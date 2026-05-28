@@ -456,6 +456,34 @@ function buildImpactType(riskLevel?: string): 'opportunity' | 'risk' | 'watch' {
   return 'opportunity';
 }
 
+async function insertMarketPulseFindingWithSchemaFallback(payload: Record<string, unknown>) {
+  const retryPayload = { ...payload };
+  const droppedColumns: string[] = [];
+
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const { data, error } = await ownedDbTable('market_pulse_findings')
+      .insert(retryPayload)
+      .select('id')
+      .single();
+
+    if (!error && data) return { data, error: null, droppedColumns };
+
+    const missingColumn = String(error?.message ?? '').match(/Could not find the '([^']+)' column/)?.[1];
+    if (!missingColumn || !(missingColumn in retryPayload)) {
+      return { data: null, error, droppedColumns };
+    }
+
+    delete retryPayload[missingColumn];
+    droppedColumns.push(missingColumn);
+  }
+
+  return {
+    data: null,
+    error: new Error(`Market Pulse finding insert exceeded schema fallback attempts; dropped ${droppedColumns.join(', ')}`),
+    droppedColumns,
+  };
+}
+
 function buildWhyItMatters(
   title: string,
   summary: string,
@@ -891,8 +919,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
     const mentionedRegulatory = (executorContext?.regulatory_policy_sensitivity ?? [])
       .filter((r) => `${p.title} ${p.summary}`.toLowerCase().includes(r.toLowerCase()));
 
-    const { data: insertedRow, error: insertError } = await ownedDbTable('market_pulse_findings')
-      .insert({
+    const { data: insertedRow, error: insertError, droppedColumns } = await insertMarketPulseFindingWithSchemaFallback({
         run_id: runId,
         company_id: companyId,
         canonical_event_key: p.canonicalEventKey,
@@ -944,9 +971,15 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
         last_shared_at: null,
         user_action_state: 'open',
         escalation_tracking: false,
-      })
-      .select('id')
-      .single();
+      });
+
+    if (droppedColumns.length > 0) {
+      console.warn('[market-pulse] finding insert skipped unavailable schema columns', {
+        runId,
+        title: p.title,
+        droppedColumns,
+      });
+    }
 
     if (insertError || !insertedRow) {
       // Skip this finding but continue the loop — one bad row should not abort

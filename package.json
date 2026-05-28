@@ -93,6 +93,8 @@
     "ops:railway": "tsx scripts/ops/railwayEnvAudit.ts",
     "ops:supabase": "tsx scripts/ops/supabaseAuthAudit.ts",
     "ops:auth-probe": "tsx scripts/ops/authRuntimeProbe.ts",
+    "ops:oauth-audit": "tsx scripts/ops/oauthRedirectAudit.ts",
+    "ops:integration-audit": "tsx scripts/ops/integrationAudit.ts",
     "lint": "eslint . --max-warnings 200",
     "lint:fix": "eslint . --fix",
     "typecheck": "node scripts/typecheck-all.js",

@@ -46,6 +46,12 @@ async function runReservedFixedWorkflow<T>(input: {
   if (!input.companyId) {
     throw new MonetizedWorkflowError(400, { error: 'Company context is required for billable content actions' });
   }
+
+  // referenceId may be a semantic string (e.g. "workspace-linkedin") for
+  // transient workspace flows; executeWithCredits canonicalizes it into a
+  // UUID at the boundary and preserves the original in note + telemetry.
+  // The semantic key is kept verbatim in idempotencyKey so dedup behavior is
+  // unaffected by the UUID projection.
   const registryResolution = resolveMonetizationFeature({ action_key: input.action });
   if (!registryResolution) {
     throw new MonetizedWorkflowError(500, { error: `No monetization registry entry for ${input.action}` });

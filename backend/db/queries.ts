@@ -51,6 +51,7 @@ export interface ScheduledPost {
   repurpose_index?: number;
   repurpose_total?: number;
   creator_attachment_metadata?: unknown;
+  is_thread_start?: boolean;
 }
 
 export interface SocialAccount {
@@ -203,27 +204,59 @@ export async function getScheduledPost(postId: string): Promise<ScheduledPost | 
 }
 
 /**
- * Update scheduled post on successful publish
+ * Update scheduled post on successful publish.
+ *
+ * G12 — optional compare-and-set: when `expectedFromStatus` is provided, the
+ * UPDATE only applies when the row's CURRENT status matches. Returns the
+ * outcome so the caller can detect divergence (e.g. operator cancelled the
+ * row mid-publish) and avoid silently overwriting an intervening state.
+ *
+ * Callers that omit `expectedFromStatus` get the original blind-update
+ * behavior (used by single-row paths that don't carry a snapshot status).
  */
+export type ScheduledPostTerminalWriteResult =
+  | { applied: true }
+  | { applied: false; reason: 'cas_mismatch' };
+
 export async function updateScheduledPostOnPublish(
   postId: string,
   platformPostId: string,
   postUrl: string,
-  publishedAt?: Date
-): Promise<void> {
-  const { error } = await supabase
-    .from('scheduled_posts')
-    .update({
-      status: 'published',
-      platform_post_id: platformPostId,
-      post_url: postUrl,
-      published_at: publishedAt?.toISOString() || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', postId);
+  publishedAt?: Date,
+  expectedFromStatus?: string,
+): Promise<ScheduledPostTerminalWriteResult> {
+  const updatePayload = {
+    status: 'published',
+    platform_post_id: platformPostId,
+    post_url: postUrl,
+    published_at: publishedAt?.toISOString() || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
 
-  if (error) {
-    throw new Error(`Failed to update scheduled post: ${error.message}`);
+  let applied = true;
+  if (expectedFromStatus) {
+    const { data, error } = await supabase
+      .from('scheduled_posts')
+      .update(updatePayload)
+      .eq('id', postId)
+      .eq('status', expectedFromStatus)
+      .select('id');
+    if (error) {
+      throw new Error(`Failed to update scheduled post: ${error.message}`);
+    }
+    applied = Array.isArray(data) && data.length > 0;
+  } else {
+    const { error } = await supabase
+      .from('scheduled_posts')
+      .update(updatePayload)
+      .eq('id', postId);
+    if (error) {
+      throw new Error(`Failed to update scheduled post: ${error.message}`);
+    }
+  }
+
+  if (!applied) {
+    return { applied: false, reason: 'cas_mismatch' };
   }
 
   // Sync platform_post_id to daily_content_plans.external_post_id — single batch update
@@ -242,27 +275,49 @@ export async function updateScheduledPostOnPublish(
       console.warn(`[queries] Could not batch-sync external_post_id: ${syncError.message}`);
     }
   }
+
+  return { applied: true };
 }
 
 /**
- * Update scheduled post on failure
+ * Update scheduled post on failure. See updateScheduledPostOnPublish for
+ * the `expectedFromStatus` CAS contract — same shape.
  */
 export async function updateScheduledPostOnFailure(
   postId: string,
-  errorMessage: string
-): Promise<void> {
+  errorMessage: string,
+  expectedFromStatus?: string,
+): Promise<ScheduledPostTerminalWriteResult> {
+  const updatePayload = {
+    status: 'failed',
+    error_message: errorMessage,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (expectedFromStatus) {
+    const { data, error } = await supabase
+      .from('scheduled_posts')
+      .update(updatePayload)
+      .eq('id', postId)
+      .eq('status', expectedFromStatus)
+      .select('id');
+    if (error) {
+      throw new Error(`Failed to update scheduled post: ${error.message}`);
+    }
+    return Array.isArray(data) && data.length > 0
+      ? { applied: true }
+      : { applied: false, reason: 'cas_mismatch' };
+  }
+
   const { error } = await supabase
     .from('scheduled_posts')
-    .update({
-      status: 'failed',
-      error_message: errorMessage,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updatePayload)
     .eq('id', postId);
 
   if (error) {
     throw new Error(`Failed to update scheduled post: ${error.message}`);
   }
+  return { applied: true };
 }
 
 /**

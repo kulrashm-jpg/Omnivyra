@@ -21,6 +21,10 @@ interface AlignmentRecoveryArgs {
   momentum?: string | null;
   fastPath?: boolean;
   planSkeleton: any;
+  /** Caller AbortSignal propagated to both the regeneration LLM call and the
+   * post-regen alignment re-evaluation so the full alignment budget can
+   * cancel everything in flight. */
+  signal?: AbortSignal;
 }
 
 export async function recoverLowAlignmentPlan({
@@ -36,6 +40,7 @@ export async function recoverLowAlignmentPlan({
   momentum,
   fastPath,
   planSkeleton,
+  signal,
 }: AlignmentRecoveryArgs): Promise<{
   structured: any;
   alignmentResult: any;
@@ -68,7 +73,10 @@ export async function recoverLowAlignmentPlan({
       ...planningInput,
       repair_instruction: regenInstruction,
     };
-    const { rawOutput: regeneratedRaw } = await generateCampaignPlanAI(regenInput as any);
+    // Alignment recovery is a full draft regeneration but it lives inside
+    // the alignment phase budget. Route to the `alignment` pool so it shares
+    // concurrency with scoring rather than starving primary drafting calls.
+    const { rawOutput: regeneratedRaw } = await generateCampaignPlanAI(regenInput as any, { signal, pool: 'alignment' });
     let regeneratedStructured = await parseAndValidateCampaignPlan({
       companyId,
       rawOutput: regeneratedRaw,
@@ -87,6 +95,8 @@ export async function recoverLowAlignmentPlan({
           psychologicalGoal: psychologicalGoal ?? null,
           momentum: momentum ?? null,
           normalizedWeeks: regeneratedStructured.weeks || [],
+          signal,
+          pool: 'alignment',
         });
         if (regeneratedAlignment.alignmentScore >= (alignmentResult?.alignmentScore ?? 0)) {
           return {

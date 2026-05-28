@@ -29,6 +29,7 @@ import { runCompletionWithOperation } from '../../services/aiGateway';
 import { estimateLlmCostUsd } from '../../services/pricingService';
 import type { ContentAngle, ContentBlueprint } from '../../services/unifiedContentGenerationEngine';
 import { createCreatorExecutionEngine } from '../../services/executionEngines/creatorExecutionEngine';
+import { runCreatorOrchestration } from '../../services/creator/creatorOrchestrator';
 
 function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -91,7 +92,17 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
     angle_preference,
     company_profile,
     activity_workspace,
+    bolt_payload,
   } = job.data;
+
+  // Phase 2 unification — BOLT-row execution branch. Pipeline worker
+  // enqueues each renderable row here; this branch owns the
+  // orchestrator call + daily_content_plans row mutation that used to
+  // run inline inside `creatorAssetGenerationRuntime`. BullMQ retries
+  // replace the prior in-loop max_retries semantic.
+  if (bolt_payload) {
+    return processBoltCreatorRowJob(job, bolt_payload as BoltCreatorRowJobData);
+  }
 
   try {
     console.log(`[creatorContentProcessor] Processing ${content_type} for company ${company_id}`);
@@ -101,37 +112,61 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
     if (!creator_context || !creator_context.target_platforms?.length) {
       throw new Error('Creator context missing: need target_platforms, campaign_description, content_theme');
     }
-    const engine = createCreatorExecutionEngine();
+    // Phase 2 unification — primary-platform generate+adapt+render+persist+FSM
+    // routed through the shared orchestrator. The N-platform variant
+    // adaptation that this worker has historically produced is preserved
+    // via direct engine.adaptForPlatform calls for the secondary
+    // platforms (the orchestrator only adapts/renders for the primary).
+    const targetPlatformsArr: string[] = Array.from(creator_context.target_platforms);
+    const primaryPlatform = String(targetPlatformsArr[0] || 'linkedin').toLowerCase();
+    const orchestrationContentType = content_type === 'carousel' ? 'carousel' : content_type === 'story' ? 'story' : 'video';
 
     void job.updateProgress(35);
-    const canonicalOutput = await engine.generateFromIntent({
+    const orchestrated = await runCreatorOrchestration({
       campaignId: String((activity_workspace as any)?.campaign_id || `creator-${company_id}`),
       companyId: company_id,
-      userId: String((activity_workspace as any)?.user_id || ''),
+      userId: String((activity_workspace as any)?.user_id || '') || null,
       topic,
-      contentType: content_type === 'carousel' ? 'carousel' : content_type === 'story' ? 'story' : 'video',
-      targetPlatforms: creator_context.target_platforms,
+      contentType: orchestrationContentType,
+      targetPlatforms: targetPlatformsArr,
       audience,
       objective: String(creator_context.campaign_description || ''),
       summary: String((activity_workspace as any)?.summary || ''),
       creatorCard: creator_context,
-      enrichedIntent: activity_workspace && typeof activity_workspace === 'object' ? activity_workspace : null,
+      enrichedIntent: activity_workspace && typeof activity_workspace === 'object' ? activity_workspace as Record<string, unknown> : null,
       existingContent: null,
+      origin: 'queue',
     });
+    const canonicalOutput = orchestrated.output;
 
     void job.updateProgress(55);
     const validationResult = safeObject(canonicalOutput.metadata.validation_result);
     const platformVariants: Record<string, any> = {};
-    for (const platform of creator_context.target_platforms) {
-      const adapted = await engine.adaptForPlatform(canonicalOutput, platform);
-      platformVariants[platform] = {
-        asset_payload: safeObject((adapted.asset_payload as Record<string, unknown>).platform_payload) || adapted.asset_payload,
-        packaging: adapted.packaging.platform_variants[platform] ?? {
-          caption: adapted.packaging.caption,
-          hashtags: adapted.packaging.hashtags,
-        },
-        asset_type: adapted.asset_type,
-      };
+    // Primary platform is already adapted+rendered by the orchestrator.
+    platformVariants[primaryPlatform] = {
+      asset_payload: safeObject((canonicalOutput.asset_payload as Record<string, unknown>).platform_payload) || canonicalOutput.asset_payload,
+      packaging: canonicalOutput.packaging.platform_variants[primaryPlatform] ?? {
+        caption: canonicalOutput.packaging.caption,
+        hashtags: canonicalOutput.packaging.hashtags,
+      },
+      asset_type: canonicalOutput.asset_type,
+    };
+    // Secondary platforms: adapt only (no re-render — the orchestrator
+    // owns the canonical render for the primary platform, and the queue
+    // processor's contract is variant adaptation, not re-rendering).
+    if (targetPlatformsArr.length > 1) {
+      const engine = createCreatorExecutionEngine();
+      for (const platform of targetPlatformsArr.slice(1)) {
+        const adapted = await engine.adaptForPlatform(canonicalOutput, platform);
+        platformVariants[platform] = {
+          asset_payload: safeObject((adapted.asset_payload as Record<string, unknown>).platform_payload) || adapted.asset_payload,
+          packaging: adapted.packaging.platform_variants[platform] ?? {
+            caption: adapted.packaging.caption,
+            hashtags: adapted.packaging.hashtags,
+          },
+          asset_type: adapted.asset_type,
+        };
+      }
     }
 
     // Step 7: Estimate cost & deduct credits
@@ -174,6 +209,10 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
       validation_result: validationResult,
       target_platforms: creator_context.target_platforms,
       canonical_output: canonicalOutput,
+      // Phase 5 parity — queue worker now exposes the persisted asset
+      // id so downstream consumers can reference creator_assets.
+      creator_asset_id: orchestrated.persistedAssetId,
+      render_strategy: orchestrated.renderStrategy,
     };
   } catch (error) {
     console.error(`[creatorContentProcessor] Error processing ${content_type}:`, error);
@@ -394,5 +433,141 @@ async function recordCreatorContentFeedback(data: Record<string, unknown>): Prom
     console.debug('[creatorContentProcessor] Feedback recorded:', data);
   } catch (error) {
     console.warn('[creatorContentProcessor] Feedback recording failed (non-blocking):', error);
+  }
+}
+
+/* ── Phase 2 — BOLT-row execution branch ────────────────────────────── */
+
+import { ownedDbTable } from '../../db/writeOwner';
+import { CREATOR_LIFECYCLE_STATES } from '../../../lib/shared/creatorGovernanceRegistry';
+import { extractCreatorMediaUrls } from '../../../lib/preview/previewUtils';
+
+type BoltCreatorRowJobData = {
+  run_id?: string | null;
+  campaign_id: string;
+  company_id: string;
+  user_id: string | null;
+  daily_plan_id: string;
+  parsed_content: Record<string, unknown>;
+  topic: string;
+  content_type: string;
+  platform: string;
+  audience: string;
+  objective: string;
+  summary: string;
+  template_id: string | null;
+  max_retries: number;
+};
+
+// Phase 4 — local `extractMediaUrlsLocal` consolidated into the shared
+// `extractCreatorMediaUrls` in lib/preview/previewUtils.
+
+/**
+ * Process a BOLT daily-plan row as an isolated queue job. Mirrors the
+ * legacy in-process logic from `creatorAssetGenerationRuntime`'s
+ * autonomous-renderable branch — engine + render + persist via the
+ * orchestrator, then the daily_content_plans row mutation BOLT was
+ * doing inline. BullMQ retries replace the in-loop max_retries.
+ */
+async function processBoltCreatorRowJob(job: Job, payload: BoltCreatorRowJobData): Promise<any> {
+  const { runCreatorOrchestration } = await import('../../services/creator/creatorOrchestrator');
+  const attempt = job.attemptsMade ?? 0;
+  const parsed = payload.parsed_content && typeof payload.parsed_content === 'object'
+    ? payload.parsed_content
+    : {};
+  const creatorCard = (parsed && typeof (parsed as any).creator_card === 'object')
+    ? (parsed as any).creator_card as Record<string, unknown>
+    : {};
+
+  try {
+    void job.updateProgress(20);
+    const orchestrated = await runCreatorOrchestration({
+      campaignId: payload.campaign_id,
+      companyId: payload.company_id,
+      userId: payload.user_id,
+      topic: payload.topic,
+      contentType: payload.content_type,
+      targetPlatforms: [payload.platform],
+      audience: payload.audience,
+      objective: payload.objective,
+      summary: payload.summary,
+      creatorCard,
+      enrichedIntent: parsed as Record<string, unknown>,
+      templateId: payload.template_id,
+      existingContent: parsed as Record<string, unknown>,
+      origin: 'bolt',
+      dailyPlanId: payload.daily_plan_id,
+    });
+
+    void job.updateProgress(80);
+    const renderedOutput = orchestrated.output;
+    const readiness = orchestrated.readiness ?? { ready: true };
+    const creatorAssetId = orchestrated.persistedAssetId;
+    const transitionContent = orchestrated.lifecycleTransition?.content ?? null;
+    const finalLifecycleState = orchestrated.lifecycleTransition?.to
+      ?? (readiness.ready ? CREATOR_LIFECYCLE_STATES.RENDER_READY : CREATOR_LIFECYCLE_STATES.RENDER_FAILED);
+
+    const mergedContent = {
+      ...parsed,
+      ...(transitionContent ?? {}),
+      ...renderedOutput,
+      creator_lifecycle_state: finalLifecycleState,
+      creator_lifecycle_history: (transitionContent && Array.isArray((transitionContent as any).creator_lifecycle_history))
+        ? (transitionContent as any).creator_lifecycle_history
+        : ((parsed as any).creator_lifecycle_history ?? []),
+      render_policy: (transitionContent as any)?.render_policy ?? { mode: 'render_only' },
+      creator_asset_id: creatorAssetId,
+      rendered_asset: {
+        creator_asset_id: creatorAssetId,
+        urls: extractCreatorMediaUrls(renderedOutput),
+        readiness,
+        rendered_at: new Date().toISOString(),
+        export_ready: !!readiness.ready,
+      },
+      content_status: readiness.ready ? 'render_ready' : 'render_failed',
+    };
+
+    await ownedDbTable('daily_content_plans')
+      .update({
+        content: JSON.stringify(mergedContent),
+        intent_type: 'creator',
+        asset_type: renderedOutput.asset_type,
+        template_id: renderedOutput.asset_instruction.template_id ?? payload.template_id ?? null,
+        retry_count: attempt,
+        max_retries: payload.max_retries,
+        failure_reason: readiness.ready ? null : (readiness.failure_reason ?? null),
+        failure_type: readiness.ready ? null : 'permanent',
+        content_status: readiness.ready ? 'render_ready' : 'render_failed',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', payload.daily_plan_id);
+
+    void job.updateProgress(100);
+    return {
+      ok: true,
+      rendered: !!readiness.ready,
+      awaiting_upload: false,
+      failed: !readiness.ready,
+      failure_reason: readiness.ready ? null : (readiness.failure_reason ?? null),
+      persisted_asset_id: creatorAssetId,
+      lifecycle_state: finalLifecycleState,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const isFinalAttempt = (job.attemptsMade ?? 0) + 1 >= (job.opts?.attempts ?? payload.max_retries);
+    if (isFinalAttempt) {
+      await ownedDbTable('daily_content_plans')
+        .update({
+          retry_count: payload.max_retries,
+          max_retries: payload.max_retries,
+          failure_reason: message,
+          failure_type: 'transient',
+          content_status: 'render_failed',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', payload.daily_plan_id);
+    }
+    // Rethrow so BullMQ records the attempt + applies backoff.
+    throw error;
   }
 }

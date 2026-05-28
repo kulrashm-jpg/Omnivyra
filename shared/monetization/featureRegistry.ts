@@ -225,6 +225,13 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       'creator_execution_blueprint_video',
       'blogGeneration',
       'blockEnrich',
+      // Phase 6 — top-level orchestrator process_type emitted by the
+      // creator orchestrator. Previously caused usageLedger warnings
+      // ("unknown process_type='creator_content'") because no entry
+      // claimed the symbol. Mapped to content_basic — same credit
+      // action as the underlying blueprint executions, so existing
+      // billing behavior is unchanged.
+      'creator_content',
     ],
     pricing_keys: {
       action_key: 'content_basic',

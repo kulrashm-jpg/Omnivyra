@@ -1,6 +1,11 @@
 import React from 'react';
 import { Calendar, Loader2, Send } from 'lucide-react';
 import type { PlatformOption, PlatformState } from './schedulerShared';
+import {
+  validatePostForPlatform,
+  platformValidationBadgeClass,
+  platformValidationLabel,
+} from '../../../lib/preview/platformLimitValidation';
 
 type Props = {
   adaptingPlatform: string | null;
@@ -60,12 +65,34 @@ export default function PostToSocialPlatformPanel({
             </span>
           ) : null}
         </label>
-        <textarea
-          value={selectedState.content}
-          onChange={(e) => onChange({ content: e.target.value })}
-          rows={8}
-          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-7 text-slate-900"
-        />
+        {(() => {
+          const validation = validatePostForPlatform(selectedState.content || '', selectedOption.key);
+          const borderClass = validation.state === 'invalid'
+            ? 'border-red-300 focus-within:border-red-400'
+            : validation.state === 'warning'
+              ? 'border-amber-300 focus-within:border-amber-400'
+              : 'border-slate-200';
+          return (
+            <>
+              <textarea
+                value={selectedState.content}
+                onChange={(e) => onChange({ content: e.target.value })}
+                rows={8}
+                className={`w-full rounded-2xl border bg-white px-4 py-3 text-sm leading-7 text-slate-900 ${borderClass}`}
+              />
+              {validation.maxCount > 0 && (
+                <div className="mt-2 flex items-center justify-end">
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${platformValidationBadgeClass(validation.state)}`}
+                    title={validation.state === 'invalid' ? `Over ${selectedOption.label} limit by ${validation.exceeded} chars` : undefined}
+                  >
+                    {platformValidationLabel(validation)}
+                  </span>
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       <div>

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Badge, BarChart3, Image, LayoutTemplate, Loader2, PanelsTopLeft, Plus, RefreshCw } from 'lucide-react';
+import { Badge, BarChart3, Image, Layers, LayoutTemplate, Loader2, PanelsTopLeft, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import type { CreatorAssetBlock, CreatorAssetBlockType } from '../../../lib/blog/blockTypes';
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
 
@@ -28,6 +28,7 @@ const ASSET_TYPES: Array<{ type: CreatorAssetBlockType; label: string; descripti
   { type: 'banner', label: 'Banner', description: 'Campaign, offer, or event banner', Icon: LayoutTemplate, route: 'banner' },
   { type: 'infographic', label: 'Infographic', description: 'Process, stats, or framework visual', Icon: BarChart3, route: 'infographic' },
   { type: 'carousel', label: 'Carousel', description: 'Multi-slide educational asset', Icon: PanelsTopLeft, route: 'carousel' },
+  { type: 'slider', label: 'Slider', description: 'Presentation-flow slide asset', Icon: Layers, route: 'slider' },
   { type: 'brand_card', label: 'Brand Card', description: 'Quote, proof, or branded authority card', Icon: Badge, route: 'image' },
 ];
 
@@ -98,6 +99,55 @@ export function CreatorAssetBlockEditor({ block, companyId, onChange }: Props) {
     });
   };
 
+  const deleteAsset = async (asset: CreatorAssetRecord) => {
+    if (typeof window === 'undefined') return;
+    if (!companyId) {
+      window.alert('Select a company before deleting assets.');
+      return;
+    }
+    if (!window.confirm(`Delete "${asset.title}"? This cannot be undone.`)) return;
+    try {
+      const url = `/api/creator-assets?company_id=${encodeURIComponent(companyId)}&id=${encodeURIComponent(asset.id)}`;
+      const res = await fetchWithAuth(url, {
+        method: 'DELETE',
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        const raw = await res.text().catch(() => '');
+        let parsedError: string | null = null;
+        try {
+          const json = raw ? JSON.parse(raw) : null;
+          parsedError = json && typeof json.error === 'string' ? json.error : null;
+        } catch { /* not JSON */ }
+        const isHtml = !parsedError && /^\s*<(!doctype|html)/i.test(raw);
+        const diagnostic = isHtml
+          ? 'dev server is serving an HTML page instead of JSON. Save any file in the editor to trigger a recompile, then try again.'
+          : (parsedError || `server returned HTTP ${res.status}.`);
+        window.alert(`Failed to delete asset — ${diagnostic}`);
+        return;
+      }
+      // Drop the deleted asset from local state. If the currently-
+      // selected block referenced this asset, clear the block too so
+      // the editor doesn't keep a dead reference.
+      setAssets((prev) => prev.filter((row) => row.id !== asset.id));
+      if (block.assetId === asset.id) {
+        onChange({
+          ...block,
+          assetId: undefined,
+          title: '',
+          url: undefined,
+          files: [],
+          previewKind: undefined,
+          caption: undefined,
+          blockTemplateId: undefined,
+          metadata: {},
+        });
+      }
+    } catch (err) {
+      window.alert(err instanceof Error ? `Failed to delete asset: ${err.message}` : 'Failed to delete asset. Please try again.');
+    }
+  };
+
   const createHref = `/command-center/creator-content/${selectedTypeMeta.route}`;
   const currentPreview = previewUrl(block);
 
@@ -105,7 +155,7 @@ export function CreatorAssetBlockEditor({ block, companyId, onChange }: Props) {
     <div className="space-y-4">
       <div>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Asset type</p>
-        <div className="grid gap-2 sm:grid-cols-5">
+        <div className="grid gap-2 grid-cols-3 sm:grid-cols-6">
           {ASSET_TYPES.map(({ type, label, Icon }) => (
             <button
               key={type}
@@ -159,13 +209,22 @@ export function CreatorAssetBlockEditor({ block, companyId, onChange }: Props) {
         </div>
       )}
 
-      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <div>
-            <p className="text-sm font-semibold text-gray-900">{selectedTypeMeta.label} repository</p>
-            <p className="text-xs text-gray-500">{selectedTypeMeta.description}</p>
+      {/* Repository — collapsed by default. The full gallery grid is
+          tall (especially with many saved assets), so it dominated
+          the block. Hidden behind a single-line header that the
+          operator clicks to expand when they're ready to browse and
+          pick. `open` is uncontrolled so each block-instance tracks
+          its own state without React plumbing. */}
+      <details className="rounded-xl border border-gray-200 bg-gray-50 group">
+        <summary className="flex cursor-pointer items-center justify-between gap-2 px-3 py-2 list-none [&::-webkit-details-marker]:hidden">
+          <div className="flex items-center gap-2">
+            <span className="text-gray-400 transition-transform group-open:rotate-90 select-none">▸</span>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">{selectedTypeMeta.label} repository</p>
+              <p className="text-xs text-gray-500">{selectedTypeMeta.description}{assets.length > 0 ? ` · ${assets.length} saved` : ''}</p>
+            </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
             <button
               type="button"
               onClick={() => void loadAssets(selectedType)}
@@ -184,8 +243,9 @@ export function CreatorAssetBlockEditor({ block, companyId, onChange }: Props) {
               Create
             </a>
           </div>
-        </div>
+        </summary>
 
+        <div className="px-3 pb-3">
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-8 text-sm text-gray-500">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -205,31 +265,48 @@ export function CreatorAssetBlockEditor({ block, companyId, onChange }: Props) {
               const isSelected = block.assetId === asset.id;
               const url = previewUrl(asset);
               return (
-                <button
+                <div
                   key={asset.id}
-                  type="button"
-                  onClick={() => selectAsset(asset)}
-                  className={`overflow-hidden rounded-lg border bg-white text-left transition-all ${
+                  className={`group relative overflow-hidden rounded-lg border bg-white transition-all ${
                     isSelected ? 'border-violet-500 ring-2 ring-violet-200' : 'border-gray-200 hover:border-violet-300 hover:shadow-sm'
                   }`}
                 >
-                  {url ? (
-                    <img src={url} alt={asset.title} className="h-28 w-full object-cover" />
-                  ) : (
-                    <div className="flex h-28 items-center justify-center bg-gray-100 text-gray-400">
-                      <SelectedTypeIcon className="h-6 w-6" />
+                  <button
+                    type="button"
+                    onClick={() => selectAsset(asset)}
+                    className="block w-full text-left"
+                  >
+                    {url ? (
+                      <img src={url} alt={asset.title} className="h-28 w-full object-cover" />
+                    ) : (
+                      <div className="flex h-28 items-center justify-center bg-gray-100 text-gray-400">
+                        <SelectedTypeIcon className="h-6 w-6" />
+                      </div>
+                    )}
+                    <div className="p-2">
+                      <p className="truncate text-xs font-semibold text-gray-900">{asset.title}</p>
+                      <p className="mt-0.5 truncate text-[11px] text-gray-500">{asset.previewKind || asset.creatorType}</p>
                     </div>
-                  )}
-                  <div className="p-2">
-                    <p className="truncate text-xs font-semibold text-gray-900">{asset.title}</p>
-                    <p className="mt-0.5 truncate text-[11px] text-gray-500">{asset.previewKind || asset.creatorType}</p>
-                  </div>
-                </button>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void deleteAsset(asset);
+                    }}
+                    aria-label={`Delete ${asset.title}`}
+                    title="Delete asset"
+                    className="absolute right-1.5 top-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-gray-200 bg-white/95 text-gray-500 opacity-0 shadow-sm transition-opacity hover:border-red-300 hover:bg-red-50 hover:text-red-600 focus:opacity-100 group-hover:opacity-100"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               );
             })}
           </div>
         )}
-      </div>
+        </div>
+      </details>
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
+import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -19,12 +20,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const errDest = earlyFlow === 'community-ai'
     ? ((earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/community-ai/connectors')
     : ((earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms');
+  const callbackHost = safeHost(`${getBaseUrl(req)}/api/auth/youtube/callback`);
+
+  logOAuthEvent({
+    event: 'oauth_callback_received',
+    provider: 'youtube',
+    callback_host: callbackHost,
+    company_id: earlyState.companyId ?? null,
+    state_user_id: earlyState.userId ?? null,
+    state_valid: earlyState.valid === true,
+    state_flow: earlyState.flow ?? null,
+    request_origin: (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string | undefined) || null,
+  });
 
   if (error) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'youtube',
+      callback_host: callbackHost,
+      company_id: earlyState.companyId ?? null,
+      state_user_id: earlyState.userId ?? null,
+      failure_point: 'provider_error',
+      failure_detail: String(error),
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'youtube',
+      callback_host: callbackHost,
+      company_id: earlyState.companyId ?? null,
+      state_user_id: earlyState.userId ?? null,
+      failure_point: 'missing_code',
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
@@ -32,6 +62,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const platform = 'youtube';
     const { companyId, userId: stateUserId, returnTo, valid } = decodeOAuthState(state as string);
     if (valid === false) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'youtube',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'invalid_oauth_state',
+        failure_detail: earlyState.reason ?? 'state signature invalid',
+      });
       return res.redirect(`${errDest}?error=${encodeURIComponent('Invalid OAuth state')}`);
     }
 
@@ -57,11 +96,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (!tokenResponse.ok) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'youtube',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'token_exchange_failed',
+        failure_detail: `HTTP ${tokenResponse.status}`,
+      });
       throw new Error('Token exchange failed');
     }
 
     const tokenData = await tokenResponse.json();
-    
+
     // Get YouTube channel info
     const channelResponse = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
       headers: {
@@ -70,6 +118,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (!channelResponse.ok) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'youtube',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'property_fetch_failed',
+        failure_detail: `channel info HTTP ${channelResponse.status}`,
+      });
       throw new Error('Channel info fetch failed');
     }
 
@@ -77,6 +134,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const channel = channelData.items?.[0];
 
     if (!channel?.id) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'youtube',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'property_fetch_failed',
+        failure_detail: 'no channel returned from /youtube/v3/channels',
+      });
       throw new Error('Failed to get YouTube channel info');
     }
 
@@ -172,6 +238,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .single();
 
       if (insertError || !newAccount) {
+        logOAuthEvent({
+          event: 'oauth_failure',
+          provider: 'youtube',
+          callback_host: callbackHost,
+          company_id: companyId ?? null,
+          user_id: userId,
+          state_user_id: stateUserId ?? null,
+          failure_point: 'persistence_failed',
+          failure_detail: insertError?.message?.slice(0, 200) ?? 'social_accounts insert failed',
+        });
         throw new Error('Failed to create account');
       }
 
@@ -196,16 +272,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         expires_at: expiresAt,
         connected_by_user_id: userId,
       });
+      logOAuthEvent({
+        event: 'oauth_success',
+        provider: 'youtube',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        user_id: userId,
+        state_user_id: stateUserId ?? null,
+        state_flow: 'community-ai',
+      });
       const communityDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/community-ai/connectors';
       return res.redirect(`${communityDest}?connected=youtube&status=success`);
     }
 
+    logOAuthEvent({
+      event: 'oauth_success',
+      provider: 'youtube',
+      callback_host: callbackHost,
+      company_id: companyId ?? null,
+      user_id: userId,
+      state_user_id: stateUserId ?? null,
+    });
     const successDest = returnTo || '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
     return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('YouTube OAuth callback error:', error);
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'youtube',
+      callback_host: callbackHost,
+      company_id: earlyState.companyId ?? null,
+      state_user_id: earlyState.userId ?? null,
+      failure_point: 'callback_exception',
+      failure_detail: String(error?.message ?? error).slice(0, 200),
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }

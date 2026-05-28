@@ -36,7 +36,14 @@ export type PipelineEvent =
   | 'ai_asset.restored'
   | 'ai_asset.override'
   | 'ai_asset.provenance'
-  | 'creator.routing_deactivated';
+  | 'creator.routing_deactivated'
+  | 'writer.attachment_rejected'
+  | 'writer.attachment_mode_coerced'
+  | 'embedded_copy_ocr_relaxed'
+  | 'embedded_copy_synthetic_reading_order'
+  | 'schedule.char_limit_overflow'
+  | 'reconciliation.success'
+  | 'reconciliation.failure';
 
 const _lastEmit = new Map<string, number>();
 // Default 60s throttle window per (event|dedupeKey). Override per call.

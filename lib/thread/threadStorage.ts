@@ -82,3 +82,32 @@ export function clearThreadPublishLink(sessionToken: string): void {
   removeThreadStorage(getThreadPublishKey(sessionToken));
 }
 
+/**
+ * G2 — per-node thread attachment assignments.
+ *
+ * Maps each node position (0-indexed) → array of CreatorAttachment IDs that
+ * the user has distributed to that node from the thread-level attached assets
+ * list. Stored separately from session/result so:
+ *   - old sessions hydrate unchanged (loadThreadNodeAttachments returns null)
+ *   - the thread-level attached assets remain the single source of truth for
+ *     attachment data (this map only stores ID pointers, not full assets)
+ *   - removing an attachment at the thread level doesn't require touching
+ *     this map — render-time resolution simply skips IDs that no longer
+ *     correspond to a thread-level asset
+ */
+export type ThreadNodeAttachmentMap = Record<number, string[]>;
+
+export function getThreadNodeAttachmentsKey(sessionToken: string): string {
+  return `thread_node_attachments_${sessionToken}`;
+}
+
+export function loadThreadNodeAttachments(sessionToken: string): ThreadNodeAttachmentMap | null {
+  if (!sessionToken) return null;
+  return readThreadStorage<ThreadNodeAttachmentMap>(getThreadNodeAttachmentsKey(sessionToken));
+}
+
+export function saveThreadNodeAttachments(sessionToken: string, map: ThreadNodeAttachmentMap): void {
+  if (!sessionToken) return;
+  writeThreadStorage(getThreadNodeAttachmentsKey(sessionToken), map);
+}
+

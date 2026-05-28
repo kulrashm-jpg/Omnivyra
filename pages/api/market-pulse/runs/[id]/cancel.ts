@@ -1,8 +1,11 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 import { supabase } from '../../../../../backend/db/supabaseClient';
+import { syncLegacyJobIntoRun } from '../../../../../backend/services/marketPulseV2Service';
 
 const CANCELLED_ERROR = 'Cancelled by user';
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_warnings', 'failed', 'cancelled']);
+const TERMINAL_LEGACY_STATUSES = new Set(['COMPLETED', 'COMPLETED_WITH_WARNINGS', 'FAILED']);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -34,12 +37,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const status = String(run.status ?? '').toLowerCase();
-    if (!['pending', 'running'].includes(status)) {
-      return res.status(400).json({ error: 'Run is already finished and cannot be cancelled' });
+    const legacyJobId = String(run.context_snapshot?.legacy_job_id ?? '').trim();
+
+    if (TERMINAL_RUN_STATUSES.has(status)) {
+      return res.status(200).json({
+        cancelled: false,
+        status,
+        alreadyFinished: true,
+        message: 'Market Pulse run already finished.',
+      });
     }
 
-    const legacyJobId = String(run.context_snapshot?.legacy_job_id ?? '').trim();
     if (legacyJobId) {
+      const { data: legacyJob } = await supabase
+        .from('market_pulse_jobs_v1')
+        .select('id, status')
+        .eq('id', legacyJobId)
+        .maybeSingle();
+
+      const legacyStatus = String(legacyJob?.status ?? '').toUpperCase();
+      if (TERMINAL_LEGACY_STATUSES.has(legacyStatus)) {
+        const synced = await syncLegacyJobIntoRun(runId, companyId);
+        return res.status(200).json({
+          cancelled: false,
+          status: synced.run.status,
+          alreadyFinished: true,
+          message: 'Market Pulse run already finished.',
+        });
+      }
+
       await supabase
         .from('market_pulse_jobs_v1')
         .update({

@@ -5,6 +5,26 @@ import {
   listCreatorAssetAttachments,
 } from '@/backend/services/creatorAssetPersistenceService';
 
+/**
+ * Phase 4 — persistence convergence note.
+ *
+ * The creatorOrchestrator (`backend/services/creator/creatorOrchestrator.ts`)
+ * also routes writer-bound persistence through `attachCreatorAsset` when
+ * the request carries a writer source binding. Both this endpoint and the
+ * orchestrator therefore resolve to the SAME `stableAssetId` (sha1 of
+ * companyId|userId|sourceType|sourceId|creatorType|renderIdentityHash) and
+ * upsert the SAME `creator_asset_attachments` row keyed by
+ * (company_id, user_id, source_type, source_id, creator_asset_id).
+ *
+ * Effect: a writer client that POSTs here AFTER the Direct flow's
+ * orchestrator already wrote the row performs an idempotent no-op
+ * upsert (same id, identical metadata) — no divergent parallel row,
+ * no duplicate id namespace. The endpoint remains the surface used by
+ * (i) the writer's durable sync-back, (ii) GET listing, and (iii)
+ * legacy clients that attach an asset originating outside the
+ * orchestrator's Direct path.
+ */
+
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }

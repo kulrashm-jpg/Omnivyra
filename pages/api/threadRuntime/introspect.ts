@@ -1,0 +1,76 @@
+/**
+ * Phase 5 — /api/threadRuntime/introspect
+ *
+ * Returns a complete distributed-aware introspection bundle for a thread:
+ *   - reconstructed trace
+ *   - correlation groups
+ *   - forensic report
+ *   - analytics window
+ *   - governance score
+ *
+ * GET /api/threadRuntime/introspect?companyId=...&threadId=...
+ *   [&runtimeSessionId=...] [&correlationId=...]
+ *   [&sinceISO=...] [&untilISO=...]
+ */
+
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { reconstructReplay } from '@/backend/services/threadRuntime/globalRuntimeReplayReconstructor';
+import { resolveDistributedCorrelation } from '@/backend/services/threadRuntime/distributedRuntimeCorrelationEngine';
+import { analyzeRuntimeForensics } from '@/backend/services/threadRuntime/runtimeForensicAnalyzer';
+import { aggregateRuntimeAnalytics } from '@/backend/services/threadRuntime/runtimeAnalyticsAggregator';
+import { computeRuntimeGovernanceScore } from '@/backend/services/threadRuntime/runtimeGovernanceScore';
+import { getDefaultPersistentTraceStore } from '@/backend/services/threadRuntime/persistentTraceStore';
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'GET') {
+    res.status(405).json({ error: 'METHOD_NOT_ALLOWED' });
+    return;
+  }
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user?.id) { res.status(401).json({ error: 'UNAUTHORIZED' }); return; }
+
+  const companyId = typeof req.query.companyId === 'string' ? req.query.companyId : null;
+  if (!companyId) { res.status(400).json({ error: 'BAD_REQUEST', reason: 'companyId required' }); return; }
+  const threadId = typeof req.query.threadId === 'string' ? req.query.threadId : undefined;
+  const runtimeSessionId = typeof req.query.runtimeSessionId === 'string' ? req.query.runtimeSessionId : undefined;
+  const correlationId = typeof req.query.correlationId === 'string' ? req.query.correlationId : undefined;
+  const sinceISO = typeof req.query.sinceISO === 'string' ? req.query.sinceISO : undefined;
+  const untilISO = typeof req.query.untilISO === 'string' ? req.query.untilISO : undefined;
+
+  if (!threadId && !runtimeSessionId && !correlationId) {
+    res.status(400).json({ error: 'BAD_REQUEST', reason: 'one of threadId/runtimeSessionId/correlationId required' });
+    return;
+  }
+
+  const store = getDefaultPersistentTraceStore();
+
+  try {
+    const replay = await reconstructReplay({ store, companyId, threadId, runtimeSessionId, correlationId, sinceISO, untilISO });
+    const events = await store.query({ companyId, threadId, runtimeSessionId, correlationId, sinceISO, untilISO, limit: 50_000 });
+    const correlation = resolveDistributedCorrelation({ events });
+    const forensics = analyzeRuntimeForensics({ trace: replay.trace });
+    const analytics = sinceISO
+      ? await aggregateRuntimeAnalytics({ store, companyId, sinceISO, untilISO })
+      : null;
+    const governance = computeRuntimeGovernanceScore({
+      analytics: analytics ?? undefined,
+      forensics,
+    });
+
+    res.status(200).json({
+      replay: {
+        trace: replay.trace,
+        contributingSessions: replay.contributingSessions,
+        dedupedCount: replay.dedupedCount,
+        rewrittenCount: replay.rewrittenCount,
+      },
+      correlation,
+      forensics,
+      analytics,
+      governance,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'INTROSPECT_FAILED', reason: (err as Error).message });
+  }
+}

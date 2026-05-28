@@ -4,8 +4,10 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, ChevronDown, ChevronUp, Loader2, Sparkles } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronUp, Loader2, MessageSquare, PenLine, Sparkles, Target } from 'lucide-react';
 import { useCompanyContext } from '../CompanyContext';
+import AIBlogCardModal from '../blog/AIBlogCardModal';
+import { buildThreadPrefillFromCard, type AiChatCardForThread } from '../../lib/thread/threadAiChatAdapter';
 import {
   getThreadExecutionDescription,
   getThreadExecutionLabel,
@@ -24,10 +26,21 @@ import {
   THREAD_INTENTS,
   type ThreadAnchorValue,
   type ThreadCompanyProfile,
+  type ThreadGenerationPayload,
   type ThreadIntentValue,
   type ThreadSessionPayload,
 } from '../../lib/thread/threadFlow';
-import { createThreadSessionToken, saveThreadSession } from '../../lib/thread/threadStorage';
+import { createThreadSessionToken, saveThreadResult, saveThreadSession } from '../../lib/thread/threadStorage';
+
+type ThreadCreationMode = 'ai' | 'manual';
+
+// Manual-mode starter segments. Visible placeholders the user immediately
+// replaces. Joined by \n\n so splitThreadIntoSegments produces 3 entries.
+const MANUAL_MODE_STARTER_SEGMENTS: readonly string[] = [
+  'Post 1 — write your hook here.',
+  'Post 2 — develop the idea so it earns the next post.',
+  'Post 3 — close with the payoff or the action you want readers to take.',
+];
 
 export default function ThreadIntelligenceView() {
   const router = useRouter();
@@ -64,6 +77,14 @@ export default function ThreadIntelligenceView() {
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [starting, setStarting] = useState(false);
   const [contextExpanded, setContextExpanded] = useState(false);
+  const [creationMode, setCreationMode] = useState<ThreadCreationMode>('ai');
+  // G19 — AI Chat modal state + optional chat-sourced overrides for tone/audience
+  // (the existing form derives these from company profile; the chat may surface
+  // freer-form values the user wants to inject for this specific thread).
+  const [aiChatOpen, setAiChatOpen] = useState(false);
+  const [toneOverride, setToneOverride] = useState<string>('');
+  const [audienceOverride, setAudienceOverride] = useState<string>('');
+  const [aiChatNotice, setAiChatNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selectedCompanyId) return;
@@ -123,6 +144,23 @@ export default function ThreadIntelligenceView() {
     );
   }
 
+  // G19 — apply AI Chat card output to the form. Pure prefill; user can edit
+  // every field afterward. Thread-specific structured fields (anchor, exec
+  // mode, platform, format) are deliberately NOT touched — chat doesn't
+  // capture them.
+  const applyAiChatCard = (card: AiChatCardForThread) => {
+    const prefill = buildThreadPrefillFromCard(card);
+    if (prefill.topic) setTopic(prefill.topic);
+    if (prefill.intent) setIntent(prefill.intent);
+    if (prefill.tone) setToneOverride(prefill.tone);
+    if (prefill.audience) setAudienceOverride(prefill.audience);
+    if (prefill.extraInstruction) setExtraInstruction(prefill.extraInstruction);
+    setAiChatOpen(false);
+    setAiChatNotice(
+      'AI Chat pre-filled topic + intent + tone + audience + guidance. Review anchor, platform, and execution mode below, then click Build thread sequence.',
+    );
+  };
+
   const startThread = async () => {
     if (!selectedCompanyId || !topic.trim() || starting) return;
     setStarting(true);
@@ -139,15 +177,21 @@ export default function ThreadIntelligenceView() {
       platformLabel: getThreadPlatformLabel(platform),
       objective: selectedIntent.objective,
       audience:
-        typeof profile?.target_audience === 'string' && profile.target_audience.trim()
-          ? profile.target_audience.trim()
-          : 'Audience aligned to the company context and topic',
+        // G19 — AI Chat audience override takes precedence when provided.
+        audienceOverride.trim()
+          ? audienceOverride.trim()
+          : typeof profile?.target_audience === 'string' && profile.target_audience.trim()
+            ? profile.target_audience.trim()
+            : 'Audience aligned to the company context and topic',
       tone:
-        typeof profile?.brand_voice === 'string' && profile.brand_voice.trim()
-          ? profile.brand_voice.trim()
-          : format.value === 'narrative-thread'
-            ? 'Confident, sharp, and momentum-building'
-            : 'Clear, high-signal, and easy to follow',
+        // G19 — AI Chat tone override takes precedence when provided.
+        toneOverride.trim()
+          ? toneOverride.trim()
+          : typeof profile?.brand_voice === 'string' && profile.brand_voice.trim()
+            ? profile.brand_voice.trim()
+            : format.value === 'narrative-thread'
+              ? 'Confident, sharp, and momentum-building'
+              : 'Clear, high-signal, and easy to follow',
       cta: intent === 'launch' ? 'Invite readers to follow the launch and engage' : 'Invite readers to react, reply, or follow for the next step',
       extraInstruction: extraInstruction.trim(),
       companyName,
@@ -162,6 +206,41 @@ export default function ThreadIntelligenceView() {
 
     const token = createThreadSessionToken();
     saveThreadSession(token, payload);
+
+    // Manual mode: also seed a stub generation result so /threads/result skips
+    // the AI generation effect and renders the editor with starter segments.
+    // The result-page effect guard at ThreadResultView.tsx checks
+    // `payload?.output?.success` and short-circuits when truthy.
+    if (creationMode === 'manual') {
+      const stubResult: ThreadGenerationPayload = {
+        output: {
+          success: true,
+          content_type: 'thread',
+          template_used: format.label,
+          master_content: {
+            content: '',
+            decision_trace: {
+              objective: selectedIntent.objective,
+              writing_angle: selectedIntent.label,
+              tone_used: payload.tone,
+            },
+          },
+          platform_variant: {
+            platform,
+            generated_content: MANUAL_MODE_STARTER_SEGMENTS.join('\n\n'),
+            discoverability_meta: { hashtags: [] },
+            adaptation_trace: {
+              style_strategy: `Manual draft on ${getThreadPlatformLabel(platform)} — written without AI generation.`,
+              format_family: format.label,
+              actual_length_used: null,
+            },
+          },
+        },
+        session: payload,
+      };
+      saveThreadResult(token, stubResult);
+    }
+
     void router.push(getThreadResultLink(token));
   };
 
@@ -223,6 +302,94 @@ export default function ThreadIntelligenceView() {
 
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
             <section className="rounded-[28px] border border-white/80 bg-white/95 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
+              <div className="mb-6">
+                <p className="mb-3 text-sm font-semibold text-slate-800">How do you want to start?</p>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <button
+                    type="button"
+                    onClick={() => setCreationMode('ai')}
+                    className={`rounded-2xl border px-4 py-4 text-left transition ${
+                      creationMode === 'ai'
+                        ? 'border-violet-300 bg-violet-50 text-violet-900 shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-violet-200 hover:bg-violet-50/60'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-violet-500" />
+                      <p className="text-sm font-semibold">Generate with AI</p>
+                    </div>
+                    <p className="mt-2 text-sm leading-6">
+                      Give us the angle and we build the full sequence for you.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCreationMode('manual')}
+                    className={`rounded-2xl border px-4 py-4 text-left transition ${
+                      creationMode === 'manual'
+                        ? 'border-violet-300 bg-violet-50 text-violet-900 shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-violet-200 hover:bg-violet-50/60'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <PenLine className="h-4 w-4 text-violet-500" />
+                      <p className="text-sm font-semibold">Write my own</p>
+                    </div>
+                    <p className="mt-2 text-sm leading-6">
+                      Skip AI generation and write each post yourself in the editor.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled
+                    title="Curated starter threads coming soon."
+                    className="cursor-not-allowed rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-4 text-left opacity-70"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Target className="h-4 w-4 text-slate-400" />
+                      <p className="text-sm font-semibold text-slate-500">Use a starter</p>
+                      <span className="ml-auto rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                        Soon
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      Pick a curated starter thread and edit it. Available in a later release.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {creationMode === 'ai' && (
+                <div className="mb-6 rounded-2xl border border-violet-200 bg-violet-50/40 px-4 py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-600">
+                        Skip the form &mdash; chat with AI instead
+                      </p>
+                      <p className="mt-1 text-sm text-slate-700">
+                        Describe what you want to thread about. AI refines the topic, intent, tone, and audience &mdash; you stay in control of anchor, platform, and execution mode.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAiChatOpen(true)}
+                      disabled={!selectedCompanyId}
+                      className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-violet-300 bg-white px-4 py-2.5 text-sm font-semibold text-violet-700 transition hover:border-violet-400 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      Open AI Chat
+                    </button>
+                  </div>
+                  {aiChatNotice && (
+                    <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                      {aiChatNotice}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="mb-2 block text-sm font-semibold text-slate-800">Thread topic</label>
                 <textarea
@@ -339,16 +506,18 @@ export default function ThreadIntelligenceView() {
                 </div>
               </div>
 
-              <div className="mt-6">
-                <label className="mb-3 block text-sm font-semibold text-slate-800">Optional guidance</label>
-                <textarea
-                  rows={6}
-                  value={extraInstruction}
-                  onChange={(event) => setExtraInstruction(event.target.value)}
-                  placeholder="Only add this if there is one thing the sequence must emphasize, avoid, or frame more carefully."
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-800 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
-                />
-              </div>
+              {creationMode === 'ai' && (
+                <div className="mt-6">
+                  <label className="mb-3 block text-sm font-semibold text-slate-800">Optional guidance</label>
+                  <textarea
+                    rows={6}
+                    value={extraInstruction}
+                    onChange={(event) => setExtraInstruction(event.target.value)}
+                    placeholder="Only add this if there is one thing the sequence must emphasize, avoid, or frame more carefully."
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-800 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
+                  />
+                </div>
+              )}
 
               <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-4">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Operating rule</p>
@@ -364,7 +533,9 @@ export default function ThreadIntelligenceView() {
 
               <div className="mt-8 flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-6">
                 <p className="text-sm text-violet-700">
-                  We will generate a full thread sequence next, not just one platform-ready shortform block.
+                  {creationMode === 'ai'
+                    ? 'We will generate a full thread sequence next, not just one platform-ready shortform block.'
+                    : 'You will land in the segment editor with 3 starter posts to replace with your own.'}
                 </p>
                 <button
                   type="button"
@@ -372,8 +543,10 @@ export default function ThreadIntelligenceView() {
                   onClick={() => void startThread()}
                   className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  Build thread sequence
+                  {starting
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : creationMode === 'ai' ? <Sparkles className="h-4 w-4" /> : <PenLine className="h-4 w-4" />}
+                  {creationMode === 'ai' ? 'Build thread sequence' : 'Open editor'}
                   <ArrowRight className="h-4 w-4" />
                 </button>
               </div>
@@ -418,6 +591,23 @@ export default function ThreadIntelligenceView() {
           </div>
         </div>
       </div>
+
+      {/* G19 — AI Chat modal. Reuses AIBlogCardModal with contentType='thread'.
+          The modal returns a BlogCardPreview which the adapter projects into
+          our form state via applyAiChatCard. */}
+      {selectedCompanyId && (
+        <AIBlogCardModal
+          isOpen={aiChatOpen}
+          onClose={() => setAiChatOpen(false)}
+          companyId={selectedCompanyId}
+          companyName={companyName}
+          companyContext={contextSummary}
+          contentLabel="thread"
+          contentType="thread"
+          contentModeLabel={format.label}
+          onCardCreated={applyAiChatCard}
+        />
+      )}
     </>
   );
 }

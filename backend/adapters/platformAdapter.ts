@@ -39,7 +39,7 @@ export type { PublishResult } from './platformAdapterTypes';
 
 /**
  * Publish a scheduled post to its platform
- * 
+ *
  * Flow:
  * 1. Fetch scheduled_post and social_account from DB
  * 2. Decrypt and retrieve OAuth token
@@ -47,13 +47,24 @@ export type { PublishResult } from './platformAdapterTypes';
  * 4. Call platform-specific adapter
  * 5. On success: update scheduled_posts with platform_post_id and status='published'
  * 6. On failure: update status and return error for retry logic
- * 
+ *
  * @param scheduledPostId - UUID of scheduled_posts record
  * @param socialAccountId - UUID of social_accounts record
+ * @param options - Optional publish hints. Phase 1B.2.2 adds
+ *                  `replyToPlatformPostId`: when set, instructs platforms with
+ *                  native reply chains (Twitter/X via in_reply_to_tweet_id) to
+ *                  thread the post as a reply to the given platform_post_id.
+ *                  Adapters without native reply chains (LinkedIn / Instagram /
+ *                  Facebook / others) ignore this option and publish standalone.
  */
+export type PublishToPlatformOptions = {
+  replyToPlatformPostId?: string;
+};
+
 export async function publishToPlatform(
   scheduledPostId: string,
-  socialAccountId: string
+  socialAccountId: string,
+  options?: PublishToPlatformOptions
 ): Promise<PublishResult> {
   console.log(`🚀 Publishing post ${scheduledPostId} via account ${socialAccountId}`);
 
@@ -166,7 +177,9 @@ export async function publishToPlatform(
         break;
       case 'twitter':
       case 'x':
-        result = await publishToX(scheduledPost, socialAccount, token);
+        result = await publishToX(scheduledPost, socialAccount, token, {
+          replyToPlatformPostId: options?.replyToPlatformPostId,
+        });
         break;
       case 'instagram':
         result = await publishToInstagram(scheduledPost, socialAccount, token);

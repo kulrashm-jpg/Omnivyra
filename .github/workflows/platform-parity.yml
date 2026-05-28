@@ -92,6 +92,29 @@ jobs:
       - name: Validate Supabase auth-config manifest
         run: npm run ops:supabase
 
+      - name: Audit OAuth redirect-URI generation (static)
+        # Static scan only on CI — the live probe is only meaningful
+        # against a deployed prod URL with a real test user, run on-demand
+        # locally via `npm run ops:oauth-audit -- --live`.
+        run: npm run ops:oauth-audit
+
+      - name: Audit integration governance (DB scan, soft-gate)
+        # Reads `company_integrations` via service-role + flags stale
+        # domains, malformed URLs, persistent failures, etc. Exits 1 on
+        # high-severity findings, 2 on infra failure. CI treats exit 1 as
+        # advisory (continue-on-error) so a regression on existing rows
+        # doesn't block the PR — the report posts in the workflow log.
+        continue-on-error: true
+        run: |
+          set +e
+          npm run ops:integration-audit -- --json > integration-audit.json
+          code=$?
+          cat integration-audit.json | head -200
+          if [ "$code" = "1" ]; then
+            echo "::warning::Integration audit reported high-severity findings — review integration-audit.json"
+          fi
+          exit 0
+
       - name: Audit Vercel env (Production + Preview)
         if: env.VERCEL_TOKEN != ''
         run: npm run ops:vercel -- --json

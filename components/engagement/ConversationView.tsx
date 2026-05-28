@@ -384,7 +384,7 @@ export const ConversationView = React.memo(function ConversationView({
         onRefresh={onRefresh}
         onMarkResolved={onMarkResolved && thread ? handleMarkResolved : undefined}
         onIgnore={onIgnore}
-        onViewLeadSignal={() => router.push('/dashboard/intelligence?intelTab=active-leads')}
+        onViewLeadSignal={() => router.push('/command-center/engagement')}
       />
 
 

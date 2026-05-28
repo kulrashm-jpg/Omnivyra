@@ -7,6 +7,7 @@ import { useRouter } from 'next/router';
 import { Check, Copy, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../CompanyContext';
 import PlatformIcon from '../ui/PlatformIcon';
+import ContentRenderer from '../ContentRenderer';
 import { filterConnectedPlatformsForContent } from '../../lib/shared/social/platformContentFilter';
 import { PLATFORM_LABELS } from '../../lib/shared/platforms';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
@@ -25,8 +26,9 @@ import {
   attachmentModeLabel,
   defaultAttachmentModeForAsset,
   type AttachmentMode,
-  type SourceTextTransform,
 } from '../../lib/content/writerCreatorAttachmentContracts';
+import WriterEmbeddedPreview from '../preview/WriterEmbeddedPreview';
+import { projectWriterAttachment } from '../../lib/preview/previewUtils';
 
 const WRITER_CREATOR_SOCIAL_PLATFORMS = ['linkedin', 'x', 'instagram', 'facebook', 'threads', 'reddit'];
 
@@ -59,6 +61,12 @@ type ShortformPayload = {
   };
   topic?: string;
   platform?: string;
+  /**
+   * G18.3 — sentinel for the "Write my own" picker mode. When 'manual' and
+   * generated_content is empty, the page renders a "Continue to scheduler"
+   * CTA instead of the AI-generation empty state.
+   */
+  creation_mode?: 'ai' | 'manual';
 };
 
 type Props = {
@@ -95,8 +103,6 @@ export default function ShortformResultPage({
   const [connectedPlatforms, setConnectedPlatforms] = useState<Array<{ key: string; label: string }>>([]);
   const [assetMenuOpen, setAssetMenuOpen] = useState(false);
   const [selectedCreatorPlatform, setSelectedCreatorPlatform] = useState('linkedin');
-  const [selectedAttachmentMode, setSelectedAttachmentMode] = useState<AttachmentMode>('supporting_visual');
-  const [selectedSourceTextTransform, setSelectedSourceTextTransform] = useState<SourceTextTransform>('none');
   const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
 
   const token = typeof router.query.prefill === 'string' ? router.query.prefill : '';
@@ -152,6 +158,14 @@ export default function ShortformResultPage({
   const adaptationTrace = payload?.output?.platform_variant?.adaptation_trace;
   const topic = payload?.topic || `Generated ${contentType}`;
   const writerSourceId = useMemo(() => createWriterSourceId('post', token || topic), [token, topic]);
+  // Phase 5 hydration hardening — memoized projection so the embedded
+  // preview rebuilds only when the attached-asset list changes, not on
+  // every parent re-render (modal open, focus, etc.). projectWriterAttachment
+  // is a pure function so the memo is referentially stable across renders.
+  const projectedAssets = useMemo(
+    () => attachedAssets.map((a) => projectWriterAttachment(a)),
+    [attachedAssets],
+  );
 
   // Capability-aware platform filter (Phase 2.C). Routes connected platforms
   // through the shared registry. Now ASSET-AWARE — when the Writer has
@@ -193,6 +207,30 @@ export default function ShortformResultPage({
     console.info(JSON.stringify({ event: CAPABILITY_LOG_EVENTS.FILTERED, ...payload }));
   }, [platformFilter, connectedPlatforms]);
 
+  // Add Asset picker: only platforms (a) connected for this company AND
+  // (b) able to publish text + at least one of the 5 Creator asset types
+  // (image / banner / infographic / carousel / brand_card). Resolves via
+  // the same capability registry as the main publish-target filter, so
+  // the matrix stays consistent.
+  const creatorAssetPlatformOptions = useMemo(() => {
+    const filtered = filterConnectedPlatformsForContent(
+      connectedPlatforms.map((p) => p.key),
+      {
+        contentType:        'post',
+        attachedAssetTypes: POST_CREATOR_ASSET_TYPES,
+      },
+    );
+    const supportedSet = new Set(filtered.supported);
+    return WRITER_CREATOR_SOCIAL_PLATFORMS.filter((p) => supportedSet.has(p));
+  }, [connectedPlatforms]);
+
+  useEffect(() => {
+    if (creatorAssetPlatformOptions.length === 0) return;
+    if (!creatorAssetPlatformOptions.includes(selectedCreatorPlatform)) {
+      setSelectedCreatorPlatform(creatorAssetPlatformOptions[0]);
+    }
+  }, [creatorAssetPlatformOptions, selectedCreatorPlatform]);
+
   const labelFor = (key: string) =>
     connectedPlatforms.find((p) => p.key === key)?.label || PLATFORM_LABELS[key] || key;
   const platformLabel = useMemo(() => {
@@ -231,7 +269,13 @@ export default function ShortformResultPage({
   }, [selectedCompanyId, writerSourceId]);
 
   const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {
-    const attachmentMode = selectedAttachmentMode || defaultAttachmentModeForAsset(assetType);
+    // Attachment mode + source-text transform are NOT user-facing knobs
+    // in the asset-type selector — they are rendering-behavior concerns
+    // resolved deterministically from payload signals in
+    // resolveAttachmentModeFromIntent. We pass the per-asset default
+    // here; the resolver inside buildWriterCreatorPrefill upgrades it
+    // based on the actual content shape.
+    const attachmentMode: AttachmentMode = defaultAttachmentModeForAsset(assetType);
     setAssetMenuOpen(false);
     launchCreatorFromWriter({
       router,
@@ -241,7 +285,6 @@ export default function ShortformResultPage({
         sourceId: writerSourceId,
         assetType,
         attachmentMode,
-        sourceTextTransform: selectedSourceTextTransform,
         title: topic,
         body: generatedContent,
         audience: '',
@@ -282,6 +325,41 @@ export default function ShortformResultPage({
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <p className="text-sm text-gray-500">Sign in to continue.</p>
+      </div>
+    );
+  }
+
+  // G18.3 — manual-draft mode: user picked "Write my own" on /posts/intelligence.
+  // The page renders a "Continue to scheduler" CTA because ShortformResultPage
+  // itself is a viewer; the scheduler is where editing happens.
+  if (payload?.creation_mode === 'manual' && !generatedContent) {
+    const manualSchedulerHref = token
+      ? `/multi-platform-scheduler?source=${contentType}-result&contentType=${encodeURIComponent(contentType)}&prefill=${encodeURIComponent(token)}`
+      : `/multi-platform-scheduler?source=${contentType}-result&contentType=${encodeURIComponent(contentType)}`;
+    return (
+      <div className={`min-h-screen bg-gradient-to-br ${accentSurfaceClassName} p-6`}>
+        <div className="mx-auto max-w-3xl rounded-[28px] border border-white/80 bg-white/92 p-8 text-center shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Write my own</p>
+          <h1 className="text-2xl font-semibold text-slate-950">Open the scheduler to write your post</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-600">
+            You picked to write this {contentType} manually. The scheduler is where you write the post content per platform and schedule it.
+            We left the AI generation step out — you stay in control of every line.
+          </p>
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <Link
+              href={manualSchedulerHref}
+              className={`inline-flex items-center justify-center rounded-xl px-5 py-3 text-sm font-semibold text-white ${accentButtonClassName}`}
+            >
+              Open scheduler to write
+            </Link>
+            <Link href="/command-center/content" className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700">
+              Back to content hub
+            </Link>
+          </div>
+          <p className="mt-6 text-xs text-slate-500">
+            Tip: the scheduler will not allow scheduling until you add post content for at least one platform.
+          </p>
+        </div>
       </div>
     );
   }
@@ -355,8 +433,45 @@ export default function ShortformResultPage({
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-5">
-                <pre className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-800">{generatedContent}</pre>
+                {/* G9.B — central ContentRenderer for platform-aware hashtag/mention highlighting + char-count.
+                    Replaces a raw <pre> that lost the platform-specific formatting every other preview already has. */}
+                <ContentRenderer
+                  content={generatedContent}
+                  platform={payload?.output?.platform_variant?.platform || payload?.platform || ''}
+                  contentType={payload?.output?.content_type || contentType}
+                  renderMode="social"
+                  showCharCount
+                  className="text-sm leading-7 text-slate-800"
+                />
               </div>
+
+              {/* Phase 1 — Writer Embedded Preview. Renders the REAL
+                  composed post (text + attached creator assets) using
+                  the same platform-faithful renderer family that
+                  PostPreviewModal uses at publish time → preview/publish
+                  parity. Hides when there is nothing meaningful to show. */}
+              {(generatedContent || attachedAssets.length > 0) && (
+                <div className="mt-5">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400 mb-2">
+                    Composed Preview
+                  </p>
+                  <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                    <WriterEmbeddedPreview
+                      mode="post"
+                      platform={payload?.output?.platform_variant?.platform || payload?.platform || 'linkedin'}
+                      content={generatedContent}
+                      contentType={payload?.output?.content_type || contentType}
+                      title={topic}
+                      // Phase 4 — projection consolidated into the shared
+                      // `projectWriterAttachment` util so post + thread
+                      // writers produce identical CreatorAttachment shapes.
+                      // Phase 5 — memoize the projection so the preview
+                      // only rebuilds when attachedAssets actually change.
+                      attachedAssets={projectedAssets}
+                    />
+                  </div>
+                </div>
+              )}
 
               {hashtags.length > 0 && (
                 <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
@@ -467,69 +582,32 @@ export default function ShortformResultPage({
                         <div className="absolute left-0 right-0 z-10 mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
                           <div className="border-b border-slate-100 px-4 py-3">
                             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Create asset from post</p>
-                            <p className="mt-1 text-xs text-slate-500">Choose a supported Creator asset and we will prefill it from this post.</p>
-                            <div className="mt-3 grid grid-cols-2 gap-2">
-                              {(['supporting_visual', 'embedded_copy'] as AttachmentMode[]).map((mode) => (
-                                <button
-                                  key={mode}
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setSelectedAttachmentMode(mode);
-                                  }}
-                                  className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
-                                    selectedAttachmentMode === mode
-                                      ? 'border-blue-600 bg-blue-600 text-white'
-                                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
-                                  }`}
-                                >
-                                  {attachmentModeLabel(mode)}
-                                </button>
-                              ))}
-                            </div>
-                            <div className="mt-3 grid grid-cols-2 gap-2">
-                              {([
-                                ['none', 'Support visually'],
-                                ['summarize', 'Summarize'],
-                                ['extract_points', 'Extract points'],
-                                ['quote', 'Quote'],
-                              ] as Array<[SourceTextTransform, string]>).map(([transform, label]) => (
-                                <button
-                                  key={transform}
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setSelectedSourceTextTransform(transform);
-                                  }}
-                                  className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
-                                    selectedSourceTextTransform === transform
-                                      ? 'border-blue-600 bg-blue-600 text-white'
-                                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
-                                  }`}
-                                >
-                                  {label}
-                                </button>
-                              ))}
-                            </div>
+                            <p className="mt-1 text-xs text-slate-500">Pick a Creator asset type. Post flow supports Image, Banner, Brand Card, and Infographic.</p>
                             <div className="mt-3 flex flex-wrap gap-2">
-                              {WRITER_CREATOR_SOCIAL_PLATFORMS.map((platform) => (
-                                <button
-                                  key={platform}
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setSelectedCreatorPlatform(platform);
-                                  }}
-                                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-semibold transition ${
-                                    selectedCreatorPlatform === platform
-                                      ? 'border-blue-600 bg-blue-600 text-white'
-                                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
-                                  }`}
-                                >
-                                  <PlatformIcon platform={platform} size={14} />
-                                  {labelFor(platform)}
-                                </button>
-                              ))}
+                              {creatorAssetPlatformOptions.length === 0 ? (
+                                <p className="text-xs text-slate-500">
+                                  Connect a social platform that supports image, infographic, or brand-card posts to attach a Creator asset.
+                                </p>
+                              ) : (
+                                creatorAssetPlatformOptions.map((platform) => (
+                                  <button
+                                    key={platform}
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setSelectedCreatorPlatform(platform);
+                                    }}
+                                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-semibold transition ${
+                                      selectedCreatorPlatform === platform
+                                        ? 'border-blue-600 bg-blue-600 text-white'
+                                        : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
+                                    }`}
+                                  >
+                                    <PlatformIcon platform={platform} size={14} />
+                                    {labelFor(platform)}
+                                  </button>
+                                ))
+                              )}
                             </div>
                           </div>
                           <button
@@ -558,9 +636,6 @@ export default function ShortformResultPage({
                     <Link href={socialWorkflowLinks.social} className={`inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-white ${accentButtonClassName}`}>
                       Post to social
                     </Link>
-                    <Link href={socialWorkflowLinks.campaign} className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-                      Use in campaign
-                    </Link>
                     <Link href={socialWorkflowLinks.intelligence} className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
                       Return to post intelligence
                     </Link>
@@ -572,7 +647,7 @@ export default function ShortformResultPage({
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Attached Assets</p>
                 {attachedAssets.length === 0 ? (
                   <p className="mt-3 text-sm leading-6 text-slate-600">
-                    No Creator assets attached yet. Use Add Asset to launch a supporting image, banner, infographic, carousel, or brand card with this post prefilled.
+                    No Creator assets attached yet. Use Add Asset to launch an Image, Banner, Brand Card, or Infographic with this post prefilled.
                   </p>
                 ) : (
                   <div className="mt-3 space-y-2">

@@ -3,6 +3,7 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import {
   listBlockTemplates,
   createBlockTemplate,
+  deleteBlockTemplate,
 } from '../../../backend/services/blockTemplateService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -42,6 +43,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         is_public,
       });
       return res.status(201).json({ template });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // ── DELETE: remove a template (id in query OR body) ───────────────────────
+  // Lives on the static /api/block-templates path because the dynamic
+  // [id] route was returning HTML 404 in this dev environment despite a
+  // correct handler. This branch is reached through the already-compiled
+  // index file, sidestepping that issue.
+  if (req.method === 'DELETE') {
+    const id = (typeof req.query.id === 'string' ? req.query.id
+      : typeof req.body?.id === 'string' ? req.body.id
+      : '').trim();
+    if (!id) return res.status(400).json({ error: 'id required' });
+    try {
+      await deleteBlockTemplate(id);
+      return res.status(200).json({ success: true, id });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }

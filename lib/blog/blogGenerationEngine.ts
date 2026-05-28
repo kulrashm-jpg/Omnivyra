@@ -282,6 +282,10 @@ export function buildAnglesUserPrompt(input: BlogGenerationInput): string {
 
   // Directional inputs — these must shape the angles directly
   if (a.uniqueness_directive)  lines.push(`UNIQUENESS DIRECTIVE (angles must honour this): ${a.uniqueness_directive}`);
+  // Phase 2.7 — section-level strategic assignments replace the
+  // must_include_points blob for the auto-synthesized case. User-supplied
+  // must_include_points is still honored (explicit user override).
+  if (a.section_strategic_assignments) lines.push(`\n${a.section_strategic_assignments}`);
   if (a.must_include_points)   lines.push(`MUST-INCLUDE POINTS (weave into each angle): ${a.must_include_points}`);
   if (a.campaign_objective)    lines.push(`CAMPAIGN OBJECTIVE: ${a.campaign_objective}`);
   if (a.trend_context)         lines.push(`TREND CONTEXT: ${a.trend_context}`);
@@ -1140,6 +1144,12 @@ export function buildTemplateAwareUserPrompt(
     }
     if (input.answers.uniqueness_directive) {
       lines.push(`\n## UNIQUENESS DIRECTIVE: ${input.answers.uniqueness_directive}`);
+    }
+    // Phase 2.7 — Section-level strategic assignments are the primary
+    // anchor-distribution mechanism. The model receives per-section
+    // bundles rather than a single comma-joined checklist.
+    if (input.answers.section_strategic_assignments) {
+      lines.push(`\n## ${input.answers.section_strategic_assignments}`);
     }
     if (input.answers.must_include_points) {
       lines.push(`\n## MUST-INCLUDE POINTS: ${input.answers.must_include_points}`);

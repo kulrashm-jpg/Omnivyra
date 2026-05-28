@@ -87,6 +87,10 @@ export default function AIBlogCardModal({
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  // Elapsed-seconds tracker for the in-flight AI call. Drives the
+  // extended progress UI that swaps in once the request crosses 5s so
+  // the user sees a reason to wait instead of a static "Thinking…".
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [conversationPhase, setConversationPhase] = useState<'topic' | 'intent' | 'details' | 'preview'>('topic');
   const [cardPreview, setCardPreview] = useState<BlogCardPreview | null>(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -104,6 +108,19 @@ export default function AIBlogCardModal({
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Tick the elapsed-seconds counter while a request is in flight.
+  // Resets to 0 the moment loading flips off so the next call starts fresh.
+  useEffect(() => {
+    if (!isLoading) {
+      setElapsedSec(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const tick = () => setElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    const interval = setInterval(tick, 500);
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   if (!isOpen) return null;
 
@@ -465,14 +482,58 @@ export default function AIBlogCardModal({
             </div>
           )}
 
-          {/* Loading indicator */}
-          {isLoading && (
+          {/* Loading indicator. Static "Thinking…" for the first 2s;
+              richer progress tracker (stage label + elapsed timer +
+              progress bar) once the request crosses the 2s threshold
+              so the user sees the call is still active. */}
+          {isLoading && elapsedSec < 2 && (
             <div className="flex gap-3">
               <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
                 <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />
               </div>
               <div className="px-3 py-2 rounded-lg bg-gray-100 text-gray-500 text-sm">
                 Thinking...
+              </div>
+            </div>
+          )}
+
+          {isLoading && elapsedSec >= 2 && (
+            <div className="flex gap-3">
+              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />
+              </div>
+              <div className="flex-1 max-w-sm rounded-lg bg-gray-50 border border-gray-200 px-3 py-2.5 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-gray-700">
+                    {elapsedSec < 15
+                      ? 'Analyzing company context…'
+                      : elapsedSec < 30
+                        ? 'Refining topic structure…'
+                        : elapsedSec < 60
+                          ? 'Polishing the recommendation…'
+                          : 'Still working — this is taking longer than usual…'}
+                  </p>
+                  <span className="text-[10px] tabular-nums text-gray-500 shrink-0">
+                    {elapsedSec}s
+                  </span>
+                </div>
+                {/* Indeterminate progress bar — purely visual signal that
+                    work is in progress (we don't have streaming progress
+                    from the API). Capped width grows with elapsed time
+                    so longer waits feel like measurable progress. */}
+                <div className="h-1 rounded-full bg-gray-200 overflow-hidden">
+                  <div
+                    className="h-full bg-blue-600 transition-all duration-500 ease-out"
+                    style={{
+                      width: `${Math.min(95, 25 + elapsedSec * 2)}%`,
+                    }}
+                  />
+                </div>
+                {elapsedSec >= 30 && (
+                  <p className="text-[11px] text-gray-500">
+                    The AI is still composing your recommendation. You can keep waiting or close this dialog and try again.
+                  </p>
+                )}
               </div>
             </div>
           )}

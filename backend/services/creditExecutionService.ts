@@ -49,6 +49,7 @@ import { resolveMonetizationFeature } from '../../shared/monetization/featureReg
 import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
 import { evaluateCreditSafetyGate } from './billing/creditSafetyGate';
 import { resolveBillingPolicy } from './billing/billingPolicyResolver';
+import { assertUuid, canonicalizeReference, type Uuid } from '@/lib/shared/uuid';
 
 /** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
 function fireAlerts(orgId: string): void {
@@ -236,6 +237,46 @@ function getReservationKeys(idempotencyKey: string): { holdKey: string; confirmK
   };
 }
 
+/**
+ * Canonical UUID anti-corruption boundary for ALL billing entry points.
+ *
+ * Asserts `orgId` and `userId` carry RFC 4122 UUID shape (these are real
+ * foreign keys and MUST be UUIDs by construction — a failure here means an
+ * upstream bug, not a legitimate semantic key).
+ *
+ * Coerces `referenceId` via `canonicalizeReference`: real UUIDs pass through
+ * unchanged; semantic keys (e.g. "workspace-linkedin", planner composites)
+ * are deterministically projected onto a stable UUID v5-shaped value so they
+ * can live in `credit_transactions.reference_id` (UUID column) without losing
+ * dedup behavior. The original semantic value is returned in `.semantic` so
+ * callers can preserve it in idempotency keys, notes, and telemetry.
+ *
+ * Namespace is keyed on `referenceType` so two different reference_types
+ * never collide on the same semantic string (e.g. "workspace-linkedin" as a
+ * "master_content" reference vs. as a "workspace_content_variants" reference
+ * derive distinct UUIDs).
+ */
+function assertCanonicalBillingIdentifiers(input: {
+  userId: unknown;
+  orgId: unknown;
+  referenceType: string;
+  referenceId: unknown;
+}): { userId: Uuid; orgId: Uuid; referenceId: Uuid; semanticReferenceId: string; referenceDerived: boolean } {
+  assertUuid(input.userId, 'userId');
+  assertUuid(input.orgId, 'orgId');
+  if (typeof input.referenceId !== 'string' || input.referenceId.trim() === '') {
+    throw new Error(`[billing-payload-invalid] referenceId must be a non-empty string for referenceType="${input.referenceType}"`);
+  }
+  const canonical = canonicalizeReference(input.referenceId, `billing:${input.referenceType}`);
+  return {
+    userId: input.userId,
+    orgId: input.orgId,
+    referenceId: canonical.uuid,
+    semanticReferenceId: canonical.semantic,
+    referenceDerived: canonical.derived,
+  };
+}
+
 function assertCanonicalCreditAction(input: {
   action: CreditAction;
   referenceType: string;
@@ -316,7 +357,18 @@ export async function reserveCreditsForWork(opts: {
   note?: string;
   validateMembership?: boolean;
 }): Promise<CreditReservationResult> {
-  const { userId, orgId, action, referenceType, referenceId } = opts;
+  const { action, referenceType } = opts;
+  // Canonical UUID anti-corruption boundary (see executeWithCredits).
+  const ids = assertCanonicalBillingIdentifiers({
+    userId:        opts.userId,
+    orgId:         opts.orgId,
+    referenceType: opts.referenceType,
+    referenceId:   opts.referenceId,
+  });
+  const userId = ids.userId;
+  const orgId = ids.orgId;
+  const referenceId = ids.referenceId;
+  const semanticReferenceId = ids.semanticReferenceId;
   if (!opts.idempotencyKey || opts.idempotencyKey.trim() === '') {
     throw new Error(`[creditReservation] MISSING idempotencyKey for action "${action}"`);
   }
@@ -405,6 +457,10 @@ export async function reserveCreditsForWork(opts: {
     return { status: 'insufficient_credits', available: available?.total ?? 0, required: credits };
   }
 
+  const baseNote = opts.note ?? action;
+  const noteWithSemantic = ids.referenceDerived
+    ? `${baseNote} [semanticRef=${semanticReferenceId}]`
+    : baseNote;
   const { error: holdErr, transactionId } = await callCreditReservation({
     orgId,
     phase: 'hold',
@@ -412,7 +468,7 @@ export async function reserveCreditsForWork(opts: {
     idempotencyKey: holdKey,
     referenceType,
     referenceId,
-    note: `[HOLD] ${opts.note ?? action}`,
+    note: `[HOLD] ${noteWithSemantic}`,
     performedBy: userId,
   });
 
@@ -557,7 +613,23 @@ export async function releaseCreditReservation(handle: CreditReservationHandle &
 export async function executeWithCredits<T>(
   opts: ExecuteWithCreditsOptions<T>,
 ): Promise<ExecuteResult<T>> {
-  const { userId, orgId, action, referenceType, referenceId, note, executor } = opts;
+  const { action, referenceType, executor } = opts;
+  // Canonical UUID anti-corruption boundary. orgId + userId asserted; the
+  // semantic referenceId is coerced into a stable UUID for the DB column and
+  // the original is preserved in `semanticReferenceId` for note/telemetry.
+  const ids = assertCanonicalBillingIdentifiers({
+    userId:        opts.userId,
+    orgId:         opts.orgId,
+    referenceType: opts.referenceType,
+    referenceId:   opts.referenceId,
+  });
+  const userId = ids.userId;
+  const orgId = ids.orgId;
+  const referenceId = ids.referenceId;
+  const semanticReferenceId = ids.semanticReferenceId;
+  const note = ids.referenceDerived && opts.note
+    ? `${opts.note} [semanticRef=${semanticReferenceId}]`
+    : opts.note;
   assertCanonicalCreditAction({ action, referenceType, referenceId, orgId, userId });
 
   // ── HARD FAIL: idempotencyKey is mandatory ─────────────────────────────────
@@ -1124,6 +1196,22 @@ export async function createCredit(opts: CreateCreditOptions): Promise<void> {
     throw new Error('[createCredit] MISSING idempotencyKey — credit grants require deterministic keys');
   }
 
+  // Canonical UUID anti-corruption boundary. orgId + performedBy MUST be
+  // UUIDs (real foreign keys); referenceId is optional for grants — when
+  // present we coerce it through the same path as executeWithCredits so
+  // semantic keys never reach the credit_transactions.reference_id column.
+  assertUuid(opts.orgId, 'orgId');
+  assertUuid(opts.performedBy, 'performedBy');
+  let canonicalReferenceId: string | undefined;
+  let grantNote = opts.note ?? `${opts.category} credit grant`;
+  if (opts.referenceId != null && opts.referenceId !== '') {
+    const canonical = canonicalizeReference(opts.referenceId, `billing:${opts.referenceType}`);
+    canonicalReferenceId = canonical.uuid;
+    if (canonical.derived) {
+      grantNote = `${grantNote} [semanticRef=${canonical.semantic}]`;
+    }
+  }
+
   const split: CategorySplit = {
     free:      opts.category === 'free'      ? opts.amount : 0,
     incentive: opts.category === 'incentive' ? opts.amount : 0,
@@ -1136,8 +1224,8 @@ export async function createCredit(opts: CreateCreditOptions): Promise<void> {
     split,
     idempotencyKey: opts.idempotencyKey,
     referenceType:  opts.referenceType,
-    referenceId:    opts.referenceId,
-    note:           opts.note ?? `${opts.category} credit grant`,
+    referenceId:    canonicalReferenceId,
+    note:           grantNote,
     performedBy:    opts.performedBy,
     // Pass the caller's declared category through. The RPC defaults to 'paid'
     // when this is missing, which silently mislabeled every free/incentive

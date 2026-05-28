@@ -136,8 +136,30 @@ const PLATFORM_LIMITS: Record<string, PlatformContentLimits> = {
 };
 
 /**
- * Format content for a specific platform
- * 
+ * Format content for a specific platform.
+ *
+ * Phase C — `mutateTruncate` controls the over-limit behavior:
+ *
+ *   - `true` (DEFAULT, BACKWARD-COMPATIBLE): if the formatted text exceeds
+ *     `limits.maxChars`, silently truncate at a word boundary and append
+ *     '...'. Returns `truncated: true` + a warning so the caller knows.
+ *     This is the historical behavior every adapter relies on today.
+ *
+ *   - `false` (RECOMMENDED once schedule-time char-limit enforce is on):
+ *     do NOT mutate the text. Return `truncated: true` (so the adapter can
+ *     refuse to publish) with a clear warning and the text UNTOUCHED. The
+ *     adapter is then responsible for not publishing partially-correct
+ *     content. The intended consumer pairs this flag with the G11 schedule-
+ *     time guard (`SCHEDULE_CHAR_LIMIT_MODE=enforce`) which rejects the
+ *     overflow at schedule time — at publish time, `mutateTruncate=false`
+ *     becomes the second line of defense that ALSO refuses to publish if
+ *     somehow over-limit content slipped past the schedule-time gate.
+ *
+ * Roll-out: adapter call sites should remain on the default until prod has
+ * been observed under `SCHEDULE_CHAR_LIMIT_MODE=enforce` for a soak window.
+ * Then flip adapters one-platform-at-a-time to `mutateTruncate: false` and
+ * add per-adapter publish-readiness reject for the over-limit case.
+ *
  * @param content - Original content text
  * @param platform - Platform name (linkedin, twitter, instagram, etc.)
  * @param options - Additional formatting options
@@ -151,6 +173,11 @@ export function formatContentForPlatform(
     mentions?: string[];
     links?: string[];
     mediaUrls?: string[];
+    /** Phase C — when false, over-limit text is NOT auto-truncated; the
+     *  caller receives `truncated:true` + warning + the UNMUTATED text and
+     *  is expected to refuse to publish. Default true preserves legacy
+     *  silent-truncate behavior. */
+    mutateTruncate?: boolean;
   } = {}
 ): FormattedContent {
   const platformKey = platform.toLowerCase();
@@ -227,18 +254,26 @@ export function formatContentForPlatform(
     finalText = `${finalText} ${hashtagText}`.trim();
   }
 
-  // Truncate if over limit
+  // Over-limit handling (see `mutateTruncate` docstring above).
   if (finalText.length > limits.maxChars) {
     truncated = true;
-    warnings.push(`Content truncated from ${finalText.length} to ${limits.maxChars} characters`);
-    
-    // Smart truncation: try to cut at word boundary
-    let truncatedText = finalText.substring(0, limits.maxChars);
-    const lastSpace = truncatedText.lastIndexOf(' ');
-    if (lastSpace > limits.maxChars * 0.9) { // Only if we're close to limit
-      truncatedText = truncatedText.substring(0, lastSpace);
+    const mutateTruncate = options.mutateTruncate !== false; // default true
+    if (mutateTruncate) {
+      warnings.push(`Content truncated from ${finalText.length} to ${limits.maxChars} characters`);
+      // Smart truncation: try to cut at word boundary
+      let truncatedText = finalText.substring(0, limits.maxChars);
+      const lastSpace = truncatedText.lastIndexOf(' ');
+      if (lastSpace > limits.maxChars * 0.9) { // Only if we're close to limit
+        truncatedText = truncatedText.substring(0, lastSpace);
+      }
+      finalText = truncatedText + (truncatedText.length < finalText.length ? '...' : '');
+    } else {
+      // Phase C — strict mode. Do NOT mutate. Adapter must refuse to publish.
+      warnings.push(
+        `Content exceeds ${platform} ${limits.maxChars}-char limit (actual: ${finalText.length}). ` +
+        `Adapter should refuse to publish; reject upstream via schedule-time guard.`
+      );
     }
-    finalText = truncatedText + (truncatedText.length < finalText.length ? '...' : '');
   }
 
   // Handle links

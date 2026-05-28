@@ -1,0 +1,218 @@
+name: Thread Runtime Observability
+
+# Blocking CI gate for the thread-runtime observability + durable
+# orchestration persistence + durable recovery + distributed runtime +
+# durable distributed runtime substrate stack. Runs six stress harnesses
+# (72 scenarios) plus the orchestration + recovery + distributed jest
+# suites (Phase 16/17/18/19/20/21 tests) on PRs that touch any tracer-,
+# persistence-, recovery-, distributed-runtime-, or durable-substrate-
+# bearing code. A failure here means a regression in: replay-contract
+# enforcement, silent-zone detection, lifecycle closure integrity,
+# transport dedup, topology integrity, durable execution / checkpoint /
+# lease persistence, durable recovery (resumable continuation, checkpoint
+# restoration, lease takeover, idempotency suppression), distributed
+# coordination (queue ordering, ownership transfer, throughput throttling,
+# worker health), OR the durable distributed substrate (Supabase queue,
+# worker registry, replay coordinator, compactor, forensic analyzer).
+# Modeled on .github/workflows/stability.yml.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/thread-runtime-observability.yml'
+      - 'backend/services/threadRuntime/**'
+      - 'backend/services/orchestration/persistence/**'
+      - 'backend/services/orchestration/recovery/**'
+      - 'backend/services/orchestration/distributed/**'
+      - 'backend/tests/orchestration/**'
+      - 'scripts/ops/longFormThreadRuntime*.ts'
+      - 'scripts/ops/longFormDurableRecoveryStress.ts'
+      - 'scripts/ops/longFormDistributedExecutionStress.ts'
+      - 'scripts/ops/longFormDurableDistributedRuntimeStress.ts'
+      - 'scripts/ops/longFormDistributedActivationStress.ts'
+      - 'scripts/ops/longFormDistributedWorkflowExecutionStress.ts'
+      - 'scripts/ops/longFormDomainExecutionStress.ts'
+      - 'scripts/ops/longFormProductionExecutionStress.ts'
+      - 'pages/api/threadRuntime/**'
+      - 'pages/api/scheduler/schedule.ts'
+      - 'lib/thread/threadNodePersistence.ts'
+      - 'lib/thread/threadRuntimeMode.ts'
+      - 'pages/multi-platform-scheduler.tsx'
+      - 'components/thread/ThreadResultView.tsx'
+      - 'components/thread/ThreadSegmentsEditor.tsx'
+      - 'supabase/migrations/20260808_thread_runtime_*.sql'
+      - 'supabase/migrations/20260810_thread_runtime_*.sql'
+      - 'supabase/migrations/20260811_thread_runtime_*.sql'
+      - 'supabase/migrations/20260812_thread_runtime_*.sql'
+      - 'supabase/migrations/20260813_long_form_operations.sql'
+      - 'instrumentation.node.ts'
+      - 'backend/queue/startWorkers.ts'
+      - 'backend/scheduler/cron.ts'
+      - 'package.json'
+  push:
+    branches: [main]
+    tags: ['v*', 'release-*']
+  workflow_dispatch:
+
+concurrency:
+  group: thread-runtime-observability-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime-observability:
+    name: Runtime observability gate (120 scenarios + production wiring + activation safety)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 12 scenarios — synthetic-trace assertions across the registry,
+      # snapshot engine, soak reporter, failure summarizer, diagnostics,
+      # validator, recovery traceability, operator summary, and observability
+      # aggregator.
+      - name: Thread runtime observability harness
+        run: npx tsx scripts/ops/longFormThreadRuntimeStress.ts
+
+      # 12 scenarios — adversarial wiring conditions: missing trace
+      # emission, duplicate lifecycle events, out-of-order sequences,
+      # snapshot omission, replay-chain corruption, silent persistence
+      # mutation, unclosed join lifecycle, reload without snapshot,
+      # recovery without completion, impossible transitions, end-to-end
+      # replay-contract gate.
+      - name: Thread runtime wiring harness
+        run: npx tsx scripts/ops/longFormThreadRuntimeWiringStress.ts
+
+      # 12 scenarios — adversarial transport conditions: duplicate
+      # delivery, partial flush failure, reconnect during reorder, unload
+      # during persist, retry storm, out-of-order arrival, tab crash,
+      # orphaned session, replay duplication, server restart, correlation
+      # + timeline + retention end-to-end.
+      - name: Thread runtime transport harness
+        run: npx tsx scripts/ops/longFormThreadRuntimeTransportStress.ts
+
+      # Phase 18G — orchestration persistence jest suite. Hermetic (no DB,
+      # no network): every test uses the in-memory mock supabase-js builder.
+      # Covers:
+      #   - SupabaseExecutionStore (Phase 16)
+      #   - bootstrapExecutionStore (Phase 17 + Phase 18 write-smoke)
+      #   - SupabaseCheckpointStore (Phase 18A)
+      #   - SupabaseLeaseStore (Phase 18B)
+      #   - writeSideSmokeVerification (Phase 18C)
+      #   - durablePersistenceDiagnostics (Phase 18H)
+      # A regression here breaks the durable execution substrate's
+      # idempotency / atomicity / fail-fast contract. Hard-gate.
+      #
+      # Phase 19K — recovery jest suite ALSO included in this run (under
+      # backend/tests/orchestration/recovery/). Covers:
+      #   - CheckpointRestorationEngine (Phase 19B)
+      #   - LeaseRecoveryGovernor (Phase 19F)
+      #   - StaleExecutionReconciler (Phase 19C)
+      #   - ReplayContinuationEngine (Phase 19D)
+      #   - ExecutionRecoveryCoordinator (Phase 19A)
+      #   - durableRecoveryDiagnostics (Phase 19H)
+      # A regression here breaks recovery determinism / replay correctness /
+      # lease coordination / idempotency suppression. Hard-gate.
+      - name: Orchestration persistence + recovery jest suite
+        run: npx jest backend/tests/orchestration --no-coverage --colors
+
+      # Phase 19I — durable-recovery distributed stress harness (12
+      # adversarial scenarios). Validates: resumability, replay correctness,
+      # idempotency, lease coordination, duplicate suppression, deterministic
+      # recovery across crash + restart + split-brain + retry-storm flows.
+      - name: Durable recovery stress harness
+        run: npx tsx scripts/ops/longFormDurableRecoveryStress.ts
+
+      # Phase 20I — distributed execution stress harness (12 adversarial
+      # scenarios). Validates: ownership correctness, queue determinism,
+      # bounded recovery throughput, throughput stability, worker
+      # coordination, split-brain prevention across claim race, stale
+      # worker reclaim, visibility-timeout reclaim, ownership transfer,
+      # retry storm, throughput overload, scheduling overload, heartbeat
+      # partition, split-brain claim, queue replay after restart flows.
+      - name: Distributed execution stress harness
+        run: npx tsx scripts/ops/longFormDistributedExecutionStress.ts
+
+      # Phase 21I — durable distributed-runtime stress harness (12
+      # adversarial scenarios). Validates the Phase 21 durable substrate:
+      # multi-instance claim race, visibility reclaim after crash, delayed
+      # replay after deploy, stale worker reclaim across instances,
+      # duplicate enqueue across workers, dead-letter recovery replay,
+      # queue corruption recovery, distributed heartbeat partition,
+      # split-brain ownership attempts, queue replay during recovery
+      # storm, worker drain during replay continuation, cross-instance
+      # retry amplification. Exercises the in-memory queue + worker
+      # registry path; the Supabase-backed path is exercised by the jest
+      # suite with mock supabase clients.
+      - name: Durable distributed runtime stress harness
+        run: npx tsx scripts/ops/longFormDurableDistributedRuntimeStress.ts
+
+      # Phase 22G — distributed activation + reclaim stress harness (12
+      # adversarial scenarios). Validates the Phase 22 activation governance
+      # + targeted reclaim hardening: activation before persistence,
+      # partial-startup hard-fail, reclaim refused during active execution,
+      # split-brain reclaim race suppression, dead-worker reclaim via
+      # listByClaimer, activation under replay storm, duplicate startup
+      # idempotency, shutdown-mid-reclaim safety, multi-entry reclaim,
+      # stale-worker false-positive refusal, activation watchdog timeout,
+      # queue replay during runtime restart.
+      - name: Distributed activation + reclaim stress harness
+        run: npx tsx scripts/ops/longFormDistributedActivationStress.ts
+
+      # Phase 23H — distributed workflow execution stress harness (12
+      # adversarial scenarios). Validates Phase 23 queue→workflow translation:
+      # malformed payload, stale execution, replay continuation after restart,
+      # duplicate replay, checkpoint mismatch, version mismatch, cancellation,
+      # corrupted metadata, orphan execution, worker failover replay,
+      # duplicate topology, restart during continuation. Exercises the
+      # WorkflowStepRegistry + QueuePayloadHydrator + ExecutionPayloadGovernor
+      # + QueueCheckpointContinuityCoordinator + bridge end-to-end.
+      - name: Distributed workflow execution stress harness
+        run: npx tsx scripts/ops/longFormDistributedWorkflowExecutionStress.ts
+
+      # Phase 24I — domain execution stress harness (12 adversarial scenarios).
+      # Validates Phase 24 real domain builders end-to-end: long-form
+      # generation restart, duplicate publish replay, provider timeout +
+      # retry, campaign restart during staggered execution, reconciliation
+      # replay after failover, checkpoint corruption during generation,
+      # duplicate regeneration, provider publish during reclaim, campaign
+      # replay after deploy restart, long-form replay divergence, provider
+      # reconciliation replay storm, queue replay during active campaign.
+      - name: Domain execution stress harness
+        run: npx tsx scripts/ops/longFormDomainExecutionStress.ts
+
+      # Phase 26I — production execution stress harness (12 adversarial scenarios).
+      # Validates production wiring end-to-end: production hook factories,
+      # in-process fingerprint cache for replay-safe publish suppression,
+      # pre-registered domain continuity rules (long-form / publish /
+      # campaign / reconciliation), cross-run forensic correlation
+      # (providerReplayDivergence + campaignContinuity + reconciliationReplay).
+      - name: Production execution stress harness
+        run: npx tsx scripts/ops/longFormProductionExecutionStress.ts
+
+      # Phase 27B — Activation safety governance jest gate. 7 suites,
+      # 56 tests covering: runtimePublishGate (transactional publish
+      # short-circuit), longFormOperationClaim (winner-takes-all ON
+      # CONFLICT), bullmqJobIdParity (cron/runtime divergence detection),
+      # providerActivationGovernor (allowlist + reddit hard-block),
+      # productionRuntimeRolloutGovernor (stage transitions),
+      # replayAuditEnforcementGovernor (threshold breaches),
+      # productionRollbackGovernor (auto rollback triggers), and the
+      # 12-scenario activationStressHarness (duplicate replay storm,
+      # concurrent publish race, cron/runtime enqueue collision, long-form
+      # replay collision, provider activation during rollback, replay-audit
+      # freeze escalation, illegal stage transition, allowlist bypass,
+      # adapter failure mid-transaction, publish replay after reclaim,
+      # runtime restart during downgrade, shadow→live transition under
+      # queue replay). Activation-safety regressions block merge.
+      - name: Activation safety governance gate
+        run: npx jest backend/tests/orchestration/distributed/domain/production --no-coverage --colors

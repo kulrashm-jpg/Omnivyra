@@ -12,6 +12,9 @@ type Props = {
   isDefault?: boolean;
   selected?: boolean;
   onClick: () => void;
+  /** When provided, renders a small × control in the top-right corner.
+   *  Callers should handle their own confirmation if needed. */
+  onDelete?: () => void;
   eyebrow?: string;
   accentClassName?: string;
   surfaceClassName?: string;
@@ -113,6 +116,7 @@ export function TemplateCard({
   isDefault,
   selected,
   onClick,
+  onDelete,
   eyebrow,
   accentClassName,
   surfaceClassName,
@@ -120,10 +124,17 @@ export function TemplateCard({
   stats,
 }: Props) {
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className={`group text-left rounded-xl border-2 p-4 shadow-sm hover:shadow-md transition-all duration-200 ${
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onClick();
+        }
+      }}
+      className={`group relative text-left rounded-xl border-2 p-4 shadow-sm hover:shadow-md transition-all duration-200 cursor-pointer ${
         surfaceClassName || 'bg-white'
       } ${
         selected
@@ -131,6 +142,26 @@ export function TemplateCard({
           : 'border-gray-100 hover:border-purple-200'
       }`}
     >
+      {onDelete && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+          aria-label={`Delete ${name}`}
+          title="Delete template"
+          className="absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-400 opacity-0 shadow-sm transition-opacity hover:border-red-300 hover:bg-red-50 hover:text-red-600 focus:opacity-100 group-hover:opacity-100"
+        >
+          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 6h18" />
+            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+          </svg>
+        </button>
+      )}
       {accentClassName && (
         <div className={`mb-3 h-1.5 w-full rounded-full bg-gradient-to-r ${accentClassName}`} />
       )}
@@ -183,7 +214,7 @@ export function TemplateCard({
         {blocks.length} blocks
         {blocks.some((b) => b.type === 'columns') && ' · has columns'}
       </p>
-    </button>
+    </div>
   );
 }
 

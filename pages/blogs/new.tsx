@@ -13,7 +13,6 @@ import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
-import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
 import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
@@ -43,6 +42,10 @@ export default function BlogNewPage() {
   const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
   const [editorPatch, setEditorPatch] = useState<Partial<BlogFormState> | null>(null);
   const [improvingArea, setImprovingArea] = useState<ImproveArea | null>(null);
+  const [improvingIssueKey, setImprovingIssueKey] = useState<string | null>(null);
+  const [cmsIntegration, setCmsIntegration] = useState<{ id: string; type: string; name: string } | null>(null);
+  const [hasLeadCapture, setHasLeadCapture] = useState<boolean>(false);
+  const [isPostingBlog, setIsPostingBlog] = useState<boolean>(false);
   const [targetWordCount, setTargetWordCount] = useState<number>(800);
   const [formatType, setFormatType] = useState<BlogFormatType | undefined>(undefined);
   const [primaryKeyword, setPrimaryKeyword] = useState<string | null>(null);
@@ -76,9 +79,14 @@ export default function BlogNewPage() {
     }
   };
 
-  const autoImproveArea = async (area: ImproveArea) => {
-    if (!liveState || improvingArea || !selectedCompanyId) return;
-    setImprovingArea(area);
+  const runImprove = async (
+    area: ImproveArea,
+    issueMessage: string | null,
+    issueKey: string | null,
+  ) => {
+    if (!liveState || improvingArea || improvingIssueKey || !selectedCompanyId) return;
+    if (issueKey) setImprovingIssueKey(issueKey);
+    else setImprovingArea(area);
     setError(null);
 
     try {
@@ -90,6 +98,7 @@ export default function BlogNewPage() {
           company_id: selectedCompanyId,
           area,
           contentType: 'blog',
+          ...(issueMessage ? { issue_message: issueMessage } : {}),
           draft: {
             title: liveState.title,
             excerpt: liveState.excerpt,
@@ -121,16 +130,50 @@ export default function BlogNewPage() {
       }
 
       setPrefillNotice(
-        `AI improved ${area}. Review the updated draft and quality panel for the refreshed score.`,
+        issueMessage
+          ? `AI applied fix: "${issueMessage}". Review the updated draft and quality panel.`
+          : `AI improved ${area}. Review the updated draft and quality panel for the refreshed score.`,
       );
       jumpToImproveArea(area);
     } catch (e) {
       jumpToImproveArea(area);
       setError(e instanceof Error ? e.message : 'AI improvement failed');
     } finally {
-      setImprovingArea(null);
+      if (issueKey) setImprovingIssueKey(null);
+      else setImprovingArea(null);
     }
   };
+
+  const autoImproveArea = (area: ImproveArea) => runImprove(area, null, null);
+
+  const autoImproveIssue = async (area: ImproveArea, message: string, key: string) => {
+    await runImprove(area, message, key);
+  };
+
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    fetch(`/api/integrations?company_id=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        const list = Array.isArray(data?.integrations) ? data.integrations : [];
+        const connectedCms = list.find((i: { type: string; status: string; id: string; name: string }) =>
+          i.type !== 'lead_webhook' && i.status === 'connected',
+        );
+        const connectedLead = list.find((i: { type: string; status: string }) =>
+          i.type === 'lead_webhook' && i.status === 'connected',
+        );
+        if (connectedCms) {
+          setCmsIntegration({ id: connectedCms.id, type: connectedCms.type, name: connectedCms.name });
+        } else {
+          setCmsIntegration(null);
+        }
+        setHasLeadCapture(Boolean(connectedLead));
+      })
+      .catch(() => {
+        setCmsIntegration(null);
+        setHasLeadCapture(false);
+      });
+  }, [selectedCompanyId]);
 
   useEffect(() => {
     if (!selectedCompanyId) return;
@@ -314,22 +357,41 @@ export default function BlogNewPage() {
     }
   };
 
-  const handleCreateCampaign = () => {
-    if (!liveState?.title?.trim()) {
-      setError('Add a title before creating a campaign from this content.');
+  const handlePostBlogToWebsite = async () => {
+    if (!selectedCompanyId) {
+      setError('Company context required to post the blog.');
       return;
     }
-    launchCampaignFromContent({
-      router,
-      contentType: 'blog',
-      title: liveState.title,
-      excerpt: liveState.excerpt,
-      tags: liveState.tags,
-      targetWordCount,
-      formatType: liveState.format_type || formatType,
-      sourceId: savedId,
-      contentMarkdown: liveState.content_markdown,
-    });
+    if (!savedId) {
+      setError('Save the blog as a draft first, then post it to the website.');
+      return;
+    }
+    if (!cmsIntegration) {
+      setError('Connect a website CMS integration before posting.');
+      return;
+    }
+    setError(null);
+    setIsPostingBlog(true);
+    try {
+      const res = await fetch(`/api/blogs/${encodeURIComponent(savedId)}/publish`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: selectedCompanyId,
+          integration_id: cmsIntegration.id,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.message || data?.error || 'Publish failed');
+      }
+      setPrefillNotice(`Blog posted to website via ${cmsIntegration.name}.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Publish failed');
+    } finally {
+      setIsPostingBlog(false);
+    }
   };
 
   const handlePostToSocial = () => {
@@ -473,26 +535,42 @@ export default function BlogNewPage() {
 
             {/* ── Quality panel (sticky right sidebar) ────────────────────── */}
             <div className="hidden lg:block w-[280px] shrink-0 sticky top-6 self-start">
-              {liveState && (
-                <ContentQualityPanel
-                  blocks={liveState.content_blocks}
-                  formState={{
-                    title:                liveState.title,
-                    excerpt:              liveState.excerpt,
-                    seo_meta_title:       liveState.seo_meta_title,
-                    seo_meta_description: liveState.seo_meta_description,
-                    tags:                 liveState.tags,
-                    target_word_count:    targetWordCount,
-                    content_type:         'blog',
-                    format_type:          liveState.format_type || formatType,
-                  }}
-                  onImprove={jumpToImproveArea}
-                  onAutoImprove={autoImproveArea}
-                  improvingArea={improvingArea}
-                  onCreateCampaign={handleCreateCampaign}
-                  companyIdentity={companyIdentity}
-                />
-              )}
+              {liveState && (() => {
+                const websiteIntegrationAvailable = Boolean(cmsIntegration && savedId);
+                let websiteIntegrationReason: string | undefined;
+                if (!cmsIntegration) {
+                  websiteIntegrationReason = 'Connect a website CMS (WordPress, HubSpot, etc.) in Integrations to enable posting.';
+                } else if (!hasLeadCapture) {
+                  websiteIntegrationReason = `Connected to ${cmsIntegration.name}. Add a lead-capture webhook for full attribution.`;
+                } else if (!savedId) {
+                  websiteIntegrationReason = 'Save the blog as a draft first, then post it to your website.';
+                }
+                return (
+                  <ContentQualityPanel
+                    blocks={liveState.content_blocks}
+                    formState={{
+                      title:                liveState.title,
+                      excerpt:              liveState.excerpt,
+                      seo_meta_title:       liveState.seo_meta_title,
+                      seo_meta_description: liveState.seo_meta_description,
+                      tags:                 liveState.tags,
+                      target_word_count:    targetWordCount,
+                      content_type:         'blog',
+                      format_type:          liveState.format_type || formatType,
+                    }}
+                    onImprove={jumpToImproveArea}
+                    onAutoImprove={autoImproveArea}
+                    improvingArea={improvingArea}
+                    onAutoImproveIssue={autoImproveIssue}
+                    improvingIssueKey={improvingIssueKey}
+                    onPostBlogToWebsite={handlePostBlogToWebsite}
+                    websiteIntegrationAvailable={websiteIntegrationAvailable}
+                    websiteIntegrationReason={websiteIntegrationReason}
+                    isPostingBlog={isPostingBlog}
+                    companyIdentity={companyIdentity}
+                  />
+                );
+              })()}
             </div>
           </div>
         </div>

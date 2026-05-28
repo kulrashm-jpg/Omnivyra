@@ -196,6 +196,7 @@ export type CreatorAssetBlockType =
   | 'banner'
   | 'infographic'
   | 'carousel'
+  | 'slider'
   | 'brand_card';
 
 export interface CreatorAssetBlock extends BlockBase {

@@ -15,6 +15,13 @@ const MARKET_PULSE_CATEGORIES = [
   'technology_platform_shifts',
 ];
 
+const FOCUSED_MARKET_PULSE_CATEGORIES = ['technology_platform_shifts'];
+const EXPANDED_MARKET_PULSE_FALLBACK_CATEGORIES = [
+  'product_positioning',
+  'growth_expansion',
+  'technology_platform_shifts',
+];
+
 type ContextResponse = {
   companyId: string;
   profile: {
@@ -233,6 +240,10 @@ type PendingRunState = {
   progress_stage?: string | null;
 };
 
+type MarketPulseLoadError = Error & {
+  status?: number;
+};
+
 const OBJECTIVES = [
   { value: 'growth', label: 'Growth' },
   { value: 'expansion', label: 'Expansion' },
@@ -274,6 +285,23 @@ function buildResolvedRegionPreview(
               : geography;
 
   return Array.from(new Set(resolved)).filter(Boolean);
+}
+
+function buildFocusedCategoryDefaults(context: ContextResponse | null): string[] {
+  const profileDefaults = context?.marketPulseProfile.default_categories ?? [];
+  const preferred = FOCUSED_MARKET_PULSE_CATEGORIES.find((category) => profileDefaults.includes(category));
+  return [preferred ?? FOCUSED_MARKET_PULSE_CATEGORIES[0]];
+}
+
+function buildExpandedCategoryDefaults(context: ContextResponse | null): string[] {
+  const profileDefaults = (context?.marketPulseProfile.default_categories ?? [])
+    .filter((category) => MARKET_PULSE_CATEGORIES.includes(category));
+  const categories = profileDefaults.length > 0 ? profileDefaults : EXPANDED_MARKET_PULSE_FALLBACK_CATEGORIES;
+  return Array.from(new Set(categories)).filter((category) => MARKET_PULSE_CATEGORIES.includes(category));
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -738,12 +766,12 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
   const [context, setContext] = useState<ContextResponse | null>(null);
   const [loadingContext, setLoadingContext] = useState(false);
   const [mode, setMode] = useState<'one_time' | 'automated'>('one_time');
-  const [objective, setObjective] = useState<'growth' | 'expansion' | 'hiring' | 'partnerships' | 'product' | 'risk'>('growth');
+  const [objective, setObjective] = useState<'growth' | 'expansion' | 'hiring' | 'partnerships' | 'product' | 'risk'>('product');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [regionScope, setRegionScope] = useState<'profile_markets' | 'expansion_markets' | 'all_defaults' | 'custom'>('profile_markets');
   const [customRegions, setCustomRegions] = useState('');
   const [competitorScope, setCompetitorScope] = useState<'profile_only' | 'auto_discover' | 'combined'>('combined');
-  const [sourceStrategy, setSourceStrategy] = useState<'ai' | 'api' | 'hybrid'>('hybrid');
+  const [sourceStrategy, setSourceStrategy] = useState<'ai' | 'api' | 'hybrid'>('ai');
   const [customDirection, setCustomDirection] = useState('');
   const [creditAcknowledged, setCreditAcknowledged] = useState(false);
   const [running, setRunning] = useState(false);
@@ -780,7 +808,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
         const data = (await res.json()) as ContextResponse;
         if (!active) return;
         setContext(data);
-        setSelectedCategories(data.marketPulseProfile.default_categories?.length ? data.marketPulseProfile.default_categories : ['competitor_moves', 'growth_expansion', 'regulatory_policy']);
+        setSelectedCategories(buildFocusedCategoryDefaults(data));
       } catch (error) {
         if (!active) return;
         setErrorMessage((error as Error).message || 'Failed to load Market Pulse context');
@@ -797,24 +825,6 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
         if (!active) return;
         if (data?.settings) {
           setAutomationEnabled(Boolean(data.settings.is_active));
-          if (data.settings.objective && OBJECTIVES.some((item) => item.value === data.settings?.objective)) {
-            setObjective(data.settings.objective as typeof objective);
-          }
-          if (Array.isArray(data.settings.categories) && data.settings.categories.length > 0) {
-            setSelectedCategories(data.settings.categories.filter((item) => MARKET_PULSE_CATEGORIES.includes(item)));
-          }
-          if (data.settings.region_scope) {
-            setRegionScope(data.settings.region_scope);
-          }
-          if (data.settings.competitor_scope) {
-            setCompetitorScope(data.settings.competitor_scope);
-          }
-          if (Array.isArray(data.settings.custom_regions) && data.settings.custom_regions.length > 0) {
-            setCustomRegions(data.settings.custom_regions.join(', '));
-          }
-          if (typeof data.settings.custom_direction === 'string') {
-            setCustomDirection(data.settings.custom_direction);
-          }
           setCreditAcknowledged(Boolean(data.settings.credit_acknowledged));
         }
       } catch {
@@ -847,10 +857,27 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
     const timer = window.setInterval(async () => {
       try {
         const res = await fetchWithAuth(`/api/market-pulse/runs/${encodeURIComponent(runId)}?companyId=${encodeURIComponent(companyId)}`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            setRunning(false);
+            setPendingRun(null);
+            setErrorMessage('Market Pulse finished or changed state, but this browser session is no longer authorized to refresh it. Refresh the page or sign in again.');
+            window.clearInterval(timer);
+          }
+          if (res.status === 404 || res.status === 409) {
+            const err = await res.json().catch(() => ({}));
+            setRunning(false);
+            setRunId(null);
+            setPendingRun(null);
+            setErrorMessage(err?.error || 'Market Pulse completed, but this run is not available in the current company context.');
+            window.clearInterval(timer);
+          }
+          return;
+        }
         const data = (await res.json()) as RunResponse;
         setRunResult(data);
         setPendingRun(null);
+        setErrorMessage(null);
         if (!['pending', 'running'].includes(String(data.run?.status ?? ''))) {
           const historyRes = await fetchWithAuth(`/api/market-pulse/history?companyId=${encodeURIComponent(companyId)}`);
           if (historyRes.ok) {
@@ -863,7 +890,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
           window.clearInterval(timer);
         }
       } catch {
-        // ignore poll errors
+        // Keep transient network failures from tearing down a legitimate scan.
       }
     }, 4000);
 
@@ -925,6 +952,9 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
       hidden: findings.length - visible.length,
     };
   }, [runResult, findingStateOverrides]);
+  const hasPrioritizedFeed = Boolean(
+    runResult && tieredFindings.P0.length + tieredFindings.P1.length + tieredFindings.P2.length > 0
+  );
 
   // Phase 1B + 2: per-finding action handler. Optimistic local update, then
   // POST. `promote` and `generate` route to dedicated Phase 2 endpoints;
@@ -1065,6 +1095,43 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
     [context, regionScope, customRegions]
   );
 
+  const loadRunResult = async (targetRunId: string, attempts = 1): Promise<RunResponse> => {
+    let lastError: MarketPulseLoadError | null = null;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) await wait(1200 * attempt);
+      const resultRes = await fetchWithAuth(`/api/market-pulse/runs/${encodeURIComponent(targetRunId)}?companyId=${encodeURIComponent(companyId)}`);
+      if (resultRes.ok) {
+        return (await resultRes.json()) as RunResponse;
+      }
+
+      const err = await resultRes.json().catch(() => ({}));
+      lastError = new Error(err?.error || `Failed to load Market Pulse run (${resultRes.status})`) as MarketPulseLoadError;
+      lastError.status = resultRes.status;
+
+      if (resultRes.status === 401 || resultRes.status === 403 || resultRes.status === 404 || resultRes.status === 409) {
+        break;
+      }
+    }
+
+    throw lastError ?? new Error('Failed to load Market Pulse run');
+  };
+
+  const loadMostRecentRunResult = async (): Promise<RunResponse | null> => {
+    const historyRes = await fetchWithAuth(`/api/market-pulse/history?companyId=${encodeURIComponent(companyId)}`);
+    if (!historyRes.ok) return null;
+
+    const historyData = await historyRes.json();
+    const nextHistory = Array.isArray(historyData?.history) ? historyData.history as HistoryItem[] : [];
+    setHistory(nextHistory);
+
+    const latestLoadableRun = nextHistory.find((item) =>
+      ['completed', 'completed_with_warnings', 'failed'].includes(String(item.status ?? '').toLowerCase())
+    ) ?? nextHistory[0];
+    if (!latestLoadableRun?.id) return null;
+
+    return loadRunResult(latestLoadableRun.id, 1);
+  };
+
   const toggleCategory = (category: string) => {
     setSelectedCategories((prev) =>
       prev.includes(category) ? prev.filter((item) => item !== category) : [...prev, category]
@@ -1104,8 +1171,49 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
         throw new Error(err?.error || 'Failed to start Market Pulse run');
       }
       const data = await res.json();
-      setRunId(String(data.runId));
+      const nextRunId = String(data.runId);
+      if (!nextRunId || nextRunId === 'undefined' || nextRunId === 'null') {
+        throw new Error('Market Pulse started, but the server did not return a valid run id');
+      }
+      setRunId(nextRunId);
       setPendingRun((current) => current ? { ...current, status: 'running', progress_stage: 'INITIALIZING' } : current);
+
+      if (!['pending', 'running'].includes(String(data.status ?? '').toLowerCase())) {
+        try {
+          const result = await loadRunResult(nextRunId, 3);
+          setRunResult(result);
+          setPendingRun(null);
+          setRunning(false);
+          setErrorMessage(null);
+        } catch (resultError) {
+          const status = (resultError as MarketPulseLoadError).status;
+          if (status === 404 || status === 409) {
+            const fallbackResult = await loadMostRecentRunResult().catch(() => null);
+            if (fallbackResult) {
+              setRunResult(fallbackResult);
+              setPendingRun(null);
+              setRunning(false);
+              setErrorMessage(null);
+              return;
+            }
+
+            setRunning(false);
+            setRunId(null);
+            setPendingRun(null);
+            setErrorMessage((resultError as Error).message || 'Market Pulse completed, but the run could not be found for this company.');
+            return;
+          }
+
+          setPendingRun({
+            created_at: new Date().toISOString(),
+            status: 'running',
+            progress_stage: 'FINALIZING',
+          });
+          setErrorMessage(
+            `${(resultError as Error).message || 'Market Pulse completed, but results could not be loaded'}. Retrying result load...`
+          );
+        }
+      }
     } catch (error) {
       setRunning(false);
       setPendingRun(null);
@@ -1158,27 +1266,48 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err?.error || 'Failed to stop Market Pulse run');
+        const alreadyFinished = typeof err?.error === 'string' && err.error.toLowerCase().includes('already finished');
+        if (!alreadyFinished) {
+          throw new Error(err?.error || 'Failed to stop Market Pulse run');
+        }
       }
+      const data = await res.json().catch(() => ({}));
 
       const cancelledAt = new Date().toISOString();
       setRunning(false);
+      setRunId(null);
       setPendingRun(null);
       setRunResult((current) => current ? {
         ...current,
         run: {
           ...current.run,
-          status: 'failed',
-          completed_at: cancelledAt,
-          legacy_error: 'Cancelled by user',
+          status: data?.alreadyFinished ? String(data.status ?? current.run.status) : 'failed',
+          completed_at: current.run.completed_at ?? cancelledAt,
+          legacy_error: data?.alreadyFinished ? current.run.legacy_error : 'Cancelled by user',
         },
       } : null);
+      if (!data?.alreadyFinished) {
+        setErrorMessage(null);
+      }
     } catch (error) {
       setErrorMessage((error as Error).message || 'Failed to stop Market Pulse run');
     } finally {
       setCancelLoading(false);
     }
   };
+
+  const activeScanStatusPanel = running ? (
+    <div className="mt-3 w-full max-w-3xl">
+      <EngineJobStatusPanel
+        status={String(runResult?.run?.status ?? pendingRun?.status ?? 'pending').toUpperCase()}
+        progressStage={runResult?.run?.progress_stage ?? pendingRun?.progress_stage}
+        confidenceIndex={runResult?.run?.confidence_index}
+        error={runResult?.run?.legacy_error}
+        createdAt={runResult?.run?.created_at ?? pendingRun?.created_at}
+        durationHint="Scan in progress. You can keep this page open while Market Pulse collects and consolidates signals."
+      />
+    </div>
+  ) : null;
 
   if (!companyId) {
     return <div className="py-4 text-sm text-gray-500">Select a company to view Market Pulse.</div>;
@@ -1365,6 +1494,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
                 {runResult?.run?.created_at && (
                   <span className="text-xs text-gray-500">Last run: {new Date(runResult.run.created_at).toLocaleString()}</span>
                 )}
+                {activeScanStatusPanel}
               </div>
             ) : (
               <div className="mt-4">
@@ -1424,7 +1554,36 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
             </div>
 
             <div className="mt-5">
-              <label className="text-sm font-medium text-gray-700">Signal categories</label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-sm font-medium text-gray-700">Signal categories</label>
+                <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategories(buildFocusedCategoryDefaults(context))}
+                    className={`rounded-md px-2.5 py-1 text-xs font-semibold transition ${
+                      selectedCategories.length === 1 && selectedCategories[0] === buildFocusedCategoryDefaults(context)[0]
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    Focused
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategories(buildExpandedCategoryDefaults(context))}
+                    className="rounded-md px-2.5 py-1 text-xs font-semibold text-gray-600 transition hover:text-gray-900"
+                  >
+                    Expanded
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategories(MARKET_PULSE_CATEGORIES)}
+                    className="rounded-md px-2.5 py-1 text-xs font-semibold text-gray-600 transition hover:text-gray-900"
+                  >
+                    All
+                  </button>
+                </div>
+              </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {MARKET_PULSE_CATEGORIES.map((category) => {
                   const active = selectedCategories.includes(category);
@@ -1467,6 +1626,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
               {runResult?.run?.created_at && (
                 <span className="text-sm text-gray-500">Last run: {new Date(runResult.run.created_at).toLocaleString()}</span>
               )}
+              {activeScanStatusPanel}
             </div>
             {context && (
               <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -1491,7 +1651,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
           {/* Phase 1B FEED — tier-grouped, action-rail-equipped finding cards.
               Replaces the four impact-grouped lists in the legacy Results section
               when at least one finding has a priority_tier (i.e. post-1A run). */}
-          {runResult && runResult.findings.length > 0 && tieredFindings.P0.length + tieredFindings.P1.length + tieredFindings.P2.length > 0 && (
+          {runResult && runResult.findings.length > 0 && hasPrioritizedFeed && (
             <FeedSection
               tieredFindings={tieredFindings}
               actioningFindingId={actioningFindingId}
@@ -1503,7 +1663,9 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
           <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
               <RefreshCw className="h-4 w-4 text-indigo-600" />
-              <h4 className="text-sm font-semibold text-gray-900">Results</h4>
+              <h4 className="text-sm font-semibold text-gray-900">
+                {hasPrioritizedFeed ? 'Run summary' : 'Results'}
+              </h4>
             </div>
 
             {!runResult && pendingRun && (
@@ -1615,7 +1777,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
                   </div>
                 )}
 
-                {[
+                {!hasPrioritizedFeed && [
                   { title: 'Top Strategic Findings', items: groupedFindings.top },
                   { title: 'Risk Signals', items: groupedFindings.risks },
                   { title: 'Watch List', items: groupedFindings.watch },

@@ -32,6 +32,7 @@ export type ImproveBlogDraftInput = {
     socialPlatform?: string;
     campaignContext?: string;
     trendContext?: string;
+    issueMessage?: string;
   };
   companyProfile?: CompanyProfile | null;
 };
@@ -209,6 +210,9 @@ function buildContextLine(input: ImproveBlogDraftInput): string {
   if (input.context?.socialPlatform) chunks.push(`Platform: ${input.context.socialPlatform}`);
   if (input.context?.campaignContext) chunks.push(`Campaign context: ${input.context.campaignContext}`);
   if (input.context?.trendContext) chunks.push(`Trend context: ${input.context.trendContext}`);
+  if (input.context?.issueMessage) {
+    chunks.push(`Focus issue (resolve this specifically before broader changes): ${input.context.issueMessage}`);
+  }
 
   if (input.companyProfile) {
     chunks.push(buildFormattedStyleInstructions(input.companyProfile));

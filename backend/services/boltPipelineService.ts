@@ -668,7 +668,27 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
   const SUBSTAGE_PROGRESS: Record<string, number> = {
     context:  17,
     drafting: 22,
-    scoring:  28,
+    // Heartbeat ticks — keep the bar at the parent phase's percentage so it
+    // doesn't oscillate; only the substage label changes.
+    'still-drafting':              22,
+    'still-evaluating-alignment':  25,
+    'still-refining':              31,
+    // Parse / skeleton repair substages emitted by parseStructuredPlanWithRecovery
+    // when the first LLM output couldn't be parsed or violated the skeleton.
+    'repairing-malformed-structure': 23,
+    'repairing-campaign-skeleton':   23,
+    'validating-repaired-campaign':  24,
+    // Legacy scoring parent — kept so runs that emit the old key keep working.
+    scoring:  25,
+    // Granular alignment substages. Each one advances the bar a single tick
+    // so the UI keeps moving while the orchestrator works through the
+    // budget-bounded alignment sequence.
+    'evaluating-alignment':                  25,
+    'checking-psychological-progression':    26,
+    'validating-content-diversity':          27,
+    'recovering-low-alignment-sections':     28,
+    'rechecking-strategic-alignment':        29,
+    'continuing-to-refinement':              30,
     refining: 31,
   };
   const onAiPlanSubStage = (sub: string): void => {

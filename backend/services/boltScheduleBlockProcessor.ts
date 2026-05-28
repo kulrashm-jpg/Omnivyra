@@ -140,8 +140,20 @@ function isPlaceholder(text: string): boolean {
   );
 }
 
+// Phase D — platform-name normalization converged onto the canonical
+// `canonicalizePlatformForDb` helper in `backend/scheduler/schedulingNormalization.ts`.
+// Behavior is byte-equivalent (both map `x → twitter`, passthrough otherwise),
+// but the canonical helper is the single source of truth for future aliases.
+//
+// Content-type normalization (toDbContentType / FALLBACK_CT_MAP) is NOT yet
+// migrated: BOLT's table covers a broader vocabulary (carousel/reel/short/
+// blog/newsletter/white_paper/image) than the canonical table currently
+// holds. Extending the canonical table to be a superset of BOLT's + changing
+// its fallback policy (canonical passes through unknown types; BOLT defaults
+// to 'post') needs its own phase with BOLT-path soak.
+import { canonicalizePlatformForDb } from '../scheduler/schedulingNormalization';
 function toDbPlatform(p: string): string {
-  return p === 'x' ? 'twitter' : p;
+  return canonicalizePlatformForDb(p);
 }
 
 function toDbContentType(

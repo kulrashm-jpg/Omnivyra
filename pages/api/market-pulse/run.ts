@@ -12,6 +12,18 @@ import {
 } from '../../../backend/services/marketPulseV2Service';
 import { processMarketPulseJobV1 } from '../../../backend/services/marketPulseJobProcessor';
 
+function shouldProcessMarketPulseInline(): boolean {
+  if (!config.ENABLE_AUTO_WORKERS) return true;
+  if (process.env.MARKET_PULSE_FORCE_QUEUE === '1') return false;
+  const redisUrl = String(config.REDIS_URL ?? '');
+  const appUrl = String(config.NEXT_PUBLIC_APP_URL ?? '');
+  return (
+    process.env.NODE_ENV !== 'production' ||
+    /localhost|127\.0\.0\.1/i.test(redisUrl) ||
+    /localhost|127\.0\.0\.1/i.test(appUrl)
+  );
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -87,16 +99,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const run = await createMarketPulseRun(companyId, resolvedInput, legacyJob.id);
-    const workersDisabled = !config.ENABLE_AUTO_WORKERS;
+    const processInline = shouldProcessMarketPulseInline();
 
-    if (workersDisabled) {
+    if (processInline) {
       await processMarketPulseJobV1(legacyJob.id);
       const syncedRun = await syncLegacyJobIntoRun(run.id, companyId);
       return res.status(201).json({
         runId: run.id,
         status: syncedRun.run.status,
         legacyJobId: legacyJob.id,
-        workersDisabled: true,
+        processedInline: true,
       });
     }
 

@@ -8,6 +8,7 @@ import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { syncInstagramAndThreadsFromMeta } from '../../../../backend/services/metaDerivedAccountsService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
+import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
 import { config } from '@/config';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -16,14 +17,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error } = req.query;
-  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
+  const decoded = decodeOAuthState(state as string);
+  const { returnTo: earlyReturnTo } = decoded;
   const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
+  const callbackHost = safeHost(`${getBaseUrl(req)}/api/auth/facebook/callback`);
+
+  logOAuthEvent({
+    event: 'oauth_callback_received',
+    provider: 'facebook',
+    callback_host: callbackHost,
+    company_id: decoded.companyId ?? null,
+    state_user_id: decoded.userId ?? null,
+    state_valid: decoded.valid === true,
+    state_flow: decoded.flow ?? null,
+    request_origin: (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string | undefined) || null,
+  });
 
   if (error) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'facebook',
+      callback_host: callbackHost,
+      company_id: decoded.companyId ?? null,
+      state_user_id: decoded.userId ?? null,
+      failure_point: 'provider_error',
+      failure_detail: String(error),
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'facebook',
+      callback_host: callbackHost,
+      company_id: decoded.companyId ?? null,
+      state_user_id: decoded.userId ?? null,
+      failure_point: 'missing_code',
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
@@ -31,6 +62,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const platform = 'facebook';
     const { companyId, userId: stateUserId, returnTo, valid } = decodeOAuthState(state as string);
     if (!valid) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'facebook',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'invalid_oauth_state',
+        failure_detail: decoded.reason ?? 'state signature invalid',
+      });
       return res.status(401).json({ error: 'invalid_oauth_state' });
     }
 
@@ -53,6 +93,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!tokenResponse.ok) {
       const err = await tokenResponse.json().catch(() => ({}));
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'facebook',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'token_exchange_failed',
+        failure_detail: `HTTP ${tokenResponse.status}`,
+      });
       throw new Error(err?.error?.message ?? 'Token exchange failed');
     }
 
@@ -84,6 +133,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const profile = await profileResponse.json();
 
     if (!profile?.id) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'facebook',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'property_fetch_failed',
+        failure_detail: 'profile.id missing from /me response',
+      });
       throw new Error('Failed to fetch Facebook profile');
     }
 
@@ -151,6 +209,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .single();
 
       if (insertError || !newAccount) {
+        logOAuthEvent({
+          event: 'oauth_failure',
+          provider: 'facebook',
+          callback_host: callbackHost,
+          company_id: companyId ?? null,
+          user_id: userId,
+          state_user_id: stateUserId ?? null,
+          failure_point: 'persistence_failed',
+          failure_detail: insertError?.message?.slice(0, 200) ?? 'social_accounts insert failed',
+        });
         throw new Error('Failed to create account');
       }
 
@@ -198,12 +266,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .catch(e => console.warn('[facebook/callback] setup credits check failed:', e?.message));
     }
 
+    logOAuthEvent({
+      event: 'oauth_success',
+      provider: 'facebook',
+      callback_host: callbackHost,
+      company_id: companyId ?? null,
+      user_id: userId,
+      state_user_id: stateUserId ?? null,
+    });
     const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
     return res.redirect(`${successDest}${sep}connected=${platform}&threads=${derivedThreadsCount > 0 ? 'enabled' : 'disabled'}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('Facebook OAuth callback error:', error);
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'facebook',
+      callback_host: callbackHost,
+      company_id: decoded.companyId ?? null,
+      state_user_id: decoded.userId ?? null,
+      failure_point: 'callback_exception',
+      failure_detail: String(error?.message ?? error).slice(0, 200),
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }

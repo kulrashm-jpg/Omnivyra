@@ -1,7 +1,16 @@
 import React, { useState } from 'react';
 import { Calendar, ExternalLink, Send } from 'lucide-react';
 import PlatformIcon from '../ui/PlatformIcon';
-import ContentRenderer from '../ContentRenderer';
+import {
+  PLATFORM_CARD_CONFIG,
+  DEFAULT_PLATFORM_CARD_CONFIG,
+} from '../preview/platformCardPrimitives';
+import PlatformPreview from '../preview/platforms';
+import { buildPreviewPayloadFromActivityEvent } from '../../lib/preview/normalizedPreviewPayload';
+import {
+  resolveDisplayContentType,
+  resolveDisplayContentTypeLabel,
+} from '../../lib/calendar/assetTypeDisplay';
 
 export type ActivityEvent = {
   type: 'activity';
@@ -12,7 +21,21 @@ export type ActivityEvent = {
   repurpose_index: number;
   repurpose_total: number;
   campaign_id: string;
+  /**
+   * Platform-native content type as persisted on `scheduled_posts.content_type`
+   * (e.g. `tweet`, `feed_post`, `post`, `pin`). Kept for downstream consumers
+   * that care about platform-specific rendering. Calendar cards should display
+   * `asset_type` instead so the user-selected format (poll/article/story/post)
+   * is reflected in the UI.
+   */
   content_type: string;
+  /**
+   * User-selected canonical asset type sourced from `daily_content_plans.content_type`
+   * (e.g. `post`, `poll`, `article`, `story`, `carousel`, `reel`, `image`).
+   * Optional because standalone (non-campaign) posts have no plan row to join.
+   * The calendar prefers this field over `content_type` for display.
+   */
+  asset_type?: string;
   execution_id?: string;
   scheduled_post_id?: string;
   status?: string;
@@ -22,161 +45,8 @@ export type ActivityEvent = {
   media_types?: string[];
 };
 
-const PLATFORM_CONFIG: Record<string, {
-  headerBg: string;
-  avatarBg: string;
-  cardBg: string;
-  highlightCls: string;
-  linkCls: string;
-  engagements: string[];
-  charLimit?: number;
-  fontCls: string;
-}> = {
-  linkedin: {
-    headerBg: 'bg-[#0A66C2] text-white',
-    avatarBg: 'bg-[#0A66C2]',
-    cardBg: 'bg-white',
-    highlightCls: 'text-[#0A66C2] font-medium',
-    linkCls: 'text-[#0A66C2]',
-    engagements: ['👍 Like', '💬 Comment', '↩ Repost', '✉ Send'],
-    fontCls: 'font-sans',
-  },
-  x: {
-    headerBg: 'bg-black text-white',
-    avatarBg: 'bg-black',
-    cardBg: 'bg-white',
-    highlightCls: 'text-sky-500 font-medium',
-    linkCls: 'text-sky-500',
-    engagements: ['💬 Reply', '🔁 Repost', '❤ Like', '🔖 Bookmark'],
-    charLimit: 280,
-    fontCls: 'font-sans text-[15px]',
-  },
-  twitter: {
-    headerBg: 'bg-black text-white',
-    avatarBg: 'bg-black',
-    cardBg: 'bg-white',
-    highlightCls: 'text-sky-500 font-medium',
-    linkCls: 'text-sky-500',
-    engagements: ['💬 Reply', '🔁 Repost', '❤ Like', '🔖 Bookmark'],
-    charLimit: 280,
-    fontCls: 'font-sans text-[15px]',
-  },
-  instagram: {
-    headerBg: 'bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 text-white',
-    avatarBg: 'bg-gradient-to-br from-purple-500 to-orange-400',
-    cardBg: 'bg-white',
-    highlightCls: 'text-blue-600 font-medium',
-    linkCls: 'text-blue-600',
-    engagements: ['❤ Like', '💬 Comment', '📤 Share', '🔖 Save'],
-    fontCls: 'font-sans',
-  },
-  facebook: {
-    headerBg: 'bg-[#1877F2] text-white',
-    avatarBg: 'bg-[#1877F2]',
-    cardBg: 'bg-white',
-    highlightCls: 'text-[#1877F2] font-medium',
-    linkCls: 'text-[#1877F2]',
-    engagements: ['👍 Like', '💬 Comment', '↩ Share'],
-    fontCls: 'font-sans',
-  },
-  youtube: {
-    headerBg: 'bg-[#FF0000] text-white',
-    avatarBg: 'bg-[#FF0000]',
-    cardBg: 'bg-[#F9F9F9]',
-    highlightCls: 'text-blue-600 font-medium',
-    linkCls: 'text-blue-600',
-    engagements: ['👍 Like', '👎 Dislike', '↩ Share', '💾 Save'],
-    fontCls: 'font-sans text-[13px]',
-  },
-  tiktok: {
-    headerBg: 'bg-black text-white',
-    avatarBg: 'bg-black',
-    cardBg: 'bg-black',
-    highlightCls: 'text-[#FE2C55] font-medium',
-    linkCls: 'text-[#FE2C55]',
-    engagements: ['❤ Like', '💬 Comment', '↩ Share'],
-    fontCls: 'font-sans text-white',
-  },
-  pinterest: {
-    headerBg: 'bg-[#E60023] text-white',
-    avatarBg: 'bg-[#E60023]',
-    cardBg: 'bg-white',
-    highlightCls: 'text-[#E60023] font-medium',
-    linkCls: 'text-[#E60023]',
-    engagements: ['❤ Save', '💬 Comment', '↩ Send'],
-    fontCls: 'font-sans',
-  },
-};
-
-function MediaThumb({
-  mediaUrls,
-  className,
-  fallback,
-}: {
-  mediaUrls?: string[];
-  className: string;
-  fallback: React.ReactNode;
-}) {
-  const urls = (mediaUrls || []).filter((u) => typeof u === 'string' && u.trim().length > 0);
-  if (urls.length === 0) {
-    return <div className={`${className} flex items-center justify-center`}>{fallback}</div>;
-  }
-  if (urls.length === 1) {
-    return (
-      <div className={`${className} relative overflow-hidden`}>
-        <img
-          src={urls[0]}
-          alt="Post media"
-          loading="lazy"
-          className="absolute inset-0 h-full w-full object-cover"
-        />
-      </div>
-    );
-  }
-  // LinkedIn-style multi-image grid: up to 4 visible, overflow badge on the last.
-  // 2 → side-by-side, 3 → first tall + two stacked, 4+ → 2×2.
-  const display = urls.slice(0, 4);
-  const extra = urls.length - display.length;
-  const gridClass =
-    display.length === 2 ? 'grid-cols-2 grid-rows-1'
-    : 'grid-cols-2 grid-rows-2';
-  return (
-    <div className={`${className} relative overflow-hidden`}>
-      <div className={`absolute inset-0 grid gap-0.5 ${gridClass}`}>
-        {display.map((url, i) => (
-          <div
-            key={`${url}-${i}`}
-            className={`relative overflow-hidden bg-gray-100 ${
-              display.length === 3 && i === 0 ? 'row-span-2' : ''
-            }`}
-          >
-            <img
-              src={url}
-              alt={`Post media ${i + 1}`}
-              loading="lazy"
-              className="absolute inset-0 h-full w-full object-cover"
-            />
-            {extra > 0 && i === display.length - 1 && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                <span className="text-xl font-bold text-white">+{extra}</span>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-const DEFAULT_PLATFORM_CONFIG: typeof PLATFORM_CONFIG[string] = {
-  headerBg: 'bg-indigo-600 text-white',
-  avatarBg: 'bg-indigo-600',
-  cardBg: 'bg-gray-50',
-  highlightCls: 'text-indigo-600 font-medium',
-  linkCls: 'text-indigo-600',
-  engagements: ['❤ Like', '💬 Comment', '↩ Share'],
-  fontCls: 'font-sans',
-};
+const PLATFORM_CONFIG = PLATFORM_CARD_CONFIG;
+const DEFAULT_PLATFORM_CONFIG = DEFAULT_PLATFORM_CARD_CONFIG;
 
 interface PostPreviewModalProps {
   event: ActivityEvent;
@@ -223,31 +93,33 @@ export default function PostPreviewModal({
   };
 
   const platform = (event.platform || '').toLowerCase().trim();
-  const contentType = (event.content_type || 'post').toLowerCase().replace(/[\s-]/g, '_');
+  // Renderer prefers asset_type (user-selected canonical format) so the
+  // preview matches the format the user picked. Falls back to the
+  // platform-native content_type for legacy / standalone events.
+  // Centralized in lib/calendar/assetTypeDisplay so every calendar surface
+  // (modal, week strip, day cell, day detail) shares the exact same rule.
+  const contentType = resolveDisplayContentType(event);
   const cfg = PLATFORM_CONFIG[platform] ?? DEFAULT_PLATFORM_CONFIG;
-  const content = event.content?.trim() || null;
   const platformLabel = platform === 'x' ? 'X (Twitter)' : platform.charAt(0).toUpperCase() + platform.slice(1);
-  const scheduledDate = event.scheduled_for
-    ? new Date(event.scheduled_for).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
-    : event.date || '';
-  const showCharCount = cfg.charLimit != null;
 
-  const hasMedia = (event.media_urls?.length ?? 0) > 0;
+  const hasMediaForLabel = (event.media_urls?.length ?? 0) > 0;
   const contentTypeLabel = (() => {
-    const base = (event.content_type || 'post').replace(/_/g, ' ').trim() || 'post';
-    if (hasMedia && /^post$/i.test(base)) return 'Post with asset';
+    const base = resolveDisplayContentTypeLabel(event);
+    if (hasMediaForLabel && /^post$/i.test(base)) return 'Post with asset';
     return base;
   })();
 
-  const isLinkedIn = platform === 'linkedin';
-  const isX = platform === 'x' || platform === 'twitter';
-  const isInstagram = platform === 'instagram';
   const isTikTok = platform === 'tiktok';
-  const isYouTube = platform === 'youtube';
-  const isFacebook = platform === 'facebook';
-  const isPinterest = platform === 'pinterest';
-  const isLinkedInArticle = isLinkedIn && contentType === 'article';
-  const isVisualMedia = ['reel', 'short', 'video', 'story', 'image', 'carousel'].includes(contentType);
+
+  // Phase 2 unification — per-platform JSX has been extracted to
+  // components/preview/platforms/* and is dispatched via PlatformPreview.
+  // The modal owns the surrounding chrome (header pill, footer action
+  // bar) and delegates the platform-faithful body to the renderer.
+  const previewPayload = buildPreviewPayloadFromActivityEvent({
+    event,
+    contentType,
+    contentTypeLabel,
+  });
 
   return (
     <div
@@ -272,251 +144,11 @@ export default function PostPreviewModal({
           <button onClick={onClose} className="text-white/80 hover:text-white text-base leading-none p-1">✕</button>
         </div>
 
-        {/* Platform Preview */}
+        {/* Platform Preview — extracted into per-platform renderers in
+            components/preview/platforms/*. The dispatcher resolves the
+            renderer from the payload's platform. */}
         <div className="flex-1 overflow-y-auto">
-          {isTikTok && (
-            <div className="bg-black relative">
-              <div className="relative bg-gradient-to-b from-gray-900 to-black" style={{ aspectRatio: '9/16', maxHeight: '52vh' }}>
-                <div className="absolute inset-0 flex flex-col justify-end p-3">
-                  <div className="absolute right-2 bottom-24 flex flex-col items-center gap-4">
-                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white border-2 border-white ${cfg.avatarBg}`}>
-                      <PlatformIcon platform="tiktok" size={14} />
-                    </div>
-                    {[['❤', '0'], ['💬', '0'], ['↩', '0'], ['⊕', '']].map(([icon, count], i) => (
-                      <div key={i} className="flex flex-col items-center">
-                        <span className="text-white text-xl">{icon}</span>
-                        {count && <span className="text-white text-[10px]">{count}</span>}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="pr-12">
-                    <p className="text-white font-semibold text-sm mb-1">@yourbrand</p>
-                    <p className="text-white text-xs leading-relaxed line-clamp-3">{content || event.title}</p>
-                    <div className="mt-1 flex items-center gap-1">
-                      <span className="text-white text-[10px] opacity-70">♫ Original sound · yourbrand</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-20">
-                  <PlatformIcon platform="tiktok" size={40} />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {isInstagram && (
-            <div className="bg-white">
-              <div className="flex items-center justify-between px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-orange-400 flex items-center justify-center text-white shrink-0">
-                    <PlatformIcon platform="instagram" size={14} />
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-gray-900 leading-none">yourbrand</p>
-                    <p className="text-[10px] text-gray-500">{scheduledDate || 'Scheduled'}</p>
-                  </div>
-                </div>
-                <span className="text-gray-400 text-lg">•••</span>
-              </div>
-              {(isVisualMedia || contentType === 'post' || (event.media_urls?.length ?? 0) > 0) && (
-                <MediaThumb
-                  mediaUrls={event.media_urls}
-                  className={`w-full bg-gradient-to-br from-purple-100 via-pink-100 to-orange-100 ${
-                    contentType === 'story' ? 'aspect-[9/16] max-h-52' : 'aspect-square'
-                  }`}
-                  fallback={
-                    <div className="text-center opacity-40">
-                      <PlatformIcon platform="instagram" size={32} />
-                      <p className="text-xs text-gray-500 mt-1">
-                        {contentType === 'reel' ? 'Reel' : contentType === 'story' ? 'Story' : contentType === 'carousel' ? 'Carousel' : 'Photo'}
-                      </p>
-                    </div>
-                  }
-                />
-              )}
-              <div className="px-3 pt-2 flex items-center gap-3 text-gray-800">
-                <span>❤</span><span>💬</span><span>📤</span>
-                <span className="ml-auto">🔖</span>
-              </div>
-              <div className="px-3 py-2">
-                <p className="text-xs text-gray-900"><span className="font-semibold">yourbrand</span> {content ? <span className="line-clamp-3">{content}</span> : <span className="text-gray-400 italic">Write a short caption to preview how this post will read.</span>}</p>
-              </div>
-            </div>
-          )}
-
-          {isX && (
-            <div className="bg-white px-4 py-3">
-              <div className="flex gap-3">
-                <div className="w-10 h-10 rounded-full bg-black flex items-center justify-center text-white shrink-0">
-                  <PlatformIcon platform="x" size={18} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1 mb-1">
-                    <span className="text-sm font-bold text-gray-900">Your Brand</span>
-                    <span className="text-sm text-gray-500">@yourbrand</span>
-                    <span className="text-gray-400 text-xs ml-auto">{scheduledDate || 'Scheduled'}</span>
-                  </div>
-                  <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="Write the first draft in Workspace to preview how this post will read." className="text-[15px] text-gray-900 leading-relaxed" />
-                  {(isVisualMedia || (event.media_urls?.length ?? 0) > 0) && (
-                    <MediaThumb
-                      mediaUrls={event.media_urls}
-                      className="mt-2 rounded-xl border border-gray-200 bg-gray-100 aspect-video"
-                      fallback={
-                        <div className="text-center opacity-40">
-                          <PlatformIcon platform="x" size={28} />
-                          <p className="text-xs text-gray-500 mt-1">{contentType === 'video' ? 'Video' : 'Media'}</p>
-                        </div>
-                      }
-                    />
-                  )}
-                  <div className="mt-3 flex items-center gap-5 text-gray-400 text-xs">
-                    {['💬 0', '🔁 0', '❤ 0', '🔖', '📤'].map((a, i) => <span key={i}>{a}</span>)}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {isLinkedIn && (
-            <div className="bg-white">
-              <div className="px-4 pt-3 pb-2">
-                <div className="flex items-start gap-3 mb-3">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0 ${cfg.avatarBg}`}>
-                    <PlatformIcon platform="linkedin" size={18} />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 leading-tight">Your Brand</p>
-                    <p className="text-[11px] text-gray-500 leading-tight">Company · {scheduledDate || 'Scheduled'}</p>
-                    <span className="text-[10px] text-gray-400 flex items-center gap-0.5">🌐 Anyone</span>
-                  </div>
-                  <span className="ml-auto text-gray-400 text-sm shrink-0">•••</span>
-                </div>
-                {isLinkedInArticle && (
-                  <div className="mb-3 border border-gray-200 rounded-lg overflow-hidden">
-                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-5">
-                      <p className="text-[10px] text-blue-600 font-semibold uppercase tracking-wide mb-1">Article</p>
-                      <p className="text-base font-bold text-gray-900 leading-snug">{event.title}</p>
-                      <p className="text-xs text-gray-500 mt-1">Your Brand · LinkedIn Article</p>
-                    </div>
-                  </div>
-                )}
-                <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="Write the first draft in Workspace to preview how this post will read." className="text-sm text-gray-800 leading-relaxed" />
-                {(isVisualMedia || (event.media_urls?.length ?? 0) > 0) && !isLinkedInArticle && (
-                  <MediaThumb
-                    mediaUrls={event.media_urls}
-                    className="mt-3 rounded-lg bg-gray-100 aspect-video border border-gray-200"
-                    fallback={
-                      <div className="text-center opacity-40">
-                        <PlatformIcon platform="linkedin" size={28} />
-                        <p className="text-xs text-gray-500 mt-1">{contentType === 'video' ? 'Video' : contentType === 'carousel' ? 'Carousel' : 'Image'}</p>
-                      </div>
-                    }
-                  />
-                )}
-              </div>
-              <div className="px-4 py-2 border-t border-gray-100">
-                <div className="flex items-center gap-1 text-xs text-gray-500">
-                  {cfg.engagements.map((a, i) => <span key={i} className="flex items-center gap-1 px-2 py-1 hover:bg-gray-50 rounded">{a}</span>)}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {isFacebook && (
-            <div className="bg-white">
-              <div className="px-4 pt-3 pb-2">
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-10 h-10 rounded-full bg-[#1877F2] flex items-center justify-center text-white shrink-0">
-                    <PlatformIcon platform="facebook" size={18} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-gray-900">Your Brand</p>
-                    <p className="text-[11px] text-gray-500 flex items-center gap-1">{scheduledDate || 'Scheduled'} · <span>🌐</span></p>
-                  </div>
-                  <span className="ml-auto text-gray-400">•••</span>
-                </div>
-                <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="Write the first draft in Workspace to preview how this post will read." className="text-sm text-gray-800 leading-relaxed" />
-                {(isVisualMedia || (event.media_urls?.length ?? 0) > 0) && (
-                  <MediaThumb
-                    mediaUrls={event.media_urls}
-                    className="mt-3 -mx-4 bg-gray-100 aspect-video"
-                    fallback={
-                      <div className="text-center opacity-40">
-                        <PlatformIcon platform="facebook" size={32} />
-                        <p className="text-xs text-gray-500 mt-1">Photo / Video</p>
-                      </div>
-                    }
-                  />
-                )}
-              </div>
-              <div className="px-4 py-2 border-t border-gray-100 flex items-center gap-1 text-xs text-gray-600">
-                {cfg.engagements.map((a, i) => <span key={i} className="flex-1 flex items-center justify-center gap-1 py-1 hover:bg-gray-50 rounded font-medium">{a}</span>)}
-              </div>
-            </div>
-          )}
-
-          {isYouTube && (
-            <div className="bg-[#F9F9F9]">
-              <div className="aspect-video bg-gray-800 flex items-center justify-center relative">
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-14 h-14 bg-[#FF0000] rounded-full flex items-center justify-center opacity-80">
-                    <span className="text-white text-xl">▶</span>
-                  </div>
-                </div>
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 p-3">
-                  <p className="text-white text-xs font-medium line-clamp-2">{event.title}</p>
-                </div>
-              </div>
-              <div className="p-3">
-                <p className="text-sm font-semibold text-gray-900 leading-snug mb-2 line-clamp-2">{event.title}</p>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-8 h-8 rounded-full bg-[#FF0000] flex items-center justify-center text-white shrink-0">
-                    <PlatformIcon platform="youtube" size={14} />
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-gray-900">Your Brand</p>
-                    <p className="text-[10px] text-gray-500">Scheduled · {scheduledDate}</p>
-                  </div>
-                </div>
-                <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={false} emptyText="Add a short description in Workspace to preview how viewers will discover this video." className="text-xs text-gray-600 leading-relaxed" />
-              </div>
-            </div>
-          )}
-
-          {isPinterest && (
-            <div className="bg-white">
-              <MediaThumb
-                mediaUrls={event.media_urls}
-                className="aspect-[2/3] max-h-64 bg-gradient-to-br from-rose-100 to-orange-100 rounded-2xl mx-3 mt-3"
-                fallback={
-                  <div className="text-center opacity-40">
-                    <PlatformIcon platform="pinterest" size={36} />
-                    <p className="text-xs text-gray-500 mt-1">Pin Image</p>
-                  </div>
-                }
-              />
-
-              <div className="px-4 py-3">
-                <p className="text-base font-bold text-gray-900 mb-1">{event.title}</p>
-                <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={false} emptyText="Add a helpful description in Workspace so this pin is ready to publish." className="text-sm text-gray-600 leading-relaxed" />
-              </div>
-            </div>
-          )}
-
-          {!isTikTok && !isInstagram && !isX && !isLinkedIn && !isFacebook && !isYouTube && !isPinterest && (
-            <div className="bg-white p-4">
-              <div className="flex items-center gap-3 mb-3">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white shrink-0 ${cfg.avatarBg}`}>
-                  <PlatformIcon platform={platform} size={18} />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-gray-900">Your Brand</p>
-                  <p className="text-xs text-gray-500">{scheduledDate || 'Scheduled'}</p>
-                </div>
-              </div>
-              <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="Write the first draft in Workspace to preview how this post will read." className={cfg.fontCls} />
-            </div>
-          )}
+          <PlatformPreview payload={previewPayload} />
         </div>
 
         {/* Footer */}

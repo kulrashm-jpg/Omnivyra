@@ -3,7 +3,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Badge } from "./ui/badge";
 import { Image as ImageIcon, PlaySquare } from "lucide-react";
 import { PlatformConfig } from "../lib/platforms";
-import ContentRenderer from "./ContentRenderer";
+import { resolvePlatformCardConfig } from "./preview/platformCardPrimitives";
+import PlatformPreview from "./preview/platforms";
+import { buildPreviewPayloadFromPlatformPost } from "../lib/preview/normalizedPreviewPayload";
 
 type PlatformKey = string;
 
@@ -15,16 +17,30 @@ interface PostPerPlatform {
   mediaType: "none" | "image" | "video";
 }
 
-function badgeBg(color: string) {
-  return `bg-${color}`;
-}
-
 export default function PreviewCard({ cfg, post }: { cfg: PlatformConfig; post: PostPerPlatform }) {
+  // G9.C — resolve visual chrome from the canonical platformCardPrimitives so
+  // PreviewCard inherits the same per-platform colors that PostPreviewModal
+  // and ThreadSequencePreview use. lib/platforms.ts still owns constraints
+  // (hashtagsLimit / textLimit / image aspect ratios) — different concern.
+  //
+  // Phase 4 (rendering consolidation) — the body now routes through the
+  // shared PlatformPreview dispatcher via a normalized payload. The
+  // hashtag chip rail + media placeholder stay on this card because
+  // they're PreviewCard-specific QA affordances, not part of the
+  // platform-faithful body.
+  const cardCfg = resolvePlatformCardConfig(cfg.key);
+  const previewPayload = buildPreviewPayloadFromPlatformPost({
+    platform: cfg.key,
+    content: post.body,
+    title: post.title,
+    hashtags: post.hashtags ? post.hashtags.split(/\s+/).filter(Boolean) : [],
+    mediaType: post.mediaType,
+  });
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <span className={`w-2 h-2 rounded-full ${badgeBg(cfg.color)}`}></span>
+          <span className={`w-2 h-2 rounded-full ${cardCfg.avatarBg}`}></span>
           {cfg.name} Preview
         </CardTitle>
         <CardDescription className="flex items-center gap-2 text-xs">
@@ -32,17 +48,10 @@ export default function PreviewCard({ cfg, post }: { cfg: PlatformConfig; post: 
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="rounded-xl border p-4 space-y-2 bg-gray-50">
-          {post.title && <p className="font-semibold">{post.title}</p>}
-          {post.body && (
-            <ContentRenderer
-              content={post.body}
-              platform={post.platform}
-              renderMode="social"
-            />
-          )}
+        <div className="rounded-xl border bg-gray-50 overflow-hidden">
+          <PlatformPreview payload={previewPayload} />
           {post.hashtags && (
-            <div className="flex flex-wrap gap-1 mt-2">
+            <div className="flex flex-wrap gap-1 px-4 pb-3">
               {post.hashtags
                 .split(/\s+/)
                 .filter(Boolean)
@@ -53,7 +62,7 @@ export default function PreviewCard({ cfg, post }: { cfg: PlatformConfig; post: 
             </div>
           )}
           {post.mediaType !== "none" && (
-            <div className="mt-3 aspect-video w-full rounded-lg bg-black/5 grid place-items-center text-xs text-gray-500">
+            <div className="mx-4 mb-4 aspect-video rounded-lg bg-black/5 grid place-items-center text-xs text-gray-500">
               {post.mediaType === "image" ? (
                 <>
                   <ImageIcon className="h-5 w-5" />
@@ -71,4 +80,4 @@ export default function PreviewCard({ cfg, post }: { cfg: PlatformConfig; post: 
       </CardContent>
     </Card>
   );
-} 
+}

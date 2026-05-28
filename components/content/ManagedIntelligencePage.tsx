@@ -1,14 +1,19 @@
 'use client';
 
+import { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { ArrowRight, BarChart2, Lightbulb, Loader2, Sparkles, TrendingUp } from 'lucide-react';
+import { ArrowRight, BarChart2, FileText, Lightbulb, Loader2, PenLine, Sparkles, Target, TrendingUp } from 'lucide-react';
 import { useCompanyContext } from '../CompanyContext';
 import AIBlogCardModal from '../blog/AIBlogCardModal';
 import { getDepthLabel, getFormatLabel, parseWordTarget } from './managed-intelligence/recommendations';
 import { useManagedIntelligenceData } from './managed-intelligence/useManagedIntelligenceData';
-import { PRIORITY_STYLES, type ManagedIntelligenceProps as Props } from './managed-intelligence/types';
+import { PRIORITY_STYLES, type CreationModeFlavor, type ManagedIntelligenceProps as Props } from './managed-intelligence/types';
+import { buildOutlineContentBlocks } from '../../lib/blog/blogOutlineSkeleton';
+import { buildShortformManualStub } from '../../lib/content/shortformManualStub';
+
+type CreationModeKind = 'ai' | 'outline' | 'manual' | 'starter';
 
 export default function ManagedIntelligencePage({
   contentType,
@@ -24,6 +29,7 @@ export default function ManagedIntelligencePage({
   generatePath,
   formatOptions,
   defaultFormat,
+  creationModePicker,
 }: Props) {
   const router = useRouter();
   const { selectedCompanyId, selectedCompanyName, user, isLoading: authLoading } = useCompanyContext();
@@ -32,6 +38,10 @@ export default function ManagedIntelligencePage({
   const formatLabel = getFormatLabel(formatOptions, selectedFormat);
   const targetWords = parseWordTarget(selectedFormatOption?.wordRange, contentType === 'story' ? 1500 : 2000);
   const depthLabel = getDepthLabel(targetWords);
+  const [creationMode, setCreationMode] = useState<CreationModeKind>('ai');
+  const pickerEnabled = creationModePicker?.enabled === true;
+  const pickerFlavor: CreationModeFlavor = creationModePicker?.flavor ?? 'longform';
+  const pickerEditorPath = creationModePicker?.editorPath ?? '';
 
   const {
     loading,
@@ -148,6 +158,62 @@ export default function ManagedIntelligencePage({
     });
   };
 
+  // G18: navigate to editor with an outline prefill stub (no API call).
+  const openEditorWithOutline = () => {
+    if (!pickerEditorPath) return;
+    const token = `${contentType.replace(/[^a-z]/g, '_')}_outline_prefill_${Date.now()}`;
+    const stub = {
+      output: {
+        title: '',
+        excerpt: '',
+        content_html: '',
+        tags: [],
+        category: '',
+        seo_meta_title: '',
+        seo_meta_description: '',
+        key_insights: [],
+        content_blocks: buildOutlineContentBlocks(contentType.replace('-', ' ')),
+      },
+      source: `${contentType.replace('-', '_')}_creation_mode_picker_outline`,
+      target_word_count: targetWords,
+      format_type: selectedFormat,
+      template_name: 'Outline starter',
+    };
+    try {
+      sessionStorage.setItem(token, JSON.stringify(stub));
+    } catch {
+      // sessionStorage write failure is non-fatal — editor will fall back to blank.
+    }
+    void router.push({ pathname: pickerEditorPath, query: { prefill: token, format: selectedFormat } });
+  };
+
+  // G18: open the editor with no prefill — pure blank manual mode (longform).
+  const openEditorBlank = () => {
+    if (!pickerEditorPath) return;
+    void router.push({ pathname: pickerEditorPath, query: { format: selectedFormat } });
+  };
+
+  // G18.3 — shortform manual mode (Posts): land on ShortformResultPage with a
+  // sentinel-marked empty stub. The result page detects creation_mode='manual'
+  // and renders a "Continue to scheduler" CTA. The scheduler is where editing
+  // actually happens (ShortformResultPage is a viewer, not an editor).
+  const openShortformManualResult = () => {
+    if (!pickerEditorPath) return;
+    const token = `${contentType.replace(/[^a-z]/g, '_')}_manual_stub_${Date.now()}`;
+    const stub = buildShortformManualStub({
+      platform: 'linkedin',
+      topic: `New ${contentType} draft`,
+      formatFamily: selectedFormat,
+    });
+    try {
+      sessionStorage.setItem(token, JSON.stringify(stub));
+    } catch {
+      // sessionStorage write failure is non-fatal — result page will show the
+      // standard empty state with a Create CTA. User can retry.
+    }
+    void router.push({ pathname: pickerEditorPath, query: { prefill: token, format: selectedFormat } });
+  };
+
   if (authLoading || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
@@ -191,6 +257,131 @@ export default function ManagedIntelligencePage({
             </Link>
           </div>
 
+          {pickerEnabled && (
+            <div className="mb-6 rounded-2xl border border-gray-200 bg-white/90 p-5 shadow-sm">
+              <p className="mb-3 text-sm font-semibold text-gray-900">How do you want to start?</p>
+              <div className={`grid gap-3 ${pickerFlavor === 'longform' ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
+                <button
+                  type="button"
+                  onClick={() => setCreationMode('ai')}
+                  className={`rounded-2xl border px-4 py-4 text-left transition ${
+                    creationMode === 'ai'
+                      ? `border-violet-300 bg-violet-50 text-violet-900 shadow-sm`
+                      : `border-gray-200 bg-white text-gray-700 hover:border-violet-200 hover:bg-violet-50/60`
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-violet-500" />
+                    <p className="text-sm font-semibold">Generate with AI</p>
+                  </div>
+                  <p className="mt-2 text-sm leading-6">
+                    Use AI Chat or pick a recommended card to generate the full {contentType.replace('-', ' ')}.
+                  </p>
+                </button>
+
+                {pickerFlavor === 'longform' && (
+                  <button
+                    type="button"
+                    onClick={() => setCreationMode('outline')}
+                    className={`rounded-2xl border px-4 py-4 text-left transition ${
+                      creationMode === 'outline'
+                        ? `border-violet-300 bg-violet-50 text-violet-900 shadow-sm`
+                        : `border-gray-200 bg-white text-gray-700 hover:border-violet-200 hover:bg-violet-50/60`
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-violet-500" />
+                      <p className="text-sm font-semibold">Start from outline</p>
+                    </div>
+                    <p className="mt-2 text-sm leading-6">
+                      Land in the editor with a 5-section structural outline ready to fill in.
+                    </p>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setCreationMode('manual')}
+                  className={`rounded-2xl border px-4 py-4 text-left transition ${
+                    creationMode === 'manual'
+                      ? `border-violet-300 bg-violet-50 text-violet-900 shadow-sm`
+                      : `border-gray-200 bg-white text-gray-700 hover:border-violet-200 hover:bg-violet-50/60`
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <PenLine className="h-4 w-4 text-violet-500" />
+                    <p className="text-sm font-semibold">Write my own</p>
+                  </div>
+                  <p className="mt-2 text-sm leading-6">
+                    Skip AI entirely. Open a blank editor and write the {contentType.replace('-', ' ')} yourself.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  disabled
+                  title="Curated starter pieces coming soon."
+                  className="cursor-not-allowed rounded-2xl border border-dashed border-gray-200 bg-gray-50/60 px-4 py-4 text-left opacity-70"
+                >
+                  <div className="flex items-center gap-2">
+                    <Target className="h-4 w-4 text-gray-400" />
+                    <p className="text-sm font-semibold text-gray-500">Use a starter</p>
+                    <span className="ml-auto rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                      Soon
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-gray-500">
+                    Pick a curated starter and edit it. Available in a later release.
+                  </p>
+                </button>
+              </div>
+
+              {creationMode === 'outline' && (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4">
+                  <p className="text-sm text-violet-700">
+                    Lands in the editor with a structural 5-section scaffold. No AI generation.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={openEditorWithOutline}
+                    className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700"
+                  >
+                    <FileText className="h-4 w-4" />
+                    Open editor with outline
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+
+              {creationMode === 'manual' && (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4">
+                  <p className="text-sm text-violet-700">
+                    {pickerFlavor === 'longform'
+                      ? 'Opens a blank editor — no prefill, no AI, no outline.'
+                      : 'Posts are edited in the scheduler. We will take you to the result page and then through to the scheduler where you write per-platform content.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={pickerFlavor === 'longform' ? openEditorBlank : openShortformManualResult}
+                    className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700"
+                  >
+                    <PenLine className="h-4 w-4" />
+                    {pickerFlavor === 'longform' ? 'Open blank editor' : 'Open result → scheduler'}
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+
+              {creationMode === 'starter' && (
+                <div className="mt-4 border-t border-gray-100 pt-4 text-sm text-gray-500">
+                  Curated starter pieces are not available yet. Pick another mode above.
+                </div>
+              )}
+            </div>
+          )}
+
+          {(!pickerEnabled || creationMode === 'ai') && (
+          <>
           <div className="grid gap-4 md:grid-cols-2">
             <button
               type="button"
@@ -371,6 +562,8 @@ export default function ManagedIntelligencePage({
               ))}
             </div>
           </section>
+          </>
+          )}
 
           <div className="mt-10 grid gap-5 lg:grid-cols-2">
             <section className="rounded-2xl border border-gray-200 bg-white/95 p-5 shadow-sm">

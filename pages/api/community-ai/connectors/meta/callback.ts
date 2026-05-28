@@ -4,6 +4,7 @@ import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 import { syncInstagramAndThreadsFromMeta } from '../../../../../backend/services/metaDerivedAccountsService';
+import { logOAuthEvent, safeHost } from '../../../../../backend/auth/oauthTelemetry';
 
 /**
  * GET /api/community-ai/connectors/meta/callback
@@ -27,19 +28,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error, error_description } = req.query;
+  const callbackHost = safeHost(getCommunityAiConnectorCallbackUrl('meta', req));
+  const requestOrigin = (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string | undefined) || null;
+
+  logOAuthEvent({
+    event: 'oauth_callback_received',
+    provider: 'meta',
+    callback_host: callbackHost,
+    state_flow: 'community-ai',
+    request_origin: requestOrigin,
+  });
 
   if (error) {
     const message = typeof error_description === 'string' ? error_description : error;
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'meta',
+      callback_host: callbackHost,
+      state_flow: 'community-ai',
+      failure_point: 'provider_error',
+      failure_detail: String(error),
+    });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent(String(message || 'Meta OAuth failed'))}`
     );
   }
 
   if (!code || typeof code !== 'string') {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'meta',
+      callback_host: callbackHost,
+      state_flow: 'community-ai',
+      failure_point: 'missing_code',
+    });
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Missing authorization code')}`);
   }
 
   if (!state || typeof state !== 'string') {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'meta',
+      callback_host: callbackHost,
+      state_flow: 'community-ai',
+      failure_point: 'invalid_oauth_state',
+      failure_detail: 'state query param missing',
+    });
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Missing OAuth state')}`);
   }
 
@@ -47,6 +81,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     statePayload = decodeState(state);
   } catch {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'meta',
+      callback_host: callbackHost,
+      state_flow: 'community-ai',
+      failure_point: 'invalid_oauth_state',
+      failure_detail: 'JSON.parse of base64 state failed',
+    });
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Invalid OAuth state')}`);
   }
 
@@ -55,6 +97,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const redirectTo = statePayload.redirect || '/community-ai/connectors';
 
   if (!tenantId || !organizationId || tenantId !== organizationId) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'meta',
+      callback_host: callbackHost,
+      company_id: organizationId || null,
+      state_flow: 'community-ai',
+      failure_point: 'invalid_oauth_state',
+      failure_detail: 'tenant_id !== organization_id or missing',
+    });
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Invalid tenant scope')}`);
   }
 
@@ -83,11 +134,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!tokenResponse.ok) {
       const errText = await tokenResponse.text();
       console.error('[meta/callback] token exchange failed:', tokenResponse.status, errText);
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'meta',
+        callback_host: callbackHost,
+        company_id: organizationId,
+        user_id: access.userId,
+        state_flow: 'community-ai',
+        failure_point: 'token_exchange_failed',
+        failure_detail: `HTTP ${tokenResponse.status}`,
+      });
       return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Meta connection failed. Please try again.')}`);
     }
 
     const tokenData = await tokenResponse.json();
     if (!tokenData.access_token) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'meta',
+        callback_host: callbackHost,
+        company_id: organizationId,
+        user_id: access.userId,
+        state_flow: 'community-ai',
+        failure_point: 'token_exchange_failed',
+        failure_detail: 'token response missing access_token',
+      });
       return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Meta did not return an access token.')}`);
     }
 
@@ -181,9 +252,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       derived_threads_count: derivedThreadsCount,
     }));
 
+    logOAuthEvent({
+      event: 'oauth_success',
+      provider: 'meta',
+      callback_host: callbackHost,
+      company_id: organizationId,
+      user_id: access.userId,
+      state_flow: 'community-ai',
+    });
     return res.redirect(`${redirectTo}?connected=meta&status=success`);
   } catch (err: any) {
     console.error('[meta/callback] error:', err?.message);
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'meta',
+      callback_host: callbackHost,
+      company_id: organizationId,
+      user_id: access.userId,
+      state_flow: 'community-ai',
+      failure_point: 'callback_exception',
+      failure_detail: String(err?.message ?? err).slice(0, 200),
+    });
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Meta connection failed. Please try again.')}`);
   }
 }

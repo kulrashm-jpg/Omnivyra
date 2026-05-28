@@ -25,6 +25,11 @@ export default function CaseStudyIntelligencePage() {
       generatePath="/case-studies/generate"
       formatOptions={CASE_STUDY_FORMATS}
       defaultFormat="case-study"
+      creationModePicker={{
+        enabled: true,
+        flavor: 'longform',
+        editorPath: '/case-studies/new',
+      }}
     />
   );
 }

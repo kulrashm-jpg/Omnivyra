@@ -7,16 +7,19 @@ import {
   normalizeAttachmentMode,
   normalizeSourceTextTransform,
   normalizeWriterCreatorAssetType,
+  resolveAttachmentModeFromIntent,
   validateAttachmentPayload,
+  SUPPORTING_VISUAL_COPY_POLICY,
   type AssetCompositionIntent,
+  type AttachmentMode,
 } from '../../../../lib/content/writerCreatorAttachmentContracts';
 import { containsDirectThreadDuplication, transformThreadForVisual } from '../../../../lib/content/writerCreatorThreadTransform';
 import { detectSemanticThreadDuplication } from '../../../../backend/services/creatorSemanticDuplication';
-import { enqueueDurableCreatorRenderJob } from '../../../../backend/services/creatorRenderDurableQueue';
-import { createCreatorAuditId } from '../../../../backend/services/creatorRenderObservability';
+import { runCreatorOrchestration } from '../../../../backend/services/creator/creatorOrchestrator';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
+import { logPipelineEvent } from '../../../../lib/shared/observability';
 
 type GenerateCreatorBody = {
   company_id?: string;
@@ -86,32 +89,95 @@ function normalizeCreatorCardForAttachment(input: {
   const assetType = normalizeWriterCreatorAssetType(
     rawIntent.assetType ?? input.creatorCard.writer_asset_type ?? input.creatorType ?? input.contentType,
   );
-  const attachmentMode = normalizeAttachmentMode(rawIntent.attachmentMode ?? input.creatorCard.attachment_mode);
-  const rawCopyPolicy = safeObject(input.creatorCard.copy_policy);
-  const sourceTextTransform = normalizeSourceTextTransform(
-    safeObject(rawIntent.copyPolicy).sourceTextTransform ?? rawCopyPolicy.sourceTextTransform ?? input.creatorCard.source_text_transform,
+  const requestedMode = normalizeAttachmentMode(rawIntent.attachmentMode ?? input.creatorCard.attachment_mode);
+  // Phase 2 fix — resolve attachment_mode from payload signals BEFORE
+  // validation. The validator is correct; the writer's mode default
+  // was too aggressive (supporting_visual for any image-class asset),
+  // which collided with paragraph source text, overlay-text fields,
+  // CTA, typography hints, and typography-bearing asset types. The
+  // resolver coerces supporting_visual → embedded_copy whenever any
+  // embedded-copy signal is present.
+  const rawOverlayTextForSignals = safeObject(input.creatorCard.overlay_text);
+  const sourceContentForSignals = safeObject(input.creatorCard.source_content);
+  const rawSourceTextTransform = normalizeSourceTextTransform(
+    safeObject(rawIntent.copyPolicy).sourceTextTransform
+      ?? safeObject(input.creatorCard.copy_policy).sourceTextTransform
+      ?? input.creatorCard.source_text_transform,
+    'none',
   );
+  const modeResolution = resolveAttachmentModeFromIntent({
+    assetType,
+    requestedMode,
+    sourceText: typeof sourceContentForSignals.snippet === 'string' ? sourceContentForSignals.snippet : null,
+    overlayText: rawOverlayTextForSignals,
+    cta: input.creatorCard.cta ?? input.creatorCard.CTA ?? rawOverlayTextForSignals.cta,
+    sourceTextTransform: rawSourceTextTransform,
+    freeFormIntent: [
+      typeof input.creatorCard.visual_intent === 'string' ? input.creatorCard.visual_intent : null,
+      typeof input.creatorCard.constraints === 'string' ? input.creatorCard.constraints : null,
+      typeof input.creatorCard.tone === 'string' ? input.creatorCard.tone : null,
+      typeof input.creatorCard.brand_generation_mode === 'string' ? input.creatorCard.brand_generation_mode : null,
+    ],
+  });
+  const attachmentMode: AttachmentMode = modeResolution.mode;
+  if (modeResolution.coerced) {
+    logPipelineEvent('writer.attachment_mode_coerced', 'info', {
+      asset_type: assetType,
+      requested_mode: requestedMode,
+      resolved_mode: attachmentMode,
+      signals: modeResolution.signals.join(','),
+      content_type: String(input.contentType ?? 'unset'),
+      source_type: String(sourceContentForSignals.source_type ?? 'unset'),
+    }, { dedupeKey: `coerce.${assetType}.${modeResolution.signals.join(':')}`, throttleMs: 10_000 });
+  }
+  const rawCopyPolicy = safeObject(input.creatorCard.copy_policy);
+  // supporting_visual is a contract-fixed mode per copyPolicyForIntent
+  // (writerCreatorAttachmentContracts.ts:199): copyPolicy MUST be
+  // SUPPORTING_VISUAL_COPY_POLICY (all-false flags + sourceTextTransform='none'),
+  // regardless of what the UI sent. Coercing here matches the same intent the
+  // recent overlay/CTA scrub captured — the UI brief form collects fields
+  // intended for the source post, not for the visual asset. Without this
+  // coercion, raw copy_policy.allowCTA / allowHeadline / allowKeyInsight or a
+  // duplication-transform value leaks through and trips validator rules
+  // #4 (thread duplication transforms), #5 (allowCTA), #6 (allow embedded copy).
+  const isSupportingVisualMode = attachmentMode === 'supporting_visual';
+  const sourceTextTransform = isSupportingVisualMode
+    ? SUPPORTING_VISUAL_COPY_POLICY.sourceTextTransform
+    : normalizeSourceTextTransform(
+        safeObject(rawIntent.copyPolicy).sourceTextTransform ?? rawCopyPolicy.sourceTextTransform ?? input.creatorCard.source_text_transform,
+      );
   const compositionIntent = buildAssetCompositionIntent({
     assetType,
     attachmentMode,
     sourceTextTransform,
-    copyPolicy: rawCopyPolicy.sourceTextTransform
-      ? {
-          allowHeadline: rawCopyPolicy.allowHeadline === true,
-          allowKeyInsight: rawCopyPolicy.allowKeyInsight === true,
-          allowCTA: rawCopyPolicy.allowCTA === true,
-          sourceTextTransform,
-        }
-      : undefined,
+    copyPolicy: isSupportingVisualMode
+      ? SUPPORTING_VISUAL_COPY_POLICY
+      : (rawCopyPolicy.sourceTextTransform
+          ? {
+              allowHeadline: rawCopyPolicy.allowHeadline === true,
+              allowKeyInsight: rawCopyPolicy.allowKeyInsight === true,
+              allowCTA: rawCopyPolicy.allowCTA === true,
+              sourceTextTransform,
+            }
+          : undefined),
   });
-  const overlayText = safeObject(input.creatorCard.overlay_text);
+  const rawOverlayText = safeObject(input.creatorCard.overlay_text);
   const sourceContent = safeObject(input.creatorCard.source_content);
+  // supporting_visual is a CTA/overlay-free mode by contract — any CTA the
+  // brief form collected is for the source post, not for embedding on the
+  // visual. Strip it BEFORE validation so the user isn't blocked just for
+  // filling in the CTA field; we'd be deleting it after validation anyway.
+  const isSupportingVisual = attachmentMode === 'supporting_visual';
+  const overlayText = isSupportingVisual ? {} : rawOverlayText;
+  const ctaForValidation = isSupportingVisual
+    ? undefined
+    : (input.creatorCard.cta ?? input.creatorCard.CTA ?? rawOverlayText.cta);
   const validation = validateAttachmentPayload({
     attachmentMode,
     assetType,
     copyPolicy: compositionIntent.copyPolicy,
     overlayText,
-    cta: input.creatorCard.cta ?? input.creatorCard.CTA ?? overlayText.cta,
+    cta: ctaForValidation,
     sourceText: String(sourceContent.snippet || ''),
     sourceType: sourceContent.source_type === 'thread' ? 'thread' : 'post',
   });
@@ -154,24 +220,10 @@ function normalizeCreatorCardForAttachment(input: {
   return { creatorCard, compositionIntent, errors: validation.errors };
 }
 
-function mergeRenderedMedia(output: any, rendered: { url?: string | null; files?: string[] | null; metadata?: Record<string, unknown> | null }) {
-  const mediaBundle = safeObject(output?.asset_payload?.media_bundle);
-  return {
-    ...output,
-    asset_payload: {
-      ...safeObject(output?.asset_payload),
-      media_bundle: {
-        ...mediaBundle,
-        ...(rendered.url ? { url: rendered.url } : {}),
-        ...(Array.isArray(rendered.files) && rendered.files.length > 0 ? { files: rendered.files } : {}),
-        metadata: {
-          ...safeObject(mediaBundle.metadata),
-          ...safeObject(rendered.metadata),
-        },
-      },
-    },
-  };
-}
+// Phase 3 cleanup — local `mergeRenderedMedia` was reachable only from
+// the pre-orchestrator render path. The orchestrator owns merging now;
+// this helper has been removed. `safeObject` remains because the
+// attachment-validation path uses it.
 
 function humanize(value: string): string {
   return String(value || '')
@@ -320,130 +372,98 @@ async function generateTextContent(input: {
   summary?: string;
   creatorCard: Record<string, unknown>;
 }): Promise<any> {
-  const [{ runCompletionWithOperation }, { config: appConfig }] = await Promise.all([
-    import('../../../../backend/services/aiGateway'),
-    import('@/config'),
-  ]);
-
   const isThread = String(input.contentType).toLowerCase() === 'thread';
+  const isPostOrThread = isThread || String(input.contentType).toLowerCase() === 'post';
   const platform = (input.targetPlatforms[0] || 'linkedin').toLowerCase();
-  const subtype = String(input.creatorCard.subtype || '').trim();
-  const tone = String(input.creatorCard.tone || '').trim();
-  const cta = String(input.creatorCard.cta || '').trim();
-  const constraints = String(input.creatorCard.constraints || '').trim();
 
-  const platformHints: Record<string, string> = {
-    linkedin: 'LinkedIn: professional voice, 1-3 short paragraphs, 3-5 hashtags, end with one clear ask.',
-    x: 'X / Twitter: under 280 chars, sharp hook, no formatting, 1-2 hashtags max.',
-    facebook: 'Facebook: conversational, 1-2 paragraphs, 3-4 hashtags, encourage replies.',
-    threads: 'Threads: concise, casual, optional hashtags, lead with the hook.',
-    reddit: 'Reddit: no marketing language, lead with curiosity or insight, avoid emojis/hashtags.',
-    instagram: 'Instagram: visual hook in opening line, line breaks for scanability, 5-10 hashtags.',
-  };
-
-  const systemPrompt = isThread
-    ? `You are a senior social copywriter specialized in connected ${platform} threads. You produce native, scroll-stopping thread sequences with a strong hook, 3-7 progression posts, and a clear CTA close. Return JSON only.
-
-Output JSON shape:
-{
-  "hook_segment": "first post in the thread — strongest scroll-stop line",
-  "segments": ["post 2", "post 3", ...],
-  "cta_segment": "final CTA close",
-  "caption": "the FULL combined thread as one block, segments separated by double newlines",
-  "hashtags": ["tag1", "tag2"],
-  "meta_description": "60-160 char summary"
-}`
-    : `You are a senior social copywriter specialized in native ${platform} posts. You produce scroll-stopping, platform-native content with a strong hook, useful body, and one clear CTA. Return JSON only.
-
-Output JSON shape:
-{
-  "hook": "scroll-stop opening line",
-  "body": "main post body (markdown-light, line breaks ok)",
-  "cta_line": "single CTA line",
-  "caption": "the FULL post text — hook + body + cta as one block",
-  "hashtags": ["tag1", "tag2"],
-  "meta_description": "60-160 char summary"
-}`;
-
-  const userPrompt = `Generate a ${input.contentType} for ${platform}.
-
-Topic: ${input.topic}
-Audience: ${input.audience || 'general professional audience'}
-Objective: ${input.objective || 'awareness'}
-${subtype ? `Subtype: ${subtype}` : ''}
-${tone ? `Tone: ${tone}` : ''}
-${cta ? `Desired CTA: ${cta}` : ''}
-${input.summary ? `Key message: ${input.summary}` : ''}
-${constraints ? `Constraints: ${constraints}` : ''}
-
-Platform guidance: ${platformHints[platform] || 'Match the conventions of the target platform.'}
-
-Avoid generic marketing adjectives (premium, game-changing, unlock, elevate) unless the user supplied that language. Lead with specifics. Return JSON only.`;
-
-  const result = await runCompletionWithOperation({
-    companyId: input.companyId,
-    model: appConfig.OPENAI_MODEL,
-    operation: `creator_text_content_${input.contentType}`,
-    temperature: 0.5,
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-  });
-
-  const parsed = JSON.parse(String(result?.output || '{}')) as Record<string, unknown>;
-  const caption = String(parsed.caption || '').trim()
-    || (isThread
-        ? [parsed.hook_segment, ...(Array.isArray(parsed.segments) ? parsed.segments : []), parsed.cta_segment].filter(Boolean).map(String).join('\n\n')
-        : [parsed.hook, parsed.body, parsed.cta_line].filter(Boolean).map(String).join('\n\n'));
-  const hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags.map(String).filter(Boolean) : [];
-  const metaDescription = String(parsed.meta_description || '').trim() || caption.slice(0, 160);
-  const threadSegments = isThread && Array.isArray(parsed.segments)
-    ? parsed.segments.map(String).filter(Boolean)
-    : [];
-
-  return {
-    intent_type: 'creator',
-    asset_type: 'image',
-    asset_instruction: {
-      blueprint: parsed,
-      structure: { output_shape: isThread ? 'thread_sequence' : 'single_post' },
-      visual_style: tone || 'native_platform_voice',
-      template_id: `text-content-${input.contentType}`,
-    },
-    asset_payload: {
-      asset_kind: 'text_content',
-      content_type: input.contentType,
-      hook: String(parsed.hook || parsed.hook_segment || '').trim(),
-      body: String(parsed.body || '').trim(),
-      cta_line: String(parsed.cta_line || parsed.cta_segment || cta || '').trim(),
-      thread_segments: threadSegments,
-      media_bundle: {
-        metadata: {
-          preview_kind: 'text_content',
-          content_type: input.contentType,
-          platform,
-          generated_by: 'creator_text_content',
+  // Phase 1 unification — post/thread text generation routes through
+  // the shared textGenerationOrchestrator (which delegates to the
+  // canonical contentGenerationPipeline). Output is reshaped into the
+  // Direct API's existing CanonicalCreatorOutput-shaped response so
+  // clients (writer pages, command center route, etc.) see no shape
+  // change.
+  if (isPostOrThread) {
+    const { runTextGeneration } = await import('../../../../backend/services/content/textGenerationOrchestrator');
+    const subtype = String(input.creatorCard.subtype || '').trim();
+    const tone = String(input.creatorCard.tone || '').trim();
+    const cta = String(input.creatorCard.cta || '').trim();
+    const constraints = String(input.creatorCard.constraints || '').trim();
+    const extraInstruction = [
+      subtype ? `Subtype: ${subtype}` : '',
+      constraints ? `Constraints: ${constraints}` : '',
+      input.summary ? `Key message: ${input.summary}` : '',
+    ].filter(Boolean).join('\n\n');
+    const orchestrated = await runTextGeneration({
+      origin: 'direct-api',
+      companyId: input.companyId,
+      topic: input.topic,
+      contentType: isThread ? 'thread' : 'post',
+      targetPlatforms: [platform],
+      audience: input.audience,
+      objective: input.objective,
+      tone: tone || undefined,
+      cta: cta || undefined,
+      extraInstruction: extraInstruction || undefined,
+      creatorCard: input.creatorCard,
+    });
+    const variant = orchestrated.platformVariant;
+    const caption = String(variant.generated_content || orchestrated.masterContent.content || '').trim();
+    const hashtags = Array.isArray((variant as any).discoverability_meta?.hashtags)
+      ? ((variant as any).discoverability_meta.hashtags as unknown[]).map(String).filter(Boolean)
+      : [];
+    const trace = orchestrated.masterContent?.decision_trace ?? {};
+    const segments = isThread && caption ? caption.split(/\n{2,}/).map((s: string) => s.trim()).filter(Boolean) : [];
+    return {
+      intent_type: 'creator',
+      asset_type: 'image',
+      asset_instruction: {
+        blueprint: orchestrated.masterContent,
+        structure: { output_shape: isThread ? 'thread_sequence' : 'single_post' },
+        visual_style: tone || 'native_platform_voice',
+        template_id: `text-content-${input.contentType}`,
+      },
+      asset_payload: {
+        asset_kind: 'text_content',
+        content_type: input.contentType,
+        hook: String((trace as any).hook || '').trim(),
+        body: caption,
+        cta_line: cta,
+        thread_segments: segments,
+        media_bundle: {
+          metadata: {
+            preview_kind: 'text_content',
+            content_type: input.contentType,
+            platform,
+            generated_by: 'creator_text_content',
+          },
         },
       },
-    },
-    packaging: {
-      caption,
-      hashtags,
-      cta: String(parsed.cta_line || parsed.cta_segment || cta || 'Learn more'),
-      meta_description: metaDescription,
-      keywords: [input.topic, input.contentType, platform].filter(Boolean),
-      platform_variants: {},
-    },
-    generation_prompt: `creator-text-content:${input.contentType}:${input.topic}`,
-    metadata: {
-      content_type: input.contentType,
-      target_platforms: input.targetPlatforms,
-      preview_kind: 'text_content',
-      text_only: true,
-    },
-  };
+      packaging: {
+        caption,
+        hashtags,
+        cta: cta || 'Learn more',
+        meta_description: caption.slice(0, 160),
+        keywords: [input.topic, input.contentType, platform].filter(Boolean),
+        platform_variants: {},
+      },
+      generation_prompt: `creator-text-content:${input.contentType}:${input.topic}`,
+      metadata: {
+        content_type: input.contentType,
+        target_platforms: input.targetPlatforms,
+        preview_kind: 'text_content',
+        text_only: true,
+      },
+    };
+  }
+
+  // Phase 2 legacy cleanup — the bespoke `runCompletionWithOperation`
+  // fallback for non-post/thread content types has been removed. The
+  // only callers reaching `generateTextContent` come from the
+  // `isTextOnlyContentType` gate above (`post` / `thread`), so any
+  // other content-type arriving here is a contract violation. Throw
+  // explicitly instead of silently producing a bespoke output that
+  // bypassed the canonical pipeline.
+  throw new Error(`creator text content: unsupported content type "${input.contentType}" — only post/thread accepted`);
 }
 
 function shouldUseCreatorFallback(error: unknown): boolean {
@@ -492,9 +512,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     contentType,
   });
   if (normalizedAttachment.errors.length > 0) {
+    // Phase A-partial — actionable hints surfaced for the residual validator
+    // rule that the normalization layer cannot resolve. Today the only such
+    // rule is #3 (paragraphLike): the source snippet is too long for a
+    // supporting_visual overlay. UI work that proactively warns / offers
+    // condense / mode-switch is deferred to its own phase; this hint at
+    // least gives the user a clear next step instead of an opaque rejection.
+    const hints: string[] = [];
+    if (normalizedAttachment.errors.includes('supporting_visual rejects paragraph overlays')) {
+      hints.push(
+        'The source snippet is too long to render as a supporting visual overlay. ' +
+        'Options: (a) shorten the snippet to under ~160 characters with no long paragraph breaks, ' +
+        'or (b) switch the attachment mode to "embedded_copy" which is designed for paragraph-length content.',
+      );
+    }
+    // Phase C — writer rejection telemetry. Each rule the validator fired is
+    // emitted at warn level so dashboards can show rejection rate by rule
+    // (which UX gap is hitting users most). No content/URL/secrets in tags.
+    for (const ruleMessage of normalizedAttachment.errors) {
+      logPipelineEvent('writer.attachment_rejected', 'warn', {
+        rule: ruleMessage,
+        attachment_mode: String(creatorCardInput.attachment_mode ?? 'unset'),
+        creator_type: String(body.creator_type ?? 'unset'),
+        content_type: String(contentType ?? 'unset'),
+        source_type: String(safeObject(creatorCardInput.source_content).source_type ?? 'unset'),
+      }, { dedupeKey: `writer.${ruleMessage}`, throttleMs: 10_000 });
+    }
     return res.status(400).json({
       error: 'Invalid Writer attachment payload',
       details: normalizedAttachment.errors,
+      ...(hints.length > 0 ? { hints } : {}),
     });
   }
   const creatorCard = normalizedAttachment.creatorCard;
@@ -616,17 +663,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const intelligenceBrief = null;
-    const [{ createCreatorExecutionEngine }, { renderAsset }] = await Promise.all([
-      import('../../../../backend/services/executionEngines/creatorExecutionEngine'),
-      import('../../../../backend/services/creatorAssetRenderer'),
-    ]);
-    const creatorEngine = createCreatorExecutionEngine();
     const primaryPlatform = targetPlatforms[0];
+    // Phase 2/3/4/5 unification — Direct flow now delegates the
+    // generate→adapt→render→persist→FSM chain to the shared
+    // creatorOrchestrator. Billing wrapper (chargeCreator) + writer
+    // attachment validation + timeout + fallback semantics remain owned
+    // by this route. The orchestrator additionally persists a
+    // creator_assets row (Phase 5) so the Direct flow becomes
+    // standalone usable; response gains `persisted_asset_id` (additive).
+    const writerSource = (() => {
+      const src = safeObject(creatorCard.source_content);
+      const sourceType = src.source_type === 'thread' ? 'thread' as const : src.source_type === 'post' ? 'post' as const : null;
+      const sourceId = typeof src.source_id === 'string' ? src.source_id : null;
+      return sourceType ? { sourceType, sourceId } : undefined;
+    })();
+    let persistedAssetIdForResponse: string | null = null;
     const output = await withCreatorTimeout(chargeCreator(() => (async () => {
-      const generated = await measureCreatorDuration('creator_generate_intent', {
+      const orchestrated = await measureCreatorDuration('creator_orchestrate', {
         contentType,
         platform: primaryPlatform,
-      }, () => creatorEngine.generateFromIntent({
+      }, () => runCreatorOrchestration({
         campaignId: `creator-content-${Date.now()}`,
         companyId,
         userId: user?.userId ?? null,
@@ -639,55 +695,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         creatorCard,
         enrichedIntent: intelligenceBrief ? {
           analytics_intelligence: {
-            content_type: intelligenceBrief.content_type,
-            readiness: intelligenceBrief.readiness,
-            prompt_block: intelligenceBrief.prompt_block,
-            low_confidence_note: intelligenceBrief.low_confidence_note,
-            primitives: intelligenceBrief.primitives,
-            recommended_uses: intelligenceBrief.recommended_uses,
+            content_type: (intelligenceBrief as any).content_type,
+            readiness: (intelligenceBrief as any).readiness,
+            prompt_block: (intelligenceBrief as any).prompt_block,
+            low_confidence_note: (intelligenceBrief as any).low_confidence_note,
+            primitives: (intelligenceBrief as any).primitives,
+            recommended_uses: (intelligenceBrief as any).recommended_uses,
           },
-        } : undefined,
+        } : null,
+        origin: 'direct',
+        source: writerSource,
+        // Match legacy Direct-flow semantics: readiness gating is opt-in
+        // for this surface (response was always returned regardless).
+        skipReadinessValidation: true,
       }));
-
-      const adapted = await measureCreatorDuration('creator_adapt_platform', {
-        contentType,
-        platform: primaryPlatform,
-      }, () => creatorEngine.adaptForPlatform(generated, primaryPlatform));
-      const renderInput = safeObject(adapted.asset_payload);
-      if (['carousel', 'pdf', 'slider', 'infographic'].includes(contentType)) {
-        const auditId = createCreatorAuditId({ companyId, contentType, platform: primaryPlatform, renderInput });
-        const renderJob = await enqueueDurableCreatorRenderJob({
-          idempotencyKey: `creator-render:${companyId}:${contentType}:${primaryPlatform}:${JSON.stringify(renderInput).slice(0, 500)}`,
-          renderer: contentType as 'carousel' | 'pdf' | 'slider' | 'infographic',
-          auditId,
-          timeoutMs: 180_000,
-          maxAttempts: 3,
-          payload: {
-            assetPayload: renderInput,
-            options: {
-              campaignId: null,
-              userId: user?.userId ?? null,
-              companyId,
-            },
-          },
-        });
-        return mergeRenderedMedia(adapted, {
-          metadata: {
-            render_async: true,
-            render_job: renderJob,
-            render_audit_id: auditId,
-          },
-        });
-      }
-      const rendered = await measureCreatorDuration('creator_render_asset_api', {
-        contentType,
-        platform: primaryPlatform,
-      }, () => renderAsset(renderInput, {
-        campaignId: null,
-        userId: user?.userId ?? null,
-        companyId,
-      }));
-      return mergeRenderedMedia(adapted, rendered);
+      persistedAssetIdForResponse = orchestrated.persistedAssetId;
+      return orchestrated.output;
     })()), 'Creator generation').catch((error) => {
       if (error instanceof PaymentRequiredError) {
         throw error; // surface enforcement as 402, never fall back to free output
@@ -720,6 +743,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       primary_platform: primaryPlatform,
       intelligence_brief: intelligenceBrief,
       output,
+      persisted_asset_id: persistedAssetIdForResponse,
     });
   } catch (error) {
     if (error instanceof PaymentRequiredError) {

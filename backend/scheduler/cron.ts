@@ -45,6 +45,47 @@ function formatCaughtError(error: unknown): string {
 
 // Fail fast if required env vars are missing
 validateCronEnv();
+
+// ── Phase 17: thread-runtime persistence boot wiring ──
+// The cron process is separate from the Next.js server and workers, so the
+// bootstrap helper must be invoked here as well. Idempotent in-process.
+// Memory mode = no-op; supabase mode HARD-FAILS (process.exit) on
+// registration / smoke-test failure — no silent downgrade.
+//
+// Top-level await isn't available in this module shape, so we run the
+// bootstrap as a fire-and-await wrapped in an IIFE. Cron boots are
+// long-lived; the 30-50ms delay is acceptable.
+import { bootstrapThreadRuntimeExecutionStore } from '../services/orchestration/persistence/bootstrapExecutionStore';
+void (async () => {
+  try {
+    await bootstrapThreadRuntimeExecutionStore({ processKind: 'cron' });
+  } catch (err) {
+    // Supabase mode hard-fails inside the bootstrap. Memory mode never throws.
+    // Any unexpected error reaching here logs but doesn't block cron boot.
+    console.error('[thread-runtime.persistence] cron boot register error:', (err as Error)?.message ?? err);
+  }
+
+  // ── Phase 22A: distributed runtime wiring (cron process) ──
+  // Env-gated via ENABLE_DURABLE_DISTRIBUTED_RUNTIME=1. Default skipped.
+  // The activation governor runs FIRST when enabled and hard-fails on
+  // unmet preconditions. Cron registers as 'cron' worker kind with
+  // recovery_scheduling capability — it doesn't poll the queue itself,
+  // it just participates in heartbeat + recovery scheduling.
+  try {
+    const { wireDistributedRuntime } = await import(
+      '../services/orchestration/distributed/bootWireDistributedRuntime'
+    );
+    await wireDistributedRuntime({ processKind: 'cron' });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'DistributedRuntimeActivationError') {
+      // Activation governor refused — let cron supervisor restart.
+      console.error('[distributed-runtime] cron activation refused:', err.message);
+      process.exit(1);
+    }
+    console.error('[distributed-runtime] cron wire error:', (err as Error)?.message ?? err);
+  }
+})();
+
 import { calibrateThresholds } from '../services/confidenceCalibrator';
 import {
   findDuePostsAndEnqueue,

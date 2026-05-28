@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { Loader2, TrendingUp, Zap } from 'lucide-react';
+import { Globe, Loader2, TrendingUp, Zap } from 'lucide-react';
 import type { ContentBlock } from '../../lib/content/blockTypes';
 import {
   calculateContentQualityScore,
@@ -30,6 +30,18 @@ interface ContentQualityPanelProps {
   companyIdentity?: CompanyIdentity;
   /** Called when user clicks "Improve Alignment" (shown when score < 60). */
   onImproveAlignment?: () => void;
+  /** Optional per-issue auto-apply. Called with the issue category, exact message, and the row key (use this same key as improvingIssueKey to surface the row spinner). */
+  onAutoImproveIssue?: (area: ImproveArea, message: string, key: string) => Promise<void>;
+  /** Stable key identifying the issue currently being auto-fixed (for spinner state). Must match the key passed into onAutoImproveIssue. */
+  improvingIssueKey?: string | null;
+  /** When provided, replaces the Create Campaign button with Post Blog (website). */
+  onPostBlogToWebsite?: () => void;
+  /** Whether website CMS + lead-capture integration is in place. Disables the post button when false. */
+  websiteIntegrationAvailable?: boolean;
+  /** Tooltip / helper text shown when website integration is not available. */
+  websiteIntegrationReason?: string;
+  /** Whether a post-blog-to-website call is currently in flight. */
+  isPostingBlog?: boolean;
 }
 
 type ScoreConfig = {
@@ -99,6 +111,12 @@ export function ContentQualityPanel({
   onCreateCampaign,
   companyIdentity,
   onImproveAlignment,
+  onAutoImproveIssue,
+  improvingIssueKey,
+  onPostBlogToWebsite,
+  websiteIntegrationAvailable,
+  websiteIntegrationReason,
+  isPostingBlog,
 }: ContentQualityPanelProps) {
   const scoreConfig = getScoreConfig(formState.content_type);
 
@@ -212,18 +230,50 @@ export function ContentQualityPanel({
 
       {score.issues.length > 0 && (
         <div className="space-y-1 border-t border-gray-100 px-4 pb-3 pt-3">
-          {errorIssues.map((issue, index) => (
-            <div key={`error-${index}`} className="flex gap-1.5 text-xs text-red-700">
-              <span className="mt-px shrink-0">x</span>
-              <span>{issue.message}</span>
-            </div>
-          ))}
-          {warnIssues.slice(0, 3).map((issue, index) => (
-            <div key={`warn-${index}`} className="flex gap-1.5 text-xs text-amber-700">
-              <span className="mt-px shrink-0">!</span>
-              <span>{issue.message}</span>
-            </div>
-          ))}
+          {errorIssues.map((issue, index) => {
+            const key = `error-${issue.category}-${index}`;
+            const fixing = improvingIssueKey === key;
+            return (
+              <div key={key} className="flex items-start gap-1.5 text-xs text-red-700">
+                <span className="mt-px shrink-0">x</span>
+                <span className="flex-1">{issue.message}</span>
+                {onAutoImproveIssue && (
+                  <button
+                    type="button"
+                    title={`Apply fix: ${issue.message}`}
+                    disabled={!!improvingArea || !!improvingIssueKey}
+                    onClick={() => onAutoImproveIssue(issue.category, issue.message, key)}
+                    className="flex h-5 items-center gap-0.5 rounded px-1 text-[10px] font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-40"
+                  >
+                    {fixing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                    Apply
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {warnIssues.slice(0, 3).map((issue, index) => {
+            const key = `warn-${issue.category}-${index}`;
+            const fixing = improvingIssueKey === key;
+            return (
+              <div key={key} className="flex items-start gap-1.5 text-xs text-amber-700">
+                <span className="mt-px shrink-0">!</span>
+                <span className="flex-1">{issue.message}</span>
+                {onAutoImproveIssue && (
+                  <button
+                    type="button"
+                    title={`Apply fix: ${issue.message}`}
+                    disabled={!!improvingArea || !!improvingIssueKey}
+                    onClick={() => onAutoImproveIssue(issue.category, issue.message, key)}
+                    className="flex h-5 items-center gap-0.5 rounded px-1 text-[10px] font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-40"
+                  >
+                    {fixing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                    Apply
+                  </button>
+                )}
+              </div>
+            );
+          })}
           {warnIssues.length > 3 && (
             <p className="text-xs text-gray-400">+{warnIssues.length - 3} more suggestions</p>
           )}
@@ -306,17 +356,57 @@ export function ContentQualityPanel({
         <div className="border-t border-gray-100 px-4 pb-3 pt-3">
           <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Publish blockers</p>
           <div className="space-y-1">
-            {publishBlockers.slice(0, 3).map((issue, index) => (
-              <div key={`blocker-${index}`} className="flex gap-1.5 text-xs text-red-700">
-                <span className="mt-px shrink-0">x</span>
-                <span>{issue.message}</span>
-              </div>
-            ))}
+            {publishBlockers.slice(0, 3).map((issue, index) => {
+              const key = `blocker-${issue.category}-${index}`;
+              const fixing = improvingIssueKey === key;
+              return (
+                <div key={key} className="flex items-start gap-1.5 text-xs text-red-700">
+                  <span className="mt-px shrink-0">x</span>
+                  <span className="flex-1">{issue.message}</span>
+                  {onAutoImproveIssue && (
+                    <button
+                      type="button"
+                      title={`Apply fix: ${issue.message}`}
+                      disabled={!!improvingArea || !!improvingIssueKey}
+                      onClick={() => onAutoImproveIssue(issue.category, issue.message, key)}
+                      className="flex h-5 items-center gap-0.5 rounded px-1 text-[10px] font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-40"
+                    >
+                      {fixing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                      Apply
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
-      {onCreateCampaign && (
+      {onPostBlogToWebsite ? (
+        <div className="border-t border-gray-100 px-4 pb-4 pt-3">
+          <button
+            type="button"
+            onClick={onPostBlogToWebsite}
+            disabled={!websiteIntegrationAvailable || !!isPostingBlog}
+            title={
+              websiteIntegrationAvailable
+                ? 'Publish this blog to your connected website'
+                : websiteIntegrationReason || 'Connect your website CMS and lead capture to enable posting.'
+            }
+            className={`flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-opacity ${
+              websiteIntegrationAvailable
+                ? 'bg-amber-600 text-white hover:opacity-90'
+                : 'cursor-not-allowed bg-gray-200 text-gray-500'
+            } disabled:opacity-60`}
+          >
+            {isPostingBlog ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />}
+            Post Blog (website)
+          </button>
+          {!websiteIntegrationAvailable && websiteIntegrationReason && (
+            <p className="mt-1.5 text-[10px] leading-snug text-gray-500">{websiteIntegrationReason}</p>
+          )}
+        </div>
+      ) : onCreateCampaign ? (
         <div className="border-t border-gray-100 px-4 pb-4 pt-3">
           <button
             type="button"
@@ -327,7 +417,7 @@ export function ContentQualityPanel({
             Create Campaign
           </button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

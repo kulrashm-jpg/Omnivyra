@@ -17,6 +17,11 @@ export default function ArticleIntelligencePage() {
       generatePath="/articles/generate"
       formatOptions={ARTICLE_FORMAT_OPTIONS}
       defaultFormat="narrative"
+      creationModePicker={{
+        enabled: true,
+        flavor: 'longform',
+        editorPath: '/articles/new',
+      }}
     />
   );
 }

@@ -1,10 +1,4 @@
-import { createHash } from 'crypto';
 import { ownedDbTable } from '../db/writeOwner';
-import { getExecutionEngine } from './executionEngines';
-import { renderAsset } from './creatorAssetRenderer';
-import { validateAssetReadiness } from './creatorAssetValidationService';
-import { validateCreatorExecutionOutput } from './creatorExecutionContracts';
-import type { CanonicalCreatorOutput } from './executionEngines/types';
 import { generateCreatorThemeTreatment } from './creatorThemeTreatmentService';
 import {
   getCreatorGovernance,
@@ -16,6 +10,7 @@ import {
 import { isSupportedManualVideoUpload } from '../../lib/shared/contentTypeClassification';
 import { logPipelineEvent } from '../../lib/shared/observability';
 import { applyTransition } from '../../lib/shared/creatorLifecycleStateMachine';
+import { enqueueBoltCreatorRowExecution, awaitBoltCreatorRowExecution } from './creator/boltCreatorQueueBridge';
 
 type DailyPlanRow = {
   id: string;
@@ -80,6 +75,14 @@ export type CreatorAssetGenerationResult = {
     | 'render_failed';
 };
 
+// Phase 3 cleanup — `hashAsset`, `mergeRenderedMedia`, the local
+// `persistCreatorAsset`, and the local `extractMediaUrls` are all gone
+// after the Phase 4 stabilization. The renderable row mutation is now
+// owned by the creator-content queue worker (see
+// creatorContentProcessor.ts), so the runtime no longer reads media URLs
+// from a canonical output here. `safeObject` remains because it has a
+// string-JSON-parse code path used by markAwaitingMediaUpload.
+
 function safeObject(value: unknown): Record<string, unknown> {
   if (typeof value === 'string') {
     try {
@@ -90,97 +93,6 @@ function safeObject(value: unknown): Record<string, unknown> {
     }
   }
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function hashAsset(input: unknown): string {
-  return createHash('sha256').update(JSON.stringify(input)).digest('hex');
-}
-
-function mergeRenderedMedia(output: CanonicalCreatorOutput, rendered: Awaited<ReturnType<typeof renderAsset>>): CanonicalCreatorOutput {
-  const payload = safeObject(output.asset_payload);
-  const mediaBundle = safeObject(payload.media_bundle);
-  return {
-    ...output,
-    asset_payload: {
-      ...payload,
-      media_bundle: {
-        ...mediaBundle,
-        ...(rendered.url ? { url: rendered.url } : {}),
-        ...(Array.isArray(rendered.files) && rendered.files.length > 0 ? { files: rendered.files } : {}),
-        metadata: {
-          ...safeObject(mediaBundle.metadata),
-          ...safeObject(rendered.metadata),
-          render_only: true,
-          export_ready: Boolean(rendered.url || (Array.isArray(rendered.files) && rendered.files.length > 0)),
-        },
-      },
-    },
-  };
-}
-
-function extractMediaUrls(output: CanonicalCreatorOutput): string[] {
-  const payload = safeObject(output.asset_payload);
-  const mediaBundle = safeObject(payload.media_bundle);
-  return [
-    typeof mediaBundle.url === 'string' ? mediaBundle.url : '',
-    ...(Array.isArray(mediaBundle.files) ? mediaBundle.files.map(String) : []),
-  ].map((value) => value.trim()).filter(Boolean);
-}
-
-async function persistCreatorAsset(input: {
-  campaignId: string;
-  companyId: string;
-  userId: string;
-  row: DailyPlanRow;
-  output: CanonicalCreatorOutput;
-}): Promise<string | null> {
-  const mediaBundle = safeObject(safeObject(input.output.asset_payload).media_bundle);
-  const urls = extractMediaUrls(input.output);
-  const assetHash = hashAsset({
-    row: input.row.id,
-    asset_type: input.output.asset_type,
-    payload: input.output.asset_payload,
-    caption: input.output.packaging.caption,
-  });
-  const assetId = `bolt-render-${input.row.id}-${assetHash.slice(0, 16)}`;
-  const title = String(input.row.topic || input.row.title || input.output.metadata.topic || 'Creator asset').trim();
-
-  const { error } = await ownedDbTable('creator_assets')
-    .upsert({
-      id: assetId,
-      tenant_id: input.companyId,
-      company_id: input.companyId,
-      user_id: input.userId,
-      source_type: null,
-      source_id: input.row.id,
-      creator_type: String(input.row.content_type || input.output.metadata.content_type || input.output.asset_type),
-      title,
-      url: urls[0] ?? null,
-      files: urls,
-      preview_kind: String(safeObject(mediaBundle.metadata).preview_kind || input.output.asset_type),
-      platform_context: String(input.row.platform || input.output.metadata.platform_variant || ''),
-      metadata: {
-        ...safeObject(mediaBundle.metadata),
-        campaign_id: input.campaignId,
-        daily_plan_id: input.row.id,
-        content_type: input.row.content_type,
-        asset_type: input.output.asset_type,
-        render_only: true,
-        export_ready: urls.length > 0,
-      },
-      source_content: input.output,
-      render_identity_hash: assetHash,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' });
-
-  if (error) {
-    console.warn('[creator-render-only][asset-persist-failed]', {
-      daily_plan_id: input.row.id,
-      message: error.message,
-    });
-    return null;
-  }
-  return assetId;
 }
 
 /**
@@ -319,45 +231,42 @@ export async function runCreatorAssetGenerationRuntime(input: {
   if (error) throw new Error(`Failed to load creator daily plans: ${error.message}`);
 
   const rows = Array.isArray(data) ? data as DailyPlanRow[] : [];
-  const engine = getExecutionEngine('creator');
+  // Phase 6 — engine + render + persist + FSM chain delegated to the
+  // creatorOrchestrator via the queue worker. The runtime keeps row
+  // iteration + BOLT-specific governance branching + daily_content_plans
+  // failure-write safety net; the queue worker owns retries + render +
+  // persist + FSM transitions for renderable rows.
   let renderedCount = 0;
   let awaitingUploadCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
 
+  // ── Pass 1: governance branching (sequential, side-effectful). ─────────
+  // Classifies each row + handles the synchronous side-effects:
+  //   - awaiting_media_upload (uploads attachment-required theme treatment)
+  //   - skipped (unsupported or non-renderable)
+  // Collects renderable rows for parallel queue dispatch in Pass 2.
+  type RenderableJob = {
+    row: DailyPlanRow;
+    contentType: string;
+    parsed: Record<string, unknown>;
+    creatorCard: Record<string, unknown>;
+    maxRetries: number;
+    primaryPlatform: string;
+  };
+  const renderable: RenderableJob[] = [];
+
   for (const row of rows) {
     const contentType = normalizeCreatorFormat(row.content_type || '');
     const governance = getCreatorGovernance(contentType);
 
-    // ── Unsupported format: skip ─────────────────────────────────────────
     if (!governance) {
       skippedCount++;
       continue;
     }
 
-    // ── Group B: attachment-required (video/reel/short/podcast) ──────────
-    // Emit awaiting_media_upload + persist full theme treatment / creator
-    // guidance / marketing package, skip rendering. No retry loop, no
-    // renderer call. The row holds in place until a user uploads a media
-    // URL via /api/activity-workspace/[id]/upload-media.
-    // Creator-required is NARROWED to the supported manual-upload video
-    // set ONLY (reel/short/video). This single canonical predicate is the
-    // sole gate into the pending/awaiting-upload placeholder lane, so
-    // "pending" can ONLY ever mean "waiting for a manual video upload".
-    //
-    // Registry Group-B formats that are NOT supported video (e.g.
-    // podcast/webinar/audiogram/teaser) are DEACTIVATED at runtime: they
-    // no longer route to a placeholder/pending state. They fall through
-    // to the non-attachment branch below (skipped → BOLT-text guidance
-    // lane). Registry + DB enums are intentionally left intact
-    // (deactivation, not deletion → migration-safe, reversible by
-    // reverting this condition). image/carousel/text+image are never
-    // creator-required and are never counted as pending.
     const supportedVideo = isSupportedManualVideoUpload(contentType);
     if (!supportedVideo && isAttachmentRequiredFormat(contentType)) {
-      // A registry attachment type that is NOT a supported video upload
-      // → deactivated, visibility-logged, then handled by the normal
-      // non-attachment fall-through (no dead routing, no stale pending).
       logPipelineEvent('creator.routing_deactivated', 'info', {
         campaign_id: input.campaignId,
         content_type: contentType,
@@ -371,123 +280,92 @@ export async function runCreatorAssetGenerationRuntime(input: {
       continue;
     }
 
-    // ── Non-renderable, non-attachment formats (e.g. post/thread): skip ──
     if (!isAutonomousRenderableFormat(contentType)) {
       skippedCount++;
       continue;
     }
 
-    // ── Group A: autonomous renderable ───────────────────────────────────
     const parsed = safeObject(row.content);
     const creatorCard = safeObject(parsed.creator_card);
     const maxRetries = Math.max(1, Number(row.max_retries ?? 3) || 3);
-    let lastError: Error | null = null;
+    const primaryPlatform = String(row.platform || parsed.platform || 'linkedin').toLowerCase();
     input.onProgress?.(`render-creator-${contentType}`);
+    renderable.push({ row, contentType, parsed, creatorCard, maxRetries, primaryPlatform });
+  }
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const generated = await (engine as any).generateFromIntent({
-          campaignId: input.campaignId,
-          companyId,
-          userId,
-          topic: String(row.topic || row.title || parsed.topic || 'Creator asset'),
-          contentType,
-          targetPlatforms: [String(row.platform || parsed.platform || 'linkedin').toLowerCase()],
-          audience: String(parsed.whoAreWeWritingFor ?? parsed.target_audience ?? creatorCard.target_audience ?? ''),
-          objective: String(parsed.dailyObjective ?? parsed.objective ?? creatorCard.objective ?? ''),
-          summary: String(parsed.summary ?? parsed.whatProblemAreWeAddressing ?? creatorCard.summary ?? ''),
-          creatorCard,
-          enrichedIntent: parsed,
-          templateId: typeof parsed.template_id === 'string' ? parsed.template_id : row.template_id ?? null,
-          existingContent: parsed,
-        }, { companyId }, {
-          assetOverride: safeObject(parsed.asset_payload || parsed.creator_asset),
-        }) as CanonicalCreatorOutput;
+  // ── Pass 2: parallel queue dispatch. ───────────────────────────────────
+  // Phase 6 — instead of awaiting each row sequentially, enqueue all
+  // rows up to a concurrency cap and await them in parallel batches.
+  // Retry / lifecycle / idempotency ownership stays inside the queue
+  // worker; we ONLY change the wait pattern. Aggregate counters are
+  // updated AFTER every batch settles so the failure_reason DB write
+  // for enqueue/await errors still runs on the row's own thread of
+  // control. The deterministic counts come from the per-row result
+  // object the queue worker returns.
+  const PARALLEL_CAP = Math.max(1, Math.min(8, renderable.length));
+  for (let i = 0; i < renderable.length; i += PARALLEL_CAP) {
+    const batch = renderable.slice(i, i + PARALLEL_CAP);
+    const settled = await Promise.allSettled(batch.map(async (job) => {
+      const handle = await enqueueBoltCreatorRowExecution({
+        run_id: null,
+        campaign_id: input.campaignId,
+        company_id: companyId,
+        user_id: userId || null,
+        daily_plan_id: job.row.id,
+        parsed_content: job.parsed,
+        topic: String(job.row.topic || job.row.title || job.parsed.topic || 'Creator asset'),
+        content_type: job.contentType,
+        platform: job.primaryPlatform,
+        audience: String(job.parsed.whoAreWeWritingFor ?? job.parsed.target_audience ?? job.creatorCard.target_audience ?? ''),
+        objective: String(job.parsed.dailyObjective ?? job.parsed.objective ?? job.creatorCard.objective ?? ''),
+        summary: String(job.parsed.summary ?? job.parsed.whatProblemAreWeAddressing ?? job.creatorCard.summary ?? ''),
+        template_id: typeof job.parsed.template_id === 'string' ? job.parsed.template_id : job.row.template_id ?? null,
+        max_retries: job.maxRetries,
+      });
+      return { job, result: await awaitBoltCreatorRowExecution(handle) };
+    }));
 
-        const generatedValidation = validateCreatorExecutionOutput(generated);
-        if (!generatedValidation.ok) {
-          throw new Error(`Generated creator output failed validation: ${generatedValidation.issues.join('; ')}`);
+    // Aggregate batch results deterministically (Promise.allSettled
+    // preserves input order, so iteration matches `batch[i] ↔ settled[i]`).
+    for (let k = 0; k < settled.length; k++) {
+      const outcome = settled[k];
+      const job = batch[k];
+      if (outcome.status === 'fulfilled') {
+        const { result } = outcome.value;
+        if (result.rendered) {
+          renderedCount++;
+        } else if (result.failed) {
+          failedCount++;
+          console.warn('[creator-render-only][row-failed]', {
+            daily_plan_id: job.row.id,
+            content_type: job.contentType,
+            message: result.failure_reason,
+          });
+        } else {
+          skippedCount++;
         }
-        const adapted = await (engine as any).adaptForPlatform(generated, String(row.platform || 'linkedin').toLowerCase()) as CanonicalCreatorOutput;
-        const rendered = await renderAsset(safeObject(adapted.asset_payload), {
-          campaignId: input.campaignId,
-          userId,
-          companyId,
+      } else {
+        failedCount++;
+        const message = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+        console.warn('[creator-render-only][row-enqueue-failed]', {
+          daily_plan_id: job.row.id,
+          content_type: job.contentType,
+          message,
         });
-        const renderedOutput = mergeRenderedMedia(adapted, rendered);
-        const readiness = await validateAssetReadiness({
-          output: renderedOutput,
-          platform: String(row.platform || 'linkedin').toLowerCase(),
-        });
-        const creatorAssetId = await persistCreatorAsset({
-          campaignId: input.campaignId,
-          companyId,
-          userId,
-          row,
-          output: renderedOutput,
-        });
-
-        const finalLifecycleState = readiness.ready
-          ? CREATOR_LIFECYCLE_STATES.RENDER_READY
-          : CREATOR_LIFECYCLE_STATES.RENDER_FAILED;
-
+        // Safety-net DB write: the worker never ran, so the row would
+        // otherwise stay in a stale state. Mirrors the prior sequential
+        // failure path.
         await ownedDbTable('daily_content_plans')
           .update({
-            content: JSON.stringify({
-              ...parsed,
-              ...renderedOutput,
-              creator_lifecycle_state: finalLifecycleState,
-              render_policy: { mode: 'render_only' },
-              creator_asset_id: creatorAssetId,
-              rendered_asset: {
-                creator_asset_id: creatorAssetId,
-                urls: extractMediaUrls(renderedOutput),
-                metadata: safeObject(safeObject(renderedOutput.asset_payload).media_bundle).metadata ?? {},
-                readiness,
-                rendered_at: new Date().toISOString(),
-                export_ready: readiness.ready,
-              },
-              content_status: readiness.ready ? 'render_ready' : 'render_failed',
-            }),
-            intent_type: 'creator',
-            asset_type: renderedOutput.asset_type,
-            template_id: renderedOutput.asset_instruction.template_id ?? row.template_id ?? null,
-            retry_count: attempt,
-            max_retries: maxRetries,
-            failure_reason: readiness.ready ? null : readiness.failure_reason,
-            failure_type: readiness.ready ? null : 'permanent',
-            content_status: readiness.ready ? 'render_ready' : 'render_failed',
+            retry_count: job.maxRetries,
+            max_retries: job.maxRetries,
+            failure_reason: message,
+            failure_type: 'transient',
+            content_status: 'render_failed',
             updated_at: new Date().toISOString(),
           })
-          .eq('id', row.id);
-
-        if (readiness.ready) renderedCount++;
-        else failedCount++;
-        lastError = null;
-        break;
-      } catch (error) {
-        lastError = error as Error;
-        if (attempt + 1 >= maxRetries) {
-          await ownedDbTable('daily_content_plans')
-            .update({
-              retry_count: maxRetries,
-              max_retries: maxRetries,
-              failure_reason: lastError.message,
-              failure_type: 'transient',
-              content_status: 'render_failed',
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', row.id);
-          failedCount++;
-        }
+          .eq('id', job.row.id);
       }
-    }
-    if (lastError) {
-      console.warn('[creator-render-only][row-failed]', {
-        daily_plan_id: row.id,
-        content_type: contentType,
-        message: lastError.message,
-      });
     }
   }
 

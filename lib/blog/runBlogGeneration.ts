@@ -60,49 +60,12 @@ import { buildEditorialDepthIntelligence } from '../content/editorialDepthIntell
 import { buildGenerationGuidanceContract } from '../content/generationGuidanceContracts';
 import { buildNarrativePlanningPrimitives } from '../content/narrativePlanningEngine';
 import { resolveOmnivyraDoctrineGenerationContext } from '../content/omnivyraEditorialDoctrine';
-import { observeBehavioralAdherenceDiagnostics } from '../content/behavioralAdherenceDiagnostics';
-import { observeEditorialDiagnostics } from '../content/editorialDiagnosticObserver';
-import { buildEditorialQualityReadiness } from '../content/editorialQualityReadiness';
-import { buildEditorialQualitySignals } from '../content/editorialQualitySignals';
-import { buildEditorialRemediationHints } from '../content/editorialRemediationHints';
-import { assembleEditorialRemediationPlan } from '../content/editorialRemediationPlanAssembler';
-import { selectRegenerationCandidates } from '../content/regenerationCandidateSelector';
-import { buildRegenerationExecutionManifest } from '../content/regenerationExecutionManifest';
-import { buildRegenerationReadinessContract } from '../content/regenerationReadinessContracts';
-import { planRecoveryExecutionDryRun } from '../content/recoveryExecutionDryRunPlanner';
-import { buildRecoveryExecutorContracts } from '../content/recoveryExecutorContracts';
-import { buildExecutorVerificationContracts } from '../content/executorVerificationContracts';
-import { observeVerificationReadiness } from '../content/verificationReadinessObserver';
-import { buildAcceptanceReadinessContracts } from '../content/acceptanceReadinessContracts';
-import { assembleAcceptanceReviewPackage } from '../content/acceptanceReviewPackageAssembler';
-import { observeValidatorReadiness } from '../content/validatorReadinessObserver';
-import { buildValidatorExecutionManifest } from '../content/validatorExecutionManifest';
-import { sequenceValidatorReview } from '../content/validatorReviewSequencer';
-import { buildValidatorResultContracts } from '../content/validatorResultContracts';
-import { prepareValidatorDecision } from '../content/validatorDecisionPreparation';
-import { simulateValidatorAcceptance } from '../content/validatorAcceptanceSimulation';
-import { sequenceValidatorRecoveryDecision } from '../content/validatorRecoveryDecisionSequencer';
-import { buildValidatorAuditTrail } from '../content/validatorAuditTrail';
-import { assembleValidatorReviewSnapshot } from '../content/validatorReviewSnapshotAssembler';
-import { buildValidatorCoverageLedger } from '../content/validatorCoverageLedger';
-import { buildValidatorDecisionTrace } from '../content/validatorDecisionTrace';
-import { buildValidatorHandoffReadiness } from '../content/validatorHandoffReadiness';
-import { buildValidatorHandoffManifest } from '../content/validatorHandoffManifest';
-import { prepareValidatorExecution } from '../content/validatorExecutionPreparation';
-import { observeValidatorOperationalReadiness } from '../content/validatorOperationalReadiness';
-import { evaluateValidatorPreflightReadiness } from '../content/validatorPreflightReadinessGate';
-import { buildValidatorExecutionAdapterContract } from '../content/validatorExecutionAdapterContract';
-import { planValidatorInvocationDryRun } from '../content/validatorInvocationDryRunPlanner';
-import { buildValidatorInvocationResultContract } from '../content/validatorInvocationResultContract';
-import { buildValidatorOutputNormalizationContract } from '../content/validatorOutputNormalizationContract';
-import { buildNormalizedValidatorOutputEnvelope } from '../content/normalizedValidatorOutputEnvelope';
-import { buildValidatorExecutionEligibilityPolicy } from '../content/validatorExecutionEligibilityPolicy';
-import { interpretValidatorRuntimeEligibility } from '../content/validatorRuntimeEligibilityInterpreter';
-import { buildValidatorRuntimeReadinessEnvelope } from '../content/validatorRuntimeReadinessEnvelope';
-import { buildValidatorRuntimeGovernanceEnvelope } from '../content/validatorRuntimeGovernanceEnvelope';
-import { buildValidatorRuntimeStabilizationEnvelope } from '../content/validatorRuntimeStabilizationEnvelope';
-import { buildValidatorRuntimeActivationReadinessGate } from '../content/validatorRuntimeActivationReadinessGate';
-import { buildValidatorRuntimeRolloutClosureEnvelope } from '../content/validatorRuntimeRolloutClosureEnvelope';
+// Phase 1.2 — Dead validator/recovery/acceptance/regeneration envelope cascade
+// removed. The previous 40+ imports built nested diagnostic contracts that
+// were attached as metadata but never gated regeneration or any other
+// behavior. They have been deleted (along with their tests). The lightweight
+// replacement diagnostics live in `attachEditorialDiagnostics` below and are
+// typed in `blogRunnerTypes.ts` as `LightweightEditorialDiagnostics`.
 import { assembleUnifiedEditorialBrief } from '../content/unifiedEditorialBriefAssembler';
 import { prioritizeEditorialRuntimeContext } from '../content/editorialRuntimeContextPrioritizer';
 import { buildGeneratorRuntimeAlignment } from '../content/generatorRuntimeAlignment';
@@ -110,6 +73,14 @@ import { buildGeneratorBehavioralSteering } from '../content/generatorBehavioral
 import { getDefaultBlogTemplates, instantiateBlogTemplate } from './defaultBlogTemplates';
 import { deriveTemplateDepthGuidance } from './runBlogGenerationPureHelpers';
 import { type CompanyIdentity } from '../content/companyContextBlock';
+import {
+  buildCanonicalCompanyIdentity,
+  validateIdentityConsistency,
+} from '../content/identityConsistencyValidator';
+import {
+  buildSectionStrategicAssignments,
+  renderSectionStrategicAssignmentsForPrompt,
+} from '../content/sectionStrategicAssignments';
 import {
   defaultFetchAngleData,
   defaultFetchSeriesData,
@@ -132,356 +103,63 @@ function isFullBlogGenerationResult(
   return result.needs_clarification === false && result.mode === 'full';
 }
 
+/**
+ * Phase 1.2 — Lightweight editorial diagnostics.
+ *
+ * Replaces the previous 30+-stage validator/recovery/acceptance/regeneration
+ * envelope cascade, which was inert (built nested contracts but never gated
+ * regeneration). The new payload exposes only operational metadata:
+ *   - which engine produced the result (always 'compatibility-core' here —
+ *     `unifiedLongFormEngine` wraps this and reports the user-facing engine)
+ *   - generation mode + duration
+ *   - section count and retry count if known
+ *
+ * The function signature is preserved so existing call sites in
+ * `runStandardHtmlBlogGeneration`, `runTemplateBlogGenerationPath`, and the
+ * fallback path continue to compile.
+ */
 function attachEditorialDiagnostics(
   result: BlogGenerationResult,
-  ctx: OrchestratorResult | null,
+  _ctx: OrchestratorResult | null,
+  meta?: {
+    generationStartMs?: number;
+    retryCount?: number;
+  },
 ): BlogGenerationResult {
-  if (!isFullBlogGenerationResult(result) || !ctx) return result;
+  if (!isFullBlogGenerationResult(result)) return result;
+
+  const generationStartMs = meta?.generationStartMs;
+  const generationDurationMs = typeof generationStartMs === 'number'
+    ? Math.max(0, Date.now() - generationStartMs)
+    : 0;
+
+  let sectionCount: number | undefined;
   try {
-    const editorialDiagnostics = observeEditorialDiagnostics({
-      generatedContent: result.result,
-      doctrine: ctx.doctrine,
-      assimilation: ctx.assimilation,
-      narrativePlanning: ctx.narrativePlanning,
-      generationGuidance: ctx.generationGuidance,
-    });
-    const behavioralAdherence = observeBehavioralAdherenceDiagnostics({
-      generatedContent: result.result,
-      generatorBehavioralSteering: ctx.generatorBehavioralSteering,
-      generatorRuntimeAlignment: ctx.generatorRuntimeAlignment,
-      unifiedEditorialBrief: ctx.unifiedEditorialBrief,
-      editorialRuntimeContext: ctx.editorialRuntimeContext,
-    });
-    const qualitySignals = buildEditorialQualitySignals({
-      editorialDiagnostics,
-      behavioralAdherenceDiagnostics: behavioralAdherence,
-      generatorBehavioralSteering: ctx.generatorBehavioralSteering,
-      generatorRuntimeAlignment: ctx.generatorRuntimeAlignment,
-    });
-    const qualityReadiness = buildEditorialQualityReadiness({
-      editorialQualitySignals: qualitySignals,
-      behavioralAdherenceDiagnostics: behavioralAdherence,
-      editorialDiagnostics,
-      generatorRuntimeAlignment: ctx.generatorRuntimeAlignment,
-    });
-    const remediationHints = buildEditorialRemediationHints({
-      editorialQualityReadiness: qualityReadiness,
-      editorialQualitySignals: qualitySignals,
-      behavioralAdherenceDiagnostics: behavioralAdherence,
-      editorialDiagnostics,
-    });
-    const remediationPlan = assembleEditorialRemediationPlan({
-      editorialRemediationHints: remediationHints,
-      editorialQualityReadiness: qualityReadiness,
-      editorialQualitySignals: qualitySignals,
-      behavioralAdherenceDiagnostics: behavioralAdherence,
-    });
-    const regenerationReadinessContract = buildRegenerationReadinessContract({
-      editorialRemediationPlan: remediationPlan,
-      editorialRemediationHints: remediationHints,
-      editorialQualityReadiness: qualityReadiness,
-      behavioralAdherenceDiagnostics: behavioralAdherence,
-    });
-    const regenerationCandidateSelection = selectRegenerationCandidates({
-      regenerationReadinessContract,
-      editorialRemediationPlan: remediationPlan,
-      editorialQualityReadiness: qualityReadiness,
-      behavioralAdherenceDiagnostics: behavioralAdherence,
-    });
-    const regenerationExecutionManifest = buildRegenerationExecutionManifest({
-      regenerationCandidateSelection,
-      regenerationReadinessContract,
-      editorialRemediationPlan: remediationPlan,
-      editorialQualityReadiness: qualityReadiness,
-    });
-    const recoveryExecutionDryRun = planRecoveryExecutionDryRun({
-      regenerationExecutionManifest,
-      regenerationCandidateSelection,
-      regenerationReadinessContract,
-      editorialRemediationPlan: remediationPlan,
-    });
-    const recoveryExecutorContracts = buildRecoveryExecutorContracts({
-      recoveryExecutionDryRun,
-      regenerationExecutionManifest,
-      regenerationCandidateSelection,
-      regenerationReadinessContract,
-    });
-    const executorVerificationContracts = buildExecutorVerificationContracts({
-      recoveryExecutorContracts,
-      recoveryExecutionDryRun,
-      regenerationExecutionManifest,
-      regenerationReadinessContract,
-    });
-    const verificationReadinessObservation = observeVerificationReadiness({
-      executorVerificationContracts,
-      recoveryExecutorContracts,
-      recoveryExecutionDryRun,
-      regenerationExecutionManifest,
-    });
-    const acceptanceReadinessContracts = buildAcceptanceReadinessContracts({
-      verificationReadinessObservation,
-      executorVerificationContracts,
-      recoveryExecutorContracts,
-      recoveryExecutionDryRun,
-    });
-    const acceptanceReviewPackage = assembleAcceptanceReviewPackage({
-      acceptanceReadinessContracts,
-      verificationReadinessObservation,
-      executorVerificationContracts,
-      recoveryExecutorContracts,
-      recoveryExecutionDryRun,
-    });
-    const validatorReadinessObservation = observeValidatorReadiness({
-      acceptanceReviewPackage,
-      acceptanceReadinessContracts,
-      verificationReadinessObservation,
-      executorVerificationContracts,
-      recoveryExecutorContracts,
-      recoveryExecutionDryRun,
-    });
-    const validatorExecutionManifest = buildValidatorExecutionManifest({
-      acceptanceReviewPackage,
-      validatorReadinessObservation,
-      acceptanceReadinessContracts,
-      verificationReadinessObservation,
-      executorVerificationContracts,
-      recoveryExecutorContracts,
-      recoveryExecutionDryRun,
-    });
-    const validatorReviewSequence = sequenceValidatorReview({
-      validatorExecutionManifest,
-      validatorReadinessObservation,
-      acceptanceReviewPackage,
-      acceptanceReadinessContracts,
-      recoveryExecutionDryRun,
-    });
-    const validatorResultContracts = buildValidatorResultContracts({
-      validatorReviewSequence,
-      validatorExecutionManifest,
-      validatorReadinessObservation,
-      acceptanceReviewPackage,
-      executorVerificationContracts,
-    });
-    const validatorDecisionPreparation = prepareValidatorDecision({
-      validatorResultContracts,
-      validatorReviewSequence,
-      validatorExecutionManifest,
-      validatorReadinessObservation,
-      acceptanceReviewPackage,
-    });
-    const validatorAcceptanceSimulation = simulateValidatorAcceptance({
-      validatorDecisionPreparation,
-      validatorResultContracts,
-      validatorReviewSequence,
-    });
-    const validatorRecoveryDecisionSequence = sequenceValidatorRecoveryDecision({
-      validatorAcceptanceSimulation,
-      validatorDecisionPreparation,
-      validatorResultContracts,
-      validatorReviewSequence,
-      validatorExecutionManifest,
-    });
-    const validatorAuditTrail = buildValidatorAuditTrail({
-      validatorRecoveryDecisionSequence,
-      validatorAcceptanceSimulation,
-      validatorDecisionPreparation,
-      validatorResultContracts,
-      validatorReviewSequence,
-    });
-    const validatorReviewSnapshot = assembleValidatorReviewSnapshot({
-      validatorAuditTrail,
-      validatorRecoveryDecisionSequence,
-      validatorAcceptanceSimulation,
-      validatorDecisionPreparation,
-      validatorResultContracts,
-    });
-    const validatorCoverageLedger = buildValidatorCoverageLedger({
-      validatorReviewSnapshot,
-      validatorAuditTrail,
-      validatorRecoveryDecisionSequence,
-      validatorResultContracts,
-    });
-    const validatorDecisionTrace = buildValidatorDecisionTrace({
-      validatorCoverageLedger,
-      validatorReviewSnapshot,
-      validatorAuditTrail,
-      validatorRecoveryDecisionSequence,
-      validatorDecisionPreparation,
-    });
-    const validatorHandoffReadiness = buildValidatorHandoffReadiness({
-      validatorDecisionTrace,
-      validatorCoverageLedger,
-      validatorReviewSnapshot,
-      validatorAuditTrail,
-      validatorRecoveryDecisionSequence,
-    });
-    const validatorHandoffManifest = buildValidatorHandoffManifest({
-      validatorHandoffReadiness,
-      validatorDecisionTrace,
-      validatorCoverageLedger,
-      validatorReviewSnapshot,
-      validatorAuditTrail,
-    });
-    const validatorExecutionPreparation = prepareValidatorExecution({
-      validatorHandoffManifest,
-      validatorHandoffReadiness,
-      validatorDecisionTrace,
-      validatorCoverageLedger,
-      validatorAuditTrail,
-      validatorRecoveryDecisionSequence,
-    });
-    const validatorOperationalReadiness = observeValidatorOperationalReadiness({
-      validatorExecutionPreparation,
-      validatorHandoffManifest,
-      validatorHandoffReadiness,
-      validatorCoverageLedger,
-      validatorReviewSnapshot,
-    });
-    const validatorPreflightReadinessGate = evaluateValidatorPreflightReadiness({
-      validatorOperationalReadiness,
-      validatorExecutionPreparation,
-      validatorHandoffManifest,
-      validatorDecisionTrace,
-      validatorCoverageLedger,
-    });
-    const validatorExecutionAdapterContract = buildValidatorExecutionAdapterContract({
-      validatorPreflightReadinessGate,
-      validatorOperationalReadiness,
-      validatorExecutionPreparation,
-      validatorHandoffManifest,
-      validatorDecisionTrace,
-    });
-    const validatorInvocationDryRunPlan = planValidatorInvocationDryRun({
-      validatorExecutionAdapterContract,
-      validatorPreflightReadinessGate,
-      validatorOperationalReadiness,
-      validatorExecutionPreparation,
-      validatorDecisionTrace,
-    });
-    const validatorInvocationResultContract = buildValidatorInvocationResultContract({
-      validatorInvocationDryRunPlan,
-      validatorExecutionAdapterContract,
-      validatorPreflightReadinessGate,
-      validatorOperationalReadiness,
-      validatorDecisionTrace,
-    });
-    const validatorOutputNormalizationContract = buildValidatorOutputNormalizationContract({
-      validatorInvocationResultContract,
-      validatorInvocationDryRunPlan,
-      validatorExecutionAdapterContract,
-      validatorPreflightReadinessGate,
-      validatorDecisionTrace,
-    });
-    const normalizedValidatorOutputEnvelope = buildNormalizedValidatorOutputEnvelope({
-      validatorOutputNormalizationContract,
-      validatorInvocationResultContract,
-      validatorInvocationDryRunPlan,
-      validatorExecutionAdapterContract,
-      validatorDecisionTrace,
-    });
-    const validatorExecutionEligibilityPolicy = buildValidatorExecutionEligibilityPolicy({
-      normalizedValidatorOutputEnvelope,
-      validatorOutputNormalizationContract,
-      validatorInvocationResultContract,
-      validatorPreflightReadinessGate,
-      validatorDecisionTrace,
-    });
-    const validatorRuntimeEligibilityInterpretation = interpretValidatorRuntimeEligibility({
-      validatorExecutionEligibilityPolicy,
-      normalizedValidatorOutputEnvelope,
-      validatorOutputNormalizationContract,
-      validatorPreflightReadinessGate,
-      validatorDecisionTrace,
-    });
-    const validatorRuntimeReadinessEnvelope = buildValidatorRuntimeReadinessEnvelope({
-      validatorRuntimeEligibilityInterpretation,
-      normalizedValidatorOutputEnvelope,
-      validatorOutputNormalizationContract,
-      validatorPreflightReadinessGate,
-      validatorDecisionTrace,
-    });
-    const validatorRuntimeGovernanceEnvelope = buildValidatorRuntimeGovernanceEnvelope({
-      validatorRuntimeReadinessEnvelope,
-      validatorRuntimeEligibilityInterpretation,
-      normalizedValidatorOutputEnvelope,
-      validatorPreflightReadinessGate,
-      validatorDecisionTrace,
-    });
-    const validatorRuntimeStabilizationEnvelope = buildValidatorRuntimeStabilizationEnvelope({
-      validatorRuntimeGovernanceEnvelope,
-      validatorRuntimeReadinessEnvelope,
-      validatorRuntimeEligibilityInterpretation,
-      normalizedValidatorOutputEnvelope,
-      validatorDecisionTrace,
-    });
-    const validatorRuntimeActivationReadinessGate = buildValidatorRuntimeActivationReadinessGate({
-      validatorRuntimeStabilizationEnvelope,
-      validatorRuntimeGovernanceEnvelope,
-      validatorRuntimeReadinessEnvelope,
-      validatorRuntimeEligibilityInterpretation,
-      normalizedValidatorOutputEnvelope,
-      validatorDecisionTrace,
-    });
-    const validatorRuntimeRolloutClosureEnvelope = buildValidatorRuntimeRolloutClosureEnvelope({
-      validatorRuntimeStabilizationEnvelope,
-      validatorRuntimeGovernanceEnvelope,
-      validatorRuntimeReadinessEnvelope,
-      validatorRuntimeEligibilityInterpretation,
-      normalizedValidatorOutputEnvelope,
-      validatorPreflightReadinessGate,
-      validatorDecisionTrace,
-    });
-    return {
-      ...result,
-      editorial_diagnostics: {
-        ...editorialDiagnostics,
-        behavioralAdherence,
-        qualitySignals,
-        qualityReadiness,
-        remediationHints,
-        remediationPlan,
-        regenerationReadinessContract,
-        regenerationCandidateSelection,
-        regenerationExecutionManifest,
-        recoveryExecutionDryRun,
-        recoveryExecutorContracts,
-        executorVerificationContracts,
-        verificationReadinessObservation,
-        acceptanceReadinessContracts,
-        acceptanceReviewPackage,
-        validatorReadinessObservation,
-        validatorExecutionManifest,
-        validatorReviewSequence,
-        validatorResultContracts,
-        validatorDecisionPreparation,
-        validatorAcceptanceSimulation,
-        validatorRecoveryDecisionSequence,
-        validatorAuditTrail,
-        validatorReviewSnapshot,
-        validatorCoverageLedger,
-        validatorDecisionTrace,
-        validatorHandoffReadiness,
-        validatorHandoffManifest,
-        validatorExecutionPreparation,
-        validatorOperationalReadiness,
-        validatorPreflightReadinessGate,
-        validatorExecutionAdapterContract,
-        validatorInvocationDryRunPlan,
-        validatorInvocationResultContract,
-        validatorOutputNormalizationContract,
-        normalizedValidatorOutputEnvelope,
-        validatorExecutionEligibilityPolicy,
-        validatorRuntimeEligibilityInterpretation,
-        validatorRuntimeReadinessEnvelope,
-        validatorRuntimeGovernanceEnvelope,
-        validatorRuntimeStabilizationEnvelope,
-        validatorRuntimeActivationReadinessGate,
-        validatorRuntimeRolloutClosureEnvelope,
-      },
-    };
+    const blocks = result.result?.content_blocks;
+    if (Array.isArray(blocks)) {
+      // Count H2-level headings as sections — matches what end users perceive
+      // as a "section" and what the prompt mandates count against.
+      sectionCount = blocks.reduce<number>((acc, block) => {
+        const b = block as { type?: string; level?: number; heading_level?: number };
+        if (b?.type === 'heading' && (b.level === 2 || b.heading_level === 2)) return acc + 1;
+        return acc;
+      }, 0);
+    }
   } catch {
-    return result;
+    sectionCount = undefined;
   }
+
+  return {
+    ...result,
+    editorial_diagnostics: {
+      generation_engine: 'compatibility-core',
+      generation_mode: result.mode,
+      fallback_triggered: false,
+      generation_duration_ms: generationDurationMs,
+      section_count: sectionCount,
+      retry_count: meta?.retryCount,
+    },
+  };
 }
 
 // ── Main function ─────────────────────────────────────────────────────────────
@@ -489,6 +167,10 @@ function attachEditorialDiagnostics(
 export async function runBlogGeneration(
   req: BlogGenerationRequest,
 ): Promise<BlogGenerationResult> {
+  // Phase 1.2 — Capture start time so attachEditorialDiagnostics can report
+  // generation_duration_ms in the lightweight metadata payload.
+  const generationStartMs = Date.now();
+
   const {
     company_id,
     mode = 'full',
@@ -602,51 +284,35 @@ export async function runBlogGeneration(
     }
   }
 
-  if (!contextualAnswers.must_include_points && companyContext) {
+  // Phase 2.7 — Section-level strategic assignments replace the
+  // must_include_points comma-joined blob.
+  //
+  // The previous synthesis dumped every company anchor (core problem, pain
+  // points, transformation, authority, key messages, products/services,
+  // tier-dependent directives) into one comma-joined string and assigned it
+  // to `must_include_points`. The model treated this as a flat global
+  // checklist → repetitive narrative inflation, every section name-dropping
+  // every anchor.
+  //
+  // We now distribute the anchors across sections (intro / body / closing)
+  // with deterministic rules — see lib/content/sectionStrategicAssignments.ts.
+  // The downstream prompt receives a structured per-section directive block
+  // via a new answer key (`section_strategic_assignments`) rather than the
+  // old `must_include_points` blob.
+  //
+  // User-supplied `must_include_points` (passed in via `answers`) is
+  // preserved — this branch only stops the AUTO-SYNTHESIS.
+  if (!contextualAnswers.section_strategic_assignments && companyContext) {
     const twRaw = contextualAnswers.target_word_count ? parseInt(contextualAnswers.target_word_count, 10) : 0;
-    // Tier: 800 = base, 1200+ = medium depth, 1600+ = deep, 2000+ = comprehensive
-    const tier = twRaw >= 2000 ? 3 : twRaw >= 1600 ? 2 : twRaw >= 1200 ? 1 : 0;
-
-    const points: string[] = [];
-    if (companyContext.coreProblemStatement) points.push(`The core problem: ${companyContext.coreProblemStatement}`);
-    if (companyContext.painSymptoms?.length) {
-      const maxPains = tier >= 2 ? 5 : tier >= 1 ? 4 : 3;
-      points.push(`Key pain points: ${companyContext.painSymptoms.slice(0, maxPains).join(', ')}`);
-    }
-    if (companyContext.desiredTransformation) points.push(`Transformation outcome: ${companyContext.desiredTransformation}`);
-    if (companyContext.authorityDomains?.length) {
-      const maxDomains = tier >= 2 ? 5 : tier >= 1 ? 4 : 3;
-      points.push(`Authority areas: ${companyContext.authorityDomains.slice(0, maxDomains).join(', ')}`);
-    }
-    if (companyContext.keyMessages) points.push(`Key messages: ${companyContext.keyMessages}`);
-    if (companyContext.productsServices) points.push(`Products/services to reference: ${companyContext.productsServices}`);
-
-    // 1200+: add depth-enhancing directives so the AI has enough material
-    if (tier >= 1) {
-      points.push('Include real-world examples or data points for each major section');
-      points.push('Address common mistakes or misconceptions the audience holds');
-      if (companyContext.competitiveAdvantages) {
-        points.push(`Weave in competitive differentiators: ${companyContext.competitiveAdvantages}`);
+    const bundle = buildSectionStrategicAssignments(companyContext, {
+      targetWordCount: twRaw || undefined,
+      companyName: companyContext.companyName,
+    });
+    if (bundle.hasAssignments) {
+      const rendered = renderSectionStrategicAssignmentsForPrompt(bundle);
+      if (rendered) {
+        contextualAnswers.section_strategic_assignments = rendered;
       }
-    }
-
-    // 1600+: add implementation guidance and brand references
-    if (tier >= 2) {
-      points.push('Provide actionable implementation steps or frameworks readers can apply');
-      if (companyContext.companyName) {
-        points.push(`Reference ${companyContext.companyName}'s perspective or expertise where natural`);
-      }
-    }
-
-    // 2000+: add comprehensive depth requirements
-    if (tier >= 3) {
-      points.push('Include a before/after comparison or case study showing measurable impact');
-      points.push('Add expert analysis or contrarian viewpoints to deepen each section');
-      points.push('Provide a mini-framework, checklist, or decision matrix readers can use immediately');
-    }
-
-    if (points.length > 0) {
-      contextualAnswers.must_include_points = points.join('; ');
     }
   }
 
@@ -705,23 +371,26 @@ export async function runBlogGeneration(
 
   const hasContextualAnswers = Object.keys(contextualAnswers).length > 0;
 
-  // Build CompanyIdentity from companyContext for system-prompt-level enforcement.
-  // This is the SAME identity shape consumed by buildIdentityLock + buildAntiGenericRules.
-  const companyIdentity: CompanyIdentity | undefined = companyContext ? {
-    companyName: companyContext.companyName,
-    industry: companyContext.industry,
-    targetAudience: companyContext.audience,
-    coreProblem: companyContext.coreProblemStatement,
-    painPoints: companyContext.painSymptoms,
-    uniqueValue: companyContext.uniqueValue,
-    productsServices: companyContext.productsServices,
-    desiredTransformation: companyContext.desiredTransformation,
-    competitiveAdvantages: companyContext.competitiveAdvantages,
-    authorityDomains: companyContext.authorityDomains,
-    keyMessages: companyContext.keyMessages,
-    brandVoice: companyContext.brand_voice,
-    strategyProfile: companyContext.strategyProfile,
-  } : undefined;
+  // Phase 2.5 — Canonical CompanyIdentity construction.
+  //
+  // Previously this site built CompanyIdentity directly from CompanyContext
+  // (lossy projection) and dropped entityArchetype, competitorIntelligence,
+  // and userGuidance — the three richest strategic fields. Long-form
+  // generation therefore had a weaker identity lock than short-form.
+  //
+  // We now prefer `req.companyProfile` (canonical typed shape) and fall
+  // back to CompanyContext only when the caller didn't supply a profile.
+  // The consistency validator emits a structured warning if anything is
+  // lossy or critical fields are missing.
+  const builtFromFallback = !req.companyProfile && Boolean(companyContext);
+  const companyIdentity: CompanyIdentity | undefined = buildCanonicalCompanyIdentity({
+    profile: req.companyProfile,
+    fallbackContext: companyContext,
+  });
+  validateIdentityConsistency(companyIdentity, {
+    source: 'runBlogGeneration',
+    builtFromFallback,
+  });
 
   const baseInput: BlogGenerationInput = {
     ...themeInput,
@@ -959,7 +628,7 @@ export async function runBlogGeneration(
         generationInput, ctx, confidence, selected_angle: selected_angle as BlogAngle | undefined,
         companyIdentity,
       });
-      if (templateResult !== null) return attachEditorialDiagnostics(templateResult, ctx);
+      if (templateResult !== null) return attachEditorialDiagnostics(templateResult, ctx, { generationStartMs });
     }
 
     const standardResult = await runStandardHtmlBlogGeneration({
@@ -976,8 +645,11 @@ export async function runBlogGeneration(
       confidence,
       ctx,
       companyIdentity,
+      // Phase 2.8 — Pass companyContext so the standard path emits
+      // LONGFORM_CONTEXT_USAGE_REPORT against the actual assembled prompt.
+      companyContext,
     });
-    return attachEditorialDiagnostics(standardResult, ctx);
+    return attachEditorialDiagnostics(standardResult, ctx, { generationStartMs });
 
   } catch (err) {
     // C3: CompanyContextEnforcementError must propagate to the API route so
@@ -1004,6 +676,6 @@ export async function runBlogGeneration(
       confidence:          'medium',
       result:              { ...fallback, content_blocks },
       hook_assessment:     { strength: 'moderate', note: 'Review before publishing.' },
-    }, ctx);
+    }, ctx, { generationStartMs });
   }
 }

@@ -24,6 +24,7 @@ import {
   updateScheduledPostOnFailure,
 } from '../../db/queries';
 import { publishToPlatform } from '../../adapters/platformAdapter';
+import { publishThread } from '../../services/threadRuntime/threadPublishOrchestrator';
 import { validatePublishReadiness } from '../../services/publishReadinessValidator';
 import { refreshDurableMediaBeforePublish } from '../../services/mediaReferenceResolver';
 import { logPipelineEvent } from '../../../lib/shared/observability';
@@ -222,7 +223,12 @@ async function processPublishJobInner(params: {
       throw new Error(`Scheduled post ${scheduled_post_id} not found`);
     }
 
-    if (scheduledPost.platform_post_id) {
+    // G12 — single-row idempotency short-circuit. For THREAD roots, a set
+    // platform_post_id only means the root published; children may still be
+    // pending. The thread delegation at Step 5 (below) handles per-row
+    // idempotency via the orchestrator's publishOneNode, which safely skips
+    // already-published nodes and resumes from the failed/blocked row.
+    if (scheduledPost.platform_post_id && scheduledPost.is_thread_start !== true) {
       console.log(`✅ Post ${scheduled_post_id} already published (platform_post_id: ${scheduledPost.platform_post_id}), skipping`);
       await updateQueueJobStatus(jobId as string, 'completed', {
         result_data: { message: 'Already published (idempotency check)' },
@@ -286,6 +292,7 @@ async function processPublishJobInner(params: {
       contentSignals: { contentType: String(scheduledPost.content_type || '') },
       hasText: !!(scheduledPost.content && String(scheduledPost.content).trim().length > 0),
       mediaUrls: scheduledPost.media_urls ?? [],
+      content: typeof scheduledPost.content === 'string' ? scheduledPost.content : '',
       skipSchedulingReadiness: true,
     });
     if (pubReadiness.ok === false) {
@@ -315,7 +322,81 @@ async function processPublishJobInner(params: {
     // manual path. No-op unless DURABLE_MEDIA_REFS; fail-open.
     await refreshDurableMediaBeforePublish(scheduled_post_id);
 
-    // Step 5: Publish to platform
+    // Step 5: Publish to platform.
+    //
+    // Phase 1B.2A.1 — thread orchestrator delegation (queue side).
+    // Mirrors publishNowService.publishNow's delegation block. If this row is
+    // the root of a multi-row thread (is_thread_start=true), hand off to the
+    // thread publish orchestrator instead of running the single-row adapter
+    // path below. The orchestrator manages per-node state transitions,
+    // sequential publish, native reply-chain (Twitter) / sequential standalone
+    // (LinkedIn/IG/FB), and per-row updateScheduledPostOn{Publish,Failure}
+    // writes. On BullMQ retry, the orchestrator's per-row platform_post_id
+    // idempotency check (publishOneNode) skips already-published nodes and
+    // resumes from the failed/blocked row (transitions failed→publishing and
+    // blocked→publishing are valid per the state machine).
+    if (scheduledPost.is_thread_start === true) {
+      console.log(`🧵 Delegating to thread orchestrator (root=${scheduled_post_id})...`);
+      const threadResult = await publishThread({
+        root_scheduled_post_id: scheduled_post_id,
+        social_account_id,
+        user_id,
+      });
+
+      if (threadResult.status === 'PUBLISHED') {
+        // Per-row scheduled_posts updates were performed inside the
+        // orchestrator (updateScheduledPostOnPublish on each node). Only the
+        // queue_jobs row needs to be marked completed here.
+        await updateQueueJobStatus(jobId as string, 'completed', {
+          result_data: {
+            thread:           true,
+            root_id:          threadResult.root_id,
+            total_nodes:      threadResult.total_nodes,
+            published_count:  threadResult.published_count,
+          },
+        });
+        await createQueueJobLog(
+          jobId as string,
+          'info',
+          `Thread published (${threadResult.published_count}/${threadResult.total_nodes} nodes)`,
+          { root_id: threadResult.root_id, total_nodes: threadResult.total_nodes },
+        );
+        console.log(`✅ Thread published successfully (${threadResult.published_count}/${threadResult.total_nodes} nodes)`);
+        return;
+      }
+
+      // FAILED — orchestrator already set the failed row to status='failed'
+      // and marked downstream rows as 'blocked'. Bridge into the queue's
+      // retry semantics: mark queue_job 'failed' with the same exponential
+      // backoff the single-row failure path uses, then throw so BullMQ
+      // applies its retry policy. On retry, the orchestrator's idempotency
+      // (platform_post_id short-circuit) skips already-published nodes.
+      const threadErrorMessage = threadResult.message || 'Thread publish failed';
+      const threadAttempts = queueJob.attempts || 0;
+      const threadBackoffDelay = Math.pow(2, threadAttempts) * 60000;
+      const threadNextRetryAt = new Date(Date.now() + threadBackoffDelay);
+      await updateQueueJobStatus(jobId as string, 'failed', {
+        error_message: threadErrorMessage,
+        error_code:    'THREAD_PUBLISH_FAILED',
+        next_retry_at: threadNextRetryAt.toISOString(),
+      });
+      await createQueueJobLog(
+        jobId as string,
+        'error',
+        `Thread publish failed at position ${threadResult.failed_at_position ?? '?'}: ${threadErrorMessage}`,
+        {
+          root_id:             threadResult.root_id,
+          total_nodes:         threadResult.total_nodes,
+          published_count:     threadResult.published_count,
+          failed_count:        threadResult.failed_count,
+          blocked_count:       threadResult.blocked_count,
+          failed_at_position:  threadResult.failed_at_position,
+        },
+      );
+      console.error(`❌ Thread publish failed: ${threadErrorMessage}`);
+      throw new Error(threadErrorMessage);
+    }
+
     console.log(`🚀 Publishing to platform via adapter...`);
     const result = await publishToPlatform(scheduled_post_id, social_account_id);
 

@@ -248,7 +248,7 @@ const CONFIG_FIELDS: Record<IntegrationType, { key: string; label: string; place
     { key: 'secret', label: 'Secret (optional)', placeholder: 'my-secret-key', hint: 'Sent as X-Webhook-Secret header' },
   ],
   wordpress: [
-    { key: 'site_url', label: 'Site URL', placeholder: 'https://myblog.com', hint: 'Production sites must use https:// (WordPress blocks Application Passwords over HTTP). Localhost/dev sites can use http://.' },
+    { key: 'site_url', label: 'WordPress URL', placeholder: 'https://omnivyra.com/blog', hint: 'The actual WordPress publishing endpoint. Examples: https://omnivyra.com or https://omnivyra.com/blog. Production sites must use https:// (Application Passwords require HTTPS); localhost/dev can use http://.' },
     { key: 'username', label: 'WordPress Username', placeholder: 'admin' },
     { key: 'app_password', label: 'Application Password', placeholder: 'xxxx xxxx xxxx xxxx', type: 'password', hint: 'Generate in WordPress under Users > Profile > Application Passwords' },
   ],
@@ -258,24 +258,24 @@ const CONFIG_FIELDS: Record<IntegrationType, { key: string; label: string; place
     { key: 'auth_header', label: 'Auth Header (optional)', placeholder: 'Authorization', hint: 'Defaults to Authorization: Bearer <api_key>' },
   ],
   ghost: [
-    { key: 'site_url', label: 'Site URL', placeholder: 'https://myblog.com', hint: 'Ghost base URL. Localhost/dev allowed over http://.' },
+    { key: 'site_url', label: 'Ghost URL', placeholder: 'https://blog.omnivyra.com', hint: 'The Ghost site base URL. Examples: https://omnivyra.com or https://blog.omnivyra.com. Localhost/dev allowed over http://.' },
     { key: 'admin_api_key', label: 'Admin API Key', placeholder: 'id:secret', type: 'password', hint: 'Ghost Admin → Settings → Integrations → custom integration → Admin API Key.' },
     { key: 'author_email', label: 'Author Email (optional)', placeholder: 'author@site.com' },
   ],
   drupal: [
-    { key: 'site_url', label: 'Site URL', placeholder: 'https://mydrupal.com', hint: 'JSON:API root is auto-detected (/jsonapi). Production must be HTTPS.' },
+    { key: 'site_url', label: 'Drupal URL', placeholder: 'https://omnivyra.com', hint: 'The Drupal site root. JSON:API path (/jsonapi) is auto-detected. Production must be HTTPS.' },
     { key: 'bearer_token', label: 'Bearer Token', placeholder: 'token', type: 'password', hint: 'OAuth/JSON:API bearer token with node create permission.' },
     { key: 'node_bundle', label: 'Node Bundle (optional)', placeholder: 'article' },
   ],
   joomla: [
-    { key: 'site_url', label: 'Site URL', placeholder: 'https://myjoomla.com', hint: 'Enable Web Services (REST API) in Global Configuration.' },
+    { key: 'site_url', label: 'Joomla URL', placeholder: 'https://omnivyra.com', hint: 'The Joomla site root. Enable Web Services (REST API) in Global Configuration.' },
     { key: 'api_token', label: 'Joomla API Token', placeholder: 'token', type: 'password', hint: 'Users → Manage → (user) → API tokens.' },
     { key: 'default_catid', label: 'Default Category ID (optional)', placeholder: '2' },
   ],
   webflow: [
     { key: 'access_token', label: 'OAuth Access Token', placeholder: 'wf-...', type: 'password', hint: 'Webflow OAuth access token or site API token.' },
     { key: 'collection_id', label: 'CMS Collection ID (optional)', placeholder: 'Run validate to discover collections', hint: 'Required for publishing; discovered on validation.' },
-    { key: 'site_url', label: 'Site URL (optional)', placeholder: 'https://mysite.webflow.io' },
+    { key: 'site_url', label: 'Webflow site URL (optional)', placeholder: 'https://mysite.webflow.io', hint: 'Your published Webflow URL (webflow.io or custom domain).' },
   ],
   shopify: [
     { key: 'shop_domain', label: 'Shop Domain', placeholder: 'mystore.myshopify.com' },
@@ -296,6 +296,107 @@ const CONFIG_FIELDS: Record<IntegrationType, { key: string; label: string; place
   ],
 };
 
+// ── Website / publishing-URL helpers ───────────────────────────────────────
+//
+// Older companies have a placeholder `Default Website` row whose
+// `canonical_url` was backfilled as `https://company-<uuid>.local`. Those
+// internal identifiers should NEVER appear in user-facing dropdowns or
+// pre-fill into publishing-URL fields.
+const PLACEHOLDER_HOST_PATTERNS = [
+  /^company-[a-f0-9-]+\.local$/i,
+  /\.local$/i,
+  /\.test$/i,
+];
+
+function isPlaceholderCanonicalUrl(rawUrl: string | null | undefined): boolean {
+  if (!rawUrl) return true;
+  let host: string;
+  try {
+    host = new URL(rawUrl).host;
+  } catch {
+    return true;
+  }
+  return PLACEHOLDER_HOST_PATTERNS.some((p) => p.test(host));
+}
+
+/**
+ * Format a website for the picker dropdown.
+ *   - "Omnivyra — https://omnivyra.com"           ← canonical case
+ *   - "Omnivyra (no canonical domain set)"        ← placeholder/.local fallback
+ *   - "Website abc12345"                          ← absolutely nothing usable
+ *
+ * Never exposes UUIDs, slugs, or system-generated `.local` domains.
+ */
+function formatWebsiteOptionLabel(website: Website): string {
+  const name = website.name?.trim();
+  const canonicalReal = !isPlaceholderCanonicalUrl(website.canonical_url);
+  if (name && canonicalReal) {
+    return `${name} — ${website.canonical_url}`;
+  }
+  if (name) return `${name} (no canonical domain set)`;
+  if (canonicalReal) return website.canonical_url;
+  return `Website ${website.id.slice(0, 8)}`;
+}
+
+/**
+ * Normalize a user-entered publishing URL:
+ *   - trim whitespace
+ *   - collapse repeated trailing slashes to none
+ *   - upgrade `http://` → `https://` when host is not localhost/.local/.test
+ *   - reject obvious wp-admin URLs (we want the site root or blog root, not admin)
+ *   - reject malformed inputs (returns { ok: false } with reason)
+ */
+function normalizePublishingUrl(raw: string): { ok: true; value: string } | { ok: false; reason: string } {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return { ok: false, reason: 'empty' };
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { ok: false, reason: 'not a valid URL' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, reason: `unsupported protocol (${parsed.protocol})` };
+  }
+  if (/\/wp-admin(\/|$)/i.test(parsed.pathname) || /\/wp-login\.php/i.test(parsed.pathname)) {
+    return { ok: false, reason: 'wp-admin URL not allowed — enter the site root or blog root' };
+  }
+  // Upgrade http→https when the host is not a known dev/loopback host.
+  const isLocalHost =
+    parsed.hostname === 'localhost' ||
+    parsed.hostname === '127.0.0.1' ||
+    /\.local$/i.test(parsed.hostname) ||
+    /\.test$/i.test(parsed.hostname);
+  if (parsed.protocol === 'http:' && !isLocalHost) {
+    parsed.protocol = 'https:';
+  }
+  // Strip trailing slash on path (but keep "/" alone as empty path).
+  let pathname = parsed.pathname.replace(/\/+$/g, '');
+  if (pathname === '') pathname = '';
+  parsed.pathname = pathname;
+  return { ok: true, value: parsed.toString().replace(/\/$/, '') };
+}
+
+/**
+ * True when `publishingUrl` is the canonical domain root OR a sub-path
+ * thereof (e.g. canonical = https://omnivyra.com, publishing =
+ * https://omnivyra.com/blog). Used to show the "Publishing under selected
+ * website" relationship badge.
+ */
+function publishingUrlIsUnderWebsite(publishingUrl: string, websiteCanonicalUrl: string): boolean {
+  try {
+    const a = new URL(publishingUrl);
+    const b = new URL(websiteCanonicalUrl);
+    if (a.host !== b.host) return false;
+    const aPath = a.pathname.replace(/\/+$/, '');
+    const bPath = b.pathname.replace(/\/+$/, '');
+    if (bPath === '' || bPath === '/') return true;
+    return aPath === bPath || aPath.startsWith(bPath + '/');
+  } catch {
+    return false;
+  }
+}
+
 interface ModalProps {
   mode: 'create' | 'edit';
   initial?: Partial<Integration>;
@@ -311,12 +412,47 @@ function IntegrationModal({ mode, initial, websites, onClose, onSave }: ModalPro
   const [websiteId, setWebsiteId] = useState(initial?.website_id || websites[0]?.id || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [siteUrlNormalizationWarning, setSiteUrlNormalizationWarning] = useState<string | null>(null);
 
   const fields = CONFIG_FIELDS[type];
+  const selectedWebsite = websites.find((w) => w.id === websiteId) ?? null;
+  const websiteHasRealDomain = !!selectedWebsite && !isPlaceholderCanonicalUrl(selectedWebsite.canonical_url);
+
+  // Auto-prefill the publishing/site URL from the selected website's canonical
+  // domain — only when (a) the integration type has a `site_url` field,
+  // (b) the field is currently empty, and (c) the website actually has a
+  // real canonical domain (not the .local backfill placeholder). User can
+  // override at any time after prefill; we never overwrite a non-empty value.
+  useEffect(() => {
+    const hasSiteUrlField = fields.some((f) => f.key === 'site_url');
+    if (!hasSiteUrlField) return;
+    if (config.site_url) return;
+    if (!selectedWebsite || !websiteHasRealDomain) return;
+    setConfig((current) => ({ ...current, site_url: selectedWebsite.canonical_url }));
+  }, [websiteId, type, selectedWebsite, websiteHasRealDomain, fields, config.site_url]);
 
   const handleTypeChange = (nextType: IntegrationType) => {
     setType(nextType);
     setConfig({});
+    setSiteUrlNormalizationWarning(null);
+  };
+
+  const handleSiteUrlBlur = (fieldKey: string) => {
+    if (fieldKey !== 'site_url') return;
+    const raw = config.site_url ?? '';
+    if (!raw.trim()) {
+      setSiteUrlNormalizationWarning(null);
+      return;
+    }
+    const result = normalizePublishingUrl(raw);
+    if ('reason' in result) {
+      setSiteUrlNormalizationWarning(result.reason);
+      return;
+    }
+    if (result.value !== raw) {
+      setConfig((current) => ({ ...current, site_url: result.value }));
+    }
+    setSiteUrlNormalizationWarning(null);
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -391,36 +527,64 @@ function IntegrationModal({ mode, initial, websites, onClose, onSave }: ModalPro
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Which website is this for?</label>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Parent website</label>
+            <p className="mb-2 text-xs text-gray-500">The site this publishing destination belongs to.</p>
             <select
               value={websiteId}
               onChange={(event) => setWebsiteId(event.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
-              <option value="">Default website</option>
+              <option value="">No parent website</option>
               {websites.map((website) => (
                 <option key={website.id} value={website.id}>
-                  {website.name} - {website.canonical_url}
+                  {formatWebsiteOptionLabel(website)}
                 </option>
               ))}
             </select>
+            {selectedWebsite && !websiteHasRealDomain && (
+              <p className="mt-1 text-xs text-amber-700">
+                This website does not have a canonical domain yet. Add one in the Websites section to enable auto-prefill.
+              </p>
+            )}
           </div>
 
           <div className="space-y-3">
-            <div className="border-t border-gray-100 pt-3 text-sm font-medium text-gray-700">Enable publishing on {TYPE_LABELS[type]}</div>
-            {fields.map((field) => (
-              <div key={field.key}>
-                <label className="mb-1 block text-sm font-medium text-gray-700">{field.label}</label>
-                <input
-                  type={field.type || 'text'}
-                  value={config[field.key] || ''}
-                  onChange={(event) => setConfig((current) => ({ ...current, [field.key]: event.target.value }))}
-                  placeholder={field.placeholder}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-                {field.hint && <p className="mt-1 text-xs text-gray-500">{field.hint}</p>}
-              </div>
-            ))}
+            <div className="border-t border-gray-100 pt-3 text-sm font-medium text-gray-700">Publishing destination — {TYPE_LABELS[type]}</div>
+            {fields.map((field) => {
+              const isSiteUrl = field.key === 'site_url';
+              const value = config[field.key] || '';
+              const showRelationshipBadge =
+                isSiteUrl &&
+                value.trim() !== '' &&
+                selectedWebsite &&
+                websiteHasRealDomain &&
+                publishingUrlIsUnderWebsite(value, selectedWebsite.canonical_url);
+              return (
+                <div key={field.key}>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">{field.label}</label>
+                  <input
+                    type={field.type || 'text'}
+                    value={value}
+                    onChange={(event) => {
+                      setConfig((current) => ({ ...current, [field.key]: event.target.value }));
+                      if (isSiteUrl) setSiteUrlNormalizationWarning(null);
+                    }}
+                    onBlur={() => handleSiteUrlBlur(field.key)}
+                    placeholder={field.placeholder}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  {field.hint && <p className="mt-1 text-xs text-gray-500">{field.hint}</p>}
+                  {isSiteUrl && siteUrlNormalizationWarning && (
+                    <p className="mt-1 text-xs text-red-700">{siteUrlNormalizationWarning}</p>
+                  )}
+                  {showRelationshipBadge && selectedWebsite && (
+                    <p className="mt-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                      ↳ Publishing under {selectedWebsite.name}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
@@ -1671,14 +1835,35 @@ export default function IntegrationsPage() {
     const gaConnected = typeof router.query.ga4 === 'string' ? router.query.ga4 : '';
     const gscConnected = typeof router.query.gsc === 'string' ? router.query.gsc : '';
 
+    // Map every OAuth callback `error=` code that the server can emit to a
+    // human-readable notice. Previously the page only handled `oauth_failed`
+    // / `gsc_oauth_failed` / `no_properties_found` /
+    // `no_search_console_properties_found`; the three callback gate codes
+    // (`unauthorized`, `invalid_oauth_state`, `missing_code`) were silently
+    // swallowed, leaving the user staring at a stale "setup required" state
+    // with no idea why. The set below is kept in lock-step with the
+    // pages/api/analytics/connect/google/callback.ts emitter.
+    const isGsc =
+      gscConnected === 'connected' || /search_console|gsc/i.test(error);
+    const setNotice = (msg: string) => {
+      if (isGsc) setGscNotice(msg);
+      else setGaNotice(msg);
+    };
+
     if (error === 'oauth_failed') {
-      setGaNotice('Failed to connect Google Analytics');
+      setGaNotice('Failed to connect Google Analytics. Please try again.');
     } else if (error === 'no_properties_found') {
-      setGaNotice('No GA properties found');
+      setGaNotice('No Google Analytics properties found on this account.');
     } else if (error === 'gsc_oauth_failed') {
-      setGscNotice('Failed to connect Search Console');
+      setGscNotice('Failed to connect Search Console. Please try again.');
     } else if (error === 'no_search_console_properties_found') {
-      setGscNotice('No Search Console properties found');
+      setGscNotice('No Search Console properties found on this account.');
+    } else if (error === 'unauthorized') {
+      setNotice('Your session expired during the OAuth flow. Sign in again, then reconnect.');
+    } else if (error === 'invalid_oauth_state') {
+      setNotice('OAuth state validation failed (likely a stale session or a redirect that took too long). Sign in fresh on www.omnivyra.com and reconnect.');
+    } else if (error === 'missing_code') {
+      setNotice('The provider redirected back without an authorization code. Retry the connection.');
     } else if (gaConnected === 'connected') {
       setGaNotice('Google Analytics connected. Select a property to finish setup.');
       void loadGoogleAnalyticsStatus();

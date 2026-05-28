@@ -35,11 +35,23 @@ import {
   type PipelineError,
 } from '../../lib/shared/pipelineErrorCodes';
 import { logPipelineEvent } from '../../lib/shared/observability';
+import { getPlatformLimits } from '../../lib/shared/contentFormatter';
 
 type GuardMode = 'enforce' | 'warn' | 'off';
 function guardMode(): GuardMode {
   const m = String(process.env.PUBLISH_GUARD_MODE ?? 'enforce').trim().toLowerCase();
   return m === 'warn' || m === 'off' ? (m as GuardMode) : 'enforce';
+}
+/**
+ * Phase B — separately-gated char-limit mode at publish time. Defaults to
+ * 'off' for safe rollout: this is the SECOND line of defense behind the
+ * schedule-time `SCHEDULE_CHAR_LIMIT_MODE`, which is the primary gate. Flip
+ * this to 'warn' once schedule-time is in `enforce`, then to 'enforce' once
+ * warn-mode telemetry confirms no legitimate overflow.
+ */
+function publishCharLimitMode(): GuardMode {
+  const m = String(process.env.PUBLISH_CHAR_LIMIT_MODE ?? 'off').trim().toLowerCase();
+  return m === 'warn' || m === 'enforce' ? (m as GuardMode) : 'off';
 }
 
 /**
@@ -75,6 +87,14 @@ export interface PublishReadinessInput {
   contentSignals?: Parameters<typeof validatePlatformContentCompatibility>[0]['contentSignals'];
   hasText?: boolean;
   mediaUrls?: string[] | null;
+  /**
+   * Phase B — the actual content text, when available. When provided AND
+   * `PUBLISH_CHAR_LIMIT_MODE` is `warn` or `enforce`, the validator checks
+   * the platform's per-character limit and rejects (enforce) or warns
+   * (warn). Omitting `content` preserves pre-Phase-B behavior (no check).
+   * Callers should pass the row's `content` field so this gate runs.
+   */
+  content?: string;
   /** The daily_content_plans / scheduled_post row, for canonical state. */
   row?: ResolvableRow;
   /** Skip the canonical scheduling-readiness gate (e.g. publish-now). */
@@ -167,6 +187,25 @@ export function validatePublishReadiness(
       `Media URL(s) are not valid http(s) URLs and cannot be published.`,
       { platform, invalidCount: badUrls.length },
     );
+  }
+
+  // 4b. Phase B — publish-time char-limit gate. Second line of defense behind
+  //     the schedule-time guard. Only runs when caller provides `content` AND
+  //     the env mode is `warn`/`enforce`. Off-by-default so no rollout risk.
+  const clMode = publishCharLimitMode();
+  if (clMode !== 'off' && typeof input.content === 'string') {
+    const text = input.content;
+    const maxChars = getPlatformLimits(platform).maxChars;
+    if (text.length > maxChars) {
+      const err = pipelineError(
+        PipelineErrorCode.CONTENT_OVER_CHAR_LIMIT,
+        `Content exceeds ${platform} ${maxChars}-char limit (actual: ${text.length}). ` +
+        `Reject before adapter to prevent silent truncation.`,
+        { platform, actualChars: text.length, maxChars, excessChars: text.length - maxChars },
+      );
+      if (clMode === 'enforce') return err;
+      warnings.push(err);
+    }
   }
 
   // 5. TikTok finalize ambiguity guard (non-fatal — surfaced, logged).

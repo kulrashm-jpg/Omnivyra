@@ -308,6 +308,48 @@ export default function BlogTemplatePage() {
                     usageCount={tpl.usage_count}
                     selected={customBlocks === tpl.content_blocks}
                     onClick={() => handleSelectSaved(tpl)}
+                    onDelete={async () => {
+                      if (typeof window === 'undefined') return;
+                      if (!companyId) {
+                        window.alert('Select a company before deleting templates.');
+                        return;
+                      }
+                      if (!window.confirm(`Delete "${tpl.name}"? This cannot be undone.`)) return;
+                      try {
+                        // DELETE goes through the static /api/block-templates
+                        // index route (NOT the dynamic [id] route). The
+                        // index route is already compiled in the dev
+                        // server (GET hits it on every page load), so
+                        // adding the DELETE branch lands on an existing
+                        // working handler — sidesteps the dev-server's
+                        // refusal to compile new files or new method
+                        // branches on dynamic routes.
+                        const url = `/api/block-templates?company_id=${encodeURIComponent(companyId)}&id=${encodeURIComponent(tpl.id)}`;
+                        const res = await fetch(url, {
+                          method: 'DELETE',
+                          credentials: 'include',
+                          headers: { Accept: 'application/json' },
+                        });
+                        if (!res.ok) {
+                          const raw = await res.text().catch(() => '');
+                          let parsedError: string | null = null;
+                          try {
+                            const json = raw ? JSON.parse(raw) : null;
+                            parsedError = json && typeof json.error === 'string' ? json.error : null;
+                          } catch { /* not JSON */ }
+                          const isHtml = !parsedError && /^\s*<(!doctype|html)/i.test(raw);
+                          const diagnostic = isHtml
+                            ? `dev server still serving stale handler. Save any file in the editor to trigger a recompile, then try again.`
+                            : (parsedError || `server returned HTTP ${res.status}.`);
+                          window.alert(`Failed to delete template — ${diagnostic}`);
+                          console.warn('[delete-template]', { status: res.status, rawSample: raw.slice(0, 200) });
+                          return;
+                        }
+                        setSavedTemplates((prev) => prev.filter((row) => row.id !== tpl.id));
+                      } catch (err) {
+                        window.alert(err instanceof Error ? `Failed to delete template: ${err.message}` : 'Failed to delete template. Please try again.');
+                      }
+                    }}
                   />
                 ))}
               </div>

@@ -137,7 +137,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       {
         label: 'Active Leads',
         description: 'Review and manage the leads that need action.',
-        href: '/dashboard/intelligence?intelTab=active-leads',
+        href: '/command-center/engagement',
         icon: Users,
       },
     ],
@@ -235,7 +235,7 @@ export function getNextActionForPath(pathname: string): NextAction | null {
     return {
       label: 'Review active leads',
       description: 'Go straight to the people and conversations that need action.',
-      href: '/dashboard/intelligence?intelTab=active-leads',
+      href: '/command-center/engagement',
       icon: Users,
     };
   }

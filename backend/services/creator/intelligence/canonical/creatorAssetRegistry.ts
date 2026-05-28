@@ -63,6 +63,22 @@ export interface PayloadShapeContract {
   json_type: 'object' | 'array';
 }
 
+/**
+ * Render strategy for the orchestrator (Phase 3 unification).
+ *   queue   — multi-slide / heavy → enqueueDurableCreatorRenderJob
+ *   inline  — single visual → renderAsset() synchronous
+ *   skipped — attachment-required or text-like; no auto-render
+ */
+export type RenderStrategy = 'queue' | 'inline' | 'skipped';
+
+/**
+ * Writer-flow source eligibility (Phase 1 unification). A canonical
+ * asset may be attachable from post writers, thread writers, both, or
+ * neither. Derived selectors use this to produce POST_CREATOR_ASSET_TYPES
+ * and THREAD_CREATOR_ASSET_TYPES without parallel hardcoded arrays.
+ */
+export type WriterSourceKey = 'post' | 'thread';
+
 export interface CreatorAssetDefinition {
   canonical_key: CanonicalAssetKey;
   canonical_asset_family: CanonicalAssetFamily;
@@ -86,6 +102,32 @@ export interface CreatorAssetDefinition {
    *  `resolveCanonicalAdapterKey` for the safe fallback. */
   adapter_mapping: CanonicalAdapterKey | null;
   payload_shape_contract: PayloadShapeContract;
+  /**
+   * Phase 1 unification — writer-side presentational subtypes that map
+   * TO this canonical entry. e.g. canonical `image` exposes
+   * supporting_image / banner / brand_card to the writer. Empty means
+   * the canonical asset is not attachable from a writer.
+   *
+   * The writer-side type union (`WriterCreatorAssetType`) is now
+   * derived from the union of these arrays; adding a subtype here
+   * propagates to writer eligibility, attachment validation, and route
+   * resolution without parallel arrays.
+   */
+  writer_attachment_subtypes: string[];
+  /**
+   * Phase 1 unification — which writer sources may attach this asset.
+   * Empty ⇒ not writer-attachable. Used by selectors
+   * `getPostAllowedAssetTypes` / `getThreadAllowedAssetTypes`.
+   */
+  writer_source_eligibility: WriterSourceKey[];
+  /**
+   * Phase 3 unification — render dispatch strategy. The orchestrator
+   * uses this single field to decide queue vs inline render across all
+   * three flows (Direct, BOLT, queue processor). Eliminates the prior
+   * asymmetry where Direct queued multi-slide while BOLT rendered
+   * everything inline.
+   */
+  render_strategy: RenderStrategy;
 }
 
 const ALL = ['linkedin', 'instagram', 'facebook', 'x', 'tiktok', 'youtube', 'pinterest', 'threads'];
@@ -94,7 +136,7 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
   image: {
     canonical_key: 'image',
     canonical_asset_family: 'image',
-    runtime_asset_types: ['image', 'banner', 'graphic', 'visual', 'photo'],
+    runtime_asset_types: ['image', 'banner', 'graphic', 'visual', 'photo', 'supporting_image', 'brand_card'],
     db_enum_asset_type: 'image',
     governance_classification: 'autonomous',
     scheduler_eligibility: 'immediate',
@@ -103,6 +145,9 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     platform_support: ['linkedin', 'instagram', 'facebook', 'x', 'pinterest', 'threads'],
     adapter_mapping: 'image',
     payload_shape_contract: { required_key: 'visual_descriptor', json_type: 'object' },
+    writer_attachment_subtypes: ['supporting_image', 'banner', 'brand_card'],
+    writer_source_eligibility: ['post', 'thread'],
+    render_strategy: 'inline',
   },
   carousel: {
     canonical_key: 'carousel',
@@ -116,6 +161,13 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     platform_support: ['linkedin', 'instagram', 'facebook', 'x'],
     adapter_mapping: 'carousel',
     payload_shape_contract: { required_key: 'slides', json_type: 'array' },
+    writer_attachment_subtypes: ['carousel'],
+    // Carousel is sequence-oriented and aligns with thread storytelling
+    // only. Post flow stays single-attachment by contract; carousel must
+    // not surface there. See validateAttachmentPayload for the matching
+    // server-side guard.
+    writer_source_eligibility: ['thread'],
+    render_strategy: 'queue',
   },
   infographic: {
     canonical_key: 'infographic',
@@ -129,6 +181,9 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     platform_support: ['linkedin', 'instagram', 'facebook'],
     adapter_mapping: 'image',
     payload_shape_contract: { required_key: 'visual_descriptor', json_type: 'object' },
+    writer_attachment_subtypes: ['infographic'],
+    writer_source_eligibility: ['post', 'thread'],
+    render_strategy: 'queue',
   },
   story: {
     canonical_key: 'story',
@@ -142,6 +197,9 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     platform_support: ['instagram', 'facebook'],
     adapter_mapping: 'image',
     payload_shape_contract: { required_key: 'visual_descriptor', json_type: 'object' },
+    writer_attachment_subtypes: [],
+    writer_source_eligibility: [],
+    render_strategy: 'inline',
   },
   reel: {
     canonical_key: 'reel',
@@ -155,6 +213,9 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     platform_support: ['instagram', 'facebook'],
     adapter_mapping: 'video',
     payload_shape_contract: { required_key: 'scenes', json_type: 'array' },
+    writer_attachment_subtypes: [],
+    writer_source_eligibility: [],
+    render_strategy: 'skipped',
   },
   short: {
     canonical_key: 'short',
@@ -168,6 +229,9 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     platform_support: ['tiktok', 'youtube', 'instagram'],
     adapter_mapping: 'video',
     payload_shape_contract: { required_key: 'scenes', json_type: 'array' },
+    writer_attachment_subtypes: [],
+    writer_source_eligibility: [],
+    render_strategy: 'skipped',
   },
   video: {
     canonical_key: 'video',
@@ -181,6 +245,9 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     platform_support: ['youtube', 'linkedin', 'facebook'],
     adapter_mapping: 'video',
     payload_shape_contract: { required_key: 'scenes', json_type: 'array' },
+    writer_attachment_subtypes: [],
+    writer_source_eligibility: [],
+    render_strategy: 'skipped',
   },
   creator_post: {
     canonical_key: 'creator_post',
@@ -197,6 +264,9 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     platform_support: ['linkedin', 'x', 'facebook', 'threads'],
     adapter_mapping: null, // no first-class adapter — see resolveCanonicalAdapterKey
     payload_shape_contract: { required_key: 'caption_blueprint', json_type: 'object' },
+    writer_attachment_subtypes: [],
+    writer_source_eligibility: [],
+    render_strategy: 'skipped',
   },
 };
 
@@ -345,3 +415,116 @@ export function getPlatformSupport(input: unknown): string[] {
 }
 
 export { ALL as CANONICAL_KNOWN_PLATFORMS };
+
+/* ── PHASE-7 derived selectors (registry as single source of truth) ───── */
+
+const REGISTRY_ENTRIES = Object.values(CREATOR_ASSET_REGISTRY) as CreatorAssetDefinition[];
+
+/**
+ * Writer-side presentational subtype → canonical key. Inverted from the
+ * `writer_attachment_subtypes` field on each canonical entry so the
+ * mapping always reflects the canonical source.
+ */
+const WRITER_SUBTYPE_TO_CANONICAL: Record<string, CanonicalAssetKey> = (() => {
+  const map: Record<string, CanonicalAssetKey> = {};
+  for (const def of REGISTRY_ENTRIES) {
+    for (const subtype of def.writer_attachment_subtypes) {
+      map[subtype] = def.canonical_key;
+    }
+  }
+  return map;
+})();
+
+/**
+ * Every writer-attachable asset subtype derived from the canonical
+ * registry. Replaces hand-maintained WRITER_CREATOR_ASSET_TYPES /
+ * POST_CREATOR_ASSET_TYPES / THREAD_CREATOR_ASSET_TYPES arrays. Adding
+ * a subtype on a canonical entry propagates here automatically.
+ */
+export function getWriterAllowedAssetTypes(): readonly string[] {
+  const out: string[] = [];
+  for (const def of REGISTRY_ENTRIES) {
+    for (const subtype of def.writer_attachment_subtypes) {
+      if (!out.includes(subtype)) out.push(subtype);
+    }
+  }
+  return out;
+}
+
+export function getPostAllowedAssetTypes(): readonly string[] {
+  const out: string[] = [];
+  for (const def of REGISTRY_ENTRIES) {
+    if (!def.writer_source_eligibility.includes('post')) continue;
+    for (const subtype of def.writer_attachment_subtypes) {
+      if (!out.includes(subtype)) out.push(subtype);
+    }
+  }
+  return out;
+}
+
+export function getThreadAllowedAssetTypes(): readonly string[] {
+  const out: string[] = [];
+  for (const def of REGISTRY_ENTRIES) {
+    if (!def.writer_source_eligibility.includes('thread')) continue;
+    for (const subtype of def.writer_attachment_subtypes) {
+      if (!out.includes(subtype)) out.push(subtype);
+    }
+  }
+  return out;
+}
+
+/** Canonical assets the platform supports (derived from platform_support arrays). */
+export function getCapabilitySupportedAssetTypes(platform: unknown): CanonicalAssetKey[] {
+  const normalized = normalizeAssetPlatformKey(platform);
+  if (!normalized) return [];
+  return REGISTRY_ENTRIES
+    .filter((def) => def.platform_support.includes(normalized))
+    .map((def) => def.canonical_key);
+}
+
+/** Canonical assets that have an active adapter mapping (image/carousel/video). */
+export function getRenderableCreatorTypes(): CanonicalAssetKey[] {
+  return REGISTRY_ENTRIES
+    .filter((def) => def.render_strategy !== 'skipped')
+    .map((def) => def.canonical_key);
+}
+
+/** Canonical assets that expose at least one writer-attachable subtype. */
+export function getAttachmentEligibleTypes(): CanonicalAssetKey[] {
+  return REGISTRY_ENTRIES
+    .filter((def) => def.writer_attachment_subtypes.length > 0)
+    .map((def) => def.canonical_key);
+}
+
+/**
+ * Look up the canonical key for a writer-side subtype. Returns null for
+ * unknown subtypes (callers fail closed).
+ */
+export function getCanonicalForWriterSubtype(subtype: unknown): CanonicalAssetKey | null {
+  const k = canon(subtype);
+  return (WRITER_SUBTYPE_TO_CANONICAL[k] ?? null) as CanonicalAssetKey | null;
+}
+
+/**
+ * Phase 3 unification — single render-strategy resolver consumed by the
+ * orchestrator. Accepts canonical keys, runtime aliases, OR writer
+ * subtypes; resolves through the registry so all three flows (Direct,
+ * BOLT, queue) agree on queue vs inline vs skipped.
+ */
+export function resolveRenderStrategy(input: unknown): RenderStrategy {
+  const canonKey = normalizeCreatorAsset(input);
+  if (canonKey) return CREATOR_ASSET_REGISTRY[canonKey].render_strategy;
+  const writerCanon = getCanonicalForWriterSubtype(input);
+  if (writerCanon) return CREATOR_ASSET_REGISTRY[writerCanon].render_strategy;
+  return 'skipped';
+}
+
+/**
+ * Coerce a writer-side subtype to its canonical key. Falls back to
+ * `normalizeCreatorAsset` for runtime aliases, then to null.
+ */
+export function resolveWriterOrCanonical(input: unknown): CanonicalAssetKey | null {
+  const direct = normalizeCreatorAsset(input);
+  if (direct) return direct;
+  return getCanonicalForWriterSubtype(input);
+}

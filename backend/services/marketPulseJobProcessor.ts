@@ -156,6 +156,8 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
 
   let consolidated: ConsolidatedPulseOutput;
 
+  if (await isCancelled()) return;
+
   if (insightSource === 'hybrid') {
     const dbSignals = await aggregateMarketPulseFromDb(companyId, regions);
     const dbConsolidated = aggregatedToConsolidated(dbSignals);
@@ -214,6 +216,8 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
   const finalError = successCount === 0 ? 'All regions failed.' : null;
 
   const confidenceIndex = computeConfidenceIndex(consolidated, 0);
+
+  if (await isCancelled()) return;
 
   await ownedDbTable('market_pulse_jobs_v1')
     .update({

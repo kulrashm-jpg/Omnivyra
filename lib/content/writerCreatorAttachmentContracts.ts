@@ -1,7 +1,18 @@
+import {
+  getWriterAllowedAssetTypes as _getWriterAllowedAssetTypes,
+} from '../../backend/services/creator/intelligence/canonical/creatorAssetRegistry';
+
 export type AttachmentMode =
   | 'embedded_copy'
   | 'supporting_visual';
 
+/**
+ * Writer-side presentational subtype union. The literals MUST match the
+ * union of `writer_attachment_subtypes` arrays in CREATOR_ASSET_REGISTRY.
+ * Type cannot itself be derived (TS limitation), but
+ * WRITER_CREATOR_ASSET_TYPES below is derived; a registry-only test
+ * verifies the union stays in sync.
+ */
 export type WriterCreatorAssetType =
   | 'supporting_image'
   | 'banner'
@@ -70,13 +81,13 @@ export type AttachmentValidationResult = {
 
 export const WRITER_CREATOR_LAYOUT_SCHEMA_VERSION = 'writer-creator-asset-v1';
 
-export const WRITER_CREATOR_ASSET_TYPES: readonly WriterCreatorAssetType[] = [
-  'supporting_image',
-  'banner',
-  'infographic',
-  'carousel',
-  'brand_card',
-];
+/**
+ * Derived from CREATOR_ASSET_REGISTRY (Phase 1 unification). Adding a
+ * writer subtype on a canonical entry propagates here automatically.
+ * No parallel hardcoded array.
+ */
+export const WRITER_CREATOR_ASSET_TYPES: readonly WriterCreatorAssetType[] =
+  Object.freeze(_getWriterAllowedAssetTypes() as readonly WriterCreatorAssetType[]);
 
 export const SOURCE_TEXT_TRANSFORMS: readonly SourceTextTransform[] = [
   'none',
@@ -165,12 +176,17 @@ export function creatorRouteTypeForAsset(assetType: WriterCreatorAssetType): Leg
 }
 
 export function assetLabel(assetType: WriterCreatorAssetType): string {
+  // Canonical creator taxonomy labels. `supporting_image` keeps its
+  // legacy enum value for backward compatibility on persisted records
+  // and route resolution, but the UI surface MUST render it as
+  // `Image` — the supporting_image name leaks an old semantic that no
+  // longer matches the canonical taxonomy.
   const labels: Record<WriterCreatorAssetType, string> = {
-    supporting_image: 'Supporting image',
+    supporting_image: 'Image',
     banner: 'Banner',
     infographic: 'Infographic',
     carousel: 'Carousel',
-    brand_card: 'Brand card',
+    brand_card: 'Brand Card',
   };
   return labels[assetType];
 }
@@ -181,6 +197,176 @@ export function attachmentModeLabel(mode: AttachmentMode): string {
 
 export function defaultAttachmentModeForAsset(assetType: WriterCreatorAssetType): AttachmentMode {
   return assetType === 'supporting_image' ? 'supporting_visual' : 'embedded_copy';
+}
+
+/* ── Phase 4 — payload signal detection (deterministic heuristics) ──── */
+
+/**
+ * Asset types whose visual surface inherently carries typography
+ * (headline / subtitle / body / slides). Requesting supporting_visual
+ * on these is almost always a misclassification because the visual
+ * itself bakes copy in at render time.
+ */
+const TYPOGRAPHY_BEARING_ASSET_TYPES: ReadonlySet<WriterCreatorAssetType> = new Set([
+  'carousel',
+  'infographic',
+  'banner',
+  'brand_card',
+]);
+
+/**
+ * Keywords that, when present in user-supplied free-form intent fields
+ * (visual_intent, constraints, tone, etc.), strongly indicate the
+ * asset should embed copy rather than serve as background visual.
+ * Lightweight — no NLP, just substring presence.
+ */
+const TYPOGRAPHY_KEYWORD_PATTERNS: ReadonlyArray<string> = [
+  'headline',
+  'subtitle',
+  'body copy',
+  'cta',
+  'call-to-action',
+  'overlay',
+  'quote',
+  'include text',
+  'include this text',
+  'put this text',
+  'put text',
+  'typography',
+  'title card',
+  'title and',
+  'caption on',
+  'caption over',
+  'embedded text',
+  'embed text',
+  'text on image',
+  'text overlay',
+  'with text',
+  'branded copy',
+];
+
+/** Source-text transforms whose semantic intent IS to render text on the asset. */
+const TEXT_BEARING_TRANSFORMS: ReadonlySet<SourceTextTransform> = new Set([
+  'summarize',
+  'extract_points',
+  'quote',
+  'framework',
+]);
+
+export type AttachmentModeSignal =
+  | 'typography_bearing_asset_type'
+  | 'overlay_text_present'
+  | 'cta_present'
+  | 'paragraph_like_source_text'
+  | 'text_bearing_transform'
+  | 'typography_keyword';
+
+export type AttachmentIntentSignals = {
+  assetType: WriterCreatorAssetType;
+  /** The mode the caller requested, if any. Null/undefined ⇒ unknown. */
+  requestedMode?: AttachmentMode | null;
+  /** Raw source post / thread text the user is attaching an asset for. */
+  sourceText?: string | null;
+  /** Writer-side overlay_text object (hook/headline/keyInsight/cta/supportingText). */
+  overlayText?: Record<string, unknown> | null;
+  /** CTA string the user supplied for the asset. */
+  cta?: unknown;
+  /** Source text transform requested by the user. */
+  sourceTextTransform?: SourceTextTransform | null;
+  /** Free-form intent text — visual_intent, constraints, tone. */
+  freeFormIntent?: ReadonlyArray<string | null | undefined>;
+};
+
+export type AttachmentModeResolution = {
+  mode: AttachmentMode;
+  /** True when the resolver overrode `requestedMode`. */
+  coerced: boolean;
+  /** Audit trail — signals that fired (for telemetry / dev logs). */
+  signals: AttachmentModeSignal[];
+};
+
+/**
+ * Phase 1 unification — resolve attachment_mode BEFORE validation by
+ * inspecting payload signals. The validator stays strict; this helper
+ * ensures the validator only ever sees payloads whose mode is
+ * semantically aligned with their content.
+ *
+ * Rules:
+ *   - Any signal indicating embedded copy (paragraph source, overlay
+ *     text, CTA, text-bearing transform, typography keyword,
+ *     typography-bearing asset type) → embedded_copy.
+ *   - No embedded-copy signals AND requestedMode === 'supporting_visual'
+ *     AND assetType is supporting_image → supporting_visual.
+ *   - Otherwise (no signals, no explicit mode, or asset type that
+ *     defaults to embedded_copy) → embedded_copy.
+ *
+ * Phase 5 safe-fallback policy is honored: when uncertain (no clear
+ * supporting-visual signal AND no clear embedded-copy signal), prefer
+ * embedded_copy because it is the permissive contract.
+ */
+export function resolveAttachmentModeFromIntent(input: AttachmentIntentSignals): AttachmentModeResolution {
+  const signals: AttachmentModeSignal[] = [];
+
+  if (TYPOGRAPHY_BEARING_ASSET_TYPES.has(input.assetType)) {
+    signals.push('typography_bearing_asset_type');
+  }
+
+  if (hasOverlayText(input.overlayText ?? null)) {
+    signals.push('overlay_text_present');
+  }
+
+  if (typeof input.cta === 'string' && input.cta.trim().length > 0) {
+    signals.push('cta_present');
+  }
+
+  if (typeof input.sourceText === 'string' && isParagraphLikeForSupportingVisual(input.sourceText)) {
+    signals.push('paragraph_like_source_text');
+  }
+
+  if (input.sourceTextTransform && TEXT_BEARING_TRANSFORMS.has(input.sourceTextTransform)) {
+    signals.push('text_bearing_transform');
+  }
+
+  if (Array.isArray(input.freeFormIntent) && input.freeFormIntent.length > 0) {
+    const blob = input.freeFormIntent
+      .filter((v): v is string => typeof v === 'string')
+      .join(' ')
+      .toLowerCase();
+    if (blob && TYPOGRAPHY_KEYWORD_PATTERNS.some((kw) => blob.includes(kw))) {
+      signals.push('typography_keyword');
+    }
+  }
+
+  const requested: AttachmentMode | null = input.requestedMode === 'embedded_copy' || input.requestedMode === 'supporting_visual'
+    ? input.requestedMode
+    : null;
+
+  // Any embedded-copy signal → embedded_copy (coerce supporting_visual
+  // requests, preserve the audit signals for telemetry).
+  if (signals.length > 0) {
+    return {
+      mode: 'embedded_copy',
+      coerced: requested === 'supporting_visual',
+      signals,
+    };
+  }
+
+  // No signals — honor the requested mode when explicit.
+  if (requested) {
+    return { mode: requested, coerced: false, signals };
+  }
+
+  // No signals + no explicit mode → fall back to asset-type default.
+  // Phase 5 safe-fallback: this still defers to the per-asset default,
+  // which is supporting_visual ONLY for supporting_image (the one asset
+  // type without typography). All other writer types default to
+  // embedded_copy, matching the "prefer embedded_copy when uncertain"
+  // rule.
+  return {
+    mode: defaultAttachmentModeForAsset(input.assetType),
+    coerced: false,
+    signals,
+  };
 }
 
 export function defaultTransformForAsset(assetType: WriterCreatorAssetType, mode: AttachmentMode): SourceTextTransform {
@@ -230,12 +416,42 @@ export function hasOverlayText(value: Record<string, unknown> | null | undefined
     .some((key) => typeof value[key] === 'string' && String(value[key]).trim().length > 0);
 }
 
+/**
+ * Phase A — shared paragraphLike heuristic.
+ *
+ * Mirrors the regex used inside `validateAttachmentPayload` (rule #3). Exported
+ * so the client-side composer can predict the server's verdict and surface a
+ * proactive warning BEFORE the user submits — avoiding the round-trip 400.
+ *
+ * Semantics:
+ *   - Returns true when the text is too dense to render as a visual overlay
+ *   - Two triggers (matches server rule):
+ *     1. A single-run of 160+ non-whitespace characters
+ *     2. A paragraph break (\n\n+) where any part is > 120 chars
+ */
+export function isParagraphLikeForSupportingVisual(text: string | null | undefined): boolean {
+  const t = String(text ?? '');
+  if (!t) return false;
+  if (/\S.{160,}\S/.test(t)) return true;
+  return t.split(/\n{2,}/).some((part) => part.trim().length > 120);
+}
+
 export function validateAttachmentPayload(input: AttachmentValidationInput): AttachmentValidationResult {
   const errors: string[] = [];
   const hasCta = typeof input.cta === 'string' && input.cta.trim().length > 0;
   const policy = input.copyPolicy;
   const sourceText = String(input.sourceText || '');
-  const paragraphLike = /\S.{160,}\S/.test(sourceText) || sourceText.split(/\n{2,}/).some((part) => part.trim().length > 120);
+  // Shared with the client via isParagraphLikeForSupportingVisual above —
+  // any change to this heuristic MUST update the exported helper too.
+  const paragraphLike = isParagraphLikeForSupportingVisual(sourceText);
+
+  // Canonical taxonomy guard: carousel is sequence-oriented and aligns
+  // only with thread storytelling. Post flow is single-attachment by
+  // contract, so the orchestration must reject any carousel payload
+  // attached from a post source — even if the UI is bypassed.
+  if (input.sourceType === 'post' && input.assetType === 'carousel') {
+    errors.push('post flow does not support carousel asset type');
+  }
 
   if (input.attachmentMode === 'supporting_visual') {
     if (hasOverlayText(input.overlayText)) errors.push('supporting_visual rejects overlay_text');
@@ -255,7 +471,25 @@ export function validateAttachmentPayload(input: AttachmentValidationInput): Att
     errors.push('embedded_copy CTA requires explicit copy policy allowCTA');
   }
 
-  if (input.sourceType === 'thread' && input.assetType === 'carousel') {
+  // Rule #9 — thread+carousel requires a transform policy in embedded_copy
+  // mode to prevent raw thread segments being duplicated onto carousel slides
+  // (the embedded copy WOULD render the raw segments verbatim, defeating the
+  // "embedded_copy" intent that carousel slides should re-present thread
+  // content via summarize/extract/framework/quote/etc.).
+  //
+  // In supporting_visual mode, the carousel carries NO embedded text by
+  // contract (SUPPORTING_VISUAL_COPY_POLICY: allowHeadline/allowKeyInsight/
+  // allowCTA = false; sourceTextTransform = 'none'). Raw thread duplication
+  // is therefore structurally impossible: there is no text-bearing surface
+  // on the carousel for raw segments to leak into. The transform-required
+  // rule has no semantic load to bear here and would create a contradiction
+  // with the supporting_visual contract that pins sourceTextTransform='none'.
+  // Skip the rule for supporting_visual; keep it strict for embedded_copy.
+  if (
+    input.sourceType === 'thread'
+    && input.assetType === 'carousel'
+    && input.attachmentMode !== 'supporting_visual'
+  ) {
     const transform = policy?.sourceTextTransform ?? 'none';
     if (transform === 'none') errors.push('thread carousel requires transform policy');
   }

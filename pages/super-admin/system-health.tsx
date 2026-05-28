@@ -212,5 +212,17 @@ import SysHealthView from '../../components/SysHealthView';
 export default function SystemHealthPage() {
   const d = useSysHealth();
   if (d._notReady) return null;
-  return <SysHealthView d={d} />;
+  return (
+    <>
+      <div className="max-w-7xl mx-auto px-6 pt-6">
+        <nav className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-gray-500">Health diagnostics:</span>
+          <a href="/super-admin/oauth-health" className="rounded-full border border-gray-200 bg-white px-2.5 py-0.5 font-medium text-gray-700 hover:bg-gray-50">OAuth + Integration</a>
+          <a href="/super-admin/system-health" className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 font-medium text-indigo-700">System</a>
+          <a href="/super-admin/dashboard" className="rounded-full border border-gray-200 bg-white px-2.5 py-0.5 font-medium text-gray-700 hover:bg-gray-50">Dashboard</a>
+        </nav>
+      </div>
+      <SysHealthView d={d} />
+    </>
+  );
 }

@@ -10,8 +10,10 @@ import PostToSocialPlatformPanel from '@/components/content/post-to-social/PostT
 import { filterConnectedPlatformsForContent } from '@/lib/shared/social/platformContentFilter';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '@/lib/shared/social/capabilityEvents';
 import { defaultScheduleValue, getContentTypeLabel, normalizePlatform, parseHashtags, resolveSocialPublishType, type ConnectedAccount, type DraftPayload, type PlatformConfigItem, type PlatformOption, type PlatformState } from '@/components/content/post-to-social/schedulerShared';
-import { clearThreadPublishLink, saveThreadPublishLink } from '@/lib/thread/threadStorage';
+import { clearThreadPublishLink, loadThreadNodeAttachments, saveThreadPublishLink } from '@/lib/thread/threadStorage';
+import { resolveThreadNodeAttachments } from '@/lib/thread/threadNodeAttachmentResolver';
 import { getThreadContinuationLink } from '@/lib/thread/threadLinks';
+import { openThreadRuntimeTracer } from '@/backend/services/threadRuntime/threadRuntimeInstrumentation';
 import {
   POST_CREATOR_ASSET_TYPES,
   THREAD_CREATOR_ASSET_TYPES,
@@ -26,16 +28,16 @@ import {
   type WriterSourceType,
 } from '@/lib/content/writerCreatorAssetLaunch';
 import {
-  attachmentModeLabel,
   defaultAttachmentModeForAsset,
   defaultTransformForAsset,
   type AttachmentMode,
-  type SourceTextTransform,
 } from '@/lib/content/writerCreatorAttachmentContracts';
 import {
   mediaTypesFromCreatorAttachments,
   mediaUrlsFromCreatorAttachments,
 } from '@/lib/content/schedulerAttachmentSemantics';
+import { splitThreadIntoSegments, buildThreadNodesFromSegments } from '@/lib/thread/threadFlow';
+import { validatePostForPlatform } from '@/lib/preview/platformLimitValidation';
 export default function MultiPlatformSchedulerPage() {
   const router = useRouter();
   const { user, selectedCompanyId, selectedCompanyName, isLoading } = useCompanyContext();
@@ -48,14 +50,11 @@ export default function MultiPlatformSchedulerPage() {
   const [platformState, setPlatformState] = useState<Record<string, PlatformState>>({});
   const [adaptingPlatform, setAdaptingPlatform] = useState<string | null>(null);
   const [assetMenuOpen, setAssetMenuOpen] = useState(false);
-  const [selectedAttachmentMode, setSelectedAttachmentMode] = useState<AttachmentMode>('supporting_visual');
-  const [selectedSourceTextTransform, setSelectedSourceTextTransform] = useState<SourceTextTransform>('none');
   const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
   const adaptedPlatformKeysRef = useRef<Record<string, string>>({});
   const requestedPlatform = typeof router.query.platform === 'string'
     ? normalizePlatform(router.query.platform)
     : '';
-  const normalizedSourcePlatform = normalizePlatform(draft?.sourcePlatform || '');
 
   const getSourceContentForPlatform = (targetPlatform: string, currentDraft: DraftPayload | null) => {
     if (!currentDraft) return '';
@@ -187,6 +186,20 @@ export default function MultiPlatformSchedulerPage() {
   const hiddenReasonByKey = useMemo(() => {
     const m = new Map<string, string>();
     for (const h of platformFilter.hidden) m.set(h.platform, h.reason);
+    // Video-only platforms (YouTube / TikTok) are excluded from the
+    // filter's `hidden` list by policy when the resolved capability set
+    // does not include video/creator. On a card grid like this surface,
+    // silently dropping them is confusing — the account is connected,
+    // it just can't publish from a text/image flow. Render them as
+    // frozen cards with the same "requires X" treatment as Instagram /
+    // Pinterest. Once a video asset gets attached, the filter's
+    // capability set includes video → these keys leave `videoOnlyHidden`
+    // and the card thaws automatically.
+    for (const key of platformFilter.videoOnlyHidden) {
+      if (!m.has(key)) {
+        m.set(key, `${key.charAt(0).toUpperCase()}${key.slice(1)} requires a video asset for publishing.`);
+      }
+    }
     return m;
   }, [platformFilter]);
 
@@ -247,12 +260,14 @@ export default function MultiPlatformSchedulerPage() {
     setPlatformState((current) => {
       const next = { ...current };
       for (const option of platformOptions) {
-        const sourceContent = getSourceContentForPlatform(option.key, draft);
-        const isSourcePlatform = normalizedSourcePlatform && option.key === normalizedSourcePlatform;
         if (next[option.key]) continue;
+        // Social copy intentionally starts blank for EVERY platform — including
+        // the source one — and only fills in after the per-platform adaptation
+        // effect finishes. This guarantees the textarea always shows content
+        // tailored to the selected platform, never the raw master copy.
         next[option.key] = {
           contentType: option.contentTypes[0] || 'post',
-          content: isSourcePlatform ? String(draft.content || sourceContent || '').trim() : '',
+          content: '',
           hashtags: draft.hashtags.join(' '),
           scheduledFor: defaultScheduleValue(),
           busy: false,
@@ -262,7 +277,7 @@ export default function MultiPlatformSchedulerPage() {
       }
       return next;
     });
-  }, [draft, normalizedSourcePlatform, platformOptions]);
+  }, [draft, platformOptions]);
 
   const selectedOption = platformOptions.find((item) => item.key === selectedPlatform) || null;
   const selectedState = selectedPlatform ? platformState[selectedPlatform] : null;
@@ -319,7 +334,12 @@ export default function MultiPlatformSchedulerPage() {
     if (!draft || !writerSourceType || !writerSourceId) return;
     const sourceContent = selectedState?.content || draft.content || '';
     const hashtagText = selectedState?.hashtags || draft.hashtags.join(' ');
-    const attachmentMode = selectedAttachmentMode || defaultAttachmentModeForAsset(assetType);
+    // Asset-type selection is the only writer-facing choice. Attachment
+    // mode + source-text transform are rendering-behavior defaults
+    // resolved from payload signals downstream; we only seed the
+    // per-asset defaults here so the validator never sees a raw 'none'.
+    const attachmentMode: AttachmentMode = defaultAttachmentModeForAsset(assetType);
+    const sourceTextTransform = defaultTransformForAsset(assetType, attachmentMode);
     setAssetMenuOpen(false);
     launchCreatorFromWriter({
       router,
@@ -329,9 +349,7 @@ export default function MultiPlatformSchedulerPage() {
         sourceId: writerSourceId,
         assetType,
         attachmentMode,
-        sourceTextTransform: writerSourceType === 'thread'
-          ? (selectedSourceTextTransform === 'none' ? defaultTransformForAsset(assetType, attachmentMode) : selectedSourceTextTransform)
-          : selectedSourceTextTransform,
+        sourceTextTransform,
         title: draft.title || draft.topic || `${sourceContentLabel} draft`,
         body: sourceContent,
         audience: 'Audience from the Writer draft',
@@ -357,50 +375,9 @@ export default function MultiPlatformSchedulerPage() {
         <div className="absolute left-0 z-20 mt-2 w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
           <div className="border-b border-slate-100 px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Create asset</p>
-            <p className="mt-1 text-xs text-slate-500">Prefilled from this {sourceContentLabel.toLowerCase()}.</p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {(['supporting_visual', 'embedded_copy'] as AttachmentMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setSelectedAttachmentMode(mode);
-                  }}
-                  className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
-                    selectedAttachmentMode === mode
-                      ? 'border-blue-600 bg-blue-600 text-white'
-                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
-                  }`}
-                >
-                  {attachmentModeLabel(mode)}
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              {([
-                ['none', 'Support visually'],
-                ['summarize', 'Summarize'],
-                ['framework', 'Framework'],
-                ['extract_points', 'Extract points'],
-              ] as Array<[SourceTextTransform, string]>).map(([transform, label]) => (
-                <button
-                  key={transform}
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setSelectedSourceTextTransform(transform);
-                  }}
-                  className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
-                    selectedSourceTextTransform === transform
-                      ? 'border-blue-600 bg-blue-600 text-white'
-                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <p className="mt-1 text-xs text-slate-500">
+              Pick a Creator asset type. Prefilled from this {sourceContentLabel.toLowerCase()}.
+            </p>
           </div>
           <button
             type="button"
@@ -443,6 +420,15 @@ export default function MultiPlatformSchedulerPage() {
     }
     if (!selectedState.content.trim()) {
       return { ok: false as const, error: 'Post content is empty.' };
+    }
+    // G11.E — over-limit guard. Soft, UI-side only. Server-side DB constraints
+    // (chk_*_content) remain the last-line enforcement.
+    const limitCheck = validatePostForPlatform(selectedState.content, selectedOption.key);
+    if (limitCheck.state === 'invalid') {
+      return {
+        ok: false as const,
+        error: `Content is over ${selectedOption.label} limit by ${limitCheck.exceeded} characters (${limitCheck.currentCount} / ${limitCheck.maxCount}). Trim the post and try again.`,
+      };
     }
     return { ok: true as const };
   };
@@ -665,6 +651,54 @@ export default function MultiPlatformSchedulerPage() {
           throw new Error(updateData.error || 'Failed to update scheduled post');
         }
       } else {
+        // Phase 1B.1: when this is a thread payload, also send `nodes` so the
+        // server can take the multi-row insert path (gated by
+        // THREAD_MULTI_ROW_RUNTIME). Server ignores `nodes` when the flag is
+        // off — so this is safe to send unconditionally for thread payloads.
+        //
+        // G2-final — per-node attachment propagation activated.
+        //
+        // ThreadResultView's per-node assignments are stored in sessionStorage
+        // under `thread_node_attachments_<sessionToken>`, where sessionToken
+        // is the value the threads-result link forwards as `sourceId` to this
+        // page. We resolve those compact asset-id pointers against the
+        // thread-level `attachedAssets` list (already loaded on this page) to
+        // build full CanonicalAttachment lists per position, then pass them
+        // into the node builder.
+        //
+        // Pre-activation dormancy: until migration 20260809 is applied, the
+        // RPC silently ignores the per-node media JSONB fields, so this
+        // payload extension is a no-op on the DB side. Post-migration, child
+        // rows persist their own media_urls + media_types.
+        const nodeAttachmentMap = sourceContentType === 'thread' && draft?.sourceId
+          ? loadThreadNodeAttachments(draft.sourceId)
+          : null;
+        const perNodeAttachments = sourceContentType === 'thread'
+          ? resolveThreadNodeAttachments({
+              nodeAttachmentMap,
+              attachedAssets,
+            })
+          : {};
+        const threadNodes = sourceContentType === 'thread'
+          ? buildThreadNodesFromSegments(
+              splitThreadIntoSegments(selectedState.content),
+              perNodeAttachments,
+            )
+          : undefined;
+
+        // Observability: open a per-tab tracer for this schedule click. Note
+        // the registry is per-tab in the browser — it does not share state
+        // with the server-side registry. The server's tracer in
+        // pages/api/scheduler/schedule.ts captures the authoritative trace.
+        const clientTracer = openThreadRuntimeTracer({
+          threadId: `client_${draft?.sourceId ?? 'unknown'}_${Date.now().toString(36)}`,
+          companyId: selectedCompanyId ?? 'unknown',
+        });
+        const clientPersistStartedAtMs = Date.now();
+        clientTracer.recordPersistAttempt({
+          detail: `client schedule POST platform=${selectedOption.key} nodes=${threadNodes?.length ?? 0}`,
+        });
+
         const scheduleRes = await fetch('/api/scheduler/schedule', {
           method: 'POST',
           credentials: 'include',
@@ -681,12 +715,21 @@ export default function MultiPlatformSchedulerPage() {
             contentType: publishContentType,
             platform: selectedOption.key,
             accountId: selectedOption.socialAccountId,
+            ...(threadNodes && threadNodes.length >= 2 ? { nodes: threadNodes } : {}),
           }),
         });
         const scheduleData = await scheduleRes.json().catch(() => ({}));
         if (!scheduleRes.ok) {
+          clientTracer.recordPersistFailure({
+            detail: scheduleData.error || `schedule POST returned ${scheduleRes.status}`,
+            latencyMs: Date.now() - clientPersistStartedAtMs,
+          });
           throw new Error(scheduleData.error || 'Failed to schedule post');
         }
+        clientTracer.recordPersistSuccess({
+          latencyMs: Date.now() - clientPersistStartedAtMs,
+          detail: `scheduled id=${scheduleData.id ?? '(none)'}`,
+        });
         scheduledPostId = scheduleData.id || null;
       }
 

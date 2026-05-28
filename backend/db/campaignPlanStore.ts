@@ -397,3 +397,121 @@ export async function savePlatformCustomizedContent(input: {
     throw new Error(`Failed to save platform customized content: ${error.message}`);
   }
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// ASYNC REFINEMENT SUPPORT
+// ───────────────────────────────────────────────────────────────────────────
+//
+// `planRevisionId` is currently the `snapshot_hash` value. The async
+// refinement worker uses these two helpers to:
+//   1. Read the base plan it should refine (`getCampaignPlanByVersionId`).
+//   2. Persist the refined plan back with optimistic-concurrency safety
+//      (`saveStructuredCampaignPlanRefinement`).
+//
+// Optimistic concurrency: each refinement reads `refinement_version`,
+// transforms the plan, and writes the new plan with WHERE
+// `refinement_version = expected`. If another refinement landed first
+// (different version), the update affects 0 rows and we skip — the newer
+// refinement wins and the worker logs `stale_refinement_skipped`.
+
+export interface CampaignPlanRevisionRow {
+  campaign_id: string;
+  snapshot_hash: string;
+  weeks: any[];
+  refinement_version: number;
+  refinement_source: 'inline' | 'async' | 'manual' | null;
+  refinement_parent_version: number | null;
+}
+
+/**
+ * Fetch the campaign_week_plan row identified by `(campaign_id?,
+ * snapshot_hash)`. Returns `null` when the row is missing — the async
+ * refinement worker treats that as "abandon job, base plan was deleted".
+ */
+export async function getCampaignPlanByVersionId(
+  planRevisionId: string,
+): Promise<CampaignPlanRevisionRow | null> {
+  if (!planRevisionId) return null;
+  const { data, error } = await supabase
+    .from('campaign_week_plan')
+    .select('campaign_id, snapshot_hash, weeks, refinement_version, refinement_source, refinement_parent_version')
+    .eq('snapshot_hash', planRevisionId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn('[campaign-plan-store] getCampaignPlanByVersionId failed:', error.message);
+    return null;
+  }
+  if (!data) return null;
+  return data as CampaignPlanRevisionRow;
+}
+
+/**
+ * Persist a refinement of an existing plan row.
+ *
+ * Optimistic-concurrency contract:
+ *   - Caller MUST pass the `expectedVersion` they observed when they read
+ *     the base plan. The update fires only when the stored
+ *     `refinement_version` still equals `expectedVersion`.
+ *   - Returns `{ applied: false, reason: 'stale_revision' }` when another
+ *     writer bumped the version first. Caller (worker) treats this as
+ *     "newer refinement won, drop our work".
+ *   - Returns `{ applied: false, reason: 'not_found' }` when the row was
+ *     deleted between read and write.
+ *
+ * Idempotency:
+ *   - Re-calling with the same `expectedVersion` after a successful apply
+ *     will return `stale_revision` (because the version has bumped) — safe.
+ *
+ * Source tag preserves forensic lineage so dashboards can split refinements
+ * by inline vs async vs manual.
+ */
+export async function saveStructuredCampaignPlanRefinement(input: {
+  campaignId: string;
+  planRevisionId: string;
+  refined: { weeks: any[] } | any;
+  expectedVersion: number;
+  source: 'inline' | 'async' | 'manual';
+}): Promise<{ applied: boolean; newVersion?: number; reason?: 'stale_revision' | 'not_found' | 'db_error' }> {
+  const refinedWeeks = (input.refined?.weeks ?? input.refined?.plan?.weeks ?? input.refined) as any[];
+  if (!Array.isArray(refinedWeeks)) {
+    return { applied: false, reason: 'db_error' };
+  }
+  const nextVersion = input.expectedVersion + 1;
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('campaign_week_plan')
+    .update({
+      weeks: refinedWeeks,
+      refinement_version: nextVersion,
+      refinement_parent_version: input.expectedVersion,
+      refinement_source: input.source,
+      refined_at: nowIso,
+      updated_at: nowIso,
+    })
+    .eq('campaign_id', input.campaignId)
+    .eq('snapshot_hash', input.planRevisionId)
+    .eq('refinement_version', input.expectedVersion)
+    .select('refinement_version');
+  if (error) {
+    console.warn('[campaign-plan-store] saveStructuredCampaignPlanRefinement failed:', error.message);
+    return { applied: false, reason: 'db_error' };
+  }
+  if (!data || data.length === 0) {
+    // Either the row no longer exists OR refinement_version moved. We
+    // disambiguate with a follow-up read so the caller can log accurately.
+    const { data: existing } = await supabase
+      .from('campaign_week_plan')
+      .select('snapshot_hash')
+      .eq('campaign_id', input.campaignId)
+      .eq('snapshot_hash', input.planRevisionId)
+      .limit(1)
+      .maybeSingle();
+    return {
+      applied: false,
+      reason: existing ? 'stale_revision' : 'not_found',
+    };
+  }
+  return { applied: true, newVersion: nextVersion };
+}

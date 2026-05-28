@@ -9,6 +9,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { plannerEventBus } from '../../../backend/services/plannerEventBus';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -89,7 +90,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const aiPlanSubStageLabels: Record<string, string> = {
       context: 'Gathering campaign context',
       drafting: 'Drafting weekly themes',
+      // Heartbeat ticks emitted every ~15s while a long-running phase is
+      // pending. UI surfaces them so the screen never sits silently on a
+      // static label during long provider waits.
+      'still-drafting': 'Still drafting campaign strategy…',
+      'still-evaluating-alignment': 'Still evaluating alignment…',
+      'still-refining': 'Still refining language and tone…',
+      // Parse / skeleton repair substages emitted from parseStructuredPlanWithRecovery
+      // when the first LLM output couldn't be parsed or violated the deterministic
+      // skeleton. They live between drafting and alignment.
+      'repairing-malformed-structure': 'Repairing malformed campaign structure',
+      'repairing-campaign-skeleton': 'Repairing campaign skeleton',
+      'validating-repaired-campaign': 'Validating repaired campaign',
+      // Legacy parent of the alignment phase — kept so older runs in flight
+      // still render a sensible label after a deploy.
       scoring: 'Scoring strategic alignment',
+      // Granular alignment substages emitted by the orchestrator. Each one is
+      // a thin marker around a specific check or recovery step so the UI
+      // never sits on a single label while multiple operations execute.
+      'evaluating-alignment': 'Evaluating campaign alignment',
+      'checking-psychological-progression': 'Checking psychological progression',
+      'validating-content-diversity': 'Validating content diversity',
+      'recovering-low-alignment-sections': 'Recovering low-alignment sections',
+      'rechecking-strategic-alignment': 'Rechecking strategic alignment',
+      'continuing-to-refinement': 'Continuing to refinement',
       refining: 'Refining language and tone',
     };
     const stage = row.current_stage;
@@ -116,6 +140,74 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stageLabel = row.status === 'completed' ? 'Complete' : stage ? stage.replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) : 'Initializing…';
     }
 
+    // ── PROGRESSIVE / STREAMING STATE (Part 8) ──────────────────────────────
+    // Surface recent planner events for THIS campaign so the UI can render
+    // optimization badges + progressive hydration without polling additional
+    // endpoints. The recent-events buffer is in-process — for a multi-instance
+    // deployment, the cluster-wide event stream should be persisted to Redis
+    // (deferred to a follow-up). Per-process events still cover the common
+    // single-worker case and degrade gracefully.
+    let progressiveState: {
+      drafting_completed?: boolean;
+      drafting_partial_chars?: number;
+      alignment_completed?: boolean;
+      alignment_score?: number | null;
+      partial_salvage_used?: boolean;
+      salvaged_week_count?: number;
+      refinement_status?: 'inline' | 'enqueued' | 'completed' | 'skipped' | 'unknown';
+      refinement_job_id?: string | null;
+      overload_active?: boolean;
+      plan_created?: boolean;
+    } = {};
+    try {
+      const campaignIdForEvents = row.result_campaign_id ?? '';
+      if (campaignIdForEvents) {
+        const recent = plannerEventBus.recentEvents().filter((e) => e.campaign_id === campaignIdForEvents);
+        progressiveState.refinement_status = 'unknown';
+        for (const ev of recent) {
+          switch (ev.type) {
+            case 'drafting_completed':
+              progressiveState.drafting_completed = true;
+              progressiveState.drafting_partial_chars = Number((ev.payload as any)?.streamed_partial_chars ?? 0);
+              break;
+            case 'alignment_completed':
+              progressiveState.alignment_completed = true;
+              progressiveState.alignment_score = Number((ev.payload as any)?.alignment_score ?? null);
+              break;
+            case 'salvage_applied':
+              progressiveState.partial_salvage_used = true;
+              progressiveState.salvaged_week_count = Number((ev.payload as any)?.salvaged_week_count ?? 0);
+              break;
+            case 'refinement_completed':
+              progressiveState.refinement_status = 'completed';
+              break;
+            case 'overload_mode_activated':
+              progressiveState.overload_active = true;
+              break;
+            case 'plan_created':
+              progressiveState.plan_created = true;
+              if ((ev.payload as any)?.async_refinement_enqueued) {
+                progressiveState.refinement_status = 'enqueued';
+                progressiveState.refinement_job_id = String((ev.payload as any)?.async_refinement_job_id ?? '');
+              } else {
+                progressiveState.refinement_status = progressiveState.refinement_status === 'completed'
+                  ? 'completed'
+                  : 'inline';
+              }
+              break;
+            case 'progressive_phase_completed':
+              if ((ev.payload as any)?.phase === 'refinement_enqueued') {
+                progressiveState.refinement_status = 'enqueued';
+                progressiveState.refinement_job_id = String((ev.payload as any)?.job_id ?? '');
+              }
+              break;
+          }
+        }
+      }
+    } catch {
+      // Never let progressive-state enrichment break the polling endpoint.
+    }
+
     return res.status(200).json({
       stage: row.current_stage,
       stage_label: stageLabel,
@@ -129,6 +221,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       weeks_generated: row.weeks_generated ?? undefined,
       daily_slots_created: row.daily_slots_created ?? undefined,
       scheduled_posts_created: row.scheduled_posts_created ?? undefined,
+      // Progressive state (Part 8). All fields optional — existing clients
+      // continue to render exactly as before, new clients can opt in.
+      progressive: progressiveState,
     });
   } catch (err) {
     console.error('[bolt/progress]', err);

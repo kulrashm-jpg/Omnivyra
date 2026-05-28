@@ -17,6 +17,11 @@ export default function StoryIntelligencePage() {
       generatePath="/stories/generate"
       formatOptions={STORY_FORMAT_OPTIONS}
       defaultFormat="short_story"
+      creationModePicker={{
+        enabled: true,
+        flavor: 'longform',
+        editorPath: '/stories/new',
+      }}
     />
   );
 }

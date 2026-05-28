@@ -8,6 +8,7 @@ import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
+import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
 import { config } from '@/config';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -16,23 +17,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error, error_description } = req.query;
-  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
+  const decoded = decodeOAuthState(state as string);
+  const { returnTo: earlyReturnTo } = decoded;
   const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
+  const callbackHost = safeHost(getCanonicalOAuthRedirectUri('linkedin', req));
+
+  logOAuthEvent({
+    event: 'oauth_callback_received',
+    provider: 'linkedin',
+    callback_host: callbackHost,
+    company_id: decoded.companyId ?? null,
+    state_user_id: decoded.userId ?? null,
+    state_valid: decoded.valid === true,
+    state_flow: decoded.flow ?? null,
+  });
 
   if (error) {
     const desc = error_description ? ` — ${error_description}` : '';
     console.error('[LinkedIn callback] OAuth error from LinkedIn:', error, error_description);
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'linkedin',
+      callback_host: callbackHost,
+      company_id: decoded.companyId ?? null,
+      failure_point: 'provider_error',
+      failure_detail: String(error),
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent(`LinkedIn error: ${error}${desc}`)}`);
   }
 
   if (!code) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'linkedin',
+      callback_host: callbackHost,
+      company_id: decoded.companyId ?? null,
+      failure_point: 'missing_code',
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
   try {
     const platform = 'linkedin';
-    const { companyId, userId: stateUserId, returnTo, valid } = decodeOAuthState(state as string);
+    const { companyId, userId: stateUserId, returnTo, valid } = decoded;
     if (!valid) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'linkedin',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'invalid_oauth_state',
+        failure_detail: decoded.reason ?? 'state signature invalid',
+      });
       return res.status(401).json({ error: 'invalid_oauth_state' });
     }
 
@@ -58,6 +95,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       console.error('[LinkedIn callback] Token exchange failed:', tokenResponse.status, errorText);
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'linkedin',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'token_exchange_failed',
+        failure_detail: `HTTP ${tokenResponse.status}`,
+      });
       throw new Error(`Token exchange failed (${tokenResponse.status}): ${errorText}`);
     }
 
@@ -299,6 +345,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error: any) {
     console.error('LinkedIn OAuth callback error:', error);
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'linkedin',
+      callback_host: callbackHost,
+      company_id: decoded.companyId ?? null,
+      state_user_id: decoded.userId ?? null,
+      failure_point: 'callback_exception',
+      failure_detail: String(error?.message ?? error).slice(0, 200),
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }

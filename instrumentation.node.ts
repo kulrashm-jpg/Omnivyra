@@ -50,6 +50,48 @@ export async function register() {
     process.exit(1);
   }
 
+  // ── Phase 17: thread-runtime persistence boot wiring ──
+  // Idempotent inside the helper. Memory mode is default + no-op.
+  // Supabase mode runs a connectivity smoke test and HARD-FAILS (process.exit)
+  // if registration / smoke test fails — per Phase 17 spec, no silent downgrade.
+  try {
+    const { bootstrapThreadRuntimeExecutionStore } = await import(
+      './backend/services/orchestration/persistence/bootstrapExecutionStore'
+    );
+    await bootstrapThreadRuntimeExecutionStore({ processKind: 'nextjs_server' });
+    _diag('instrumentation.node.ts:thread-runtime-persistence-ok');
+  } catch (err) {
+    // Memory mode never throws. Supabase mode invokes the configured fatal
+    // handler (process.exit) and never returns. Anything reaching this catch
+    // is an unexpected runtime error worth surfacing without crashing memory boot.
+    _diag('instrumentation.node.ts:thread-runtime-persistence-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.error('[thread-runtime.persistence] unexpected register error:', (err as Error)?.message ?? err);
+  }
+
+  // ── Phase 22A: distributed runtime wiring ──
+  // Env-gated via ENABLE_DURABLE_DISTRIBUTED_RUNTIME=1 inside
+  // maybeStartDistributedRuntime. Default: skipped, so this is a no-op
+  // unless operators opted in. The activation governor runs FIRST and
+  // hard-fails when any precondition is unmet (no silent downgrade).
+  try {
+    const { wireDistributedRuntime } = await import(
+      './backend/services/orchestration/distributed/bootWireDistributedRuntime'
+    );
+    await wireDistributedRuntime({ processKind: 'nextjs_server' });
+    _diag('instrumentation.node.ts:distributed-runtime-wired');
+  } catch (err) {
+    _diag('instrumentation.node.ts:distributed-runtime-wire-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (err instanceof Error && err.name === 'DistributedRuntimeActivationError') {
+      // Activation governor refused — surface for the supervisor.
+      throw err;
+    }
+    console.error('[distributed-runtime] wire error:', (err as Error)?.message ?? err);
+  }
+
   const monitoringFlag = process.env.ENABLE_REDIS_USAGE_MONITORING;
   const isProduction =
     process.env.OMNIVYRA_ENV === 'production' ||

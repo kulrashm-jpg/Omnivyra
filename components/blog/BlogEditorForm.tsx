@@ -1080,46 +1080,55 @@ export function BlogEditorForm({
           >
             <div className="space-y-3">
               {state.content_blocks.map((block, i) => (
-                <React.Fragment key={block.id}>
-                  <BlockWrapper
-                    block={block}
-                    index={i}
-                    total={state.content_blocks.length}
-                    onMoveUp={() => handleMoveUp(i)}
-                    onMoveDown={() => handleMoveDown(i)}
-                    onDelete={() => handleDelete(i)}
-                    onDuplicate={() => handleDuplicate(i)}
-                    {...getAiAction(block, i)}
-                  >
-                    {block.type === 'image' ? (
-                      <>
-                        <ImageBlockEditor
-                          block={block as ImageBlock}
-                          onChange={(b) => updateBlock(i, b)}
-                          onSearchStock={() => setStockSearchBlockIdx(stockSearchBlockIdx === i ? null : i)}
-                        />
-                        {stockSearchBlockIdx === i && (
-                          <div className="mt-3">
-                            <ImageStockSearchPopover
-                              blogTitle={state.title}
-                              blogExcerpt={state.excerpt}
-                              blogTags={state.tags}
-                              nearestHeading={findNearestHeading(state.content_blocks, i)}
-                              onSelect={(img) => handleStockImageSelect(i, img)}
-                              onClose={() => setStockSearchBlockIdx(null)}
-                            />
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <BlockEditor block={block} onChange={(b) => updateBlock(i, b)} companyId={effectiveCompanyId} />
-                    )}
-                  </BlockWrapper>
-                  {/* "Add block" between / after each block */}
-                  <BlockPicker onSelect={(type) => handleAddBlock(i, type)} />
-                </React.Fragment>
+                <BlockWrapper
+                  key={block.id}
+                  block={block}
+                  index={i}
+                  total={state.content_blocks.length}
+                  onMoveUp={() => handleMoveUp(i)}
+                  onMoveDown={() => handleMoveDown(i)}
+                  onDelete={() => handleDelete(i)}
+                  onDuplicate={() => handleDuplicate(i)}
+                  {...getAiAction(block, i)}
+                >
+                  {block.type === 'image' ? (
+                    <>
+                      <ImageBlockEditor
+                        block={block as ImageBlock}
+                        onChange={(b) => updateBlock(i, b)}
+                        onSearchStock={() => setStockSearchBlockIdx(stockSearchBlockIdx === i ? null : i)}
+                      />
+                      {stockSearchBlockIdx === i && (
+                        <div className="mt-3">
+                          <ImageStockSearchPopover
+                            blogTitle={state.title}
+                            blogExcerpt={state.excerpt}
+                            blogTags={state.tags}
+                            nearestHeading={findNearestHeading(state.content_blocks, i)}
+                            onSelect={(img) => handleStockImageSelect(i, img)}
+                            onClose={() => setStockSearchBlockIdx(null)}
+                          />
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <BlockEditor block={block} onChange={(b) => updateBlock(i, b)} companyId={effectiveCompanyId} />
+                  )}
+                </BlockWrapper>
               ))}
             </div>
+
+            {/* Single Add Block control at the end of the list.
+                Previously this rendered between EVERY block which
+                stretched the editor visually and made the page feel
+                like a wall of formatting affordances. One picker at
+                the end + drag-to-reorder + per-block hover toolbar
+                covers the same operations without the clutter. */}
+            {state.content_blocks.length > 0 && (
+              <div className="mt-4 flex justify-center">
+                <BlockPicker onSelect={(type) => handleAddBlock(state.content_blocks.length - 1, type)} />
+              </div>
+            )}
           </SortableContext>
 
           {/* Ghost block shown under the pointer while dragging */}

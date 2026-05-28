@@ -45,6 +45,24 @@ export type CardSelectionBundle = {
   };
 };
 
+/**
+ * G18 — creation-mode picker. Optional; when enabled, ManagedIntelligencePage
+ * renders a picker at the top that splits the user's entry into discrete modes.
+ *
+ *   'shortform' flavor → 3 modes: ai | manual | starter (disabled stub)
+ *   'longform'  flavor → 4 modes: ai | outline | manual | starter (disabled stub)
+ *
+ * `editorPath` is where 'outline' and 'manual' navigate to (the editor page,
+ * e.g. '/newsletters/new'). 'ai' continues to use the existing in-page flow.
+ */
+export type CreationModeFlavor = 'shortform' | 'longform';
+
+export type CreationModePickerConfig = {
+  enabled: boolean;
+  flavor: CreationModeFlavor;
+  editorPath: string;
+};
+
 export type ManagedIntelligenceProps = {
   contentType: 'article' | 'guide' | 'story' | 'whitepaper' | 'case-study' | 'newsletter' | 'post' | 'thread';
   pageTitle: string;
@@ -59,6 +77,7 @@ export type ManagedIntelligenceProps = {
   generatePath: string;
   formatOptions: FormatOption[];
   defaultFormat: string;
+  creationModePicker?: CreationModePickerConfig;
 };
 
 export const PRIORITY_STYLES = {

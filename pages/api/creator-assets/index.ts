@@ -1,6 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { listCreatorAssets, upsertCreatorAssetRecord } from '@/backend/services/creatorAssetPersistenceService';
+import {
+  listCreatorAssets,
+  upsertCreatorAssetRecord,
+  deleteCreatorAssetRecord,
+} from '@/backend/services/creatorAssetPersistenceService';
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -18,6 +22,7 @@ function creatorTypeAliases(value: unknown): string[] {
     banner: ['banner'],
     infographic: ['infographic'],
     carousel: ['carousel'],
+    slider: ['slider'],
     brand_card: ['brand_card', 'image'],
   };
   return map[normalized] || [];
@@ -41,13 +46,36 @@ function mapAsset(row: Record<string, unknown>) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST' && req.method !== 'GET') {
+  if (req.method !== 'POST' && req.method !== 'GET' && req.method !== 'DELETE') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   const companyId = String(req.body?.company_id || req.query.company_id || '').trim();
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+
+  // ── DELETE: remove a creator_assets row (id in query OR body) ─────────────
+  // Lives on the static index path because dynamic [id] routes are
+  // unreliable in this dev environment. Strictly scoped to (id,
+  // companyId) inside the persistence service.
+  if (req.method === 'DELETE') {
+    const id = (typeof req.query.id === 'string' ? req.query.id
+      : typeof req.body?.id === 'string' ? req.body.id
+      : '').trim();
+    if (!id) return res.status(400).json({ error: 'id required' });
+    try {
+      const result = await deleteCreatorAssetRecord({ assetId: id, companyId });
+      if (!result.deletedAsset) {
+        return res.status(404).json({ error: 'Creator asset not found for this company' });
+      }
+      return res.status(200).json({ success: true, id, deletedAttachments: result.deletedAttachments });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete creator asset';
+      return res.status(message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE') ? 503 : 500).json({
+        error: message,
+      });
+    }
+  }
 
   if (req.method === 'GET') {
     try {

@@ -17,6 +17,11 @@ export default function WhitepaperIntelligencePage() {
       generatePath="/whitepapers/generate"
       formatOptions={WHITEPAPER_FORMAT_OPTIONS}
       defaultFormat="research"
+      creationModePicker={{
+        enabled: true,
+        flavor: 'longform',
+        editorPath: '/whitepapers/new',
+      }}
     />
   );
 }

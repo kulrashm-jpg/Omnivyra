@@ -39,6 +39,11 @@ let intelligencePollingWorker: ReturnType<typeof getIntelligencePollingWorker>;
 let listeningExecutionWorker: ReturnType<typeof getWorker>;
 let semanticIndexingWorker: ReturnType<typeof getWorker>;
 let replayPartitionWorker: ReturnType<typeof getWorker>;
+// Async planner refinement worker. Started AFTER usage protection is ready
+// so its first job sees the same gating as inline planner calls. Graceful
+// drain on shutdown — `worker.close()` waits for in-flight refinements to
+// complete before exiting so we never half-write a refined plan.
+let refinementWorker: ReturnType<typeof getWorker> | null = null;
 
 const shutdown = async () => {
   await publishWorker?.close?.();
@@ -49,6 +54,16 @@ const shutdown = async () => {
   await listeningExecutionWorker?.close?.();
   await semanticIndexingWorker?.close?.();
   await replayPartitionWorker?.close?.();
+  // Refinement worker close MUST be awaited last so other queues drain first
+  // (their failure paths can enqueue refinement jobs). close() with no args
+  // performs graceful drain — waits for active jobs, refuses new ones.
+  if (refinementWorker) {
+    try {
+      await refinementWorker.close();
+    } catch (err) {
+      console.warn('[planner-refinement] worker close failed:', (err as Error)?.message);
+    }
+  }
   process.exit(0);
 };
 
@@ -57,6 +72,84 @@ const shutdown = async () => {
  */
 export async function startWorkers(): Promise<void> {
   _diag('startWorkers:entered');
+
+  // ── Phase 17: thread-runtime persistence boot wiring ──
+  // Workers run as a separate process (spawned by scripts/start-all.js), so
+  // the bootstrap helper must be invoked here too. Idempotent in-process.
+  // Memory mode = no-op; supabase mode runs a connectivity smoke test and
+  // HARD-FAILS (process.exit) if registration fails — no silent downgrade.
+  try {
+    const { bootstrapThreadRuntimeExecutionStore } = await import(
+      '../services/orchestration/persistence/bootstrapExecutionStore'
+    );
+    await bootstrapThreadRuntimeExecutionStore({ processKind: 'worker' });
+    _diag('startWorkers:thread-runtime-persistence-ok');
+  } catch (err) {
+    // Supabase mode invokes fatal handler (process.exit) and never returns.
+    // Memory mode never throws. Any unexpected error reaching here logs
+    // but doesn't crash worker boot.
+    _diag('startWorkers:thread-runtime-persistence-error', { error: err instanceof Error ? err.message : String(err) });
+    console.error('[thread-runtime.persistence] worker boot register error:', (err as Error)?.message ?? err);
+  }
+
+  // ── Phase 22A: distributed runtime wiring (worker process) ──
+  // Env-gated via ENABLE_DURABLE_DISTRIBUTED_RUNTIME=1 inside the helper.
+  // When enabled, the activation governor runs FIRST and hard-fails on
+  // unmet preconditions — no silent downgrade. This is the worker
+  // process, so the runtime poll loop + heartbeat + replay sweep + compactor
+  // all run here. Step builders are intentionally no-op (the BullMQ-based
+  // workers below handle the actual job processing); the distributed
+  // runtime layer is for queue/lease coordination across instances.
+  try {
+    const { wireDistributedRuntime } = await import(
+      '../services/orchestration/distributed/bootWireDistributedRuntime'
+    );
+    await wireDistributedRuntime({ processKind: 'worker' });
+    _diag('startWorkers:distributed-runtime-wired');
+  } catch (err) {
+    _diag('startWorkers:distributed-runtime-wire-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (err instanceof Error && err.name === 'DistributedRuntimeActivationError') {
+      // Activation governor refused — let the supervisor restart.
+      throw err;
+    }
+    console.error('[distributed-runtime] worker wire error:', (err as Error)?.message ?? err);
+  }
+
+  // ── Enterprise governance — boot wiring ──
+  // Subscribes notification delivery (if NOTIFY_ENABLED=true) and runs
+  // warm-start restoration (if WARM_START_ENABLED=true AND
+  // REDIS_ENABLED=true). Both are idempotent + feature-flag-gated +
+  // best-effort. Failures NEVER block worker boot.
+  try {
+    const { startNotificationDelivery } = await import(
+      '../services/creator/enterpriseGovernanceNotificationDelivery'
+    );
+    startNotificationDelivery();
+    _diag('startWorkers:enterprise-governance-notify-subscribed');
+  } catch (err) {
+    _diag('startWorkers:enterprise-governance-notify-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.warn('[enterprise-governance] notify subscribe error:', (err as Error)?.message ?? err);
+  }
+  try {
+    const { restoreReviewRecordsFromRedis } = await import(
+      '../services/creator/enterpriseGovernanceWarmStart'
+    );
+    // Fire-and-forget — warm-start runs async; worker boot proceeds.
+    void restoreReviewRecordsFromRedis().then((result) => {
+      _diag('startWorkers:enterprise-governance-warm-start-complete', {
+        restored: result.recordsRestored, skipped: result.recordsSkippedDuplicate,
+      });
+    }).catch(() => {});
+  } catch (err) {
+    _diag('startWorkers:enterprise-governance-warm-start-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   const boltConcurrency = Math.min(4, Math.max(1, os.cpus().length));
 
   // BUG#21 fix: await first usage-protection poll before registering workers.
@@ -94,6 +187,193 @@ export async function startWorkers(): Promise<void> {
 
   publishWorker = getWorker('publish', processPublishJob);
   boltWorker = getWorker('bolt-execution', processBoltJob, { concurrency: boltConcurrency });
+
+  // ── PLANNER REFINEMENT WORKER ────────────────────────────────────────────
+  // Async refinement is the off-path pass that polishes the alignment-recovered
+  // plan after the synchronous planner returned the base. Concurrency is
+  // intentionally low — refinement is a single LLM call and we don't want to
+  // amplify cost. Stalled jobs are recovered by BullMQ's lock-renewal
+  // mechanism (default 30s; we set a 60s lock duration to comfortably cover
+  // the gateway provider timeout).
+  //
+  // Gated by ASYNC_REFINEMENT_ENABLED; when false we still attach the worker
+  // (so any in-queue jobs from a prior enabled period drain), but the enqueue
+  // side won't add new ones.
+  try {
+    const { processAsyncRefinementJob } =
+      await import('./jobProcessors/asyncRefinementProcessor');
+    const refinementConcurrency = Math.max(1, Number(process.env.PLANNER_REFINEMENT_CONCURRENCY || 2));
+    // getWorker only exposes `concurrency`; BullMQ defaults for lockDuration
+    // (30s) and stalledInterval (30s) are adequate for refinement, which is
+    // a single sub-30s LLM call. Stalled-job recovery uses BullMQ's built-in
+    // mechanism — if a worker dies mid-job, the lock expires and BullMQ
+    // marks it stalled for retry.
+    refinementWorker = getWorker(
+      'planner-refinement',
+      async (job) => {
+        await processAsyncRefinementJob(job as any);
+      },
+      { concurrency: refinementConcurrency },
+    );
+    refinementWorker.on('error', (err) => {
+      console.error('[planner-refinement] worker error:', err?.message ?? err);
+    });
+    refinementWorker.on('failed', (job, err) => {
+      console.warn('[planner-refinement] job failed:', {
+        job_id: job?.id,
+        attempts: job?.attemptsMade,
+        error: err?.message,
+      });
+    });
+    refinementWorker.on('stalled', (jobId) => {
+      console.warn('[planner-refinement] job stalled, will retry:', { job_id: jobId });
+    });
+    _diag('startWorkers:planner-refinement-registered', { concurrency: refinementConcurrency });
+  } catch (err) {
+    _diag('startWorkers:planner-refinement-register-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.warn(
+      '[planner-refinement] worker registration skipped:',
+      (err as Error)?.message ?? err,
+    );
+  }
+
+  // ── DISTRIBUTED PLANNER EVENT PROPAGATION ────────────────────────────────
+  // Env-gated via DISTRIBUTED_EVENTS_ENABLED. When enabled, this worker
+  // process publishes propagatable planner events (plan_created /
+  // alignment_completed / refinement_completed / salvage_applied /
+  // overload_mode_activated) to a Redis Pub/Sub channel and subscribes for
+  // events from other instances. When disabled or Redis is unavailable, the
+  // local event bus continues to work — only cross-instance visibility is lost.
+  try {
+    const { startDistributedPlannerEvents } =
+      await import('../services/plannerEventBusDistributed');
+    await startDistributedPlannerEvents();
+    _diag('startWorkers:distributed-events-started');
+  } catch (err) {
+    _diag('startWorkers:distributed-events-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.warn(
+      '[planner-events] distributed propagation start skipped:',
+      (err as Error)?.message ?? err,
+    );
+  }
+
+  // ── REDIS STREAMS EVENT DURABILITY ──────────────────────────────────────
+  // Env-gated via PLANNER_EVENT_STREAMS_ENABLED. When enabled, propagatable
+  // planner events are ALSO published to durable Redis Streams (in addition
+  // to Pub/Sub) so consumers that need at-least-once delivery + replay can
+  // attach. The local in-process bus continues to fire first.
+  try {
+    const { startEventStreamConsumers } =
+      await import('../services/plannerEventStreams');
+    await startEventStreamConsumers('planner-default');
+    _diag('startWorkers:event-streams-started');
+  } catch (err) {
+    _diag('startWorkers:event-streams-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.warn(
+      '[planner-streams] consumer start skipped:',
+      (err as Error)?.message ?? err,
+    );
+  }
+
+  // ── DISTRIBUTED OVERLOAD COORDINATOR ────────────────────────────────────
+  // Env-gated via DISTRIBUTED_OVERLOAD_ENABLED. Publishes this instance's
+  // pressure score every PUBLISH_INTERVAL_MS (default 5s) and reads the
+  // cluster-wide mode (cached 2s). Hysteresis prevents flapping between
+  // modes during borderline load.
+  try {
+    const { startOverloadCoordinator } =
+      await import('../services/distributedOverloadCoordinator');
+    startOverloadCoordinator();
+    _diag('startWorkers:overload-coordinator-started');
+  } catch (err) {
+    _diag('startWorkers:overload-coordinator-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.warn(
+      '[planner-overload] coordinator start skipped:',
+      (err as Error)?.message ?? err,
+    );
+  }
+
+  // ── ROLLOUT ORCHESTRATOR SYNC + CANARY HEALTH GATES ────────────────────
+  // Sync loop reads the operator's desired mode from Redis and updates
+  // process.env.PLANNER_ROLLOUT_MODE every 5s. Health gates run every 60s
+  // during in_canary status and auto-rollback on threshold breach.
+  try {
+    const { startPlannerRolloutSync } =
+      await import('../services/plannerRolloutMode');
+    startPlannerRolloutSync();
+    _diag('startWorkers:planner-rollout-sync-started');
+  } catch (err) {
+    _diag('startWorkers:planner-rollout-sync-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.warn(
+      '[planner-rollout] sync start skipped:',
+      (err as Error)?.message ?? err,
+    );
+  }
+  try {
+    const { startCanaryHealthGates } =
+      await import('../services/plannerCanaryHealthGates');
+    startCanaryHealthGates();
+    _diag('startWorkers:canary-gates-started');
+  } catch (err) {
+    _diag('startWorkers:canary-gates-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.warn(
+      '[planner-canary] gates start skipped:',
+      (err as Error)?.message ?? err,
+    );
+  }
+
+  // ── TELEMETRY + TRACING EXPORTER BOOTSTRAP ──────────────────────────────
+  // Inspects env and wires the active sinks (dogstatsd / OTLP HTTP metrics
+  // / OTLP HTTP traces / Prometheus pull). Any unset env leaves that sink
+  // disabled. When no metric sink is configured, the fallback log exporter
+  // remains active so dashboards backed by log-based metrics keep working.
+  // The composer starts the periodic 10s snapshot loop itself.
+  try {
+    const { bootstrapPlannerExporters } =
+      await import('../services/plannerExporters');
+    const result = bootstrapPlannerExporters();
+    _diag('startWorkers:telemetry-exporters-bootstrapped', { ...result });
+  } catch (err) {
+    _diag('startWorkers:telemetry-exporters-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.warn(
+      '[planner-exporters] bootstrap skipped:',
+      (err as Error)?.message ?? err,
+    );
+  }
+
+  // ── REALTIME TRANSPORT (env-gated) ──────────────────────────────────────
+  // PLANNER_REALTIME_TRANSPORT_ENABLED=true → wires SSE/WS fanout via
+  // Redis pub/sub. When disabled, SSE keeps using the legacy direct-bus
+  // path in pages/api/bolt/progress-stream.ts.
+  try {
+    const { start: startRealtime } =
+      await import('../services/plannerRealtimeTransport');
+    startRealtime();
+    _diag('startWorkers:realtime-transport-started');
+  } catch (err) {
+    _diag('startWorkers:realtime-transport-error', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    console.warn(
+      '[planner-realtime] transport start skipped:',
+      (err as Error)?.message ?? err,
+    );
+  }
+
   engagementWorker = getWorker(
     'engagement-polling',
     async () => {

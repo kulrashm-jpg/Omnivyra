@@ -359,3 +359,54 @@ export function splitThreadIntoSegments(rawContent: string): string[] {
 export function joinThreadSegments(segments: string[]): string {
   return segments.map((entry) => entry.trim()).filter(Boolean).join('\n\n');
 }
+
+/**
+ * Phase 1B.1 — projects in-memory thread segments to the server-canonical
+ * ThreadNode payload shape consumed by the multi-row insert path. Skips
+ * empty/whitespace-only segments and stays 0-indexed (position 0 = root).
+ *
+ * Pure function; safe to call from both client (submit-time) and server.
+ */
+import type { CanonicalAttachment } from '@/lib/shared/attachments/canonicalAttachment';
+
+export type BuiltThreadNode = {
+  position: number;
+  content: string;
+  attachments?: CanonicalAttachment[];
+};
+
+/**
+ * G2-final — optional per-node attachments.
+ *
+ * Pass `nodeAttachmentsByPosition` to attach canonical attachments to each
+ * resulting node (keyed by the node's 0-indexed position in the FILTERED
+ * output, i.e. after empty segments are skipped). Absent / empty entries
+ * produce text-only nodes.
+ *
+ * The function still skips segments that are empty string AND have no
+ * attachments. A segment that is empty but has at least one attachment is
+ * preserved as an asset-only node (assuming the server-side parser is also
+ * configured to accept asset-only nodes — see parseThreadNodesPayload).
+ */
+export function buildThreadNodesFromSegments(
+  segments: string[],
+  nodeAttachmentsByPosition?: Record<number, CanonicalAttachment[]>,
+): BuiltThreadNode[] {
+  if (!Array.isArray(segments)) return [];
+  const nodes: BuiltThreadNode[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const raw = segments[i];
+    const content = typeof raw === 'string' ? raw.trim() : '';
+    // G2-final — index by ORIGINAL position (i) so the caller's nodeAttachmentMap
+    // (which is keyed by editor index) lines up correctly even when earlier
+    // segments are skipped.
+    const attachmentsForOriginalPosition = nodeAttachmentsByPosition?.[i] ?? [];
+    if (!content && attachmentsForOriginalPosition.length === 0) continue;
+    const node: BuiltThreadNode = { position: nodes.length, content };
+    if (attachmentsForOriginalPosition.length > 0) {
+      node.attachments = attachmentsForOriginalPosition;
+    }
+    nodes.push(node);
+  }
+  return nodes;
+}

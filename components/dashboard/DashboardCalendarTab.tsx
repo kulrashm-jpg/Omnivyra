@@ -5,6 +5,10 @@ import { getPlatformLabel } from '../../utils/platformIcons';
 import type { useDashboardState } from '../hooks/useDashboardState';
 import type { CalendarActivity, CalendarExecutionStage } from '../DashboardPage.types';
 import type { ActivityEvent } from './PostPreviewModal';
+import {
+  resolveDisplayContentType,
+  resolveDisplayContentTypeLabel,
+} from '../../lib/calendar/assetTypeDisplay';
 
 type DashboardState = ReturnType<typeof useDashboardState>;
 type CalendarDayItem = CalendarActivity | ActivityEvent;
@@ -280,7 +284,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                                 </div>
                                 <div className="min-w-0 flex-1">
                                   <p className="text-sm font-medium text-gray-900 truncate">{ev.title}</p>
-                                  <p className="text-xs text-gray-500 capitalize">{ev.platform} · {ev.content_type} · {ev.date}</p>
+                                  <p className="text-xs text-gray-500 capitalize">{ev.platform} · {resolveDisplayContentTypeLabel(ev)} · {ev.date}</p>
                                 </div>
                               </div>
                               <button
@@ -366,13 +370,13 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                                   tabIndex={0}
                                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleActivityEventClick(item); } }}
                                   className={`w-full text-[11px] px-1.5 py-1 rounded flex items-center gap-0.5 cursor-pointer hover:opacity-90 active:scale-95 border-l-4 ${borderColor} ${colorClass}`}
-                                  title={`${getPlatformLabel(item.platform)} · ${item.content_type?.replace(/_/g, ' ')} · ${item.title}${isOverdue ? ' (overdue)' : ''}`}
+                                  title={`${getPlatformLabel(item.platform)} · ${resolveDisplayContentTypeLabel(item)} · ${item.title}${isOverdue ? ' (overdue)' : ''}`}
                                 >
                                   {isOverdue && <span className="text-red-500 font-bold shrink-0">!</span>}
                                   {!isOverdue && isDraggable && <GripVertical className="w-3 h-3 shrink-0 opacity-40" />}
                                   <PlatformIcon platform={item.platform} size={11} />
                                   <span className="font-semibold shrink-0">{getPlatformLabel(item.platform)}</span>
-                                  <span className="opacity-50 shrink-0 hidden sm:inline">{item.content_type?.replace(/_/g, ' ') || 'post'}</span>
+                                  <span className="opacity-50 shrink-0 hidden sm:inline">{resolveDisplayContentTypeLabel(item)}</span>
                                   <span className="truncate flex-1 min-w-0">{item.title}</span>
                                 </div>
                               );
@@ -457,7 +461,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                                 <div key={`week-${dateKey}-act-${index}`} className={`text-[11px] px-1.5 py-0.5 rounded truncate inline-flex items-center gap-0.5 ${colorClass}`}>
                                   <PlatformIcon platform={activity.platform} size={10} />
                                   <span className="ml-0.5 truncate">{getPlatformLabel(activity.platform)} — {activity.title}</span>
-                                  {<RepurposeDots index={activity.repurpose_index} total={activity.repurpose_total} contentType={activity.content_type} />}
+                                  {<RepurposeDots index={activity.repurpose_index} total={activity.repurpose_total} contentType={resolveDisplayContentType(activity)} />}
                                 </div>
                               );
                             }
@@ -521,10 +525,10 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                                   <PlatformIcon platform={activity.platform} size={20} />
                                 </div>
                                 <div className="min-w-0 flex-1">
-                                  <p className="font-medium text-gray-900 truncate capitalize">{activity.content_type}</p>
+                                  <p className="font-medium text-gray-900 truncate capitalize">{resolveDisplayContentTypeLabel(activity)}</p>
                                   <p className="text-sm text-gray-700 truncate">{activity.title}</p>
                                   <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
-                                    {<RepurposeDots index={activity.repurpose_index} total={activity.repurpose_total} contentType={activity.content_type} />}
+                                    {<RepurposeDots index={activity.repurpose_index} total={activity.repurpose_total} contentType={resolveDisplayContentType(activity)} />}
                                     {activity.date && <span>{activity.date}</span>}
                                   </div>
                                 </div>

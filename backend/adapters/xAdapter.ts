@@ -49,16 +49,31 @@ interface Token {
 }
 
 /**
+ * Phase 1B.2.2 — optional publish hints.
+ *
+ * `replyToPlatformPostId`: chain this tweet as a reply to the given tweet id
+ * via Twitter API v2's `reply.in_reply_to_tweet_id`. Used by the thread
+ * publish orchestrator to build native X thread chains. When undefined, the
+ * tweet publishes as a standalone post.
+ */
+export type PublishToXOptions = {
+  replyToPlatformPostId?: string;
+};
+
+/**
  * Publish post to X (Twitter)
  */
 export async function publishToX(
   post: ScheduledPost,
   account: SocialAccount,
-  token: Token
+  token: Token,
+  options?: PublishToXOptions
 ): Promise<PublishResult> {
   // Use mock mode if enabled
   if (config.USE_MOCK_PLATFORMS === true) {
-    console.log('🧪 MOCK MODE: Simulating X/Twitter post');
+    console.log('🧪 MOCK MODE: Simulating X/Twitter post', {
+      reply_to: options?.replyToPlatformPostId ?? null,
+    });
     return {
       success: true,
       platform_post_id: `mock_twitter_${Date.now()}`,
@@ -87,6 +102,14 @@ export async function publishToX(
     const payload: any = {
       text: text,
     };
+
+    // Phase 1B.2.2 — native thread reply chain.
+    // When replyToPlatformPostId is set, attach Twitter API v2's
+    // `reply.in_reply_to_tweet_id`. Used by the thread publish orchestrator
+    // to chain children to their parent's tweet id.
+    if (options?.replyToPlatformPostId) {
+      payload.reply = { in_reply_to_tweet_id: options.replyToPlatformPostId };
+    }
 
     // Add media if present (media_ids required for images/videos)
     if (post.media_urls && post.media_urls.length > 0) {

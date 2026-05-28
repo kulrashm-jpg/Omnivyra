@@ -101,8 +101,11 @@ function isPlaceholder(text: string): boolean {
   );
 }
 
+// Phase D — platform-name normalization converged onto the canonical helper.
+// Content-type normalization deferred (see boltScheduleBlockProcessor).
+import { canonicalizePlatformForDb } from '../../scheduler/schedulingNormalization';
 function toDbPlatform(p: string): string {
-  return p === 'x' ? 'twitter' : p;
+  return canonicalizePlatformForDb(p);
 }
 
 function toDbContentType(

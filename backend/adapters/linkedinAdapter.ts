@@ -16,6 +16,11 @@
 import type { PublishResult } from './platformAdapterTypes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
+import {
+  getOrUploadLinkedInAsset,
+  inferLinkedInMediaKind,
+  type LinkedInMediaKind,
+} from './linkedin/linkedinMediaUpload';
 
 interface ScheduledPost {
   id: string;
@@ -24,6 +29,7 @@ interface ScheduledPost {
   title?: string;
   hashtags?: string[];
   media_urls?: string[];
+  media_types?: string[];
   scheduled_for: string;
 }
 
@@ -93,6 +99,85 @@ export async function publishToLinkedIn(
     lifecycleState: 'PUBLISHED',
     isReshareDisabledByAuthor: false,
   };
+
+  // ── Media upload branch (feature-flagged) ─────────────────────────────
+  //
+  // LINKEDIN_MEDIA_UPLOAD_ENABLED=true activates the LinkedIn media pipeline:
+  //   1. For each url in post.media_urls, upload (or reuse cached URN) to LinkedIn
+  //   2. Attach the asset URN to the Posts API payload
+  //   3. If ANY upload fails: return a structured failure WITHOUT publishing
+  //      (so the post isn't sent as text-only with media silently dropped).
+  //
+  // Default off. The corresponding ADAPTER_CAN_PUBLISH_MEDIA[linkedin] flag in
+  // publishReadinessValidator.ts MUST stay `false` until you have validated
+  // the upload pipeline against a real LinkedIn account in non-prod. Once
+  // validated, flip both flags together.
+  //
+  // Per-node thread media: each thread child row publishes through its own
+  // publishToLinkedIn call (the orchestrator passes per-row id; the adapter
+  // sees that row's own media_urls). No per-thread coordination needed here.
+  const linkedinMediaEnabled = String(process.env.LINKEDIN_MEDIA_UPLOAD_ENABLED ?? 'false').toLowerCase() === 'true';
+  const mediaUrls = Array.isArray(post.media_urls) ? post.media_urls.filter((u) => typeof u === 'string' && u.trim().length > 0) : [];
+  const mediaTypes = Array.isArray(post.media_types) ? post.media_types : [];
+
+  if (linkedinMediaEnabled && mediaUrls.length > 0) {
+    // Upload each media url; aggregate URNs.
+    const uploaded: Array<{ url: string; urn: string; kind: LinkedInMediaKind }> = [];
+    for (let i = 0; i < mediaUrls.length; i++) {
+      const url = mediaUrls[i];
+      const mimeType = typeof mediaTypes[i] === 'string' ? mediaTypes[i] : undefined;
+      const outcome = await getOrUploadLinkedInAsset({
+        scheduledPostId: post.id,
+        sourceUrl: url,
+        mimeType,
+        auth: { accessToken: token.access_token, authorUrn },
+      });
+      if (outcome.ok === false) {
+        return {
+          success: false,
+          error: {
+            code: outcome.error.code,
+            message: outcome.error.message,
+            retryable: outcome.error.retryable,
+          },
+        };
+      }
+      uploaded.push({ url, urn: outcome.result.assetUrn, kind: outcome.result.kind });
+    }
+
+    // Attach to the Posts API payload.
+    // Single asset: content.media = { id: '<urn>', altText: null }
+    // (Multi-image carousel and mixed image+video deferred — see module header.)
+    if (uploaded.length === 1) {
+      payload.content = { media: { id: uploaded[0].urn, altText: null } };
+    } else {
+      // Multi-image case (multiImage). Mixing image+video in one post is NOT
+      // supported by LinkedIn Posts API — reject explicitly to surface the
+      // limit rather than send a malformed payload.
+      const allImages = uploaded.every((u) => u.kind === 'image');
+      if (!allImages) {
+        return {
+          success: false,
+          error: {
+            code: 'LINKEDIN_MIXED_MEDIA_UNSUPPORTED',
+            message: 'LinkedIn Posts API does not support mixing image and video in one post. Split into separate posts.',
+            retryable: false,
+          },
+        };
+      }
+      payload.content = {
+        multiImage: {
+          images: uploaded.map((u) => ({ id: u.urn, altText: null })),
+        },
+      };
+    }
+  } else if (mediaUrls.length > 0 && !linkedinMediaEnabled) {
+    // Media present but flag off — emit a structured warning so the operator
+    // sees this row had media that was silently dropped. The publish-readiness
+    // guard (PUBLISH_GUARD_MODE=enforce) should normally reject this row
+    // before it reaches the adapter; this branch is the defense-in-depth log.
+    console.warn('[linkedin] LINKEDIN_MEDIA_UPLOAD_ENABLED=false but row has', mediaUrls.length, 'media url(s) — publishing as TEXT ONLY');
+  }
 
   console.log('[linkedin] publishing as author:', authorUrn, '| content length:', formatted.text.length);
 

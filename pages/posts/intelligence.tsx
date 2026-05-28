@@ -37,6 +37,11 @@ export default function PostIntelligencePage() {
       generatePath="/posts/generate"
       formatOptions={POST_FORMATS}
       defaultFormat="authority-post"
+      creationModePicker={{
+        enabled: true,
+        flavor: 'shortform',
+        editorPath: '/posts/result',
+      }}
     />
   );
 }

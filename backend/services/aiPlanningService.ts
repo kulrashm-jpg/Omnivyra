@@ -4,7 +4,7 @@
  * Uses campaignPromptBuilder for prompts; does not construct prompts directly.
  */
 
-import { generateCampaignPlan } from './aiGateway';
+import { generateCampaignPlan, type LlmPoolName } from './aiGateway';
 import { buildCampaignPlanningPrompt } from './campaignPromptBuilder';
 import type { PlanningGenerationInput } from '../types/campaignPlanning';
 
@@ -14,7 +14,15 @@ import type { PlanningGenerationInput } from '../types/campaignPlanning';
  * Prompts are built via buildCampaignPlanningPrompt.
  * Accepts only PlanningGenerationInput.
  */
-export async function generateCampaignPlanAI(input: PlanningGenerationInput): Promise<{ rawOutput: string }> {
+export async function generateCampaignPlanAI(
+  input: PlanningGenerationInput,
+  options: {
+    signal?: AbortSignal;
+    pool?: LlmPoolName;
+    stream?: boolean;
+    onChunk?: (delta: string, accumulated: string) => void;
+  } = {},
+): Promise<{ rawOutput: string }> {
   Object.freeze(input);
   const messages = await buildCampaignPlanningPrompt(input);
 
@@ -23,6 +31,10 @@ export async function generateCampaignPlanAI(input: PlanningGenerationInput): Pr
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     messages,
+    signal: options.signal,
+    pool: options.pool,
+    stream: options.stream,
+    onChunk: options.onChunk,
   });
   const raw = completion.output?.trim() || '';
   return { rawOutput: raw };

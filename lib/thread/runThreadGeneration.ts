@@ -4,6 +4,7 @@ import {
   type MasterContentPayload,
   type PlatformVariantPayload,
 } from '../../backend/services/contentGenerationPipeline';
+import { runTextGeneration } from '../../backend/services/content/textGenerationOrchestrator';
 import { getDefaultThreadTemplates } from './defaultThreadTemplates';
 import { getProfile } from '../../backend/services/companyProfileService';
 import {
@@ -70,6 +71,30 @@ export async function runThreadGeneration(
       : undefined,
   ].filter(Boolean).join('\n\n');
 
+  // Phase 1 unification — initial generation routed through the shared
+  // textGenerationOrchestrator. The company-context regen pass below
+  // still uses the underlying pipeline directly because it needs to pass
+  // a modified extra_instruction WITH the original item shape; that
+  // path is preserved as a behavior-equivalent retry surface until the
+  // orchestrator exposes a retry hook.
+  const initial = await runTextGeneration({
+    origin: 'thread-api',
+    companyId: input.company_id,
+    topic: input.topic,
+    contentType: 'thread',
+    targetPlatforms: [platform],
+    audience: input.target_audience,
+    objective: input.objective || input.intent,
+    tone: input.tone,
+    cta: input.cta,
+    templateName: input.template_name,
+    extraInstruction: extraInstruction || undefined,
+  });
+  let master_content: MasterContentPayload = initial.masterContent;
+  let platform_variant: PlatformVariantPayload = initial.platformVariant;
+
+  // Preserve the original `item` shape for the company-context regen
+  // path so its prompt structure is byte-identical to legacy behavior.
   const item = {
     execution_id: `thread-${Date.now()}`,
     company_id: input.company_id,
@@ -91,16 +116,6 @@ export async function runThreadGeneration(
     ],
     ...(extraInstruction ? { extra_instruction: extraInstruction } : {}),
   };
-
-  let master_content = await generateMasterContentFromIntent(item);
-  let [platform_variant] = await buildPlatformVariantsFromMaster({
-    ...item,
-    master_content,
-  });
-
-  if (!platform_variant) {
-    throw new Error(`Failed to generate thread variant for platform "${platform}"`);
-  }
 
   // D3: short-form company-context gate. Lightweight single regen on failure.
   if (companyEnforcement) {

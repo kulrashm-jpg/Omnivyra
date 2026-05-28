@@ -74,7 +74,7 @@ export function useDashboardState() {
   const [intelligenceView, setIntelligenceView] = useState<IntelligenceWorkspaceView>(() => {
     if (typeof window !== 'undefined') {
       const p = new URLSearchParams(window.location.search).get('intelTab');
-      if (p === 'market-pulse' || p === 'active-leads') return p;
+      if (p === 'market-pulse') return p;
       if (p === 'intelligence') return 'market-pulse';
     }
     return 'market-pulse';
@@ -999,6 +999,10 @@ export function useDashboardState() {
     getStageLabelWithDuration(stage, durationWeeks);
 
   const openIntelligenceTab = useCallback((view: IntelligenceWorkspaceView = 'market-pulse') => {
+    if (view === 'active-leads') {
+      void router.push('/command-center/engagement');
+      return;
+    }
     setIntelligenceView(view);
     const params = new URLSearchParams();
     if (selectedCompanyId) params.set('companyId', selectedCompanyId);

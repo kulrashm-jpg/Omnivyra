@@ -655,3 +655,44 @@ export async function detectCreatorAssetStaleState(input: {
   }).filter((item) => item.reason.length > 0);
   return { candidates, checkedAt: new Date().toISOString() };
 }
+
+/**
+ * Delete a creator_assets row PLUS any attachment-table rows that
+ * reference it. Scoped strictly to (assetId, companyId) so a caller
+ * can never delete a row outside their tenant. Returns the number of
+ * deleted rows in each table for the API response.
+ */
+export async function deleteCreatorAssetRecord(input: {
+  assetId: string;
+  companyId: string;
+}): Promise<{ deletedAsset: boolean; deletedAttachments: number }> {
+  const availability = await checkCreatorPersistenceAvailability();
+  if (!availability.available) {
+    throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
+  }
+
+  // Detach any creator_asset_attachments rows first — keeps writer
+  // attachment lists consistent if the asset was previously embedded.
+  let deletedAttachments = 0;
+  try {
+    const { data: attachRows } = await ownedDbTable('creator_asset_attachments')
+      .delete()
+      .eq('company_id', input.companyId)
+      .eq('creator_asset_id', input.assetId)
+      .select('id');
+    deletedAttachments = Array.isArray(attachRows) ? attachRows.length : 0;
+  } catch {
+    // Best-effort: attachment cleanup failure must not block asset delete.
+  }
+
+  const { data, error } = await ownedDbTable('creator_assets')
+    .delete()
+    .eq('id', input.assetId)
+    .eq('company_id', input.companyId)
+    .select('id');
+  if (error) throw new Error(`Failed to delete creator asset: ${error.message}`);
+  return {
+    deletedAsset: Array.isArray(data) && data.length > 0,
+    deletedAttachments,
+  };
+}

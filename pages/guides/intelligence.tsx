@@ -17,6 +17,11 @@ export default function GuideIntelligencePage() {
       generatePath="/guides/generate"
       formatOptions={GUIDE_FORMAT_OPTIONS}
       defaultFormat="comprehensive"
+      creationModePicker={{
+        enabled: true,
+        flavor: 'longform',
+        editorPath: '/guides/new',
+      }}
     />
   );
 }

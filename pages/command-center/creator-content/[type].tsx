@@ -52,8 +52,19 @@ type ChoiceOption = {
 };
 
 type WorkflowField =
-  | { id: string; label: string; placeholder: string; rows?: number; kind: 'text' | 'textarea' }
+  | { id: string; label: string; placeholder: string; rows?: number; kind: 'text' | 'textarea'; presets?: ReadonlyArray<string> }
   | { id: string; label: string; kind: 'single-select'; options: ChoiceOption[] };
+
+const DEFAULT_CTA_PRESETS: ReadonlyArray<string> = [
+  'Learn more',
+  'Book a demo',
+  'Sign up',
+  'Get started',
+  'Try it free',
+  'Subscribe',
+  'Contact us',
+  'Shop now',
+];
 
 type WorkflowConfig = {
   title: string;
@@ -178,7 +189,7 @@ const WORKFLOW_CONFIG: Record<CreatorTypeId, WorkflowConfig> = {
       },
       { id: 'audience', label: 'Who is this for?', placeholder: 'Audience segment', kind: 'text' },
       { id: 'keyMessage', label: 'What is the main message?', placeholder: 'Single message or takeaway', rows: 3, kind: 'textarea' },
-      { id: 'cta', label: 'What action should the viewer take?', placeholder: 'Desired CTA', kind: 'text' },
+      { id: 'cta', label: 'What action should the viewer take?', placeholder: 'Desired CTA', kind: 'text', presets: DEFAULT_CTA_PRESETS },
     ],
   },
   banner: {
@@ -769,6 +780,42 @@ const DEFAULT_BRAND_SELECTIONS: BrandContextSelections = {
   campaign: false,
 };
 
+type BrandAssetSize = 'small' | 'medium' | 'large';
+
+// Each step up is 80% bigger than the previous: small = 1.0x (current size on
+// the rendered asset), medium = 1.8x, large = ~3.24x. The numeric factor is
+// surfaced in the brief so the renderer can scale logo / favicon proportionally.
+const BRAND_ASSET_SIZE_PRESETS: ReadonlyArray<{ value: BrandAssetSize; label: string; scale: number }> = [
+  { value: 'small',  label: 'Small',  scale: 1.0  },
+  { value: 'medium', label: 'Medium', scale: 1.8  },
+  { value: 'large',  label: 'Large',  scale: 3.24 },
+];
+
+const DEFAULT_BRAND_ASSET_SIZE: BrandAssetSize = 'small';
+
+// "Small" is the current rendered baseline per asset class. Medium / large
+// derive from this base via the scale factor in BRAND_ASSET_SIZE_PRESETS.
+const BRAND_ASSET_BASE_PX: Readonly<Record<'logo' | 'favicon', number>> = {
+  logo:    96,
+  favicon: 32,
+};
+
+function normalizeBrandAssetSize(value: unknown): BrandAssetSize {
+  return BRAND_ASSET_SIZE_PRESETS.some((p) => p.value === value)
+    ? (value as BrandAssetSize)
+    : DEFAULT_BRAND_ASSET_SIZE;
+}
+
+function brandAssetSizePx(asset: 'logo' | 'favicon', size: BrandAssetSize): number {
+  const preset = BRAND_ASSET_SIZE_PRESETS.find((p) => p.value === size) ?? BRAND_ASSET_SIZE_PRESETS[0];
+  return Math.round(BRAND_ASSET_BASE_PX[asset] * preset.scale);
+}
+
+function describeBrandAssetSize(asset: 'logo' | 'favicon', size: BrandAssetSize): string {
+  const preset = BRAND_ASSET_SIZE_PRESETS.find((p) => p.value === size) ?? BRAND_ASSET_SIZE_PRESETS[0];
+  return `${preset.label.toLowerCase()} (~${brandAssetSizePx(asset, size)}px on the asset)`;
+}
+
 function buildDefaultAnswers(config: WorkflowConfig): Record<string, string> {
   const defaults: Record<string, string> = {
     subtype: config.subtypeOptions[0]?.value || '',
@@ -1087,11 +1134,17 @@ function buildBrandContextLines(input: {
   }
   if (input.selections.logo) {
     const logo = input.overrides.logoUrl || profile.logoUrl;
-    if (logo) lines.push(`Company logo reference: ${logo}`);
+    if (logo) {
+      const size = normalizeBrandAssetSize(input.overrides.logoSize);
+      lines.push(`Company logo reference: ${logo} (render size: ${describeBrandAssetSize('logo', size)}, aligned to the asset)`);
+    }
   }
   if (input.selections.favicon) {
     const favicon = input.overrides.faviconUrl || profile.faviconUrl;
-    if (favicon) lines.push(`Company favicon reference: ${favicon}`);
+    if (favicon) {
+      const size = normalizeBrandAssetSize(input.overrides.faviconSize);
+      lines.push(`Company favicon reference: ${favicon} (render size: ${describeBrandAssetSize('favicon', size)}, aligned to the asset)`);
+    }
   }
   if (input.selections.tagline) {
     const tagline = input.overrides.tagline || profile.tagline;
@@ -1134,6 +1187,9 @@ function buildSuggestionOptions(
     brandMode: CreatorBrandMode;
     brandPresence: BrandPresence;
     brandProfile: CreatorBrandProfile | null;
+    /** Resolved target platform when a writer source supplied one; null on
+     *  the direct creator route (no inherent platform — keep copy generic). */
+    targetPlatform: string | null;
   },
 ): SuggestionOption[] {
   const subtypeLabel = config.subtypeOptions.find((option) => option.value === answers.subtype)?.label || config.title;
@@ -1147,9 +1203,24 @@ function buildSuggestionOptions(
     'clear visual continuity';
   const audience = String(answers.audience || 'your target audience').trim();
   const message = String(answers.keyMessage || answers.headline || answers.topic || config.title).trim();
-  const platform = config.primaryPlatforms[0] === 'linkedin' ? 'LinkedIn' : humanizeValue(config.primaryPlatforms[0]);
-  const companySignal = context.brandMode === 'brand-aware'
-    ? `${context.brandProfile?.companyName ? `${context.brandProfile.companyName} ` : ''}${context.brandPresence} brand presence`
+  // Platform-aware copy ONLY when a real target platform is supplied (writer
+  // route). Direct creator route → platform-agnostic so the asset can be
+  // reused anywhere without LinkedIn (or any single platform) bias.
+  const platformLabel = context.targetPlatform
+    ? (context.targetPlatform.toLowerCase() === 'linkedin' ? 'LinkedIn' : humanizeValue(context.targetPlatform))
+    : null;
+  const platformPrefix = platformLabel ? `${platformLabel}-friendly ` : '';
+  const platformSuffix = platformLabel ? ` for ${platformLabel}` : ' across your distribution channels';
+  // Brand-aware → weave the company into every suggestion so all three
+  // directions align with the selected company context. Independent → keep
+  // copy generic.
+  const brandAware = context.brandMode === 'brand-aware';
+  const companyName = brandAware ? (context.brandProfile?.companyName || '').trim() : '';
+  const brandClause = companyName ? `for ${companyName} ` : '';
+  const companySignal = brandAware
+    ? (companyName
+        ? `${companyName}'s ${context.brandPresence} brand presence`
+        : `${context.brandPresence} brand presence`)
     : 'independent creative territory';
   const industrySignal = context.brandProfile?.industry ? `${context.brandProfile.industry} positioning` : 'category positioning';
   const assetSignal = answers.assetSubtype && answers.assetSubtype !== 'none'
@@ -1161,25 +1232,39 @@ function buildSuggestionOptions(
       ? 'retention, clarity, and trust'
       : 'reach, recall, and scroll-stopping clarity';
 
+  // Ensure every suggestion summary opens with a capital letter regardless
+  // of whether the leading token is a platform/brand label or a workflow
+  // word like "promotional".
+  const capFirst = (sentence: string): string =>
+    sentence.length === 0 ? sentence : sentence.charAt(0).toUpperCase() + sentence.slice(1);
+
   return [
     {
       id: 'safe-fit',
       label: 'Authority Direction',
-      summary: `${platform}-friendly ${subtypeLabel.toLowerCase()} ${config.title.toLowerCase()} for ${objective.toLowerCase()} that frames "${message}" through ${companySignal}, ${industrySignal}, and ${objectiveSignal}${assetSignal}.`,
+      summary: capFirst(
+        `${platformPrefix}${subtypeLabel.toLowerCase()} ${config.title.toLowerCase()} ${brandClause}for ${objective.toLowerCase()} that frames "${message}" through ${companySignal}, ${industrySignal}, and ${objectiveSignal}${assetSignal}.`,
+      ),
       rationale: `Use this when ${audience} needs a polished, credible direction with strong retention and low execution risk.`,
-      badges: ['Brand Safe', `${platform} Friendly`, 'Educational'],
+      badges: platformLabel
+        ? ['Brand Safe', `${platformLabel} Friendly`, 'Educational']
+        : ['Brand Safe', 'Multi-Platform', 'Educational'],
     },
     {
       id: 'standout',
       label: 'Standout Direction',
-      summary: `High-attention ${config.title.toLowerCase()} that leads with a sharper hook around "${message}", uses ${style.toLowerCase()} personality, and makes the first-screen payoff unmistakable for ${platform}.`,
+      summary: capFirst(
+        `high-attention ${config.title.toLowerCase()} ${brandClause}that leads with a sharper hook around "${message}", uses ${style.toLowerCase()} personality, and makes the first-screen payoff unmistakable${platformSuffix}.`,
+      ),
       rationale: `Best when the priority is stopping attention quickly without turning the output into generic hype.`,
       badges: ['High Attention', style.toLowerCase().includes('premium') ? 'Premium' : 'Bold', 'High CTR'],
     },
     {
       id: 'educator',
       label: 'Conversion Direction',
-      summary: `Structured ${config.title.toLowerCase()} that turns "${message}" into a clear sequence, keeps ${continuity.toLowerCase()}, and gives the CTA a specific next-step role instead of generic closing copy.`,
+      summary: capFirst(
+        `structured ${config.title.toLowerCase()} ${brandClause}that turns "${message}" into a clear sequence, keeps ${continuity.toLowerCase()}, and gives the CTA a specific next-step role instead of generic closing copy.`,
+      ),
       rationale: `Best when clarity, downstream reuse, and action are more important than novelty alone.`,
       badges: ['Conversion Focused', 'Educational', objective.toLowerCase().includes('conversion') ? 'High CTR' : 'Reusable'],
     },
@@ -1194,6 +1279,12 @@ export default function CreatorTypeWorkflowPage() {
 
   const [answers, setAnswers] = React.useState<Record<string, string>>({});
   const [isGenerating, setIsGenerating] = React.useState(false);
+  // Progress tracker state. `generationStage` advances through 4 stages
+  // while a generation is in flight; `showProgress` is gated behind a
+  // 2-second delay so quick runs (cache hits, small payloads) don't
+  // flash a tracker the operator never gets to read.
+  const [generationStage, setGenerationStage] = React.useState(0);
+  const [showProgress, setShowProgress] = React.useState(false);
   const [isSavingBlock, setIsSavingBlock] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -1217,6 +1308,12 @@ export default function CreatorTypeWorkflowPage() {
   const [standaloneAttachmentMode, setStandaloneAttachmentMode] = React.useState<AttachmentMode>('supporting_visual');
   const [recommendedAttachmentMode, setRecommendedAttachmentMode] = React.useState<AttachmentMode | null>(null);
   const [selectedPlatform, setSelectedPlatform] = React.useState('linkedin');
+  // Connected platforms that support the current creator content type
+  // (creator capability). null = still loading; [] = company has none
+  // connected. Routes through the canonical bolt/available-platforms API
+  // so capability filtering + token validity stay in sync with the
+  // rest of the app.
+  const [connectedPlatforms, setConnectedPlatforms] = React.useState<string[] | null>(null);
   const [overlayText, setOverlayText] = React.useState<WriterOverlayText>(EMPTY_OVERLAY_TEXT);
   const generationInFlightRef = React.useRef(false);
   const saveInFlightRef = React.useRef(false);
@@ -1243,6 +1340,16 @@ export default function CreatorTypeWorkflowPage() {
         const savedAt = typeof restored?.saved_at === 'string' ? Date.parse(restored.saved_at) : 0;
         const isStale = Boolean(savedAt && Date.now() - savedAt > CREATOR_DRAFT_MAX_AGE_MS);
         if (isStale) {
+          window.localStorage.removeItem(getCreatorDraftStorageKey(type));
+          restored = null;
+        }
+        // Direct-route isolation: if this load is NOT a writer prefill flow
+        // but the saved draft was hydrated from a prior writer session,
+        // discard the draft and start fresh. The direct creator route
+        // must never carry writer-imported content from a previous session.
+        const hasIncomingWriterPrefill =
+          router.query.source === 'writer' && typeof router.query.prefill === 'string';
+        if (!hasIncomingWriterPrefill && restored && typeof restored.writer_source_id === 'string' && restored.writer_source_id) {
           window.localStorage.removeItem(getCreatorDraftStorageKey(type));
           restored = null;
         }
@@ -1381,6 +1488,9 @@ export default function CreatorTypeWorkflowPage() {
           overlayText,
           standaloneAttachmentMode,
           recommendedAttachmentMode,
+          // Tag drafts hydrated from a writer session so the direct
+          // creator route can discard them on its next clean visit.
+          writer_source_id: writerSource ? writerSource.sourceId : null,
           saved_at: new Date().toISOString(),
         }));
       } catch {
@@ -1388,7 +1498,7 @@ export default function CreatorTypeWorkflowPage() {
       }
     }, 250);
     return () => window.clearTimeout(persistTimer);
-  }, [answers, brandMode, brandOverrides, brandPresence, brandSelections, overlayText, standaloneAttachmentMode, recommendedAttachmentMode, selectedAssetId, selectedPlatform, selectedSuggestionId, type]);
+  }, [answers, brandMode, brandOverrides, brandPresence, brandSelections, overlayText, standaloneAttachmentMode, recommendedAttachmentMode, selectedAssetId, selectedPlatform, selectedSuggestionId, type, writerSource]);
 
   React.useEffect(() => {
     if (!selectedCompanyId) {
@@ -1429,8 +1539,69 @@ export default function CreatorTypeWorkflowPage() {
     };
   }, [selectedCompanyId, selectedCompanyName]);
 
+  // Progress tracker driver — when isGenerating flips true, schedule
+  // (a) a 2-second timer that reveals the tracker (skips it on fast
+  // runs) and (b) staged advancement timers that mirror the renderer
+  // pipeline. When isGenerating flips back to false (success OR
+  // error), every timer is torn down and the stage resets so the
+  // next run starts fresh.
+  React.useEffect(() => {
+    if (!isGenerating) {
+      setShowProgress(false);
+      setGenerationStage(0);
+      return;
+    }
+    // Reset for a fresh run.
+    setGenerationStage(0);
+    setShowProgress(false);
+    // Timing tuned to the renderer pipeline:
+    //   stage 0 (Preparing brief)    : t=0     until t=1.2s
+    //   stage 1 (Generating with AI) : t=1.2s  until t=14s   (longest step)
+    //   stage 2 (Composing overlay)  : t=14s   until t=22s
+    //   stage 3 (Saving asset)       : t=22s   until done
+    // Generation usually completes during stage 2 or 3; if it stalls
+    // we hold on the final stage rather than lying that we are done.
+    const showTimer = window.setTimeout(() => setShowProgress(true), 2000);
+    const stageTimers = [
+      window.setTimeout(() => setGenerationStage(1), 1_200),
+      window.setTimeout(() => setGenerationStage(2), 14_000),
+      window.setTimeout(() => setGenerationStage(3), 22_000),
+    ];
+    return () => {
+      window.clearTimeout(showTimer);
+      stageTimers.forEach((t) => window.clearTimeout(t));
+    };
+  }, [isGenerating]);
+
+  // Fetch creator-capable connected platforms for the current company so
+  // the platform picker only surfaces platforms that (a) are actually
+  // connected and (b) support image / carousel / etc. content. Mirrors
+  // the BOLT picker's source-of-truth.
   React.useEffect(() => {
     if (!selectedCompanyId) {
+      setConnectedPlatforms([]);
+      return;
+    }
+    let cancelled = false;
+    setConnectedPlatforms(null);
+    fetch(
+      `/api/bolt/available-platforms?companyId=${encodeURIComponent(selectedCompanyId)}&mode=bolt-creator`,
+      { credentials: 'include' },
+    )
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        const supported = Array.isArray(data?.supported) ? data.supported as string[] : [];
+        setConnectedPlatforms(supported);
+      })
+      .catch(() => {
+        if (!cancelled) setConnectedPlatforms([]);
+      });
+    return () => { cancelled = true; };
+  }, [selectedCompanyId]);
+
+  React.useEffect(() => {
+    if (!selectedCompanyId || !type) {
       setSavedAssets([]);
       setSelectedAssetId(null);
       setIsLoadingAssets(false);
@@ -1438,17 +1609,40 @@ export default function CreatorTypeWorkflowPage() {
     }
     let cancelled = false;
     setIsLoadingAssets(true);
-    fetch(`/api/block-templates?company_id=${encodeURIComponent(selectedCompanyId)}&content_type=blog`, {
-      credentials: 'include',
-    })
-      .then((response) => response.json())
+    // Pull saved creator assets from the canonical creator_assets store,
+    // FILTERED to the current page's type. For 'image' we query
+    // 'supporting_image' which the API expands to ['supporting_image',
+    // 'image'] via its alias map. Previously this read from
+    // /api/block-templates?content_type=blog which polluted the blog
+    // templates UI — that path is gone.
+    const creatorTypeForRead = type === 'image' ? 'supporting_image' : type;
+    fetch(
+      `/api/creator-assets?company_id=${encodeURIComponent(selectedCompanyId)}&creator_type=${encodeURIComponent(creatorTypeForRead)}&limit=8`,
+      { credentials: 'include' },
+    )
+      .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         if (cancelled) return;
-        const templates = Array.isArray(data?.templates) ? data.templates : [];
-        const creatorAssets = templates
-          .filter((template: SavedCreatorAsset) => Array.isArray(template.tags) && template.tags.includes('creator-asset'))
-          .slice(0, 8);
-        setSavedAssets(creatorAssets);
+        const rows = Array.isArray(data?.assets) ? data.assets : [];
+        const mapped: SavedCreatorAsset[] = rows.map((row: Record<string, unknown>) => {
+          const meta = (row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata))
+            ? row.metadata as Record<string, unknown>
+            : {};
+          const continuity = (meta.creator_continuity && typeof meta.creator_continuity === 'object' && !Array.isArray(meta.creator_continuity))
+            ? meta.creator_continuity as SavedCreatorAsset['creator_metadata']
+            : undefined;
+          return {
+            id: String(row.id || ''),
+            name: String(row.title || 'Creator asset'),
+            description: typeof meta.description === 'string' ? meta.description as string : null,
+            format_type: typeof row.creatorType === 'string' ? row.creatorType as string : null,
+            tags: ['creator-asset', typeof row.creatorType === 'string' ? row.creatorType as string : ''].filter(Boolean),
+            usage_count: 0,
+            created_at: typeof row.createdAt === 'string' ? row.createdAt as string : undefined,
+            creator_metadata: continuity,
+          } as SavedCreatorAsset;
+        });
+        setSavedAssets(mapped);
       })
       .catch(() => {
         if (!cancelled) setSavedAssets([]);
@@ -1459,7 +1653,7 @@ export default function CreatorTypeWorkflowPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedCompanyId, savedBlock?.id]);
+  }, [selectedCompanyId, savedBlock?.id, type]);
 
   React.useEffect(() => {
     if (!selectedAssetId || isLoadingAssets || savedAssets.length === 0) return;
@@ -1483,8 +1677,17 @@ export default function CreatorTypeWorkflowPage() {
     [brandMode, brandOverrides, brandPresence, brandProfile, brandSelections],
   );
   const suggestionOptions = React.useMemo(
-    () => (config ? buildSuggestionOptions(config, answers, { brandMode, brandPresence, brandProfile }) : []),
-    [answers, brandMode, brandPresence, brandProfile, config],
+    () => (config
+      ? buildSuggestionOptions(config, answers, {
+          brandMode,
+          brandPresence,
+          brandProfile,
+          // Only carry a target platform when the session was hydrated from
+          // a writer source. Direct-route image creation stays platform-agnostic.
+          targetPlatform: writerSource?.platform ?? null,
+        })
+      : []),
+    [answers, brandMode, brandPresence, brandProfile, config, writerSource],
   );
 
   if (!authChecked || isLoading) {
@@ -1557,6 +1760,225 @@ export default function CreatorTypeWorkflowPage() {
     };
     setOverlayText((current) => ({ ...current, [id]: value.slice(0, limits[id]) }));
   };
+
+  // Derive overlay-field suggestion chips from the actual Writer post
+  // body (not generic templates or the topic/keyMessage descriptors).
+  // We sentence-split the imported text and rank candidates per field:
+  //   - hook       → shortest first sentence / strongest opener (≤76)
+  //   - headline   → short declarative claims (≤84)
+  //   - supporting → proof/benefit sentences (≤96)
+  //   - keyInsight → longest substantive claim (≤132)
+  // Intersection of the workflow's primary platforms and the company's
+  // connected creator-capable platforms. Empty array when the company
+  // has no creator-capable connections; null upstream means "loading".
+  const availablePlatforms = React.useMemo(() => {
+    if (!config) return [] as string[];
+    if (!connectedPlatforms) return [] as string[]; // loading → render nothing yet
+    const connectedSet = new Set(connectedPlatforms.map((p) => String(p).toLowerCase()));
+    return config.primaryPlatforms.filter((p) => connectedSet.has(p.toLowerCase()));
+  }, [config, connectedPlatforms]);
+
+  // If the currently-selected platform is no longer in the connected/
+  // capable set (e.g., the default 'linkedin' fired before the fetch
+  // resolved, and LinkedIn isn't connected), snap to the first
+  // available platform. Skip on the writer route — the writer source's
+  // platform is authoritative there.
+  React.useEffect(() => {
+    if (writerSource) return;
+    if (availablePlatforms.length === 0) return;
+    if (!availablePlatforms.includes(selectedPlatform)) {
+      setSelectedPlatform(availablePlatforms[0]);
+    }
+  }, [availablePlatforms, selectedPlatform, writerSource]);
+
+  // Each source sentence is allocated to AT MOST one field (priority
+  // order: hook → headline → supporting → keyInsight) so the four chip
+  // lists never repeat the same underlying sentence. Falls back to the
+  // title only when no body sentence fit a field.
+  const overlayFieldSuggestions = React.useMemo(() => {
+    const limits: Record<keyof WriterOverlayText, number> = {
+      hook: 76, headline: 84, keyInsight: 132, cta: 42, supportingText: 96,
+    };
+    const compact = (raw: string, max: number): string => {
+      const single = String(raw || '').replace(/\s+/g, ' ').trim();
+      if (!single) return '';
+      return single.length <= max ? single : `${single.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+    };
+    const normalize = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase();
+
+    // Sentence-split the Writer body. Mirrors the splitter used by the
+    // structured-prompt path so chips show the same content units the
+    // renderer will see. Skips URLs, emoji-only fragments, and very short
+    // particles.
+    const body = String(writerSource?.body || answers.keyMessage || '').trim();
+    const sentences = body
+      .replace(/https?:\/\/\S+/gi, '')
+      .split(/(?<=[.!?])\s+|\n+/u)
+      .map((s) => s.replace(/^[\-*\d.)\s\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]+/u, '').replace(/\s+/g, ' ').trim())
+      .filter((s) => s.length >= 18 && /[A-Za-z]/.test(s));
+
+    const title = String(writerSource?.title || answers.topic || '').trim();
+
+    // Proof-ish keyword bias for the Supporting Text field.
+    const PROOF_KEYWORDS = /\b(proof|trust|built|backed|teams|customers|data|result|outcome|measur|evidence|clarity|insight|because|reason)\b/i;
+
+    // Ranked candidate lists per field (best-first). Same source sentence
+    // can appear across multiple lists at this stage — the allocator
+    // below resolves conflicts so each sentence ends up in only one
+    // field's chip list.
+    const hookCandidates = sentences
+      .filter((s) => s.length <= 110)
+      .sort((a, b) => a.length - b.length);
+
+    const headlineCandidates = sentences
+      .filter((s) => s.length >= 24 && s.length <= 110)
+      .sort((a, b) => Math.abs(a.length - 60) - Math.abs(b.length - 60));
+
+    const supportingCandidates = sentences
+      .map((s) => ({ s, score: (PROOF_KEYWORDS.test(s) ? 1 : 0) + (s.length >= 40 && s.length <= 120 ? 1 : 0) }))
+      .sort((a, b) => b.score - a.score)
+      .map((entry) => entry.s);
+
+    const insightCandidates = sentences
+      .filter((s) => s.length >= 40)
+      .sort((a, b) => Math.min(b.length, 132) - Math.min(a.length, 132));
+
+    // Cross-field allocation — each source sentence is claimed by at
+    // most one field. Priority order (hook first) reflects how
+    // constrained each slot is: hooks need short punchy openers and are
+    // hardest to find, key insights are the most permissive.
+    const claimed = new Set<string>();
+    const allocate = (candidates: string[], limit: number, max: number): string[] => {
+      const out: string[] = [];
+      for (const sentence of candidates) {
+        const key = normalize(sentence);
+        if (!key || claimed.has(key)) continue;
+        const value = compact(sentence, max);
+        if (!value) continue;
+        claimed.add(key);
+        out.push(value);
+        if (out.length >= limit) break;
+      }
+      return out;
+    };
+
+    const hook        = allocate(hookCandidates,       3, limits.hook);
+    const headline    = allocate(headlineCandidates,   3, limits.headline);
+    const supporting  = allocate(supportingCandidates, 3, limits.supportingText);
+    const insight     = allocate(insightCandidates,    3, limits.keyInsight);
+
+    // Seed fallback — when there is no writer body to mine, whatever the
+    // operator has already typed (topic, key message, or the hook itself)
+    // seeds every still-empty overlay slot. Each slot gets a DISTINCT
+    // framing of the seed so no two chips render the same text. If a
+    // templated framing would overflow a field's cap, that field is
+    // left blank rather than falling back to a duplicate raw seed.
+    const seeds = [
+      title,
+      String(overlayText.hook || '').trim(),
+      String(answers.keyMessage || '').trim(),
+    ].filter(Boolean);
+    // Deduplicate seeds so the same source string never claims itself
+    // twice when topic + hook happen to be identical.
+    const seenSeeds = new Set<string>();
+    const dedupedSeeds = seeds.filter((s) => {
+      const k = normalize(s);
+      if (!k || seenSeeds.has(k)) return false;
+      seenSeeds.add(k);
+      return true;
+    });
+    const tryFill = (slot: string[], text: string, max: number): boolean => {
+      if (slot.length > 0) return false;
+      if (text.length > max) return false; // overflow → skip (no duplicate fallback)
+      const chipText = compact(text, max);
+      if (!chipText) return false;
+      // Block exact-text duplicates across fields — if any other field
+      // already shows the same chip, skip rather than duplicate.
+      const chipKey = normalize(chipText);
+      if (
+        hook.some((c) => normalize(c) === chipKey) ||
+        headline.some((c) => normalize(c) === chipKey) ||
+        supporting.some((c) => normalize(c) === chipKey) ||
+        insight.some((c) => normalize(c) === chipKey)
+      ) return false;
+      slot.push(chipText);
+      return true;
+    };
+    for (const seed of dedupedSeeds) {
+      const seedKey = normalize(seed);
+      if (!seedKey || claimed.has(seedKey)) continue;
+      const capitalized = seed.charAt(0).toUpperCase() + seed.slice(1);
+      let consumed = false;
+      // Each field gets a structurally DISTINCT framing so the opening
+      // words and sentence shape differ visibly — Hook stays as the raw
+      // seed (the attention grabber), Headline reads as a label-prefixed
+      // announcement, Supporting Text wraps the seed mid-sentence, Key
+      // Insight uses a positioning frame.
+      if (tryFill(hook,       capitalized,                          limits.hook))           consumed = true;
+      if (tryFill(headline,   `Introducing: ${capitalized}`,         limits.headline))       consumed = true;
+      if (tryFill(supporting, `Here's what ${capitalized} brings`,   limits.supportingText)) consumed = true;
+      if (tryFill(insight,    `Why ${capitalized} matters now`,      limits.keyInsight))     consumed = true;
+      if (consumed) claimed.add(seedKey);
+    }
+
+    return { hook, headline, supportingText: supporting, keyInsight: insight };
+  }, [writerSource?.body, writerSource?.title, answers.topic, answers.keyMessage, overlayText.hook]);
+
+  // Suggestions for the freeform "Who is this for?" (audience) and "What
+  // is the main message?" (keyMessage) form fields. Sourced from real
+  // context — writer source, brand profile, brand overrides, topic, hook,
+  // key insight — capped at 3 chips per field and deduplicated.
+  const freeformFieldSuggestions = React.useMemo(() => {
+    const MAX_CHIPS = 3;
+    const compact = (raw: string, max: number): string => {
+      const single = String(raw || '').replace(/\s+/g, ' ').trim();
+      if (!single) return '';
+      return single.length <= max ? single : `${single.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+    };
+    const capFirst = (s: string): string =>
+      s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1);
+    const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+    const pushUnique = (list: string[], value: string | undefined | null, max: number): void => {
+      const compacted = compact(capFirst(String(value || '')), max);
+      if (!compacted) return;
+      const key = norm(compacted);
+      if (list.some((existing) => norm(existing) === key)) return;
+      if (list.length >= MAX_CHIPS) return;
+      list.push(compacted);
+    };
+
+    // Audience candidates — priority: writer audience, brand override,
+    // brand profile audience. Stops at 3 unique chips.
+    const audience: string[] = [];
+    pushUnique(audience, writerSource?.audience, 80);
+    pushUnique(audience, brandOverrides.audience, 80);
+    pushUnique(audience, brandProfile?.audience, 80);
+
+    // Key-message candidates — priority order surfaces the most
+    // specific content first (writer first sentence > typed insight >
+    // typed hook > topic > writer title). Capped at 3 distinct chips.
+    const keyMessage: string[] = [];
+    const writerBody = String(writerSource?.body || '').trim();
+    const writerFirstSentence = writerBody
+      .split(/(?<=[.!?])\s+|\n+/u)[0]
+      ?.trim() || '';
+    pushUnique(keyMessage, writerFirstSentence, 200);
+    pushUnique(keyMessage, overlayText.keyInsight, 200);
+    pushUnique(keyMessage, overlayText.hook, 200);
+    pushUnique(keyMessage, answers.topic, 200);
+    pushUnique(keyMessage, writerSource?.title, 200);
+
+    return { audience, keyMessage };
+  }, [
+    writerSource?.audience,
+    writerSource?.body,
+    writerSource?.title,
+    brandOverrides.audience,
+    brandProfile?.audience,
+    answers.topic,
+    overlayText.hook,
+    overlayText.keyInsight,
+  ]);
 
   const handleUseExistingAsset = (asset: SavedCreatorAsset) => {
     if (isGenerating || actionInProgress) return;
@@ -2148,7 +2570,6 @@ export default function CreatorTypeWorkflowPage() {
     setNotice(null);
 
     try {
-      const baseContentBlocks = buildCreatorContentBlocks(String(answers.topic || config.title), result.output);
       const rendererMetadata = ((result.output.asset_payload?.media_bundle as any)?.metadata || {}) as Record<string, any>;
       const persistedRendererMetadata = {
         tenantId: rendererMetadata.tenantId || rendererMetadata.tenant_id || null,
@@ -2185,7 +2606,11 @@ export default function CreatorTypeWorkflowPage() {
               hook:           overlayText.hook,
               headline:       overlayText.headline,
               keyInsight:     overlayText.keyInsight,
-              cta:            overlayText.cta,
+              // CTA is no longer captured as a dedicated overlay input —
+              // the workflow's "What action should the viewer take?"
+              // (answers.cta) is the single source of truth. Preserve
+              // overlayText.cta if a legacy session restored a value.
+              cta:            overlayText.cta || String(answers.cta || '').trim(),
               supportingText: overlayText.supportingText,
             }
           : null,
@@ -2199,62 +2624,24 @@ export default function CreatorTypeWorkflowPage() {
         renderIdentityHash: persistedRendererMetadata.renderIdentityHash,
         renderer_metadata:  rendererMetadata,
       };
-      const continuityBlock = {
-        type: 'creator_continuity' as const,
-        data: { ...continuityMetadata, schema_version: 1 },
-      };
-      // Prepend the continuity block; downstream blog/post renderers skip
-      // unknown types via their existing filter, and the API strips the
-      // block out of content_blocks via `extractCreatorContinuity` before
-      // it reaches client renderers.
-      const contentBlocks = [continuityBlock, ...baseContentBlocks];
-      const response = await fetch('/api/block-templates', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: selectedCompanyId,
-          name: `${String(answers.topic || config.title).trim()} Asset`,
-          // Description is now prose-only. Renderer metadata used to be
-          // JSON.stringified here for restoration; that's been superseded by
-          // the structured `creator_continuity` block prepended to
-          // content_blocks. Old assets still restore correctly via the
-          // legacy fallback path in `handleUseExistingAsset`.
-          description: `Creator asset from ${config.title}. Stored for future long-form writer reuse.\n\n${serializeCreatorFlowContext(buildCurrentContext(result.primary_platform))}`,
-          content_type: 'blog',
-          format_type: result.output.asset_type,
-          content_blocks: contentBlocks,
-          tags: [
-            ...result.output.packaging.hashtags,
-            'creator-asset',
-            config.contentType,
-            `source:${type}`,
-            answers.audience ? `audience:${answers.audience}` : '',
-            answers.cta ? `cta:${answers.cta}` : '',
-            persistedRendererMetadata.rendererVersion ? `renderer:${persistedRendererMetadata.rendererVersion}` : '',
-            persistedRendererMetadata.logoSource ? `logo:${persistedRendererMetadata.logoSource}` : '',
-            persistedRendererMetadata.layoutVariantId ? `layout:${persistedRendererMetadata.layoutVariantId}` : '',
-            String(answers.assetSubtype || result.output.asset_type || '').trim(),
-          ].filter(Boolean),
-          is_public: false,
-        }),
-      });
-
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data?.error || 'Failed to save this creator output as a reusable block.');
-      }
-
-      const templateId = String(data?.template?.id || '').trim();
-      const templateName = String(data?.template?.name || `${String(answers.topic || config.title).trim()} Asset`).trim();
+      // SINGLE storage path: creator_assets table, categorized by
+      // creator_type. The block_templates POST that used to run here
+      // polluted the blog-templates UI with creator assets — that path
+      // is gone. The full continuity bundle now travels inside
+      // asset.metadata.creator_continuity so "Use Existing Asset"
+      // restore still has everything it needs without a parallel
+      // block_template row.
+      const assetTitle = `${String(answers.topic || config.title).trim()} Asset`;
+      const description = `Creator asset from ${config.title}. Stored for future long-form writer reuse.\n\n${serializeCreatorFlowContext(buildCurrentContext(result.primary_platform))}`;
       const mediaBundle = result.output.asset_payload?.media_bundle || {};
-      void fetch('/api/creator-assets', {
+      const creatorTypeForSave = writerAssetType ?? (type === 'image' ? 'supporting_image' : type);
+
+      const response = await fetch('/api/creator-assets', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: selectedCompanyId,
-          block_template_id: templateId || undefined,
           source_type: writerSource?.sourceType,
           source_id: writerSource?.sourceId,
           source_content: writerSource ? {
@@ -2266,8 +2653,8 @@ export default function CreatorTypeWorkflowPage() {
             hashtags: writerSource.hashtags,
           } : null,
           asset: {
-            creatorType: writerAssetType ?? (type === 'image' ? 'supporting_image' : type),
-            title: templateName,
+            creatorType: creatorTypeForSave,
+            title: assetTitle,
             url: typeof mediaBundle.url === 'string' ? mediaBundle.url : undefined,
             files: Array.isArray(mediaBundle.files) ? mediaBundle.files : undefined,
             previewKind: typeof rendererMetadata.preview_kind === 'string' ? rendererMetadata.preview_kind : undefined,
@@ -2276,81 +2663,97 @@ export default function CreatorTypeWorkflowPage() {
             metadata: {
               ...rendererMetadata,
               creatorContentAssetType: type,
-              savedBlockReference: templateId ? buildBlockReference(templateId) : null,
-              blockTemplateId: templateId || null,
+              description,
+              creator_continuity: { ...continuityMetadata, schema_version: 1 },
+              tags: [
+                ...result.output.packaging.hashtags,
+                'creator-asset',
+                config.contentType,
+                `source:${type}`,
+                answers.audience ? `audience:${answers.audience}` : '',
+                answers.cta ? `cta:${answers.cta}` : '',
+                persistedRendererMetadata.rendererVersion ? `renderer:${persistedRendererMetadata.rendererVersion}` : '',
+                persistedRendererMetadata.logoSource ? `logo:${persistedRendererMetadata.logoSource}` : '',
+                persistedRendererMetadata.layoutVariantId ? `layout:${persistedRendererMetadata.layoutVariantId}` : '',
+                String(answers.assetSubtype || result.output.asset_type || '').trim(),
+              ].filter(Boolean),
             },
           },
         }),
-      }).catch(() => undefined);
-      const nextSavedBlock = templateId
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to save this creator output as a reusable asset.');
+      }
+
+      const assetId = String(data?.asset?.id || '').trim();
+      const nextSavedBlock = assetId
         ? {
-            id: templateId,
-            reference: buildBlockReference(templateId),
-            name: templateName,
+            id: assetId,
+            reference: buildBlockReference(assetId),
+            name: assetTitle,
           }
         : null;
 
       setSavedBlock(nextSavedBlock);
       setNotice(
         nextSavedBlock
-          ? `Saved as creator asset ${nextSavedBlock.reference}. Writer Content can pull this asset later in long-form content.`
-          : 'Saved as a reusable creator asset. You can pull it into long-form content later.',
+          ? `Saved to your ${config.title.toLowerCase()} asset library. Long-form content can pull this from the asset picker.`
+          : 'Saved as a reusable creator asset. Long-form content can pull it from the asset picker.',
       );
       if (nextSavedBlock) {
         setSelectedAssetId(nextSavedBlock.id);
       }
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to save this creator output as a reusable block.');
+      setError(saveError instanceof Error ? saveError.message : 'Failed to save this creator output as a reusable asset.');
     } finally {
       setIsSavingBlock(false);
       saveInFlightRef.current = false;
     }
   };
 
-  const handleDownloadBrief = () => {
+  const handleDownloadBrief = async () => {
     if (actionInProgress || !hasUsableCreatorOutput(result) || typeof window === 'undefined') {
       if (!hasUsableCreatorOutput(result)) setError('Generate a usable creator output before downloading it.');
       return;
     }
     setActionInProgress('download');
     try {
+      // Download the rendered image asset itself (PNG / JPG) — NOT a
+      // markdown brief. Earlier this handler emitted a `.md` summary of
+      // the creator output which was the wrong artifact for an image-
+      // focused workflow. We fetch the primary media URL, infer the
+      // extension from the URL path, and stream it through a Blob anchor
+      // so cross-origin Supabase storage URLs download cleanly.
+      const imageUrl = mediaUrls[0];
+      if (!imageUrl) {
+        setError('No image available to download yet.');
+        return;
+      }
       const title = String(answers.topic || config.title || 'creator-asset').trim();
-      const assetLines = [
-        `# ${title}`,
-        '',
-        `Type: ${config.title}`,
-        `Asset: ${result.output.asset_type}`,
-        answers.assetSubtype ? `Supporting asset: ${humanizeValue(answers.assetSubtype)}` : '',
-        result.primary_platform ? `Primary platform: ${result.primary_platform}` : '',
-        '',
-        '## Context',
-        serializeCreatorFlowContext(buildCurrentContext(result.primary_platform)),
-        '',
-        '## Caption',
-        result.output.packaging.caption || '',
-        '',
-        '## CTA',
-        result.output.packaging.cta || '',
-        '',
-        '## Summary',
-        result.output.packaging.meta_description || '',
-        '',
-        '## Hashtags',
-        result.output.packaging.hashtags.map((tag) => (tag.startsWith('#') ? tag : `#${tag}`)).join(' '),
-        '',
-        '## Media',
-        ...summarizeMediaUrls(result),
-      ].filter((line) => line !== undefined).join('\n');
-      const blob = new Blob([assetLines], { type: 'text/markdown;charset=utf-8' });
-      const url = window.URL.createObjectURL(blob);
+      const safeTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'creator-asset';
+      let ext = 'png';
+      try {
+        const parsed = new URL(imageUrl, window.location.href);
+        const extMatch = parsed.pathname.match(/\.(png|jpe?g|webp|gif|svg)$/i);
+        if (extMatch) ext = extMatch[1].toLowerCase() === 'jpeg' ? 'jpg' : extMatch[1].toLowerCase();
+      } catch {
+        // keep png fallback
+      }
+      const filename = `${safeTitle}.${ext}`;
+      const response = await fetch(imageUrl, { credentials: 'omit' });
+      if (!response.ok) throw new Error(`fetch failed (${response.status})`);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url;
-      link.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'creator-asset'}-brief.md`;
+      link.href = blobUrl;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       link.remove();
-      window.URL.revokeObjectURL(url);
-      setNotice('Downloaded this creator brief.');
+      window.URL.revokeObjectURL(blobUrl);
+      setNotice(`Downloaded ${filename}.`);
     } catch {
       setError('Could not prepare the download. Please try again.');
     } finally {
@@ -2593,25 +2996,55 @@ export default function CreatorTypeWorkflowPage() {
                             { id: 'brandColors' as const, label: 'Brand Colors', field: 'brandColors', placeholder: '#0B5ED7, #111827...' },
                             { id: 'audience' as const, label: 'Audience', field: 'audience', placeholder: 'Target audience context' },
                             { id: 'campaign' as const, label: 'Campaign Association', field: 'campaign', placeholder: 'Campaign, launch, or initiative' },
-                          ].map((item) => (
-                            <div key={item.id} className="rounded-xl border border-gray-200 bg-white px-3 py-3">
-                              <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500">
+                          ].map((item) => {
+                            const isSizable = item.id === 'logo' || item.id === 'favicon';
+                            const sizeFieldKey = isSizable ? `${item.id}Size` : '';
+                            const currentSize = isSizable ? normalizeBrandAssetSize(brandOverrides[sizeFieldKey]) : null;
+                            return (
+                              <div key={item.id} className="rounded-xl border border-gray-200 bg-white px-3 py-3">
+                                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-gray-500">
+                                  <input
+                                    type="checkbox"
+                                    checked={brandSelections[item.id]}
+                                    onChange={(event) => setBrandSelection(item.id, event.target.checked)}
+                                    className="h-4 w-4 rounded border-gray-300 text-slate-900"
+                                  />
+                                  {item.label}
+                                </label>
                                 <input
-                                  type="checkbox"
-                                  checked={brandSelections[item.id]}
-                                  onChange={(event) => setBrandSelection(item.id, event.target.checked)}
-                                  className="h-4 w-4 rounded border-gray-300 text-slate-900"
+                                  value={brandOverrides[item.field] || ''}
+                                  onChange={(event) => setBrandOverride(item.field, event.target.value)}
+                                  placeholder={item.placeholder}
+                                  className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
                                 />
-                                {item.label}
-                              </label>
-                              <input
-                                value={brandOverrides[item.field] || ''}
-                                onChange={(event) => setBrandOverride(item.field, event.target.value)}
-                                placeholder={item.placeholder}
-                                className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
-                              />
-                            </div>
-                          ))}
+                                {isSizable && brandSelections[item.id] ? (
+                                  <div className="mt-2">
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-400">
+                                      Size on asset
+                                    </p>
+                                    <div className="mt-1 flex flex-wrap gap-3">
+                                      {BRAND_ASSET_SIZE_PRESETS.map((preset) => (
+                                        <label
+                                          key={preset.value}
+                                          className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700"
+                                        >
+                                          <input
+                                            type="radio"
+                                            name={`${item.id}-size`}
+                                            value={preset.value}
+                                            checked={currentSize === preset.value}
+                                            onChange={() => setBrandOverride(sizeFieldKey, preset.value)}
+                                            className="h-3.5 w-3.5 border-gray-300 text-slate-900"
+                                          />
+                                          {preset.label} ({brandAssetSizePx(item.id, preset.value)}px)
+                                        </label>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -2790,9 +3223,15 @@ export default function CreatorTypeWorkflowPage() {
                       <p className="mb-2 text-xs leading-5 text-emerald-800">
                         Imported Writer platform is preserved for this creative. Open a new Add Asset flow to target another platform.
                       </p>
+                    ) : connectedPlatforms === null ? (
+                      <p className="mb-2 text-xs leading-5 text-emerald-700">Loading connected platforms…</p>
+                    ) : availablePlatforms.length === 0 ? (
+                      <p className="mb-2 text-xs leading-5 text-amber-700">
+                        No connected platforms support this content type yet. Connect a platform from Settings to enable publishing for this creative.
+                      </p>
                     ) : null}
                     <div className="flex flex-wrap gap-2">
-                      {(writerSource ? [selectedPlatform] : config.primaryPlatforms).filter(Boolean).map((platform) => (
+                      {(writerSource ? [selectedPlatform] : availablePlatforms).filter(Boolean).map((platform) => (
                         <button
                           key={platform}
                           type="button"
@@ -2814,25 +3253,42 @@ export default function CreatorTypeWorkflowPage() {
                     {[
                       { id: 'hook' as const, label: 'Hook', placeholder: 'Short attention hook', max: 76 },
                       { id: 'headline' as const, label: 'Headline', placeholder: 'Main creative headline', max: 84 },
-                      { id: 'cta' as const, label: 'CTA', placeholder: 'Book a demo, Learn more...', max: 42 },
                       { id: 'supportingText' as const, label: 'Supporting Text', placeholder: 'One short proof, context, or benefit line', max: 96 },
-                    ].map((field) => (
-                      <label key={field.id} className="block">
-                        <span className="mb-1 flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">
-                          <span>{field.label}</span>
-                          <span className="font-medium normal-case tracking-normal text-emerald-600">
-                            {(overlayText[field.id] || '').length}/{field.max}
+                    ].map((field) => {
+                      const suggestions = overlayFieldSuggestions[field.id] || [];
+                      return (
+                        <label key={field.id} className="block">
+                          <span className="mb-1 flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">
+                            <span>{field.label}</span>
+                            <span className="font-medium normal-case tracking-normal text-emerald-600">
+                              {(overlayText[field.id] || '').length}/{field.max}
+                            </span>
                           </span>
-                        </span>
-                        <input
-                          value={overlayText[field.id] || ''}
-                          onChange={(event) => setOverlayField(field.id, event.target.value)}
-                          placeholder={field.placeholder}
-                          maxLength={field.max}
-                          className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
-                        />
-                      </label>
-                    ))}
+                          <input
+                            value={overlayText[field.id] || ''}
+                            onChange={(event) => setOverlayField(field.id, event.target.value)}
+                            placeholder={field.placeholder}
+                            maxLength={field.max}
+                            className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
+                          />
+                          {suggestions.length > 0 ? (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {suggestions.map((suggestion) => (
+                                <button
+                                  key={suggestion}
+                                  type="button"
+                                  onClick={() => setOverlayField(field.id, suggestion)}
+                                  className="rounded-full border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-medium text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-50"
+                                  title={`Use: ${suggestion}`}
+                                >
+                                  {suggestion.length > 36 ? `${suggestion.slice(0, 35).trimEnd()}…` : suggestion}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </label>
+                      );
+                    })}
                     <label className="block md:col-span-2">
                       <span className="mb-1 flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">
                         <span>Key Insight</span>
@@ -2848,15 +3304,35 @@ export default function CreatorTypeWorkflowPage() {
                         maxLength={132}
                         className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
                       />
+                      {(overlayFieldSuggestions.keyInsight || []).length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {overlayFieldSuggestions.keyInsight.map((suggestion) => (
+                            <button
+                              key={suggestion}
+                              type="button"
+                              onClick={() => setOverlayField('keyInsight', suggestion)}
+                              className="rounded-full border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-medium text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-50"
+                              title={`Use: ${suggestion}`}
+                            >
+                              {suggestion.length > 56 ? `${suggestion.slice(0, 55).trimEnd()}…` : suggestion}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                     </label>
                   </div>
                   <p className="mt-3 text-xs leading-5 text-emerald-800">
-                    Platform choice controls density, CTA weight, and brand treatment. X, Threads, and Reddit use lighter overlays; Instagram and Facebook use stronger CTA presence.
+                    The CTA you set in "What action should the viewer take?" below is reused on the creative — set it once and we'll render it on the asset. Platform choice still controls density, CTA weight, and brand treatment.
                   </p>
                 </div>
               ) : null}
 
-              {config.fields.map((field) => (
+              {config.fields.map((field) => {
+                const freeformChips: string[] =
+                  field.id === 'audience' ? freeformFieldSuggestions.audience
+                  : field.id === 'keyMessage' ? freeformFieldSuggestions.keyMessage
+                  : [];
+                return (
                 <div key={field.id} className="block">
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">{field.label}</span>
                   {field.kind === 'single-select' ? (
@@ -2891,15 +3367,54 @@ export default function CreatorTypeWorkflowPage() {
                       className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
                     />
                   ) : (
-                    <input
-                      value={answers[field.id] || ''}
-                      onChange={(event) => setAnswer(field.id, event.target.value)}
-                      placeholder={field.placeholder}
-                      className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-                    />
+                    <div className="space-y-2">
+                      {Array.isArray(field.presets) && field.presets.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {field.presets.map((preset) => {
+                            const selected = (answers[field.id] || '').trim().toLowerCase() === preset.toLowerCase();
+                            return (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => setAnswer(field.id, preset)}
+                                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                                  selected
+                                    ? 'border-sky-500 bg-sky-50 text-sky-800'
+                                    : 'border-gray-200 bg-white text-gray-600 hover:border-slate-300'
+                                }`}
+                              >
+                                {preset}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      <input
+                        value={answers[field.id] || ''}
+                        onChange={(event) => setAnswer(field.id, event.target.value)}
+                        placeholder={field.placeholder}
+                        className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                      />
+                    </div>
                   )}
+                  {freeformChips.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {freeformChips.map((chip) => (
+                        <button
+                          key={chip}
+                          type="button"
+                          onClick={() => setAnswer(field.id, chip)}
+                          className="rounded-full border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-medium text-emerald-800 transition hover:border-emerald-400 hover:bg-emerald-50"
+                          title={`Use: ${chip}`}
+                        >
+                          {chip.length > 56 ? `${chip.slice(0, 55).trimEnd()}…` : chip}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="mt-6 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-4">
@@ -2931,6 +3446,55 @@ export default function CreatorTypeWorkflowPage() {
                 {isGenerating ? 'Generating...' : `Generate ${config.title}`}
               </button>
             </div>
+
+            {isGenerating && showProgress ? (
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-500" aria-hidden="true" />
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-700">Working on your {config.title.toLowerCase()}</p>
+                </div>
+                <ol className="space-y-2">
+                  {[
+                    'Preparing your brief',
+                    'Generating image with AI',
+                    'Composing overlay text',
+                    'Saving the asset',
+                  ].map((label, idx) => {
+                    const status: 'done' | 'active' | 'pending' =
+                      idx < generationStage ? 'done' : idx === generationStage ? 'active' : 'pending';
+                    return (
+                      <li key={label} className="flex items-start gap-3 text-sm">
+                        <span
+                          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${
+                            status === 'done'
+                              ? 'border-emerald-500 bg-emerald-500 text-white'
+                              : status === 'active'
+                                ? 'border-slate-900 bg-slate-900 text-white'
+                                : 'border-slate-200 bg-white text-slate-400'
+                          }`}
+                          aria-hidden="true"
+                        >
+                          {status === 'done' ? '✓' : idx + 1}
+                        </span>
+                        <span
+                          className={
+                            status === 'pending' ? 'text-slate-400'
+                              : status === 'active' ? 'font-semibold text-slate-900'
+                                : 'text-slate-700'
+                          }
+                        >
+                          {label}
+                          {status === 'active' ? <span className="ml-2 inline-block animate-pulse text-slate-500">…</span> : null}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ol>
+                <p className="mt-3 text-[11px] text-slate-500">
+                  Heavy renders can take 15–25 seconds. You can leave this page open — we keep working in the background.
+                </p>
+              </div>
+            ) : null}
           </div>
 
           <div className="space-y-6">
@@ -3187,24 +3751,37 @@ export default function CreatorTypeWorkflowPage() {
                           href={mediaUrls[0]}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-xs font-semibold text-blue-700 hover:text-blue-900"
+                          className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
                         >
-                          Open full size
+                          <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M15 3h6v6" />
+                            <path d="M10 14 21 3" />
+                            <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+                          </svg>
+                          View full size
                         </a>
                       </div>
                       <div className="grid gap-3">
                         {mediaUrls.map((url, index) => (
-                          <div key={url} className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
-                            <img
-                              src={url}
-                              alt={`${config.title} preview ${index + 1}`}
-                              style={{ aspectRatio: previewAspectRatio }}
-                              className="w-full bg-gray-100 object-contain"
-                              loading="lazy"
-                              onError={() => setError('Preview could not load. The generated media URL is still available in the output actions.')}
-                            />
-                            <div className="border-t border-gray-100 px-4 py-3">
-                              <a href={url} target="_blank" rel="noreferrer" className="break-all text-xs font-medium text-blue-700 hover:text-blue-900">
+                          <div key={url} className="max-w-xs overflow-hidden rounded-2xl border border-gray-200 bg-white">
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="Open full size"
+                              className="block"
+                            >
+                              <img
+                                src={url}
+                                alt={`${config.title} preview ${index + 1}`}
+                                style={{ aspectRatio: previewAspectRatio }}
+                                className="w-full bg-gray-100 object-contain"
+                                loading="lazy"
+                                onError={() => setError('Preview could not load. The generated media URL is still available in the output actions.')}
+                              />
+                            </a>
+                            <div className="border-t border-gray-100 px-3 py-2">
+                              <a href={url} target="_blank" rel="noreferrer" className="break-all text-[11px] font-medium text-blue-700 hover:text-blue-900">
                                 {url}
                               </a>
                             </div>
@@ -3335,83 +3912,98 @@ export default function CreatorTypeWorkflowPage() {
                     </button>
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={handleSaveAsBlock}
-                      disabled={isSavingBlock || Boolean(actionInProgress)}
-                      className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {isSavingBlock ? 'Saving Asset...' : 'Save As Asset'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveAsBlog}
-                      disabled={Boolean(actionInProgress)}
-                      className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {actionInProgress === 'blog' ? 'Opening Blog...' : 'Save As Blog'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleLaunchCampaign}
-                      disabled={Boolean(actionInProgress)}
-                      className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {actionInProgress === 'campaign' ? 'Opening Campaign...' : 'Use In Campaign'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleOpenScheduler}
-                      disabled={Boolean(actionInProgress)}
-                      className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {actionInProgress === 'post' ? 'Opening Post...' : 'Use As Post'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => repurposePaths[0] && handleRepurpose(repurposePaths[0])}
-                      disabled={repurposePaths.length === 0 || Boolean(actionInProgress)}
-                      className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {actionInProgress?.startsWith('repurpose') ? 'Repurposing...' : 'Repurpose'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleDownloadBrief}
-                      disabled={Boolean(actionInProgress)}
-                      className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {actionInProgress === 'download' ? 'Preparing...' : 'Download'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleDuplicateOutput}
-                      disabled={Boolean(actionInProgress)}
-                      className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60 sm:col-span-2"
-                    >
-                      {actionInProgress === 'duplicate' ? 'Duplicating...' : 'Duplicate'}
-                    </button>
-                  </div>
-
-                  {repurposePaths.length > 0 && (
-                    <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">Repurpose Paths</p>
-                      <div className="mt-3 grid gap-2">
-                        {repurposePaths.map((path) => (
-                          <button
-                            key={path.id}
-                            type="button"
-                            onClick={() => handleRepurpose(path)}
-                            disabled={Boolean(actionInProgress)}
-                            className="rounded-xl border border-gray-200 bg-white px-3 py-3 text-left text-sm transition hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            <span className="font-semibold text-gray-900">{path.label}</span>
-                            <span className="mt-1 block text-xs text-gray-500">{path.description}</span>
-                          </button>
-                        ))}
+                  {/*
+                    Context-aware action surface (Phase 1–6).
+                    Embedded writer flow: the asset is already attached
+                    to the writer post/thread automatically when
+                    generation succeeds (see appendWriterAttachedAssetDurable
+                    above). This block exposes only the actions that make
+                    semantic sense INSIDE the writer flow:
+                      PRIMARY    → Return to Writer
+                      SECONDARY  → Save As Asset · Download · Regenerate
+                    Standalone-only / campaign / repurpose / duplicate
+                    CTAs are deliberately hidden — they belong to the
+                    standalone creator studio surface.
+                  */}
+                  {writerSource ? (
+                    <div className="space-y-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try { router.back(); } catch { /* router.back may throw if no history */ }
+                        }}
+                        disabled={Boolean(actionInProgress)}
+                        className="w-full rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {`Return to ${writerSource.sourceType === 'thread' ? 'Thread' : 'Post'}`}
+                      </button>
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <button
+                          type="button"
+                          onClick={handleSaveAsBlock}
+                          disabled={isSavingBlock || Boolean(actionInProgress)}
+                          className="rounded-2xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isSavingBlock ? 'Saving...' : 'Save As Asset'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDownloadBrief}
+                          disabled={Boolean(actionInProgress)}
+                          className="rounded-2xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {actionInProgress === 'download' ? 'Preparing...' : 'Download'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleGenerate}
+                          disabled={isGenerating || Boolean(actionInProgress)}
+                          className="rounded-2xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isGenerating ? 'Regenerating...' : 'Regenerate'}
+                        </button>
                       </div>
+                      <p className="text-[11px] text-gray-500">
+                        Asset is auto-attached to your {writerSource.sourceType === 'thread' ? 'thread' : 'post'}. Return to keep editing — or refine above and regenerate before going back.
+                      </p>
                     </div>
+                  ) : (
+                    <>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          onClick={handleSaveAsBlock}
+                          disabled={isSavingBlock || Boolean(actionInProgress)}
+                          className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isSavingBlock ? 'Saving Asset...' : 'Save As Asset'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleLaunchCampaign}
+                          disabled={Boolean(actionInProgress)}
+                          className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {actionInProgress === 'campaign' ? 'Opening Campaign...' : 'Use In Campaign'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDownloadBrief}
+                          disabled={Boolean(actionInProgress)}
+                          className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {actionInProgress === 'download' ? 'Preparing...' : 'Download'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDuplicateOutput}
+                          disabled={Boolean(actionInProgress)}
+                          className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {actionInProgress === 'duplicate' ? 'Duplicating...' : 'Duplicate'}
+                        </button>
+                      </div>
+                    </>
                   )}
                 </div>
               )}

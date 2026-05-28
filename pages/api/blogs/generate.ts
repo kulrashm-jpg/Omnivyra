@@ -119,6 +119,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         template_name:    typeof template_name === 'string' ? template_name : undefined,
         cache_version:    typeof cache_version === 'string' ? cache_version : undefined,
         companyContext: builtContext?.companyContext,
+        // Phase 2.5 — Canonical identity extraction. Pass the typed profile
+        // through so `runBlogGeneration` builds CompanyIdentity via
+        // `extractCompanyIdentity(profile)` instead of the lossy
+        // CompanyContext-only fallback that used to drop entityArchetype,
+        // competitorIntelligence, and userGuidance.
+        companyProfile: builtContext?.companyProfile as BlogGenerationRequest['companyProfile'],
       };
 
       const result = await runUnifiedLongFormGeneration({

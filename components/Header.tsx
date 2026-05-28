@@ -4,7 +4,7 @@ import { useRouter } from 'next/router';
 import {
   Menu, X, ChevronDown, BarChart3, FileText, Megaphone, MessageSquare,
   Settings, LogOut, Users, CreditCard, Zap, Link2, HelpCircle,
-  Sun, Moon, LifeBuoy, BookOpen, Home, Shield,
+  Sun, Moon, LifeBuoy, BookOpen, Home, Shield, Activity,
 } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
@@ -62,7 +62,7 @@ const NAV_ITEMS = [
     children: [
       { label: 'Engagement Center', href: '/command-center/engagement' },
       { label: 'Market Pulse',      href: '/dashboard/intelligence?intelTab=market-pulse' },
-      { label: 'Active Leads',      href: '/dashboard/intelligence?intelTab=active-leads' },
+      { label: 'Active Leads',      href: '/command-center/engagement' },
       { label: 'Intelligence',      href: '/intelligence' },
     ],
   },
@@ -180,6 +180,7 @@ function UserMenu({
   displayName,
   roleLabel,
   isCompanyAdmin,
+  isSuperAdminUser,
   isDark,
   onToggleDark,
   onLogout,
@@ -188,6 +189,7 @@ function UserMenu({
   displayName: string;
   roleLabel: string | null;
   isCompanyAdmin: boolean;
+  isSuperAdminUser: boolean;
   isDark: boolean;
   onToggleDark: () => void;
   onLogout: () => void;
@@ -283,6 +285,9 @@ function UserMenu({
             )}
             {/* Security settings are per-user, not per-company-role; visible to every authenticated user. */}
             <Item icon={Shield}     label="Security"           href={SETTINGS_ROUTE_SECURITY} />
+            {isSuperAdminUser && (
+              <Item icon={Activity} label="Integration Health" href="/super-admin/oauth-health" />
+            )}
           </Section>
 
           <Section>
@@ -412,6 +417,9 @@ const Header: React.FC = () => {
     normalizedRole === 'COMPANY_ADMIN' ||
     normalizedRole === 'SUPER_ADMIN' ||
     normalizedRole === 'ADMIN';
+  // Platform-operator-only routes (oauth-health, system-health) gated by a
+  // strict SUPER_ADMIN check rather than the loosened isCompanyAdmin gate.
+  const isSuperAdminUser = normalizedRole === 'SUPER_ADMIN';
 
   // Determine which top-level nav is active based on current route
   const activeNav = NAV_ITEMS.findIndex((item) =>
@@ -478,6 +486,7 @@ const Header: React.FC = () => {
                 displayName={displayName}
                 roleLabel={roleLabel}
                 isCompanyAdmin={isCompanyAdmin}
+                isSuperAdminUser={isSuperAdminUser}
                 isDark={isDark}
                 onToggleDark={toggleDark}
                 onLogout={handleLogout}

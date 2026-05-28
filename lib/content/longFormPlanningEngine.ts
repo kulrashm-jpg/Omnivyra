@@ -41,6 +41,43 @@ import {
   type PerformanceInsights,
 } from './longFormPerformanceLearning';
 import { getLongFormTemplateSpec, type LongFormTemplateSpec } from './longFormTemplateSpecs';
+// Phase 3.3 + 3.7 — Semantic repetition detection + planned-engine stability telemetry.
+import { detectSemanticRepetition } from '../../backend/services/longForm/semanticRepetitionDetector';
+import {
+  emitPlannedEngineSuccess,
+  emitPlannedEngineFailure,
+  recordPlannedEngineAttempt,
+  recordPlannedEngineSuccess as recordSuccessBucket,
+  recordPlannedEngineFailure as recordFailureBucket,
+} from '../../backend/services/longForm/plannedEngineStabilityTelemetry';
+// Phase 4.1 — Adaptive recovery budget (replaces `repairedSections.length >= 3`).
+import {
+  computeAdaptiveRecoveryBudget,
+  type AdaptiveRecoveryBudget,
+  type IssueCategory,
+  type IssueSeverity,
+} from '../../backend/services/longForm/adaptiveRecoveryBudget';
+// Phase 6.2 — Adaptive section sizing applied at plan emission time.
+import {
+  computeAdaptiveSectionSize,
+  estimateTopicComplexity,
+  estimateNarrativeDensity,
+} from '../../backend/services/longForm/adaptiveSectionSizing';
+// Phase 6.3 — Planner stability validation BEFORE generation begins.
+import {
+  validatePlannerStability,
+  type PlannerStabilityResult,
+} from '../../backend/services/longForm/plannerStabilityValidator';
+// Phase 8.1 — Content-type stabilizer applied at planning.
+import {
+  getContentTypeStabilizer,
+  applyPlanningStabilizer,
+} from '../../backend/services/longForm/contentTypeStabilizers';
+// Phase 9.1 — Self-healing actions consumed at planning.
+import {
+  hasActiveAction as hasActiveHealingAction,
+  getActiveHealingActionsForContentType,
+} from '../../backend/services/longForm/selfHealingCoordinator';
 
 export type PlannedSectionContentType =
   | 'explanation'
@@ -65,6 +102,20 @@ export interface ContentPlanSection {
   requires_opinionated_insight?: boolean;
   framework_role?: 'introduce' | 'apply' | 'none';
   target_entities?: string[];
+  /**
+   * Phase 6.2 — Per-section generation profile emitted by the adaptive
+   * sizing pass. Downstream consumers (section generator, execution
+   * strategy, planner stability validator) prefer these values over the
+   * raw planner-emitted `word_target`.
+   */
+  section_generation_profile?: {
+    target_words: number;
+    timeout_budget_ms: number;
+    compression_risk: 'low' | 'moderate' | 'high';
+    grounding_density: number;       // count of fragments relevant to this section
+    strategic_density: number;       // 0..1
+    retry_risk: number;              // 0..1
+  };
 }
 
 export interface ContentPlan {
@@ -99,6 +150,24 @@ export interface LongFormQualityReport {
   evidenceCount: number;
   issues: string[];
   repairedSections: string[];
+  /**
+   * Phase 3.3 — Cross-section semantic repetition snapshot.
+   * Driven by `detectSemanticRepetition`. The orchestrator selectively
+   * regenerates the flagged sections (never the full article).
+   */
+  semanticRepetition?: {
+    repetition_score: number;
+    repeated_concepts: string[];
+    repeated_transitions: string[];
+    repeated_rhetorical_patterns: string[];
+    overlapping_sections: Array<{
+      sectionA: number;
+      sectionB: number;
+      overlapScore: number;
+    }>;
+    verdict: 'pass' | 'retry' | 'fail';
+    sections_regenerated: number[];
+  };
 }
 
 export interface PlannedLongFormGenerationInput
@@ -111,6 +180,14 @@ export interface PlannedLongFormGenerationInput
   contentPerformance?: ContentPerformance[];
   performanceFeatureSnapshots?: ContentPerformanceFeatureSnapshot[];
   performanceInsights?: PerformanceInsights;
+  /**
+   * Phase 4.3 — Activated grounding profile (built upstream from prior
+   * company blogs / internal uploads / approved URLs / snippets). The
+   * planning engine currently passes this through to its repair pass
+   * unchanged; downstream factual/citation/source-integrity layers
+   * consume it when present.
+   */
+  groundingProfile?: import('../../backend/services/longForm/longFormRecommendationTypes').RetrievalGroundingProfile;
 }
 
 export interface PlannedLongFormGenerationResult {
@@ -600,6 +677,146 @@ function sectionNeedsRepair(
   return reasons;
 }
 
+// Phase 6.2 — Apply adaptive section sizing across the plan.
+//
+// For each section we derive `section_generation_profile.target_words`
+// from topic complexity, narrative density, grounding density, and the
+// article-level word target. Downstream consumers prefer this profile
+// over the raw planner-emitted `word_target`. We also overwrite
+// `word_target` so existing consumers that read it pick up the adapted
+// value transparently.
+function applyAdaptiveSizingToPlan(plan: ContentPlan, ctx: {
+  articleWordTarget: number;
+  contentType: string;
+  groundingFragmentCount: number;
+}): ContentPlan {
+  if (!plan?.sections?.length) return plan;
+  const sections = plan.sections.length;
+  const baselinePerSection = Math.max(60, Math.round(ctx.articleWordTarget / sections));
+
+  // ── Phase 8.1 — Apply the content-type planning stabilizer.
+  // The stabilizer modulates section count + per-section word target;
+  // subsequent adaptive sizing tunes per-section based on complexity.
+  const stab = applyPlanningStabilizer({
+    contentType: ctx.contentType,
+    baselineSectionCount: sections,
+    baselinePerSectionWordTarget: baselinePerSection,
+  });
+  // Phase 9.1 — Active self-healing actions tighten the planner output.
+  const healingTightenPlanner = hasActiveHealingAction('tighten_planner', ctx.contentType);
+  const healingReduceSizing = hasActiveHealingAction('reduce_section_sizing', ctx.contentType);
+  const healingCompressionBias = hasActiveHealingAction('increase_compression_bias', ctx.contentType);
+  const healingSectionTrim = healingTightenPlanner ? 0.85 : 1; // shave 15% off section count
+  const healingWordTrim = healingReduceSizing ? 0.85 : (healingCompressionBias ? 0.92 : 1);
+  const stabilizedPerSection = Math.max(60, Math.round(stab.perSectionWordTarget * healingWordTrim));
+  // If the stabilizer reduced section count below current plan length,
+  // we cap; if it increased, we leave existing sections (the LLM
+  // produced what it produced; we don't synthesize new sections).
+  const targetSections = Math.min(sections, Math.max(2, Math.round(stab.sectionCount * healingSectionTrim)));
+  const stabilizerProfile = getContentTypeStabilizer(ctx.contentType);
+  // Per-section grounding density target from the stabilizer (whitepaper
+  // wants 3 per section, newsletter wants 1, etc.). We surface this via
+  // section_generation_profile so the runtime can preserve grounding
+  // anchors accordingly.
+  const stabilizerAnchorDensity = stabilizerProfile.planning.groundingAnchorsPerSection;
+  const trimmedSections = targetSections < sections
+    ? plan.sections.slice(0, targetSections)
+    : plan.sections;
+  const adapted = trimmedSections.map((s) => {
+    // Use stabilizedPerSection as the new baseline (overriding the raw
+    // planner-emitted word_target) when the planner output is wildly
+    // off — but keep planner's intent when it's within ±25% of the
+    // stabilized target.
+    const plannerWordTarget = s.word_target ?? baselinePerSection;
+    const baselineForSection = Math.abs(plannerWordTarget - stabilizedPerSection) / stabilizedPerSection > 0.25
+      ? stabilizedPerSection
+      : plannerWordTarget;
+    return { ...s, word_target: baselineForSection };
+  }).map((s) => {
+    const complexity = estimateTopicComplexity({
+      sectionTitle: s.section_title,
+      keyPoints: s.key_points,
+      requiresOpinionatedInsight: s.requires_opinionated_insight,
+      requiresDirectAnswer: s.requires_direct_answer,
+      frameworkRole: s.framework_role,
+    });
+    const narrative = estimateNarrativeDensity({
+      sectionTitle: s.section_title,
+      keyPoints: s.key_points,
+      requiresOpinionatedInsight: s.requires_opinionated_insight,
+      requiresDirectAnswer: s.requires_direct_answer,
+      frameworkRole: s.framework_role,
+    });
+    const sized = computeAdaptiveSectionSize({
+      baselineWordTarget: s.word_target ?? baselinePerSection,
+      contentType: ctx.contentType,
+      topicComplexity: complexity,
+      groundingDensity: ctx.groundingFragmentCount,
+      narrativeDensity: narrative,
+      retryHistoryCount: 0,
+      timeoutRisk: 0,
+    });
+    const compressionRisk: 'low' | 'moderate' | 'high' =
+      sized.wordTarget >= 600 ? 'high'
+      : sized.wordTarget >= 350 ? 'moderate'
+      : 'low';
+    // Phase 8.1: surface stabilizer-required anchor density per section
+    // (whitepapers want ≥3 grounding anchors per section; newsletters 1).
+    // Downstream consumers may use this to weight evidence requirements.
+    const effectiveGroundingDensity = Math.max(
+      ctx.groundingFragmentCount,
+      Math.ceil(stabilizerAnchorDensity * Math.max(1, sections)),
+    );
+    return {
+      ...s,
+      word_target: sized.wordTarget,
+      section_generation_profile: {
+        target_words: sized.wordTarget,
+        timeout_budget_ms: Math.min(sized.recommendedTimeoutMs, stabilizerProfile.runtime.timeoutBudgetCapMs),
+        compression_risk: compressionRisk,
+        grounding_density: effectiveGroundingDensity,
+        strategic_density: complexity,
+        retry_risk: 0,
+      },
+    };
+  });
+  return { ...plan, sections: adapted };
+}
+
+// Phase 3.3 — Run the semantic repetition detector across the generated
+// sections. Returns the report block + the set of section indices the
+// caller should regenerate selectively (NEVER the full article).
+function runSemanticRepetitionCheck(
+  sections: SectionGenerationResult[],
+): {
+  block: NonNullable<LongFormQualityReport['semanticRepetition']>;
+  sectionsToRegenerate: number[];
+  triggerIssue: string | null;
+} {
+  const detected = detectSemanticRepetition(
+    sections.map((s, i) => ({ sectionIndex: i, sectionTitle: s.section_title, html: s.html })),
+  );
+  const block: NonNullable<LongFormQualityReport['semanticRepetition']> = {
+    repetition_score: detected.repetitionScore,
+    repeated_concepts: detected.repeatedConcepts,
+    repeated_transitions: detected.repeatedTransitions,
+    repeated_rhetorical_patterns: detected.repeatedRhetoricalPatterns,
+    overlapping_sections: detected.overlappingSections.map((p) => ({
+      sectionA: p.sectionA.index,
+      sectionB: p.sectionB.index,
+      overlapScore: p.overlapScore,
+    })),
+    verdict: detected.verdict,
+    sections_regenerated: [],
+  };
+  let triggerIssue: string | null = null;
+  if (detected.verdict !== 'pass') {
+    const indices = detected.sectionsToRegenerate.join(', ');
+    triggerIssue = `Semantic repetition detected (score ${detected.repetitionScore}). Selective regeneration targets: [${indices}].`;
+  }
+  return { block, sectionsToRegenerate: detected.sectionsToRegenerate, triggerIssue };
+}
+
 function validateLongFormQuality(
   plan: ContentPlan,
   sections: SectionGenerationResult[],
@@ -635,6 +852,10 @@ function validateLongFormQuality(
   if (insightDensityScore < 1) issues.push('Opinionated insight density requirement not met.');
   if (evidenceCount < 2) issues.push('Evidence requirement not met.');
 
+  // Phase 3.3 — Semantic repetition pass (cross-section overlap detection).
+  const repetition = runSemanticRepetitionCheck(sections);
+  if (repetition.triggerIssue) issues.push(repetition.triggerIssue);
+
   return {
     sectionUniquenessScore,
     repeatedSectionPairs: variation.duplicateSectionPairs,
@@ -646,9 +867,44 @@ function validateLongFormQuality(
     evidenceCount,
     issues,
     repairedSections: [],
+    semanticRepetition: repetition.block,
   };
 }
 
+// Phase 4.1 — Classify quality issues into adaptive-budget IssueCategory.
+function classifyIssue(issue: string): IssueCategory {
+  const i = issue.toLowerCase();
+  if (i.includes('alignment') || i.includes('icp') || i.includes('positioning') || i.includes('strategic perspective')) return 'alignment';
+  if (i.includes('hallucination') || i.includes('factual') || i.includes('evidence') || i.includes('citation')) return 'factual';
+  if (i.includes('repetition') || i.includes('overlap') || i.includes('semantic')) return 'repetition';
+  if (i.includes('genericity') || i.includes('generic')) return 'genericity';
+  if (i.includes('framework') || i.includes('continuity') || i.includes('opinionated insight') || i.includes('direct answer')) return 'continuity';
+  if (i.includes('assignment')) return 'assignment';
+  return 'unknown';
+}
+
+function severityForReport(report: LongFormQualityReport): IssueSeverity {
+  const repScore = report.semanticRepetition?.repetition_score ?? 0;
+  const issueCount = report.issues.length;
+  if (issueCount >= 8 || repScore >= 75) return 'catastrophic';
+  if (issueCount >= 5 || repScore >= 55) return 'severe';
+  if (issueCount >= 2 || repScore >= 35) return 'moderate';
+  return 'low';
+}
+
+/**
+ * Phase 4.1 — Replaces the prior `repairedSections.length >= 3` ceiling.
+ *
+ * The repair loop now:
+ *   1. Computes an `AdaptiveRecoveryBudget` from issue mix + severity +
+ *      semantic-repetition score + elapsed duration.
+ *   2. Allocates repairs up to `budget.maxRepairs` (NOT a hardcoded 3).
+ *   3. Targets the sections flagged by semantic-repetition selectively
+ *      (the budget's TARGETED_REPETITION mode caps this at 2 sections).
+ *   4. Aborts early when the budget says EARLY_ABORT.
+ *   5. Stops when the diminishing-return threshold isn't crossed by a
+ *      repair attempt.
+ */
 async function repairFailedSections(
   input: PlannedLongFormGenerationInput,
   plan: ContentPlan,
@@ -658,16 +914,55 @@ async function repairFailedSections(
   serpStructureHints: SerpStructureHints,
   contentPositioning: ContentPositioning,
   differentiationStrategy: DifferentiationStrategy,
-): Promise<{ sections: SectionGenerationResult[]; report: LongFormQualityReport }> {
-  if (report.issues.length === 0) return { sections, report };
+  /** Phase 4.1 — Caller passes elapsed ms so the budget can shrink under time pressure. */
+  generationStartMs: number,
+): Promise<{ sections: SectionGenerationResult[]; report: LongFormQualityReport; recoveryBudget: AdaptiveRecoveryBudget }> {
+  // Always compute the budget — even on a clean article — so the planner
+  // returns a deterministic diagnostic shape.
+  const failedSectionCount = report.semanticRepetition?.sections_regenerated.length ?? report.issues.length;
+  const issueCategories: Partial<Record<IssueCategory, number>> = {};
+  for (const issue of report.issues) {
+    const cat = classifyIssue(issue);
+    issueCategories[cat] = (issueCategories[cat] ?? 0) + 1;
+  }
+  const severityDistribution: Partial<Record<IssueSeverity, number>> = {
+    [severityForReport(report)]: Math.min(plan.sections.length, Math.max(1, failedSectionCount)),
+  };
+  const budget = computeAdaptiveRecoveryBudget({
+    total_sections: plan.sections.length,
+    failed_sections: failedSectionCount,
+    severity_distribution: severityDistribution,
+    issue_categories: issueCategories,
+    content_type: input.contentType,
+    generation_duration_ms: Math.max(0, Date.now() - generationStartMs),
+  });
+
+  if (report.issues.length === 0 || budget.maxRepairs === 0) {
+    return { sections, report, recoveryBudget: budget };
+  }
 
   const repaired = [...sections];
   const repairedSections: string[] = [];
+
+  // Phase 4.1 — Surface targeted-repetition selection so we don't burn
+  // budget regenerating sections whose only issue is overlap with a
+  // sibling section we ALREADY repaired.
+  const repetitionTargets = new Set<number>(report.semanticRepetition?.sections_regenerated ?? []);
+
   for (let index = 0; index < plan.sections.length; index += 1) {
+    if (repairedSections.length >= budget.maxRepairs) break;
+
     const planSection = plan.sections[index];
     const current = repaired[index];
     if (!current) continue;
     const reasons = sectionNeedsRepair(planSection, current, report, plan);
+
+    // For TARGETED_REPETITION budgets, ONLY regenerate the indices the
+    // semantic detector flagged.
+    if (budget.escalationStrategy === 'TARGETED_REPETITION' && !repetitionTargets.has(index)) {
+      continue;
+    }
+
     if (reasons.length === 0 && report.issues.length > 0 && index !== plan.sections.length - 1) continue;
     if (reasons.length === 0 && repairedSections.length > 0) continue;
 
@@ -683,8 +978,6 @@ async function repairFailedSections(
       repairReasons: reasons.length > 0 ? reasons : report.issues,
     });
     repairedSections.push(planSection.section_title);
-
-    if (repairedSections.length >= 3) break;
   }
 
   const nextReport = validateLongFormQuality(plan, repaired, input.contentType);
@@ -694,6 +987,7 @@ async function repairFailedSections(
       ...nextReport,
       repairedSections,
     },
+    recoveryBudget: budget,
   };
 }
 
@@ -820,9 +1114,81 @@ async function repairScoredSections(input: {
   return repaired;
 }
 
+// Phase 7.5 — Planner-generation wrapper supporting tightening hints.
+//
+// The first attempt calls `generateContentPlan` unchanged. Subsequent
+// attempts inject a tightening hint into the planner's `input.answers`
+// so the LLM produces a cleaner plan on the retry. Hints stay within
+// the existing planner contract — no provider redesign.
+async function attemptPlannerGeneration(args: {
+  input: PlannedLongFormGenerationInput;
+  templateSpec: LongFormTemplateSpec | null;
+  searchIntent: SearchIntent;
+  topicEntityMap: TopicEntityMap;
+  serpStructureHints: SerpStructureHints;
+  contentPositioning: ContentPositioning;
+  competitorContentProfile: CompetitorContentProfile;
+  differentiationStrategy: DifferentiationStrategy;
+  performanceInsights: PerformanceInsights;
+  tighteningHint?: {
+    fewerSections: boolean;
+    reduceOverlap: boolean;
+    tighterComplexity: boolean;
+    previousIssues?: string[];
+  };
+}): Promise<ContentPlan> {
+  if (!args.tighteningHint) {
+    return await generateContentPlan(
+      args.input,
+      args.templateSpec,
+      args.searchIntent,
+      args.topicEntityMap,
+      args.serpStructureHints,
+      args.contentPositioning,
+      args.competitorContentProfile,
+      args.differentiationStrategy,
+      args.performanceInsights,
+    );
+  }
+  // Inject tightening into answers so the planner's prompt sees them.
+  const hint = args.tighteningHint;
+  const tighteningLines: string[] = [];
+  if (hint.fewerSections) tighteningLines.push('Emit fewer, more focused sections than your typical default.');
+  if (hint.reduceOverlap) tighteningLines.push('Each section must address a distinct angle — no two sections may share more than 25% of their key_points.');
+  if (hint.tighterComplexity) tighteningLines.push('Keep each section\'s key_points concise (3–5 points max). Avoid over-loading a single section.');
+  if (hint.previousIssues && hint.previousIssues.length > 0) {
+    tighteningLines.push(`The previous plan failed validation with: ${hint.previousIssues.slice(0, 4).join(' | ')}. Avoid these specific failure modes.`);
+  }
+  const augmentedInput: PlannedLongFormGenerationInput = {
+    ...args.input,
+    answers: {
+      ...(args.input.answers ?? {}),
+      planner_regeneration_hint: tighteningLines.join(' '),
+    },
+  };
+  return await generateContentPlan(
+    augmentedInput,
+    args.templateSpec,
+    args.searchIntent,
+    args.topicEntityMap,
+    args.serpStructureHints,
+    args.contentPositioning,
+    args.competitorContentProfile,
+    args.differentiationStrategy,
+    args.performanceInsights,
+  );
+}
+
 export async function runPlannedLongFormGeneration(
   input: PlannedLongFormGenerationInput,
 ): Promise<PlannedLongFormGenerationResult> {
+  // Phase 3.7 — Stability telemetry instrumentation (start).
+  const __plannedStart = Date.now();
+  recordPlannedEngineAttempt(input.contentType);
+  let __failurePhase: 'planning' | 'section_generation' | 'quality_validation' | 'post_integrity' | 'unknown' = 'planning';
+  let __partialSectionsCompleted = 0;
+
+  try {
   const templateSpec = getLongFormTemplateSpec(input.contentType, input.formatType, input.template_name);
   const searchIntent = classifySearchIntent({
     topic: input.topic,
@@ -862,17 +1228,120 @@ export async function runPlannedLongFormGeneration(
     competitorProfile: competitorContentProfile,
     companyContext: input.companyContext,
   }), performanceInsights);
-  const plan = await generateContentPlan(
-    input,
-    templateSpec,
-    searchIntent,
-    topicEntityMap,
-    serpStructureHints,
-    contentPositioning,
-    competitorContentProfile,
-    differentiationStrategy,
-    performanceInsights,
-  );
+  // ── Phase 7.5 — Plan generation with auto-regeneration on instability ──
+  // Wrap the planner LLM call + adaptive sizing + stability check in a
+  // bounded retry loop. Up to MAX_PLANNER_REGENERATIONS attempts are made
+  // with tightened prompts; only after the budget is exhausted do we
+  // throw and let the facade fall back.
+  const MAX_PLANNER_REGENERATIONS = 2;
+  const articleWordTarget = (() => {
+    const tw = input.answers?.target_word_count ?? input.targetWordCount;
+    if (typeof tw === 'string') return Number.parseInt(tw, 10) || 1200;
+    if (typeof tw === 'number') return tw;
+    return 1200;
+  })();
+  const groundingFragmentCount = input.groundingProfile?.approvedSources.reduce(
+    (sum, src) => sum + src.contentFragments.length,
+    0,
+  ) ?? 0;
+
+  let plan: ContentPlan | null = null;
+  let stability: PlannerStabilityResult | null = null;
+  const plannerAttemptHistory: Array<{
+    attempt: number;
+    stabilityScore: number;
+    recommendation: PlannerStabilityResult['recommendation'];
+    reasoning: string;
+  }> = [];
+
+  for (let plannerAttempt = 0; plannerAttempt <= MAX_PLANNER_REGENERATIONS; plannerAttempt += 1) {
+    // The first attempt uses the base planner; subsequent attempts apply
+    // tightening (fewer sections, reduced overlap, lower complexity).
+    const tighteningHint = plannerAttempt === 0
+      ? undefined
+      : {
+          fewerSections: true,
+          reduceOverlap: true,
+          tighterComplexity: true,
+          previousIssues: stability?.invalidSections.map((s) => `${s.sectionTitle}: ${s.reasons.join(', ')}`)
+            .concat(stability?.sequencingIssues ?? []),
+        };
+    const rawPlan = await attemptPlannerGeneration({
+      input,
+      templateSpec,
+      searchIntent,
+      topicEntityMap,
+      serpStructureHints,
+      contentPositioning,
+      competitorContentProfile,
+      differentiationStrategy,
+      performanceInsights,
+      tighteningHint,
+    });
+
+    // Apply adaptive section sizing on each attempt.
+    plan = applyAdaptiveSizingToPlan(rawPlan, {
+      articleWordTarget,
+      contentType: input.contentType,
+      groundingFragmentCount,
+    });
+
+    // Stability check.
+    stability = validatePlannerStability({
+      plan,
+      contentType: input.contentType,
+      articleTargetWords: articleWordTarget,
+    });
+    plannerAttemptHistory.push({
+      attempt: plannerAttempt + 1,
+      stabilityScore: stability.stabilityScore,
+      recommendation: stability.recommendation,
+      reasoning: stability.reasoning.join(' '),
+    });
+
+    if (stability.recommendation === 'accept' || stability.recommendation === 'accept_with_warnings') {
+      break; // good plan; proceed to section generation
+    }
+
+    if (stability.recommendation === 'reject') {
+      recordFailureBucket(input.contentType, `planner stability reject (attempt ${plannerAttempt + 1}): ${stability.reasoning.join(' ')}`);
+      emitPlannedEngineFailure({
+        company_id: input.company_id ?? null,
+        content_type: input.contentType,
+        topic: input.topic,
+        failure_phase: 'planning',
+        reason: `planner_stability_reject_after_${plannerAttempt + 1}_attempts: ${stability.reasoning.join(' ')}`,
+        partial_sections_completed: 0,
+        duration_ms: Math.max(0, Date.now() - __plannedStart),
+      });
+      throw new Error(
+        `[longFormPlanningEngine] Plan rejected by stability validator after ${plannerAttempt + 1} attempt(s): ${stability.reasoning.join(' ')}`,
+      );
+    }
+
+    // regenerate_plan: try again if budget allows.
+    if (plannerAttempt >= MAX_PLANNER_REGENERATIONS) {
+      recordFailureBucket(input.contentType, `planner stability exhausted after ${MAX_PLANNER_REGENERATIONS + 1} attempts`);
+      emitPlannedEngineFailure({
+        company_id: input.company_id ?? null,
+        content_type: input.contentType,
+        topic: input.topic,
+        failure_phase: 'planning',
+        reason: `planner_stability_exhausted_after_${MAX_PLANNER_REGENERATIONS + 1}_attempts: ${stability.reasoning.join(' ')}`,
+        partial_sections_completed: 0,
+        duration_ms: Math.max(0, Date.now() - __plannedStart),
+      });
+      throw new Error(
+        `[longFormPlanningEngine] Plan regeneration budget exhausted after ${MAX_PLANNER_REGENERATIONS + 1} attempt(s): ${stability.reasoning.join(' ')}`,
+      );
+    }
+  }
+  // The loop guarantees `plan` is non-null on a clean exit.
+  if (!plan || !stability) {
+    throw new Error('[longFormPlanningEngine] Planner loop exited without a plan (should not happen).');
+  }
+
+  __failurePhase = 'section_generation';
   const generatedSections: SectionGenerationResult[] = [];
 
   for (const section of plan.sections) {
@@ -886,9 +1355,14 @@ export async function runPlannedLongFormGeneration(
       contentPositioning,
       differentiationStrategy,
     }));
+    __partialSectionsCompleted = generatedSections.length;
   }
 
+  __failurePhase = 'quality_validation';
   const initialReport = validateLongFormQuality(plan, generatedSections, input.contentType);
+  // Phase 4.1 — Adaptive recovery budget replaces the prior fixed
+  // `repairedSections.length >= 3` cap. Budget is shared back into the
+  // quality report's repairedSections field for telemetry visibility.
   let { sections, report } = await repairFailedSections(
     input,
     plan,
@@ -898,6 +1372,7 @@ export async function runPlannedLongFormGeneration(
     serpStructureHints,
     contentPositioning,
     differentiationStrategy,
+    __plannedStart,
   );
   let contentHtml = buildContentHtml(input, plan, sections);
   let contentBlocks = await buildContentBlocks(input, contentHtml);
@@ -976,11 +1451,30 @@ export async function runPlannedLongFormGeneration(
       },
     };
   }
+  __failurePhase = 'post_integrity';
   const generatedFeatureSnapshot = extractFeatureSnapshot({
     content_id: `${input.contentType}:${input.topic}`,
     plan,
     sections,
     positioning: contentPositioning,
+  });
+
+  // Phase 3.7 — Stability telemetry: planned-engine success.
+  const sectionsFailed = 0; // planner-path doesn't track this directly; the orchestrator does.
+  recordSuccessBucket(input.contentType);
+  emitPlannedEngineSuccess({
+    company_id: input.company_id ?? null,
+    content_type: input.contentType,
+    topic: input.topic,
+    total_sections: sections.length,
+    sections_passed: sections.length - sectionsFailed,
+    sections_failed: sectionsFailed,
+    total_retries: report.repairedSections.length,
+    avg_retries_per_section: sections.length > 0
+      ? Number((report.repairedSections.length / sections.length).toFixed(3))
+      : 0,
+    duration_ms: Math.max(0, Date.now() - __plannedStart),
+    final_lifecycle_state: report.issues.length === 0 ? 'article_completed' : 'article_recovered',
   });
 
   return {
@@ -1020,4 +1514,21 @@ export async function runPlannedLongFormGeneration(
       template_used: Boolean(templateSpec),
     },
   };
+  } catch (error) {
+    // Phase 3.7 — Stability telemetry: planned-engine failure.
+    const reason = error instanceof Error ? error.message : String(error);
+    const reasonStack = error instanceof Error ? error.stack : undefined;
+    recordFailureBucket(input.contentType, reason);
+    emitPlannedEngineFailure({
+      company_id: input.company_id ?? null,
+      content_type: input.contentType,
+      topic: input.topic,
+      failure_phase: __failurePhase,
+      reason,
+      reason_stack: reasonStack,
+      partial_sections_completed: __partialSectionsCompleted,
+      duration_ms: Math.max(0, Date.now() - __plannedStart),
+    });
+    throw error;
+  }
 }

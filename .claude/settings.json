@@ -31,7 +31,16 @@
       "Bash(git -C c:/tmp/omnivyra-deploy log -1 --pretty=format:'%h %s')",
       "Bash(echo \"EXIT_LIB:$?\")",
       "Bash(echo \"TYPECHECK_EXIT:$?\")",
-      "Bash(echo \"BUILD_TSC_EXIT:$?\")"
+      "Bash(echo \"BUILD_TSC_EXIT:$?\")",
+      "Bash(cat C:\\\\\\\\Users\\\\\\\\Admin\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\c--virality\\\\\\\\d0017e23-d7e5-4f5e-a6e3-b0d150d7fe90\\\\\\\\tasks\\\\\\\\bw8esvop8.output)",
+      "Bash(tee /tmp/tsc-p10.log)",
+      "Bash(tee /tmp/tsc-p11.log)",
+      "Bash(tee /tmp/tsc-p12.log)",
+      "Bash(tee /tmp/tsc-p12b.log)",
+      "Bash(tee /tmp/tsc-p12c.log)",
+      "Bash(tee /tmp/tsc-p13.log)",
+      "Bash(tee /tmp/tsc-p135.log)",
+      "Bash(tee /tmp/tsc-p136.log)"
     ],
     "additionalDirectories": [
       "C:\\virality\\pages\\api\\activity-workspace\\[id]",

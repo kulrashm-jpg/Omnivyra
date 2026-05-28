@@ -68,6 +68,49 @@ function normalizeAssetType(value: string): CreatorOcrAssetType {
   return 'image';
 }
 
+/**
+ * Lightweight-social-embedded-copy classification (Phase 1).
+ *
+ * Returns TRUE for assets whose visual surface is a single deterministic
+ * overlay on top of a single image — the simple "post image" / quote card
+ * / CTA card / branded visual class that social platforms host. These
+ * assets:
+ *   - never require enterprise OCR for reading-order extraction (the
+ *     overlay structure is already declared in governedOverlay),
+ *   - never need document-grade reading-order extraction (no columns,
+ *     no page flow, no multi-section navigation),
+ *   - already carry a deterministic reading order via their overlay keys.
+ *
+ * Returns FALSE for document-class assets (pdf / slider / multi-slide
+ * carousel / infographic) and for any supporting_visual asset, which
+ * keep the strict OCR + reading-order contract.
+ *
+ * Single-asset, single-image: supporting_image / banner / brand_card.
+ * Carousel + infographic stay on the strict path because their visual
+ * surface contains structural reading flow (slide order, section flow)
+ * that the OCR pipeline is designed to validate.
+ */
+const LIGHTWEIGHT_SOCIAL_PLATFORMS: ReadonlySet<string> = new Set([
+  'linkedin', 'x', 'twitter', 'instagram', 'facebook', 'threads', 'pinterest', '',
+]);
+
+const LIGHTWEIGHT_SOCIAL_ASSET_TYPES: ReadonlySet<CreatorOcrAssetType> = new Set([
+  'supporting_image', 'banner', 'brand_card', 'image',
+]);
+
+export function isLightweightSocialEmbeddedCopy(input: {
+  assetType: string;
+  platform?: string | null;
+  attachmentMode?: string | null;
+}): boolean {
+  const mode = input.attachmentMode === 'embedded_copy' ? 'embedded_copy' : 'other';
+  if (mode !== 'embedded_copy') return false;
+  const assetType = normalizeAssetType(input.assetType);
+  if (!LIGHTWEIGHT_SOCIAL_ASSET_TYPES.has(assetType)) return false;
+  const platform = compact(input.platform).toLowerCase();
+  return LIGHTWEIGHT_SOCIAL_PLATFORMS.has(platform);
+}
+
 export function resolveCreatorOcrThresholds(input: {
   assetType: string;
   platform?: string | null;
@@ -77,13 +120,24 @@ export function resolveCreatorOcrThresholds(input: {
   const platform = compact(input.platform).toLowerCase();
   const mode = input.attachmentMode === 'supporting_visual' ? 'supporting_visual' : input.attachmentMode === 'embedded_copy' ? 'embedded_copy' : 'unknown';
   const visualFirst = platform === 'instagram' || mode === 'supporting_visual' || assetType === 'supporting_image';
+  // Phase 2 — lightweight social embedded_copy assets do NOT require the
+  // external OCR provider. They carry a deterministic overlay structure
+  // (governedOverlay) that supplies the reading-order signal OCR would
+  // otherwise extract. The provider stays optional: when configured it
+  // still runs and its validation flags still apply; when unavailable,
+  // governance proceeds via the synthetic reading-order path.
+  const lightweight = isLightweightSocialEmbeddedCopy({ assetType, platform, attachmentMode: input.attachmentMode });
   return {
     minConfidence: visualFirst ? 0.72 : 0.62,
     maxVisibleTextCharacters: mode === 'supporting_visual' ? 0 : assetType === 'pdf' ? 2000 : assetType === 'carousel' || assetType === 'slider' ? 420 : 180,
     maxTextRegions: mode === 'supporting_visual' ? 0 : assetType === 'pdf' ? 80 : assetType === 'carousel' || assetType === 'slider' ? 36 : 12,
     maxDenseRegionRatio: visualFirst ? 0.12 : 0.22,
     rejectCta: mode === 'supporting_visual' || assetType === 'supporting_image' || assetType === 'brand_card' || assetType === 'infographic',
-    requireProvider: mode === 'supporting_visual',
+    // requireProvider:
+    //   - true for supporting_visual (OCR is the only signal we have that no copy leaks onto the visual)
+    //   - false for lightweight social embedded_copy (overlay structure is declared)
+    //   - false otherwise (default)
+    requireProvider: mode === 'supporting_visual' && !lightweight,
   };
 }
 

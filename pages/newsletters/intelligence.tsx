@@ -27,6 +27,11 @@ export default function NewsletterIntelligencePage() {
       generatePath="/newsletters/generate"
       formatOptions={NEWSLETTER_FORMATS}
       defaultFormat="insight-letter"
+      creationModePicker={{
+        enabled: true,
+        flavor: 'longform',
+        editorPath: '/newsletters/new',
+      }}
     />
   );
 }

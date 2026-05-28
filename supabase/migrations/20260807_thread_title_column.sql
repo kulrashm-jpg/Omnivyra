@@ -1,0 +1,38 @@
+-- 20260807_thread_title_column.sql
+--
+-- FIX: Thread multi-row runtime shadow soak fails because
+-- scheduled_posts.thread_title does not exist in prod.
+--
+-- BACKGROUND
+-- ─────────
+-- The 20260806_thread_multi_row_runtime migration assumes scheduled_posts
+-- already has columns parent_post_id, thread_position, is_thread_start, and
+-- thread_title. A prod-state audit (2026-05-25) confirmed that:
+--
+--   - parent_post_id          ✅ present (uuid, nullable)
+--   - thread_position         ✅ present (integer, nullable)
+--   - is_thread_start         ✅ present (boolean, default false)
+--   - thread_title            ❌ MISSING — this migration adds it
+--   - uniq_thread_position    ✅ constraint already in prod
+--   - insert_thread_atomic    ✅ function already in prod
+--   - replace_thread_children ✅ function already in prod
+--
+-- The constraint + functions were applied out-of-band (not via the
+-- supabase_migrations ledger) and the thread_title column step was missed.
+-- PL/pgSQL defers column resolution to call-time, so the missing column
+-- only surfaced at runtime when shadow-mode multi-row inserts attempted to
+-- write thread_title — producing the soak finding:
+--
+--   [scheduler/schedule] thread multi-row insert failed (shadow mode, non-fatal):
+--   column "thread_title" of relation "scheduled_posts" does not exist
+--
+-- RISK ANALYSIS
+-- ─────────────
+-- - Nullable column, no DEFAULT → ZERO existing rows fail.
+-- - 0 existing thread rows in prod at time of writing → no thread data to migrate.
+-- - RLS policies on scheduled_posts cover all columns; new column inherits.
+-- - IF NOT EXISTS guard → safe to re-run.
+-- - Reversible: ALTER TABLE scheduled_posts DROP COLUMN IF EXISTS thread_title.
+
+ALTER TABLE scheduled_posts
+  ADD COLUMN IF NOT EXISTS thread_title text;

@@ -37,6 +37,7 @@ import { emitCreatorEvent, CREATOR_EVENTS } from './creatorOperationalTelemetryS
 import { recordAuditEntry } from './creatorAuditTrailService';
 import { recordPublishFailure } from './creatorQueueReliabilityService';
 import { validateCreatorPublishSemanticsLive } from './creatorPublishValidation';
+import { publishThread } from './threadRuntime/threadPublishOrchestrator';
 
 /**
  * Publish-time re-validation for attachment-required posts. The
@@ -197,6 +198,38 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     };
   }
 
+  // Phase 1B.2.2 — thread orchestrator delegation.
+  // If this row is the root of a multi-row thread (is_thread_start=TRUE),
+  // hand off to the thread publish orchestrator instead of running the
+  // single-row pipeline below. The orchestrator walks parent → children in
+  // thread_position order, publishes each, manages per-node state
+  // transitions, and handles native reply-chain (Twitter) or sequential
+  // standalone (LinkedIn/IG/FB/other). For single-row posts (the vast
+  // majority), this branch is skipped and the existing single-row path runs.
+  //
+  // G12 — IMPORTANT: this check runs BEFORE the platform_post_id short-circuit
+  // below. For threads, the root having a platform_post_id only means the
+  // ROOT was published — there may still be unpublished children. The
+  // orchestrator's per-node idempotency safely skips already-published nodes
+  // and continues with unpublished ones (the resume-from-failed path).
+  if (scheduledPost.is_thread_start === true) {
+    const threadResult = await publishThread({
+      root_scheduled_post_id: scheduled_post_id,
+      social_account_id,
+      user_id,
+    });
+    return {
+      status: threadResult.status,
+      external_post_id: undefined,
+      post_url: undefined,
+      published_at: threadResult.status === 'PUBLISHED' ? threadResult.timestamp : undefined,
+      message: threadResult.message,
+      timestamp: threadResult.timestamp,
+    };
+  }
+
+  // Single-row idempotency: if the row has already been published once and
+  // is not a thread root, the platform_post_id alone tells us we're done.
   if (scheduledPost.platform_post_id) {
     return {
       status: 'PUBLISHED',
@@ -349,6 +382,7 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     contentSignals: { contentType: String(scheduledPost.content_type || '') },
     hasText: !!(scheduledPost.content && String(scheduledPost.content).trim().length > 0),
     mediaUrls: scheduledPost.media_urls ?? [],
+    content: typeof scheduledPost.content === 'string' ? scheduledPost.content : '',
     skipSchedulingReadiness: true,
   });
   if (schedReadiness.ok === false) {

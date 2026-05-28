@@ -8,6 +8,7 @@ import { syncInstagramAndThreadsFromMeta } from '../../../../backend/services/me
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { encryptTokenColumns, setToken } from '../../../../backend/auth/tokenStore';
 import { persistGrantedScopesByPlatformUser, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
+import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
 import { config } from '@/config';
 
 type MetaPageSummary = {
@@ -188,16 +189,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error } = req.query;
-  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
+  const decoded = decodeOAuthState(state as string);
+  const { returnTo: earlyReturnTo } = decoded;
   const errDest = earlyReturnTo && earlyReturnTo.startsWith('/') ? earlyReturnTo : '/social-platforms';
+  const callbackHost = safeHost(`${getBaseUrl(req)}/api/auth/instagram/callback`);
 
-  if (error) return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
-  if (!code) return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
+  logOAuthEvent({
+    event: 'oauth_callback_received',
+    provider: 'instagram',
+    callback_host: callbackHost,
+    company_id: decoded.companyId ?? null,
+    state_user_id: decoded.userId ?? null,
+    state_valid: decoded.valid === true,
+    state_flow: decoded.flow ?? null,
+    request_origin: (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string | undefined) || null,
+  });
+
+  if (error) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'instagram',
+      callback_host: callbackHost,
+      company_id: decoded.companyId ?? null,
+      state_user_id: decoded.userId ?? null,
+      failure_point: 'provider_error',
+      failure_detail: String(error),
+    });
+    return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
+  }
+  if (!code) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'instagram',
+      callback_host: callbackHost,
+      company_id: decoded.companyId ?? null,
+      state_user_id: decoded.userId ?? null,
+      failure_point: 'missing_code',
+    });
+    return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
+  }
 
   try {
     const platform = 'instagram';
     const { companyId, userId: stateUserId, returnTo, valid } = decodeOAuthState(state as string);
     if (!valid) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'instagram',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'invalid_oauth_state',
+        failure_detail: decoded.reason ?? 'state signature invalid',
+      });
       return res.status(401).json({ error: 'invalid_oauth_state' });
     }
 
@@ -219,6 +263,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!tokenResponse.ok) {
       const body = await tokenResponse.json().catch(() => ({}));
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'instagram',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'token_exchange_failed',
+        failure_detail: `HTTP ${tokenResponse.status}`,
+      });
       throw new Error(body?.error?.message ?? 'Token exchange failed');
     }
 
@@ -283,6 +336,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (syncResult.instagramAccounts.length === 0) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'instagram',
+        callback_host: callbackHost,
+        company_id: companyId ?? null,
+        user_id: userId,
+        state_user_id: stateUserId ?? null,
+        failure_point: 'property_fetch_failed',
+        failure_detail: 'no Instagram Business accounts derived from Meta',
+      });
       throw new Error('No Instagram Business account found. Connect a Facebook Page with an Instagram Business account to enable Instagram and Threads.');
     }
 
@@ -333,6 +396,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
+    logOAuthEvent({
+      event: 'oauth_success',
+      provider: 'instagram',
+      callback_host: callbackHost,
+      company_id: companyId ?? null,
+      user_id: userId,
+      state_user_id: stateUserId ?? null,
+    });
     const successDest = returnTo && returnTo.startsWith('/') ? returnTo : '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
     const accountName = syncResult.instagramAccounts[0]?.username || syncResult.instagramAccounts[0]?.name || 'Instagram';
@@ -350,6 +421,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
   } catch (err: any) {
     console.error('Instagram OAuth callback error:', err);
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'instagram',
+      callback_host: callbackHost,
+      company_id: decoded.companyId ?? null,
+      state_user_id: decoded.userId ?? null,
+      failure_point: 'callback_exception',
+      failure_detail: String(err?.message ?? err).slice(0, 200),
+    });
     return res.redirect(`${errDest}?error=${encodeURIComponent(err.message || 'Connection failed')}`);
   }
 }

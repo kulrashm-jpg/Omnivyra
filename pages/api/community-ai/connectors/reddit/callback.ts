@@ -4,6 +4,7 @@ import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 import { persistGrantedScopesByPlatformUser, normaliseScopes } from '../../../../../backend/auth/oauthScopePersistence';
+import { logOAuthEvent, safeHost } from '../../../../../backend/auth/oauthTelemetry';
 
 const decodeState = (state: string) => {
   const padded = state.replace(/-/g, '+').replace(/_/g, '/');
@@ -21,20 +22,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error, error_description } = req.query;
+  const callbackHost = safeHost(getCommunityAiConnectorCallbackUrl('reddit', req));
+  const requestOrigin = (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string | undefined) || null;
+
+  logOAuthEvent({
+    event: 'oauth_callback_received',
+    provider: 'reddit',
+    callback_host: callbackHost,
+    state_flow: 'community-ai',
+    request_origin: requestOrigin,
+  });
+
   if (error) {
     const message = typeof error_description === 'string' ? error_description : error;
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'reddit',
+      callback_host: callbackHost,
+      state_flow: 'community-ai',
+      failure_point: 'provider_error',
+      failure_detail: String(error),
+    });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent(String(message || 'OAuth failed'))}`
     );
   }
 
   if (!code || typeof code !== 'string') {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'reddit',
+      callback_host: callbackHost,
+      state_flow: 'community-ai',
+      failure_point: 'missing_code',
+    });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Missing authorization code')}`
     );
   }
 
   if (!state || typeof state !== 'string') {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'reddit',
+      callback_host: callbackHost,
+      state_flow: 'community-ai',
+      failure_point: 'invalid_oauth_state',
+      failure_detail: 'state query param missing',
+    });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Missing OAuth state')}`
     );
@@ -44,6 +79,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     statePayload = decodeState(state);
   } catch {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'reddit',
+      callback_host: callbackHost,
+      state_flow: 'community-ai',
+      failure_point: 'invalid_oauth_state',
+      failure_detail: 'JSON.parse of base64 state failed',
+    });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Invalid OAuth state')}`
     );
@@ -54,6 +97,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const redirectTo = statePayload.redirect || '/community-ai/connectors';
 
   if (!tenantId || !organizationId || tenantId !== organizationId) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'reddit',
+      callback_host: callbackHost,
+      company_id: organizationId || null,
+      state_flow: 'community-ai',
+      failure_point: 'invalid_oauth_state',
+      failure_detail: 'tenant_id !== organization_id or missing',
+    });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Invalid tenant scope')}`
     );
@@ -88,6 +140,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (!tokenResponse.ok) {
+      logOAuthEvent({
+        event: 'oauth_failure',
+        provider: 'reddit',
+        callback_host: callbackHost,
+        company_id: organizationId,
+        user_id: access!.userId,
+        state_flow: 'community-ai',
+        failure_point: 'token_exchange_failed',
+        failure_detail: `HTTP ${tokenResponse.status}`,
+      });
       return res.redirect(
         `/community-ai/connectors?error=${encodeURIComponent('Connection failed. Please try again.')}`
       );
@@ -134,8 +196,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // G5.5: Audit log
     console.info('[connector_audit]', JSON.stringify({ user_id: access!.userId, company_id: organizationId, platform: 'reddit', action: 'connect' }));
 
+    logOAuthEvent({
+      event: 'oauth_success',
+      provider: 'reddit',
+      callback_host: callbackHost,
+      company_id: organizationId,
+      user_id: access!.userId,
+      state_flow: 'community-ai',
+    });
     return res.redirect(`${redirectTo}?connected=reddit&status=success`);
   } catch (err: any) {
+    logOAuthEvent({
+      event: 'oauth_failure',
+      provider: 'reddit',
+      callback_host: callbackHost,
+      company_id: organizationId,
+      user_id: access!.userId,
+      state_flow: 'community-ai',
+      failure_point: 'callback_exception',
+      failure_detail: String(err?.message ?? err).slice(0, 200),
+    });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Connection failed. Please try again.')}`
     );

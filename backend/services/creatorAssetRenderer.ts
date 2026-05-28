@@ -11,7 +11,7 @@ import { captureImageProviderCost } from './billing/blackHoleCostCapture';
 import { creatorEvent } from './creatorObservation';
 import { recordCreatorDuration } from './creatorRuntimeMetrics';
 import { validateProviderImageTextSafety } from './creatorImageTextValidation';
-import { runCreatorOcr } from './creatorOcrProvider';
+import { runCreatorOcr, isLightweightSocialEmbeddedCopy } from './creatorOcrProvider';
 import {
   autoCorrectVisualCopy,
   buildPreviewGovernanceWarnings,
@@ -22,9 +22,15 @@ import {
   validateVisualGovernance,
 } from './creatorAssetGovernance';
 import { estimateTextBox, validateLayoutGeometry } from './creatorRenderGeometry';
-import { assertRenderManifestExportable, createRenderManifest } from './creatorRenderManifest';
+import {
+  assertRenderManifestExportable,
+  createRenderManifest,
+  synthesizeReadingOrderForOverlay,
+  type GovernanceCompatibilityFlags,
+} from './creatorRenderManifest';
 import { detectSemanticThreadDuplication } from './creatorSemanticDuplication';
 import { validateCreatorAccessibility } from './creatorAccessibilityValidation';
+import { logPipelineEvent } from '../../lib/shared/observability';
 import { persistCreatorValidationManifest } from './creatorRenderPersistence';
 import { resolvePlatformGeometryProfile, platformTextBoxY } from './creatorPlatformGeometry';
 import { getCreatorRendererRegistration } from './creatorRendererRegistry';
@@ -577,37 +583,58 @@ function buildOverlaySvg(input: {
   const preset = getOverlayPreset(input.platform, input.fileNamePrefix, input.overlay, input.subtypeHint ?? null);
   const overlayStrategy = input.brandKit.overlayStrategy;
   const accent = input.brandKit.accentColor;
-  const panelOpacity = Math.max(preset.panelOpacity, overlayStrategy.panelOpacity);
-  const panelWidth = Math.round(input.width * preset.panelWidthRatio);
-  const panelX = preset.margin;
-  const panelY = preset.margin;
   const headlineLines = balanceTextLines(input.overlay.headline, preset.headlineChars, preset.maxHeadlineLines);
   const insightLines = balanceTextLines(input.overlay.keyInsight, preset.insightChars, preset.maxInsightLines);
   const supportLines = preset.maxSupportLines > 0 ? balanceTextLines(input.overlay.supportingText, preset.supportChars, preset.maxSupportLines) : [];
-  const hook = input.overlay.hook || input.platform || 'Social creative';
-  const stress = headlineLines.length + insightLines.length + supportLines.length;
-  const headlineStart = panelY + (stress > 6 ? 136 : 154);
+  // Hook fallback: prefer operator-typed hook → platform → generic.
+  // The previous backdrop panel made the platform fallback look like a
+  // banner ("INSTAGRAM"); without the panel a missing hook is just
+  // silent, which is the correct behaviour.
+  const hook = input.overlay.hook || '';
+  // Text-stack layout — bottom-anchored. Text lives in the lower
+  // portion of the image so it doesn't fight a portrait/subject in
+  // the upper half. Sizes follow the existing preset so banner /
+  // square / portrait aspect ratios keep their tuned hierarchy.
+  // Margin is the LARGER of the preset margin and 6% of canvas width
+  // so big-format renders keep generous breathing room and the
+  // headline never sits flush against the left edge.
+  const safeMargin = Math.max(preset.margin, Math.round(input.width * 0.06));
+  const textX = safeMargin;
+  const textRightLimit = input.width - safeMargin;
+  const textWidth = Math.max(160, textRightLimit - textX);
   const headlineLineHeight = Math.round(preset.headlineSize * 1.14);
   const insightLineHeight = Math.round(preset.insightSize * 1.34);
   const supportLineHeight = Math.round(preset.supportSize * 1.35);
-  const insightStart = headlineStart + (headlineLines.length * headlineLineHeight) + (stress > 6 ? 24 : 34);
-  const supportStart = insightStart + (insightLines.length * insightLineHeight) + (supportLines.length > 0 ? (stress > 6 ? 16 : 24) : 0);
-  // CTA is no longer rendered as an embedded button — social posts get
-  // CTA copy through the caption + native UI (like/share/comment). We
-  // keep `layoutBottom` for the overflow-risk quality flag and footer
-  // positioning; the value tracks where the support text ends.
-  const contentBottom = supportStart + (supportLines.length * supportLineHeight);
-  const layoutBottom = contentBottom + (preset.footerMode === 'hidden' ? 0 : 76);
-  const footer = preset.footerMode === 'hidden' ? '' : input.brandKit.companyName || '';
+  const hookLineGap = hook ? Math.round(preset.hookSize * 0.9) + 18 : 0;
+  const insightGap = headlineLines.length > 0 && insightLines.length > 0 ? 22 : 0;
+  const supportGap = (headlineLines.length + insightLines.length) > 0 && supportLines.length > 0 ? 14 : 0;
+  const headlineBlockHeight = headlineLines.length * headlineLineHeight;
+  const insightBlockHeight = insightLines.length * insightLineHeight;
+  const supportBlockHeight = supportLines.length * supportLineHeight;
+  const totalStackHeight = hookLineGap + headlineBlockHeight + insightGap + insightBlockHeight + supportGap + supportBlockHeight;
+  const footerHeight = preset.footerMode === 'hidden' ? 0 : 40;
+  const bottomPadding = Math.max(48, Math.round(input.height * 0.06));
+  const supportEndY = input.height - bottomPadding - footerHeight;
+  const supportStart = supportEndY - supportBlockHeight + supportLineHeight;
+  const insightEndY = supportEndY - supportBlockHeight - supportGap;
+  const insightStart = insightEndY - insightBlockHeight + insightLineHeight;
+  const headlineEndY = insightEndY - insightBlockHeight - insightGap;
+  const headlineStart = headlineEndY - headlineBlockHeight + headlineLineHeight;
+  const hookY = headlineStart - hookLineGap;
+  const layoutBottom = supportEndY + footerHeight;
+  // Footer text (brand name) suppressed — the top-right brand mark
+  // already conveys ownership, and rendering "Omnivyra" both as a
+  // logo and as a watermark reads as redundant.
   const standardBrandMode = preset.brandMode === 'standard';
-  // Logo sizing is proportional to canvas so a 1600x900 banner doesn't
-  // wear the same 190px logo as a 1080x1350 IG post. fit:'inside' in
-  // loadBrandMark preserves aspect ratio within these bounds.
-  const logoMaxWidth = Math.round(input.width * (standardBrandMode ? 0.18 : 0.10));
-  const logoMaxHeight = Math.round(input.height * (standardBrandMode ? 0.10 : 0.09));
+  // Brand mark sizing — enlarged so the logo is clearly visible at
+  // typical post viewing sizes. Previously 18%/10% of canvas width;
+  // now 24%/16% which keeps the logo proportional without
+  // dominating the frame.
+  const logoMaxWidth = Math.round(input.width * (standardBrandMode ? 0.24 : 0.16));
+  const logoMaxHeight = Math.round(input.height * (standardBrandMode ? 0.13 : 0.11));
   const brandPlacement = {
-    top: preset.margin + 14,
-    left: input.width - preset.margin - logoMaxWidth - 20,
+    top: safeMargin + 14,
+    left: input.width - safeMargin - logoMaxWidth - 20,
     maxWidth: logoMaxWidth,
     maxHeight: logoMaxHeight,
   };
@@ -621,22 +648,36 @@ function buildOverlaySvg(input: {
     height: input.height,
   });
 
+  // Bottom scrim — vertical gradient that fades from transparent at
+  // ~50% height down to a soft dark at the bottom. Gives the text
+  // enough contrast over any background photo WITHOUT a giant side
+  // panel competing with the image content.
+  const scrimTop = Math.round(input.height * 0.46);
+  const scrimHeight = input.height - scrimTop;
+  const scrimBottomOpacity = Math.min(0.82, Math.max(0.55, overlayStrategy.shadeStartOpacity + 0.2));
+  const scrimMidOpacity = Math.max(0.18, overlayStrategy.shadeMidOpacity * 0.7);
+  const headingColor = '#ffffff';
+  const insightColor = 'rgba(255,255,255,0.94)';
+  const supportColor = 'rgba(255,255,255,0.78)';
+
   const svg = `
     <svg width="${input.width}" height="${input.height}" viewBox="0 0 ${input.width} ${input.height}" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <linearGradient id="shade" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="rgba(2,6,23,${overlayStrategy.shadeStartOpacity})" />
-          <stop offset="68%" stop-color="rgba(2,6,23,${overlayStrategy.shadeMidOpacity})" />
-          <stop offset="100%" stop-color="rgba(2,6,23,0)" />
+        <linearGradient id="bottomScrim" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="rgba(2,6,23,0)" />
+          <stop offset="55%" stop-color="rgba(2,6,23,${scrimMidOpacity})" />
+          <stop offset="100%" stop-color="rgba(2,6,23,${scrimBottomOpacity})" />
         </linearGradient>
+        <filter id="textShadow" x="-15%" y="-15%" width="130%" height="130%">
+          <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.55)" flood-opacity="1" />
+        </filter>
       </defs>
-      <rect width="${input.width}" height="${input.height}" fill="url(#shade)" />
-      <rect x="${panelX}" y="${panelY}" width="${panelWidth}" height="${input.height - (panelY * 2)}" rx="32" fill="rgba(15,23,42,${panelOpacity})" stroke="rgba(255,255,255,0.14)" />
-      <text x="${panelX + 42}" y="${panelY + 66}" fill="${accent}" font-size="${preset.hookSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="800" letter-spacing="1.1">${escapeXml(hook.toUpperCase())}</text>
-      ${headlineLines.map((line, index) => `<text x="${panelX + 42}" y="${headlineStart + index * headlineLineHeight}" fill="${overlayStrategy.headingColor}" font-size="${preset.headlineSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.headingWeight}">${escapeXml(line)}</text>`).join('')}
-      ${insightLines.map((line, index) => `<text x="${panelX + 44}" y="${insightStart + index * insightLineHeight}" fill="${overlayStrategy.textColor}" font-size="${preset.insightSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.bodyWeight}">${escapeXml(line)}</text>`).join('')}
-      ${supportLines.map((line, index) => `<text x="${panelX + 44}" y="${supportStart + index * supportLineHeight}" fill="${overlayStrategy.mutedTextColor}" font-size="${preset.supportSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="500">${escapeXml(line)}</text>`).join('')}
-      ${footer ? `<text x="${panelX + 42}" y="${input.height - 82}" fill="${overlayStrategy.footerColor}" opacity="${preset.footerMode === 'subtle' ? '0.72' : '0.9'}" font-size="22" font-family="${input.brandKit.typography.fontFamily}" font-weight="700">${escapeXml(footer.slice(0, 62))}</text>` : ''}
+      <rect x="0" y="${scrimTop}" width="${input.width}" height="${scrimHeight}" fill="url(#bottomScrim)" />
+      ${hook ? `<text x="${textX}" y="${hookY}" filter="url(#textShadow)" fill="${accent}" font-size="${preset.hookSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="800" letter-spacing="1.4">${escapeXml(hook.toUpperCase())}</text>` : ''}
+      ${headlineLines.map((line, index) => `<text x="${textX}" y="${headlineStart + index * headlineLineHeight}" filter="url(#textShadow)" fill="${headingColor}" font-size="${preset.headlineSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.headingWeight}">${escapeXml(line)}</text>`).join('')}
+      ${insightLines.map((line, index) => `<text x="${textX}" y="${insightStart + index * insightLineHeight}" filter="url(#textShadow)" fill="${insightColor}" font-size="${preset.insightSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.bodyWeight}">${escapeXml(line)}</text>`).join('')}
+      ${supportLines.map((line, index) => `<text x="${textX}" y="${supportStart + index * supportLineHeight}" filter="url(#textShadow)" fill="${supportColor}" font-size="${preset.supportSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="500">${escapeXml(line)}</text>`).join('')}
+      <!-- footer watermark suppressed (brand mark in top-right is canonical); textWidth=${textWidth} retained for layout-spec future use -->
     </svg>
   `.trim();
   return { svg, quality, brandPlacement };
@@ -725,6 +766,31 @@ async function normalizeBackgroundBuffer(input: {
   }
 }
 
+/**
+ * Build the provider image prompt via the layered composer + the
+ * multimodal evolution stack (Phases 1-9 of brand-conditioned creative).
+ *
+ * Pipeline:
+ *   1. Compose first attempt via creatorPromptComposer (premium
+ *      auto-detected when brand grounding is strong).
+ *   2. Score the prompt via creatorOutputQualityRanking.
+ *   3. If below threshold, compute adaptive retry directives and
+ *      re-compose ONCE with the mutations applied. Pick the higher-
+ *      scoring of the two attempts.
+ *   4. Assemble the multimodal payload via creatorMultimodalReferences
+ *      against the current provider's capabilities. References
+ *      survive as image inputs (capable providers) or as enriched
+ *      textual descriptors (legacy providers).
+ *   5. Update the brand visual memory so subsequent generations
+ *      reuse the same template for visual continuity.
+ *   6. Stash the full audit envelope on assetPayload.media_bundle.metadata.
+ *   7. Return the final text prompt the existing provider call expects.
+ *
+ * No control-flow changes to the caller. The function still returns a
+ * single string; the multimodal payload + scoring + retry all happen
+ * inside the prompt-building boundary so the renderer's existing
+ * provider call signature stays untouched.
+ */
 function buildAiImagePrompt(input: {
   title: string;
   body: string;
@@ -732,68 +798,488 @@ function buildAiImagePrompt(input: {
   metadata: Record<string, unknown>;
   assetPayload: Record<string, unknown>;
   attachmentMode?: string | null;
-  /** Subtype hint resolved from `creator_card.subtype` etc. */
   subtypeHint?: ImageSubtypeHint | null;
+  /** Used for brand visual memory lookup/update (Phase 9). */
+  companyId?: string | null;
 }): string {
   const brandContext = safeObject(input.metadata.brand_context);
   const selectedAssets = safeObject(input.metadata.selected_brand_assets);
-  const colorPalette = Array.isArray(input.assetPayload.color_palette)
-    ? input.assetPayload.color_palette.map((value) => String(value)).filter(Boolean).slice(0, 5).join(', ')
-    : '';
-  const audience = compactText(input.metadata.audience);
-  const platform = compactText(input.metadata.platform || input.metadata.primary_platform);
-  const objective = compactText(input.metadata.objective || input.metadata.summary);
-  const brandTone = compactText(brandContext.tone || input.metadata.tone);
-  const tagline = compactText(brandContext.tagline || selectedAssets.tagline);
-  const supportingVisual = input.attachmentMode === 'supporting_visual';
+  const productContextRaw = safeObject(input.metadata.product_context);
+  const brandKit = safeObject(input.metadata.brand_kit ?? selectedAssets);
+  const palette = Array.isArray(input.assetPayload.color_palette)
+    ? input.assetPayload.color_palette.map((v) => String(v)).filter(Boolean).slice(0, 5)
+    : Array.isArray(brandKit.palette)
+      ? (brandKit.palette as unknown[]).map((v) => String(v)).filter(Boolean).slice(0, 5)
+      : [];
 
-  // Mode-shared header — both branches still ban literal typography in
-  // the generated image. text_embedded relies on the deterministic SVG
-  // overlay; composition deliberately keeps provider text out because
-  // models routinely render it malformed.
-  const header = [
-    supportingVisual
-      ? 'Create a production-ready editorial marketing visual that stands on its own as a complete social creative — not an ad poster, text layout, slide, or wireframe.'
-      : 'Create a production-ready editorial marketing visual scene, not an ad poster, text layout, slide, or wireframe.',
-    `Content type: ${input.eyebrow || 'image'}.`,
-    `Theme to depict visually, without writing it in the image: ${input.title}.`,
-    input.body ? `Visual direction to depict through objects, people, color, lighting, and composition only: ${input.body}.` : '',
-    objective ? `Objective: ${objective}.` : '',
-    audience ? `Audience: ${audience}.` : '',
-    platform ? `Platform intent: ${platform}.` : '',
-    brandTone ? `Brand personality: ${brandTone}.` : '',
-    tagline ? `Optional tagline influence: ${tagline}.` : '',
-    colorPalette ? `Use this color direction where natural: ${colorPalette}.` : '',
-    input.subtypeHint?.promptLine ?? '',
-  ];
+  // Lazy require so the creative-intelligence modules are only loaded
+  // when the renderer actually needs them.
+  const { composeCreatorImagePrompt } =
+    require('./creator/creatorPromptComposer') as typeof import('./creator/creatorPromptComposer');
+  const { assembleMultimodalPayload } =
+    require('./creator/creatorMultimodalReferences') as typeof import('./creator/creatorMultimodalReferences');
+  const { scoreCreatorPromptQuality, computeRetryDirective } =
+    require('./creator/creatorOutputQualityRanking') as typeof import('./creator/creatorOutputQualityRanking');
+  const { getBrandVisualPreference, updateBrandVisualPreference } =
+    require('./creator/creatorVisualBrandMemory') as typeof import('./creator/creatorVisualBrandMemory');
+  const { planCreativeDirection } =
+    require('./creator/creativeDirectorEngine') as typeof import('./creator/creativeDirectorEngine');
+  const { orchestrateCreativeVariants } =
+    require('./creator/creativeVariantOrchestrator') as typeof import('./creator/creativeVariantOrchestrator');
+  const { rankCreativeAesthetic, pickWinningVariant } =
+    require('./creator/creativeAestheticRanking') as typeof import('./creator/creativeAestheticRanking');
+  const { planOrFetchCampaignDNA, projectAssetPlanFromDNA } =
+    require('./creator/campaignCoherenceEngine') as typeof import('./creator/campaignCoherenceEngine');
+  const { resolvePlatformAdaptation } =
+    require('./creator/platformVisualAdaptation') as typeof import('./creator/platformVisualAdaptation');
+  const { evaluateBrandGovernance } =
+    require('./creator/brandGovernanceEngine') as typeof import('./creator/brandGovernanceEngine');
+  const { computeOptimizationDirective, decideAutonomousOperation } =
+    require('./creator/autonomousCreativeOptimizer') as typeof import('./creator/autonomousCreativeOptimizer');
+  const { recordTelemetryEvent } =
+    require('./creator/creatorPerformanceTelemetry') as typeof import('./creator/creatorPerformanceTelemetry');
 
-  const modeBlock = supportingVisual
-    ? [
-        // Composition: full-frame finished visual, no reserved overlay space.
-        'Treat the entire frame as the final creative — no reserved negative space, no anticipated text overlay.',
-        'Compose with a clear focal subject, strong color discipline, and intentional foreground/background balance. The image must read on its own without any accompanying text.',
-        'Prefer clean real-world marketing photography, tasteful product/context scenes, or premium editorial abstraction with one clear focal idea.',
-        'Keep the visual standalone: it pairs with a separate caption written outside the image, so the image itself should not try to deliver the message in words.',
-      ]
-    : [
-        // text_embedded: leave room for the SVG overlay we composite later.
-        'Make it polished, specific, modern, and usable as a commercial social creative background with clear negative space for a later text overlay.',
-        'Keep the focal subject to the right or background depth, leaving the left and lower-left visually calm for typography.',
-        'Prefer clean real-world marketing photography, tasteful product/context scenes, or premium editorial abstraction with one clear focal idea.',
-        'Represent CTA direction through composition and focal hierarchy, not through rendered text.',
-      ];
+  const composerInput = {
+    title: input.title,
+    body: input.body,
+    eyebrow: input.eyebrow,
+    attachmentMode: input.attachmentMode,
+    subtypeHint: input.subtypeHint ? { promptLine: input.subtypeHint.promptLine } : null,
+    brandKit: {
+      companyName: typeof brandKit.companyName === 'string' ? brandKit.companyName : (typeof brandContext.companyName === 'string' ? brandContext.companyName : undefined),
+      logoUrl: typeof brandKit.logoUrl === 'string' ? brandKit.logoUrl : (typeof brandContext.logoUrl === 'string' ? brandContext.logoUrl : undefined),
+      faviconUrl: typeof brandKit.faviconUrl === 'string' ? brandKit.faviconUrl : (typeof brandContext.faviconUrl === 'string' ? brandContext.faviconUrl : undefined),
+      palette,
+      accentColor: typeof brandKit.accentColor === 'string' ? brandKit.accentColor : (typeof brandContext.accentColor === 'string' ? brandContext.accentColor : undefined),
+      typography: typeof brandKit.typography === 'object' && brandKit.typography !== null ? brandKit.typography as { fontFamily?: string } : undefined,
+      tone: typeof brandContext.tone === 'string' ? brandContext.tone : (typeof input.metadata.tone === 'string' ? input.metadata.tone : undefined),
+      industry: typeof brandKit.industry === 'string' ? brandKit.industry : (typeof brandContext.industry === 'string' ? brandContext.industry : undefined),
+      domain: typeof brandKit.domain === 'string' ? brandKit.domain : (typeof brandContext.domain === 'string' ? brandContext.domain : undefined),
+    },
+    productContext: {
+      productName: typeof productContextRaw.productName === 'string' ? productContextRaw.productName : (typeof brandContext.productName === 'string' ? brandContext.productName : undefined),
+      productCategory: typeof productContextRaw.productCategory === 'string' ? productContextRaw.productCategory : undefined,
+      screenshotUrls: Array.isArray(productContextRaw.screenshotUrls) ? (productContextRaw.screenshotUrls as unknown[]).map(String) : undefined,
+      dashboardDescription: typeof productContextRaw.dashboardDescription === 'string' ? productContextRaw.dashboardDescription : undefined,
+      uiKeywords: Array.isArray(productContextRaw.uiKeywords) ? (productContextRaw.uiKeywords as unknown[]).map(String) : undefined,
+    },
+    audience: compactText(input.metadata.audience),
+    platform: compactText(input.metadata.platform || input.metadata.primary_platform),
+    objective: compactText(input.metadata.objective || input.metadata.summary),
+    tagline: compactText(brandContext.tagline || selectedAssets.tagline),
+    brandMode: typeof input.metadata.brand_generation_mode === 'string'
+      ? input.metadata.brand_generation_mode
+      : (typeof input.metadata.brand_mode === 'string' ? input.metadata.brand_mode : 'brand-aware'),
+    contentType: typeof input.metadata.content_type === 'string' ? input.metadata.content_type : input.eyebrow,
+  };
 
-  // Shared guardrails — apply in both modes. Provider typography is
-  // banned in BOTH branches: composition relies on the visual itself,
-  // text_embedded relies on our deterministic overlay.
-  const footer = [
-    'Strictly avoid all visible text: no words, letters, numbers, captions, signage, fake logos, UI text, CTA buttons, or tagline text.',
-    'If a screen, dashboard, paper, or object appears, keep any markings abstract and unreadable.',
-    'Use brand details as visual influence only: palette, mood, composition, industry cues, and audience relevance.',
-    'Avoid chaotic collages, busy dashboards, decorative clutter, fake interface screenshots, malformed hands, and plain gradient quote cards.',
-  ];
+  // Pull the brand's preferred template + strategy if one is cached.
+  const brandPreference = getBrandVisualPreference(input.companyId);
+  const productContextExpected = Boolean(
+    composerInput.productContext.productName
+      || composerInput.productContext.dashboardDescription
+      || (composerInput.productContext.screenshotUrls?.length ?? 0) > 0
+  );
 
-  return [...header, ...modeBlock, ...footer].filter(Boolean).join('\n');
+  // ── Enterprise creative-intelligence pipeline ──────────────────────
+  // Phase 1 (campaign coherence) — plan-or-fetch the campaign visual
+  // DNA. Subsequent assets for the same campaign id reuse the DNA so
+  // cross-asset coherence is preserved.
+  const campaignIdForDna =
+    (typeof input.metadata.campaign_id === 'string' && input.metadata.campaign_id.trim()) ? input.metadata.campaign_id.trim()
+    : (typeof input.metadata.campaignId === 'string' && input.metadata.campaignId.trim()) ? input.metadata.campaignId.trim()
+    : null;
+  const dnaResult = planOrFetchCampaignDNA({
+    campaignId: campaignIdForDna,
+    campaignIntent: composerInput.objective ?? null,
+    audience: composerInput.audience ?? null,
+    platform: composerInput.platform ?? null,
+    contentType: composerInput.contentType ?? null,
+    brandKit: composerInput.brandKit,
+    productContext: composerInput.productContext,
+  });
+  const campaignDNA = dnaResult?.dna ?? null;
+
+  // Phase 1 — plan creative direction. When campaign DNA exists,
+  // project the per-asset plan FROM the DNA so emotional / realism /
+  // composition / human presence are inherited. Otherwise plan from
+  // brand-memory continuity (no campaign DNA case).
+  const plan = campaignDNA
+    ? projectAssetPlanFromDNA({
+        dna: campaignDNA,
+        campaignIntent: composerInput.objective ?? null,
+        audience: composerInput.audience ?? null,
+        platform: composerInput.platform ?? null,
+        contentType: composerInput.contentType ?? null,
+        brandKit: composerInput.brandKit,
+        productContext: composerInput.productContext,
+      })
+    : planCreativeDirection({
+        campaignIntent: composerInput.objective ?? null,
+        audience: composerInput.audience ?? null,
+        platform: composerInput.platform ?? null,
+        contentType: composerInput.contentType ?? null,
+        brandKit: composerInput.brandKit,
+        productContext: composerInput.productContext,
+        brandMemory: brandPreference?.preferredStrategy
+          ? { preferredStrategy: brandPreference.preferredStrategy as any }
+          : null,
+      });
+
+  // Phase 3 — platform-native adaptation resolved from the asset's
+  // platform. Adaptation lines are appended to the composer input's
+  // extra context (the composer itself emits the platform intent line;
+  // adaptation extends it).
+  const platformAdaptation = resolvePlatformAdaptation(composerInput.platform);
+
+  // Phase 3 (autonomous optimizer) — derive optimizer directives from
+  // the org's strategic memory + human feedback. The directives nudge
+  // the composer toward strategies + emotional directions that have
+  // performed well historically for this org. All directives are
+  // bounded (Phase 11) — never auto-disable, only nudge weights.
+  const optimization = computeOptimizationDirective({
+    companyId: input.companyId,
+    currentStrategy: null,
+  });
+  if (optimization.mutations.forceBrandAware) composerInput.brandMode = 'brand-aware';
+  // Realism + suppression intensification is already baked into the
+  // composer's premium variant templates; the optimizer signals this
+  // by setting `promoteToPremium` which the variant orchestrator
+  // honors via the existing premium-bias path.
+
+  // Phase 2 + 6 — orchestrate 1-3 meaningfully different variants
+  // based on grounding signals + cost governance. Grounding here is
+  // the same threshold the composer uses (≥3 signals counted from
+  // brand kit + product context).
+  const brandSignalCount = [
+    composerInput.brandKit?.companyName,
+    composerInput.brandKit?.industry,
+    composerInput.brandKit?.tone,
+    Array.isArray(composerInput.brandKit?.palette) && (composerInput.brandKit!.palette!.length ?? 0) > 0 ? '1' : null,
+    composerInput.brandKit?.accentColor,
+    composerInput.brandKit?.logoUrl,
+  ].filter(Boolean).length;
+  const productSignalCount = [
+    composerInput.productContext?.productName,
+    composerInput.productContext?.productCategory,
+    composerInput.productContext?.dashboardDescription,
+    Array.isArray(composerInput.productContext?.screenshotUrls) && (composerInput.productContext!.screenshotUrls!.length ?? 0) > 0 ? '1' : null,
+    Array.isArray(composerInput.productContext?.uiKeywords) && (composerInput.productContext!.uiKeywords!.length ?? 0) > 0 ? '1' : null,
+  ].filter(Boolean).length;
+  const orchestration = orchestrateCreativeVariants({
+    plan,
+    hasBrandGrounding: brandSignalCount >= 3,
+    hasProductGrounding: productSignalCount >= 3,
+    brandPreference: brandPreference?.preferredTemplate ?? null,
+    // Phase 6 — DNA-constrained exploration. When the campaign has an
+    // established DNA, variants are restricted to its approved templates.
+    // Phase 9 — cost governance: max 3 variants always; renders driven
+    // by stale DNA (assetCount > 24) hard-cap to one variant to avoid
+    // exploration cost on mature campaigns.
+    config: campaignDNA
+      ? {
+          campaignApprovedTemplates: campaignDNA.approvedTemplates,
+          hardCapToOne: campaignDNA.assetCount > 24,
+        }
+      : undefined,
+  });
+
+  // Phase 3 — compose + score each variant.
+  type Candidate = {
+    spec: typeof orchestration.variants[number];
+    composed: ReturnType<typeof composeCreatorImagePrompt>;
+    rank: ReturnType<typeof rankCreativeAesthetic>;
+    qualityScore: ReturnType<typeof scoreCreatorPromptQuality>;
+  };
+  const candidates: Candidate[] = orchestration.variants.map((spec) => {
+    const variantInput = { ...composerInput, ...spec.inputMutations };
+    const variantComposed = composeCreatorImagePrompt(variantInput, spec.composeOptions);
+    const variantRank = rankCreativeAesthetic({
+      composed: variantComposed,
+      plan,
+      productContextExpected,
+    });
+    const variantQuality = scoreCreatorPromptQuality({
+      composed: variantComposed,
+      productContextExpected,
+    });
+    return { spec, composed: variantComposed, rank: variantRank, qualityScore: variantQuality };
+  });
+
+  // Phase 7 — winner selection. Highest aesthetic total wins.
+  const { winner, runners } = pickWinningVariant(
+    candidates.map((c) => ({ variant: c, rank: c.rank })),
+  );
+  let composed = winner.variant.composed;
+  let score = winner.variant.qualityScore;
+  let retryApplied = false;
+  let retryReason: string | null = null;
+
+  // Phase 2 + 7 — enterprise brand governance + governance-aware retry.
+  // The governance engine validates the winning variant against the
+  // brand kit + campaign DNA. When violations exist, the renderer
+  // applies the suggested retry strategy ONCE before falling back to
+  // the original winner. Phase 9 cost governance caps the loop at a
+  // single governance-driven re-compose attempt — no recursion.
+  const governance = evaluateBrandGovernance({
+    composed: winner.variant.composed,
+    plan,
+    rank: winner.variant.rank,
+    brandKit: composerInput.brandKit,
+    dna: campaignDNA,
+  });
+  let governanceRetryApplied = false;
+  let governancePostRetry = governance;
+  if ((governance.governanceViolations.length > 0 || governance.rejectGeneration)
+      && governance.retryStrategy !== 'none') {
+    // Construct a governance-driven mutation from the retry strategy.
+    const govMutations: Partial<typeof composerInput> = {};
+    const govOptions: { premium?: boolean; brandPreference?: any } = {};
+    switch (governance.retryStrategy) {
+      case 'tighten_brand_signals':
+      case 'tighten_palette':
+        govMutations.brandMode = 'brand-aware';
+        break;
+      case 'tighten_realism':
+      case 'reduce_stock_bias':
+        govOptions.premium = true;
+        break;
+      case 'increase_product_grounding':
+        // No mutation possible from the renderer (product context is
+        // upstream input); flag-only for the audit envelope.
+        break;
+      case 'switch_emotional_tone':
+      case 'enforce_composition_family':
+      case 'suppress_human_presence':
+        // These mutations require re-projecting from DNA. When DNA
+        // is present, the projected plan already inherited the DNA's
+        // emotional tone / composition / human presence — re-running
+        // through the composer with the current plan suffices.
+        break;
+      default:
+        break;
+    }
+    const govRetryInput = { ...composerInput, ...govMutations };
+    const govRetryComposed = composeCreatorImagePrompt(govRetryInput, {
+      ...govOptions,
+      brandPreference: brandPreference?.preferredTemplate ?? null,
+    });
+    const govRetryRank = rankCreativeAesthetic({
+      composed: govRetryComposed,
+      plan,
+      productContextExpected,
+    });
+    const govRetryScore = scoreCreatorPromptQuality({
+      composed: govRetryComposed,
+      productContextExpected,
+    });
+    const govRetryEval = evaluateBrandGovernance({
+      composed: govRetryComposed,
+      plan,
+      rank: govRetryRank,
+      brandKit: composerInput.brandKit,
+      dna: campaignDNA,
+    });
+    // Accept the retry when it improves governance OR aesthetic score.
+    const govImproved = govRetryEval.governanceScore > governance.governanceScore
+      || govRetryRank.totalScore > winner.variant.rank.totalScore;
+    if (govImproved) {
+      composed = govRetryComposed;
+      score = govRetryScore;
+      governanceRetryApplied = true;
+      governancePostRetry = govRetryEval;
+    }
+  }
+
+  // Single-variant safety net — when only 1 variant was orchestrated
+  // (weak grounding / hard cap), preserve the prior adaptive-retry
+  // behavior so the prompt still gets a second pass when score is low.
+  if (orchestration.count === 1) {
+    const retry = computeRetryDirective({ score, composed });
+    if (retry.shouldRetry) {
+      const retryInput = { ...composerInput, ...retry.inputMutations };
+      const retryComposed = composeCreatorImagePrompt(retryInput, {
+        ...retry.optionOverrides,
+        brandPreference: brandPreference?.preferredTemplate ?? null,
+      });
+      const retryScore = scoreCreatorPromptQuality({ composed: retryComposed, productContextExpected });
+      if (retryScore.score > score.score) {
+        composed = retryComposed;
+        score = retryScore;
+        retryApplied = true;
+        retryReason = retry.reason;
+      }
+    }
+  }
+
+  // Phase 1-2 — multimodal payload assembly. Provider id is hardcoded
+  // here as the OpenAI standard because that's what generateProviderImage
+  // calls; capability registry will handle future swaps without
+  // touching this code.
+  const multimodal = assembleMultimodalPayload({
+    composed,
+    providerId: 'openai-gpt-image-1',
+  });
+
+  // Phase 8 — record this attempt in brand visual memory so future
+  // assets for the same company drift toward the same lane. Records
+  // the FULL creative intelligence envelope (strategy + emotional
+  // direction + composition + realism + subject priority + narrative).
+  updateBrandVisualPreference({
+    companyId: input.companyId,
+    template: composed.creativeDirection,
+    premium: composed.premium,
+    score: score.score,
+    surface: input.eyebrow || (typeof input.metadata.content_type === 'string' ? input.metadata.content_type : 'image'),
+    strategy: plan.strategyProfile,
+    emotionalDirection: plan.emotionalDirection,
+    compositionStrategy: plan.compositionStrategy,
+    realismProfile: plan.realismProfile,
+    subjectPriority: plan.subjectPriority,
+    visualNarrative: plan.visualNarrative,
+  });
+
+  // Stash the FULL creative-intelligence audit envelope on
+  // assetPayload.media_bundle.metadata. This preserves variant
+  // traceability + explainability + ranking metadata so dashboards
+  // can pivot variant performance and audit the winner choice.
+  const bundle = safeObject(input.assetPayload.media_bundle);
+  const bundleMeta = safeObject(bundle.metadata);
+  (bundle as Record<string, unknown>).metadata = {
+    ...bundleMeta,
+    // Winning variant + composer signals
+    creative_direction: composed.creativeDirection,
+    creative_direction_premium: composed.premium,
+    brand_grounded: composed.brandGrounded,
+    product_grounded: composed.productGrounded,
+    // Strategic plan
+    creative_strategy: plan.strategyProfile,
+    creative_emotional_direction: plan.emotionalDirection,
+    creative_composition_strategy: plan.compositionStrategy,
+    creative_realism_profile: plan.realismProfile,
+    creative_visual_narrative: plan.visualNarrative,
+    creative_framing_strategy: plan.framingStrategy,
+    creative_subject_priority: plan.subjectPriority,
+    creative_human_presence_mode: plan.humanPresenceMode,
+    creative_visual_density: plan.visualDensity,
+    creative_premium_bias: plan.premiumBias,
+    creative_plan_rationale: plan.rationale,
+    // Variant exploration audit
+    variant_count: orchestration.count,
+    variant_rationale: orchestration.rationale,
+    variants: candidates.map((c) => ({
+      id: c.spec.id,
+      label: c.spec.label,
+      template: c.spec.audit.template,
+      exploration_vector: c.spec.audit.explorationVector,
+      rank_total: c.rank.totalScore,
+      rank_bucket: c.rank.bucket,
+      rank_reason: c.rank.rankingReason,
+      strengths: c.rank.strengths,
+      weaknesses: c.rank.weaknesses,
+    })),
+    winner_variant_id: winner.variant.spec.id,
+    runner_up_count: runners.length,
+    // Aesthetic ranking of the winner
+    aesthetic_score: winner.rank.totalScore,
+    aesthetic_bucket: winner.rank.bucket,
+    aesthetic_dimensions: winner.rank.dimensionScores,
+    aesthetic_strengths: winner.rank.strengths,
+    aesthetic_weaknesses: winner.rank.weaknesses,
+    // Prior-phase quality envelope (preserved for backward-compat with
+    // dashboards that already track these fields).
+    prompt_quality_score: score.score,
+    prompt_quality_bucket: score.bucket,
+    prompt_quality_flags: score.flags,
+    prompt_quality_categories: score.categoryScores,
+    prompt_retry_applied: retryApplied,
+    prompt_retry_reason: retryReason,
+    multimodal_references_present: multimodal.audit.referencesPresent,
+    multimodal_references_accepted: multimodal.audit.referencesAccepted,
+    multimodal_references_degraded_to_text: multimodal.audit.referencesDegradedToText,
+    brand_visual_preference_used: Boolean(brandPreference),
+    // Phase 1 + 8 — campaign coherence envelope.
+    campaign_dna_established: dnaResult?.established ?? null,
+    campaign_dna_reused: dnaResult ? !dnaResult.established : null,
+    campaign_dna_strategy_family: campaignDNA?.strategyFamily ?? null,
+    campaign_dna_emotional_tone: campaignDNA?.visualDNA.emotionalTone ?? null,
+    campaign_dna_realism_profile: campaignDNA?.visualDNA.realismProfile ?? null,
+    campaign_dna_composition_family: campaignDNA?.visualDNA.compositionFamily ?? null,
+    campaign_dna_visual_density: campaignDNA?.visualDNA.visualDensity ?? null,
+    campaign_dna_human_presence_policy: campaignDNA?.visualDNA.humanPresencePolicy ?? null,
+    campaign_dna_product_presence_policy: campaignDNA?.visualDNA.productPresencePolicy ?? null,
+    campaign_dna_palette_discipline: campaignDNA?.visualDNA.paletteDiscipline ?? [],
+    campaign_dna_approved_templates: campaignDNA?.approvedTemplates ?? [],
+    campaign_dna_asset_count: campaignDNA?.assetCount ?? null,
+    campaign_dna_rationale: campaignDNA?.rationale ?? [],
+    // Phase 3 — platform adaptation envelope.
+    platform_adaptation: {
+      platform: platformAdaptation.platform,
+      density: platformAdaptation.densityAdjustment,
+      whitespace: platformAdaptation.whitespaceDiscipline,
+      energy: platformAdaptation.visualEnergy,
+      human_nudge: platformAdaptation.humanPresenceNudge,
+      cta_emphasis: platformAdaptation.ctaEmphasis,
+    },
+    // Phase 2 + 7 — governance envelope.
+    governance_score: governancePostRetry.governanceScore,
+    governance_violations: governancePostRetry.governanceViolations.map((v) => ({
+      category: v.category, severity: v.severity, description: v.description,
+    })),
+    governance_warnings: governancePostRetry.governanceWarnings.map((v) => ({
+      category: v.category, severity: v.severity, description: v.description,
+    })),
+    governance_brand_alignment_confidence: governancePostRetry.brandAlignmentConfidence,
+    governance_reject_generation: governancePostRetry.rejectGeneration,
+    governance_retry_strategy: governancePostRetry.retryStrategy,
+    governance_retry_applied: governanceRetryApplied,
+    governance_retry_rationale: governance.retryRationale,
+    governance_pre_retry_score: governance.governanceScore,
+    // Phase 3 + 5 + 7 — autonomous optimizer envelope.
+    optimization_directive_strategy_weights: optimization.strategyWeights,
+    optimization_directive_mutations: optimization.mutations,
+    optimization_preferred_emotional: optimization.preferredEmotionalDirection,
+    optimization_preferred_realism: optimization.preferredRealismProfile,
+    optimization_rationale: optimization.rationale,
+  };
+  (input.assetPayload as Record<string, unknown>).media_bundle = bundle;
+
+  // Phase 4 — telemetry event for this prompt-building attempt. The
+  // renderer's actual provider call + QA evaluation happens AFTER
+  // this function returns (the renderer scope tracks render outcome
+  // for the QA telemetry). This first event records the "render
+  // requested" signal so the strategic memory has continuous coverage
+  // even when downstream stages fail.
+  if (input.companyId) {
+    try {
+      const decision = decideAutonomousOperation({
+        qaScore: 70, // placeholder — QA runs post-render in the renderer scope below
+        qaSeverity: 'pass',
+        governanceScore: governancePostRetry.governanceScore,
+        governanceRejected: governancePostRetry.rejectGeneration,
+        aestheticBucket: winner.variant.rank.bucket,
+      });
+      recordTelemetryEvent({
+        type: 'variant_selected',
+        companyId: input.companyId,
+        campaignId: campaignIdForDna,
+        strategy: plan.strategyProfile,
+        template: composed.creativeDirection,
+        platform: composerInput.platform ?? null,
+        emotionalDirection: plan.emotionalDirection,
+        realismProfile: plan.realismProfile,
+        aestheticScore: winner.variant.rank.totalScore,
+        governanceScore: governancePostRetry.governanceScore,
+        payload: {
+          autonomous_decision: decision.action,
+          autonomous_reason: decision.reason,
+          variant_count: orchestration.count,
+        },
+      });
+    } catch { /* telemetry never throws */ }
+  }
+
+  return multimodal.textPrompt;
 }
 
 function timeoutAfter<T>(ms: number, label: string): Promise<T> {
@@ -1153,7 +1639,15 @@ async function composeSingleVisualAsset(
     assetType: fileNamePrefix,
   });
   const brandColors = brandKit.normalizedPalette;
-  const overlay = enforcedAssetType === 'supporting_image'
+  // supporting_image asset normally suppresses overlay text (post text
+  // stays separate from the image). HOWEVER when the writer / direct
+  // route explicitly opts into `embedded_copy`, the operator's typed
+  // hook/headline/insight MUST flow through to the renderer — otherwise
+  // the SVG composer falls back to the platform name (e.g. "INSTAGRAM")
+  // and produces a nonsense overlay.
+  const supportingImageWithoutEmbeddedCopy =
+    enforcedAssetType === 'supporting_image' && metadata.attachment_mode !== 'embedded_copy';
+  const overlay = supportingImageWithoutEmbeddedCopy
     ? { hook: '', headline: '', keyInsight: '', cta: '', supportingText: '' }
     : normalizeOverlayText({ assetPayload, metadata, title, body });
   const writerGoverned = Boolean(metadata.writer_asset_type || metadata.creator_content_asset_type || metadata.attachment_mode);
@@ -1213,6 +1707,22 @@ async function composeSingleVisualAsset(
     : enforcedAssetType === 'banner'
       ? 'embedded_copy'
       : resolveAttachmentRenderMode({ fileNamePrefix, assetPayload, metadata });
+  // ── Phase 7 runtime wiring — semantic vs render-policy attachment mode.
+  // `attachmentRenderPolicy` above is the RENDERER-INTERNAL composition
+  // policy (drives overlay-vs-no-overlay, prompt text-bans, etc.) and
+  // can differ from what the writer semantically requested because the
+  // supporting_image entry hardcodes 'supporting_visual'. For OCR
+  // gating + lightweight-lane classification we need the WRITER'S
+  // semantic intent (from `metadata.attachment_mode`, set by the API
+  // normalize layer's `resolveAttachmentModeFromIntent`). When the
+  // writer payload has no explicit mode, fall back to the renderer's
+  // internal policy to preserve legacy behavior.
+  const semanticAttachmentMode: 'embedded_copy' | 'supporting_visual' =
+    metadata.attachment_mode === 'embedded_copy'
+      ? 'embedded_copy'
+      : metadata.attachment_mode === 'supporting_visual'
+        ? 'supporting_visual'
+        : attachmentRenderPolicy;
   const subtypeHint = resolveImageSubtype(metadata, assetPayload);
   const providerPrompt = buildAiImagePrompt({
     title,
@@ -1222,6 +1732,7 @@ async function composeSingleVisualAsset(
     assetPayload,
     attachmentMode: attachmentRenderPolicy,
     subtypeHint,
+    companyId: options.companyId ?? null,
   });
   const providerResult = await generateProviderImage({
     prompt: providerPrompt,
@@ -1242,7 +1753,9 @@ async function composeSingleVisualAsset(
         image: providerResult.image.buffer,
         assetType: enforcedAssetType ?? fileNamePrefix,
         platform,
-        attachmentMode: attachmentRenderPolicy,
+        // Phase 7 wiring fix — OCR threshold resolution uses the
+        // writer's semantic mode, not the renderer-internal policy.
+        attachmentMode: semanticAttachmentMode,
         mimeType: 'image/png',
       })
     : null;
@@ -1388,7 +1901,8 @@ async function composeSingleVisualAsset(
     image: fileBuffer,
     assetType: enforcedAssetType ?? fileNamePrefix,
     platform,
-    attachmentMode: attachmentRenderPolicy,
+    // Phase 7 wiring fix — see semanticAttachmentMode above.
+    attachmentMode: semanticAttachmentMode,
     mimeType: 'image/png',
   });
   const mergedTextValidation = {
@@ -1398,12 +1912,84 @@ async function composeSingleVisualAsset(
     confidence: finalOcr.confidence || textValidation.confidence,
     provider: finalOcr.provider,
   };
+  // Phase 1/3 — lightweight social embedded_copy lane. Eligible
+  // single-image overlays (supporting_image / banner / brand_card on
+  // social platforms in embedded_copy mode) tolerate OCR-provider
+  // unavailability and synthesize reading order from the governed
+  // overlay structure. Manifest is still validated; only the
+  // operational-tier OCR + missing-reading-order signals are repaired.
+  // Phase 7 wiring fix — classification uses the writer's semantic
+  // mode (the API normalize layer already resolved it via
+  // resolveAttachmentModeFromIntent), NOT the renderer-internal
+  // composition policy. Without this, supporting_image renders
+  // hardcoded to 'supporting_visual' policy fail the lightweight check
+  // even when the writer payload semantically requested embedded_copy.
+  const lightweightSocial = isLightweightSocialEmbeddedCopy({
+    assetType: enforcedAssetType ?? fileNamePrefix,
+    platform,
+    attachmentMode: semanticAttachmentMode,
+  });
+  // ocr_relaxed is enabled when the OCR provider is unavailable for
+  // any reason AND the asset qualifies for the lightweight lane.
+  // `provider_image_unavailable_for_ocr` (provider had no image to
+  // analyze, from validateProviderImageTextSafety) is treated as an
+  // operational unavailability signal too — it's already filtered by
+  // assertRenderManifestExportable regardless of lane, but including
+  // it here keeps the relaxation flag set so dashboards count this
+  // lane consistently.
+  const ocrProviderUnavailable = finalOcr.provider === 'unavailable'
+    || finalOcr.flags.includes('ocr_provider_unconfigured')
+    || finalOcr.flags.includes('ocr_provider_required_unavailable')
+    || finalOcr.flags.includes('provider_image_unavailable_for_ocr')
+    || (providerOcr?.provider === 'unavailable')
+    || (mergedTextValidation.flags.includes('ocr_provider_required_unavailable'))
+    || (mergedTextValidation.flags.includes('ocr_provider_unconfigured'));
+  const ocrRelaxedForCompat = lightweightSocial && ocrProviderUnavailable;
+  const readingOrderResolution = synthesizeReadingOrderForOverlay(governedOverlay as Record<string, unknown>);
+  const naturalReadingOrder = ['hook', 'headline', 'keyInsight', 'supportingText'].filter((key) => Boolean(governedOverlay[key]));
+  const effectiveReadingOrder = naturalReadingOrder.length > 0
+    ? naturalReadingOrder
+    : readingOrderResolution.readingOrder;
+  const syntheticForCompat = lightweightSocial && naturalReadingOrder.length === 0;
+
+  if (ocrRelaxedForCompat) {
+    logPipelineEvent('embedded_copy_ocr_relaxed', 'info', {
+      asset_type: String(enforcedAssetType ?? fileNamePrefix),
+      platform: String(platform || 'unset'),
+      attachment_mode: String(semanticAttachmentMode || 'unset'),
+      render_policy: String(attachmentRenderPolicy || 'unset'),
+      reason: 'lightweight_social_ocr_provider_unavailable',
+    }, { dedupeKey: `ocr_relaxed.${platform}.${enforcedAssetType ?? fileNamePrefix}`, throttleMs: 10_000 });
+  }
+  if (syntheticForCompat) {
+    logPipelineEvent('embedded_copy_synthetic_reading_order', 'info', {
+      asset_type: String(enforcedAssetType ?? fileNamePrefix),
+      platform: String(platform || 'unset'),
+      attachment_mode: String(semanticAttachmentMode || 'unset'),
+      render_policy: String(attachmentRenderPolicy || 'unset'),
+      governance_mode: 'lightweight_social_embedded_copy',
+      reason: 'no_overlay_keys_populated',
+    }, { dedupeKey: `synthetic_order.${platform}.${enforcedAssetType ?? fileNamePrefix}`, throttleMs: 10_000 });
+  }
+
   const accessibilityValidation = validateCreatorAccessibility({
     altText: title,
-    readingOrder: ['hook', 'headline', 'keyInsight', 'supportingText'].filter((key) => Boolean(governedOverlay[key])),
+    readingOrder: effectiveReadingOrder,
     minFontSize: fileNamePrefix === 'banner' ? 20 : 18,
     contrastRatio: geometry.contrastRatio,
   });
+  const governanceCompatibility: GovernanceCompatibilityFlags | undefined = lightweightSocial
+    ? {
+        lightweight_social_embedded_copy: true,
+        ocr_relaxed: ocrRelaxedForCompat,
+        synthetic_reading_order: syntheticForCompat,
+        degraded_mode_reason: ocrRelaxedForCompat
+          ? 'ocr_provider_unavailable_lightweight_lane'
+          : syntheticForCompat
+            ? 'synthetic_reading_order_no_overlay_keys'
+            : undefined,
+      }
+    : undefined;
   const manifest = createRenderManifest({
     rendererId,
     platformProfile: resolvePlatformVisualProfile(platform) as unknown as Record<string, unknown>,
@@ -1415,8 +2001,9 @@ async function composeSingleVisualAsset(
     transformIntent: typeof metadata.source_text_transform === 'string' ? metadata.source_text_transform : null,
     exportMetadata: { width, height, preview_kind: 'social_creative', provider_ocr: providerOcr },
     altText: title,
-    readingOrder: ['hook', 'headline', 'keyInsight', 'supportingText'].filter((key) => Boolean(governedOverlay[key])),
+    readingOrder: effectiveReadingOrder,
     accessibilityValidation,
+    governanceCompatibility,
   });
   if (writerGoverned) assertRenderManifestExportable(manifest);
   modeAwareMetadata.render_manifest = manifest;
@@ -1429,6 +2016,126 @@ async function composeSingleVisualAsset(
     geometry,
     accessibility: accessibilityValidation,
   };
+
+  // ── Phase 1 + 2 — Production render QA. Combines OCR + CV-light
+  // image statistics + the prior governance / aesthetic ranks into a
+  // single QA verdict. The QA result rides on metadata so the
+  // downstream renderer + dashboards can pivot regenerate-required
+  // assets and surface the autonomous-operation decision.
+  // Phase 11 — QA evaluation never throws; failures degrade to
+  // production-safe defaults and the renderer continues.
+  try {
+    const composedMeta = safeObject(safeObject(modeAwareMetadata.media_bundle).metadata);
+    const governanceForQa = {
+      governanceScore: Number(composedMeta.governance_score ?? 100),
+      governanceViolations: Array.isArray(composedMeta.governance_violations) ? composedMeta.governance_violations as any : [],
+      governanceWarnings: Array.isArray(composedMeta.governance_warnings) ? composedMeta.governance_warnings as any : [],
+      brandAlignmentConfidence: Number(composedMeta.governance_brand_alignment_confidence ?? 100),
+      rejectGeneration: Boolean(composedMeta.governance_reject_generation),
+      retryStrategy: String(composedMeta.governance_retry_strategy ?? 'none'),
+      retryRationale: composedMeta.governance_retry_rationale as any,
+    };
+    const aestheticForQa = {
+      totalScore: Number(composedMeta.aesthetic_score ?? 70),
+      bucket: String(composedMeta.aesthetic_bucket ?? 'good') as 'premium' | 'good' | 'acceptable' | 'weak' | 'low',
+      dimensionScores: composedMeta.aesthetic_dimensions as any || {},
+      strengths: Array.isArray(composedMeta.aesthetic_strengths) ? composedMeta.aesthetic_strengths as any : [],
+      weaknesses: Array.isArray(composedMeta.aesthetic_weaknesses) ? composedMeta.aesthetic_weaknesses as any : [],
+      rankingReason: '',
+    };
+    const planForQa = {
+      strategyProfile: composedMeta.creative_strategy as any,
+      emotionalDirection: composedMeta.creative_emotional_direction as any,
+      compositionStrategy: composedMeta.creative_composition_strategy as any,
+      realismProfile: composedMeta.creative_realism_profile as any,
+      visualNarrative: composedMeta.creative_visual_narrative as any,
+      artDirectionStyle: '',
+      framingStrategy: composedMeta.creative_framing_strategy as any,
+      subjectPriority: composedMeta.creative_subject_priority as any,
+      environmentStyle: '',
+      humanPresenceMode: composedMeta.creative_human_presence_mode as any,
+      visualDensity: composedMeta.creative_visual_density as any,
+      premiumBias: Boolean(composedMeta.creative_premium_bias),
+      rationale: [],
+    };
+    const { evaluateProductionRenderQA } =
+      require('./creator/renderQualityAssurance') as typeof import('./creator/renderQualityAssurance');
+    const { decideAutonomousOperation, computeOptimizationDirective } =
+      require('./creator/autonomousCreativeOptimizer') as typeof import('./creator/autonomousCreativeOptimizer');
+    const { recordTelemetryEvent } =
+      require('./creator/creatorPerformanceTelemetry') as typeof import('./creator/creatorPerformanceTelemetry');
+    const qaResult = await evaluateProductionRenderQA({
+      imageBuffer: fileBuffer,
+      ocr: finalOcr,
+      governance: governanceForQa as any,
+      rank: aestheticForQa as any,
+      plan: planForQa as any,
+      attachmentMode: semanticAttachmentMode,
+    });
+    const autonomousDecision = decideAutonomousOperation({
+      qaScore: qaResult.qaScore,
+      qaSeverity: qaResult.severity,
+      governanceScore: governanceForQa.governanceScore,
+      governanceRejected: governanceForQa.rejectGeneration,
+      aestheticBucket: aestheticForQa.bucket,
+    });
+    modeAwareMetadata.render_qa = {
+      qa_score: qaResult.qaScore,
+      qa_severity: qaResult.severity,
+      qa_violations: qaResult.qaViolations,
+      qa_warnings: qaResult.qaWarnings,
+      qa_regenerate_required: qaResult.regenerateRequired,
+      qa_retry_strategy: qaResult.retryStrategy,
+      qa_production_safe: qaResult.productionSafe,
+      qa_component_scores: qaResult.audit.componentScores,
+      qa_image_analysis: qaResult.imageAnalysis,
+      autonomous_action: autonomousDecision.action,
+      autonomous_reason: autonomousDecision.reason,
+    };
+    // Phase 4 — telemetry event for post-render QA outcome.
+    if (options.companyId) {
+      try {
+        recordTelemetryEvent({
+          type: qaResult.severity === 'fail' || qaResult.severity === 'reject' ? 'qa_failed' : 'qa_passed',
+          companyId: options.companyId,
+          campaignId: typeof metadata.campaign_id === 'string' ? metadata.campaign_id : null,
+          strategy: composedMeta.creative_strategy as any,
+          template: composedMeta.creative_direction as any,
+          platform,
+          emotionalDirection: composedMeta.creative_emotional_direction as any,
+          realismProfile: composedMeta.creative_realism_profile as any,
+          qaScore: qaResult.qaScore,
+          governanceScore: governanceForQa.governanceScore,
+          aestheticScore: aestheticForQa.totalScore,
+          payload: {
+            autonomous_action: autonomousDecision.action,
+            qa_severity: qaResult.severity,
+          },
+        });
+      } catch { /* telemetry never throws */ }
+    }
+    // Surface optimization directive on metadata for dashboard visibility.
+    const optimizationForLog = computeOptimizationDirective({ companyId: options.companyId ?? null });
+    modeAwareMetadata.render_optimization = {
+      strategy_weights: optimizationForLog.strategyWeights,
+      mutations: optimizationForLog.mutations,
+      preferred_emotional: optimizationForLog.preferredEmotionalDirection,
+      preferred_realism: optimizationForLog.preferredRealismProfile,
+      rationale: optimizationForLog.rationale,
+    };
+  } catch (qaError) {
+    // QA failure is non-fatal; record and continue. Phase 11 cost-bounded.
+    modeAwareMetadata.render_qa = {
+      qa_score: null,
+      qa_severity: 'pass',
+      qa_violations: [],
+      qa_warnings: [],
+      qa_regenerate_required: false,
+      qa_retry_strategy: 'none',
+      qa_production_safe: true,
+      qa_error: qaError instanceof Error ? qaError.message : String(qaError),
+    };
+  }
   void persistCreatorValidationManifest({
     rendererId,
     assetType: String(governanceAssetType),

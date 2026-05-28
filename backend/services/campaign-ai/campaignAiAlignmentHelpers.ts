@@ -1,4 +1,4 @@
-import { generateCampaignPlan } from '../aiGateway';
+import { generateCampaignPlan, type LlmPoolName } from '../aiGateway';
 import { canonicalJsonStringify } from '../viralitySnapshotBuilder';
 
 export type AlignmentSuggestion = {
@@ -107,6 +107,8 @@ export async function evaluateWeeklyAlignment(params: {
   psychologicalGoal?: string | null;
   momentum?: string | null;
   normalizedWeeks: any[];
+  signal?: AbortSignal;
+  pool?: LlmPoolName;
 }): Promise<AlignmentEvaluation> {
   const evaluationPrompt = {
     recommendation_context: params.recommendationContext ?? null,
@@ -121,6 +123,8 @@ export async function evaluateWeeklyAlignment(params: {
     campaignId: params.campaignId ?? null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
+    signal: params.signal,
+    pool: params.pool ?? 'alignment',
     messages: [
       {
         role: 'system',

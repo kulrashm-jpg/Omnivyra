@@ -6,6 +6,23 @@ import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 import { validateCreatorPublishSemantics } from '@/backend/services/creatorPublishValidation';
 import { recordCreatorRenderMetric } from '@/backend/services/creatorRenderObservability';
 import { persistCreatorValidationManifest } from '@/backend/services/creatorRenderPersistence';
+import {
+  getThreadRuntimeMode,
+  isMultiRowWriteEnabled,
+  isLegacyJoinedWriteSkipped,
+  checkEnforceGate,
+} from '@/lib/thread/threadRuntimeMode';
+import {
+  parseThreadNodesPayload,
+  coerceThreadContentTypeForPlatform,
+} from '@/lib/thread/threadNodeContract';
+import { insertThreadAtomic, ThreadInsertError } from '@/lib/thread/threadNodePersistence';
+import { openThreadRuntimeTracer } from '@/backend/services/threadRuntime/threadRuntimeInstrumentation';
+import { canonicalizeScheduleForDb } from '@/backend/scheduler/schedulingNormalization';
+import {
+  checkScheduleCharLimit,
+  checkScheduleCharLimitForNodes,
+} from '@/backend/scheduler/schedulingCharLimitGuard';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const { user, error } = await getSupabaseUserFromRequest(req);
@@ -14,27 +31,6 @@ async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise
     return null;
   }
   return user.id;
-}
-
-// The scheduled_posts.chk_content_type constraint was authored with the legacy
-// platform / content_type vocabulary (twitter/tweet, instagram/feed_post). The
-// rest of the app uses canonical names (x, post). Coerce here so the insert
-// satisfies the constraint without requiring a DB migration.
-const PLATFORM_DB_ALIAS: Record<string, string> = {
-  x: 'twitter',
-};
-
-const PLATFORM_DEFAULT_CONTENT_TYPE: Record<string, string> = {
-  twitter: 'tweet',
-  instagram: 'feed_post',
-};
-
-function canonicalizeForDb(rawPlatform: string, rawContentType: string): { platform: string; contentType: string } {
-  const platform = PLATFORM_DB_ALIAS[rawPlatform] ?? rawPlatform;
-  const contentType = rawContentType === 'post' && PLATFORM_DEFAULT_CONTENT_TYPE[platform]
-    ? PLATFORM_DEFAULT_CONTENT_TYPE[platform]
-    : rawContentType;
-  return { platform, contentType };
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -46,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userId = await requireUserId(req, res);
     if (!userId) return;
 
-    const { companyId, title, content, hashtags, mediaType, mediaUrls, mediaTypes, creatorAttachments, scheduledFor, platform, accountId, contentType } = req.body;
+    const { companyId, title, content, hashtags, mediaType, mediaUrls, mediaTypes, creatorAttachments, scheduledFor, platform, accountId, contentType, nodes: rawNodes } = req.body;
 
     if (companyId) {
       const access = await enforceCompanyAccess({ req, res, companyId: String(companyId) });
@@ -61,13 +57,75 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Scheduled time must be in the future' });
     }
 
+    // ── Phase 1B.1: thread multi-row branch ─────────────────────────────────
+    // When THREAD_MULTI_ROW_RUNTIME is on AND the client sent a `nodes` array
+    // with 2+ entries, take the multi-row insert path. In 'shadow' mode the
+    // legacy joined insert still runs (source of truth); the multi-row insert
+    // happens in parallel for soak verification. In 'enforce' mode ONLY the
+    // multi-row insert runs.
+    const parsedNodes = parseThreadNodesPayload(rawNodes);
+    const isThreadPayload = Boolean(parsedNodes && parsedNodes.length >= 2);
+    const runtimeMode = getThreadRuntimeMode();
+
     const hashtagArray = hashtags
       ? hashtags.split(/\s+/).filter((t: string) => t.startsWith('#'))
       : [];
 
-    const rawPlatform = String(platform || '').trim().toLowerCase();
-    const rawContentType = String(contentType || 'post').trim().toLowerCase() || 'post';
-    const { platform: dbPlatform, contentType: dbContentType } = canonicalizeForDb(rawPlatform, rawContentType);
+    const { dbPlatform, dbContentType } = canonicalizeScheduleForDb({
+      platform,
+      contentType: contentType || 'post',
+    });
+
+    // G11 — schedule-time char-limit guard. No-op when SCHEDULE_CHAR_LIMIT_MODE
+    // is unset/off (default). In 'warn' mode, logs and continues. In 'enforce'
+    // mode, rejects with 422 before the DB constraint surfaces an opaque 500.
+    if (isThreadPayload && parsedNodes) {
+      const nodeCheck = checkScheduleCharLimitForNodes({
+        platform: dbPlatform,
+        nodes: parsedNodes,
+      });
+      if (!nodeCheck.ok) {
+        if (nodeCheck.shouldReject) {
+          return res.status(422).json({
+            error: nodeCheck.code,
+            message: nodeCheck.message,
+            platform: nodeCheck.platform,
+            actualChars: nodeCheck.actualChars,
+            maxChars: nodeCheck.maxChars,
+            excessChars: nodeCheck.excessChars,
+            failedPosition: nodeCheck.failedPosition,
+          });
+        }
+        console.warn('[scheduler/schedule] char-limit warn (thread)', {
+          platform: nodeCheck.platform,
+          actualChars: nodeCheck.actualChars,
+          maxChars: nodeCheck.maxChars,
+          failedPosition: nodeCheck.failedPosition,
+        });
+      }
+    } else {
+      const charCheck = checkScheduleCharLimit({
+        platform: dbPlatform,
+        content: String(content || ''),
+      });
+      if (!charCheck.ok) {
+        if (charCheck.shouldReject) {
+          return res.status(422).json({
+            error: charCheck.code,
+            message: charCheck.message,
+            platform: charCheck.platform,
+            actualChars: charCheck.actualChars,
+            maxChars: charCheck.maxChars,
+            excessChars: charCheck.excessChars,
+          });
+        }
+        console.warn('[scheduler/schedule] char-limit warn (single)', {
+          platform: charCheck.platform,
+          actualChars: charCheck.actualChars,
+          maxChars: charCheck.maxChars,
+        });
+      }
+    }
 
     const normalizedMediaUrls = Array.isArray(mediaUrls)
       ? mediaUrls
@@ -166,6 +224,134 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         errors: scheduleValidation.errors,
         warnings: scheduleValidation.warnings,
       });
+    }
+
+    // ── Multi-row path (Phase 1B.1) — runs when flag on AND thread payload ──
+    if (isThreadPayload && isMultiRowWriteEnabled() && parsedNodes) {
+      // Phase 1B.1A — enforce-mode hard gate. Reject before any rows are
+      // inserted to prevent first-segment-only publish (children dormant
+      // forever) until 1B.2's orchestrator exists.
+      const enforceGate = checkEnforceGate();
+      if (!enforceGate.allowed) {
+        return res.status(422).json({
+          error: 'THREAD_ENFORCE_MODE_BLOCKED',
+          message: enforceGate.reason,
+        });
+      }
+
+      // Observability: open a runtime tracer for this scheduling request.
+      // All tracer calls are no-throw — wrapped internally by safeCall.
+      const pendingThreadId = `pending_${userId.slice(0, 8)}_${Date.now().toString(36)}`;
+      const runtimeTracer = openThreadRuntimeTracer({
+        threadId: pendingThreadId,
+        companyId: userId,
+      });
+      const persistStartedAtMs = Date.now();
+
+      try {
+        // Phase 1B.1A — atomic dormancy. In shadow mode the multi-row root
+        // is created with status='draft' so the cron's direct scan does NOT
+        // double-publish alongside the legacy joined row.
+        const shadowMode = !isLegacyJoinedWriteSkipped();
+        runtimeTracer.recordPersistAttempt({
+          detail: `insertThreadAtomic platform=${dbPlatform} node_count=${parsedNodes!.length} mode=${runtimeMode}`,
+        });
+        const threadResult = await insertThreadAtomic(supabase, {
+          user_id: userId,
+          social_account_id: accountId ? String(accountId) : null,
+          campaign_id: null,  // scheduler/schedule does not carry campaign_id
+          platform: dbPlatform,
+          scheduled_for: String(scheduledFor),
+          title: title || null,
+          hashtags: hashtagArray.length ? hashtagArray : null,
+          nodes: parsedNodes,
+          rootStatus: shadowMode ? 'draft' : 'scheduled',
+        });
+        runtimeTracer.recordPersistSuccess({
+          latencyMs: Date.now() - persistStartedAtMs,
+          detail: `root=${threadResult.rootId} nodes=${threadResult.nodeIds.length}`,
+        });
+        // Emit a node_create event per inserted row so replay reconstruction
+        // sees individual nodes, not just the atomic RPC. The rootId is at
+        // position 0; subsequent ids align with parsedNodes positions.
+        try {
+          for (let i = 0; i < threadResult.nodeIds.length; i += 1) {
+            const id = threadResult.nodeIds[i];
+            const inputNode = parsedNodes!.find((n) => n.position === i);
+            runtimeTracer.recordNodeCreate({
+              nodeId: id,
+              parentNodeId: i === 0 ? null : threadResult.rootId,
+              position: inputNode?.position ?? i,
+              mode: 'manual',
+              detail: `multi-row insert position=${inputNode?.position ?? i}`,
+            });
+          }
+        } catch (_emitErr) {
+          /* tracer is no-throw internally; this catch is defensive only */
+        }
+
+        // Enqueue the ROOT only in enforce mode (where it has status='scheduled'
+        // and is the publish target). In shadow mode the root is dormant
+        // ('draft') so enqueueing it would not cause publish — but we skip
+        // for clarity and to keep the queue uncluttered.
+        if (!shadowMode && accountId) {
+          try {
+            await enqueueScheduledPostAt(
+              threadResult.rootId,
+              userId,
+              String(accountId),
+              String(scheduledFor),
+            );
+          } catch (enqueueError: any) {
+            console.warn('[scheduler/schedule] enqueueScheduledPostAt (thread root) failed (non-fatal):', enqueueError?.message);
+          }
+        }
+
+        recordCreatorRenderMetric({
+          name: 'thread_multi_row_insert',
+          tags: {
+            mode: runtimeMode,
+            platform: dbPlatform,
+            node_count: String(parsedNodes.length),
+            endpoint: 'scheduler/schedule',
+            root_status: shadowMode ? 'draft' : 'scheduled',
+          },
+        });
+
+        // In 'enforce' mode the legacy joined insert is SKIPPED entirely.
+        if (isLegacyJoinedWriteSkipped()) {
+          return res.status(201).json({
+            id: threadResult.rootId,
+            message: 'Thread scheduled successfully',
+            data: {
+              id: threadResult.rootId,
+              platform: dbPlatform,
+              content_type: coerceThreadContentTypeForPlatform(dbPlatform),
+              scheduled_for: scheduledFor,
+              status: 'scheduled',
+              thread: { root_id: threadResult.rootId, node_count: parsedNodes.length },
+            },
+          });
+        }
+        // In 'shadow' mode fall through to the legacy insert below — multi-row
+        // tree is dormant (root status='draft'); legacy joined row remains the
+        // publish source-of-truth.
+      } catch (threadErr) {
+        const err = threadErr as ThreadInsertError;
+        runtimeTracer.recordPersistFailure({
+          detail: err.message ?? 'unknown thread insert error',
+          latencyMs: Date.now() - persistStartedAtMs,
+          payload: { code: err.code ?? null },
+        });
+        // Shadow mode: log and continue with legacy insert (non-fatal).
+        // Enforce mode: fail the request — we cannot silently fall back to
+        // legacy joined insert when the operator has set enforce.
+        if (isLegacyJoinedWriteSkipped()) {
+          console.error('[scheduler/schedule] thread multi-row insert failed (enforce mode):', err.message, err.code);
+          return res.status(500).json({ error: err.message || 'thread_multi_row_insert_failed' });
+        }
+        console.warn('[scheduler/schedule] thread multi-row insert failed (shadow mode, non-fatal):', err.message);
+      }
     }
 
     const insertPayload: Record<string, any> = {

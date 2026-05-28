@@ -21,6 +21,16 @@ export const PipelineErrorCode = {
   MEDIA_ASSET_INACCESSIBLE: 'MEDIA_ASSET_INACCESSIBLE',
   NOT_READY_FOR_SCHEDULE: 'NOT_READY_FOR_SCHEDULE',
   CONTENT_EMPTY: 'CONTENT_EMPTY',
+  /**
+   * Phase B — publish-time char-limit reject. Fires when the row's content
+   * exceeds the platform's per-character limit AND the publish-readiness
+   * guard is in `enforce` mode for char-limits (PUBLISH_CHAR_LIMIT_MODE).
+   * Second line of defense behind the schedule-time guard
+   * (SCHEDULE_CHAR_LIMIT_MODE); ensures overflow that slipped past the
+   * scheduler does NOT reach the adapter (where it would be silently
+   * truncated unless mutateTruncate:false has been flipped).
+   */
+  CONTENT_OVER_CHAR_LIMIT: 'CONTENT_OVER_CHAR_LIMIT',
 } as const;
 
 export type PipelineErrorCode =

@@ -3,11 +3,16 @@ import {
   assetLabel,
   buildAssetCompositionIntent,
   creatorRouteTypeForAsset,
+  resolveAttachmentModeFromIntent,
   type AssetCompositionIntent,
   type AttachmentMode,
   type SourceTextTransform,
   type WriterCreatorAssetType,
 } from './writerCreatorAttachmentContracts';
+import {
+  getPostAllowedAssetTypes as _getPostAllowedAssetTypes,
+  getThreadAllowedAssetTypes as _getThreadAllowedAssetTypes,
+} from '../../backend/services/creator/intelligence/canonical/creatorAssetRegistry';
 
 export type WriterSourceType = 'post' | 'thread';
 export type CreatorAssetLaunchType = WriterCreatorAssetType;
@@ -51,21 +56,16 @@ export type WriterAttachedAsset = {
   createdAt: string;
 };
 
-export const POST_CREATOR_ASSET_TYPES: CreatorAssetLaunchType[] = [
-  'supporting_image',
-  'banner',
-  'infographic',
-  'carousel',
-  'brand_card',
-];
+/**
+ * Derived from CREATOR_ASSET_REGISTRY (Phase 1 unification).
+ * `writer_source_eligibility: ['post']` on a canonical entry surfaces
+ * its subtypes here; same for thread. No parallel hardcoded arrays.
+ */
+export const POST_CREATOR_ASSET_TYPES: CreatorAssetLaunchType[] =
+  Array.from(_getPostAllowedAssetTypes()) as CreatorAssetLaunchType[];
 
-export const THREAD_CREATOR_ASSET_TYPES: CreatorAssetLaunchType[] = [
-  'supporting_image',
-  'banner',
-  'infographic',
-  'carousel',
-  'brand_card',
-];
+export const THREAD_CREATOR_ASSET_TYPES: CreatorAssetLaunchType[] =
+  Array.from(_getThreadAllowedAssetTypes()) as CreatorAssetLaunchType[];
 
 export function getWriterAttachedAssetsKey(sourceType: WriterSourceType, sourceId: string): string {
   return `writer_attached_assets_${sourceType}_${sourceId || 'draft'}`;
@@ -182,6 +182,19 @@ export function buildWriterCreatorPrefill(input: {
   companyName?: string;
   brandContext?: Record<string, unknown>;
 }): WriterCreatorSourcePayload {
+  // Phase 3 fix — resolve attachment_mode from prefill signals so the
+  // session payload that lands on the Direct route already carries a
+  // semantically-aligned mode. The Direct API normalize layer also
+  // resolves (belt-and-braces), but resolving here means the prefill
+  // UI and the API see the same mode and there's no flicker between
+  // launch and submit.
+  const resolution = resolveAttachmentModeFromIntent({
+    assetType: input.assetType,
+    requestedMode: input.attachmentMode ?? null,
+    sourceText: input.body,
+    sourceTextTransform: input.sourceTextTransform ?? null,
+    freeFormIntent: [input.tone],
+  });
   return {
     id: `${input.sourceType}-${Date.now()}`,
     sourceType: input.sourceType,
@@ -196,7 +209,7 @@ export function buildWriterCreatorPrefill(input: {
     brandContext: input.brandContext,
     compositionIntent: buildAssetCompositionIntent({
       assetType: input.assetType,
-      attachmentMode: input.attachmentMode,
+      attachmentMode: resolution.mode,
       sourceTextTransform: input.sourceTextTransform,
     }),
     createdAt: new Date().toISOString(),

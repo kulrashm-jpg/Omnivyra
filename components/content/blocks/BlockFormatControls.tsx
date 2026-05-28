@@ -48,10 +48,18 @@ export function BlockFormatControls<T extends ContentBlock>({
   const format = block.format ?? {};
 
   return (
-    <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/70 px-3 py-3">
-      <div className="mb-3 flex items-center justify-between">
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">Format</p>
-        <label className="flex items-center gap-2 text-xs text-gray-600">
+    <details className="rounded-lg border border-dashed border-gray-200 bg-gray-50/70 group">
+      {/* Collapsed by default — the formatting panel was a major
+          source of visual stretch in the editor since EVERY block
+          carried it expanded. The <details> wrapper keeps every
+          control reachable in one click while removing the wall of
+          dropdowns from the default editor view. */}
+      <summary className="flex cursor-pointer items-center justify-between px-3 py-2 list-none [&::-webkit-details-marker]:hidden">
+        <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500 select-none">
+          Format
+          <span className="ml-2 inline-block text-gray-400 transition-transform group-open:rotate-90">▸</span>
+        </p>
+        <label className="flex items-center gap-2 text-xs text-gray-600" onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
             checked={!!format.lead}
@@ -60,9 +68,9 @@ export function BlockFormatControls<T extends ContentBlock>({
           />
           Lead emphasis
         </label>
-      </div>
+      </summary>
 
-      <div className="space-y-3">
+      <div className="space-y-3 px-3 pb-3 pt-1">
         <div>
           <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">Alignment</p>
           <div className="grid grid-cols-4 gap-1">
@@ -183,6 +191,6 @@ export function BlockFormatControls<T extends ContentBlock>({
           </label>
         )}
       </div>
-    </div>
+    </details>
   );
 }

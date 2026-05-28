@@ -15,15 +15,39 @@ import fs from 'fs';
 import path from 'path';
 
 describe('Writer -> Creator attachment contracts', () => {
-  it('exposes first-class post/thread asset catalogs without legacy pdf/slider/image collapse', () => {
+  it('exposes first-class post/thread asset catalogs aligned with canonical creator taxonomy', () => {
+    // Carousel is a sequence-oriented asset and is exposed only on the
+    // thread surface. Post flow is single-attachment by contract.
     expect(POST_CREATOR_ASSET_TYPES).toEqual([
       'supporting_image',
       'banner',
-      'infographic',
-      'carousel',
       'brand_card',
+      'infographic',
     ]);
-    expect(THREAD_CREATOR_ASSET_TYPES).toEqual(POST_CREATOR_ASSET_TYPES);
+    expect(THREAD_CREATOR_ASSET_TYPES).toEqual([
+      'supporting_image',
+      'banner',
+      'brand_card',
+      'carousel',
+      'infographic',
+    ]);
+  });
+
+  it('post flow rejects carousel asset type at the payload validator', () => {
+    const result = validateAttachmentPayload({
+      attachmentMode: 'embedded_copy',
+      assetType: 'carousel',
+      copyPolicy: {
+        allowHeadline: true,
+        allowKeyInsight: true,
+        allowCTA: false,
+        sourceTextTransform: 'summarize',
+      },
+      overlayText: null,
+      sourceType: 'post',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('post flow does not support carousel asset type');
   });
 
   it('exposes the six standalone Creator asset routes as first-class content asset types', () => {

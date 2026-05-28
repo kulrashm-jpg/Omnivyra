@@ -17,6 +17,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     socialPlatform,
     campaignContext,
     trendContext,
+    issue_message,
   } = req.body ?? {};
 
   if (!company_id || typeof company_id !== 'string') {
@@ -72,6 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         socialPlatform: typeof socialPlatform === 'string' ? socialPlatform : undefined,
         campaignContext: typeof campaignContext === 'string' ? campaignContext : undefined,
         trendContext: typeof trendContext === 'string' ? trendContext : undefined,
+        issueMessage: typeof issue_message === 'string' && issue_message.trim() ? issue_message.trim() : undefined,
       },
       companyProfile: profile,
     } as const;

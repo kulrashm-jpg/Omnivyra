@@ -142,6 +142,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const posts = [...campaignPosts, ...standalonePosts];
 
+    // ── ASSET TYPE LOOKUP (calendar content-type fix) ────────────────────────
+    // scheduled_posts.content_type holds the PLATFORM-NATIVE value (e.g.
+    // `tweet` / `post` / `feed_post` / `pin` / `reel`), not the user-selected
+    // canonical asset type (`post` / `poll` / `article` / `story` / `carousel`
+    // / `reel` / `image`). That normalization happens inside
+    // boltScheduleBlockProcessor (toDbContentType → FALLBACK_CT_MAP) so the
+    // chk_content_type DB constraint is satisfied. It is also the reason every
+    // calendar card was rendering "Post": for X every asset maps to `tweet`,
+    // for LinkedIn polls/carousels map to `post`, etc. — so the card title
+    // looked identical regardless of the format the user actually picked.
+    //
+    // To surface the user-selected asset on the calendar without changing the
+    // stored scheduled_posts shape, we look up the matching daily_content_plans
+    // row (FK: daily_content_plans.scheduled_post_id) and emit the original
+    // `content_type` as `asset_type`. The renderer prefers `asset_type` and
+    // falls back to `content_type` for legacy events (pre-FK rows, ad-hoc
+    // standalone posts) so nothing breaks.
+    const assetTypeByPostId = new Map<string, string>();
+    const scheduledPostIds = posts
+      .map((p) => p?.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    if (scheduledPostIds.length > 0) {
+      try {
+        // Chunked to keep the IN-list size bounded; .in() with 1000+ values
+        // can blow past PostgREST query-string limits.
+        const CHUNK = 500;
+        for (let i = 0; i < scheduledPostIds.length; i += CHUNK) {
+          const chunk = scheduledPostIds.slice(i, i + CHUNK);
+          const { data: planRows } = await supabase
+            .from('daily_content_plans')
+            .select('scheduled_post_id, content_type')
+            .in('scheduled_post_id', chunk);
+          for (const row of planRows || []) {
+            const spid = (row as any)?.scheduled_post_id;
+            const ct = (row as any)?.content_type;
+            if (typeof spid === 'string' && spid && typeof ct === 'string' && ct.trim()) {
+              assetTypeByPostId.set(spid, ct.trim().toLowerCase());
+            }
+          }
+        }
+      } catch (lookupErr: any) {
+        // Never let asset-type enrichment break the calendar — fall back to
+        // platform-native content_type for affected events.
+        console.warn('[calendar/activity-events] asset_type lookup skipped:', lookupErr?.message);
+      }
+    }
+
     const now = new Date().toISOString();
     const events = (posts || []).map((row: any) => {
       const scheduledFor = row.scheduled_for ? new Date(row.scheduled_for) : new Date();
@@ -156,6 +203,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         scheduled_post_id: row.id,
       });
       const badge = CANONICAL_BADGE[canonical];
+      const platformNativeType = String(row.content_type || 'post').trim();
+      // asset_type is the user-selected canonical format (post/poll/article/story/…)
+      // sourced from daily_content_plans. Falls back to the platform-native type
+      // when there is no matching plan row (standalone posts, legacy data).
+      const assetType = (row.id && assetTypeByPostId.get(row.id)) || platformNativeType;
       return {
         date: dateStr,
         platform: normalizePlatform(row.platform),
@@ -163,7 +215,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         repurpose_index: row.repurpose_index != null ? Number(row.repurpose_index) : 1,
         repurpose_total: row.repurpose_total != null ? Number(row.repurpose_total) : 1,
         campaign_id: row.campaign_id || '',
-        content_type: String(row.content_type || 'post').trim(),
+        content_type: platformNativeType,
+        asset_type: assetType,
         scheduled_post_id: row.id,
         execution_id: row.repurpose_parent_execution_id || null,
         status,
@@ -230,6 +283,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             continue;
           }
           const badge = CANONICAL_BADGE[canonical];
+          const pendingType = String(r.content_type || 'post').trim();
           events.push({
             date: dateStr,
             platform: normalizePlatform(r.platform || ''),
@@ -237,7 +291,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             repurpose_index: 1,
             repurpose_total: 1,
             campaign_id: r.campaign_id || '',
-            content_type: String(r.content_type || 'post').trim(),
+            content_type: pendingType,
+            // Pending events come directly from daily_content_plans so the
+            // canonical asset type is the same value as the row's content_type.
+            asset_type: pendingType,
             scheduled_post_id: null as any,
             execution_id: null,
             status: 'pending',

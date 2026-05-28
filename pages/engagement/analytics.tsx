@@ -292,7 +292,7 @@ export default function EngagementAnalyticsPage() {
                 <Link href="/engagement" className="rounded-full border border-gray-200 px-3 py-1.5 text-sm text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900">
                   Inbox
                 </Link>
-                <Link href="/dashboard/intelligence?intelTab=active-leads" className="rounded-full border border-gray-200 px-3 py-1.5 text-sm text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900">
+                <Link href="/command-center/engagement" className="rounded-full border border-gray-200 px-3 py-1.5 text-sm text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900">
                   Active Leads
                 </Link>
               </div>

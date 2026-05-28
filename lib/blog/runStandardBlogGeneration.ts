@@ -33,7 +33,12 @@ import {
 } from './runBlogGenerationPureHelpers';
 import { injectInternalLinks } from './runBlogGenerationDataAccess';
 import type { OrchestratorResult } from '../content/contentGenerationOrchestrator';
-import type { BlogGenerationResult } from './blogRunnerTypes';
+import type { BlogGenerationResult, CompanyContext } from './blogRunnerTypes';
+import { recordContextUsageReport } from '../content/contextUsageReport';
+import {
+  computePromptBudgetReport,
+  emitPromptBudgetTelemetry,
+} from '../../backend/services/longForm/promptBudgetTelemetry';
 import { getProfile } from '../../backend/services/companyProfileService';
 import {
   extractCompanyIdentity,
@@ -69,6 +74,12 @@ export interface StandardBlogGenerationParams {
    * with buildIdentityLock + buildAntiGenericRules.
    */
   companyIdentity?: CompanyIdentity;
+  /**
+   * Phase 2.8 — Pass the source CompanyContext so we can emit a
+   * LONGFORM_CONTEXT_USAGE_REPORT telemetry event detecting wasted /
+   * unused / heavily-used / ignored-critical fields.
+   */
+  companyContext?: CompanyContext;
 }
 
 export async function runStandardHtmlBlogGeneration(
@@ -88,7 +99,33 @@ export async function runStandardHtmlBlogGeneration(
     confidence,
     ctx,
     companyIdentity,
+    companyContext,
   } = params;
+
+  // Phase 2.8 — Emit LONGFORM_CONTEXT_USAGE_REPORT for the assembled prompt
+  // BEFORE the model call. This lets operators see exactly which strategic
+  // fields actually made it into the prompt the model received.
+  const systemPromptForReport = buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity);
+  const userPromptForReport = buildGenerationUserPrompt(generationInput);
+  recordContextUsageReport({
+    context: companyContext,
+    assembledPrompt: `${systemPromptForReport}\n\n${userPromptForReport}`,
+    source: 'runStandardHtmlBlogGeneration',
+    companyId: company_id,
+    contentType,
+  });
+
+  // Phase 3.6 — Emit LONGFORM_PROMPT_BUDGET for the compatibility-core call.
+  // Surfaces system/user sizes, doctrine share, identity share, and
+  // truncation risk for every blog generation pass.
+  emitPromptBudgetTelemetry(computePromptBudgetReport({
+    operation: 'blogGeneration',
+    model: 'gpt-4o',
+    companyId: company_id,
+    systemPrompt: systemPromptForReport,
+    userPrompt: userPromptForReport,
+    outputBudgetTokens: maxTokens,
+  }));
 
   const aiResult = await runCompletionWithOperation({
     operation:       'blogGeneration',
@@ -99,8 +136,8 @@ export async function runStandardHtmlBlogGeneration(
     response_format: { type: 'json_object' },
     max_tokens:      maxTokens,
     messages: [
-      { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity) },
-      { role: 'user',   content: buildGenerationUserPrompt(generationInput) },
+      { role: 'system', content: systemPromptForReport },
+      { role: 'user',   content: userPromptForReport },
     ],
   });
 

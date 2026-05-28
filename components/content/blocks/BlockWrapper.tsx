@@ -134,7 +134,11 @@ export function BlockWrapper({
           <p className="flex-1 truncate text-xs text-gray-400 ml-1">{blockPreview(block)}</p>
         )}
 
-        <div className="ml-auto flex items-center gap-0.5">
+        {/* Toolbar — hidden by default, fades in on hover or keyboard
+            focus within the block. Keeps the default editor surface
+            clean; controls are always reachable when the operator
+            interacts with a specific block. */}
+        <div className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           {/* AI action button */}
           {onAiAction && (
             <button

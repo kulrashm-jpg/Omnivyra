@@ -8,6 +8,8 @@ import { Check, Copy, Loader2, Sparkles } from 'lucide-react';
 import { useCompanyContext } from '../CompanyContext';
 import { getThreadExecutionDescription, getThreadExecutionLabel } from '../../lib/thread/threadExecution';
 import ThreadSegmentsEditor from './ThreadSegmentsEditor';
+import ThreadSequencePreview, { type ThreadNode } from './ThreadSequencePreview';
+import WriterEmbeddedPreview from '../preview/WriterEmbeddedPreview';
 import {
   getThreadAnchor,
   joinThreadSegments,
@@ -21,8 +23,13 @@ import {
   saveThreadResult,
   saveThreadSession,
   createThreadSessionToken,
+  loadThreadNodeAttachments,
+  saveThreadNodeAttachments,
+  type ThreadNodeAttachmentMap,
 } from '../../lib/thread/threadStorage';
 import { getThreadContinuationLink, getThreadSchedulerLink } from '../../lib/thread/threadLinks';
+import { openThreadRuntimeTracer } from '../../backend/services/threadRuntime/threadRuntimeInstrumentation';
+import type { ThreadSegmentEditorRuntimeEvent } from './ThreadSegmentsEditor';
 import {
   THREAD_CREATOR_ASSET_TYPES,
   assetLabel,
@@ -39,7 +46,6 @@ import {
   defaultAttachmentModeForAsset,
   defaultTransformForAsset,
   type AttachmentMode,
-  type SourceTextTransform,
 } from '../../lib/content/writerCreatorAttachmentContracts';
 
 type ApiResponse = {
@@ -116,9 +122,51 @@ export default function ThreadResultView() {
   const [copied, setCopied] = useState(false);
   const [activeSessionToken, setActiveSessionToken] = useState('');
   const [assetMenuOpen, setAssetMenuOpen] = useState(false);
-  const [selectedAttachmentMode, setSelectedAttachmentMode] = useState<AttachmentMode>('supporting_visual');
-  const [selectedSourceTextTransform, setSelectedSourceTextTransform] = useState<SourceTextTransform>('none');
   const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
+  const [nodeAttachmentMap, setNodeAttachmentMap] = useState<ThreadNodeAttachmentMap>({});
+
+  // Phase 3 — runtime tracer for editor surfaces. Opened lazily once we
+  // have both a sessionToken and a companyId. Per-tab memory; the server
+  // transport (Phase 1) drains events asynchronously. All emit calls are
+  // no-throw — observability MUST NOT break the editor.
+  const runtimeTracer = useMemo(() => {
+    if (!activeSessionToken || !selectedCompanyId) return null;
+    try {
+      return openThreadRuntimeTracer({
+        runtimeSessionId: `editor_${activeSessionToken.slice(0, 16)}`,
+        threadId: `editor_thread_${activeSessionToken.slice(0, 16)}`,
+        companyId: selectedCompanyId,
+      });
+    } catch {
+      return null;
+    }
+  }, [activeSessionToken, selectedCompanyId]);
+
+  const handleEditorRuntimeEvent = (e: ThreadSegmentEditorRuntimeEvent) => {
+    if (!runtimeTracer) return;
+    try {
+      if (e.kind === 'node_reorder') {
+        runtimeTracer.recordNodeReorder({
+          nodeId: `seg_${e.index}`,
+          newPosition: e.newPosition,
+          detail: `editor reorder ${e.index} → ${e.newPosition}`,
+        });
+      } else if (e.kind === 'node_create') {
+        runtimeTracer.recordNodeCreate({
+          nodeId: `seg_${e.index}`,
+          parentNodeId: e.index === 0 ? null : 'seg_0',
+          position: e.index,
+          mode: 'manual',
+          detail: 'editor add-segment',
+        });
+      } else if (e.kind === 'node_edit') {
+        runtimeTracer.recordNodeEdit({
+          nodeId: `seg_${e.index}`,
+          detail: `editor ${e.reason} index=${e.index}`,
+        });
+      }
+    } catch { /* swallow — tracer must never break editor */ }
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -191,7 +239,9 @@ export default function ThreadResultView() {
     const run = async () => {
       setGenerating(true);
       setError(null);
+      const regenStartedAtMs = Date.now();
       try {
+        runtimeTracer?.recordPersistAttempt({ detail: `regen via /api/threads/generate topic="${session.topic.slice(0, 40)}"` });
         const anchorObjective = `Anchor: ${session.anchorLabel}. ${session.anchorFocus}`;
         const anchorContextLines: string[] = [];
         if (session.anchor === 'product' && session.productsServices) {
@@ -228,6 +278,10 @@ export default function ThreadResultView() {
 
         const data = (await response.json()) as ApiResponse;
         if (!response.ok || !data.success) {
+          runtimeTracer?.recordPersistFailure({
+            detail: data.error || `regen returned ${response.status}`,
+            latencyMs: Date.now() - regenStartedAtMs,
+          });
           throw new Error(data.error || 'Failed to generate thread');
         }
 
@@ -235,7 +289,12 @@ export default function ThreadResultView() {
         setPayload(nextPayload);
 
         const generated = data.platform_variant?.generated_content || '';
-        setSegments(splitThreadIntoSegments(generated));
+        const generatedSegments = splitThreadIntoSegments(generated);
+        setSegments(generatedSegments);
+        runtimeTracer?.recordPersistSuccess({
+          latencyMs: Date.now() - regenStartedAtMs,
+          detail: `regen produced ${generatedSegments.length} segment(s)`,
+        });
 
         saveThreadResult(activeSessionToken, nextPayload);
       } catch (generationError) {
@@ -249,6 +308,35 @@ export default function ThreadResultView() {
   }, [activeSessionToken, generating, payload?.output?.success, selectedCompanyId, session]);
 
   const fullThread = useMemo(() => joinThreadSegments(segments), [segments]);
+  const previewNodes = useMemo<ThreadNode[]>(() => {
+    // G2 — resolve per-node attachment IDs against the current thread-level
+    // assets so the preview reflects assignments without storing duplicate
+    // attachment data. IDs that no longer match (e.g. removed at thread level)
+    // are silently dropped.
+    const threadAssetsById = new Map(attachedAssets.map((a) => [a.id, a]));
+    return segments.map((content, index) => {
+      const assignedIds = nodeAttachmentMap[index] ?? [];
+      const resolved = assignedIds
+        .map((id) => threadAssetsById.get(id))
+        .filter((a): a is WriterAttachedAsset => Boolean(a))
+        .map((a) => ({
+          id: a.id,
+          assetId: a.id,
+          assetType: a.creatorType,
+          title: a.title,
+          previewUrl: a.url,
+          attachmentMode: a.attachmentMode,
+          mediaKind: a.previewKind as 'image' | 'video' | 'gif' | 'other' | undefined,
+        }));
+      return {
+        id: `${activeSessionToken || 'thread'}-seg-${index}`,
+        position: index,
+        content,
+        platform: session?.platform,
+        attachments: resolved.length > 0 ? resolved : undefined,
+      };
+    });
+  }, [activeSessionToken, segments, session?.platform, attachedAssets, nodeAttachmentMap]);
   const hashtags = payload?.output?.platform_variant?.discoverability_meta?.hashtags || [];
   const decisionTrace = payload?.output?.master_content?.decision_trace;
   const adaptationTrace = payload?.output?.platform_variant?.adaptation_trace;
@@ -284,12 +372,31 @@ export default function ThreadResultView() {
     };
   }, [selectedCompanyId, writerSourceId]);
 
+  // G2 — load per-node attachment assignments for this session token.
+  useEffect(() => {
+    if (!activeSessionToken) {
+      setNodeAttachmentMap({});
+      return;
+    }
+    const loaded = loadThreadNodeAttachments(activeSessionToken);
+    setNodeAttachmentMap(loaded ?? {});
+  }, [activeSessionToken]);
+
+  // G2 — persist per-node attachment map on every change.
+  const handleNodeAttachmentsChange = (next: ThreadNodeAttachmentMap) => {
+    setNodeAttachmentMap(next);
+    if (activeSessionToken) saveThreadNodeAttachments(activeSessionToken, next);
+  };
+
   const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {
     if (!session) return;
-    const attachmentMode = selectedAttachmentMode || defaultAttachmentModeForAsset(assetType);
-    const sourceTextTransform = selectedSourceTextTransform === 'none'
-      ? defaultTransformForAsset(assetType, attachmentMode)
-      : selectedSourceTextTransform;
+    // Attachment mode + source-text transform are rendering-behavior
+    // concerns, not part of asset-type selection. We seed per-asset
+    // defaults here; resolveAttachmentModeFromIntent in
+    // buildWriterCreatorPrefill upgrades the mode based on payload
+    // signals (paragraph length, typography keywords, etc.).
+    const attachmentMode: AttachmentMode = defaultAttachmentModeForAsset(assetType);
+    const sourceTextTransform = defaultTransformForAsset(assetType, attachmentMode);
     setAssetMenuOpen(false);
     launchCreatorFromWriter({
       router,
@@ -426,8 +533,43 @@ export default function ThreadResultView() {
               </div>
 
               {segments.length > 0 && (
-                <ThreadSegmentsEditor segments={segments} onChange={setSegments} />
+                <ThreadSegmentsEditor
+                  segments={segments}
+                  onChange={setSegments}
+                  platform={session.platform}
+                  nodeAttachments={nodeAttachmentMap}
+                  availableThreadAssets={attachedAssets}
+                  onNodeAttachmentsChange={handleNodeAttachmentsChange}
+                  onRuntimeEvent={handleEditorRuntimeEvent}
+                />
               )}
+
+              <div className="mt-8 border-t border-slate-200 pt-6">
+                <div className="mb-4 flex items-baseline justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Sequence Preview
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      This is the order the thread will publish in on {session.platformLabel}.
+                      Each card is one published post.
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                    {previewNodes.length} {previewNodes.length === 1 ? 'post' : 'posts'}
+                  </span>
+                </div>
+                {/* Phase 1 — Writer Embedded Preview (thread mode).
+                    Dispatches to the same ThreadSequencePreview internally;
+                    routes through the unified preview surface so post +
+                    thread writers consume one entry point. */}
+                <WriterEmbeddedPreview
+                  mode="thread"
+                  platform={session.platform}
+                  precomputedNodes={previewNodes}
+                  threadEmptyLabel="Generate or add at least one thread post to preview the sequence."
+                />
+              </div>
             </section>
 
             <aside className="space-y-5">
@@ -487,50 +629,7 @@ export default function ThreadResultView() {
                       <div className="absolute left-0 right-0 z-10 mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
                         <div className="border-b border-slate-100 px-4 py-3">
                           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Create asset from thread</p>
-                          <p className="mt-1 text-xs text-slate-500">Choose a supported Creator asset and we will prefill it from this thread sequence.</p>
-                          <div className="mt-3 grid grid-cols-2 gap-2">
-                            {(['supporting_visual', 'embedded_copy'] as AttachmentMode[]).map((mode) => (
-                              <button
-                                key={mode}
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setSelectedAttachmentMode(mode);
-                                }}
-                                className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
-                                  selectedAttachmentMode === mode
-                                    ? 'border-violet-600 bg-violet-600 text-white'
-                                    : 'border-slate-200 bg-white text-slate-600 hover:border-violet-200'
-                                }`}
-                              >
-                                {attachmentModeLabel(mode)}
-                              </button>
-                            ))}
-                          </div>
-                          <div className="mt-3 grid grid-cols-2 gap-2">
-                            {([
-                              ['none', 'Support visually'],
-                              ['summarize', 'Summarize visually'],
-                              ['framework', 'Framework visualization'],
-                              ['quote', 'Quote extraction'],
-                            ] as Array<[SourceTextTransform, string]>).map(([transform, label]) => (
-                              <button
-                                key={transform}
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setSelectedSourceTextTransform(transform);
-                                }}
-                                className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
-                                  selectedSourceTextTransform === transform
-                                    ? 'border-violet-600 bg-violet-600 text-white'
-                                    : 'border-slate-200 bg-white text-slate-600 hover:border-violet-200'
-                                }`}
-                              >
-                                {label}
-                              </button>
-                            ))}
-                          </div>
+                          <p className="mt-1 text-xs text-slate-500">Pick a Creator asset type. Thread flow supports Image, Banner, Brand Card, Infographic, and Carousel.</p>
                         </div>
                         <button
                           type="button"
@@ -561,9 +660,6 @@ export default function ThreadResultView() {
                   <Link href={getThreadContinuationLink(activeSessionToken)} className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
                     Plan continuation
                   </Link>
-                  <Link href={`/campaign-planner?mode=direct&source=thread-result&contentType=thread&topic=${encodeURIComponent(session.topic)}`} className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-                    Use in campaign
-                  </Link>
                   <Link href="/threads/intelligence" className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
                     Build another thread
                   </Link>
@@ -574,7 +670,7 @@ export default function ThreadResultView() {
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Attached Assets</p>
                 {attachedAssets.length === 0 ? (
                   <p className="mt-3 text-sm leading-6 text-slate-600">
-                    No Creator assets attached yet. Use Add Asset to launch a supporting image, banner, infographic, carousel, or brand card with this thread prefilled.
+                    No Creator assets attached yet. Use Add Asset to launch an Image, Banner, Brand Card, Infographic, or Carousel with this thread prefilled.
                   </p>
                 ) : (
                   <div className="mt-3 space-y-2">

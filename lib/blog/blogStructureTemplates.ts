@@ -29,13 +29,24 @@ export const BLOG_FORMAT_OPTIONS: { value: BlogFormatType; label: string; descri
 ];
 
 // ── Validation overrides ────────────────────────────────────────────────────
+//
+// Phase 3.4 — These were previously HARD mandates ("min_h2 ≥ N", "FAQ
+// required", "Summary required"). They are now SOFT advisory floors used
+// only by intent-driven validation. Generation prompts no longer carry
+// "MUST" language for structure; the structure_rules_prompt is now
+// adaptive guidance keyed to content depth + intent.
 
 export interface FormatValidationOverrides {
   min_h2?:                  number;
   max_h2?:                  number;
-  requires_key_insights:    boolean;
-  requires_summary:         boolean;
-  requires_references:      boolean;
+  /**
+   * Phase 3.4 — These were `boolean` (forced). They are now optional and,
+   * when set, treated as ADVISORY by downstream validation (the validator
+   * surfaces a soft warning but does not fail the article).
+   */
+  requires_key_insights?:   boolean;
+  requires_summary?:        boolean;
+  requires_references?:     boolean;
   requires_list_items?:     number;   // listicle: min numbered items
   requires_steps?:          number;   // tutorial: min step count
   requires_results_section?: boolean; // case-study: must have results H2
@@ -47,6 +58,57 @@ export interface FormatValidationOverrides {
 export interface StructureRules {
   structure_rules_prompt: string;
   validation_overrides:   FormatValidationOverrides;
+  /**
+   * Phase 3.4 — Dynamic guidance object surfaced separately so callers
+   * can introspect ranges + conditional sections without parsing the prompt.
+   */
+  dynamic_guidance?: DynamicStructureGuidance;
+}
+
+// ── Phase 3.4: Dynamic structure guidance ───────────────────────────────────
+//
+// Replaces hard "MUST include N H2s / FAQ / Summary / References" mandates
+// with adaptive, intent-driven recommendations. The system prompt now tells
+// the model "the topic should determine structure" rather than "use this
+// exact skeleton". Templates (listicle/tutorial/comparison/case-study) can
+// still REQUEST a shape, but the engine will not inflate empty sections to
+// satisfy a count.
+
+export type ContentIntent =
+  | 'authority'     // strategic, POV-led, short and dense beats long and thin
+  | 'operational'   // practitioner-facing how-to with concrete steps
+  | 'narrative'     // story-driven, freer structure
+  | 'comparison'    // option weighing, must surface decision criteria
+  | 'list'          // explicitly enumerative; numbered structure expected
+  | 'reference';    // looked-up answer, scannable, can be terse
+
+export interface DynamicStructureGuidance {
+  /** Recommended H2 count range — advisory only, not a gate. */
+  recommendedStructureRange: { min: number; max: number };
+  /**
+   * Sections that ARE typical for the format but only if topic depth warrants.
+   * Each entry says when the section makes sense; the model decides
+   * adaptively rather than always including the section.
+   */
+  conditionalSections: Array<{
+    name: string;
+    appliesWhen: string;
+    skipWhen: string;
+  }>;
+  /**
+   * Depth-aware expansion rules. Generation respects target word count but
+   * does not pad — fewer sections at higher per-section depth is preferred
+   * over many thin sections.
+   */
+  contentDepthAwareExpansion: {
+    perSectionWordTarget: number;
+    preferFewerDeeperSections: boolean;
+    minWordsPerSection: number;
+  };
+  /** Intent-driven structural hints surfaced into the prompt. */
+  intentAwareStructureHints: string[];
+  /** The primary intent inferred for this format (or supplied by caller). */
+  primaryIntent: ContentIntent;
 }
 
 // ── Main function ───────────────────────────────────────────────────────────
@@ -64,151 +126,258 @@ export function getStructureRules(
   switch (formatType) {
 
     case 'listicle': {
-      const itemCount = tw <= 800 ? '5–7' : tw <= 1200 ? '7–9' : '8–10';
-      const minItems  = tw <= 800 ? 5 : tw <= 1200 ? 7 : 8;
-      const wordsPerItem = Math.round((tw - 250) / minItems); // subtract intro/summary overhead
+      // Listicles are inherently enumerative — the format ITSELF demands a
+      // sequence of numbered items. Item count is the one structural floor
+      // we keep, because removing it would invalidate the format choice.
+      // Every other element (key-insights / summary / references) is now
+      // adaptive: include when the topic genuinely benefits, not by rote.
+      const recommendedItems = tw <= 800 ? '5–7' : tw <= 1200 ? '6–9' : '7–10';
+      const minItems  = tw <= 800 ? 4 : tw <= 1200 ? 5 : 6;
+      const wordsPerItem = Math.round((tw - 200) / Math.max(minItems, 5));
       return {
-        structure_rules_prompt: `## LISTICLE STRUCTURE (mandatory)
+        structure_rules_prompt: `## LISTICLE STRUCTURE (adaptive)
 
-- Key Insights block (4–5 bullet points, standalone value)
-- Hook intro (100–150 words, frames why this list matters — NOT a question)
-- ${itemCount} numbered H2 items (e.g., "1. Specific Insight Title", "2. Another Insight")
-  - Each item: H2 heading + 2–3 paragraphs (${Math.max(100, wordsPerItem)}+ words per item)
-  - Each item must be a standalone, actionable insight — not a vague label
-  - Items should build progressively (easiest → hardest, or most obvious → most surprising)
-- Summary (100–150 words, distills the most important items and tells the reader what to do next)
-- References section (minimum 3 real sources)
+This is a list-format article. Item count and depth should serve the topic — never inflate to hit a number.
 
-Each numbered item MUST have substantive analysis — not just a heading and one sentence. Include examples, data, or practitioner implications.`,
+- Hook intro (60–150 words). Frame why this list matters. Avoid generic openers.
+- ${recommendedItems} numbered H2 items, each titled with a specific insight (e.g., "1. Specific Insight Title"). At least ${minItems} items are typical for this length.
+  - Each item: H2 heading + 1–3 paragraphs (target ~${Math.max(120, wordsPerItem)} words; vary as warranted).
+  - Items should build progressively, but skip items if they would be redundant.
+- Closing paragraph (50–150 words): single recommendation or call to action — only if it adds value. Skip if the items already conclude themselves.
+
+CONDITIONAL SECTIONS — include ONLY when warranted:
+- Key Insights block (4–5 bullets): include if the list is long (≥ 7 items) or the reader will likely scan first. Skip for short, punchy lists.
+- Summary: include only if synthesis adds new framing the items haven't already delivered.
+- References section: include when claims rely on outside data, statistics, or named research. Do NOT add a references stub just for the format.
+
+Each item must have substantive analysis — examples, data, or practitioner implications. A one-sentence item is fine only if the insight is genuinely complete in that sentence.`,
         validation_overrides: {
-          min_h2:                minItems,
-          max_h2:               12,
-          requires_key_insights: true,
-          requires_summary:      true,
-          requires_references:   true,
+          max_h2:               14,
           requires_list_items:   minItems,
+          // Key-insights, summary, references no longer forced.
+        },
+        dynamic_guidance: {
+          recommendedStructureRange: { min: minItems, max: 14 },
+          conditionalSections: [
+            { name: 'Key Insights', appliesWhen: 'list has ≥ 7 items OR readers will scan first', skipWhen: 'short focused list (≤ 6 items)' },
+            { name: 'Summary', appliesWhen: 'synthesis would add new framing', skipWhen: 'items conclude themselves' },
+            { name: 'References', appliesWhen: 'claims rely on outside data/research', skipWhen: 'list is opinion or experience-driven' },
+          ],
+          contentDepthAwareExpansion: {
+            perSectionWordTarget: Math.max(120, wordsPerItem),
+            preferFewerDeeperSections: false,
+            minWordsPerSection: 80,
+          },
+          intentAwareStructureHints: [
+            'Items should be specific and actionable, not vague labels.',
+            'Order items by escalating insight, not arbitrary alphabetic order.',
+          ],
+          primaryIntent: 'list',
         },
       };
     }
 
     case 'tutorial': {
+      // Tutorials are operational by nature — sequential steps are
+      // intrinsic to the format. We keep the step floor but let the rest
+      // (Prerequisites, Common Mistakes, Summary, References, Key Insights)
+      // become adaptive.
       const stepCount = tw <= 800 ? '3–4' : tw <= 1200 ? '4–5' : '5–7';
       const minSteps  = tw <= 800 ? 3 : tw <= 1200 ? 4 : 5;
-      const wordsPerStep = Math.round((tw - 400) / minSteps); // subtract overhead for intro, prereqs, mistakes, summary
+      const wordsPerStep = Math.round((tw - 350) / Math.max(minSteps, 3));
       return {
-        structure_rules_prompt: `## TUTORIAL STRUCTURE (mandatory)
+        structure_rules_prompt: `## TUTORIAL STRUCTURE (adaptive, operational intent)
 
-- Key Insights block (4–5 bullet points, what the reader will learn)
-- Hook intro (100–150 words, states the problem this tutorial solves — NOT a question)
-- <h2>Prerequisites</h2> section (what the reader needs before starting — tools, knowledge, access)
-- ${stepCount} step-by-step H2 sections (e.g., "Step 1: Set Up Your Environment", "Step 2: Configure the Pipeline")
-  - Each step: H2 heading + 2–4 paragraphs (${Math.max(120, wordsPerStep)}+ words per step)
-  - Steps must be sequential — each builds on the previous
-  - Include specific commands, settings, or actions the reader must take
-  - Where relevant, include what success looks like after completing each step
-- <h2>Common Mistakes</h2> section (3–5 mistakes with explanations of why they happen and how to avoid them)
-- Summary (100–150 words, confirms what was built/achieved and suggests next steps)
-- References section (minimum 3 real sources — documentation, guides, authoritative articles)
+This is a how-to tutorial. Step depth and section count should serve the practitioner — never inflate to hit a count.
 
-Every step MUST include enough detail that a practitioner can execute it without guessing.`,
+- Hook intro (80–150 words). State the problem this tutorial solves and what success looks like.
+- ${stepCount} step-by-step H2 sections (e.g., "Step 1: Set Up Your Environment").
+  - Each step: H2 heading + 2–4 paragraphs (~${Math.max(120, wordsPerStep)} words; deeper steps are fine when warranted).
+  - Steps must be sequential and concrete — specific commands, settings, or actions.
+  - Indicate what success looks like after each step when ambiguous.
+
+CONDITIONAL SECTIONS — include ONLY when warranted:
+- <h2>Prerequisites</h2>: include if the reader needs specific tools, accounts, or prior knowledge to start. Skip for tutorials that work end-to-end with no setup.
+- <h2>Common Mistakes</h2>: include if the practitioner is genuinely likely to hit a pitfall worth flagging. Skip if no real pitfalls exist.
+- Key Insights block: include if the tutorial has more than ~5 steps and a scannable summary helps. Skip for short focused tutorials.
+- Summary: include if there is non-obvious synthesis or next-steps beyond the final step. Skip if the final step already concludes.
+- References: include when steps cite or rely on outside documentation. Do not add a references stub for the format alone.
+
+Every step must include enough detail that a practitioner can execute it without guessing.`,
         validation_overrides: {
-          min_h2:                minSteps + 2, // steps + prerequisites + common mistakes
-          max_h2:               10,
-          requires_key_insights: true,
-          requires_summary:      true,
-          requires_references:   true,
+          max_h2:               12,
           requires_steps:        minSteps,
+          // Prerequisites / Common Mistakes / Key Insights / Summary / References no longer forced.
+        },
+        dynamic_guidance: {
+          recommendedStructureRange: { min: minSteps, max: 12 },
+          conditionalSections: [
+            { name: 'Prerequisites', appliesWhen: 'reader needs specific setup', skipWhen: 'tutorial works end-to-end with no prep' },
+            { name: 'Common Mistakes', appliesWhen: 'real pitfalls exist worth flagging', skipWhen: 'no genuine failure modes' },
+            { name: 'Key Insights', appliesWhen: '> 5 steps; scannable summary helps', skipWhen: 'short focused tutorial' },
+            { name: 'Summary', appliesWhen: 'non-obvious synthesis or next-steps', skipWhen: 'final step concludes naturally' },
+            { name: 'References', appliesWhen: 'cites outside docs/research', skipWhen: 'fully self-contained' },
+          ],
+          contentDepthAwareExpansion: {
+            perSectionWordTarget: Math.max(150, wordsPerStep),
+            preferFewerDeeperSections: false,
+            minWordsPerSection: 100,
+          },
+          intentAwareStructureHints: [
+            'Concrete > abstract: every step must contain specific actions, commands, or settings.',
+            'Validate progress: tell the reader how to know each step worked.',
+          ],
+          primaryIntent: 'operational',
         },
       };
     }
 
     case 'case-study': {
+      // Case studies are narrative-around-evidence. The narrative ARC
+      // (Background → Challenge → Solution → Results → Takeaways) is what
+      // makes the format what it is, so we keep that as a recommended
+      // structure. We drop the hard MIN H2 / forced references / forced
+      // key-insights mandates and let depth follow the available evidence.
       return {
-        structure_rules_prompt: `## CASE STUDY STRUCTURE (mandatory)
+        structure_rules_prompt: `## CASE STUDY STRUCTURE (adaptive, narrative-around-evidence)
 
-- Key Insights block (4–5 bullet points, the key findings and results)
-- Hook intro (100–150 words, leads with the result or transformation achieved — NOT a question)
-- <h2>Background</h2> (who, what industry, starting position, context — ${Math.max(150, Math.round(tw * 0.12))}+ words)
-- <h2>Challenge</h2> (the specific problem, its business impact, why previous approaches failed — ${Math.max(150, Math.round(tw * 0.15))}+ words)
-- <h2>Solution</h2> (the approach taken, why it was chosen, key decisions made — ${Math.max(200, Math.round(tw * 0.2))}+ words)
-- <h2>Implementation</h2> (how it was executed, timeline, resources, obstacles overcome — ${Math.max(150, Math.round(tw * 0.15))}+ words)
-- <h2>Results</h2> (specific, measurable outcomes — use data points, percentages, before/after comparisons. Include blockquotes for key metrics — ${Math.max(150, Math.round(tw * 0.15))}+ words)
-- <h2>Key Takeaways</h2> (3–5 actionable lessons other practitioners can apply — ${Math.max(100, Math.round(tw * 0.1))}+ words)
-- References section (minimum 3 real sources)
+This is a case study. Lead with what changed. Depth per section should match the evidence available — never pad to hit a word target.
 
-The Results section MUST contain specific numbers or measurable outcomes. Do not use vague claims like "significant improvement" — quantify everything.`,
+Recommended arc (deviate only when the topic genuinely demands it):
+- Hook intro (80–150 words): lead with the result or transformation achieved.
+- <h2>Background</h2>: who, what industry, starting position (~${Math.max(120, Math.round(tw * 0.10))} words).
+- <h2>Challenge</h2>: specific problem + business impact + why prior approaches failed (~${Math.max(120, Math.round(tw * 0.15))} words).
+- <h2>Solution</h2>: approach taken + why + key decisions (~${Math.max(150, Math.round(tw * 0.18))} words).
+- <h2>Implementation</h2>: execution detail, timeline, obstacles (~${Math.max(120, Math.round(tw * 0.15))} words). Skip if Solution already covers execution end-to-end.
+- <h2>Results</h2>: specific, measurable outcomes — use data points and before/after comparisons.
+- <h2>Key Takeaways</h2>: lessons other practitioners can apply (3–5 takeaways is typical).
+
+CONDITIONAL — include only when warranted:
+- Key Insights block: include if results are dense and a scannable upfront block helps. Skip if the hook already does this work.
+- References section: include when external research, public data, or named sources are cited. Do not add a references stub just to satisfy the format.
+
+The Results section should contain specific numbers or measurable outcomes — quantify wherever real evidence allows. If genuine numbers are not available, write the outcome qualitatively rather than fabricating data.`,
         validation_overrides: {
-          min_h2:                  6,
-          max_h2:                  8,
-          requires_key_insights:   true,
-          requires_summary:        false, // case studies use Key Takeaways instead
-          requires_references:     true,
+          max_h2:                  10,
           requires_results_section: true,
+          // Key-insights and references no longer forced.
+        },
+        dynamic_guidance: {
+          recommendedStructureRange: { min: 4, max: 8 },
+          conditionalSections: [
+            { name: 'Implementation', appliesWhen: 'execution detail is non-obvious and adds value', skipWhen: 'Solution already covers execution' },
+            { name: 'Key Insights', appliesWhen: 'dense results need scannable upfront block', skipWhen: 'hook does that work' },
+            { name: 'References', appliesWhen: 'external research/data cited', skipWhen: 'internal experience only' },
+          ],
+          contentDepthAwareExpansion: {
+            perSectionWordTarget: Math.round(tw / 6),
+            preferFewerDeeperSections: true,
+            minWordsPerSection: 120,
+          },
+          intentAwareStructureHints: [
+            'Lead with the change, not the company name.',
+            'Quantify results when real numbers exist; never fabricate data to satisfy the format.',
+          ],
+          primaryIntent: 'narrative',
         },
       };
     }
 
     case 'comparison': {
       const featureCount = tw <= 800 ? '3–4' : tw <= 1200 ? '4–5' : '5–6';
-      const minFeatures  = tw <= 800 ? 3 : tw <= 1200 ? 4 : 5;
+      const minFeatures  = tw <= 800 ? 2 : tw <= 1200 ? 3 : 4;
       return {
-        structure_rules_prompt: `## COMPARISON STRUCTURE (mandatory)
+        structure_rules_prompt: `## COMPARISON STRUCTURE (adaptive, decision-led)
 
-- Key Insights block (4–5 bullet points, the key differentiators and recommendation)
-- Hook intro (100–150 words, frames the decision the reader faces — NOT a question)
-- <h2>Overview</h2> (introduce the options being compared, their positioning, and target audience — ${Math.max(150, Math.round(tw * 0.12))}+ words)
-- ${featureCount} comparison H2 sections (e.g., "Ease of Setup", "Pricing and Value", "Performance at Scale")
-  - Each comparison: H2 heading + balanced analysis of both/all options
-  - Use <strong> to highlight key differences
-  - Include specific data points, not just opinions
-  - Each section: ${Math.max(120, Math.round((tw - 400) / minFeatures))}+ words
-- <h2>Pros and Cons</h2> (clear bullet lists for each option — use <ul> with pros and cons labeled)
-- <h2>Verdict</h2> (clear recommendation based on use case — "Choose X if...", "Choose Y if..." — ${Math.max(100, Math.round(tw * 0.1))}+ words)
-- References section (minimum 3 real sources — product docs, independent reviews, benchmarks)
+This is a comparison. Focus is helping the reader decide — never inflate sections to hit a count.
 
-The comparison MUST be balanced. Avoid favoring one option without data to support it. Present trade-offs, not winners.`,
+- Hook intro (80–150 words): frame the decision the reader faces.
+- <h2>Overview</h2> (optional): introduce the options being compared. Skip if the hook already does this.
+- ${featureCount} comparison H2 sections covering the dimensions that actually decide the choice (e.g., "Ease of Setup", "Pricing and Value", "Performance at Scale"). Use the dimensions that matter — at least ${minFeatures} are typical.
+  - Each dimension: balanced analysis of all options; specific data points where possible; <strong> for key differences.
+  - Section depth follows evidence: ~${Math.max(120, Math.round((tw - 350) / Math.max(minFeatures, 3)))} words is typical, more when warranted.
+- <h2>Verdict</h2>: clear recommendation by use case — "Choose X if…", "Choose Y if…".
+
+CONDITIONAL — include only when warranted:
+- Key Insights block: include if the article is long (>1500 words) and a scannable upfront recommendation block helps. Skip for short focused comparisons.
+- <h2>Pros and Cons</h2>: include when the comparison spans many small differences best summarized at the end. Skip if pros/cons are clear from the comparison sections themselves.
+- References section: include when claims rely on independent benchmarks or third-party data. Do not add a references stub for the format alone.
+
+The comparison must be balanced — present trade-offs, not winners. Avoid favoring an option without data to support it.`,
         validation_overrides: {
-          min_h2:                minFeatures + 3, // features + overview + pros/cons + verdict
-          max_h2:               10,
-          requires_key_insights: true,
-          requires_summary:      false, // comparisons use Verdict instead
-          requires_references:   true,
+          max_h2:               12,
           requires_comparison:   true,
+          // Key-insights and references no longer forced.
+        },
+        dynamic_guidance: {
+          recommendedStructureRange: { min: minFeatures + 1, max: 10 },
+          conditionalSections: [
+            { name: 'Overview', appliesWhen: 'options need brief positioning before deep comparison', skipWhen: 'hook already positions them' },
+            { name: 'Key Insights', appliesWhen: 'long comparison (>1500 words)', skipWhen: 'short focused comparison' },
+            { name: 'Pros and Cons', appliesWhen: 'many small differences need final summary', skipWhen: 'differences are clear in-line' },
+            { name: 'References', appliesWhen: 'independent benchmarks/data cited', skipWhen: 'opinion-led comparison' },
+          ],
+          contentDepthAwareExpansion: {
+            perSectionWordTarget: Math.max(120, Math.round((tw - 350) / Math.max(minFeatures, 3))),
+            preferFewerDeeperSections: true,
+            minWordsPerSection: 100,
+          },
+          intentAwareStructureHints: [
+            'Compare on dimensions that decide the choice, not on every possible feature.',
+            'Verdict must be use-case-based ("Choose X if…"), not a universal winner.',
+          ],
+          primaryIntent: 'comparison',
         },
       };
     }
 
     case 'pillar': {
-      const sectionCount = tw <= 2500 ? '5–7' : tw <= 4000 ? '7–9' : '8–10';
-      const minSections  = tw <= 2500 ? 5 : tw <= 4000 ? 7 : 8;
-      const wordsPerSection = Math.round((tw - 500) / minSections); // subtract intro/summary/insights overhead
+      const sectionCount = tw <= 2500 ? '5–7' : tw <= 4000 ? '6–9' : '7–10';
+      const minSections  = tw <= 2500 ? 4 : tw <= 4000 ? 5 : 6;
+      const wordsPerSection = Math.round((tw - 400) / Math.max(minSections, 5));
       return {
-        structure_rules_prompt: `## GUIDE / PILLAR CONTENT STRUCTURE (mandatory)
+        structure_rules_prompt: `## GUIDE / PILLAR CONTENT STRUCTURE (adaptive, depth-led)
 
-This is a COMPLETE GUIDE. Depth over brevity. Write comprehensive, in-depth explanations. Assume the reader wants full understanding. Avoid surface-level content.
+This is a comprehensive guide. Prefer FEWER, DEEPER sections over MANY thin sections — depth follows the topic, not a section count.
 
-- Key Insights block (5–7 bullet points, each a standalone takeaway for scanners)
-- <h2>Introduction</h2>: What this guide covers, who it's for, and what the reader will gain (150–250 words). Frame the scope clearly.
-- ${sectionCount} deep H2 sections — each a comprehensive chapter of the guide:
-  - Each section: H2 heading + 3–6 paragraphs (${Math.max(200, wordsPerSection)}+ words per section)
-  - Use H3 sub-headings within sections to break down complex ideas (2–4 H3s per H2)
-  - Include concrete examples, data points, frameworks, and actionable advice in every section
-  - Naturally distribute target keywords across section headings and body text
-  - Use <blockquote> for key definitions, expert insights, or critical data points (at least 1 per major section)
-- <h2>Summary</h2>: Synthesize the guide's core message, key takeaways, and recommended next actions (150–200 words)
-- References section (minimum 5 authoritative sources with URLs)
+- <h2>Introduction</h2>: What this guide covers and who it's for (~150–250 words). Frame the scope explicitly.
+- ${sectionCount} deep H2 sections — each a substantive chapter:
+  - Section depth target: ~${Math.max(200, wordsPerSection)} words. Vary as the topic warrants.
+  - H3 sub-headings only when they genuinely break down a complex idea. Do not subdivide for the sake of subdivision.
+  - Concrete examples, data points, frameworks, and actionable advice. <blockquote> only when the line earns it as a quote-worthy definition or insight.
+
+CONDITIONAL — include only when warranted:
+- Key Insights block: include if the guide is >2500 words AND a scannable upfront block helps readers who'll come back to specific sections. Skip for shorter focused guides.
+- <h2>Summary</h2>: include if synthesis or next-actions go beyond what the closing section already delivers. Skip if the final section concludes naturally.
+- References section: include when external research, standards, or authoritative sources are cited. Do not add a references stub to satisfy the format.
 
 QUALITY REQUIREMENTS:
-- Each section must be substantive enough to stand as its own article — this is pillar content
-- Build progressively: foundational concepts first, then advanced strategies
-- Cross-reference between sections ("As discussed in Section 2..." or "Building on the framework above...")
-- Include at least 2–3 blockquotes for quotable insights throughout the guide`,
+- Each section must earn its place — substantive enough to stand as its own article. If a section can't, merge it with a stronger neighbor.
+- Build progressively: foundational concepts first, then advanced strategies.
+- Cross-reference between sections only when the reference adds value ("Building on the framework above..." rather than mechanical signposting).
+- Use <blockquote> for genuinely quote-worthy lines, not as decoration.`,
         validation_overrides: {
-          min_h2:                minSections + 1, // sections + summary
-          max_h2:               12,
-          requires_key_insights: true,
-          requires_summary:      true,
-          requires_references:   true,
+          max_h2:               14,
+          // Key-insights / Summary / References / min H2 no longer forced.
+        },
+        dynamic_guidance: {
+          recommendedStructureRange: { min: minSections, max: 12 },
+          conditionalSections: [
+            { name: 'Key Insights', appliesWhen: '>2500 words and readers will scan or return', skipWhen: 'shorter focused guide' },
+            { name: 'Summary', appliesWhen: 'synthesis goes beyond what final section delivers', skipWhen: 'final section concludes naturally' },
+            { name: 'References', appliesWhen: 'external research/standards cited', skipWhen: 'experience-driven guide' },
+          ],
+          contentDepthAwareExpansion: {
+            perSectionWordTarget: Math.max(200, wordsPerSection),
+            preferFewerDeeperSections: true,
+            minWordsPerSection: 150,
+          },
+          intentAwareStructureHints: [
+            'Depth over breadth: 5 deep sections beats 9 thin ones.',
+            'H3 sub-headings only when they break down genuine complexity.',
+            'Blockquotes earn their place by being quotable — not by adding decoration.',
+          ],
+          primaryIntent: 'authority',
         },
       };
     }
@@ -284,9 +453,9 @@ ${ARTICLE_COMMON}`,
         validation_overrides: {
           min_h2: tw <= 1200 ? 3 : 4,
           max_h2: 8,
-          requires_key_insights: true,
-          requires_summary: true,
-          requires_references: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
+          requires_summary: false, // Phase 3.4 — advisory only, never forced
+          requires_references: false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -310,9 +479,9 @@ ${ARTICLE_COMMON}`,
         validation_overrides: {
           min_h2: parseInt(findingsCount) + 3, // findings + background + implications + what's next
           max_h2: 10,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary: false,
-          requires_references: true,
+          requires_references: false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -335,9 +504,9 @@ ${ARTICLE_COMMON}`,
         validation_overrides: {
           min_h2: 4,
           max_h2: 7,
-          requires_key_insights: true,
-          requires_summary: true,
-          requires_references: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
+          requires_summary: false, // Phase 3.4 — advisory only, never forced
+          requires_references: false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -407,9 +576,9 @@ ${WP_COMMON}`,
         validation_overrides: {
           min_h2: 7,
           max_h2: 12,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary: false,
-          requires_references: true,
+          requires_references: false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -434,9 +603,9 @@ ${WP_COMMON}`,
         validation_overrides: {
           min_h2: 8,
           max_h2: 11,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary: false,
-          requires_references: true,
+          requires_references: false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -462,9 +631,9 @@ ${WP_COMMON}`,
         validation_overrides: {
           min_h2: 8,
           max_h2: 12,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary: false,
-          requires_references: true,
+          requires_references: false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -543,8 +712,8 @@ ${NL_COMMON}`,
         validation_overrides: {
           min_h2:                6,
           max_h2:                6,
-          requires_key_insights: true,
-          requires_summary:      true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
+          requires_summary:      false, // Phase 3.4 — advisory only, never forced
           requires_references:   false,
         },
       };
@@ -571,9 +740,9 @@ ${NL_COMMON}`,
         validation_overrides: {
           min_h2:                5,
           max_h2:                5,
-          requires_key_insights: true,
-          requires_summary:      true,
-          requires_references:   true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
+          requires_summary:      false, // Phase 3.4 — advisory only, never forced
+          requires_references:   false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -599,9 +768,9 @@ ${NL_COMMON}`,
         validation_overrides: {
           min_h2:                6,
           max_h2:                6,
-          requires_key_insights: true,
-          requires_summary:      true,
-          requires_references:   true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
+          requires_summary:      false, // Phase 3.4 — advisory only, never forced
+          requires_references:   false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -627,9 +796,9 @@ ${NL_COMMON}`,
         validation_overrides: {
           min_h2:                6,
           max_h2:                6,
-          requires_key_insights: true,
-          requires_summary:      true,
-          requires_references:   true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
+          requires_summary:      false, // Phase 3.4 — advisory only, never forced
+          requires_references:   false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -654,9 +823,9 @@ ${NL_COMMON}`,
         validation_overrides: {
           min_h2:                minItems + 2, // items + quick hits + action items
           max_h2:               12,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary:      false,
-          requires_references:   true,
+          requires_references:   false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -680,9 +849,9 @@ ${NL_COMMON}`,
         validation_overrides: {
           min_h2:                minSections + 2, // sections + bottom line + next steps
           max_h2:               9,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary:      false,
-          requires_references:   true,
+          requires_references:   false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -707,9 +876,9 @@ ${NL_COMMON}`,
         validation_overrides: {
           min_h2:                minItems + 2, // items + TL;DR + one thing
           max_h2:               14,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary:      false,
-          requires_references:   true,
+          requires_references:   false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -775,7 +944,7 @@ ${STORY_COMMON}`,
         validation_overrides: {
           min_h2:                3,
           max_h2:                6,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary:      false,
           requires_references:   false,
         },
@@ -806,7 +975,7 @@ ${STORY_COMMON}`,
         validation_overrides: {
           min_h2:                minScenes + 2, // scenes + resolution + reflection
           max_h2:               10,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary:      false,
           requires_references:   false,
         },
@@ -836,7 +1005,7 @@ ${STORY_COMMON}`,
         validation_overrides: {
           min_h2:                minScenes + 2, // scenes + cliffhanger + next time
           max_h2:               9,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary:      false,
           requires_references:   false,
         },
@@ -907,9 +1076,9 @@ ${GUIDE_COMMON}`,
         validation_overrides: {
           min_h2:                minSections + 1,
           max_h2:               12,
-          requires_key_insights: true,
-          requires_summary:      true,
-          requires_references:   true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
+          requires_summary:      false, // Phase 3.4 — advisory only, never forced
+          requires_references:   false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -936,9 +1105,9 @@ ${GUIDE_COMMON}`,
         validation_overrides: {
           min_h2:                minSteps + 2,
           max_h2:               12,
-          requires_key_insights: true,
-          requires_summary:      true,
-          requires_references:   true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
+          requires_summary:      false, // Phase 3.4 — advisory only, never forced
+          requires_references:   false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
@@ -966,9 +1135,9 @@ ${GUIDE_COMMON}`,
         validation_overrides: {
           min_h2:                minCategories + 2,
           max_h2:               14,
-          requires_key_insights: true,
+          requires_key_insights: false, // Phase 3.4 — advisory only, never forced
           requires_summary:      false,
-          requires_references:   true,
+          requires_references:   false, // Phase 3.4 — advisory only, never forced
         },
       };
     }
