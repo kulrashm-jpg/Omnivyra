@@ -222,7 +222,14 @@ export async function runComparisonBlogGeneration(args: {
   generationInput: BlogGenerationInput;
   targetWords: number;
   angleLabel?: string;
+  /** Blog Governance Parity — optional governance prompt context. */
+  governance?: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null;
 }): Promise<ComparisonDraft | null> {
+  // Blog Governance Parity — lazy-imported shared helper.
+  const { applyGovernancePreambleToSystemPrompt } =
+    await import('../../backend/services/creator/strategyGovernancePromptContext');
+  const govPreamble = (base: string) =>
+    applyGovernancePreambleToSystemPrompt(base, args.governance ?? null);
   // ── Company context injection ──
   const a = args.generationInput.answers || {};
   const companyContextBlock = [
@@ -265,7 +272,7 @@ export async function runComparisonBlogGeneration(args: {
     messages: [
       {
         role: 'system',
-        content:
+        content: govPreamble(
           `You are writing a comparison-style B2B blog article.\n` +
           (companyContextBlock ? `\nCOMPANY CONTEXT:\n${companyContextBlock}\n\n` : '') +
           `CONTENT QUALITY RULES (MANDATORY):\n` +
@@ -298,6 +305,7 @@ export async function runComparisonBlogGeneration(args: {
           `- callout_body must state a clear verdict or decision framing.\n` +
           `- summary_body must contain at least ${summaryTarget} words.\n` +
           `- references must contain at least 3 credible entries with real titles and URLs whenever possible.\n`,
+        ),
       },
       {
         role: 'user',
@@ -364,12 +372,13 @@ export async function runComparisonBlogGeneration(args: {
         messages: [
           {
             role: 'system',
-            content:
+            content: govPreamble(
               `Return JSON only: { "html": "<p>...</p><p>...</p>" }\n` +
               `Write one decision-grade comparison section with at least ${paragraphTarget} words.\n` +
               `Use 2-3 <p> tags, cover strengths, tradeoffs, and scenario fit, and do not output headings or bullets.\n` +
               (companyContextBlock ? `Reference this company context throughout:\n${companyContextBlock}\n` : '') +
               buildSectionEnforcementPrompt(_sectionIdentity, blueprint.index - 1),
+            ),
           },
           {
             role: 'user',
@@ -403,9 +412,10 @@ export async function runComparisonBlogGeneration(args: {
         messages: [
           {
             role: 'system',
-            content:
+            content: govPreamble(
               `Return JSON only: { "items": ["...", "..."] }\n` +
               `Write a concrete comparison list with at least ${Math.min(listItemTarget, blueprint.slotCount)} items.\n`,
+            ),
           },
           {
             role: 'user',
@@ -438,9 +448,10 @@ export async function runComparisonBlogGeneration(args: {
       messages: [
         {
           role: 'system',
-          content:
+          content: govPreamble(
             `Return JSON only with keys excerpt, seo_meta_description, key_insights, callout_body, summary_body, references.\n` +
             `callout_body must state a clear verdict. summary_body must be at least ${summaryTarget} words. references must include at least 3 credible entries.\n`,
+          ),
         },
         {
           role: 'user',

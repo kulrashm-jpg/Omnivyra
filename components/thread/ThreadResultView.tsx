@@ -31,7 +31,7 @@ import { getThreadContinuationLink, getThreadSchedulerLink } from '../../lib/thr
 import { openThreadRuntimeTracer } from '../../backend/services/threadRuntime/threadRuntimeInstrumentation';
 import type { ThreadSegmentEditorRuntimeEvent } from './ThreadSegmentsEditor';
 import {
-  THREAD_CREATOR_ASSET_TYPES,
+  THREAD_CREATOR_ASSET_TYPES_VISIBLE,
   assetLabel,
   buildWriterCreatorPrefill,
   createWriterSourceId,
@@ -638,7 +638,7 @@ export default function ThreadResultView() {
                         >
                           No asset
                         </button>
-                        {THREAD_CREATOR_ASSET_TYPES.map((assetType) => (
+                        {THREAD_CREATOR_ASSET_TYPES_VISIBLE.map((assetType) => (
                           <button
                             key={assetType}
                             type="button"

@@ -270,7 +270,14 @@ export async function runEditorialBlogGeneration(args: {
   targetWords: number;
   angleLabel?: string;
   templateLabel: 'Visual Feature' | 'Magazine';
+  /** Blog Governance Parity — optional governance prompt context. */
+  governance?: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null;
 }): Promise<EditorialDraft | null> {
+  // Blog Governance Parity — lazy-imported shared helper.
+  const { applyGovernancePreambleToSystemPrompt } =
+    await import('../../backend/services/creator/strategyGovernancePromptContext');
+  const govPreamble = (base: string) =>
+    applyGovernancePreambleToSystemPrompt(base, args.governance ?? null);
   // ── Company context injection ──
   const a = args.generationInput.answers || {};
   const companyContextBlock = [
@@ -312,7 +319,7 @@ export async function runEditorialBlogGeneration(args: {
     messages: [
       {
         role: 'system',
-        content:
+        content: govPreamble(
           `You are writing a ${args.templateLabel} blog article.\n` +
           (companyContextBlock ? `\nCOMPANY CONTEXT:\n${companyContextBlock}\n\n` : '') +
           `CONTENT QUALITY RULES (MANDATORY):\n` +
@@ -347,6 +354,7 @@ export async function runEditorialBlogGeneration(args: {
           `- The article must reach at least ${minAcceptable} words and aim for ${args.targetWords} words.\n` +
           `- references must contain at least 3 credible entries with real titles and URLs whenever possible.\n` +
           `- summary_body must contain at least ${summaryTarget} words.\n`,
+        ),
       },
       {
         role: 'user',
@@ -411,12 +419,13 @@ export async function runEditorialBlogGeneration(args: {
         messages: [
           {
             role: 'system',
-            content:
+            content: govPreamble(
               `Return JSON only: { "html": "<p>...</p><p>...</p>" }\n` +
               `Write one substantial ${args.templateLabel} section with at least ${paragraphTarget} words.\n` +
               `Use 2-3 <p> tags, include analysis and examples, and do not output headings or bullets.\n` +
               (companyContextBlock ? `Reference this company context throughout:\n${companyContextBlock}\n` : '') +
               buildSectionEnforcementPrompt(_sectionIdentity, blueprint.index - 1),
+            ),
           },
           {
             role: 'user',
@@ -448,7 +457,7 @@ export async function runEditorialBlogGeneration(args: {
         messages: [
           {
             role: 'system',
-            content: `Return JSON only: { "alt": "string", "caption": "string" }. Write specific, accessible, relevant image metadata.`,
+            content: govPreamble(`Return JSON only: { "alt": "string", "caption": "string" }. Write specific, accessible, relevant image metadata.`),
           },
           {
             role: 'user',
@@ -483,7 +492,7 @@ export async function runEditorialBlogGeneration(args: {
         messages: [
           {
             role: 'system',
-            content: `Return JSON only: { "text": "string", "author": "string", "source": "string" }. Write a specific editorial pull quote, not a placeholder.`,
+            content: govPreamble(`Return JSON only: { "text": "string", "author": "string", "source": "string" }. Write a specific editorial pull quote, not a placeholder.`),
           },
           {
             role: 'user',
@@ -518,9 +527,10 @@ export async function runEditorialBlogGeneration(args: {
       messages: [
         {
           role: 'system',
-          content:
+          content: govPreamble(
             `Return JSON only with keys excerpt, seo_meta_description, key_insights, callout_body, summary_body, references.\n` +
             `summary_body must be at least ${summaryTarget} words. references must include at least 3 credible entries.\n`,
+          ),
         },
         {
           role: 'user',

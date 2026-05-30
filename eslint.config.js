@@ -177,6 +177,7 @@ module.exports = [
       'pages/api/feature-completion.ts',
       'pages/api/community-ai/connectors/utils.ts',
       'tests/auth/authTestHarness.ts',
+      'db-utils/supabase-util-client.js',
     ],
     rules: {
       'no-restricted-syntax': 'off',

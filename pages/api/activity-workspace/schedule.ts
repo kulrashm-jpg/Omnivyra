@@ -240,7 +240,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       platform: platformNorm,
       nodes: parsedNodes,
     });
-    if (!nodeCheck.ok) {
+    if (nodeCheck.ok === false) {
       if (nodeCheck.shouldReject) {
         return res.status(422).json({
           error: nodeCheck.code,
@@ -264,7 +264,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       platform: platformNorm,
       content: String(content || ''),
     });
-    if (!charCheck.ok) {
+    if (charCheck.ok === false) {
       if (charCheck.shouldReject) {
         return res.status(422).json({
           error: charCheck.code,
@@ -287,7 +287,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Phase 1B.1A — enforce-mode hard gate. Reject before any rows are inserted
     // or updated to prevent first-segment-only publish until 1B.2 ships.
     const enforceGate = checkEnforceGate();
-    if (!enforceGate.allowed) {
+    if (enforceGate.allowed === false) {
       return res.status(422).json({
         error: 'THREAD_ENFORCE_MODE_BLOCKED',
         message: enforceGate.reason,

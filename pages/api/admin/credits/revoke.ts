@@ -86,7 +86,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         metadata: { ...(metadata ?? {}), originalGrantIdempotencyKey },
       },
     });
-    if (!proposal.ok) return res.status(400).json({ error: proposal.message, code: proposal.code });
+    if (proposal.ok === false) return res.status(400).json({ error: proposal.message, code: proposal.code });
     proposalId = proposal.approvalId;
     if (!proposal.autoApproved) {
       return billingOk(res, 202, {
@@ -120,7 +120,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return billingFail(res, 500, { rawMessage: err?.message ?? 'Revocation failed', legacyCode: 'LEDGER_FAILED' });
   }
 
-  if (!revokeResult.success) {
+  if (revokeResult.success === false) {
     return billingFail(res, 400, {
       rawMessage: `Revoke failed: ${revokeResult.reason}`,
       legacyCode: revokeResult.reason,

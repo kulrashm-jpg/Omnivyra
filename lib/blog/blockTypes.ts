@@ -199,6 +199,42 @@ export type CreatorAssetBlockType =
   | 'slider'
   | 'brand_card';
 
+/**
+ * Variant collection — Writer multi-asset storage (PHASE 4 of the
+ * final variant workflow activation phase). When the Writer generates
+ * a Top-3 or Experiment-mode fan-out, the resulting variant assets
+ * are persisted on the block as an array. The block still keeps the
+ * single `assetId` / `url` / `files` fields to point at the
+ * OPERATOR-SELECTED variant (the one that will actually publish);
+ * the alternatives ride alongside as `variants[]`. Legacy blocks
+ * with no `variants[]` field continue rendering as single-asset
+ * blocks — backward compatibility preserved.
+ */
+export type CreatorAssetVariantEntry = {
+  /** Renderer-resolved variant id (e.g. `image:quote-image:v2`). */
+  variant_id: string;
+  /** Variant family token. */
+  variant_family: 'v1' | 'v2' | 'v3';
+  /** Asset id returned by the generation endpoint. */
+  asset_id: string | null;
+  /** Primary preview URL — used by the Writer's variant preview grid. */
+  url?: string;
+  /** Additional file URLs (carousel slides). */
+  files?: string[];
+  /** Optional caption text. */
+  caption?: string;
+  /** Optional generation status — for in-progress / failed marks. */
+  state?: 'generated' | 'failed' | 'pending';
+  /** Optional inline metrics snapshot — populated when the dashboard
+   *  has live winner data for the variant. */
+  metrics?: {
+    engagementRate?: number;
+    saveRate?: number;
+    shareRate?: number;
+    sampleSize?: number;
+  } | null;
+};
+
 export interface CreatorAssetBlock extends BlockBase {
   type: 'creator_asset';
   assetId?: string;
@@ -210,6 +246,19 @@ export interface CreatorAssetBlock extends BlockBase {
   caption?: string;
   blockTemplateId?: string;
   metadata?: Record<string, unknown>;
+  /** Variant collection (PHASE 4). Empty / absent on legacy blocks
+   *  and on blocks attached via single-variant mode. */
+  variants?: CreatorAssetVariantEntry[];
+  /** When `variants[]` is non-empty, this points at the variant the
+   *  operator selected as the primary publish target. The block's
+   *  `assetId` / `url` / `files` mirror that variant's fields. */
+  selectedVariantId?: string;
+  /** P3-5 — when true, the publisher should iterate every
+   *  successfully-generated variant in `variants[]` and publish each
+   *  as its own asset attachment. When false (default), only the
+   *  `selectedVariantId` publishes. Backward compatible — absent /
+   *  `undefined` matches the legacy single-variant publish path. */
+  publishAllVariants?: boolean;
 }
 
 // ── Union ─────────────────────────────────────────────────────────────────────

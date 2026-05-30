@@ -232,6 +232,32 @@ export async function runPerformanceIngestion(): Promise<PerformanceIngestionRes
     for (const companyId of affectedCompanyIds) {
       invalidateStrategyProfileCache(companyId);
     }
+
+    // ── Strategy Analytics runtime activation (additive + best-effort) ──
+    // Mirror each rolled-up post's engagement total into the strategy
+    // aggregator. Best-effort: all failures swallowed; the canonical
+    // campaign_performance_signals insert above already succeeded and
+    // analytics must never block ingestion (PHASE 6).
+    try {
+      const { recordCampaignPerformanceStrategyEvents } =
+        await import('../services/creator/strategyAnalyticsRuntime');
+      await Promise.all(
+        toInsert.map((row) => {
+          const postId = String(row.post_id ?? '');
+          const engagementTotal = Number(row.engagement ?? 0);
+          if (!postId || engagementTotal <= 0) return Promise.resolve();
+          return recordCampaignPerformanceStrategyEvents({
+            scheduledPostId: postId,
+            engagementTotal,
+          });
+        }),
+      );
+    } catch (err: unknown) {
+      console.warn(
+        '[performanceIngestion] strategy analytics recording failed (non-fatal):',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));
   }

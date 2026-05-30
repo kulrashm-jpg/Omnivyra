@@ -241,7 +241,14 @@ export async function runTutorialBlogGeneration(args: {
   generationInput: BlogGenerationInput;
   targetWords: number;
   angleLabel?: string;
+  /** Blog Governance Parity — optional governance prompt context. */
+  governance?: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null;
 }): Promise<TutorialDraft | null> {
+  // Blog Governance Parity — lazy-imported shared helper.
+  const { applyGovernancePreambleToSystemPrompt } =
+    await import('../../backend/services/creator/strategyGovernancePromptContext');
+  const govPreamble = (base: string) =>
+    applyGovernancePreambleToSystemPrompt(base, args.governance ?? null);
   // ── Company context injection ──
   const a = args.generationInput.answers || {};
   const companyContextBlock = [
@@ -284,7 +291,7 @@ export async function runTutorialBlogGeneration(args: {
     messages: [
       {
         role: 'system',
-        content:
+        content: govPreamble(
           `You are writing a step-by-step Tutorial blog article.\n` +
           (companyContextBlock ? `\nCOMPANY CONTEXT:\n${companyContextBlock}\n\n` : '') +
           `CONTENT QUALITY RULES (MANDATORY):\n` +
@@ -318,6 +325,7 @@ export async function runTutorialBlogGeneration(args: {
           `- callout_body should cover prerequisites or troubleshooting with real detail.\n` +
           `- summary_body must contain at least ${summaryTarget} words.\n` +
           `- references must contain at least 3 credible resources with real titles and URLs whenever possible.\n`,
+        ),
       },
       {
         role: 'user',
@@ -387,7 +395,7 @@ export async function runTutorialBlogGeneration(args: {
         messages: [
           {
             role: 'system',
-            content:
+            content: govPreamble(
               `You are writing one step section of a Tutorial blog article.\n` +
               `Return JSON only: { "html": "<p>...</p><p>...</p>" }\n` +
               `Rules:\n` +
@@ -397,6 +405,7 @@ export async function runTutorialBlogGeneration(args: {
               `- Do not write bullets, headings, or placeholders\n` +
               (companyContextBlock ? `Reference this company context throughout:\n${companyContextBlock}\n` : '') +
               buildSectionEnforcementPrompt(_sectionIdentity, blueprint.index - 1),
+            ),
           },
           {
             role: 'user',
@@ -433,12 +442,13 @@ export async function runTutorialBlogGeneration(args: {
         messages: [
           {
             role: 'system',
-            content:
+            content: govPreamble(
               `You are writing a checklist/list block for a Tutorial article.\n` +
               `Return JSON only: { "items": ["...", "..."] }\n` +
               `Rules:\n` +
               `- Return at least ${Math.min(listItemTarget, blueprint.slotCount)} filled items\n` +
               `- Each item must be specific, practical, and non-generic\n`,
+            ),
           },
           {
             role: 'user',
@@ -472,7 +482,7 @@ export async function runTutorialBlogGeneration(args: {
       messages: [
         {
           role: 'system',
-          content:
+          content: govPreamble(
             `You are writing the support blocks for a Tutorial blog article.\n` +
             `Return JSON only:\n` +
             `{\n` +
@@ -488,6 +498,7 @@ export async function runTutorialBlogGeneration(args: {
             `- callout_body must cover prerequisites or troubleshooting with useful detail\n` +
             `- summary_body must be at least ${summaryTarget} words\n` +
             `- references must include at least 3 credible sources/resources with real titles and URLs whenever possible\n`,
+          ),
         },
         {
           role: 'user',

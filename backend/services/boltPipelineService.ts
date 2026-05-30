@@ -58,6 +58,10 @@ import {
   type BoltPipelineMode,
   type BoltCampaignType,
 } from './boltPipelineFailurePersistence';
+import { captureStrategySnapshot } from '../../lib/shared/bolt/captureStrategySnapshot';
+import { assertValidBoltBlueprint } from '../../lib/shared/bolt/validateBoltBlueprint';
+import { BoltError, BOLT_ERROR_CODES } from '../../lib/shared/bolt/boltErrorCodes';
+import { withBlueprintSaveGuard } from './boltPersistenceGuards';
 import {
   acquireRunLock,
   extendRunLock,
@@ -75,10 +79,19 @@ function normalizeOptionalUuid(value: unknown): string | null {
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  // Closure-pass follow-up: rejects with BoltError(STAGE_TIMEOUT) instead
+  // of a generic Error. The message text is identical so the classifier's
+  // 'timed out' pattern match still works for legacy callers, but the
+  // BoltError fast-path now gives us a stable code on the failure summary
+  // without depending on string matching. Behavior unchanged otherwise.
   return Promise.race([
     promise,
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)
+      setTimeout(() => reject(new BoltError(
+        BOLT_ERROR_CODES.STAGE_TIMEOUT,
+        `${label} timed out after ${ms / 1000}s`,
+        { details: { label, timeout_ms: ms } }
+      )), ms)
     ),
   ]);
 }
@@ -205,7 +218,11 @@ async function updateRun(
   const { error } = await ownedDbTable('bolt_execution_runs')
     .update(sanitizedUpdates)
     .eq('id', runId);
-  if (error) throw new Error(`Failed to update run: ${error.message}`);
+  if (error) throw new BoltError(
+    BOLT_ERROR_CODES.RUN_UPDATE_FAILED,
+    `Failed to update run: ${error.message}`,
+    { cause: error, details: { db_error: error.message } }
+  );
 }
 
 async function logEvent(
@@ -258,7 +275,11 @@ async function assertCampaignValid(campaignId: string): Promise<void> {
     .select('id')
     .eq('id', campaignId)
     .maybeSingle();
-  if (error || !data) throw new Error('Campaign not found');
+  if (error || !data) throw new BoltError(
+    BOLT_ERROR_CODES.SCHEDULING_CAMPAIGN_NOT_FOUND,
+    'Campaign not found',
+    { cause: error ?? undefined }
+  );
 }
 
 async function runSourceRecommendation(
@@ -295,7 +316,13 @@ async function runSourceRecommendation(
       .maybeSingle();
 
     if (fetchError || !latestVersion) {
-      throw new Error('Campaign version not found for source-recommendation');
+      // Part 6 — classified persistence failure so the failure summary
+      // surfaces CAMPAIGN_VERSION_NOT_FOUND instead of a generic message.
+      throw new BoltError(
+        BOLT_ERROR_CODES.CAMPAIGN_VERSION_NOT_FOUND,
+        `Campaign version not found for source-recommendation (campaign_id=${campaignId}).`,
+        { cause: fetchError ?? undefined, details: { campaign_id: campaignId, company_id: companyId } }
+      );
     }
 
     const currentSnapshot = ((latestVersion as { campaign_snapshot?: unknown }).campaign_snapshot as Record<string, unknown>) || {};
@@ -313,7 +340,13 @@ async function runSourceRecommendation(
       .update({ campaign_snapshot: updatedSnapshot })
       .eq('id', (latestVersion as { id: string }).id);
 
-    if (updateError) throw new Error(`Source-recommendation update failed: ${updateError.message}`);
+    if (updateError) {
+      throw new BoltError(
+        BOLT_ERROR_CODES.CAMPAIGN_VERSION_UPDATE_FAILED,
+        `CAMPAIGN_VERSION_UPDATE_FAILED: ${updateError.message}`,
+        { cause: updateError, details: { campaign_id: campaignId, db_error: updateError.message } }
+      );
+    }
 
     const updates: Record<string, unknown> = {};
     if (sourceThemeTitle) updates.name = sourceThemeTitle;
@@ -339,7 +372,13 @@ async function runSourceRecommendation(
       start_date: startDate,
     });
 
-    if (campaignError) throw new Error(`Campaign creation failed: ${campaignError.message}`);
+    if (campaignError) {
+      throw new BoltError(
+        BOLT_ERROR_CODES.CAMPAIGN_INSERT_FAILED,
+        `CAMPAIGN_INSERT_FAILED: ${campaignError.message}`,
+        { cause: campaignError, details: { campaign_id: newCampaignId, company_id: companyId, db_error: campaignError.message } }
+      );
+    }
 
     const snapshotPayload: Record<string, unknown> = {
       source_strategic_theme: sourceStrategicTheme,
@@ -366,7 +405,13 @@ async function runSourceRecommendation(
       campaign_weights: { brand_awareness: 1 },
     });
 
-    if (versionError) throw new Error(`Campaign version creation failed: ${versionError.message}`);
+    if (versionError) {
+      throw new BoltError(
+        BOLT_ERROR_CODES.CAMPAIGN_VERSION_INSERT_FAILED,
+        `CAMPAIGN_VERSION_INSERT_FAILED: ${versionError.message}`,
+        { cause: versionError, details: { campaign_id: newCampaignId, company_id: companyId, db_error: versionError.message } }
+      );
+    }
     campaignId = newCampaignId;
   }
 
@@ -745,7 +790,10 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
 
   const plan = result?.plan;
   if (!plan || !Array.isArray(plan.weeks)) {
-    throw new Error('AI plan did not return a valid plan with weeks');
+    throw new BoltError(
+      BOLT_ERROR_CODES.AI_PLAN_INVALID,
+      'AI plan did not return a valid plan with weeks',
+    );
   }
 
   // Trim to requested duration: reduce downstream work (generate-weekly-structure, scheduling)
@@ -767,18 +815,25 @@ async function runCommitPlan(
   const blueprint = fromStructuredPlan({ weeks: sanitizedWeeks, campaign_id: campaignId });
   // Align with strategic theme card → create campaign flow: saveStructuredCampaignPlan + commitDraftBlueprint
   const snapshotHash = `bolt-${campaignId}-${Date.now()}`;
-  await saveStructuredCampaignPlan({
-    campaignId,
-    snapshot_hash: snapshotHash,
-    weeks: sanitizedWeeks as any,
-    omnivyre_decision: { status: 'ok', recommendation: 'proceed' } as any,
-    raw_plan_text: '',
-  });
-  await commitDraftBlueprint({
-    campaignId,
-    blueprint,
-    source: 'bolt-ai-commit-plan',
-  });
+  // Part 6 — classify any save failure as BLUEPRINT_SAVE_FAILED rather
+  // than leaking a generic Supabase / orchestrator error. The wrapper
+  // preserves the raw cause in `details.db_error` for forensics.
+  await withBlueprintSaveGuard({ campaign_id: campaignId, snapshot_hash: snapshotHash, op: 'saveStructuredCampaignPlan' }, () =>
+    saveStructuredCampaignPlan({
+      campaignId,
+      snapshot_hash: snapshotHash,
+      weeks: sanitizedWeeks as any,
+      omnivyre_decision: { status: 'ok', recommendation: 'proceed' } as any,
+      raw_plan_text: '',
+    })
+  );
+  await withBlueprintSaveGuard({ campaign_id: campaignId, op: 'commitDraftBlueprint' }, () =>
+    commitDraftBlueprint({
+      campaignId,
+      blueprint,
+      source: 'bolt-ai-commit-plan',
+    })
+  );
   const durationWeeks = Math.max(1, blueprint.duration_weeks ?? plan.weeks.length ?? 1);
   const tentativeStart = executionConfig?.tentative_start as string | undefined;
   const startDateValue =
@@ -1041,7 +1096,11 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
     .maybeSingle();
 
   if (fetchError || !run) {
-    throw new Error(`BOLT run not found: ${runId}`);
+    throw new BoltError(
+      BOLT_ERROR_CODES.RUN_NOT_FOUND,
+      `BOLT run not found: ${runId}`,
+      { details: { run_id: runId } }
+    );
   }
 
   const status = (run as { status?: string }).status;
@@ -1076,6 +1135,27 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   // "show me all bolt-text schedule-view failures from this week".
   const pipelineMode: BoltPipelineMode = (outcomeView ?? 'week_plan') as BoltPipelineMode;
   const campaignType: BoltCampaignType = deriveBoltCampaignType(payload.executionConfig);
+  // Captured up-front so every catch site can attach it without rebuilding.
+  // Eligible-platforms isn't known yet; we re-capture later with that field
+  // included for the per-stage catches that fire after platform resolution.
+  const siblingDifferential = (payload as { sibling_differential?: {
+    has_siblings: boolean;
+    sibling_count: number;
+    latest_succeeded_sibling_run_id: string | null;
+    differs_from_succeeded_sibling: string[];
+    differs_from_failed_sibling: string[];
+  } }).sibling_differential ?? undefined;
+  let strategySnapshot = {
+    ...captureStrategySnapshot({
+      executionConfig: payload.executionConfig,
+      sourceStrategicTheme: payload.sourceStrategicTheme,
+      outcomeView: payload.outcomeView ?? null,
+      sourceOpportunityId: payload.sourceOpportunityId ?? null,
+      sourceRecommendationId: payload.recId ?? null,
+      regionsFromCard: payload.regionsFromCard ?? null,
+    }),
+    ...(siblingDifferential ? { sibling_differential: siblingDifferential } : {}),
+  };
   const executionProfile = getExecutionProfile(payload.executionConfig);
   if (executionProfile === 'creator') {
     const formats = getCreatorFormatsFromExecutionConfig(payload.executionConfig);
@@ -1085,6 +1165,7 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       await persistPipelineFailure({
         runId, stage: 'pre-validate-creator-format', error: err,
         runStartedAt, pipelineMode, campaignType,
+        companyId, strategySnapshot,
       });
       // Release the lock so a fast-failing validation doesn't hold the
       // row in "running with valid lock" for the full TTL.
@@ -1101,6 +1182,7 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       await persistPipelineFailure({
         runId, stage: 'pre-validate-creator-schedule', error: err,
         runStartedAt, pipelineMode, campaignType,
+        companyId, strategySnapshot,
       });
       await releaseRunLock(runId, lock.token);
       throw err;
@@ -1176,6 +1258,7 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
     await persistPipelineFailure({
       runId, stage: 'validate-execution-config', error: err,
       runStartedAt, pipelineMode, campaignType,
+      companyId, strategySnapshot,
     });
     await releaseRunLock(runId, lock.token);
     throw err;
@@ -1216,6 +1299,22 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       selected_platforms: selectedList,
       eligible: eligiblePlatforms,
     });
+    // Refresh the strategy snapshot now that eligible_platforms is known.
+    // Catch sites that fire AFTER this point will attach the richer
+    // snapshot to bolt_failure_summary, giving operators the platform
+    // narrowing for differential diagnosis.
+    strategySnapshot = {
+      ...captureStrategySnapshot({
+        executionConfig: payload.executionConfig,
+        sourceStrategicTheme: payload.sourceStrategicTheme,
+        outcomeView: payload.outcomeView ?? null,
+        sourceOpportunityId: payload.sourceOpportunityId ?? null,
+        sourceRecommendationId: payload.recId ?? null,
+        regionsFromCard: payload.regionsFromCard ?? null,
+        eligiblePlatforms,
+      }),
+      ...(siblingDifferential ? { sibling_differential: siblingDifferential } : {}),
+    };
   } catch (err) {
     console.error('[bolt] Failed to resolve eligible platforms', err);
     eligiblePlatforms = [];
@@ -1237,6 +1336,7 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
     await persistPipelineFailure({
       runId, stage: 'validate-platforms', error: err,
       runStartedAt, pipelineMode, campaignType,
+      companyId, strategySnapshot,
     });
     await releaseRunLock(runId, lock.token);
     throw err;
@@ -1304,6 +1404,7 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
           await persistPipelineFailure({
             runId, stage, error: guardErr,
             runStartedAt, pipelineMode, campaignType, campaignId,
+            companyId, strategySnapshot,
           });
           await updateRun(runId, { status: 'aborted' });
           return;
@@ -1362,6 +1463,13 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
             plan: { weeks: plan.weeks },
           });
         } else if (stage === 'commit-plan' && campaignId && plan) {
+          // Part 5 — blueprint guard. Runs BEFORE the structured plan
+          // is committed so malformed AI output never reaches
+          // generate-weekly-structure with rows that will silently
+          // skip or fail with a generic message. Throws a BoltError
+          // whose code is one of the BLUEPRINT_* family; the per-stage
+          // catch picks it up and persistPipelineFailure surfaces it.
+          assertValidBoltBlueprint(plan);
           await runCommitPlan(campaignId, plan, payload.executionConfig as Record<string, unknown>, requiresMediaFlow);
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
@@ -1425,6 +1533,7 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
             userId: payload.userId ?? null,
             mode: creatorExecutionMode ?? 'RENDER_ONLY',
             onProgress: (progressStage) => updateRun(runId, { current_stage: progressStage }),
+            runId,
           });
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
@@ -1468,6 +1577,8 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
           pipelineMode,
           campaignType,
           campaignId,
+          companyId,
+          strategySnapshot,
         });
         throw stageErr;
       }
@@ -1586,6 +1697,8 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       pipelineMode,
       campaignType,
       campaignId,
+      companyId,
+      strategySnapshot,
     });
     // Release lock on failure too — keeps stale-lock rows out of the
     // sweeper's queue. Token-checked, so if our lock was already

@@ -43,7 +43,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       actorUserId: user.id,
       reason: reason.trim(),
     });
-    if (!result.ok) {
+    if (result.ok === false) {
       const status =
         result.code === 'NOT_FOUND'        ? 404 :
         result.code === 'ALREADY_EXECUTED' ? 409 :

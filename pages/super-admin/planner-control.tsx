@@ -59,6 +59,7 @@ export default function PlannerControlPage() {
             <a href="/super-admin/system-health" className="rounded-full border border-gray-200 bg-white px-2.5 py-0.5 font-medium text-gray-700 hover:bg-gray-50">System health</a>
             <a href="/super-admin/oauth-health" className="rounded-full border border-gray-200 bg-white px-2.5 py-0.5 font-medium text-gray-700 hover:bg-gray-50">OAuth health</a>
             <a href="/super-admin/planner-control" className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 font-medium text-indigo-700">Planner control</a>
+            <a href="/super-admin/bolt-failures" className="rounded-full border border-gray-200 bg-white px-2.5 py-0.5 font-medium text-gray-700 hover:bg-gray-50">BOLT failures</a>
             <a href="/super-admin/dashboard" className="rounded-full border border-gray-200 bg-white px-2.5 py-0.5 font-medium text-gray-700 hover:bg-gray-50">Dashboard</a>
           </nav>
 

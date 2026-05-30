@@ -3,6 +3,7 @@ import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
 import { requireCompanyContext } from '@/backend/services/companyContextGuardService';
 import { sendInvite } from '@/backend/services/emailService';
 import { resolveAuthenticatedUser } from '@/backend/services/authResolver';
+import { getCanonicalAppUrl } from '@/backend/config/getCanonicalAppUrl';
 import { randomBytes, createHash } from 'crypto';
 
 async function getActorUserId(req: NextApiRequest): Promise<string | null> {

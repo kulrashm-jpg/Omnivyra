@@ -108,6 +108,23 @@ export type CreatorOrchestrationInput = {
    * becomes standalone-usable (Phase 5).
    */
   skipPersistence?: boolean;
+
+  /**
+   * Final Corrective Pass — P1-1. Optional pre-resolved variant
+   * applied to this generation. When present, the orchestrator merges
+   * `{ variant_id, variant_family, strategy_id }` into the
+   * media_bundle.metadata envelope so the canonical
+   * `creatorAssetRenderer` picks it up via its existing variant path.
+   *
+   * Populated by the campaign runner when the campaign carries a
+   * persisted `execution_config.variant_strategy`. Direct / writer
+   * flows leave this null and behave exactly as before.
+   */
+  appliedVariant?: {
+    strategy_id: string;
+    variant_id: string;
+    variant_family: string;
+  } | null;
 };
 
 export type CreatorOrchestrationResult = {
@@ -401,6 +418,17 @@ export async function runCreatorOrchestration(
   const engine = createCreatorExecutionEngine();
   const primaryPlatform = String(input.targetPlatforms[0] || 'linkedin').toLowerCase();
 
+  // Final Corrective Pass — P2-2. Generation telemetry. The orchestrator
+  // is the single canonical entry point for asset generation (direct +
+  // BOLT + queue origins), so measuring duration here populates the
+  // `generation` telemetry category for ALL surfaces.
+  const generationStartedAt = (typeof performance !== 'undefined' && performance.now)
+    ? performance.now()
+    : Date.now();
+  let generationOk = false;
+
+  try {
+
   // 1) generate
   const generationCtx: CreatorGenerationContext = {
     campaignId: input.campaignId,
@@ -423,13 +451,21 @@ export async function runCreatorOrchestration(
     { assetOverride: safeObject(safeObject(input.existingContent).asset_payload || safeObject(input.existingContent).creator_asset) },
   ) as CanonicalCreatorOutput;
 
-  const generatedValidation = validateCreatorExecutionOutput(generated);
+  // Final Corrective Pass — P1-1. Merge the campaign-resolved variant
+  // (if any) into media_bundle.metadata BEFORE adapt + render so the
+  // renderer's existing variant path picks it up. No behavior change
+  // when appliedVariant is null.
+  const generatedWithVariant: CanonicalCreatorOutput = input.appliedVariant
+    ? mergeAppliedVariantIntoOutput(generated, input.appliedVariant)
+    : generated;
+
+  const generatedValidation = validateCreatorExecutionOutput(generatedWithVariant);
   if (!generatedValidation.ok) {
     throw new Error(`creator orchestrator: generation output failed validation: ${generatedValidation.issues.join('; ')}`);
   }
 
   // 2) adapt
-  const adapted = await engine.adaptForPlatform(generated, primaryPlatform) as CanonicalCreatorOutput;
+  const adapted = await engine.adaptForPlatform(generatedWithVariant, primaryPlatform) as CanonicalCreatorOutput;
 
   // 3) render
   const renderResult = await runRenderDispatch({
@@ -564,6 +600,36 @@ export async function runCreatorOrchestration(
     }
   }
 
+  // Final Corrective Pass — P2-1. Notify the experiment tracker that
+  // an asset finished generation. Resolves the variant id from either
+  // the explicitly-applied campaign variant OR (fallback) from the
+  // rendered media_bundle.metadata.applied_variant envelope written by
+  // the renderer when it resolved a variant during render.
+  try {
+    const renderedMediaMeta = safeObject(safeObject(renderResult.output.asset_payload).media_bundle).metadata as Record<string, unknown> | undefined;
+    const applied = renderedMediaMeta && typeof renderedMediaMeta === 'object'
+      ? renderedMediaMeta.applied_variant
+      : null;
+    const fallbackVariantId = applied && typeof applied === 'object' && !Array.isArray(applied)
+      ? typeof (applied as Record<string, unknown>).variant_id === 'string'
+        ? (applied as Record<string, unknown>).variant_id as string
+        : null
+      : null;
+    const resolvedVariantId = input.appliedVariant?.variant_id ?? fallbackVariantId;
+    if (resolvedVariantId) {
+      const { notifyExperimentAssetGenerated } =
+        require('./variantExperimentLifecycle') as typeof import('./variantExperimentLifecycle');
+      notifyExperimentAssetGenerated({
+        companyId: input.companyId,
+        variantId: resolvedVariantId,
+        assetId: persistedAssetId,
+      });
+    }
+  } catch {
+    // Best-effort.
+  }
+
+  generationOk = true;
   return {
     output: renderResult.output,
     renderStrategy: strategy,
@@ -571,5 +637,61 @@ export async function runCreatorOrchestration(
     persistedAssetId,
     readiness,
     lifecycleTransition,
+  };
+  } finally {
+    // Final Corrective Pass — P2-2. Record generation duration in
+    // ALL cases (success + failure) so the `generation` telemetry
+    // category reflects real activity. Bounded ring buffer caps
+    // memory.
+    try {
+      const generationEndedAt = (typeof performance !== 'undefined' && performance.now)
+        ? performance.now()
+        : Date.now();
+      const { recordVariantTimingSample } =
+        require('./variantPerformanceTelemetry') as typeof import('./variantPerformanceTelemetry');
+      recordVariantTimingSample(
+        'generation',
+        generationEndedAt - generationStartedAt,
+        generationOk,
+        { origin: input.origin, content_type: effectiveContentType, has_variant: Boolean(input.appliedVariant) },
+      );
+    } catch {
+      // Best-effort.
+    }
+  }
+}
+
+/* ── Helper: merge campaign-applied variant into output (P1-1) ───────── */
+
+function mergeAppliedVariantIntoOutput(
+  output: CanonicalCreatorOutput,
+  applied: { strategy_id: string; variant_id: string; variant_family: string },
+): CanonicalCreatorOutput {
+  const payload = safeObject(output.asset_payload);
+  const mediaBundle = safeObject(payload.media_bundle);
+  const existingMeta = safeObject(mediaBundle.metadata);
+  // Only set the variant envelope when caller-supplied — never
+  // overwrite an upstream-resolved variant_id (defensive).
+  const existingAppliedVariant = safeObject(existingMeta.applied_variant);
+  const mergedMeta: Record<string, unknown> = {
+    ...existingMeta,
+    variant_id: existingMeta.variant_id ?? applied.variant_id,
+    variant_family: existingMeta.variant_family ?? applied.variant_family,
+    applied_variant: {
+      ...existingAppliedVariant,
+      strategy_id: existingAppliedVariant.strategy_id ?? applied.strategy_id,
+      variant_id: existingAppliedVariant.variant_id ?? applied.variant_id,
+      variant_family: existingAppliedVariant.variant_family ?? applied.variant_family,
+    },
+  };
+  return {
+    ...output,
+    asset_payload: {
+      ...payload,
+      media_bundle: {
+        ...mediaBundle,
+        metadata: mergedMeta,
+      },
+    },
   };
 }

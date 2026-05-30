@@ -58,6 +58,7 @@ import { validateWorkEmail } from '../../../../lib/auth/serverValidation';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { IDENTITY_ADMIN_ASSIGN } from '../../../../shared/contracts/security';
 import { getRequestContext } from '../../../../backend/services/requestContext';
+import { getCanonicalAppUrl } from '../../../../backend/config/getCanonicalAppUrl';
 
 type InviteMode = 'magic_link' | 'temp_password';
 

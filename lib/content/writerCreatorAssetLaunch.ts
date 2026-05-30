@@ -2,6 +2,7 @@ import type { NextRouter } from 'next/router';
 import {
   assetLabel,
   buildAssetCompositionIntent,
+  creatorLayoutForAsset,
   creatorRouteTypeForAsset,
   resolveAttachmentModeFromIntent,
   type AssetCompositionIntent,
@@ -66,6 +67,29 @@ export const POST_CREATOR_ASSET_TYPES: CreatorAssetLaunchType[] =
 
 export const THREAD_CREATOR_ASSET_TYPES: CreatorAssetLaunchType[] =
   Array.from(_getThreadAllowedAssetTypes()) as CreatorAssetLaunchType[];
+
+/**
+ * Taxonomy consolidation — UI-facing subset of the writer-attachable
+ * creator types. Removes `banner` (now an Image layout) so the writer
+ * "Add Asset" menu surfaces only the 3 consolidated primary types
+ * plus brand_card. The underlying POST_CREATOR_ASSET_TYPES /
+ * THREAD_CREATOR_ASSET_TYPES arrays remain unfiltered for backward
+ * compat — historical attachments saved as `banner` still load,
+ * render, and label correctly via the alias map + assetLabel().
+ *
+ * IMPORTANT: do NOT filter at the canonical registry. The runtime
+ * normalization (`runtime_asset_types`) depends on the full list. Only
+ * the user-facing PICKER chips are reduced here.
+ */
+const CONSOLIDATION_HIDDEN_TYPES: ReadonlySet<CreatorAssetLaunchType> = new Set([
+  'banner' as CreatorAssetLaunchType,
+]);
+
+export const POST_CREATOR_ASSET_TYPES_VISIBLE: CreatorAssetLaunchType[] =
+  POST_CREATOR_ASSET_TYPES.filter((t) => !CONSOLIDATION_HIDDEN_TYPES.has(t));
+
+export const THREAD_CREATOR_ASSET_TYPES_VISIBLE: CreatorAssetLaunchType[] =
+  THREAD_CREATOR_ASSET_TYPES.filter((t) => !CONSOLIDATION_HIDDEN_TYPES.has(t));
 
 export function getWriterAttachedAssetsKey(sourceType: WriterSourceType, sourceId: string): string {
   return `writer_attached_assets_${sourceType}_${sourceId || 'draft'}`;
@@ -223,6 +247,11 @@ export function launchCreatorFromWriter(input: {
 }): void {
   if (typeof window === 'undefined') return;
   const routeType = creatorRouteTypeForAsset(input.assetType);
+  // Taxonomy consolidation — when the writer assetType maps to a
+  // different route type (e.g., banner → image), include a layout
+  // preset in the URL so the consolidated workflow opens on the
+  // correct preset (e.g., Image with Wide Banner layout pre-selected).
+  const layoutPreset = creatorLayoutForAsset(input.assetType);
   const token = `${input.source.sourceType}_${input.assetType}_${Date.now()}`;
   window.sessionStorage.setItem(getWriterCreatorPrefillKey(token), JSON.stringify(input.source));
   void input.router.push({
@@ -234,6 +263,7 @@ export function launchCreatorFromWriter(input: {
       attachment_mode: input.source.compositionIntent.attachmentMode,
       source_text_transform: input.source.compositionIntent.copyPolicy?.sourceTextTransform ?? 'none',
       prefill: token,
+      ...(layoutPreset ? { layout: layoutPreset } : {}),
       ...(input.source.platform ? { platform: input.source.platform } : {}),
     },
   });

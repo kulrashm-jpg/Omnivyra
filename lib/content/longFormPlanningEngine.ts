@@ -2,6 +2,7 @@ import { runCompletionWithOperation } from '../../backend/services/aiGateway';
 import { htmlToBlocks } from '../blog/htmlToBlocks';
 import type { BlogGenerationRequest, BlogGenerationResult, CompanyContext } from '../blog/runBlogGeneration';
 import { injectInternalLinks } from '../blog/runBlogGenerationDataAccess';
+import { buildGovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
 import {
   validateContentVariation,
   type DuplicateSectionPair,
@@ -1512,6 +1513,7 @@ export async function runPlannedLongFormGeneration(
           : `Generated with quality repairs; review remaining issues: ${report.issues.join('; ')}`,
       },
       template_used: Boolean(templateSpec),
+      governance: buildGovernanceExplainabilityMetadata(null),
     },
   };
   } catch (error) {

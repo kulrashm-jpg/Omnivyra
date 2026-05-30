@@ -31,6 +31,10 @@ type GenerateCreatorBody = {
   objective?: string;
   summary?: string;
   creator_card?: Record<string, unknown>;
+  /** Final Corrective Pass — P1-1. When provided, the generation path
+   *  fetches the campaign's persisted variant_strategy and applies it
+   *  via the campaignVariantApplier helper. Absence = unchanged behavior. */
+  campaign_id?: string;
 };
 
 const CREATOR_GENERATION_API_TIMEOUT_MS = 120_000;
@@ -337,6 +341,18 @@ async function generateThemeTreatment(input: {
   creatorCard: Record<string, unknown>;
 }): Promise<any> {
   const { generateCreatorThemeTreatment } = await import('../../../../backend/services/creatorThemeTreatmentService');
+  // Creator Governance Parity For Text Content — Phase 4. Theme
+  // treatments now receive the same governance context the visual
+  // composer + text orchestrator do. Best-effort: resolution failure
+  // leaves `governance=null` and the prior treatment output is
+  // unchanged.
+  const governance = await resolveGovernanceForLane({
+    companyId: input.companyId,
+    contentType: input.contentType,
+    creatorCard: input.creatorCard,
+    lane: 'image', // theme treatments share the image lane policy
+    actorUserId: input.userId,
+  });
   return generateCreatorThemeTreatment({
     companyId: input.companyId,
     userId: input.userId,
@@ -347,7 +363,64 @@ async function generateThemeTreatment(input: {
     objective: input.objective,
     summary: input.summary,
     creatorCard: input.creatorCard,
+    governance,
   });
+}
+
+/**
+ * Creator Governance Parity For Text Content — shared resolver.
+ *
+ * Reads the company's persisted profile and builds the governance
+ * prompt context for the given lane + selected strategy slug. Used
+ * by text + theme-treatment paths so they consume the SAME helper
+ * the visual renderer uses (no second governance system).
+ *
+ * Best-effort — returns null on any failure so callers fall through
+ * to the prior no-governance behavior.
+ */
+async function resolveGovernanceForLane(input: {
+  companyId: string;
+  contentType: string;
+  creatorCard: Record<string, unknown>;
+  lane: 'image' | 'carousel' | 'infographic';
+  actorUserId?: string | null;
+}): Promise<any> {
+  try {
+    const { getProfile } = await import('../../../../backend/services/companyProfileService');
+    const { buildGovernancePromptContext } = await import('../../../../backend/services/creator/strategyGovernancePromptContext');
+    const { maybeAuditRestrictedStrategySelection } = await import('../../../../backend/services/creator/governanceItemEnricher');
+    const profile = await getProfile(input.companyId, { autoRefine: false });
+    if (!profile) return null;
+    const selectedRaw = String(
+      input.creatorCard?.purpose_key
+        || input.creatorCard?.infographic_layout
+        || input.creatorCard?.subtype
+        || ''
+    ).trim() || null;
+    const context = buildGovernancePromptContext({
+      companyContext: {
+        industry: profile.industry ?? null,
+        industry_list: profile.industry_list ?? null,
+        category: profile.category ?? null,
+        category_list: profile.category_list ?? null,
+      },
+      contentType: input.lane,
+      selectedStrategy: selectedRaw,
+    });
+    // Closure Pass — Phase 5. Fire the canonical audit event when the
+    // Direct API / theme-treatment / text path selects a restricted
+    // strategy. Picker-mediated selections already fire via the
+    // /api/creator-intelligence/restricted-strategy-audit endpoint.
+    maybeAuditRestrictedStrategySelection({
+      context,
+      companyId: input.companyId,
+      contentType: input.contentType,
+      actorUserId: input.actorUserId ?? null,
+    });
+    return context;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -393,6 +466,17 @@ async function generateTextContent(input: {
       constraints ? `Constraints: ${constraints}` : '',
       input.summary ? `Key message: ${input.summary}` : '',
     ].filter(Boolean).join('\n\n');
+    // Creator Governance Parity For Text Content — Phase 2+3. Post +
+    // thread paths now receive the same governance context the
+    // visual composer does. Best-effort resolution — failure leaves
+    // `governance=null` and prior behavior is preserved.
+    const governance = await resolveGovernanceForLane({
+      companyId: input.companyId,
+      contentType: input.contentType,
+      creatorCard: input.creatorCard,
+      lane: 'image', // post / thread share the image lane policy
+      actorUserId: input.userId,
+    });
     const orchestrated = await runTextGeneration({
       origin: 'direct-api',
       companyId: input.companyId,
@@ -405,6 +489,7 @@ async function generateTextContent(input: {
       cta: cta || undefined,
       extraInstruction: extraInstruction || undefined,
       creatorCard: input.creatorCard,
+      governance,
     });
     const variant = orchestrated.platformVariant;
     const caption = String(variant.generated_content || orchestrated.masterContent.content || '').trim();
@@ -435,6 +520,13 @@ async function generateTextContent(input: {
             content_type: input.contentType,
             platform,
             generated_by: 'creator_text_content',
+            // Creator Governance Parity For Text Content — Phase 5.
+            // Mirror the text orchestrator's governance metadata onto
+            // media_bundle.metadata so downstream surfaces read it off
+            // creator_attachment_metadata exactly as they do for
+            // visual assets. industry='none' / warnings=0 when no
+            // governance applied (back-compat).
+            governance: orchestrated.governance,
           },
         },
       },
@@ -452,6 +544,10 @@ async function generateTextContent(input: {
         target_platforms: input.targetPlatforms,
         preview_kind: 'text_content',
         text_only: true,
+        // Creator Governance Parity For Text Content — Phase 5.
+        // Top-level metadata mirror so callers that don't dig into
+        // media_bundle still see the governance summary.
+        governance: orchestrated.governance,
       },
     };
   }
@@ -664,6 +760,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const intelligenceBrief = null;
     const primaryPlatform = targetPlatforms[0];
+
+    // Campaign Multi-Variant Execution Completion — Phase 2. When the
+    // request carries a campaign_id, resolve the FULL variant plan
+    // (not just the first decision). `single_variant`/`best_variant`
+    // yield 1 decision; `top_3_variants`/`experiment` yield N. Absent
+    // or failed resolution leaves `variantPlan=null` and behavior is
+    // unchanged (single-asset path).
+    let variantPlan: import('../../../../backend/services/creator/campaignVariantApplier').CampaignVariantPlan | null = null;
+    const campaignIdForVariant = typeof body.campaign_id === 'string' && body.campaign_id.trim().length > 0
+      ? body.campaign_id.trim()
+      : null;
+    if (campaignIdForVariant) {
+      try {
+        const { supabase } = await import('../../../../backend/db/supabaseClient');
+        const { data: campaignRow } = await supabase
+          .from('campaign_versions')
+          .select('campaign_snapshot')
+          .eq('campaign_id', campaignIdForVariant)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (campaignRow) {
+          const { resolveCampaignVariantPlan } = await import('../../../../backend/services/creator/campaignVariantApplier');
+          variantPlan = resolveCampaignVariantPlan({
+            campaign: campaignRow,
+            companyId,
+            campaignId: campaignIdForVariant,
+            platform: primaryPlatform,
+            creatorId: user?.userId ?? null,
+          });
+        }
+      } catch (error) {
+        console.warn('[creator-content][campaign-variant-resolve-failed]', {
+          campaign_id: campaignIdForVariant,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    // Single-asset fast path keeps prior shape; multi-asset path
+    // surfaces `generated_assets[]` additively (Phase 6 back-compat).
+    const isFanOut = variantPlan !== null && variantPlan.decisions.length > 1;
+    const singleAppliedVariant = variantPlan && variantPlan.decisions[0]
+      ? {
+          strategy_id: variantPlan.strategy_id,
+          variant_id: variantPlan.decisions[0].variant_id,
+          variant_family: variantPlan.decisions[0].variant_family,
+        }
+      : null;
     // Phase 2/3/4/5 unification — Direct flow now delegates the
     // generate→adapt→render→persist→FSM chain to the shared
     // creatorOrchestrator. Billing wrapper (chargeCreator) + writer
@@ -678,38 +822,102 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return sourceType ? { sourceType, sourceId } : undefined;
     })();
     let persistedAssetIdForResponse: string | null = null;
+    let generatedAssetsForResponse: Array<{
+      rank: number;
+      variant_id: string;
+      variant_family: string;
+      strategy_id: string;
+      experiment_id: string | null;
+      persisted_asset_id: string | null;
+      ok: boolean;
+      error?: string;
+    }> | null = null;
+    // Direct API Adaptation Parity. Capture the per-asset canonical
+    // outputs (single OR fan-out) so the post-generation secondary-
+    // platform adaptation loop can iterate over them. Each entry's
+    // `output` already carries variant_id / variant_family /
+    // strategy_id on media_bundle.metadata (set by the orchestrator's
+    // `mergeAppliedVariantIntoOutput`), so attribution survives
+    // unchanged through adaptation.
+    const successfulOutputs: Array<{
+      variantKey: string;
+      output: import('../../../../backend/services/executionEngines/types').CanonicalCreatorOutput;
+    }> = [];
+    const baseOrchestratorInput = {
+      campaignId: campaignIdForVariant ?? `creator-content-${Date.now()}`,
+      companyId,
+      userId: user?.userId ?? null,
+      topic,
+      contentType,
+      targetPlatforms,
+      audience: String(body.audience || '').trim() || undefined,
+      objective: String(body.objective || '').trim() || undefined,
+      summary: String(body.summary || '').trim() || undefined,
+      creatorCard,
+      enrichedIntent: intelligenceBrief ? {
+        analytics_intelligence: {
+          content_type: (intelligenceBrief as any).content_type,
+          readiness: (intelligenceBrief as any).readiness,
+          prompt_block: (intelligenceBrief as any).prompt_block,
+          low_confidence_note: (intelligenceBrief as any).low_confidence_note,
+          primitives: (intelligenceBrief as any).primitives,
+          recommended_uses: (intelligenceBrief as any).recommended_uses,
+        },
+      } : null,
+      origin: 'direct' as const,
+      source: writerSource,
+      // Match legacy Direct-flow semantics: readiness gating is opt-in
+      // for this surface (response was always returned regardless).
+      skipReadinessValidation: true,
+    };
     const output = await withCreatorTimeout(chargeCreator(() => (async () => {
+      // Campaign Multi-Variant Execution Completion — Phase 2.
+      // top_3_variants / experiment fan out via the shared runner.
+      if (isFanOut && variantPlan) {
+        const { runCampaignVariantFanOut } = await import('../../../../backend/services/creator/campaignVariantFanOut');
+        const fanOutResult = await measureCreatorDuration('creator_orchestrate', {
+          contentType,
+          platform: primaryPlatform,
+        }, () => runCampaignVariantFanOut({
+          plan: variantPlan!,
+          orchestratorInput: baseOrchestratorInput,
+        }));
+        generatedAssetsForResponse = fanOutResult.generated_assets.map((a) => ({
+          rank: a.rank,
+          variant_id: a.variant_id,
+          variant_family: a.variant_family,
+          strategy_id: a.strategy_id,
+          experiment_id: a.experiment_id,
+          persisted_asset_id: a.result?.persistedAssetId ?? null,
+          ok: a.ok,
+          ...(a.error ? { error: a.error } : {}),
+        }));
+        for (const a of fanOutResult.generated_assets) {
+          if (a.ok && a.result) {
+            successfulOutputs.push({ variantKey: a.variant_id, output: a.result.output });
+          }
+        }
+        // Back-compat — return the first successful asset's canonical
+        // output as the legacy single-asset payload.
+        const first = fanOutResult.generated_asset;
+        if (!first || !first.result) {
+          throw new Error(`fan-out produced no successful assets (${fanOutResult.generated_assets.length} attempted)`);
+        }
+        persistedAssetIdForResponse = first.result.persistedAssetId;
+        return first.result.output;
+      }
       const orchestrated = await measureCreatorDuration('creator_orchestrate', {
         contentType,
         platform: primaryPlatform,
       }, () => runCreatorOrchestration({
-        campaignId: `creator-content-${Date.now()}`,
-        companyId,
-        userId: user?.userId ?? null,
-        topic,
-        contentType,
-        targetPlatforms,
-        audience: String(body.audience || '').trim() || undefined,
-        objective: String(body.objective || '').trim() || undefined,
-        summary: String(body.summary || '').trim() || undefined,
-        creatorCard,
-        enrichedIntent: intelligenceBrief ? {
-          analytics_intelligence: {
-            content_type: (intelligenceBrief as any).content_type,
-            readiness: (intelligenceBrief as any).readiness,
-            prompt_block: (intelligenceBrief as any).prompt_block,
-            low_confidence_note: (intelligenceBrief as any).low_confidence_note,
-            primitives: (intelligenceBrief as any).primitives,
-            recommended_uses: (intelligenceBrief as any).recommended_uses,
-          },
-        } : null,
-        origin: 'direct',
-        source: writerSource,
-        // Match legacy Direct-flow semantics: readiness gating is opt-in
-        // for this surface (response was always returned regardless).
-        skipReadinessValidation: true,
+        ...baseOrchestratorInput,
+        appliedVariant: singleAppliedVariant,
       }));
       persistedAssetIdForResponse = orchestrated.persistedAssetId;
+      successfulOutputs.push({
+        variantKey: singleAppliedVariant?.variant_id ?? 'primary',
+        output: orchestrated.output,
+      });
       return orchestrated.output;
     })()), 'Creator generation').catch((error) => {
       if (error instanceof PaymentRequiredError) {
@@ -738,12 +946,77 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     });
 
+    // Direct API Adaptation Parity. After generation completes, run
+    // secondary-platform adaptation per asset using the SAME
+    // `engine.adaptForPlatform` contract the queue worker already uses
+    // (creatorContentProcessor.ts). Best-effort + sequential — a
+    // single adaptation failure does NOT fail the request:
+    //
+    //   - reuses the existing engine + adaptation contract (no new
+    //     adaptation architecture)
+    //   - primary platform is already adapted+rendered by the
+    //     orchestrator → marked OK without re-invoking the engine
+    //   - secondary platforms run sequentially with try/catch; failures
+    //     captured as { ok: false, error }
+    //   - attribution survives: each `output` retains its
+    //     media_bundle.metadata.applied_variant envelope from the
+    //     orchestrator's pre-render merge
+    //   - billing unchanged: adaptation is not separately billed in
+    //     the queue worker, and is not separately billed here either
+    //   - governance unchanged: adaptation does not touch the
+    //     enterprise-governance hooks; those fired inside the
+    //     orchestrator
+    //
+    // Runs OUTSIDE the withCreatorTimeout/chargeCreator block — the
+    // generation budget (120s) is preserved for the actual generation
+    // step. Adaptation extends the response time but never fails it.
+    let perAssetAdaptations: Record<string, Record<string, {
+      ok: boolean;
+      asset_payload?: Record<string, unknown>;
+      packaging?: Record<string, unknown>;
+      asset_type?: string;
+      error?: string;
+    }>> = {};
+    if (successfulOutputs.length > 0 && targetPlatforms.length > 0) {
+      const { createCreatorExecutionEngine } = await import('../../../../backend/services/executionEngines/creatorExecutionEngine');
+      const { runDirectApiSecondaryAdaptation } = await import('../../../../backend/services/creator/directApiAdaptationRunner');
+      const engine = createCreatorExecutionEngine();
+      perAssetAdaptations = await runDirectApiSecondaryAdaptation({
+        engine,
+        successfulOutputs,
+        primaryPlatform,
+        secondaryPlatforms: targetPlatforms.slice(1),
+        onFailure: ({ variantKey, platform, message }) => {
+          console.warn('[creator-content][secondary-adapt-failed]', {
+            variant_id: variantKey,
+            platform,
+            message,
+          });
+        },
+      });
+    }
+
     return res.status(200).json({
       success: true,
       primary_platform: primaryPlatform,
       intelligence_brief: intelligenceBrief,
       output,
       persisted_asset_id: persistedAssetIdForResponse,
+      // Direct API Adaptation Parity. Per-asset secondary-platform
+      // adaptation status. Single-asset callers see one entry keyed
+      // by variant_id (or 'primary' when no variant was applied).
+      ...(Object.keys(perAssetAdaptations).length > 0 ? {
+        per_asset_adaptations: perAssetAdaptations,
+      } : {}),
+      // Campaign Multi-Variant Execution Completion — Phase 6.
+      // Multi-asset response payload (additive — single-asset callers
+      // ignore this field).
+      ...(generatedAssetsForResponse ? {
+        generated_assets: generatedAssetsForResponse,
+        variant_mode: variantPlan?.mode ?? null,
+        variant_strategy_id: variantPlan?.strategy_id ?? null,
+        experiment_id: variantPlan?.experiment_id ?? null,
+      } : {}),
     });
   } catch (error) {
     if (error instanceof PaymentRequiredError) {

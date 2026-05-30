@@ -17,6 +17,7 @@ import { getOAuthCredentialsForPlatform } from '@/backend/auth/oauthCredentialRe
 import { refreshTwitterTokenIfNeeded } from '@/backend/auth/tokenRefresh';
 import { getToken } from '@/backend/auth/tokenStore';
 import { getPlatformAdapter } from '@/backend/services/platformAdapters';
+import { bearerAuthorization } from '@/lib/httpAuthHeaders';
 
 type TokenTestResult = {
   ok: boolean | null;
@@ -38,7 +39,7 @@ async function testToken(platform: string, accessToken: string): Promise<TokenTe
     switch (platform) {
       case 'linkedin': {
         const response = await fetch('https://api.linkedin.com/v2/userinfo', {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: { Authorization: bearerAuthorization(accessToken) },
         });
         if (response.ok) {
           const body = await response.json().catch(() => ({}));
@@ -57,7 +58,7 @@ async function testToken(platform: string, accessToken: string): Promise<TokenTe
       case 'twitter':
       case 'x': {
         const response = await fetch('https://api.twitter.com/2/users/me', {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: { Authorization: bearerAuthorization(accessToken) },
         });
         if (response.ok) {
           const body = await response.json().catch(() => ({}));
@@ -83,7 +84,7 @@ async function testToken(platform: string, accessToken: string): Promise<TokenTe
       case 'youtube': {
         const response = await fetch(
           'https://www.googleapis.com/youtube/v3/channels?part=id,snippet&mine=true',
-          { headers: { Authorization: `Bearer ${accessToken}` } }
+          { headers: { Authorization: bearerAuthorization(accessToken) } }
         );
         if (response.ok) {
           const body = await response.json().catch(() => ({}));
@@ -120,7 +121,7 @@ async function testToken(platform: string, accessToken: string): Promise<TokenTe
       case 'reddit': {
         const response = await fetch('https://oauth.reddit.com/api/v1/me', {
           headers: {
-            Authorization: `Bearer ${accessToken}`,
+            Authorization: bearerAuthorization(accessToken),
             'User-Agent': 'Virality/1.0',
           },
         });

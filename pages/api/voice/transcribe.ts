@@ -3,6 +3,7 @@ import FormData from 'form-data';
 import fs from 'fs';
 import path from 'path';
 import { captureFlatProviderCost } from '../../../backend/services/billing/blackHoleCostCapture';
+import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 
 // Voice transcription API using Whisper (OpenAI) and AssemblyAI
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -111,7 +112,7 @@ async function transcribeWithWhisper(audioFile: any) {
   const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${openaiApiKey}`,
+      Authorization: bearerAuthorization(openaiApiKey),
     },
     body: webFormData,
   });

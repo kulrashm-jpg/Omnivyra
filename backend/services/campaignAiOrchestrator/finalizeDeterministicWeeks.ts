@@ -1,4 +1,5 @@
 import { supabase } from '../../db/supabaseClient';
+import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorCodes';
 import { getCampaignById } from '../../db/campaignStore';
 import { attachGenerationPipelineToDailyItems } from '../contentGenerationPipeline';
 import { runAutopilotForPlan } from '../autopilotExecutionPipeline';
@@ -50,18 +51,18 @@ export async function finalizeDeterministicWeeks({
   for (const entry of orderedWeeks) {
     const week = entry.w as any;
     const execItems: any[] = Array.isArray(week?.execution_items) ? week.execution_items : null;
-    if (!execItems) throw new Error('DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
+    if (!execItems) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
 
     const perWeekSlots: Array<{ execIdx: number; slotIdx: number; progression_step: number; slot: any }> = [];
     for (let execIdx = 0; execIdx < execItems.length; execIdx += 1) {
       const exec = execItems[execIdx];
       const slots: any[] = Array.isArray(exec?.topic_slots) ? exec.topic_slots : null;
-      if (!slots) throw new Error('DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
+      if (!slots) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
       for (let slotIdx = 0; slotIdx < slots.length; slotIdx += 1) {
         const slot = slots[slotIdx];
         const progression_step = Number(slot?.progression_step);
         if (!slot || !Number.isFinite(progression_step) || progression_step < 1 || !slot.intent) {
-          throw new Error('DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
+          throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
         }
         perWeekSlots.push({ execIdx, slotIdx, progression_step, slot });
       }

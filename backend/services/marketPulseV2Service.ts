@@ -357,6 +357,345 @@ export async function createMarketPulseRun(
   return data;
 }
 
+type MovementDirection = 'Emerging' | 'Growing' | 'Stable' | 'Declining' | 'Accelerating';
+type MovementMomentum = 'Low' | 'Moderate' | 'High';
+type MarketPulseFindingRow = Record<string, unknown>;
+
+function asNumber(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function asRegions(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((region) => String(region).trim()).filter(Boolean)
+    : [];
+}
+
+function uniqueRegionCount(value: unknown): number {
+  return new Set(asRegions(value).map((region) => region.toLowerCase())).size;
+}
+
+function confidenceComponents(row: MarketPulseFindingRow): Record<string, unknown> {
+  const breakdown = row.confidence_breakdown;
+  if (!breakdown || typeof breakdown !== 'object') return {};
+  const components = (breakdown as Record<string, unknown>).components;
+  return components && typeof components === 'object'
+    ? (components as Record<string, unknown>)
+    : {};
+}
+
+function sourceCount(row: MarketPulseFindingRow): number | null {
+  return asNumber(row.source_count) ?? asNumber(confidenceComponents(row).source_count);
+}
+
+function mentionCount(row: MarketPulseFindingRow): number | null {
+  const components = confidenceComponents(row);
+  return asNumber(components.mention_count)
+    ?? asNumber(components.mentions_count)
+    ?? asNumber(components.mention_volume)
+    ?? asNumber(row.mention_count)
+    ?? asNumber(row.mention_volume);
+}
+
+function explicitRoleSourceCount(row: MarketPulseFindingRow, role: 'analyst' | 'competitor'): number {
+  const sources = row.sources_json;
+  if (!Array.isArray(sources)) return 0;
+
+  const matched = new Set<string>();
+  sources.forEach((source, index) => {
+    if (!source || typeof source !== 'object') return;
+    const record = source as Record<string, unknown>;
+    const text = ['role', 'source_role', 'source_type', 'type', 'kind', 'category', 'label']
+      .map((field) => record[field])
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+    if (!text.includes(role)) return;
+    matched.add(String(record.id ?? record.url ?? record.name ?? record.title ?? index));
+  });
+
+  return matched.size;
+}
+
+const TIER_RANK_FOR_MOVEMENT: Record<string, number> = { P0: 3, P1: 2, P2: 1 };
+
+function tierRank(row: MarketPulseFindingRow): number {
+  const tier = typeof row.priority_tier === 'string' ? row.priority_tier : '';
+  return TIER_RANK_FOR_MOVEMENT[tier] ?? 0;
+}
+
+function rowCreatedAtMs(row: MarketPulseFindingRow): number | null {
+  const createdAt = typeof row.created_at === 'string' ? new Date(row.created_at).getTime() : NaN;
+  return Number.isFinite(createdAt) ? createdAt : null;
+}
+
+function movementLine(label: string, current: number, previous: number, unit: string): string | null {
+  const delta = current - previous;
+  if (delta === 0) return null;
+  const direction = delta > 0 ? 'increased' : 'decreased';
+  const arrow = delta > 0 ? '↑' : '↓';
+  return `${arrow} ${label} ${direction} by ${Math.abs(delta)} ${unit}${Math.abs(delta) === 1 ? '' : 's'}`;
+}
+
+function buildMovementSummary(
+  current: MarketPulseFindingRow,
+  previous: MarketPulseFindingRow | null,
+): {
+  direction: MovementDirection;
+  momentum: MovementMomentum;
+  changes: string[];
+  first_observation: boolean;
+  compared_to_finding_id: string | null;
+} {
+  if (!previous) {
+    return {
+      direction: 'Emerging',
+      momentum: 'Low',
+      changes: ['First observation.'],
+      first_observation: true,
+      compared_to_finding_id: null,
+    };
+  }
+
+  const changes: string[] = [];
+  const currentSourceCount = sourceCount(current);
+  const previousSourceCount = sourceCount(previous);
+  const currentMentionCount = mentionCount(current);
+  const previousMentionCount = mentionCount(previous);
+  const currentRegionCount = uniqueRegionCount(current.regions);
+  const previousRegionCount = uniqueRegionCount(previous.regions);
+  const currentCompetitorCount = explicitRoleSourceCount(current, 'competitor');
+  const previousCompetitorCount = explicitRoleSourceCount(previous, 'competitor');
+  const tierDelta = tierRank(current) - tierRank(previous);
+
+  const sourceLine = currentSourceCount !== null && previousSourceCount !== null
+    ? movementLine('Source count', currentSourceCount, previousSourceCount, 'source')
+    : null;
+  if (sourceLine) changes.push(sourceLine);
+
+  const regionLine = movementLine('Geographic spread', currentRegionCount, previousRegionCount, 'region');
+  if (regionLine) changes.push(regionLine);
+
+  const competitorLine = movementLine('Competitor references', currentCompetitorCount, previousCompetitorCount, 'reference');
+  if (competitorLine) changes.push(competitorLine);
+
+  const mentionLine = currentMentionCount !== null && previousMentionCount !== null
+    ? movementLine('Mention volume', currentMentionCount, previousMentionCount, 'mention')
+    : null;
+  if (mentionLine) changes.push(mentionLine);
+
+  if (tierDelta > 0) changes.push('↑ Priority tier escalated');
+  if (tierDelta < 0) changes.push('↓ Priority tier softened');
+  if (changes.length === 0) changes.push('No measurable change from previous observation.');
+
+  const positiveSignals = [
+    currentSourceCount !== null && previousSourceCount !== null && currentSourceCount > previousSourceCount,
+    currentMentionCount !== null && previousMentionCount !== null && currentMentionCount > previousMentionCount,
+    currentRegionCount > previousRegionCount,
+    currentCompetitorCount > previousCompetitorCount,
+    tierDelta > 0,
+  ].filter(Boolean).length;
+  const negativeSignals = [
+    currentSourceCount !== null && previousSourceCount !== null && currentSourceCount < previousSourceCount,
+    currentMentionCount !== null && previousMentionCount !== null && currentMentionCount < previousMentionCount,
+    currentRegionCount < previousRegionCount,
+    currentCompetitorCount < previousCompetitorCount,
+    tierDelta < 0,
+  ].filter(Boolean).length;
+
+  const trajectory = typeof current.trajectory === 'string' ? current.trajectory : null;
+  const escalationLevel = typeof current.escalation_level === 'string' ? current.escalation_level : null;
+  const direction: MovementDirection =
+    trajectory === 'accelerating' || escalationLevel === 'escalating_pattern' || (tierDelta > 0 && positiveSignals >= 2)
+      ? 'Accelerating'
+      : positiveSignals > negativeSignals
+        ? 'Growing'
+        : negativeSignals > positiveSignals
+          ? 'Declining'
+          : 'Stable';
+
+  const momentum: MovementMomentum =
+    direction === 'Accelerating' || positiveSignals >= 3
+      ? 'High'
+      : direction === 'Growing' || positiveSignals >= 1 || negativeSignals >= 1
+        ? 'Moderate'
+        : 'Low';
+
+  return {
+    direction,
+    momentum,
+    changes: changes.slice(0, 4),
+    first_observation: false,
+    compared_to_finding_id: typeof previous.id === 'string' ? previous.id : null,
+  };
+}
+
+async function attachMovementSummaries(
+  findings: MarketPulseFindingRow[],
+  companyId: string,
+  runId: string,
+): Promise<MarketPulseFindingRow[]> {
+  const keys = Array.from(new Set(
+    findings
+      .map((finding) => typeof finding.canonical_event_key === 'string' ? finding.canonical_event_key : '')
+      .filter(Boolean),
+  ));
+  if (keys.length === 0) {
+    return findings.map((finding) => ({
+      ...finding,
+      movement_summary: buildMovementSummary(finding, null),
+    }));
+  }
+
+  const { data: previousRows, error } = await ownedDbTable('market_pulse_findings')
+    .select('*')
+    .eq('company_id', companyId)
+    .neq('run_id', runId)
+    .in('canonical_event_key', keys)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    return findings.map((finding) => ({
+      ...finding,
+      movement_summary: buildMovementSummary(finding, null),
+    }));
+  }
+
+  const previousRowsByKey = new Map<string, MarketPulseFindingRow[]>();
+  for (const row of (previousRows ?? []) as MarketPulseFindingRow[]) {
+    const key = typeof row.canonical_event_key === 'string' ? row.canonical_event_key : '';
+    if (!key) continue;
+    const rows = previousRowsByKey.get(key) ?? [];
+    rows.push(row);
+    previousRowsByKey.set(key, rows);
+  }
+
+  return findings.map((finding) => {
+    const key = typeof finding.canonical_event_key === 'string' ? finding.canonical_event_key : '';
+    const currentCreatedAt = rowCreatedAtMs(finding);
+    const previous = key
+      ? (previousRowsByKey.get(key) ?? []).find((row) => {
+          const previousCreatedAt = rowCreatedAtMs(row);
+          return currentCreatedAt === null || previousCreatedAt === null || previousCreatedAt < currentCreatedAt;
+        }) ?? null
+      : null;
+    return {
+      ...finding,
+      movement_summary: buildMovementSummary(finding, previous),
+    };
+  });
+}
+
+function summarizeFindingForDelta(row: MarketPulseFindingRow): { id: string | null; title: string; canonical_event_key: string | null; category: string | null } {
+  return {
+    id: typeof row.id === 'string' ? row.id : null,
+    title: typeof row.title === 'string' && row.title.trim() ? row.title : 'Untitled signal',
+    canonical_event_key: typeof row.canonical_event_key === 'string' ? row.canonical_event_key : null,
+    category: typeof row.category === 'string' ? row.category : null,
+  };
+}
+
+async function buildMarketDeltaSummary(
+  run: Record<string, unknown>,
+  currentFindings: MarketPulseFindingRow[],
+  companyId: string,
+): Promise<{
+  baseline: boolean;
+  previous_run_id: string | null;
+  market_direction: 'Expanding' | 'Stable' | 'Shifting' | 'Volatile';
+  new_signals: Array<{ id: string | null; title: string; canonical_event_key: string | null; category: string | null }>;
+  strengthening_signals: Array<{ id: string | null; title: string; canonical_event_key: string | null; category: string | null }>;
+  weakening_signals: Array<{ id: string | null; title: string; canonical_event_key: string | null; category: string | null }>;
+  retired_signals: Array<{ id: string | null; title: string; canonical_event_key: string | null; category: string | null }>;
+}> {
+  const currentCreatedAt = typeof run.created_at === 'string' ? run.created_at : new Date().toISOString();
+  const { data: previousRun } = await ownedDbTable('market_pulse_runs')
+    .select('id, created_at')
+    .eq('company_id', companyId)
+    .in('status', ['completed', 'completed_with_warnings'])
+    .lt('created_at', currentCreatedAt)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!previousRun?.id) {
+    return {
+      baseline: true,
+      previous_run_id: null,
+      market_direction: 'Stable',
+      new_signals: [],
+      strengthening_signals: [],
+      weakening_signals: [],
+      retired_signals: [],
+    };
+  }
+
+  const { data: previousFindings } = await ownedDbTable('market_pulse_findings')
+    .select('*')
+    .eq('run_id', previousRun.id);
+
+  const previousByKey = new Map<string, MarketPulseFindingRow>();
+  for (const row of (previousFindings ?? []) as MarketPulseFindingRow[]) {
+    const key = typeof row.canonical_event_key === 'string' ? row.canonical_event_key : '';
+    if (key && !previousByKey.has(key)) previousByKey.set(key, row);
+  }
+
+  const currentByKey = new Map<string, MarketPulseFindingRow>();
+  for (const row of currentFindings) {
+    const key = typeof row.canonical_event_key === 'string' ? row.canonical_event_key : '';
+    if (key && !currentByKey.has(key)) currentByKey.set(key, row);
+  }
+
+  const newSignals: MarketPulseFindingRow[] = [];
+  const strengtheningSignals: MarketPulseFindingRow[] = [];
+  const weakeningSignals: MarketPulseFindingRow[] = [];
+
+  for (const row of currentFindings) {
+    const key = typeof row.canonical_event_key === 'string' ? row.canonical_event_key : '';
+    const movement = row.movement_summary && typeof row.movement_summary === 'object'
+      ? (row.movement_summary as { direction?: string; momentum?: string; first_observation?: boolean })
+      : null;
+    const previous = key ? previousByKey.get(key) ?? null : null;
+    if (!previous || movement?.first_observation) {
+      newSignals.push(row);
+      continue;
+    }
+
+    const tierDelta = tierRank(row) - tierRank(previous);
+    if (tierDelta > 0 || movement?.direction === 'Growing' || movement?.direction === 'Accelerating' || movement?.momentum === 'High') {
+      strengtheningSignals.push(row);
+    } else if (tierDelta < 0 || movement?.direction === 'Declining') {
+      weakeningSignals.push(row);
+    }
+  }
+
+  const retiredSignals = Array.from(previousByKey.entries())
+    .filter(([key]) => !currentByKey.has(key))
+    .map(([, row]) => row);
+
+  const expansionPressure = newSignals.length + strengtheningSignals.length;
+  const contractionPressure = weakeningSignals.length + retiredSignals.length;
+  const marketDirection =
+    expansionPressure > 0 && contractionPressure > 0
+      ? 'Volatile'
+      : expansionPressure > contractionPressure
+        ? 'Expanding'
+        : contractionPressure > expansionPressure
+          ? 'Shifting'
+          : 'Stable';
+
+  return {
+    baseline: false,
+    previous_run_id: previousRun.id as string,
+    market_direction: marketDirection,
+    new_signals: newSignals.map(summarizeFindingForDelta),
+    strengthening_signals: strengtheningSignals.map(summarizeFindingForDelta),
+    weakening_signals: weakeningSignals.map(summarizeFindingForDelta),
+    retired_signals: retiredSignals.map(summarizeFindingForDelta),
+  };
+}
+
 export async function getMarketPulseRun(runId: string, companyId: string) {
   const { data: run, error } = await ownedDbTable('market_pulse_runs')
     .select('*')
@@ -372,6 +711,16 @@ export async function getMarketPulseRun(runId: string, companyId: string) {
     .select('*')
     .eq('run_id', runId)
     .order('relevance_score', { ascending: false });
+  const findingsWithMovement = await attachMovementSummaries(
+    (findings ?? []) as MarketPulseFindingRow[],
+    companyId,
+    runId,
+  );
+  const marketDeltaSummary = await buildMarketDeltaSummary(
+    run as Record<string, unknown>,
+    findingsWithMovement,
+    companyId,
+  );
 
   const legacyJob = run?.context_snapshot?.legacy_job ?? null;
   const consolidated = (legacyJob?.consolidated_result ?? null) as
@@ -418,6 +767,7 @@ export async function getMarketPulseRun(runId: string, companyId: string) {
       risk_pressure: typeof runRow.risk_pressure === 'number' ? (runRow.risk_pressure as number) : null,
       change_summary: (runRow.change_summary as Record<string, unknown> | null) ?? null,
       prior_run_id: (runRow.prior_run_id as string | null) ?? null,
+      market_delta_summary: marketDeltaSummary,
       // Phase 2 executive panels.
       momentum_overview: (runRow.momentum_overview as Record<string, unknown> | null) ?? null,
       category_acceleration: (runRow.category_acceleration as Record<string, unknown> | null) ?? null,
@@ -426,7 +776,7 @@ export async function getMarketPulseRun(runId: string, companyId: string) {
       propagation_map: (runRow.propagation_map as Record<string, unknown> | null) ?? null,
       trend_persistence: (runRow.trend_persistence as Record<string, unknown> | null) ?? null,
     },
-    findings: findings ?? [],
+    findings: findingsWithMovement,
   };
 }
 

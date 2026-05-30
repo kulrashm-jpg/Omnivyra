@@ -486,7 +486,10 @@ async function executeBlockScheduleRuntime(
         } else {
           // Each activity card has its own unique topic + content_type.
           // Process one card at a time — AI gets a fresh context per card.
-          const item = buildItemFromEnriched(enriched, platformTargets, companyId) as Parameters<typeof generateMasterContentFromIntent>[0];
+          const baseItem = buildItemFromEnriched(enriched, platformTargets, companyId) as Parameters<typeof generateMasterContentFromIntent>[0];
+          // Closure Pass — Phase 4. Enrich item with governance.
+          const { enrichItemWithGovernance } = await import('./creator/governanceItemEnricher');
+          const item = await enrichItemWithGovernance(baseItem as any) as typeof baseItem;
           console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] Generating master for:`, {
             contentType, topic,
           });
@@ -536,7 +539,10 @@ async function executeBlockScheduleRuntime(
       // ── 4b. Build platform variants (all platforms in one call) ──────────
       let variantByKey = new Map<string, string>();
       try {
-        const item = buildItemFromEnriched(enriched, platformTargets, companyId) as Parameters<typeof generateMasterContentFromIntent>[0];
+        const baseItem = buildItemFromEnriched(enriched, platformTargets, companyId) as Parameters<typeof generateMasterContentFromIntent>[0];
+        // Closure Pass — Phase 4. Enrich item with governance.
+        const { enrichItemWithGovernance } = await import('./creator/governanceItemEnricher');
+        const item = await enrichItemWithGovernance(baseItem as any) as typeof baseItem;
         (item as any).master_content = { ...master, generation_status: 'generated' };
         const variants = await buildPlatformVariantsFromMaster(item);
         for (const v of variants) {

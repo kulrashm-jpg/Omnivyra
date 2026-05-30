@@ -30,6 +30,7 @@ import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { logger } from '../../../backend/services/logger';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
+import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
 
 type SuccessResponse = { ok: true };
 type ErrorResponse   = { error: string };

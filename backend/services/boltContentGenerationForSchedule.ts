@@ -12,6 +12,11 @@ import { supabase } from '../db/supabaseClient';
 import { updateActivity } from './executionPlannerPersistence';
 import { generateMasterContentFromIntent } from './contentGenerationPipeline';
 import { buildPlatformVariantsFromMaster } from './contentGenerationPipeline';
+// Closure Pass — Phase 4. BOLT schedule generation now resolves
+// governance from the campaign's company profile and threads it onto
+// the pipeline `item` so system prompts pick up the preamble.
+import { getProfile } from './companyProfileService';
+import { buildGovernancePromptContext } from './creator/strategyGovernancePromptContext';
 
 /** Accepts DB shape where title/topic/scheduled_time may be null */
 type DailyPlanRow = {
@@ -225,7 +230,32 @@ export async function generateContentForDailyPlans(
       ...parsed,
     };
 
-    const item = { ...buildItemFromEnriched(enriched, platformTargets), company_id: campaignCompanyId } as unknown as Parameters<typeof generateMasterContentFromIntent>[0];
+    // Closure Pass — Phase 4. Resolve governance from the campaign's
+    // company profile. Best-effort: failure leaves governance=null and
+    // legacy behavior preserved.
+    let governance: ReturnType<typeof buildGovernancePromptContext> | null = null;
+    try {
+      const profile = await getProfile(campaignCompanyId, { autoRefine: false });
+      if (profile) {
+        governance = buildGovernancePromptContext({
+          companyContext: {
+            industry: profile.industry ?? null,
+            industry_list: profile.industry_list ?? null,
+            category: profile.category ?? null,
+            category_list: profile.category_list ?? null,
+          },
+          contentType: 'image', // BOLT-scheduled posts share the image-lane policy
+          selectedStrategy: null,
+        });
+      }
+    } catch {
+      // Best-effort.
+    }
+    const item = {
+      ...buildItemFromEnriched(enriched, platformTargets),
+      company_id: campaignCompanyId,
+      ...(governance ? { governance } : {}),
+    } as unknown as Parameters<typeof generateMasterContentFromIntent>[0];
 
     // Use existing generated_content as master if available — avoids a redundant LLM call
     // and ensures repurposing is based on the actual stored content, not a regenerated draft.

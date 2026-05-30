@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
+import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -40,7 +41,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': bearerAuthorization(String(apiKey)),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({

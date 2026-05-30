@@ -13,6 +13,7 @@ import { PLATFORM_LABELS } from '../../lib/shared/platforms';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
 import {
   POST_CREATOR_ASSET_TYPES,
+  POST_CREATOR_ASSET_TYPES_VISIBLE,
   assetLabel,
   buildWriterCreatorPrefill,
   createWriterSourceId,
@@ -617,7 +618,7 @@ export default function ShortformResultPage({
                           >
                             No asset
                           </button>
-                          {POST_CREATOR_ASSET_TYPES.map((assetType) => (
+                          {POST_CREATOR_ASSET_TYPES_VISIBLE.map((assetType) => (
                             <button
                               key={assetType}
                               type="button"
@@ -650,23 +651,44 @@ export default function ShortformResultPage({
                     No Creator assets attached yet. Use Add Asset to launch an Image, Banner, Brand Card, or Infographic with this post prefilled.
                   </p>
                 ) : (
-                  <div className="mt-3 space-y-2">
-                    {attachedAssets.map((asset) => (
-                      <a
-                        key={asset.id}
-                        href={asset.url || `/command-center/creator-content/${asset.creatorType}`}
-                        target={asset.url ? '_blank' : undefined}
-                        rel={asset.url ? 'noreferrer' : undefined}
-                        className="block rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm text-slate-700 transition hover:border-slate-300"
-                      >
-                        <span className="font-semibold">{asset.title}</span>
-                        <span className="mt-1 block text-xs text-slate-500">
-                          {assetLabel(asset.creatorType)}
-                          {asset.attachmentMode ? ` - ${attachmentModeLabel(asset.attachmentMode)}` : ''}
-                          {asset.previewKind ? ` - ${asset.previewKind.replace(/_/g, ' ')}` : ''}
-                        </span>
-                      </a>
-                    ))}
+                  <div className="mt-3 space-y-3">
+                    {attachedAssets.map((asset) => {
+                      // Visual preview of the attached asset. Previously
+                      // rendered as a text-only link, which made operators
+                      // think nothing was attached after returning from the
+                      // creator page. Now each attachment shows the image
+                      // (or the first file from a multi-file asset) so
+                      // "Continue with your post" lands on a page that
+                      // clearly carries forward the asset.
+                      const previewSrc = asset.url
+                        || (Array.isArray(asset.files) ? asset.files.find(Boolean) : '')
+                        || '';
+                      return (
+                        <div
+                          key={asset.id}
+                          className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 transition hover:border-slate-300"
+                        >
+                          {previewSrc ? (
+                            <a href={previewSrc} target="_blank" rel="noreferrer" className="block">
+                              <img
+                                src={previewSrc}
+                                alt={asset.title || 'Attached creator asset'}
+                                className="w-full max-h-72 object-contain bg-slate-100"
+                                loading="lazy"
+                              />
+                            </a>
+                          ) : null}
+                          <div className="px-4 py-3 text-sm text-slate-700">
+                            <span className="block font-semibold">{asset.title}</span>
+                            <span className="mt-1 block text-xs text-slate-500">
+                              {assetLabel(asset.creatorType)}
+                              {asset.attachmentMode ? ` · ${attachmentModeLabel(asset.attachmentMode)}` : ''}
+                              {asset.previewKind ? ` · ${asset.previewKind.replace(/_/g, ' ')}` : ''}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

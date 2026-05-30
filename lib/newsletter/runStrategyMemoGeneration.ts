@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { buildGovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
 import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
@@ -700,6 +701,7 @@ export async function runStrategyMemoGeneration(
         template_used: true,
         hook_assessment: { strength: 'moderate', note: 'Newsletter-owned strategy memo generation path used.' },
         result: parsed,
+        governance: buildGovernanceExplainabilityMetadata(null),
       };
     }
 
@@ -724,6 +726,7 @@ export async function runStrategyMemoGeneration(
       template_used: true,
       hook_assessment: { strength: 'moderate', note: 'Newsletter-owned strategy memo generation path used.' },
       result: best,
+      governance: buildGovernanceExplainabilityMetadata(null),
     };
   }
 

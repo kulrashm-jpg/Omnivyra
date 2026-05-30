@@ -114,6 +114,10 @@ import {
   getUnsupportedCreatorFormats,
   validateCreatorScheduleRequest,
 } from '../../../lib/shared/creatorGovernanceRegistry';
+import { validateBoltPreExecution } from '../../../backend/services/boltPreExecutionValidator';
+import { BOLT_ERROR_CODE_FRIENDLY_MESSAGES } from '../../../lib/shared/bolt/boltErrorCodes';
+import { computeSiblingDifferential } from '../../../backend/services/boltStrategyDifferential';
+import { resolveCampaignMode } from '../../../lib/shared/bolt/formatGovernance';
 
 function normalizeOptionalUuid(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -216,6 +220,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // ── PART 1 — Comprehensive pre-execution validation ──────────────
+    // Catches everything the legacy inline checks above do NOT cover:
+    // text formats, strategic-theme structure, frequency/duration/goal/
+    // audience presence, platform-array integrity, AND a campaign-version
+    // preflight lookup. Returns the first error code so the UI shows
+    // a precise message instead of "technical glitch" once the worker
+    // has already burned a row in bolt_execution_runs.
+    const preflight = await validateBoltPreExecution({
+      companyId,
+      generatedCampaignId: payload.generatedCampaignId,
+      sourceStrategicTheme: payload.sourceStrategicTheme,
+      executionConfig: payload.executionConfig as Record<string, unknown>,
+      outcomeView: payload.outcomeView,
+      selectedPlatforms: (payload.executionConfig as Record<string, unknown> | null)?.selected_platforms,
+      checkCampaignVersion: true,
+    });
+    if (!preflight.ok) {
+      const first = preflight.errors[0];
+      // 409 only for hard "this strategy can never be executed" classes;
+      // 400 for everything else (validation / missing inputs).
+      const status = first.code === 'CAMPAIGN_VERSION_ACCESS_DENIED' ? 403
+        : first.code === 'CAMPAIGN_VERSION_NOT_FOUND' || first.code === 'CAMPAIGN_VERSION_MISMATCH' ? 409
+        : 400;
+      return res.status(status).json({
+        error: first.message,
+        code: first.code,
+        friendly_message: BOLT_ERROR_CODE_FRIENDLY_MESSAGES[first.code],
+        all_errors: preflight.errors.map((e) => ({ code: e.code, message: e.message, field: e.field })),
+      });
+    }
+
     const generatedCampaignId = payload.generatedCampaignId;
     if (generatedCampaignId && typeof generatedCampaignId === 'string' && generatedCampaignId.trim()) {
       const { data: existingRun } = await supabase
@@ -234,6 +269,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // Part 7 — sibling strategy differential. Computed at enqueue time
+    // and stamped into the payload so the pipeline's strategySnapshot
+    // capture picks it up; the failure summary row then carries
+    // `differs_from_succeeded_sibling` for the operator to see.
+    const execConfig = payload.executionConfig as Record<string, unknown> | null;
+    const themeForDiff = payload.sourceStrategicTheme as Record<string, unknown> | null;
+    const differential = await computeSiblingDifferential({
+      companyId,
+      recommendationId: typeof payload.recId === 'string' ? payload.recId : null,
+      opportunityId: typeof payload.sourceOpportunityId === 'string' ? payload.sourceOpportunityId : null,
+      generatedCampaignId: typeof payload.generatedCampaignId === 'string' ? payload.generatedCampaignId : null,
+      campaignMode: resolveCampaignMode(execConfig),
+      contentFormats: Array.isArray(execConfig?.content_formats) ? (execConfig?.content_formats as unknown[]).map(String) : [],
+      selectedPlatforms: Array.isArray(execConfig?.selected_platforms) ? (execConfig?.selected_platforms as unknown[]).map(String) : [],
+      themeTitle: themeForDiff
+        ? (typeof themeForDiff.title === 'string'
+            ? themeForDiff.title
+            : typeof themeForDiff.polished_title === 'string' ? themeForDiff.polished_title : null)
+        : null,
+    });
+    const payloadWithDiff = differential
+      ? { ...payload, sibling_differential: differential }
+      : payload;
+
     const { data: run, error } = await supabase
       .from('bolt_execution_runs')
       .insert({
@@ -243,7 +302,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         current_stage: 'source-recommendation',
         status: 'started',
         progress_percentage: 0,
-        payload,
+        payload: payloadWithDiff,
       })
       .select('id')
       .single();

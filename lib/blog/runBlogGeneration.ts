@@ -91,6 +91,10 @@ import type { CompanyContext, BlogGenerationRequest, BlogGenerationResult } from
 export type { CompanyContext, BlogGenerationRequest, BlogGenerationResult } from './blogRunnerTypes';
 import { runStandardHtmlBlogGeneration } from './runStandardBlogGeneration';
 import { runTemplateBlogGenerationPath } from './runTemplateBlogGeneration';
+import {
+  buildGovernanceExplainabilityMetadata,
+  type GovernancePromptContext,
+} from '../../backend/services/creator/strategyGovernancePromptContext';
 
 type FullBlogGenerationResult = Extract<
   BlogGenerationResult,
@@ -159,6 +163,22 @@ function attachEditorialDiagnostics(
       section_count: sectionCount,
       retry_count: meta?.retryCount,
     },
+  };
+}
+
+/**
+ * Blog Governance Parity — attaches the canonical governance metadata
+ * envelope to the blog generation result. Always present (carries
+ * `industry='none'` when no policy applies) so downstream consumers can
+ * rely on a stable shape.
+ */
+function attachBlogGovernanceMetadata(
+  result: BlogGenerationResult,
+  governance: GovernancePromptContext | null,
+): BlogGenerationResult {
+  return {
+    ...result,
+    governance: buildGovernanceExplainabilityMetadata(governance),
   };
 }
 
@@ -240,6 +260,38 @@ export async function runBlogGeneration(
     series_context: typeof series_context === 'string' ? series_context.trim() : undefined,
   };
 
+  // Blog Governance Parity: resolve once per generation and expose a stable
+  // public metadata envelope on every result branch.
+  const governance: GovernancePromptContext | null = await (async () => {
+    try {
+      const { getProfile } = await import('../../backend/services/companyProfileService');
+      const { buildGovernancePromptContext } = await import('../../backend/services/creator/strategyGovernancePromptContext');
+      const profile = await getProfile(company_id, { autoRefine: false });
+      if (!profile) return null;
+      const ctx = buildGovernancePromptContext({
+        companyContext: {
+          industry: profile.industry ?? null,
+          industry_list: profile.industry_list ?? null,
+          category: profile.category ?? null,
+          category_list: profile.category_list ?? null,
+        },
+        contentType: 'image',
+        selectedStrategy: null,
+      });
+      const { maybeAuditRestrictedStrategySelection } =
+        await import('../../backend/services/creator/governanceItemEnricher');
+      maybeAuditRestrictedStrategySelection({
+        context: ctx,
+        companyId: company_id,
+        contentType,
+        actorUserId: null,
+      });
+      return ctx;
+    } catch {
+      return null;
+    }
+  })();
+
   const hasAnswers = (
     answers !== null &&
     answers !== undefined &&
@@ -251,7 +303,11 @@ export async function runBlogGeneration(
   if (!hasAnswers && !selected_angle) {
     const questions = generateClarificationQuestions(themeInput);
     if (questions.length > 0) {
-      return { needs_clarification: true, questions };
+      return attachBlogGovernanceMetadata({
+        needs_clarification: true,
+        questions,
+        governance: buildGovernanceExplainabilityMetadata(governance),
+      }, governance);
     }
   }
 
@@ -419,7 +475,7 @@ export async function runBlogGeneration(
           temperature:     0.7,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: buildAnglesSystemPrompt(contentType, companyIdentity) },
+            { role: 'system', content: buildAnglesSystemPrompt(contentType, companyIdentity, governance) },
             { role: 'user',   content: buildAnglesUserPrompt(baseInput) },
           ],
         });
@@ -456,7 +512,7 @@ export async function runBlogGeneration(
         (perfData.status === 'fulfilled' && perfData.value) ? perfData.value : null;
     }
 
-    return {
+    return attachBlogGovernanceMetadata({
       needs_clarification: false,
       mode:                'angles',
       angles,
@@ -465,7 +521,8 @@ export async function runBlogGeneration(
       effectiveness_based,
       seo_intelligence:    ctx?.seo ?? undefined,
       trend_intelligence:  ctx?.trends ?? undefined,
-    };
+      governance:          buildGovernanceExplainabilityMetadata(governance),
+    }, governance);
   }
 
   // ── Mode: full ──────────────────────────────────────────────────────────────
@@ -627,8 +684,12 @@ export async function runBlogGeneration(
         effectiveTemplateBlocks, effectiveTemplateName, targetWc, maxTokens,
         generationInput, ctx, confidence, selected_angle: selected_angle as BlogAngle | undefined,
         companyIdentity,
+        governance,
       });
-      if (templateResult !== null) return attachEditorialDiagnostics(templateResult, ctx, { generationStartMs });
+      if (templateResult !== null) {
+        const result = attachEditorialDiagnostics(templateResult, ctx, { generationStartMs });
+        return attachBlogGovernanceMetadata(result, governance);
+      }
     }
 
     const standardResult = await runStandardHtmlBlogGeneration({
@@ -648,8 +709,10 @@ export async function runBlogGeneration(
       // Phase 2.8 — Pass companyContext so the standard path emits
       // LONGFORM_CONTEXT_USAGE_REPORT against the actual assembled prompt.
       companyContext,
+      governance,
     });
-    return attachEditorialDiagnostics(standardResult, ctx, { generationStartMs });
+    const result = attachEditorialDiagnostics(standardResult, ctx, { generationStartMs });
+    return attachBlogGovernanceMetadata(result, governance);
 
   } catch (err) {
     // C3: CompanyContextEnforcementError must propagate to the API route so
@@ -670,12 +733,14 @@ export async function runBlogGeneration(
       blogTable,
     );
 
-    return attachEditorialDiagnostics({
+    const fallbackResult = attachEditorialDiagnostics({
       needs_clarification: false,
       mode:                'full',
       confidence:          'medium',
       result:              { ...fallback, content_blocks },
       hook_assessment:     { strength: 'moderate', note: 'Review before publishing.' },
+      governance:          buildGovernanceExplainabilityMetadata(governance),
     }, ctx, { generationStartMs });
+    return attachBlogGovernanceMetadata(fallbackResult, governance);
   }
 }

@@ -58,6 +58,52 @@ type GitHubComment = {
   created_at?: string | null;
 };
 
+/** PR-OPA-4: shape of the public GET /users/{login} response we care about. */
+type GitHubUser = {
+  login?: string | null;
+  name?: string | null;
+  company?: string | null;
+  bio?: string | null;
+  location?: string | null;
+};
+
+/**
+ * PR-OPA-4: cached profile lookup. Returns nullable triple. Profile
+ * fetch failures (4xx, 5xx, timeout, network) are treated as
+ * "looked up, nothing useful" — we cache an empty result so we never
+ * retry the same login within the execution. Per spec: "Signal
+ * ingestion must continue if enrichment fails."
+ */
+type CachedProfile = {
+  profile_company: string | null;
+  profile_bio: string | null;
+  profile_name: string | null;
+};
+
+async function fetchGitHubUserProfile(
+  login: string,
+  deadline: number,
+): Promise<CachedProfile> {
+  const empty: CachedProfile = {
+    profile_company: null,
+    profile_bio: null,
+    profile_name: null,
+  };
+  if (Date.now() >= deadline) return empty;
+  try {
+    const resp = await timedFetch(`${GITHUB_API}/users/${encodeURIComponent(login)}`, deadline);
+    if (!resp.ok) return empty;
+    const user = (await resp.json()) as GitHubUser;
+    return {
+      profile_company: typeof user.company === 'string' && user.company.trim() ? user.company.trim() : null,
+      profile_bio:     typeof user.bio     === 'string' && user.bio.trim()     ? user.bio.trim()     : null,
+      profile_name:    typeof user.name    === 'string' && user.name.trim()    ? user.name.trim()    : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 function authHeaders(): Record<string, string> {
   const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -316,6 +362,40 @@ export const githubListeningConnector: ListeningConnector = {
     }
 
     if (Date.now() >= deadline) partial = true;
+
+    // ---------- PR-OPA-4: profile enrichment ----------
+    // Unique authors only; cache per execution; bounded by the same
+    // deadline as the rest of the run. Failures are silent and do
+    // not affect signal ingestion.
+    if (signals.length > 0 && Date.now() < deadline) {
+      const uniqueLogins = new Set<string>();
+      for (const s of signals) {
+        if (s.author_handle) uniqueLogins.add(s.author_handle);
+      }
+      const profileCache = new Map<string, CachedProfile>();
+      for (const login of uniqueLogins) {
+        if (Date.now() >= deadline) {
+          partial = true;
+          break;
+        }
+        const profile = await fetchGitHubUserProfile(login, deadline);
+        profileCache.set(login, profile);
+      }
+      for (const s of signals) {
+        const handle = s.author_handle;
+        if (!handle) continue;
+        const profile = profileCache.get(handle);
+        if (!profile) continue;
+        if (profile.profile_company || profile.profile_bio || profile.profile_name) {
+          s.metadata = {
+            ...s.metadata,
+            ...(profile.profile_company !== null ? { profile_company: profile.profile_company } : {}),
+            ...(profile.profile_bio     !== null ? { profile_bio:     profile.profile_bio }     : {}),
+            ...(profile.profile_name    !== null ? { profile_name:    profile.profile_name }    : {}),
+          };
+        }
+      }
+    }
 
     return {
       signals,

@@ -579,8 +579,36 @@ function buildOverlaySvg(input: {
   platform: string;
   fileNamePrefix: string;
   subtypeHint?: ImageSubtypeHint | null;
+  /**
+   * Strategy-aware rendering modifiers (resolved from
+   * `renderStrategyRegistry.ts`). When null/omitted, the renderer
+   * applies the existing preset path byte-identical to the
+   * pre-phase renderer — legacy assets are unaffected.
+   */
+  renderStrategy?: import('./creator/renderStrategyRegistry').RenderStrategy | null;
 }): { svg: string; quality: OverlayQualityReport; brandPlacement: { top: number; left: number; maxWidth: number; maxHeight: number } } {
-  const preset = getOverlayPreset(input.platform, input.fileNamePrefix, input.overlay, input.subtypeHint ?? null);
+  // Resolve strategy modifiers. When no strategy supplied, all
+  // multipliers are 1.0 + ctaMode='standard' so behaviour is byte
+  // identical to the pre-phase renderer (legacy gate, PHASE 10).
+  const { applyScale } = require('./creator/renderStrategyRegistry') as typeof import('./creator/renderStrategyRegistry');
+  const strategyMods = input.renderStrategy?.modifiers ?? null;
+  const presetRaw = getOverlayPreset(input.platform, input.fileNamePrefix, input.overlay, input.subtypeHint ?? null);
+  // Apply strategy multipliers to the preset table BEFORE downstream
+  // sizing math reads from it. Each multiplier is bounded inside
+  // applyScale so a malformed strategy can't yield off-canvas sizes.
+  const preset = strategyMods
+    ? {
+        ...presetRaw,
+        hookSize: applyScale(presetRaw.hookSize, strategyMods.hookScale),
+        headlineSize: applyScale(presetRaw.headlineSize, strategyMods.headlineScale),
+        insightSize: applyScale(presetRaw.insightSize, strategyMods.insightScale),
+        supportSize: applyScale(presetRaw.supportSize, strategyMods.supportScale),
+        maxHeadlineLines: Math.max(
+          1,
+          Math.min(4, presetRaw.maxHeadlineLines + strategyMods.maxHeadlineLinesDelta),
+        ),
+      }
+    : presetRaw;
   const overlayStrategy = input.brandKit.overlayStrategy;
   const accent = input.brandKit.accentColor;
   const headlineLines = balanceTextLines(input.overlay.headline, preset.headlineChars, preset.maxHeadlineLines);
@@ -598,7 +626,13 @@ function buildOverlaySvg(input: {
   // Margin is the LARGER of the preset margin and 6% of canvas width
   // so big-format renders keep generous breathing room and the
   // headline never sits flush against the left edge.
-  const safeMargin = Math.max(preset.margin, Math.round(input.width * 0.06));
+  // Strategy-aware margin — base margin times the strategy's
+  // marginScale (1.0 when no strategy). Clamped to safe bounds inside
+  // applyScale.
+  const baseSafeMargin = Math.max(preset.margin, Math.round(input.width * 0.06));
+  const safeMargin = strategyMods
+    ? Math.round(applyScale(baseSafeMargin, strategyMods.marginScale, 0.7, 1.5))
+    : baseSafeMargin;
   const textX = safeMargin;
   const textRightLimit = input.width - safeMargin;
   const textWidth = Math.max(160, textRightLimit - textX);
@@ -630,8 +664,18 @@ function buildOverlaySvg(input: {
   // typical post viewing sizes. Previously 18%/10% of canvas width;
   // now 24%/16% which keeps the logo proportional without
   // dominating the frame.
-  const logoMaxWidth = Math.round(input.width * (standardBrandMode ? 0.24 : 0.16));
-  const logoMaxHeight = Math.round(input.height * (standardBrandMode ? 0.13 : 0.11));
+  // Strategy-aware logo sizing. Strategy multiplier is applied with
+  // bounds so brand-focus assets get a larger mark (+35%) and quote
+  // images get a smaller mark (-30%) without ever overflowing the
+  // top-right placement region.
+  const logoBaseWidth = Math.round(input.width * (standardBrandMode ? 0.24 : 0.16));
+  const logoBaseHeight = Math.round(input.height * (standardBrandMode ? 0.13 : 0.11));
+  const logoMaxWidth = strategyMods
+    ? Math.round(applyScale(logoBaseWidth, strategyMods.logoScaleMultiplier, 0.5, 1.6))
+    : logoBaseWidth;
+  const logoMaxHeight = strategyMods
+    ? Math.round(applyScale(logoBaseHeight, strategyMods.logoScaleMultiplier, 0.5, 1.6))
+    : logoBaseHeight;
   const brandPlacement = {
     top: safeMargin + 14,
     left: input.width - safeMargin - logoMaxWidth - 20,
@@ -652,13 +696,53 @@ function buildOverlaySvg(input: {
   // ~50% height down to a soft dark at the bottom. Gives the text
   // enough contrast over any background photo WITHOUT a giant side
   // panel competing with the image content.
-  const scrimTop = Math.round(input.height * 0.46);
+  // Strategy-aware scrim: textBlockTopRatio (when supplied by the
+  // strategy) overrides the default 46% start; intensity multiplier
+  // adjusts mid+bottom opacity. Quote / brand-focus → lighter scrim;
+  // promotional / story → stronger scrim.
+  const scrimTopRatio = strategyMods?.textBlockTopRatio ?? 0.46;
+  const scrimTop = Math.round(input.height * Math.max(0.25, Math.min(0.7, scrimTopRatio)));
   const scrimHeight = input.height - scrimTop;
-  const scrimBottomOpacity = Math.min(0.82, Math.max(0.55, overlayStrategy.shadeStartOpacity + 0.2));
-  const scrimMidOpacity = Math.max(0.18, overlayStrategy.shadeMidOpacity * 0.7);
+  const scrimIntensity = strategyMods?.scrimIntensityMultiplier ?? 1.0;
+  const scrimBottomOpacity = Math.min(
+    0.88,
+    Math.max(0.45, (overlayStrategy.shadeStartOpacity + 0.2) * scrimIntensity),
+  );
+  const scrimMidOpacity = Math.max(
+    0.14,
+    Math.min(0.45, overlayStrategy.shadeMidOpacity * 0.7 * scrimIntensity),
+  );
   const headingColor = '#ffffff';
   const insightColor = 'rgba(255,255,255,0.94)';
   const supportColor = 'rgba(255,255,255,0.78)';
+
+  // CTA emission. The strategy's ctaMode decides whether (and how)
+  // the overlay renders a CTA pill. 'absent' suppresses entirely;
+  // 'subtle' is text-only with low contrast; 'standard' is a soft
+  // pill; 'strong' is a high-contrast pill with the accent color.
+  // CTA copy comes from the existing overlayText.cta surface — no
+  // new input field, no new caller contract.
+  const ctaCopy = String(input.overlay.cta || '').trim();
+  const ctaMode = strategyMods?.ctaMode ?? 'standard';
+  const renderCta = ctaCopy.length > 0 && ctaMode !== 'absent';
+  const ctaFontSize = Math.round(preset.supportSize * 1.05);
+  const ctaPadX = Math.round(ctaFontSize * 0.9);
+  const ctaPadY = Math.round(ctaFontSize * 0.5);
+  const ctaApproxWidth = Math.min(textWidth, Math.round(ctaCopy.length * ctaFontSize * 0.62) + ctaPadX * 2);
+  const ctaHeight = ctaFontSize + ctaPadY * 2;
+  const ctaY = input.height - bottomPadding - footerHeight - ctaHeight - 14;
+  const ctaSvg = (() => {
+    if (!renderCta) return '';
+    if (ctaMode === 'subtle') {
+      return `<text x="${textX}" y="${ctaY + ctaFontSize}" filter="url(#textShadow)" fill="rgba(255,255,255,0.85)" font-size="${ctaFontSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="600" letter-spacing="0.4">${escapeXml(ctaCopy)} →</text>`;
+    }
+    const pillFill = ctaMode === 'strong' ? accent : 'rgba(255,255,255,0.92)';
+    const pillTextColor = ctaMode === 'strong' ? '#0F172A' : '#0F172A';
+    return `
+      <rect x="${textX}" y="${ctaY}" width="${ctaApproxWidth}" height="${ctaHeight}" rx="${Math.round(ctaHeight / 2)}" fill="${pillFill}" opacity="${ctaMode === 'strong' ? 1.0 : 0.92}" />
+      <text x="${textX + ctaPadX}" y="${ctaY + ctaPadY + ctaFontSize - 4}" fill="${pillTextColor}" font-size="${ctaFontSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${ctaMode === 'strong' ? 800 : 700}" letter-spacing="0.3">${escapeXml(ctaCopy)}</text>
+    `;
+  })();
 
   const svg = `
     <svg width="${input.width}" height="${input.height}" viewBox="0 0 ${input.width} ${input.height}" xmlns="http://www.w3.org/2000/svg">
@@ -677,6 +761,7 @@ function buildOverlaySvg(input: {
       ${headlineLines.map((line, index) => `<text x="${textX}" y="${headlineStart + index * headlineLineHeight}" filter="url(#textShadow)" fill="${headingColor}" font-size="${preset.headlineSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.headingWeight}">${escapeXml(line)}</text>`).join('')}
       ${insightLines.map((line, index) => `<text x="${textX}" y="${insightStart + index * insightLineHeight}" filter="url(#textShadow)" fill="${insightColor}" font-size="${preset.insightSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.bodyWeight}">${escapeXml(line)}</text>`).join('')}
       ${supportLines.map((line, index) => `<text x="${textX}" y="${supportStart + index * supportLineHeight}" filter="url(#textShadow)" fill="${supportColor}" font-size="${preset.supportSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="500">${escapeXml(line)}</text>`).join('')}
+      ${ctaSvg}
       <!-- footer watermark suppressed (brand mark in top-right is canonical); textWidth=${textWidth} retained for layout-spec future use -->
     </svg>
   `.trim();
@@ -871,6 +956,65 @@ function buildAiImagePrompt(input: {
       ? input.metadata.brand_generation_mode
       : (typeof input.metadata.brand_mode === 'string' ? input.metadata.brand_mode : 'brand-aware'),
     contentType: typeof input.metadata.content_type === 'string' ? input.metadata.content_type : input.eyebrow,
+    // Purpose-driven generation strategy. Resolved by the composer
+    // against the PurposeStrategyRegistry — see purposeStrategyRegistry.ts.
+    // The key flows from the form submission's creator_card:
+    //   - image / banner: creator_card.subtype (e.g. 'promotional-image')
+    //   - carousel / slider: creator_card.subtype (e.g. 'story-carousel')
+    //   - infographic: creator_card.infographic_layout (e.g. 'stats')
+    // We also accept top-level metadata.subtype / .purpose_key for
+    // back-compat with any caller that flattens differently.
+    purposeKey: (() => {
+      const creatorCard = safeObject(input.metadata.creator_card);
+      const direct = String(
+        input.metadata.purpose_key
+          || creatorCard.purpose_key
+          || creatorCard.infographic_layout
+          || creatorCard.subtype
+          || input.metadata.subtype
+          || ''
+      ).trim();
+      return direct || null;
+    })(),
+    // Creator Governance → Prompt Composer Integration — Phase 2.
+    // Build the governance prompt context from the resolved industry
+    // (sourced from brandKit.industry — the same field the prompt
+    // composer already uses to annotate industry context). The
+    // governance layer is a strict no-op for non-regulated industries.
+    governance: (() => {
+      const { buildGovernancePromptContext } =
+        require('./creator/strategyGovernancePromptContext') as typeof import('./creator/strategyGovernancePromptContext');
+      const industry = typeof brandKit.industry === 'string'
+        ? brandKit.industry
+        : (typeof brandContext.industry === 'string' ? brandContext.industry : null);
+      const category = typeof input.metadata.category === 'string'
+        ? input.metadata.category
+        : null;
+      // Resolve the content-type lane for the policy lookup. Banner /
+      // brand_card collapse to image; slider / pdf collapse to carousel.
+      const ctRaw = String(input.metadata.content_type ?? input.eyebrow ?? '')
+        .trim()
+        .toLowerCase();
+      const lane: 'image' | 'carousel' | 'infographic' =
+        ctRaw === 'banner' || ctRaw === 'brand_card' ? 'image'
+          : ctRaw === 'slider' || ctRaw === 'pdf' ? 'carousel'
+            : ctRaw === 'carousel' ? 'carousel'
+              : ctRaw === 'infographic' ? 'infographic'
+                : 'image';
+      const selectedRaw = String(
+        input.metadata.purpose_key
+          || safeObject(input.metadata.creator_card).purpose_key
+          || safeObject(input.metadata.creator_card).infographic_layout
+          || safeObject(input.metadata.creator_card).subtype
+          || input.metadata.subtype
+          || ''
+      ).trim() || null;
+      return buildGovernancePromptContext({
+        companyContext: industry || category ? { industry, category } : null,
+        contentType: lane,
+        selectedStrategy: selectedRaw,
+      });
+    })(),
   };
 
   // Pull the brand's preferred template + strategy if one is cached.
@@ -1139,6 +1283,35 @@ function buildAiImagePrompt(input: {
     visualNarrative: plan.visualNarrative,
   });
 
+  // Resolve the render strategy ONCE here so both the metadata
+  // explainability envelope AND the downstream buildOverlaySvg call
+  // see the same strategy. Resolution is null-safe when no purpose
+  // strategy attached (legacy callers).
+  const { resolveRenderStrategy: _resolveRenderStrategyForBundle } =
+    require('./creator/renderStrategyRegistry') as typeof import('./creator/renderStrategyRegistry');
+  const renderStrategy = _resolveRenderStrategyForBundle(composed.purposeStrategy?.id ?? null);
+  // Resolve the active variant (PHASE 4 — purpose-aware variant
+  // exploration). The variant lookup checks (in order): explicit
+  // `variant_id` on the asset metadata, then `variant_family` paired
+  // with the strategy id. Returns null for legacy assets that did
+  // not specify a variant — the renderer + analytics layer fall back
+  // to strategy-only behavior in that case.
+  const { resolveVariant: _resolveVariantForBundle, resolveVariantByFamily: _resolveVariantByFamilyForBundle } =
+    require('./creator/variantRegistry') as typeof import('./creator/variantRegistry');
+  const { resolveVariantStrategyProfile: _resolveVariantProfileForBundle } =
+    require('./creator/variantStrategyProfiles') as typeof import('./creator/variantStrategyProfiles');
+  const inputMeta = safeObject(safeObject(input.assetPayload.media_bundle).metadata);
+  const inputVariantId = typeof inputMeta.variant_id === 'string' && inputMeta.variant_id.length > 0
+    ? inputMeta.variant_id
+    : null;
+  const inputVariantFamily = typeof inputMeta.variant_family === 'string' && inputMeta.variant_family.length > 0
+    ? inputMeta.variant_family
+    : null;
+  const variantForBundle =
+    _resolveVariantForBundle(inputVariantId)
+    ?? _resolveVariantByFamilyForBundle(composed.purposeStrategy?.id ?? null, inputVariantFamily);
+  const variantProfileForBundle = _resolveVariantProfileForBundle(variantForBundle?.variant_id ?? null);
+
   // Stash the FULL creative-intelligence audit envelope on
   // assetPayload.media_bundle.metadata. This preserves variant
   // traceability + explainability + ranking metadata so dashboards
@@ -1152,6 +1325,96 @@ function buildAiImagePrompt(input: {
     creative_direction_premium: composed.premium,
     brand_grounded: composed.brandGrounded,
     product_grounded: composed.productGrounded,
+    // Creator Governance → Prompt Composer Integration — Phase 5.
+    // Explainability metadata exposing which governance signals the
+    // composer applied. Always present; carries industry='none' for
+    // non-regulated companies. Downstream surfaces (post-execution
+    // UI, audit trail) read this off creator_attachment_metadata to
+    // render the compliance summary.
+    governance: composed.governance,
+    // Purpose-driven strategy envelope (PHASE 6 explainability).
+    // Surfaced in preview as "Generated As" + rationale; null when
+    // no purpose strategy resolved (legacy / direct-call paths).
+    purpose_strategy: composed.purposeStrategy,
+    generated_as_label: composed.purposeStrategy?.generatedAsLabel ?? null,
+    purpose_why_chosen: composed.purposeStrategy?.whyChosen ?? null,
+    purpose_density_bias: composed.purposeStrategy?.densityBias ?? null,
+    purpose_branding_intensity: composed.purposeStrategy?.brandingIntensity ?? null,
+    purpose_typography_weight: composed.purposeStrategy?.typographyWeight ?? null,
+    purpose_cta_intensity: composed.purposeStrategy?.ctaIntensity ?? null,
+    purpose_slide_arc: composed.purposeStrategy?.slideArcRoles ?? null,
+    purpose_information_architecture: composed.purposeStrategy?.informationArchitecturePattern ?? null,
+    // Strategy-aware rendering envelope (PHASE 9 explainability).
+    // When a render strategy was applied to buildOverlaySvg, surface
+    // the typography/branding/density/cta/visual-emphasis profile
+    // strings so the preview can render an "Applied Render Strategy"
+    // strip alongside the existing "Generated As" panel. Null when no
+    // render strategy resolved.
+    applied_render_strategy: renderStrategy
+      ? {
+          id: renderStrategy.id,
+          typography_profile: renderStrategy.explainability.typographyProfile,
+          branding_profile: renderStrategy.explainability.brandingProfile,
+          density_profile: renderStrategy.explainability.densityProfile,
+          cta_profile: renderStrategy.explainability.ctaProfile,
+          visual_emphasis_profile: renderStrategy.explainability.visualEmphasisProfile,
+          modifiers_applied: {
+            headline_scale: renderStrategy.modifiers.headlineScale,
+            hook_scale: renderStrategy.modifiers.hookScale,
+            insight_scale: renderStrategy.modifiers.insightScale,
+            support_scale: renderStrategy.modifiers.supportScale,
+            max_headline_lines_delta: renderStrategy.modifiers.maxHeadlineLinesDelta,
+            margin_scale: renderStrategy.modifiers.marginScale,
+            text_block_top_ratio: renderStrategy.modifiers.textBlockTopRatio,
+            scrim_intensity_multiplier: renderStrategy.modifiers.scrimIntensityMultiplier,
+            logo_scale_multiplier: renderStrategy.modifiers.logoScaleMultiplier,
+            logo_opacity: renderStrategy.modifiers.logoOpacity,
+            cta_mode: renderStrategy.modifiers.ctaMode,
+            focal_emphasis: renderStrategy.modifiers.focalEmphasis,
+          },
+        }
+      : null,
+    // Strategy analytics attribution envelope (PHASE 2 — Purpose
+    // Strategy Analytics). Resolved from `purpose_strategy.id` so the
+    // canonical analytics dimensions travel on every strategy-aware
+    // asset. Null for legacy / non-strategy assets — analytics surfaces
+    // MUST fall back gracefully (PHASE 12).
+    strategy_analytics: (() => {
+      const { buildStrategyAnalyticsAttribution: _attr } =
+        require('./creator/strategyAnalyticsRecorder') as typeof import('./creator/strategyAnalyticsRecorder');
+      const attribution = _attr({
+        purpose_strategy: composed.purposeStrategy,
+        applied_render_strategy: renderStrategy
+          ? { id: renderStrategy.id }
+          : null,
+        applied_variant: variantForBundle ? {
+          variant_id: variantForBundle.variant_id,
+          variant_family: variantForBundle.variant_family,
+        } : null,
+      });
+      // Carry the variant fields on the analytics envelope so the
+      // recorder + leaderboards key off them downstream (PHASE 6).
+      if (attribution && variantForBundle) {
+        (attribution as Record<string, unknown>).variant_id = variantForBundle.variant_id;
+        (attribution as Record<string, unknown>).variant_family = variantForBundle.variant_family;
+      }
+      return attribution;
+    })(),
+    // Applied Variant envelope (PHASE 12 — preview explainability).
+    // Surfaces the variant identity + reasoning string so the preview
+    // panel can render the "Applied Variant" strip alongside the
+    // existing "Applied Render Strategy" strip. Null for legacy /
+    // baseline assets with no variant.
+    applied_variant: variantForBundle
+      ? {
+          variant_id: variantForBundle.variant_id,
+          variant_family: variantForBundle.variant_family,
+          display_name: variantForBundle.display_name,
+          description: variantForBundle.description,
+          exploration_dimensions: variantForBundle.exploration_dimensions,
+          reasoning: variantProfileForBundle?.reasoning ?? null,
+        }
+      : null,
     // Strategic plan
     creative_strategy: plan.strategyProfile,
     creative_emotional_direction: plan.emotionalDirection,
@@ -1793,6 +2056,53 @@ async function composeSingleVisualAsset(
   //                still be applied (handled below). overlay_quality is
   //                NOT emitted in this branch.
   const skipOverlayComposite = attachmentRenderPolicy === 'supporting_visual';
+  // Strategy-aware rendering — resolve the RenderStrategy from the
+  // purpose_strategy.id surfaced onto media_bundle.metadata by the
+  // prompt composer in buildAiImagePrompt (which runs above on line
+  // 1892). When no purpose strategy resolved (legacy callers + paths
+  // that bypass the registry), `renderStrategy` is null and the
+  // overlay path produces byte-identical output to the pre-phase
+  // renderer (PHASE 10 regression-safety guarantee).
+  const { resolveRenderStrategy } =
+    require('./creator/renderStrategyRegistry') as typeof import('./creator/renderStrategyRegistry');
+  const bundleMetaForStrategy = safeObject(safeObject(assetPayload.media_bundle).metadata);
+  const purposeStrategyForRender = safeObject(bundleMetaForStrategy.purpose_strategy);
+  const purposeStrategyIdForRender = typeof purposeStrategyForRender.id === 'string'
+    ? String(purposeStrategyForRender.id)
+    : null;
+  const renderStrategyRaw = resolveRenderStrategy(purposeStrategyIdForRender);
+  // ── Variant overlay (PHASE 4 — purpose-aware variant exploration) ──
+  // When the asset metadata declares a `variant_family` or a fully
+  // qualified `variant_id`, compose the variant overlay ON TOP of the
+  // resolved RenderStrategyModifiers. Legacy assets with no variant
+  // declared resolve `variant` = null and the renderer behaves
+  // byte-identically to the pre-variant phase (PHASE 16 regression
+  // safety).
+  const variantFamilyForRender = (() => {
+    const raw =
+      bundleMetaForStrategy.variant_family
+      ?? purposeStrategyForRender.variant_family
+      ?? null;
+    return typeof raw === 'string' && raw.length > 0 ? raw : null;
+  })();
+  const variantIdFromMetadata = (() => {
+    const raw = bundleMetaForStrategy.variant_id ?? purposeStrategyForRender.variant_id ?? null;
+    return typeof raw === 'string' && raw.length > 0 ? raw : null;
+  })();
+  const { resolveVariant: _resolveVariantForRender, resolveVariantByFamily: _resolveVariantByFamilyForRender } =
+    require('./creator/variantRegistry') as typeof import('./creator/variantRegistry');
+  const { resolveVariantStrategyProfile: _resolveVariantProfile, composeVariantOntoStrategyModifiers: _composeVariantOnto } =
+    require('./creator/variantStrategyProfiles') as typeof import('./creator/variantStrategyProfiles');
+  const variantForRender =
+    _resolveVariantForRender(variantIdFromMetadata)
+    ?? _resolveVariantByFamilyForRender(purposeStrategyIdForRender, variantFamilyForRender);
+  const variantProfile = _resolveVariantProfile(variantForRender?.variant_id ?? null);
+  const renderStrategy = renderStrategyRaw && variantProfile
+    ? {
+        ...renderStrategyRaw,
+        modifiers: _composeVariantOnto(renderStrategyRaw.modifiers, variantProfile),
+      }
+    : renderStrategyRaw;
   const overlayRender = skipOverlayComposite
     ? null
     : buildOverlaySvg({
@@ -1803,6 +2113,7 @@ async function composeSingleVisualAsset(
         platform,
         fileNamePrefix,
         subtypeHint,
+        renderStrategy,
       });
   const brandPlacement = overlayRender?.brandPlacement
     ?? defaultBrandPlacement({ width, height, fileNamePrefix });
@@ -2363,6 +2674,25 @@ function normalizeStructuredItems(
   fileNamePrefix: string,
   metadata: Record<string, unknown>,
 ): Array<Record<string, string>> {
+  // Purpose-driven slide-arc orchestration. When the metadata carries
+  // a resolved purposeStrategy with a slideArc (carousel) OR an
+  // informationArchitecture.sectionBlueprint (infographic-ish), use
+  // it as the canonical role sequence. The LLM-supplied items map
+  // onto these roles in order; when fewer items than roles, missing
+  // slides are scaffolded from the strategy's intent. When more
+  // items than roles, extras keep their LLM-supplied roles.
+  const bundleMeta = safeObject(safeObject(metadata.media_bundle).metadata);
+  const purposeStrategy = (() => {
+    const direct = (metadata as Record<string, unknown>).purpose_strategy;
+    if (direct && typeof direct === 'object') return direct as Record<string, unknown>;
+    const fromBundle = bundleMeta.purpose_strategy;
+    if (fromBundle && typeof fromBundle === 'object') return fromBundle as Record<string, unknown>;
+    return null;
+  })();
+  const slideArcRoles = Array.isArray((purposeStrategy as Record<string, unknown> | null)?.slideArcRoles)
+    ? ((purposeStrategy as Record<string, unknown>).slideArcRoles as unknown[]).map(String).filter(Boolean)
+    : null;
+
   const clean = items.map((item, index) => ({
     role: compactText(item.role || item.section_type || item.type || `Slide ${index + 1}`),
     headline: compactText(item.headline || item.title || item.heading || `Slide ${index + 1}`),
@@ -2371,8 +2701,23 @@ function normalizeStructuredItems(
   })).filter((item) => item.headline || item.body);
 
   if (clean.length > 0) {
-    const lastIndex = clean.length - 1;
-    return clean.slice(0, fileNamePrefix === 'pdf' ? 7 : 8).map((item, index) => ({
+    const sliceLimit = fileNamePrefix === 'pdf' ? 7 : 8;
+    const sliced = clean.slice(0, sliceLimit);
+    // Purpose-strategy role overlay — when the strategy supplies a
+    // role sequence (Educational: hook → concept → explanation →
+    // example → summary, Story: hook → problem → journey → ..., etc.),
+    // assign roles in order so structured slide generation matches
+    // the strategy's narrative architecture.
+    if (slideArcRoles && slideArcRoles.length > 0) {
+      return sliced.map((item, index) => ({
+        role: slideArcRoles[index] || item.role || `slide_${index + 1}`,
+        headline: item.headline,
+        body: item.body,
+        designNote: item.designNote,
+      }));
+    }
+    const lastIndex = sliced.length - 1;
+    return sliced.map((item, index) => ({
       role: index === 0 ? 'hook' : index === lastIndex ? 'cta' : item.role || (index === 1 ? 'insight' : index === 2 ? 'proof' : 'content'),
       headline: item.headline,
       body: item.body,
@@ -2380,9 +2725,21 @@ function normalizeStructuredItems(
     }));
   }
 
+  // Empty-LLM fallback. When a purpose strategy is present, scaffold
+  // slides directly from its arc so the fallback path still produces
+  // strategy-aligned content rather than the generic hook/insight/
+  // proof/cta sequence.
   const topic = compactText(metadata.topic || fallbackLabel, fallbackLabel);
   const summary = compactText(metadata.summary || fallbackLabel, fallbackLabel);
   const objective = compactText(metadata.objective || 'Make the core idea easy to act on');
+  if (slideArcRoles && slideArcRoles.length > 0) {
+    return slideArcRoles.map((role, index) => ({
+      role,
+      headline: index === 0 ? topic : role.replace(/_/g, ' '),
+      body: index === 0 ? summary : index === slideArcRoles.length - 1 ? objective : 'Detail for this slide will be expanded.',
+      designNote: `${role} slide`,
+    }));
+  }
   return [
     { role: 'hook', headline: topic, body: summary, designNote: 'Strong opening hierarchy' },
     { role: 'insight', headline: 'Core insight', body: objective, designNote: 'Clarify the important shift' },
@@ -2416,6 +2773,55 @@ async function renderStructuredSlidePng(input: {
     colors: input.brandKit.normalizedPalette,
     variantId: `${input.brandKit.layoutVariantId}-${input.index}`,
   });
+  // Strategy-aware carousel/infographic slide rendering — read the
+  // resolved purpose_strategy.id from metadata and look up the
+  // matching render strategy. Slides for carousels and infographics
+  // share the same buildOverlaySvg entry point as image rendering, so
+  // the same strategy modifiers apply per slide.
+  const { resolveRenderStrategy: resolveRenderStrategySlide } =
+    require('./creator/renderStrategyRegistry') as typeof import('./creator/renderStrategyRegistry');
+  const slideBundleMeta = safeObject(safeObject(input.metadata.media_bundle).metadata);
+  const slidePurposeStrategyId =
+    (typeof slideBundleMeta.purpose_strategy === 'object' && slideBundleMeta.purpose_strategy !== null
+      ? String((slideBundleMeta.purpose_strategy as Record<string, unknown>).id || '')
+      : '') ||
+    (typeof input.metadata.purpose_strategy === 'object' && input.metadata.purpose_strategy !== null
+      ? String((input.metadata.purpose_strategy as Record<string, unknown>).id || '')
+      : '');
+  const slideRenderStrategyRaw = resolveRenderStrategySlide(slidePurposeStrategyId || null);
+  // ── Variant overlay (PHASE 4) — carousel/infographic slide path ──
+  // Mirrors the image-flow composition above. Reads `variant_family`
+  // / `variant_id` from the slide metadata bundle and overlays the
+  // variant profile on top of the slide's RenderStrategyModifiers.
+  const slideVariantFamily = (() => {
+    const meta = slideBundleMeta as Record<string, unknown>;
+    const fromMeta = meta.variant_family;
+    if (typeof fromMeta === 'string' && fromMeta.length > 0) return fromMeta;
+    const purposeStrategyMeta = meta.purpose_strategy && typeof meta.purpose_strategy === 'object'
+      ? (meta.purpose_strategy as Record<string, unknown>)
+      : null;
+    const fromPurpose = purposeStrategyMeta?.variant_family;
+    return typeof fromPurpose === 'string' && fromPurpose.length > 0 ? fromPurpose : null;
+  })();
+  const slideVariantIdMeta = (() => {
+    const meta = slideBundleMeta as Record<string, unknown>;
+    const fromMeta = meta.variant_id;
+    return typeof fromMeta === 'string' && fromMeta.length > 0 ? fromMeta : null;
+  })();
+  const { resolveVariant: _slideResolveVariant, resolveVariantByFamily: _slideResolveVariantByFamily } =
+    require('./creator/variantRegistry') as typeof import('./creator/variantRegistry');
+  const { resolveVariantStrategyProfile: _slideResolveProfile, composeVariantOntoStrategyModifiers: _slideCompose } =
+    require('./creator/variantStrategyProfiles') as typeof import('./creator/variantStrategyProfiles');
+  const slideVariant =
+    _slideResolveVariant(slideVariantIdMeta)
+    ?? _slideResolveVariantByFamily(slidePurposeStrategyId || null, slideVariantFamily);
+  const slideVariantProfile = _slideResolveProfile(slideVariant?.variant_id ?? null);
+  const slideRenderStrategy = slideRenderStrategyRaw && slideVariantProfile
+    ? {
+        ...slideRenderStrategyRaw,
+        modifiers: _slideCompose(slideRenderStrategyRaw.modifiers, slideVariantProfile),
+      }
+    : slideRenderStrategyRaw;
   const overlayRender = buildOverlaySvg({
     width: input.width,
     height: input.height,
@@ -2423,6 +2829,7 @@ async function renderStructuredSlidePng(input: {
     brandKit: input.brandKit,
     platform,
     fileNamePrefix: input.fileNamePrefix === 'pdf' ? 'infographic' : 'carousel',
+    renderStrategy: slideRenderStrategy,
   });
   const brandMark = await loadBrandMark({
     brandKit: input.brandKit,

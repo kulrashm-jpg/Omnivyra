@@ -9,6 +9,7 @@ import {
   PenTool,
   Rocket,
   Sparkles,
+  TestTube2,
   Users,
 } from 'lucide-react';
 
@@ -81,6 +82,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       '/command-center/bolt-creator-strategy',
       '/command-center/intelligent-mix-strategy',
       '/command-center/campaigns',
+      '/command-center/variant-experience',
     ],
     children: [
       {
@@ -107,6 +109,12 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
         href: '/command-center/intelligent-mix-strategy',
         icon: Rocket,
       },
+      {
+        label: 'Variant Experience',
+        description: 'Plan V1 / V2 / V3, view winners, manage experiments and operator controls.',
+        href: '/command-center/variant-experience',
+        icon: TestTube2,
+      },
     ],
   },
   {
@@ -114,7 +122,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
     href: '/command-center/engagement',
     icon: MessageSquare,
     description: 'Monitor audience signals, leads, and conversations.',
-    matchers: ['/command-center/engagement', '/engagement'],
+    matchers: ['/command-center/engagement', '/command-center/active-leads', '/engagement'],
     children: [
       {
         label: 'Engagement Center',
@@ -137,7 +145,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       {
         label: 'Active Leads',
         description: 'Review and manage the leads that need action.',
-        href: '/command-center/engagement',
+        href: '/command-center/active-leads',
         icon: Users,
       },
     ],
@@ -190,11 +198,24 @@ export function isPathActive(pathname: string, href: string): boolean {
 
 export function getPrimaryNavForPath(pathname: string): PrimaryNavItem | null {
   const path = normalizePath(pathname);
-  return (
-    PRIMARY_NAV_ITEMS.find((item) =>
-      item.matchers.some((matcher) => path === matcher || path.startsWith(`${matcher}/`)),
-    ) ?? null
-  );
+  // Longest-prefix precedence. A primary item whose matcher is the
+  // closest specific prefix wins over a primary item whose matcher
+  // is a broader parent. Prevents `/command-center` (claimed by
+  // Dashboard) from outranking `/command-center/variant-experience`
+  // (declared as a Campaigns matcher).
+  let bestMatch: PrimaryNavItem | null = null;
+  let bestMatcherLength = -1;
+  for (const item of PRIMARY_NAV_ITEMS) {
+    for (const matcher of item.matchers) {
+      const matches = path === matcher || path.startsWith(`${matcher}/`);
+      if (!matches) continue;
+      if (matcher.length > bestMatcherLength) {
+        bestMatcherLength = matcher.length;
+        bestMatch = item;
+      }
+    }
+  }
+  return bestMatch;
 }
 
 export function getSecondaryNavForPath(pathname: string): SecondaryNavItem[] {
@@ -231,7 +252,7 @@ export function getNextActionForPath(pathname: string): NextAction | null {
     };
   }
 
-  if (path.startsWith('/engagement') || path.startsWith('/command-center/engagement')) {
+  if (path.startsWith('/engagement') || path.startsWith('/command-center/engagement') || path.startsWith('/command-center/active-leads')) {
     return {
       label: 'Review active leads',
       description: 'Go straight to the people and conversations that need action.',

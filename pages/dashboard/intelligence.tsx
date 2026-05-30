@@ -76,7 +76,7 @@ export default function CMOIntelligenceDashboard() {
       return;
     }
     if (view === 'active-leads') {
-      void router.replace('/command-center/engagement');
+      void router.replace('/command-center/active-leads');
       return;
     }
   }, [router, router.query.companyId, router.query.intelTab]);

@@ -30,7 +30,7 @@ type Strategy = {
   confidence_score: number;
 };
 
-const ACTIVE_LEADS_ROUTE = '/command-center/engagement';
+const ACTIVE_LEADS_ROUTE = '/command-center/active-leads';
 
 function toActionLabel(opportunityType: string | undefined): string {
   if (!opportunityType) return 'Reply with a clear next step';

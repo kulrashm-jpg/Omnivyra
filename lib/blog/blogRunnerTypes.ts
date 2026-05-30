@@ -24,6 +24,7 @@ import type {
   RecommendationContext,
   CompanyProfile,
 } from '../../backend/services/companyProfile/types';
+import type { GovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
 
 /**
  * Phase 2.4 — Expanded strategic context surface.
@@ -178,6 +179,7 @@ export type BlogGenerationResult =
   | {
       needs_clarification: true;
       questions:           ClarificationQuestion[];
+      governance:          GovernanceExplainabilityMetadata;
     }
   | {
       needs_clarification: false;
@@ -188,6 +190,7 @@ export type BlogGenerationResult =
       effectiveness_based?: boolean;
       seo_intelligence?: SEOIntelligenceResult;
       trend_intelligence?: TrendIntelligenceResult;
+      governance:          GovernanceExplainabilityMetadata;
     }
   | {
       needs_clarification: false;
@@ -204,6 +207,7 @@ export type BlogGenerationResult =
        * envelope cascade which produced metadata-only payloads.
        */
       editorial_diagnostics?: LightweightEditorialDiagnostics;
+      governance:          GovernanceExplainabilityMetadata;
     };
 
 /**

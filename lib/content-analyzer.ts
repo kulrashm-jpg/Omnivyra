@@ -1,4 +1,5 @@
 // AI Content Analysis and Topic Uniqueness Assessment
+import { bearerAuthorization } from './httpAuthHeaders';
 export interface TopicAnalysis {
   topic: string;
   platforms: PlatformScore[];
@@ -38,7 +39,7 @@ export class ContentAnalyzer {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Authorization': bearerAuthorization(process.env.OPENAI_API_KEY ?? ''),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -120,7 +121,7 @@ export class ContentAnalyzer {
       // Use Twitter API v2 for topic analysis
       const response = await fetch(`https://api.twitter.com/2/tweets/search/recent?query=${encodeURIComponent(topic)}&max_results=10`, {
         headers: {
-          'Authorization': `Bearer ${process.env.TWITTER_BEARER_TOKEN}`
+          'Authorization': bearerAuthorization(process.env.TWITTER_BEARER_TOKEN ?? '')
         }
       });
       
@@ -141,7 +142,7 @@ export class ContentAnalyzer {
       // Use LinkedIn API for professional content analysis
       const response = await fetch(`https://api.linkedin.com/v2/socialActions?q=byTopic&topic=${encodeURIComponent(topic)}`, {
         headers: {
-          'Authorization': `Bearer ${process.env.LINKEDIN_ACCESS_TOKEN}`
+          'Authorization': bearerAuthorization(process.env.LINKEDIN_ACCESS_TOKEN ?? '')
         }
       });
       

@@ -92,7 +92,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             metadata:       { usdEquivalent: usdEquivalent ?? null },
           },
         });
-        if (!proposal.ok) return res.status(400).json({ error: proposal.message, code: proposal.code });
+        if (proposal.ok === false) return res.status(400).json({ error: proposal.message, code: proposal.code });
         if (!proposal.autoApproved) {
           return res.status(202).json({
             ok: true,
@@ -105,7 +105,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
         const { grantCredits } = await import('../../../../backend/services/consumptionAnalyticsService');
         const result = await grantCredits({ organizationId: companyId, credits, usdEquivalent, note, performedBy: userId });
-        if (!result.ok) return res.status(500).json({ error: result.error });
+        if (result.ok === false) return res.status(500).json({ error: result.error });
         const ledgerIdem = String(req.headers['idempotency-key'] ?? `${proposal.approvalId}:exec`);
         await recordAdminAudit({
           actorUserId: userId,
@@ -145,7 +145,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             reason:         note,
           },
         });
-        if (!proposal.ok) return res.status(400).json({ error: proposal.message, code: proposal.code });
+        if (proposal.ok === false) return res.status(400).json({ error: proposal.message, code: proposal.code });
         if (!proposal.autoApproved) {
           return res.status(202).json({
             ok: true,
@@ -158,7 +158,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
         const { adjustCredits } = await import('../../../../backend/services/consumptionAnalyticsService');
         const result = await adjustCredits({ organizationId: companyId, credits, note, performedBy: userId });
-        if (!result.ok) return res.status(500).json({ error: result.error });
+        if (result.ok === false) return res.status(500).json({ error: result.error });
         const ledgerIdem = String(req.headers['idempotency-key'] ?? `${proposal.approvalId}:exec`);
         await recordAdminAudit({
           actorUserId: userId,
@@ -200,7 +200,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             reason:           note ?? 'credit_rate_usd change',
           },
         });
-        if (!proposal.ok) return res.status(400).json({ error: proposal.message, code: proposal.code });
+        if (proposal.ok === false) return res.status(400).json({ error: proposal.message, code: proposal.code });
         if (!proposal.autoApproved) {
           return res.status(202).json({
             ok: true,
@@ -213,7 +213,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
         const { updateOrgCreditRate } = await import('../../../../backend/services/consumptionAnalyticsService');
         const result = await updateOrgCreditRate({ organizationId: companyId, creditRateUsd, performedBy: userId });
-        if (!result.ok) return res.status(500).json({ error: result.error });
+        if (result.ok === false) return res.status(500).json({ error: result.error });
         const ledgerIdem = String(req.headers['idempotency-key'] ?? `${proposal.approvalId}:exec`);
         await recordAdminAudit({
           actorUserId: userId,

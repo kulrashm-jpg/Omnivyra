@@ -277,6 +277,24 @@ async function publishOneNode(input: {
         post_url: publishResult.post_url,
       });
     }
+    // P1-B — advance variant experiment tracker per node. Each thread
+    // node is its own scheduled_posts row, so we resolve attribution
+    // per row id. Mirrors the pattern from publishNowService.
+    // Best-effort; failures never block publish success.
+    try {
+      const { resolveStrategyAttributionForScheduledPost } = await import('../creator/strategyAttributionResolver');
+      const { notifyExperimentAssetPublished } = await import('../creator/variantExperimentLifecycle');
+      const attribution = await resolveStrategyAttributionForScheduledPost(row.id);
+      if (attribution?.variantId && attribution.companyId) {
+        notifyExperimentAssetPublished({
+          companyId: attribution.companyId,
+          variantId: attribution.variantId,
+          scheduledPostId: row.id,
+        });
+      }
+    } catch (err) {
+      console.warn('[threadPublishOrchestrator] experiment publish-notify failed (non-fatal):', err instanceof Error ? err.message : String(err));
+    }
     return {
       ok: true,
       platform_post_id: publishResult.platform_post_id,

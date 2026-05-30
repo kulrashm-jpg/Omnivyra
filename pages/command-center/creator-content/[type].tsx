@@ -23,6 +23,22 @@ import {
   type AttachmentMode,
   type WriterCreatorAssetType,
 } from '../../../lib/content/writerCreatorAttachmentContracts';
+// Variant Experience Embedding — drop-in CTA + winner display + fan-out runner.
+// All additions are gated on the resolved strategy id being non-null
+// (i.e. the operator has selected a known subtype). Legacy single-
+// variant generation flows continue working byte-identically when no
+// variant is pinned (the planner default is V1 baseline).
+import { VariantExperienceEntryCard } from '../../../components/variant-experience/VariantExperienceEntryCard';
+import { VariantWinnerCard } from '../../../components/variant-experience/VariantWinnerCard';
+import { VariantPreviewGrid } from '../../../components/variant-experience/VariantPreviewGrid';
+import { useSharedStrategyAnalytics } from '../../../components/variant-experience/VariantContexts';
+import type { VariantExecutionResult, VariantFamily } from '../../../components/variant-experience/useVariantApi';
+import {
+  decodeVariantQuery,
+  resolveCreatorStrategyId,
+  type CreatorTypeForVariant,
+} from '../../../lib/variants/creatorStrategyMapping';
+import { runVariantFanOut } from '../../../lib/variants/fanOutRunner';
 
 type CreatorTypeId =
   | 'carousel'
@@ -94,20 +110,45 @@ function isDeterministicStructuredType(type: CreatorTypeId | null): boolean {
   return type === 'carousel' || type === 'pdf' || type === 'slider';
 }
 
-const WORKFLOW_CONFIG: Record<CreatorTypeId, WorkflowConfig> = {
+// Note: `banner` and `slider` are intentionally absent from this map
+// after the taxonomy consolidation. They remain in CreatorTypeId only
+// so the URL-alias redirect effect at the top of CreatorTypeWorkflowPage
+// can detect them and redirect to image/carousel with the appropriate
+// layout pre-selected. Their old generation behavior is preserved via
+// the layout selector + content_type override in handleGenerate.
+const WORKFLOW_CONFIG: Partial<Record<CreatorTypeId, WorkflowConfig>> = {
   carousel: {
     title: 'Carousel',
     contentType: 'carousel',
-    intro: 'Pick the kind of carousel you want, set the core direction, and let AI turn that into a structured creator asset.',
-    subtypeLabel: 'What kind of carousel do you want to create?',
+    intro: 'Pick the carousel style first, set the core direction, and let AI turn that into a structured creator asset.',
+    // Taxonomy consolidation: Slider is now a Carousel layout
+    // (widescreen-presentation) rather than a separate creator type.
+    // Style is the primary intent selector; Layout below controls
+    // aspect ratio + presentation typography. See PHASE 5.
+    subtypeLabel: 'What style of carousel do you want to create?',
     subtypeOptions: [
       { value: 'educational-carousel', label: 'Educational', description: 'Teach a concept through a clear slide-by-slide sequence.' },
-      { value: 'authority-carousel', label: 'Authority', description: 'Position expertise with insights, proof, and a strong close.' },
       { value: 'framework-carousel', label: 'Framework', description: 'Present a model, process, or repeatable structure.' },
+      { value: 'story-carousel', label: 'Story', description: 'Narrative arc across slides — hook, journey, resolution.' },
+      { value: 'product-showcase-carousel', label: 'Product Showcase', description: 'Walk through product features, scenes, or benefits slide-by-slide.' },
+      { value: 'presentation-carousel', label: 'Presentation', description: 'Pitch / deck format — best paired with the Widescreen layout below.' },
     ],
     primaryPlatforms: ['linkedin', 'instagram', 'facebook', 'x', 'threads', 'reddit', 'pinterest'],
     fields: [
       { id: 'topic', label: 'What is the carousel about?', placeholder: 'Main topic, offer, framework, or idea', kind: 'text' },
+      {
+        // Layout selector. `widescreen-presentation` maps to the
+        // existing slider render preset (1600x900, larger body font,
+        // deck-style typography) — wired in handleGenerate where
+        // content_type is overridden to 'slider'. No new renderer.
+        id: 'layout',
+        label: 'What layout do you want?',
+        kind: 'single-select',
+        options: [
+          { value: 'standard', label: 'Standard Carousel', description: 'Square slide canvas optimized for feeds — Instagram, LinkedIn, Facebook.' },
+          { value: 'widescreen-presentation', label: 'Widescreen Presentation', description: 'Deck-style 16:9 slides with larger presentation typography — pitches, talks, summaries.' },
+        ],
+      },
       {
         id: 'objective',
         label: 'What should this asset achieve?',
@@ -147,16 +188,37 @@ const WORKFLOW_CONFIG: Record<CreatorTypeId, WorkflowConfig> = {
   image: {
     title: 'Image',
     contentType: 'image',
-    intro: 'Choose the image style first, then guide AI with a few structured inputs so it can propose the right visual direction.',
-    subtypeLabel: 'What kind of image do you want to create?',
+    intro: 'Choose the image purpose first, then guide AI with a few structured inputs so it can propose the right visual direction.',
+    // Taxonomy consolidation: Banner is now an Image layout (wide-banner)
+    // rather than a separate creator type. Purpose is the primary intent
+    // selector (was "subtype" in the prior shape); Layout below controls
+    // aspect ratio + render preset. See PHASE 2 of the consolidation report.
+    subtypeLabel: 'What is the purpose of this image?',
     subtypeOptions: [
       { value: 'promotional-image', label: 'Promotional', description: 'Highlight an offer, announcement, or launch message.' },
-      { value: 'quote-image', label: 'Quote Image', description: 'Turn one memorable line into a strong static visual.' },
       { value: 'educational-image', label: 'Educational', description: 'Present one clear concept in a static visual format.' },
+      { value: 'quote-image', label: 'Quote Image', description: 'Turn one memorable line into a strong static visual.' },
+      { value: 'product-showcase-image', label: 'Product Showcase', description: 'Highlight a product feature, hero, or detail with focused framing.' },
+      { value: 'brand-focus-image', label: 'Brand Focus', description: 'Polished brand statement, manifesto, or authority frame.' },
     ],
     primaryPlatforms: SOCIAL_CREATIVE_PLATFORMS,
     fields: [
       { id: 'topic', label: 'What is the image about?', placeholder: 'Topic, offer, message, or announcement', kind: 'text' },
+      {
+        // Layout selector. `wide-banner` maps to the existing banner
+        // render preset (1600x900, larger headline + logo, tighter
+        // LinkedIn panel) — wired in handleGenerate where content_type
+        // is overridden to 'banner'. No new renderer is created.
+        id: 'layout',
+        label: 'What layout do you want?',
+        kind: 'single-select',
+        options: [
+          { value: 'square', label: 'Square', description: 'Balanced 1:1 canvas — Instagram, Facebook, multi-platform.' },
+          { value: 'portrait', label: 'Portrait', description: 'Tall 4:5 canvas — Instagram, Pinterest, vertical mobile.' },
+          { value: 'landscape', label: 'Landscape', description: 'Wide 16:9 canvas — LinkedIn, X, Reddit feeds.' },
+          { value: 'wide-banner', label: 'Wide Banner', description: 'Promotional 16:9 hero with elevated typography + larger brand mark.' },
+        ],
+      },
       {
         id: 'objective',
         label: 'What should the image achieve?',
@@ -192,54 +254,9 @@ const WORKFLOW_CONFIG: Record<CreatorTypeId, WorkflowConfig> = {
       { id: 'cta', label: 'What action should the viewer take?', placeholder: 'Desired CTA', kind: 'text', presets: DEFAULT_CTA_PRESETS },
     ],
   },
-  banner: {
-    title: 'Banner',
-    contentType: 'banner',
-    intro: 'Choose the banner intent and let AI shape the hierarchy, message emphasis, and visual direction around that use case.',
-    subtypeLabel: 'What kind of banner do you want to create?',
-    subtypeOptions: [
-      { value: 'launch-banner', label: 'Launch', description: 'Announce a launch, release, or important new update.' },
-      { value: 'promo-banner', label: 'Promotion', description: 'Push an offer, campaign, or conversion-oriented CTA.' },
-      { value: 'event-banner', label: 'Event', description: 'Promote a webinar, event, or date-led initiative.' },
-    ],
-    primaryPlatforms: SOCIAL_CREATIVE_PLATFORMS,
-    fields: [
-      { id: 'topic', label: 'What is the banner promoting?', placeholder: 'Offer, launch, event, campaign, or message', kind: 'text' },
-      {
-        id: 'objective',
-        label: 'What should this banner optimize for?',
-        kind: 'single-select',
-        options: [
-          { value: 'clicks', label: 'Clicks', description: 'Drive immediate traffic or visits.' },
-          { value: 'signups', label: 'Signups', description: 'Push the audience toward registration or lead capture.' },
-          { value: 'awareness', label: 'Awareness', description: 'Make the message memorable and visible.' },
-        ],
-      },
-      {
-        id: 'hierarchy',
-        label: 'What should dominate visually?',
-        kind: 'single-select',
-        options: [
-          { value: 'headline-first', label: 'Headline First', description: 'Lead with bold message clarity.' },
-          { value: 'offer-first', label: 'Offer First', description: 'Lead with the practical value or benefit.' },
-          { value: 'cta-first', label: 'CTA First', description: 'Make the next step feel most prominent.' },
-        ],
-      },
-      {
-        id: 'styleDirection',
-        label: 'Which visual personality should it follow?',
-        kind: 'single-select',
-        options: [
-          { value: 'clean-brand', label: 'Clean + Brand-Led', description: 'Professional, consistent, and controlled.' },
-          { value: 'high-energy', label: 'High Energy', description: 'More vivid, urgent, and promotional.' },
-          { value: 'minimal-premium', label: 'Minimal + Premium', description: 'Simple, spacious, and elevated.' },
-        ],
-      },
-      { id: 'audience', label: 'Who should notice this first?', placeholder: 'Audience segment', kind: 'text' },
-      { id: 'headline', label: 'What should the banner headline communicate?', placeholder: 'Primary headline or statement', rows: 3, kind: 'textarea' },
-      { id: 'cta', label: 'What CTA should appear?', placeholder: 'Book now, Learn more, Download, Join...', kind: 'text' },
-    ],
-  },
+  // banner entry removed — see consolidation note above WORKFLOW_CONFIG.
+  // Authoring URL /command-center/creator-content/banner is redirected
+  // to /command-center/creator-content/image?layout=wide-banner.
   infographic: {
     title: 'Infographic',
     contentType: 'infographic',
@@ -268,12 +285,12 @@ const WORKFLOW_CONFIG: Record<CreatorTypeId, WorkflowConfig> = {
         label: 'How should the information be organized?',
         kind: 'single-select',
         options: [
-          { value: 'stats', label: 'Stats', description: 'Metric-led sections with compact proof points.' },
-          { value: 'comparison', label: 'Comparison', description: 'Side-by-side understanding or contrast.' },
+          { value: 'stats', label: 'Statistics', description: 'Metric-led sections with compact proof points.' },
           { value: 'process', label: 'Process', description: 'Linear, sequential explanation.' },
-          { value: 'framework', label: 'Framework', description: 'Grouped modules with clear separation.' },
-          { value: 'hierarchy', label: 'Hierarchy', description: 'Priority-led structure with nested importance.' },
           { value: 'timeline', label: 'Timeline', description: 'Chronological sequence with clear stages.' },
+          { value: 'comparison', label: 'Comparison', description: 'Side-by-side understanding or contrast.' },
+          { value: 'framework', label: 'Framework', description: 'Grouped modules with clear separation.' },
+          { value: 'roadmap', label: 'Roadmap', description: 'Milestone-anchored plan or phased outlook — internally generated as a timeline with phase labels.' },
         ],
       },
       { id: 'audience', label: 'Who is it for?', placeholder: 'Audience segment', kind: 'text' },
@@ -321,54 +338,9 @@ const WORKFLOW_CONFIG: Record<CreatorTypeId, WorkflowConfig> = {
       { id: 'cta', label: 'What CTA should it end with?', placeholder: 'Desired CTA', kind: 'text' },
     ],
   },
-  slider: {
-    title: 'Slider',
-    contentType: 'slider',
-    intro: 'Choose the slider style first, then guide AI with the message flow, audience, and presentation direction you want.',
-    subtypeLabel: 'What kind of slider do you want to create?',
-    subtypeOptions: [
-      { value: 'pitch-slider', label: 'Pitch', description: 'Present an offer, value proposition, or proposal.' },
-      { value: 'teaching-slider', label: 'Teaching', description: 'Walk through a topic in presentation form.' },
-      { value: 'summary-slider', label: 'Summary', description: 'Condense a longer idea into a slide-ready sequence.' },
-    ],
-    primaryPlatforms: ['linkedin'],
-    fields: [
-      { id: 'topic', label: 'What is the slider about?', placeholder: 'Theme, topic, or presentation subject', kind: 'text' },
-      {
-        id: 'objective',
-        label: 'What should the slider achieve?',
-        kind: 'single-select',
-        options: [
-          { value: 'pitch', label: 'Pitch', description: 'Move the audience toward belief in an offer or direction.' },
-          { value: 'explain', label: 'Explain', description: 'Clarify a concept in a slide-led format.' },
-          { value: 'summarize', label: 'Summarize', description: 'Compress information into a structured set of slides.' },
-        ],
-      },
-      {
-        id: 'continuity',
-        label: 'How should the slide flow feel?',
-        kind: 'single-select',
-        options: [
-          { value: 'continuous', label: 'Continuous', description: 'Each slide should build directly into the next.' },
-          { value: 'sectioned', label: 'Sectioned', description: 'Slides should group into distinct parts.' },
-          { value: 'progressive', label: 'Progressive', description: 'Slides should escalate or deepen over time.' },
-        ],
-      },
-      {
-        id: 'styleDirection',
-        label: 'What presentation personality fits best?',
-        kind: 'single-select',
-        options: [
-          { value: 'corporate-clean', label: 'Corporate + Clean', description: 'Structured, professional, and polished.' },
-          { value: 'premium-editorial', label: 'Premium Editorial', description: 'Refined and more design-forward.' },
-          { value: 'bold-modern', label: 'Bold Modern', description: 'Sharper, stronger, and more visually expressive.' },
-        ],
-      },
-      { id: 'audience', label: 'Who is it for?', placeholder: 'Audience segment', kind: 'text' },
-      { id: 'keyMessage', label: 'What is the key message?', placeholder: 'Main argument or narrative', rows: 3, kind: 'textarea' },
-      { id: 'slideDirection', label: 'How should the slides flow?', placeholder: 'Suggested sequence or slide logic', rows: 4, kind: 'textarea' },
-    ],
-  },
+  // slider entry removed — see consolidation note above WORKFLOW_CONFIG.
+  // Authoring URL /command-center/creator-content/slider is redirected to
+  // /command-center/creator-content/carousel?layout=widescreen-presentation.
   post: {
     title: 'Post',
     contentType: 'post',
@@ -1275,6 +1247,29 @@ export default function CreatorTypeWorkflowPage() {
   const router = useRouter();
   const { user, authChecked, isLoading, selectedCompanyId, selectedCompanyName } = useCompanyContext();
   const type = typeof router.query.type === 'string' ? (router.query.type as CreatorTypeId) : null;
+
+  // Taxonomy consolidation — legacy URL aliasing. Users (or external
+  // bookmarks / writer attachments) hitting /creator-content/banner or
+  // /creator-content/slider are redirected to the consolidated
+  // image/carousel workflow with the corresponding layout pre-selected.
+  // Historical creator_assets rows stored under creatorType='banner' or
+  // 'slider' continue to render normally — only the AUTHORING URL is
+  // redirected, never the saved-asset surfaces.
+  React.useEffect(() => {
+    if (!router.isReady) return;
+    if (type === 'banner') {
+      void router.replace({
+        pathname: '/command-center/creator-content/image',
+        query: { ...router.query, type: 'image', layout: 'wide-banner' },
+      }, undefined, { shallow: false });
+    } else if (type === 'slider') {
+      void router.replace({
+        pathname: '/command-center/creator-content/carousel',
+        query: { ...router.query, type: 'carousel', layout: 'widescreen-presentation' },
+      }, undefined, { shallow: false });
+    }
+  }, [router, type]);
+
   const config = type ? WORKFLOW_CONFIG[type] : null;
 
   const [answers, setAnswers] = React.useState<Record<string, string>>({});
@@ -1293,6 +1288,20 @@ export default function CreatorTypeWorkflowPage() {
   const [refinePrompt, setRefinePrompt] = React.useState('');
   const [refinedSuggestion, setRefinedSuggestion] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<CreatorResult | null>(null);
+  // ── Variant Experience Embedding state ──────────────────────────
+  // `variantPin` carries the family the operator chose for a single
+  // generation; consumed by the existing handleGenerate path so the
+  // server sees `variant_id` / `variant_family` on the creator_card
+  // payload. `variantPlan` carries the most recent planner result
+  // for top-3 / experiment fan-out (rendered as preview + Generate
+  // Variants button below the main Generate button).
+  const [variantPin, setVariantPin] = React.useState<VariantFamily | null>(null);
+  const [variantPlan, setVariantPlan] = React.useState<VariantExecutionResult | null>(null);
+  const [variantFanOutInFlight, setVariantFanOutInFlight] = React.useState(false);
+  const [variantFanOutSummary, setVariantFanOutSummary] = React.useState<string | null>(null);
+  // Note: `lastGeneratePayloadRef` was removed in the final readiness
+  // pass. Variant fan-out now builds its payload directly from form
+  // state via `buildGenerationBody(null)`, so the ref had no readers.
   const [savedAssets, setSavedAssets] = React.useState<SavedCreatorAsset[]>([]);
   const [isLoadingAssets, setIsLoadingAssets] = React.useState(false);
   const [selectedAssetId, setSelectedAssetId] = React.useState<string | null>(null);
@@ -1357,9 +1366,16 @@ export default function CreatorTypeWorkflowPage() {
         restored = null;
       }
     }
+    // URL layout override (consolidation alias redirect) — when the
+    // user arrives via /creator-content/image?layout=wide-banner (or
+    // ?layout=widescreen-presentation on carousel), preselect the
+    // layout choice so the form opens on the intended preset.
+    const urlLayout = typeof router.query.layout === 'string' ? router.query.layout : '';
+    const layoutOverride = (urlLayout === 'wide-banner' || urlLayout === 'widescreen-presentation' || urlLayout === 'square' || urlLayout === 'portrait' || urlLayout === 'landscape' || urlLayout === 'standard') ? { layout: urlLayout } : {};
     setAnswers({
       ...defaults,
       ...((restored?.answers && typeof restored.answers === 'object') ? restored.answers as Record<string, string> : {}),
+      ...layoutOverride,
     });
     setResult(null);
     setError(null);
@@ -1409,6 +1425,18 @@ export default function CreatorTypeWorkflowPage() {
     }
     setSelectedAssetId(typeof restored?.selectedAssetId === 'string' ? restored.selectedAssetId : null);
   }, [config, router.query.prefill, router.query.source, type]);
+
+  // ── Variant deep-link pin (PHASE 1 — Variant Experience Embedding) ──
+  // When the Writer (or any sibling surface) routes the operator here
+  // with `?variant_family=v2`, pre-pin that family so the generation
+  // request carries the variant attribution without the operator
+  // having to re-pick it. Legacy URLs (no query) keep `variantPin`
+  // null and the page generates the V1 baseline byte-identically to
+  // the pre-variant flow (PHASE 10 regression-safety guarantee).
+  React.useEffect(() => {
+    const decoded = decodeVariantQuery(router.query as Record<string, string | string[] | undefined>);
+    if (decoded.variantFamily) setVariantPin(decoded.variantFamily);
+  }, [router.query]);
 
   React.useEffect(() => {
     if (!router.isReady || !config || !type || typeof window === 'undefined') return;
@@ -2124,6 +2152,163 @@ export default function CreatorTypeWorkflowPage() {
     setNotice('AI direction refined. Generate when this feels right.');
   };
 
+  // Generation-body builder (P1-1 fix). Constructs the canonical
+  // request payload from current form state so fan-out can fire on
+  // first click without requiring a prior baseline Generate.
+  //
+  // Pass `variantPinOverride` to override the operator's `variantPin`
+  // — fan-out passes `null` because the runner adds variant_family
+  // per decision; the single-variant path passes `variantPin` so the
+  // operator's mode pick rides on the request.
+  //
+  // Returns null when the form is not ready (missing topic) — fan-out
+  // callers receive null and short-circuit; handleGenerate sets the
+  // error directly.
+  const buildGenerationBody = React.useCallback((variantPinOverride: VariantFamily | null): Record<string, unknown> | null => {
+    if (!String(answers.topic || '').trim()) return null;
+    const writerStructureGuidance = writerSource && isDeterministicStructuredType(type)
+      ? buildWriterStructureGuidance(writerSource, type as CreatorTypeId)
+      : '';
+    const writerCopyPolicy = writerCompositionIntent?.copyPolicy ?? null;
+    const standaloneEmbeddedCopy = standaloneAttachmentMode === 'embedded_copy';
+    const overlayAllowed = !writerSource || writerEmbeddedCopy;
+    const overlayPayload = isSocialCreativeType(type) && overlayAllowed && (!writerSource ? !(type === 'image' && !standaloneEmbeddedCopy) : writerEmbeddedCopy)
+      ? {
+          hook: String(overlayText.hook || '').trim(),
+          headline: String(overlayText.headline || answers.headline || answers.topic || '').trim(),
+          keyInsight: String(overlayText.keyInsight || '').trim(),
+          cta: writerCopyPolicy?.allowCTA ? String(overlayText.cta || answers.cta || '').trim() : '',
+          supportingText: String(overlayText.supportingText || '').trim(),
+        }
+      : null;
+    const constraintLines = [
+      answers.subtype ? `Subtype: ${answers.subtype}` : '',
+      !writerSource && answers.cta ? `CTA: ${answers.cta}` : '',
+      answers.dataPoints ? `Data points: ${answers.dataPoints}` : '',
+      answers.sectionDirection ? `Sections: ${answers.sectionDirection}` : '',
+      answers.slideDirection ? `Slide direction: ${answers.slideDirection}` : '',
+      answers.assetSubtype ? `Supporting asset type: ${answers.assetSubtype}` : '',
+      answers.assetDirection ? `Supporting asset direction: ${answers.assetDirection}` : '',
+      answers.headline ? `Headline: ${answers.headline}` : '',
+      answers.continuity ? `Continuity: ${answers.continuity}` : '',
+      answers.visualSystem ? `Visual continuity: ${answers.visualSystem}` : '',
+      answers.hierarchy ? `Visual hierarchy: ${answers.hierarchy}` : '',
+      answers.structureMode ? `Structure mode: ${answers.structureMode}` : '',
+      answers.density ? `Density: ${answers.density}` : '',
+      answers.styleDirection ? `Style direction: ${answers.styleDirection}` : '',
+      answers.refinement ? `Additional notes: ${answers.refinement}` : '',
+      selectedAsset ? `Use existing asset: ${selectedAsset.name} (${getSavedAssetCreatorType(selectedAsset)})` : '',
+      selectedSuggestion ? `Selected AI direction: ${selectedSuggestion.summary}` : '',
+      refinedSuggestion ? `Refined AI direction: ${refinedSuggestion}` : '',
+      refinePrompt ? `Refinement prompt: ${refinePrompt}` : '',
+      writerSource && writerSupportingVisual
+        ? [
+            `Source content imported from ${writerSource.sourceType}: ${writerSource.title}`,
+            'Attachment mode: supporting_visual.',
+            'Provider image must contain no visible text, CTA, paragraph overlay, thread restatement, or slide duplication.',
+          ].join('\n')
+        : writerSource && isSocialCreativeType(type) && overlayPayload
+          ? [
+              `Source content imported from ${writerSource.sourceType}: ${writerSource.title}`,
+              'Creator layer owns deterministic typography for embedded copy.',
+              `Hook: ${overlayPayload.hook}`,
+              `Headline: ${overlayPayload.headline}`,
+              `Key insight: ${overlayPayload.keyInsight}`,
+              overlayPayload.cta ? `CTA: ${overlayPayload.cta}` : '',
+              `Supporting: ${overlayPayload.supportingText}`,
+            ].filter(Boolean).join('\n')
+          : writerSource
+            ? `Source content imported from ${writerSource.sourceType}: ${writerSource.title}\n${writerSource.body.slice(0, 1200)}`
+            : '',
+      writerStructureGuidance
+        ? `Structured asset sequence:\n${writerStructureGuidance}`
+        : '',
+      writerSource?.sourceType === 'thread' && type === 'carousel'
+        ? `Thread carousel safety: transform the source with ${writerCompositionIntent?.copyPolicy?.sourceTextTransform ?? 'none'} before slide generation; never directly map raw thread segments to slides.`
+        : '',
+      overlayPayload
+        ? `Overlay text:\nHook: ${overlayPayload.hook}\nHeadline: ${overlayPayload.headline}\nKey insight: ${overlayPayload.keyInsight}\nCTA: ${overlayPayload.cta}\nSupporting: ${overlayPayload.supportingText}`
+        : '',
+      `Lightweight context:\n${serializeCreatorFlowContext(buildCurrentContext(selectedPlatform))}`,
+      `Brand context:\n${brandContextLines.join('\n')}`,
+      'Quality guardrails: avoid generic phrases like premium quality, unlock growth, game-changing, or elevate your brand unless the user supplied that language.',
+      'Make the output specific to the selected platform, audience, objective, CTA, and visual personality.',
+      'Use concrete visual hierarchy, hook framing, and CTA language rather than abstract marketing adjectives.',
+    ].filter(Boolean);
+    const layoutChoice = String(answers.layout || '').trim();
+    const consolidatedContentType =
+      config.contentType === 'image' && layoutChoice === 'wide-banner' ? 'banner' :
+      config.contentType === 'carousel' && layoutChoice === 'widescreen-presentation' ? 'slider' :
+      config.contentType;
+    return {
+      company_id: selectedCompanyId || undefined,
+      creator_type: type,
+      content_type: consolidatedContentType,
+      topic: String(answers.topic || '').trim(),
+      objective: String(answers.objective || '').trim(),
+      audience: String(answers.audience || '').trim(),
+      summary: String(
+        answers.keyMessage || answers.headline || answers.sectionDirection || answers.slideDirection || '',
+      ).trim(),
+      creator_card: {
+        objective: String(answers.objective || '').trim(),
+        audience: String(answers.audience || '').trim(),
+        tone: String(answers.styleDirection || '').trim(),
+        visual_intent: [answers.subtype, answers.styleDirection, answers.visualSystem, answers.hierarchy]
+          .filter(Boolean)
+          .join(' | '),
+        supporting_asset_type: String(answers.assetSubtype || '').trim(),
+        existing_asset_id: selectedAsset?.id || null,
+        existing_asset_name: selectedAsset?.name || null,
+        lightweight_context: buildCurrentContext(selectedPlatform),
+        selected_platform: selectedPlatform,
+        ...(variantPinOverride ? { variant_family: variantPinOverride } : {}),
+        ...(!writerSource && type === 'image' ? { attachment_mode: standaloneAttachmentMode } : {}),
+        writer_asset_type: writerAssetType,
+        creator_content_asset_type: type,
+        attachment_mode: writerAttachmentMode,
+        asset_composition_intent: writerCompositionIntent,
+        copy_policy: writerCopyPolicy,
+        source_text_transform: writerCopyPolicy?.sourceTextTransform ?? null,
+        infographic_layout: type === 'infographic' ? String(answers.structureMode || 'framework') : null,
+        overlay_text: overlayPayload,
+        brand_generation_mode: brandMode,
+        brand_presence: brandMode === 'brand-aware' ? brandPresence : 'none',
+        brand_context: brandMode === 'brand-aware'
+          ? {
+              selections: brandSelections,
+              profile: brandProfile,
+              overrides: brandOverrides,
+              context_lines: brandContextLines,
+            }
+          : {
+              disabled: true,
+              context_lines: brandContextLines,
+            },
+        source_content: writerSource
+          ? {
+              source_type: writerSource.sourceType,
+              source_id: writerSource.sourceId,
+              title: writerSource.title,
+              snippet: writerSource.body.slice(0, 500),
+              platform: writerSource.platform,
+              hashtags: writerSource.hashtags,
+            }
+          : null,
+        constraints: constraintLines.join('\n'),
+        asset_type: type,
+        template_id: null,
+      },
+      target_platforms: [selectedPlatform || config.primaryPlatforms[0]],
+    };
+  }, [
+    type, config, answers, selectedAsset, selectedSuggestion, refinedSuggestion, refinePrompt,
+    writerSource, writerSupportingVisual, writerEmbeddedCopy, writerCompositionIntent,
+    writerAssetType, writerAttachmentMode, standaloneAttachmentMode,
+    overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
+    brandContextLines, selectedPlatform, selectedCompanyId,
+  ]);
+
   const handleGenerate = async () => {
     if (generationInFlightRef.current || isGenerating) return;
     if (!String(answers.topic || '').trim()) {
@@ -2138,9 +2323,10 @@ export default function CreatorTypeWorkflowPage() {
     setSavedBlock(null);
     setResult(null);
 
-    const writerStructureGuidance = writerSource && isDeterministicStructuredType(type)
-      ? buildWriterStructureGuidance(writerSource, type as CreatorTypeId)
-      : '';
+    // Local computations needed by the validation gate AND by the
+    // downstream metadata echo (where the saved asset's record
+    // mirrors the operator's intent). The full request body is
+    // constructed by buildGenerationBody (P1-1).
     const writerCopyPolicy = writerCompositionIntent?.copyPolicy ?? null;
     const standaloneEmbeddedCopy = standaloneAttachmentMode === 'embedded_copy';
     const overlayAllowed = !writerSource || writerEmbeddedCopy;
@@ -2170,141 +2356,26 @@ export default function CreatorTypeWorkflowPage() {
       }
     }
 
-    const constraintLines = [
-      answers.subtype ? `Subtype: ${answers.subtype}` : '',
-      !writerSource && answers.cta ? `CTA: ${answers.cta}` : '',
-      answers.dataPoints ? `Data points: ${answers.dataPoints}` : '',
-      answers.sectionDirection ? `Sections: ${answers.sectionDirection}` : '',
-      answers.slideDirection ? `Slide direction: ${answers.slideDirection}` : '',
-      answers.assetSubtype ? `Supporting asset type: ${answers.assetSubtype}` : '',
-      answers.assetDirection ? `Supporting asset direction: ${answers.assetDirection}` : '',
-      answers.headline ? `Headline: ${answers.headline}` : '',
-      answers.continuity ? `Continuity: ${answers.continuity}` : '',
-      answers.visualSystem ? `Visual continuity: ${answers.visualSystem}` : '',
-      answers.hierarchy ? `Visual hierarchy: ${answers.hierarchy}` : '',
-      answers.structureMode ? `Structure mode: ${answers.structureMode}` : '',
-      answers.density ? `Density: ${answers.density}` : '',
-      answers.styleDirection ? `Style direction: ${answers.styleDirection}` : '',
-      answers.refinement ? `Additional notes: ${answers.refinement}` : '',
-      selectedAsset ? `Use existing asset: ${selectedAsset.name} (${getSavedAssetCreatorType(selectedAsset)})` : '',
-      selectedSuggestion ? `Selected AI direction: ${selectedSuggestion.summary}` : '',
-      refinedSuggestion ? `Refined AI direction: ${refinedSuggestion}` : '',
-      refinePrompt ? `Refinement prompt: ${refinePrompt}` : '',
-      // Writer-source context. For type='image' + composition mode, we
-      // DROP the structured overlay candidates from the prompt — they only
-      // make sense when the renderer will composite them. We still pass
-      // the imported Writer body so the LLM can shape visual direction
-      // around the source content.
-      writerSource && writerSupportingVisual
-        ? [
-            `Source content imported from ${writerSource.sourceType}: ${writerSource.title}`,
-            'Attachment mode: supporting_visual.',
-            'Provider image must contain no visible text, CTA, paragraph overlay, thread restatement, or slide duplication.',
-          ].join('\n')
-        : writerSource && isSocialCreativeType(type) && overlayPayload
-        ? [
-            `Source content imported from ${writerSource.sourceType}: ${writerSource.title}`,
-            'Creator layer owns deterministic typography for embedded copy.',
-            `Hook: ${overlayPayload.hook}`,
-            `Headline: ${overlayPayload.headline}`,
-            `Key insight: ${overlayPayload.keyInsight}`,
-            overlayPayload.cta ? `CTA: ${overlayPayload.cta}` : '',
-            `Supporting: ${overlayPayload.supportingText}`,
-          ].filter(Boolean).join('\n')
-        : writerSource
-          ? `Source content imported from ${writerSource.sourceType}: ${writerSource.title}\n${writerSource.body.slice(0, 1200)}`
-          : '',
-      writerStructureGuidance
-        ? `Structured asset sequence:\n${writerStructureGuidance}`
-        : '',
-      writerSource?.sourceType === 'thread' && type === 'carousel'
-        ? `Thread carousel safety: transform the source with ${writerCompositionIntent?.copyPolicy?.sourceTextTransform ?? 'none'} before slide generation; never directly map raw thread segments to slides.`
-        : '',
-      overlayPayload
-        ? `Overlay text:\nHook: ${overlayPayload.hook}\nHeadline: ${overlayPayload.headline}\nKey insight: ${overlayPayload.keyInsight}\nCTA: ${overlayPayload.cta}\nSupporting: ${overlayPayload.supportingText}`
-        : '',
-      `Lightweight context:\n${serializeCreatorFlowContext(buildCurrentContext(selectedPlatform))}`,
-      `Brand context:\n${brandContextLines.join('\n')}`,
-      'Quality guardrails: avoid generic phrases like premium quality, unlock growth, game-changing, or elevate your brand unless the user supplied that language.',
-      'Make the output specific to the selected platform, audience, objective, CTA, and visual personality.',
-      'Use concrete visual hierarchy, hook framing, and CTA language rather than abstract marketing adjectives.',
-    ].filter(Boolean);
-
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), CREATOR_GENERATION_TIMEOUT_MS);
 
     try {
+      // Build via the shared payload builder (P1-1 fix). The same
+      // helper feeds the variant fan-out path so fan-out works on
+      // first click without needing a prior baseline Generate.
+      const generationBody = buildGenerationBody(variantPin);
+      if (!generationBody) {
+        generationInFlightRef.current = false;
+        setIsGenerating(false);
+        setError('Please answer the main topic question first.');
+        return;
+      }
       const response = await fetch('/api/command-center/creator-content/generate', {
         method: 'POST',
         credentials: 'include',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: selectedCompanyId || undefined,
-          creator_type: type,
-          content_type: config.contentType,
-          topic: String(answers.topic || '').trim(),
-          objective: String(answers.objective || '').trim(),
-          audience: String(answers.audience || '').trim(),
-          summary: String(
-            answers.keyMessage || answers.headline || answers.sectionDirection || answers.slideDirection || '',
-          ).trim(),
-          creator_card: {
-            objective: String(answers.objective || '').trim(),
-            audience: String(answers.audience || '').trim(),
-            tone: String(answers.styleDirection || '').trim(),
-            visual_intent: [answers.subtype, answers.styleDirection, answers.visualSystem, answers.hierarchy]
-              .filter(Boolean)
-              .join(' | '),
-            supporting_asset_type: String(answers.assetSubtype || '').trim(),
-            existing_asset_id: selectedAsset?.id || null,
-            existing_asset_name: selectedAsset?.name || null,
-            lightweight_context: buildCurrentContext(selectedPlatform),
-            selected_platform: selectedPlatform,
-            // Attachment-mode contract: when type === 'image' AND mode is
-            // supporting_visual, the overlay editor is hidden and the renderer
-            // skips the overlay composite — so we omit overlay_text from
-            // the payload entirely (sending it would confuse a v1-shape
-            // consumer). banner/infographic still always emit overlay_text
-            // since they're text_embedded by definition.
-            ...(!writerSource && type === 'image' ? { attachment_mode: standaloneAttachmentMode } : {}),
-            writer_asset_type: writerAssetType,
-            creator_content_asset_type: type,
-            attachment_mode: writerAttachmentMode,
-            asset_composition_intent: writerCompositionIntent,
-            copy_policy: writerCopyPolicy,
-            source_text_transform: writerCopyPolicy?.sourceTextTransform ?? null,
-            infographic_layout: type === 'infographic' ? String(answers.structureMode || 'framework') : null,
-            overlay_text: overlayPayload,
-            brand_generation_mode: brandMode,
-            brand_presence: brandMode === 'brand-aware' ? brandPresence : 'none',
-            brand_context: brandMode === 'brand-aware'
-              ? {
-                  selections: brandSelections,
-                  profile: brandProfile,
-                  overrides: brandOverrides,
-                  context_lines: brandContextLines,
-                }
-              : {
-                  disabled: true,
-                  context_lines: brandContextLines,
-                },
-            source_content: writerSource
-              ? {
-                  source_type: writerSource.sourceType,
-                  source_id: writerSource.sourceId,
-                  title: writerSource.title,
-                  snippet: writerSource.body.slice(0, 500),
-                  platform: writerSource.platform,
-                  hashtags: writerSource.hashtags,
-                }
-              : null,
-            constraints: constraintLines.join('\n'),
-            asset_type: type,
-            template_id: null,
-          },
-          target_platforms: [selectedPlatform || config.primaryPlatforms[0]],
-        }),
+        body: JSON.stringify(generationBody),
       });
 
       const data = await response.json().catch(() => ({}));
@@ -3436,6 +3507,61 @@ export default function CreatorTypeWorkflowPage() {
               </div>
             )}
 
+            {/* Variant Experience Embedding — surfaces variant
+                planner + winner display when the operator's selected
+                subtype resolves to a known strategy. Renders nothing
+                when subtype is empty or unknown so legacy flows are
+                untouched. */}
+            <CreatorVariantExperienceSection
+              type={type}
+              subtype={answers.subtype}
+              companyId={selectedCompanyId || ''}
+              variantPin={variantPin}
+              setVariantPin={setVariantPin}
+              variantPlan={variantPlan}
+              setVariantPlan={setVariantPlan}
+              variantFanOutInFlight={variantFanOutInFlight}
+              variantFanOutSummary={variantFanOutSummary}
+              onSingleDecisionReady={(family) => {
+                // P1-4 — single-decision modes (single_variant /
+                // best_variant) auto-fire Generate once the planner
+                // settles so operators don't have to click twice.
+                setVariantPin(family);
+                if (!generationInFlightRef.current && !isGenerating) {
+                  void handleGenerate();
+                }
+              }}
+              onFanOut={async (plan) => {
+                if (!selectedCompanyId || !plan) return;
+                setVariantFanOutInFlight(true);
+                setVariantFanOutSummary(null);
+                try {
+                  // P1-1 — build the canonical payload directly from
+                  // current form state so fan-out works on the first
+                  // click. Variant pin is null because the runner
+                  // adds `variant_family` per decision.
+                  const basePayload = buildGenerationBody(null);
+                  if (!basePayload) {
+                    setVariantFanOutSummary('Please answer the main topic question first so the fan-out can describe the brief.');
+                    return;
+                  }
+                  const result = await runVariantFanOut({
+                    companyId: selectedCompanyId,
+                    plan,
+                    request: { basePayload },
+                  });
+                  setVariantFanOutSummary(
+                    `${result.successCount} of ${result.outcomes.length} variant assets generated`
+                    + (result.failureCount > 0 ? ` · ${result.failureCount} failed (see console)` : ''),
+                  );
+                } catch (err) {
+                  setVariantFanOutSummary(err instanceof Error ? err.message : 'Variant fan-out failed.');
+                } finally {
+                  setVariantFanOutInFlight(false);
+                }
+              }}
+            />
+
             <div className="mt-6 flex flex-wrap gap-3">
               <button
                 type="button"
@@ -3443,7 +3569,11 @@ export default function CreatorTypeWorkflowPage() {
                 disabled={isGenerating}
                 className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isGenerating ? 'Generating...' : `Generate ${config.title}`}
+                {isGenerating
+                  ? 'Generating...'
+                  : variantPin
+                    ? `Generate ${config.title} — Variant ${variantPin.toUpperCase()}`
+                    : `Generate ${config.title}`}
               </button>
             </div>
 
@@ -3935,7 +4065,7 @@ export default function CreatorTypeWorkflowPage() {
                         disabled={Boolean(actionInProgress)}
                         className="w-full rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {`Return to ${writerSource.sourceType === 'thread' ? 'Thread' : 'Post'}`}
+                        {`Continue with your ${writerSource.sourceType === 'thread' ? 'thread' : 'post'}`}
                       </button>
                       <div className="grid gap-3 sm:grid-cols-3">
                         <button
@@ -4011,6 +4141,110 @@ export default function CreatorTypeWorkflowPage() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Variant Experience — Creator embedding subcomponent ──────────────
+ * Encapsulates the variant card + winner card + fan-out preview so the
+ * main CreatorWorkflowPage body stays focused on the existing
+ * generation flow. Renders nothing when the operator's subtype does
+ * not resolve to a known strategy id — legacy single-variant flows
+ * remain byte-identical.
+ */
+function CreatorVariantExperienceSection(props: {
+  type: CreatorTypeId | null;
+  subtype: string | undefined;
+  companyId: string;
+  variantPin: VariantFamily | null;
+  setVariantPin: React.Dispatch<React.SetStateAction<VariantFamily | null>>;
+  variantPlan: VariantExecutionResult | null;
+  setVariantPlan: React.Dispatch<React.SetStateAction<VariantExecutionResult | null>>;
+  variantFanOutInFlight: boolean;
+  variantFanOutSummary: string | null;
+  onFanOut: (plan: VariantExecutionResult) => Promise<void>;
+  /** P1-4 callback — fires when the planner returns a single-decision
+   *  plan (single_variant / best_variant). Parent uses it to auto-fire
+   *  Generate so operators don't have to click twice. */
+  onSingleDecisionReady: (family: VariantFamily) => void;
+}) {
+  const {
+    type, subtype, companyId,
+    variantPin, setVariantPin,
+    variantPlan, setVariantPlan,
+    variantFanOutInFlight, variantFanOutSummary,
+    onFanOut, onSingleDecisionReady,
+  } = props;
+  // Only run on the three variant-supporting creator types.
+  if (type !== 'image' && type !== 'carousel' && type !== 'infographic') return null;
+  const strategyId = resolveCreatorStrategyId(type as CreatorTypeForVariant, subtype ?? null);
+  if (!strategyId || !companyId) return null;
+  // P2-1 — read from shared analytics provider when one is mounted
+  // upstream; falls back to a direct fetch when not. Saves redundant
+  // GETs when multiple variant surfaces (e.g. CreatorVariantExperienceSection,
+  // WriterVariantSection nested in a side panel) coexist on the same
+  // page.
+  const analytics = useSharedStrategyAnalytics({ companyId, enabled: Boolean(strategyId) });
+  const winnerForStrategy = analytics.data?.execution.winner_recommendations.find(
+    (w) => w.strategy_id === strategyId,
+  ) ?? analytics.data?.variants.winners.find((w) => w.strategy_id === strategyId) ?? null;
+  return (
+    <div className="mt-6 space-y-3">
+      <VariantExperienceEntryCard
+        companyId={companyId}
+        strategyId={strategyId}
+        contentType={type as CreatorTypeForVariant}
+        onPlanComplete={(plan) => {
+          setVariantPlan(plan);
+          // For single-variant + best-variant the planner returns one
+          // decision — pin its family AND auto-fire Generate (P1-4)
+          // so the operator's "Pick Best Variant" intent ships in
+          // one click rather than two.
+          if (plan.decisions.length === 1) {
+            const fam = plan.decisions[0].variant.variant_family;
+            if (fam === 'v1' || fam === 'v2' || fam === 'v3') {
+              onSingleDecisionReady(fam);
+            }
+          }
+        }}
+      />
+      {variantPin ? (
+        <p className="text-xs text-indigo-700">
+          Current Generate pinned to Variant {variantPin.toUpperCase()}. Switch the variant card mode to update.
+        </p>
+      ) : null}
+      {variantPlan && variantPlan.decisions.length > 1 ? (
+        <div className="rounded-xl border border-indigo-200 bg-white p-3 shadow-sm">
+          <header className="mb-2 flex items-baseline justify-between gap-2">
+            <h4 className="text-sm font-semibold text-gray-900">Variant fan-out</h4>
+            <span className="text-xs text-gray-500">
+              Resolved mode: <strong>{variantPlan.resolvedMode}</strong>
+              {variantPlan.experimentId ? <> · Experiment <strong>{variantPlan.experimentId}</strong></> : null}
+            </span>
+          </header>
+          <VariantPreviewGrid decisions={variantPlan.decisions} />
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void onFanOut(variantPlan)}
+              disabled={variantFanOutInFlight}
+              className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500 disabled:opacity-50"
+            >
+              {variantFanOutInFlight ? 'Fanning out…' : `Generate ${variantPlan.decisions.length} variants`}
+            </button>
+            {variantFanOutSummary ? (
+              <span className="text-xs text-gray-600">{variantFanOutSummary}</span>
+            ) : (
+              <span className="text-xs italic text-gray-500">
+                Tip — run a baseline Generate first so the fan-out can replay the same brief per variant.
+              </span>
+            )}
+          </div>
+        </div>
+      ) : null}
+      {winnerForStrategy ? (
+        <VariantWinnerCard winner={winnerForStrategy} />
+      ) : null}
     </div>
   );
 }

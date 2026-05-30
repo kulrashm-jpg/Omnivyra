@@ -58,7 +58,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       comment,
     });
 
-    if (!result.ok) {
+    if (result.ok === false) {
       const status =
         result.code === 'NOT_FOUND'           ? 404 :
         result.code === 'SELF_SIGN_BLOCKED'   ? 403 :

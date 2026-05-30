@@ -1375,7 +1375,6 @@ export default function BoltStrategyView({ d }: { d: S }) {
                     execStartedAt={execStartedAt}
                     anyExecuting={executing}
                     contentJobProgress={selectedIds.includes(card.id) ? contentJobProgress : null}
-                    outcomeView={outcomeView}
                     onSelect={() => handleCardSelect(card.id)}
                   />
                 ))}

@@ -20,6 +20,7 @@ import { enhanceNewsletterSystemPrompt } from './promptHelpers';
 import type { CompanyContext } from '../../blog/blogRunnerTypes';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { extractStrategyProfile } from '../../content/companyStrategyPerspective';
+import { buildGovernanceExplainabilityMetadata } from '../../../backend/services/creator/strategyGovernancePromptContext';
 
 // ── Newsletter company context cache (5-min TTL) ────────────────────────────
 // Auto-fetches company profile so all newsletter AI calls get enforcement
@@ -150,6 +151,7 @@ export function buildSuccessResult(parsed: ParsedResult, note: string): Newslett
     template_used: true,
     hook_assessment: { strength: 'moderate', note },
     result: parsed,
+    governance: buildGovernanceExplainabilityMetadata(null),
   };
 }
 
@@ -161,6 +163,7 @@ export function buildFallbackResult(parsed: ParsedResult, note: string): Newslet
     template_used: true,
     hook_assessment: { strength: 'moderate', note },
     result: parsed,
+    governance: buildGovernanceExplainabilityMetadata(null),
   };
 }
 

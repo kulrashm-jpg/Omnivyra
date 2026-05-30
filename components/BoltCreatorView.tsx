@@ -638,7 +638,7 @@ export default function BoltCreatorView({ d }: { d: S }) {
                   { value: 'unique' as SharingMode, label: 'Unique',     icon: '✦',  hint: 'Distinct content per platform' },
                   { value: 'ai'     as SharingMode, label: 'AI Decides', icon: '🤖', hint: 'AI checks format compatibility' },
                 ] as const).map((opt) => {
-                  const isSharedDisabled = opt.value === 'shared' && contentFormats.length > 0 && contentFormats.some((f) => !isCrossPlatformShareableFormat(f));
+                  const isSharedDisabled = opt.value === 'shared' && contentFormats.length > 0 && contentFormats.some((f) => !isCrossPlatformShareableFormat(String(f)));
                   return (
                     <button
                       key={opt.value}
@@ -658,9 +658,12 @@ export default function BoltCreatorView({ d }: { d: S }) {
                   );
                 })}
               </div>
-              {contentFormats.some((f) => !isCrossPlatformShareableFormat(f)) && (
+              {contentFormats.some((f) => !isCrossPlatformShareableFormat(String(f))) && (
                 <p className="text-[10px] text-amber-600 mt-2 leading-snug">
-                  ⚠ {contentFormats.filter((f) => !isCrossPlatformShareableFormat(f)).map((f) => f.charAt(0).toUpperCase() + f.slice(1)).join(', ')} {contentFormats.filter((f) => !isCrossPlatformShareableFormat(f)).length === 1 ? 'does' : 'do'} not support cross-platform sharing — Shared mode is unavailable.
+                  ⚠ {contentFormats.filter((f) => !isCrossPlatformShareableFormat(String(f))).map((f) => {
+                    const formatLabel = String(f);
+                    return formatLabel.charAt(0).toUpperCase() + formatLabel.slice(1);
+                  }).join(', ')} {contentFormats.filter((f) => !isCrossPlatformShareableFormat(String(f))).length === 1 ? 'does' : 'do'} not support cross-platform sharing — Shared mode is unavailable.
                 </p>
               )}
             </div>

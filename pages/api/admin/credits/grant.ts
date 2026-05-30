@@ -116,7 +116,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         metadata,
       },
     });
-    if (!proposal.ok) {
+    if (proposal.ok === false) {
       return res.status(400).json({ error: proposal.message, code: proposal.code });
     }
     proposalId = proposal.approvalId;
@@ -155,7 +155,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return billingFail(res, 500, { rawMessage: err?.message, legacyCode: 'INTERNAL' });
   }
 
-  if (!result.ok) {
+  if (result.ok === false) {
     const failure = result as Extract<AdminGrantResult, { ok: false }>;
     const statusCode =
       failure.code === 'LEDGER_FAILED'         ? 500 :

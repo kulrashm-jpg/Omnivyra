@@ -9,6 +9,14 @@ import { isMediaDependentContentType, resolvePlatformTargets, resolveMediaStatus
 import { optimizeDiscoverabilityForPlatform, buildMediaSearchIntent, normalizeLegacyMediaSearchIntent } from './discoverabilityHelpers';
 import { getProfile } from '../companyProfileService';
 import { extractCompanyIdentity, buildCompanyContextBlockShort, buildIdentityLock, buildAntiGenericRules, type CompanyIdentity } from '../../../lib/content/companyContextBlock';
+// Creator System-Prompt Governance Integration. Final Closure Pass —
+// Phase 3 (rewriter consistency). Both the batch variant generator
+// and the per-platform rewriter delegate to the SAME canonical
+// preamble helper; no local re-implementation.
+import {
+  applyGovernancePreambleToSystemPrompt as applyGovernanceToSystemPrompt,
+  type GovernancePromptContext,
+} from '../creator/strategyGovernancePromptContext';
 
 // ── Company context cache for variant generation ─────────────────────────────
 const _variantContextCache = new Map<string, { block: string; identity: CompanyIdentity; at: number }>();
@@ -58,7 +66,16 @@ export const PLATFORM_STYLE_MAP: Record<string, string> = {
 async function generatePlatformVariantsInOneCall(
   masterContentOrBlueprints: string | ContentBlueprint[],
   targets: Array<{ platform: string; content_type: string; max_length?: number; discoverabilityMeta?: import('./variantRenderers').DiscoverabilityMeta }>,
-  context: { writer_content_brief?: Record<string, unknown>; intent?: Record<string, unknown>; company_id?: string | null }
+  context: {
+    writer_content_brief?: Record<string, unknown>;
+    intent?: Record<string, unknown>;
+    company_id?: string | null;
+    /** Creator System-Prompt Governance Integration. When present and
+     *  the resolved industry is regulated, the system prompt is
+     *  prepended with a non-negotiable compliance policy block. Null /
+     *  industry='none' → strict no-op (byte-identical system prompt). */
+    governance?: GovernancePromptContext | null;
+  },
 ): Promise<Record<string, string> | Array<Record<string, string>>> {
   const isBatch = Array.isArray(masterContentOrBlueprints);
   const blueprints = isBatch ? (masterContentOrBlueprints as ContentBlueprint[]) : null;
@@ -71,9 +88,13 @@ async function generatePlatformVariantsInOneCall(
 
   // Enhance system prompt with identity lock + anti-generic rules when company is known
   const hasVariantIdentity = !!(variantIdentity.companyName || variantIdentity.industry);
-  const effectiveVariantSystemPrompt = hasVariantIdentity
+  const identityVariantSystemPrompt = hasVariantIdentity
     ? `${buildIdentityLock(variantIdentity, 'platform variant')}\n\n${PLATFORM_VARIANTS_SYSTEM}\n${buildAntiGenericRules(variantIdentity)}`
     : PLATFORM_VARIANTS_SYSTEM;
+  const effectiveVariantSystemPrompt = applyGovernanceToSystemPrompt(
+    identityVariantSystemPrompt,
+    context.governance,
+  );
 
   const platformConfig = targets.map((t) => ({
     key: `${t.platform}_${t.content_type}`,
@@ -176,6 +197,7 @@ export async function renderPlatformVariantsFromBlueprint(
       intent: asObject(item?.intent) || undefined,
       discoverabilityMeta: undefined,
       existingMediaSearchIntent: undefined,
+      governance: (item as any)?.governance ?? null,
     });
     built.push(placeholder);
   }
@@ -249,6 +271,7 @@ export async function renderPlatformVariantsFromBlueprint(
         ? await generatePlatformVariantsInOneCall(fullText, aiTargetsWithMeta, {
             writer_content_brief: asObject(item?.writer_content_brief) || undefined,
             intent: asObject(item?.intent) || undefined,
+            governance: (item as any)?.governance ?? null,
           })
         : null;
 
@@ -269,6 +292,7 @@ export async function renderPlatformVariantsFromBlueprint(
           writer_content_brief: asObject(item?.writer_content_brief) || undefined,
           intent: asObject(item?.intent) || undefined,
           discoverabilityMeta,
+          governance: (item as any)?.governance ?? null,
         });
         built.push(single);
         continue;
@@ -281,6 +305,7 @@ export async function renderPlatformVariantsFromBlueprint(
           writer_content_brief: asObject(item?.writer_content_brief) || undefined,
           intent: asObject(item?.intent) || undefined,
           discoverabilityMeta,
+          governance: (item as any)?.governance ?? null,
         });
         built.push(fallback);
         continue;
@@ -347,6 +372,9 @@ export async function generatePlatformVariantFromMaster(
     discoverabilityMeta?: import('./variantRenderers').DiscoverabilityMeta;
     existingMediaSearchIntent?: unknown;
     company_id?: string | null;
+    /** Creator System-Prompt Governance Integration. Forwarded to
+     *  the rewriter's system prompt as a non-negotiable preamble. */
+    governance?: GovernancePromptContext | null;
   } = {}
 ): Promise<PlatformVariantPayload> {
   const normalizedPlatform = nonEmpty(platform).toLowerCase() || 'unknown';
@@ -434,6 +462,19 @@ export async function generatePlatformVariantFromMaster(
     });
 
   const requestVariant = async (instruction: string): Promise<string> => {
+    const baseRewriterSystemPrompt = [
+      'Rewrite the given MASTER CONTENT for the specified platform and content type.',
+      'Keep meaning aligned to master content. Do not mention other platforms.',
+      '',
+      'FORMATTING RULES — apply based on the platform:',
+            '- linkedin / facebook: Start with a single bold hook line (**Hook here**). Then short paragraphs of 1-2 sentences each, separated by a blank line. Emphasise key phrases with **bold**. End with a CTA line.',
+            '- x / twitter: Each distinct thought on its own line. Separate groups of thoughts with a blank line. Max 280 characters total.',
+            '- instagram: Short punchy paragraphs separated by blank lines. Hashtags on a separate line at the very end after a blank line.',
+      '- youtube: Keyword-rich first sentence. Structured paragraphs separated by blank lines.',
+      '- Default: Short readable paragraphs (2-3 sentences), each separated by a blank line.',
+      '',
+      'OUTPUT FORMAT: Plain text with blank lines between paragraphs. No markdown headers (no #). No bullet dashes (use • only if natural). Preserve line breaks.',
+    ].join('\n');
     const aiResult = await runCompletionWithOperation({
       companyId: constraints.company_id ?? null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -442,19 +483,7 @@ export async function generatePlatformVariantFromMaster(
       messages: [
         {
           role: 'system',
-          content: [
-            'Rewrite the given MASTER CONTENT for the specified platform and content type.',
-            'Keep meaning aligned to master content. Do not mention other platforms.',
-            '',
-            'FORMATTING RULES — apply based on the platform:',
-            '- linkedin / facebook: Start with a single bold hook line (**Hook here**). Then short paragraphs of 1-2 sentences each, separated by a blank line. Emphasise key phrases with **bold**. End with a CTA line.',
-            '- x / twitter: Each distinct thought on its own line. Separate groups of thoughts with a blank line. Max 280 characters total.',
-            '- instagram: Short punchy paragraphs separated by blank lines. Hashtags on a separate line at the very end after a blank line.',
-            '- youtube: Keyword-rich first sentence. Structured paragraphs separated by blank lines.',
-            '- Default: Short readable paragraphs (2-3 sentences), each separated by a blank line.',
-            '',
-            'OUTPUT FORMAT: Plain text with blank lines between paragraphs. No markdown headers (no #). No bullet dashes (use • only if natural). Preserve line breaks.',
-          ].join('\n'),
+          content: applyGovernanceToSystemPrompt(baseRewriterSystemPrompt, constraints.governance),
         },
         {
           role: 'user',
@@ -625,6 +654,7 @@ async function buildPlatformVariantsRuntime(item: DailyExecutionItemLike): Promi
             writer_content_brief: asObject(item?.writer_content_brief) || undefined,
             intent: asObject(item?.intent) || undefined,
             company_id: (item as any)?.company_id ?? null,
+            governance: (item as any)?.governance ?? null,
           })
         : null;
 
@@ -655,6 +685,7 @@ async function buildPlatformVariantsRuntime(item: DailyExecutionItemLike): Promi
             discoverabilityMeta,
             existingMediaSearchIntent: existingVariant?.media_search_intent,
             company_id: (item as any)?.company_id ?? null,
+            governance: (item as any)?.governance ?? null,
           });
           built.push(single);
         } catch {
@@ -704,6 +735,7 @@ async function buildPlatformVariantsRuntime(item: DailyExecutionItemLike): Promi
             intent: asObject(item?.intent) || undefined,
             discoverabilityMeta,
             existingMediaSearchIntent: existingVariant?.media_search_intent,
+            governance: (item as any)?.governance ?? null,
           });
         } catch {
           fallback = existingVariant && nonEmpty(existingVariant.generated_content).length > 0
@@ -797,6 +829,7 @@ async function buildPlatformVariantsRuntime(item: DailyExecutionItemLike): Promi
       intent: asObject(item?.intent) || undefined,
       discoverabilityMeta: undefined,
       existingMediaSearchIntent: existingVariant?.media_search_intent,
+      governance: (item as any)?.governance ?? null,
     });
     built.push(placeholder);
   }

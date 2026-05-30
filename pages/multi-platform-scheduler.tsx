@@ -15,8 +15,8 @@ import { resolveThreadNodeAttachments } from '@/lib/thread/threadNodeAttachmentR
 import { getThreadContinuationLink } from '@/lib/thread/threadLinks';
 import { openThreadRuntimeTracer } from '@/backend/services/threadRuntime/threadRuntimeInstrumentation';
 import {
-  POST_CREATOR_ASSET_TYPES,
-  THREAD_CREATOR_ASSET_TYPES,
+  POST_CREATOR_ASSET_TYPES_VISIBLE,
+  THREAD_CREATOR_ASSET_TYPES_VISIBLE,
   assetLabel,
   buildWriterCreatorPrefill,
   createWriterSourceId,
@@ -291,10 +291,14 @@ export default function MultiPlatformSchedulerPage() {
   const writerSourceId = writerSourceType && draft
     ? createWriterSourceId(writerSourceType, draft.sourceId || router.query.prefill?.toString() || draft.title)
     : '';
+  // Taxonomy consolidation — surface only the 3 consolidated primary
+  // types in the writer Add Asset picker. Banner attachments saved
+  // historically still load + render via the API alias map; only the
+  // authoring picker chips are reduced.
   const supportedCreatorAssetTypes = writerSourceType === 'thread'
-    ? THREAD_CREATOR_ASSET_TYPES
+    ? THREAD_CREATOR_ASSET_TYPES_VISIBLE
     : writerSourceType === 'post'
-      ? POST_CREATOR_ASSET_TYPES
+      ? POST_CREATOR_ASSET_TYPES_VISIBLE
       : [];
 
   const updatePlatformState = (platform: string, patch: Partial<PlatformState>) => {

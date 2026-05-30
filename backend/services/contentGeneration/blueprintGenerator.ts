@@ -17,6 +17,23 @@ import {
   buildAntiGenericRules,
   type CompanyIdentity,
 } from '../../../lib/content/companyContextBlock';
+// Creator System-Prompt Governance Integration. Final Closure Pass —
+// Phase 3 (rewriter consistency). All system-prompt construction
+// sites in this module call the SAME canonical preamble helper from
+// strategyGovernancePromptContext.ts; no local re-implementation.
+import { applyGovernancePreambleToSystemPromptFromItem } from '../creator/strategyGovernancePromptContext';
+
+/**
+ * Thin wrapper preserving the original call-site signature
+ * (basePrompt, item). Delegates to the canonical shared helper so
+ * the preamble format is single-source.
+ */
+function applyGovernanceToSystemPrompt(
+  basePrompt: string,
+  item: DailyExecutionItemLike,
+): string {
+  return applyGovernancePreambleToSystemPromptFromItem(basePrompt, item as any);
+}
 
 // ── Company identity cache (5-min TTL, matches aiModelRouter pattern) ────────
 const _identityCache = new Map<string, { identity: CompanyIdentity; at: number }>();
@@ -77,9 +94,10 @@ export async function generateContentBlueprint(item: DailyExecutionItemLike): Pr
   }
 
   const { content: systemPrompt, template_name, template_version, template_hash } = getContentBlueprintPromptWithFingerprint();
-  const effectiveSystemPrompt = identity.companyName
+  const baseSystemPrompt = identity.companyName
     ? `${buildIdentityLock(identity, 'content blueprint')}\n\n${systemPrompt}\n${buildAntiGenericRules(identity)}`
     : systemPrompt;
+  const effectiveSystemPrompt = applyGovernanceToSystemPrompt(baseSystemPrompt, item);
   console.info('Prompt executed', { prompt: 'content_blueprint', version: CONTENT_GENERATION_PROMPT_VERSION });
   const result = await runCompletionWithOperation({
     companyId: (item as any)?.company_id ?? null,
@@ -242,7 +260,7 @@ export async function generateMasterContentStrict(
   if (isMediaFlow) {
     const productionSystemPromptBase = getContentTypeSystemPrompt(ctCategory);
     const antiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
-    systemPrompt = productionSystemPromptBase + antiGeneric;
+    systemPrompt = applyGovernanceToSystemPrompt(productionSystemPromptBase + antiGeneric, item);
     const productionContext: Record<string, unknown> = {
       topic,
       objective,
@@ -301,9 +319,10 @@ export async function generateMasterContentStrict(
 
     const contentTypeSystemPromptBase = getContentTypeSystemPrompt(ctCategory);
     const textAntiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
-    systemPrompt = identity.companyName
+    const baseSystemPrompt = identity.companyName
       ? `${buildIdentityLock(identity, contextPayload.content_type as string)}\n\n${contentTypeSystemPromptBase}${textAntiGeneric}`
       : contentTypeSystemPromptBase + textAntiGeneric;
+    systemPrompt = applyGovernanceToSystemPrompt(baseSystemPrompt, item);
     const contentTypeMaxWords = getContentTypeMaxWords(ctCategory, nonEmpty(item?.content_type));
     userContent    = JSON.stringify({ ...contextPayload, max_words: contentTypeMaxWords });
     temperature    = 0.7;
@@ -421,7 +440,7 @@ async function generateMasterContentRuntime(item: DailyExecutionItemLike): Promi
     const productionSystemPromptBase = getContentTypeSystemPrompt(ctCategory);
     // Append anti-generic enforcement so company context is binding, not metadata
     const antiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
-    const productionSystemPrompt = productionSystemPromptBase + antiGeneric;
+    const productionSystemPrompt = applyGovernanceToSystemPrompt(productionSystemPromptBase + antiGeneric, item);
     const productionContext: Record<string, unknown> = {
       topic,
       objective,
@@ -519,9 +538,10 @@ async function generateMasterContentRuntime(item: DailyExecutionItemLike): Promi
   const contentTypeSystemPromptBase = getContentTypeSystemPrompt(ctCategory);
   // Append anti-generic enforcement so company context is binding, not metadata
   const textAntiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
-    const contentTypeSystemPrompt = identity.companyName
+    const contentTypeSystemPromptIdentity = identity.companyName
       ? `${buildIdentityLock(identity, contextPayload.content_type as string)}\n\n${contentTypeSystemPromptBase}${textAntiGeneric}`
       : contentTypeSystemPromptBase + textAntiGeneric;
+    const contentTypeSystemPrompt = applyGovernanceToSystemPrompt(contentTypeSystemPromptIdentity, item);
   const contentTypeMaxWords = getContentTypeMaxWords(ctCategory, nonEmpty(item?.content_type));
 
   try {
@@ -549,7 +569,7 @@ async function generateMasterContentRuntime(item: DailyExecutionItemLike): Promi
         content_type: contextPayload.content_type,
         topic,
       });
-      const simpleSystemPrompt = getContentTypeSystemPrompt(ctCategory);
+      const simpleSystemPrompt = applyGovernanceToSystemPrompt(getContentTypeSystemPrompt(ctCategory), item);
       aiResult = await callAi(simpleSystemPrompt);
       aiContent = nonEmpty(aiResult?.output);
     }

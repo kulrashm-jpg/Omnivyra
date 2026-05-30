@@ -10,9 +10,9 @@
  * 5) Constraint naming consistency
  */
 
-const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs');
 const path = require('path');
+const { createDbUtilsClient } = require('./supabase-util-client');
 
 // Load environment variables
 function loadEnv() {
@@ -34,10 +34,7 @@ function loadEnv() {
 
 loadEnv();
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+const supabase = createDbUtilsClient();
 
 const colors = {
   reset: '\x1b[0m',
@@ -454,4 +451,3 @@ main().catch(err => {
   console.error(`${colors.red}Error running validation:${colors.reset}`, err);
   process.exit(1);
 });
-

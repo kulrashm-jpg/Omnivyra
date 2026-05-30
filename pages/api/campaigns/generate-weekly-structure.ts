@@ -6,6 +6,9 @@ import { routeRequiresMediaIntent } from '../../../backend/services/orchestratio
 import { deriveCreatorAssetTypeFromIntent } from '../../../backend/services/creatorTemplateRegistryService';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorCodes';
+import { validateDailyPlanRow } from '../../../lib/shared/bolt/validateDailyPlanRow';
+import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import {
@@ -198,7 +201,10 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         : [];
 
   if (!campaignId || weekNumbers.length === 0) {
-    throw new Error('campaignId and week (or weeks array) are required');
+    throw new BoltError(
+      BOLT_ERROR_CODES.WEEK_STRUCTURE_VALIDATION_FAILED,
+      'campaignId and week (or weeks array) are required',
+    );
   }
 
     const { data: campaign } = await supabase
@@ -214,19 +220,30 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     await supabase.from('campaigns').update({ start_date: effectiveStartDate }).eq('id', campaignId);
   }
   if (!effectiveStartDate) {
-    throw new Error('Campaign start_date is required before generating daily plans');
+    throw new BoltError(
+      BOLT_ERROR_CODES.WEEK_STRUCTURE_VALIDATION_FAILED,
+      'Campaign start_date is required before generating daily plans',
+      { details: { field: 'start_date' } }
+    );
   }
   // Ensure campaign object has start_date for downstream usage
   if (campaign) (campaign as { start_date: string }).start_date = effectiveStartDate;
 
   const blueprint = await getUnifiedCampaignBlueprint(String(campaignId));
   if (!blueprint?.weeks?.length) {
-    throw new Error('Committed weekly blueprint not found');
+    throw new BoltError(
+      BOLT_ERROR_CODES.BLUEPRINT_NOT_FOUND,
+      'Committed weekly blueprint not found',
+    );
   }
   for (const wn of weekNumbers) {
     const wb = blueprint.weeks.find((w) => Number(w.week_number) === wn);
     if (!wb) {
-      throw new Error(`Week ${wn} not found in blueprint`);
+      throw new BoltError(
+        BOLT_ERROR_CODES.WEEK_NOT_FOUND,
+        `Week ${wn} not found in blueprint`,
+        { details: { week_number: wn } }
+      );
     }
   }
 
@@ -607,11 +624,11 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     for (const it of executionItems) {
       const slots = Array.isArray(it.topic_slots) ? it.topic_slots : [];
       if (slots.length < Math.max(0, Math.floor(it.count_per_week))) {
-        throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
+        throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_INTENT_REQUIRED');
       }
       for (const slot of slots) {
         if (!slot || typeof slot !== 'object' || !slot.intent) {
-          throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
+          throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_INTENT_REQUIRED');
         }
       }
     }
@@ -631,11 +648,11 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           const slot = (exec.topic_slots || [])[k];
           const baseDayIndex = Math.min(7, Math.max(1, Number((slot as any)?.day_index) || ((k % 7) + 1)));
           if (!slot || !slot.intent) {
-            throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
+            throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_INTENT_REQUIRED');
           }
           const rawTopic = slot.topic == null ? '' : String(slot.topic);
           if (!rawTopic.trim()) {
-            throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
+            throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_INTENT_REQUIRED');
           }
           const topicTitle = rawTopic;
           const topicKey = normalizeTopicKey(topicTitle);
@@ -655,11 +672,11 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           const writerBrief = execIntent;
           const globalProgressionIndex = Number((slot as any)?.global_progression_index);
           const writingAngle = typeof execIntent.writing_angle === 'string' && execIntent.writing_angle ? execIntent.writing_angle : null;
-          if (typeof dailyObjective !== 'string' || !dailyObjective) throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
-          if (typeof who !== 'string' || !who) throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
-          if (typeof briefSummary !== 'string' || !briefSummary) throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
-          if (typeof ctaType !== 'string' || !ctaType) throw new Error('DETERMINISTIC_TOPIC_INTENT_REQUIRED');
-          if (!Number.isFinite(globalProgressionIndex) || globalProgressionIndex < 1) throw new Error('DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
+          if (typeof dailyObjective !== 'string' || !dailyObjective) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_INTENT_REQUIRED');
+          if (typeof who !== 'string' || !who) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_INTENT_REQUIRED');
+          if (typeof briefSummary !== 'string' || !briefSummary) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_INTENT_REQUIRED');
+          if (typeof ctaType !== 'string' || !ctaType) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_INTENT_REQUIRED');
+          if (!Number.isFinite(globalProgressionIndex) || globalProgressionIndex < 1) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
 
           const contentGuidance = deriveContentGuidance(briefForSlot);
           const slotMasterContentId = (slot as any)?.master_content_id;
@@ -1581,6 +1598,72 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       persistRows = await resolveWeeklyRowsForPersistence(campaignId, allRowsToInsert) as typeof allRowsToInsert;
       if (!Array.isArray(persistRows) || persistRows.length === 0) persistRows = allRowsToInsert;
     } catch { persistRows = allRowsToInsert; }
+
+    // ── Closure-pass follow-up: row-level validation + diagnostics ────
+    // Policy here is SKIP-AND-RECORD. Reason: the planner has already
+    // produced these rows; aborting the stage at this point would change
+    // generation behavior for rows that historically would have shipped.
+    // Instead we record any anomalies into bolt_row_failure_diagnostics
+    // (when a BOLT run id is in scope) and let the valid rows persist.
+    // The dashboard's row-failure rollup makes silent skips visible.
+    //
+    // The validator is purely structural (platform present, content_type
+    // in registry, week_number integer, CTA warning-class) so a properly-
+    // generated row never trips it. The wiring is a safety net.
+    const boltRunId = (body.variantMetadata as Record<string, unknown> | undefined)?.runId;
+    const diagnosticRecords: RowFailureRecord[] = [];
+    const validatedPersistRows: typeof persistRows = [];
+    for (const row of persistRows) {
+      const r = validateDailyPlanRow(row as any);
+      if (r.ok) {
+        validatedPersistRows.push(row);
+        continue;
+      }
+      // CTA-only failures are warning-class — the row still persists, but
+      // we record the diagnostic so operators see the gap on the dashboard.
+      const hardErrors = r.errors.filter((e) => e.code !== BOLT_ERROR_CODES.DAILY_PLAN_INVALID_CTA);
+      const shouldKeep = hardErrors.length === 0;
+      if (shouldKeep) validatedPersistRows.push(row);
+
+      if (typeof boltRunId === 'string' && boltRunId) {
+        const rowAny = row as Record<string, unknown>;
+        for (const e of r.errors) {
+          diagnosticRecords.push({
+            runId: boltRunId,
+            campaignId,
+            companyId: companyId ?? null,
+            weekNumber: typeof rowAny.week_number === 'number' ? rowAny.week_number : null,
+            platform: typeof rowAny.platform === 'string' ? rowAny.platform : null,
+            contentType: typeof rowAny.content_type === 'string' ? rowAny.content_type : null,
+            stage: 'generate-weekly-structure',
+            code: e.code,
+            message: e.message,
+            field: e.field,
+            details: { skipped: !shouldKeep && e.code !== BOLT_ERROR_CODES.DAILY_PLAN_INVALID_CTA },
+          });
+        }
+      }
+    }
+    if (diagnosticRecords.length > 0) {
+      // Fire-and-forget batch write. recordRowFailureBatch never throws
+      // and never blocks the caller — diagnostics persistence is a
+      // best-effort observability channel, not part of the generation
+      // contract. We await so logs surface inline; the inner try/catch
+      // in the batch writer makes this safe.
+      await recordRowFailureBatch(diagnosticRecords);
+    }
+    persistRows = validatedPersistRows;
+    if (persistRows.length === 0) {
+      // All rows were rejected. Don't proceed to saveWeekPlans with an
+      // empty batch — would be a no-op that masks the failure. Throw the
+      // canonical BoltError so the per-stage catch in boltPipelineService
+      // records a run-level failure too.
+      throw new BoltError(
+        BOLT_ERROR_CODES.DAILY_PLAN_ROW_INVALID,
+        `All ${allRowsToInsert.length} generated rows failed validation. See bolt_row_failure_diagnostics for details.`,
+        { details: { rejected_count: allRowsToInsert.length, sample_run_id: boltRunId ?? null } }
+      );
+    }
     const byWeek = new Map<number, typeof persistRows>();
     for (const row of persistRows) {
       const wn = Number((row as { week_number?: number })?.week_number) || 1;

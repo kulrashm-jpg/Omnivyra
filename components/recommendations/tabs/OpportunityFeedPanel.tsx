@@ -83,6 +83,16 @@ type FeedItem = {
   matched_keywords: string[];
   author_metadata: { author_handle?: string | null; platform_user_id?: string | null };
   explanation: OpportunityExplanation;
+  /** PR-OPA-1: verbatim source excerpt (max 300 chars). Nullable for legacy rows. */
+  signal_excerpt: string | null;
+  /** PR-OPA-2: rule-derived next-step guidance. Null when type is generic_interest. */
+  suggested_next_action: string | null;
+  /** PR-OPA-3: resolved identity fields. Null when platform unsupported or metadata absent. */
+  resolved_company: string | null;
+  resolved_role: string | null;
+  identity_confidence: 'high' | 'medium' | 'low' | null;
+  /** PR-OPA-6: read-time-derived priority score the server orders by. */
+  priority_score: number | null;
   created_at: string;
 };
 
@@ -273,6 +283,51 @@ export default function OpportunityFeedPanel({ companyId, fetchWithAuth }: Props
                       <span className="text-[10px] text-slate-400">· {fmtTime(item.created_at)}</span>
                     </div>
                     <p className="mt-1 text-slate-700">{item.detected_reason}</p>
+                    {item.signal_excerpt && (
+                      <figure className="mt-2 rounded-md border-l-2 border-violet-300 bg-violet-50/60 px-3 py-2">
+                        <figcaption className="text-[10px] font-semibold uppercase tracking-wider text-violet-700">
+                          What was said
+                        </figcaption>
+                        <blockquote className="mt-1 text-[13px] italic leading-snug text-slate-800">
+                          “{item.signal_excerpt}”
+                        </blockquote>
+                      </figure>
+                    )}
+                    {item.suggested_next_action && (
+                      <div className="mt-2 rounded-md border-l-2 border-emerald-300 bg-emerald-50/60 px-3 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                          Suggested Next Action
+                        </div>
+                        <p className="mt-0.5 text-[13px] font-medium text-slate-800">
+                          {item.suggested_next_action}
+                        </p>
+                      </div>
+                    )}
+                    {(item.identity_confidence === 'high' || item.identity_confidence === 'medium') && (
+                      <div className="mt-2 rounded-md border-l-2 border-sky-300 bg-sky-50/60 px-3 py-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-sky-700">
+                          Identity
+                        </div>
+                        <dl className="mt-0.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[13px]">
+                          {item.resolved_company && (
+                            <>
+                              <dt className="font-medium text-slate-500">Company:</dt>
+                              <dd className="text-slate-800">{item.resolved_company}</dd>
+                            </>
+                          )}
+                          {item.resolved_role && (
+                            <>
+                              <dt className="font-medium text-slate-500">Role:</dt>
+                              <dd className="text-slate-800">{item.resolved_role}</dd>
+                            </>
+                          )}
+                          <dt className="font-medium text-slate-500">Confidence:</dt>
+                          <dd className={item.identity_confidence === 'high' ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
+                            {item.identity_confidence === 'high' ? 'High' : 'Medium'}
+                          </dd>
+                        </dl>
+                      </div>
+                    )}
                     <div className="mt-1 grid grid-cols-2 gap-x-3 text-[11px] text-slate-500 md:grid-cols-4">
                       <span>Opp <strong className="text-slate-700">{fmtPct(item.opportunity_score)}</strong></span>
                       <span>Confidence <strong className="text-slate-700">{fmtPct(item.confidence_score)}</strong></span>

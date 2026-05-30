@@ -4,13 +4,14 @@ import {
   ingestComments,
   getCommentsForScheduledPost,
 } from '../../../backend/services/engagementIngestionService';
+import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 
 // Reply helpers left unchanged for now (deprecated later per canonical design).
 const replyToLinkedInComment = async (accessToken: string, commentId: string, replyText: string) => {
   const response = await fetch('https://api.linkedin.com/v2/comments', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: bearerAuthorization(accessToken),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -26,7 +27,7 @@ const replyToTwitterComment = async (accessToken: string, postId: string, replyT
   const response = await fetch('https://api.twitter.com/2/tweets', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: bearerAuthorization(accessToken),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({

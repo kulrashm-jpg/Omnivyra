@@ -1,4 +1,8 @@
 import { supabase } from '../db/supabaseClient';
+import { BoltError, BOLT_ERROR_CODES } from '../../lib/shared/bolt/boltErrorCodes';
+import { recordRowFailureBatch, type RowFailureRecord } from './boltRowFailureDiagnostics';
+// `getCreatorGovernance` is already imported below from the creator
+// governance registry — kept there to avoid duplicate identifier.
 
 import { getPlatformRules, listPlatformCatalog } from './platformIntelligenceService';
 import { generateContentForDailyPlans } from './boltContentGenerationForSchedule';
@@ -336,7 +340,11 @@ async function getCurrentCampaignPlanVersion(campaignId: string): Promise<number
     .limit(1)
     .maybeSingle();
   if (error) {
-    throw new Error(`Failed to resolve current campaign plan version: ${error.message}`);
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_PLAN_INVALID,
+      `Failed to resolve current campaign plan version: ${error.message}`,
+      { cause: error, details: { db_error: error.message } }
+    );
   }
   return Math.max(1, toNumericValue((data as any)?.version, 1));
 }
@@ -1301,7 +1309,11 @@ async function processCreatorStructuredSchedule(input: {
           const planVersionAtGenerate = await getCurrentCampaignPlanVersion(campaignId);
           if (planVersionAtGenerate !== planVersion) {
             failureType = 'stale';
-            throw new Error(`Stale creator plan version ${planVersion}; current version is ${planVersionAtGenerate}`);
+            throw new BoltError(
+              BOLT_ERROR_CODES.SCHEDULING_STALE_PLAN_VERSION,
+              `Stale creator plan version ${planVersion}; current version is ${planVersionAtGenerate}`,
+              { details: { plan_version: planVersion, current_plan_version: planVersionAtGenerate } }
+            );
           }
           const generated = await (engine as any).generateFromIntent({
             campaignId,
@@ -1328,7 +1340,11 @@ async function processCreatorStructuredSchedule(input: {
 
           const generatedValidation = validateCreatorExecutionOutput(generated);
           if (!generatedValidation.ok) {
-            throw new Error(`Generated creator output failed validation: ${generatedValidation.issues.join('; ')}`);
+            throw new BoltError(
+              BOLT_ERROR_CODES.SCHEDULING_CREATOR_OUTPUT_INVALID,
+              `Generated creator output failed validation: ${generatedValidation.issues.join('; ')}`,
+              { details: { issues: generatedValidation.issues } }
+            );
           }
           await logCreatorExecutionAudit({
             campaignId,
@@ -1350,7 +1366,11 @@ async function processCreatorStructuredSchedule(input: {
           const planVersionAtAdapt = await getCurrentCampaignPlanVersion(campaignId);
           if (planVersionAtAdapt !== planVersion) {
             failureType = 'stale';
-            throw new Error(`Stale creator plan version ${planVersion}; current version is ${planVersionAtAdapt}`);
+            throw new BoltError(
+              BOLT_ERROR_CODES.SCHEDULING_STALE_PLAN_VERSION,
+              `Stale creator plan version ${planVersion}; current version is ${planVersionAtAdapt}`,
+              { details: { plan_version: planVersion, current_plan_version: planVersionAtAdapt } }
+            );
           }
           const adapted = await (engine as any).adaptForPlatform(generated, platform) as CanonicalCreatorOutput;
           const schedulingValidation = validateCreatorSchedulingContract({
@@ -1358,7 +1378,11 @@ async function processCreatorStructuredSchedule(input: {
             platform,
           });
           if (!schedulingValidation.ok) {
-            throw new Error(`Adapted creator output failed validation: ${schedulingValidation.issues.join('; ')}`);
+            throw new BoltError(
+              BOLT_ERROR_CODES.SCHEDULING_CREATOR_OUTPUT_INVALID,
+              `Adapted creator output failed validation: ${schedulingValidation.issues.join('; ')}`,
+              { details: { issues: schedulingValidation.issues } }
+            );
           }
           await logCreatorExecutionAudit({
             campaignId,
@@ -1407,7 +1431,11 @@ async function processCreatorStructuredSchedule(input: {
           const planVersionAtSchedule = await getCurrentCampaignPlanVersion(campaignId);
           if (planVersionAtSchedule !== planVersion) {
             failureType = 'stale';
-            throw new Error(`Stale creator plan version ${planVersion}; current version is ${planVersionAtSchedule}`);
+            throw new BoltError(
+              BOLT_ERROR_CODES.SCHEDULING_STALE_PLAN_VERSION,
+              `Stale creator plan version ${planVersion}; current version is ${planVersionAtSchedule}`,
+              { details: { plan_version: planVersion, current_plan_version: planVersionAtSchedule } }
+            );
           }
           const scheduledFor = buildScheduledForFromDailyPlan(row.date, row.scheduled_time);
           const scheduled = await (engine as any).schedule(adapted, {
@@ -1459,7 +1487,11 @@ async function processCreatorStructuredSchedule(input: {
           });
 
           if (scheduled.status === 'failed') {
-            throw new Error(scheduled.failure_reason || 'Creator scheduling failed');
+            throw new BoltError(
+              BOLT_ERROR_CODES.SCHEDULING_NOT_ELIGIBLE,
+              scheduled.failure_reason || 'Creator scheduling failed',
+              { details: { failure_reason: scheduled.failure_reason ?? null } }
+            );
           }
 
           finalOutput = adapted;
@@ -1763,7 +1795,10 @@ async function scheduleStructuredPlanRuntime(
   already_scheduled_count?: number;
 }> {
   if (!plan?.weeks || !Array.isArray(plan.weeks) || plan.weeks.length === 0) {
-    throw new Error('Structured plan is required');
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_PLAN_INVALID,
+      'Structured plan is required',
+    );
   }
 
   const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
@@ -1779,10 +1814,18 @@ async function scheduleStructuredPlanRuntime(
       errorDetails: campaignError?.details,
       hasData: !!campaign,
     });
-    throw new Error(`Campaign not found (id=${campaignId}, err=${campaignError?.message ?? 'no data'})`);
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_CAMPAIGN_NOT_FOUND,
+      `Campaign not found (id=${campaignId}, err=${campaignError?.message ?? 'no data'})`,
+      { cause: campaignError ?? undefined, details: { campaign_id: campaignId } }
+    );
   }
   if (!campaign.start_date) {
-    throw new Error('Campaign start date is required for scheduling');
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_CONFIG_INCOMPLETE,
+      'Campaign start date is required for scheduling',
+      { details: { campaign_id: campaignId, field: 'start_date' } }
+    );
   }
   // RULE: never schedule activity in a past date. Instead of failing the
   // whole run when start_date is stale (e.g. a config carried over from a
@@ -1836,7 +1879,11 @@ async function scheduleStructuredPlanRuntime(
     }
   }
   if (!effectiveUserId) {
-    throw new Error('Campaign has no user_id and no company members found — cannot resolve social accounts');
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_USER_RESOLUTION_FAILED,
+      'Campaign has no user_id and no company members found — cannot resolve social accounts',
+      { details: { campaign_id: campaignId } }
+    );
   }
 
   let accountsQuery = ownedDbTable('social_accounts')
@@ -1851,7 +1898,10 @@ async function scheduleStructuredPlanRuntime(
   const { data: accounts, error: accountError } = await accountsQuery;
 
   if (accountError || !accounts) {
-    throw new Error('Failed to load social accounts');
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_SOCIAL_ACCOUNTS_FAILED,
+      'Failed to load social accounts',
+    );
   }
 
   const catalog = await listPlatformCatalog({ activeOnly: true });
@@ -1916,6 +1966,44 @@ async function scheduleStructuredPlanRuntime(
       (row) => (row as { intent_type?: unknown }).intent_type === 'creator'
     );
     if (creatorIntentRows.length > 0) {
+      // Closure-pass follow-up: per-row diagnostics for the
+      // assert-unschedulable path. The assertion throws when ANY row's
+      // content_type isn't a schedulable creator format, but loses the
+      // per-row attribution. We enumerate the offending rows here so
+      // bolt_row_failure_diagnostics carries the breakdown before the
+      // assertion throws the run-level BoltError. Policy: ABORT-STAGE
+      // (we don't drop rows here — the existing planner behaviour is to
+      // treat any unschedulable creator format as a hard stop, and the
+      // diagnostics are purely additive observability).
+      const offending: RowFailureRecord[] = [];
+      for (const row of creatorIntentRows) {
+        const ct = (row as { content_type?: unknown }).content_type;
+        const governance = getCreatorGovernance(ct);
+        if (!governance || governance.schedulable !== true) {
+          offending.push({
+            runId: options?.run_id ?? '',
+            campaignId,
+            dailyPlanId: typeof (row as { id?: unknown }).id === 'string'
+              ? ((row as { id: string }).id)
+              : null,
+            weekNumber: typeof (row as { week_number?: unknown }).week_number === 'number'
+              ? ((row as { week_number: number }).week_number)
+              : null,
+            platform: typeof (row as { platform?: unknown }).platform === 'string'
+              ? ((row as { platform: string }).platform)
+              : null,
+            contentType: typeof ct === 'string' ? ct : null,
+            stage: 'schedule-structured-plan',
+            code: BOLT_ERROR_CODES.DAILY_PLAN_UNSCHEDULABLE,
+            message: `content_type "${String(ct ?? '')}" is not a schedulable creator format.`,
+            details: { intent_type: 'creator', schedulable: governance?.schedulable ?? false },
+          });
+        }
+      }
+      if (offending.length > 0 && options?.run_id) {
+        // Best-effort. The batch writer never throws.
+        await recordRowFailureBatch(offending);
+      }
       assertNoUnschedulableCreatorDailyPlans(creatorIntentRows);
     }
     // execution_mode and creator_asset are optional columns not always selected —
@@ -2323,13 +2411,21 @@ async function scheduleStructuredPlanRuntime(
             collisionCount += 1;
             continue;
           }
-          throw new Error(`Failed to schedule posts: ${rowErr.message}`);
+          throw new BoltError(
+            BOLT_ERROR_CODES.SCHEDULED_POST_PERSISTENCE_FAILED,
+            `Failed to schedule posts: ${rowErr.message}`,
+            { cause: rowErr, details: { db_error: rowErr.message } }
+          );
         }
         if (row) insertedPosts.push(row as typeof insertedPosts[number]);
       }
       alreadyScheduledCount += collisionCount;
     } else {
-      throw new Error(`Failed to schedule posts: ${insertError.message}`);
+      throw new BoltError(
+        BOLT_ERROR_CODES.SCHEDULED_POST_PERSISTENCE_FAILED,
+        `Failed to schedule posts: ${insertError.message}`,
+        { cause: insertError, details: { db_error: insertError.message } }
+      );
     }
   } else {
     insertedPosts = (bulkInsertedPosts ?? []) as typeof insertedPosts;
@@ -2410,12 +2506,20 @@ async function validatePlatformAndType(input: { platform: string; contentType: s
 }> {
   const bundle = await getPlatformRules(input.platform);
   if (!bundle) {
-    throw new Error(`Unsupported platform: ${String(input.platform)}`);
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_PLATFORM_UNSUPPORTED,
+      `Unsupported platform: ${String(input.platform)}`,
+      { details: { platform: String(input.platform) } }
+    );
   }
 
   const canonicalPlatform = String(bundle.platform.canonical_key || '').toLowerCase().trim();
   if (!canonicalPlatform) {
-    throw new Error(`Unsupported platform: ${String(input.platform)}`);
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_PLATFORM_UNSUPPORTED,
+      `Unsupported platform: ${String(input.platform)}`,
+      { details: { platform: String(input.platform) } }
+    );
   }
 
   const normalizedContentType = String(input.contentType || 'post').toLowerCase().trim();
@@ -2425,7 +2529,11 @@ async function validatePlatformAndType(input: { platform: string; contentType: s
       .filter(Boolean)
   );
   if (supportedTypes.size > 0 && !supportedTypes.has(normalizedContentType)) {
-    throw new Error(`Unsupported contentType "${normalizedContentType}" for platform "${canonicalPlatform}"`);
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_CONTENT_TYPE_UNSUPPORTED,
+      `Unsupported contentType "${normalizedContentType}" for platform "${canonicalPlatform}"`,
+      { details: { platform: canonicalPlatform, content_type: normalizedContentType } }
+    );
   }
 
   return {
@@ -2447,7 +2555,11 @@ async function resolveActiveSocialAccountId(userId: string, canonicalPlatform: s
     .order('created_at', { ascending: false })
     .limit(1);
 
-  if (error) throw new Error(`Failed to load social accounts: ${error.message}`);
+  if (error) throw new BoltError(
+    BOLT_ERROR_CODES.SCHEDULING_SOCIAL_ACCOUNTS_FAILED,
+    `Failed to load social accounts: ${error.message}`,
+    { cause: error, details: { db_error: error.message } }
+  );
   const row = (data || [])[0];
   return row?.id ? String(row.id) : null;
 }
@@ -2479,7 +2591,11 @@ export async function listLegacyScheduledPosts(input: {
   }
 
   const { data, error, count } = await q.range(offset, offset + limit - 1);
-  if (error) throw new Error(`Failed to list scheduled posts: ${error.message}`);
+  if (error) throw new BoltError(
+    BOLT_ERROR_CODES.SCHEDULED_POST_PERSISTENCE_FAILED,
+    `Failed to list scheduled posts: ${error.message}`,
+    { cause: error, details: { db_error: error.message, op: 'list' } }
+  );
 
   return {
     posts: (data || []).map(mapDbRowToLegacyScheduledPost),
@@ -2515,13 +2631,24 @@ async function createLegacyScheduledPostRuntime(input: {
       .eq('is_active', true)
       .maybeSingle();
 
-    if (error) throw new Error(`Failed to load social account: ${error.message}`);
+    if (error) throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_SOCIAL_ACCOUNTS_FAILED,
+      `Failed to load social account: ${error.message}`,
+      { cause: error, details: { db_error: error.message, op: 'load_one' } }
+    );
     if (!data?.id) {
-      throw new Error('Invalid accountId');
+      throw new BoltError(
+        BOLT_ERROR_CODES.SCHEDULING_NO_ACCOUNT_FOR_PLATFORM,
+        'Invalid accountId',
+      );
     }
     const acctPlatform = String((data as any).platform || '').toLowerCase().trim();
     if (!candidates.has(acctPlatform)) {
-      throw new Error(`accountId is not connected for platform "${canonicalPlatform}"`);
+      throw new BoltError(
+        BOLT_ERROR_CODES.SCHEDULING_ACCOUNT_PLATFORM_MISMATCH,
+        `accountId is not connected for platform "${canonicalPlatform}"`,
+        { details: { platform: canonicalPlatform } }
+      );
     }
     socialAccountId = String(data.id);
   } else {
@@ -2529,12 +2656,19 @@ async function createLegacyScheduledPostRuntime(input: {
   }
 
   if (!socialAccountId) {
-    throw new Error(`No active social account connected for platform "${canonicalPlatform}"`);
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_NO_ACCOUNT_FOR_PLATFORM,
+      `No active social account connected for platform "${canonicalPlatform}"`,
+      { details: { platform: canonicalPlatform } }
+    );
   }
 
   const scheduledFor = new Date(input.scheduledFor as any);
   if (Number.isNaN(scheduledFor.getTime())) {
-    throw new Error('Invalid scheduledFor');
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_INVALID_SCHEDULED_TIME,
+      'Invalid scheduledFor',
+    );
   }
 
   const now = new Date().toISOString();
@@ -2595,7 +2729,11 @@ async function createLegacyScheduledPostRuntime(input: {
         return mapDbRowToLegacyScheduledPost(existing);
       }
     }
-    throw new Error(`Failed to schedule post: ${error.message}`);
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULED_POST_PERSISTENCE_FAILED,
+      `Failed to schedule post: ${error.message}`,
+      { cause: error, details: { db_error: error.message, op: 'schedule' } }
+    );
   }
   return mapDbRowToLegacyScheduledPost(data);
 }
@@ -2612,7 +2750,11 @@ export async function getLegacyScheduledPostById(input: {
     .eq('user_id', input.userId)
     .maybeSingle();
 
-  if (error) throw new Error(`Failed to get scheduled post: ${error.message}`);
+  if (error) throw new BoltError(
+    BOLT_ERROR_CODES.SCHEDULED_POST_PERSISTENCE_FAILED,
+    `Failed to get scheduled post: ${error.message}`,
+    { cause: error, details: { db_error: error.message, op: 'get' } }
+  );
   if (!data) return null;
   return mapDbRowToLegacyScheduledPost(data);
 }
@@ -2638,7 +2780,11 @@ export async function updateLegacyScheduledPost(input: {
   if (typeof input.patch.status === 'string') patch.status = input.patch.status;
   if (typeof input.patch.scheduledFor === 'string') {
     const scheduledFor = new Date(input.patch.scheduledFor);
-    if (Number.isNaN(scheduledFor.getTime())) throw new Error('Invalid scheduledFor');
+    if (Number.isNaN(scheduledFor.getTime())) throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_INVALID_SCHEDULED_TIME,
+      'Invalid scheduledFor (NaN time)',
+      { details: { op: 'update' } }
+    );
     patch.scheduled_for = scheduledFor.toISOString();
   }
   if (typeof input.patch.contentType === 'string') {
@@ -2666,7 +2812,11 @@ export async function updateLegacyScheduledPost(input: {
     .eq('id', input.id)
     .eq('user_id', input.userId);
 
-  if (error) throw new Error(`Failed to update post: ${error.message}`);
+  if (error) throw new BoltError(
+    BOLT_ERROR_CODES.SCHEDULED_POST_PERSISTENCE_FAILED,
+    `Failed to update post: ${error.message}`,
+    { cause: error, details: { db_error: error.message, op: 'update' } }
+  );
 }
 
 export async function cancelLegacyScheduledPost(input: { userId: string; id: string }): Promise<void> {
@@ -2675,7 +2825,11 @@ export async function cancelLegacyScheduledPost(input: { userId: string; id: str
     .eq('id', input.id)
     .eq('user_id', input.userId);
 
-  if (error) throw new Error(`Failed to cancel post: ${error.message}`);
+  if (error) throw new BoltError(
+    BOLT_ERROR_CODES.SCHEDULED_POST_PERSISTENCE_FAILED,
+    `Failed to cancel post: ${error.message}`,
+    { cause: error, details: { db_error: error.message, op: 'cancel' } }
+  );
 }
 
 export async function publishLegacyScheduledPostNow(input: { userId: string; id: string }): Promise<void> {
@@ -2685,5 +2839,9 @@ export async function publishLegacyScheduledPostNow(input: { userId: string; id:
     .eq('id', input.id)
     .eq('user_id', input.userId);
 
-  if (error) throw new Error(`Failed to queue post: ${error.message}`);
+  if (error) throw new BoltError(
+    BOLT_ERROR_CODES.SCHEDULED_POST_PERSISTENCE_FAILED,
+    `Failed to queue post: ${error.message}`,
+    { cause: error, details: { db_error: error.message, op: 'queue' } }
+  );
 }

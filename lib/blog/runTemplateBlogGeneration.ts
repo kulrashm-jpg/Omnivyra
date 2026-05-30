@@ -57,6 +57,7 @@ import {
 } from '../content/companyContextBlock';
 import { validateContentVariation } from '../content/contentVariationValidator';
 import { getProfile } from '../../backend/services/companyProfileService';
+import { buildGovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
 
 export interface TemplateBlogGenerationParams {
   company_id: string;
@@ -80,6 +81,12 @@ export interface TemplateBlogGenerationParams {
    * identity from the profile fetch already performed for repair anchoring.
    */
   companyIdentity?: CompanyIdentity;
+  /**
+   * Blog Governance Parity — optional governance prompt context.
+   * When present, the template-aware system prompt is prepended with
+   * the canonical compliance preamble before each AI call.
+   */
+  governance?: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null;
 }
 
 export async function runTemplateBlogGenerationPath(
@@ -101,7 +108,9 @@ export async function runTemplateBlogGenerationPath(
     confidence,
     selected_angle,
     companyIdentity: callerCompanyIdentity,
+    governance,
   } = params;
+  const governanceMetadata = buildGovernanceExplainabilityMetadata(governance);
 
   const { buildTemplateAwareSystemPromptV2, buildTemplateAwareUserPrompt, parseTemplateOutput } =
     await import('./blogGenerationEngine');
@@ -190,6 +199,7 @@ export async function runTemplateBlogGenerationPath(
         generationInput,
         targetWords: targetWc,
         angleLabel: selected_angle?.label,
+        governance,
       });
 
       if (classicDraft) {
@@ -230,6 +240,7 @@ export async function runTemplateBlogGenerationPath(
           template_used: true,
           seo_intelligence: ctx.seo ?? undefined,
           trend_intelligence: ctx.trends ?? undefined,
+          governance: governanceMetadata,
         };
       }
     } catch {
@@ -247,6 +258,7 @@ export async function runTemplateBlogGenerationPath(
         generationInput,
         targetWords: targetWc,
         angleLabel: selected_angle?.label,
+        governance,
       });
 
       if (tutorialDraft) {
@@ -287,6 +299,7 @@ export async function runTemplateBlogGenerationPath(
           template_used: true,
           seo_intelligence: ctx.seo ?? undefined,
           trend_intelligence: ctx.trends ?? undefined,
+          governance: governanceMetadata,
         };
       }
     } catch {
@@ -304,6 +317,7 @@ export async function runTemplateBlogGenerationPath(
         generationInput,
         targetWords: targetWc,
         angleLabel: selected_angle?.label,
+        governance,
       });
 
       if (comparisonDraft) {
@@ -344,6 +358,7 @@ export async function runTemplateBlogGenerationPath(
           template_used: true,
           seo_intelligence: ctx.seo ?? undefined,
           trend_intelligence: ctx.trends ?? undefined,
+          governance: governanceMetadata,
         };
       }
     } catch {
@@ -362,6 +377,7 @@ export async function runTemplateBlogGenerationPath(
         targetWords: targetWc,
         angleLabel: selected_angle?.label,
         templateLabel: isVisualFeatureBlogTemplate ? 'Visual Feature' : 'Magazine',
+        governance,
       });
 
       if (editorialDraft) {
@@ -402,6 +418,7 @@ export async function runTemplateBlogGenerationPath(
           template_used: true,
           seo_intelligence: ctx.seo ?? undefined,
           trend_intelligence: ctx.trends ?? undefined,
+          governance: governanceMetadata,
         };
       }
     } catch {
@@ -412,12 +429,21 @@ export async function runTemplateBlogGenerationPath(
   // Prefer identity passed from runBlogGeneration (derived from companyContext);
   // fall back to identity reconstructed from profile + answers for standalone callers.
   const effectiveIdentity = callerCompanyIdentity ?? _identity;
-  const templateSystemPrompt = buildTemplateAwareSystemPromptV2(
+  const baseTemplateSystemPrompt = buildTemplateAwareSystemPromptV2(
     targetWc ?? 1200,
     contentType,
     effectiveTemplateBlocks,
     effectiveTemplateName,
     effectiveIdentity,
+  );
+  // Blog Governance Parity — prepend the compliance preamble to every
+  // template-aware system prompt invocation. No-op when no governance
+  // applies (legacy callers see byte-identical prompts).
+  const { applyGovernancePreambleToSystemPrompt } =
+    await import('../../backend/services/creator/strategyGovernancePromptContext');
+  const templateSystemPrompt = applyGovernancePreambleToSystemPrompt(
+    baseTemplateSystemPrompt,
+    governance ?? null,
   );
   const templateUserPrompt = buildTemplateAwareUserPrompt(generationInput, effectiveTemplateBlocks);
 
@@ -1462,6 +1488,7 @@ export async function runTemplateBlogGenerationPath(
       template_used:       true,
       seo_intelligence:    ctx.seo ?? undefined,
       trend_intelligence:  ctx.trends ?? undefined,
+      governance:          governanceMetadata,
     };
     }
   }

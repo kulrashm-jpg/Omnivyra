@@ -31,6 +31,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { logger } from '../../../backend/services/logger';
 import { sendDomainVerificationReminder } from '../../../backend/services/domainReminderService';
+import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 
 const BATCH_SIZE = 50;
 const CLEANUP_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -51,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const auth = req.headers['authorization'];
-    if (auth !== `Bearer ${cronSecret}`) {
+    if (auth !== bearerAuthorization(cronSecret)) {
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
   } else {

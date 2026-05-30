@@ -39,6 +39,21 @@ function wrapWithCompanyEnforcement(
   return `${head}\n\n${base}\n${tail}`;
 }
 
+/**
+ * Blog Governance Parity — prepend the canonical governance preamble
+ * to any blog system prompt. Returns the base prompt unchanged when no
+ * governance context applies (industry='none', null, etc.) — preserving
+ * byte-identical output for legacy callers.
+ */
+function applyBlogGovernancePreamble(
+  base: string,
+  governance: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null | undefined,
+): string {
+  const { applyGovernancePreambleToSystemPrompt } =
+    require('../../backend/services/creator/strategyGovernancePromptContext') as typeof import('../../backend/services/creator/strategyGovernancePromptContext');
+  return applyGovernancePreambleToSystemPrompt(base, governance ?? null);
+}
+
 // ── Angle types ───────────────────────────────────────────────────────────────
 
 export type AngleType = 'analytical' | 'contrarian' | 'strategic';
@@ -119,6 +134,12 @@ export interface BlogGenerationOutput {
 export function buildAnglesSystemPrompt(
   contentType: 'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide' = 'blog',
   companyIdentity?: CompanyIdentity,
+  // Blog Governance Parity — optional governance prompt context. When
+  // present and the resolved industry is regulated, the system prompt
+  // is prepended with the canonical compliance preamble. Null /
+  // industry='none' → strict no-op (byte-identical system prompt to
+  // legacy callers).
+  governance?: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null,
 ): string {
   const currentYear = new Date().getFullYear();
   const nextYear    = currentYear + 1;
@@ -251,7 +272,10 @@ Return ONLY valid JSON — no markdown, no prose:
   ]
 }`;
 
-  return wrapWithCompanyEnforcement(base, `${contentType} angles`, companyIdentity);
+  return applyBlogGovernancePreamble(
+    wrapWithCompanyEnforcement(base, `${contentType} angles`, companyIdentity),
+    governance,
+  );
 }
 
 export function buildAnglesUserPrompt(input: BlogGenerationInput): string {
@@ -358,6 +382,8 @@ export function buildGenerationSystemPrompt(
   contentType: 'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide' = 'blog',
   formatType?: BlogFormatType | ArticleFormatType | WhitepaperFormatType | NewsletterFormatType | StoryFormatType | GuideFormatType,
   companyIdentity?: CompanyIdentity,
+  // Blog Governance Parity — optional governance prompt context.
+  governance?: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null,
 ): string {
   const currentYear = new Date().getFullYear();
   const nextYear    = currentYear + 1;
@@ -582,7 +608,10 @@ The content_html field must be valid HTML using only these elements:
 
 Do NOT use: <div> (except key-insights), <span>, <table>, inline styles, class attributes (except the key-insights div), or any JavaScript.`;
 
-  return wrapWithCompanyEnforcement(base, contentType, companyIdentity);
+  return applyBlogGovernancePreamble(
+    wrapWithCompanyEnforcement(base, contentType, companyIdentity),
+    governance,
+  );
 }
 
 export function buildGenerationUserPrompt(input: BlogGenerationInput): string {

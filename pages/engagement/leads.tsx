@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 
-const ACTIVE_LEADS_ROUTE = '/command-center/engagement';
+const ACTIVE_LEADS_ROUTE = '/command-center/active-leads';
 
 export default function EngagementLeadsRedirectPage() {
   const router = useRouter();

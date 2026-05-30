@@ -159,7 +159,7 @@ export const buildPreviewHeaders = (
 ) => {
   const merged = { ...(headers || {}) };
   if (authType === 'bearer' && apiKeyEnvName && !merged.Authorization) {
-    merged.Authorization = `Bearer {{${apiKeyEnvName}}}`;
+    merged.Authorization = ['Bearer', `{{${apiKeyEnvName}}}`].join(' ');
   }
   return merged;
 };

@@ -7,6 +7,10 @@ import CommandPalette from './CommandPalette';
 import SectionNav from './SectionNav';
 import RewardToast from '../retention/RewardToast';
 import { useRetention } from '../../hooks/useRetention';
+// P2-1 — variant experience shared analytics + operator-controls
+// providers. Mounted at AppLayout so every authenticated page gets a
+// single shared fetch instead of N consumer-level fetches.
+import { VariantExperienceShell } from '../variant-experience/VariantExperienceShell';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -42,25 +46,27 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   }, []);
 
   return (
-    <div className="flex min-h-screen flex-col bg-gray-50">
-      <GlobalHeader onOpenCommandPalette={() => setIsCommandPaletteOpen(true)} />
-      <CommandPalette open={isCommandPaletteOpen} onClose={() => setIsCommandPaletteOpen(false)} />
-      {!isCommandCenterHome ? (
-        <div className="relative z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-          <div className="mx-auto flex max-w-screen-xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
-            <div className="min-w-0">
-              <Breadcrumbs />
-              <SectionNav />
+    <VariantExperienceShell>
+      <div className="flex min-h-screen flex-col bg-gray-50">
+        <GlobalHeader onOpenCommandPalette={() => setIsCommandPaletteOpen(true)} />
+        <CommandPalette open={isCommandPaletteOpen} onClose={() => setIsCommandPaletteOpen(false)} />
+        {!isCommandCenterHome ? (
+          <div className="relative z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
+            <div className="mx-auto flex max-w-screen-xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
+              <div className="min-w-0">
+                <Breadcrumbs />
+                <SectionNav />
+              </div>
             </div>
           </div>
-        </div>
-      ) : null}
-      <main className="relative z-0 flex-1">
-        {children}
-      </main>
-      <GlobalFooter />
-      <RewardToast reward={pendingReward} onDismiss={dismissReward} />
-    </div>
+        ) : null}
+        <main className="relative z-0 flex-1">
+          {children}
+        </main>
+        <GlobalFooter />
+        <RewardToast reward={pendingReward} onDismiss={dismissReward} />
+      </div>
+    </VariantExperienceShell>
   );
 };
 

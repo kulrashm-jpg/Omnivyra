@@ -84,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         platform: dbPlatform,
         nodes: parsedNodes,
       });
-      if (!nodeCheck.ok) {
+      if (nodeCheck.ok === false) {
         if (nodeCheck.shouldReject) {
           return res.status(422).json({
             error: nodeCheck.code,
@@ -108,7 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         platform: dbPlatform,
         content: String(content || ''),
       });
-      if (!charCheck.ok) {
+      if (charCheck.ok === false) {
         if (charCheck.shouldReject) {
           return res.status(422).json({
             error: charCheck.code,
@@ -173,6 +173,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 : renderManifest && typeof (renderManifest as Record<string, unknown>).rendererId === 'string'
                   ? String((renderManifest as Record<string, unknown>).rendererId)
                   : null;
+            // Strategy Analytics linkage (PHASE 2 runtime activation):
+            // Preserve the `strategy_analytics` envelope written by the
+            // renderer onto media_bundle.metadata so that downstream
+            // engagement emitters can resolve the strategy from the
+            // scheduled_posts.creator_attachment_metadata JSONB. This
+            // is additive — when the asset has no strategy attribution,
+            // the field is null and legacy behavior is preserved.
+            const strategyAnalytics = asset.strategy_analytics
+              && typeof asset.strategy_analytics === 'object'
+              && !Array.isArray(asset.strategy_analytics)
+              ? asset.strategy_analytics
+              : (renderManifest
+                  && typeof (renderManifest as Record<string, unknown>).media_bundle === 'object'
+                  && (renderManifest as Record<string, unknown>).media_bundle
+                  && typeof ((renderManifest as Record<string, unknown>).media_bundle as Record<string, unknown>).metadata === 'object'
+                  && ((renderManifest as Record<string, unknown>).media_bundle as Record<string, unknown>).metadata
+                  ? (((renderManifest as Record<string, unknown>).media_bundle as Record<string, unknown>).metadata as Record<string, unknown>).strategy_analytics
+                    ?? null
+                  : null);
             return {
             id: typeof asset.id === 'string' ? asset.id : null,
             creatorType: typeof asset.creatorType === 'string' ? asset.creatorType : null,
@@ -188,13 +207,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             validationManifest,
             validation_manifest: validationManifest,
             renderer_id: rendererId,
+            strategy_analytics: strategyAnalytics,
           };
         })
       : [];
 
     const scheduleValidation = validateCreatorPublishSemantics({
-      platform: rawPlatform,
-      contentType: rawContentType,
+      platform: dbPlatform,
+      contentType: dbContentType,
       text: content,
       mediaUrls: normalizedMediaUrls,
       creatorAttachmentMetadata: normalizedCreatorAttachments,
@@ -202,12 +222,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (scheduleValidation.ok === false) {
       recordCreatorRenderMetric({
         name: 'scheduler_validation_rejection',
-        tags: { platform: rawPlatform, contentType: rawContentType, errors: scheduleValidation.errors.join(',') },
+        tags: { platform: dbPlatform, contentType: dbContentType, errors: scheduleValidation.errors.join(',') },
       });
       await Promise.all(scheduleValidation.normalizedMetadata.map((entry, index) => persistCreatorValidationManifest({
         rendererId: entry.renderer_id ?? 'unknown-renderer',
-        assetType: String(entry.asset_composition_intent?.assetType ?? rawContentType),
-        platform: rawPlatform,
+        assetType: String(entry.asset_composition_intent?.assetType ?? dbContentType),
+        platform: dbPlatform,
         attachmentMode: entry.attachment_mode,
         renderManifest: (entry.render_manifest ?? {}) as unknown as Record<string, unknown>,
         validationManifest: {
@@ -217,7 +237,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           errors: scheduleValidation.errors,
           warnings: scheduleValidation.warnings,
         },
-        auditId: `schedule:${rawPlatform}:${index}`,
+        auditId: `schedule:${dbPlatform}:${index}`,
       })));
       return res.status(422).json({
         error: 'CREATOR_ATTACHMENT_SCHEDULE_VALIDATION_FAILED',
@@ -232,7 +252,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // inserted to prevent first-segment-only publish (children dormant
       // forever) until 1B.2's orchestrator exists.
       const enforceGate = checkEnforceGate();
-      if (!enforceGate.allowed) {
+      if (enforceGate.allowed === false) {
         return res.status(422).json({
           error: 'THREAD_ENFORCE_MODE_BLOCKED',
           message: enforceGate.reason,

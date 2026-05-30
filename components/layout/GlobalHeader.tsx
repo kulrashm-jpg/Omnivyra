@@ -167,7 +167,7 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
     children: [
       { label: 'Engagement Center', href: '/command-center/engagement', description: 'Conversation inbox and action queue.' },
       { label: 'Market Pulse', href: '/dashboard/intelligence?intelTab=market-pulse', description: 'Pulse, trend, and audience movement view.' },
-      { label: 'Active Leads', href: '/command-center/engagement', description: 'Lead review and action workspace.' },
+      { label: 'Active Leads', href: '/command-center/active-leads', description: 'Lead review and action workspace.' },
       { label: 'Intelligence', href: '/intelligence', description: 'Broader intelligence signals and insights.' },
     ],
   },

@@ -1,4 +1,5 @@
 import { buildCreatorInstruction } from '../buildCreatorInstruction';
+import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorCodes';
 import { inferExecutionMode } from '../executionModeInference';
 import { deriveTopicWeights, weightedAssignment } from './topicAssignmentHelpers';
 import {
@@ -42,7 +43,7 @@ export function buildDeterministicWeeks({
     ...structured,
     weeks: (structured.weeks || []).map((w: any, idx: number) => {
       if (!Array.isArray(baseExecutionItems) || baseExecutionItems.length === 0) {
-        throw new Error('DETERMINISTIC_TOPIC_SLOT_COUNT_MISMATCH');
+        throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_SLOT_COUNT_MISMATCH');
       }
 
       const weekOrdinalRaw = Number((w as any)?.week ?? (w as any)?.week_number ?? (w as any)?.weekNumber ?? idx + 1);
@@ -55,7 +56,7 @@ export function buildDeterministicWeeks({
         ensureNonEmptyString((w as any)?.primary_objective ?? (w as any)?.objective) ??
         ensureNonEmptyString((effectivePrefilledPlanning as any)?.campaign_goal ?? (effectivePrefilledPlanning as any)?.key_messages) ??
         ensureNonEmptyString((effectivePrefilledPlanning as any)?.execution_config?.campaign_goal);
-      if (!objectiveRaw) throw new Error('DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
+      if (!objectiveRaw) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
 
       const weekly_narrative_spine = deriveWeeklyNarrativeSpine({
         campaign_stage,
@@ -69,7 +70,7 @@ export function buildDeterministicWeeks({
         ensureNonEmptyString(campaign_stage) &&
         ensureNonEmptyString(weekly_narrative_spine) &&
         ensureNonEmptyString(audience_awareness_target);
-      if (!okWeekMeta) throw new Error('DETERMINISTIC_WEEK_META_REQUIRED');
+      if (!okWeekMeta) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_WEEK_META_REQUIRED');
 
       const weeklyCapsule =
         (w as any)?.weeklyContextCapsule ??
@@ -84,10 +85,10 @@ export function buildDeterministicWeeks({
       const execution_items = baseExecutionItems.map((it, execIdx: number) => {
         const count = Number(it?.count_per_week ?? 0) || 0;
         const c = Math.max(0, Math.floor(count));
-        if (c <= 0) throw new Error('DETERMINISTIC_TOPIC_SLOT_COUNT_MISMATCH');
+        if (c <= 0) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_SLOT_COUNT_MISMATCH');
         const slotTopics = allSlots.slice(cursor, cursor + c).map((t) => (t == null ? null : String(t)));
         cursor += c;
-        if (slotTopics.length !== c) throw new Error('DETERMINISTIC_TOPIC_SLOT_COUNT_MISMATCH');
+        if (slotTopics.length !== c) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_SLOT_COUNT_MISMATCH');
         const dayIndices = spreadDaysForCount(c, 7);
 
         const contentTypeForId = String(it?.content_type ?? 'post').toLowerCase().replace(/\s+/g, '_');
@@ -102,14 +103,14 @@ export function buildDeterministicWeeks({
         const target_audience =
           ensureNonEmptyString(w?.target_audience ?? w?.targetAudience ?? (effectivePrefilledPlanning as any)?.target_audience) ??
           ensureNonEmptyString((effectivePrefilledPlanning as any)?.execution_config?.target_audience);
-        if (!objective || !cta_type || !target_audience) throw new Error('DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
+        if (!objective || !cta_type || !target_audience) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
 
         const keyMessages = (effectivePrefilledPlanning as any)?.key_messages ?? null;
         return {
           ...it,
           topic_slots: slotTopics.map((topic, slotIndex: number) => {
             const topicString = ensureNonEmptyString(topic);
-            if (!topicString) throw new Error('DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
+            if (!topicString) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
             const writingAngle = deriveWritingAngle({
               themeRaw: theme,
               topicRaw: topicString,
@@ -152,7 +153,7 @@ export function buildDeterministicWeeks({
               ensureNonEmptyString(intent.recommendation_alignment?.source_type) &&
               ensureNonEmptyString(intent.recommendation_alignment?.source_value) &&
               ensureNonEmptyString(intent.recommendation_alignment?.alignment_reason);
-            if (!okIntent) throw new Error('DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
+            if (!okIntent) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
 
             const master_content_id = `${campaignIdForMasterContent}_w${weekOrdinal}_${contentTypeForId}_${execIdx}_${slotIndex}`;
             const execution_mode = inferExecutionMode(String(it?.content_type ?? 'post'));
@@ -191,12 +192,12 @@ export function buildDeterministicWeeks({
       for (let execIdx = 0; execIdx < execution_items.length; execIdx += 1) {
         const exec = execution_items[execIdx];
         const slots = Array.isArray(exec?.topic_slots) ? exec.topic_slots : null;
-        if (!slots) throw new Error('DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
+        if (!slots) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
         for (let slotIdx = 0; slotIdx < slots.length; slotIdx += 1) {
           const slot = slots[slotIdx];
           const progression_step = Number(slot?.progression_step);
           if (!slot || !Number.isFinite(progression_step) || progression_step < 1 || !slot.intent) {
-            throw new Error('DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
+            throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
           }
           globalSlots.push({ execIdx, slotIdx, progression_step, slot });
         }
@@ -205,19 +206,19 @@ export function buildDeterministicWeeks({
       for (let i = 0; i < globalSlots.length; i += 1) globalSlots[i]!.slot.global_progression_index = i + 1;
       for (const g of globalSlots) {
         const n = Number(g.slot?.global_progression_index);
-        if (!Number.isFinite(n) || n < 1) throw new Error('DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
+        if (!Number.isFinite(n) || n < 1) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_GLOBAL_PROGRESSION_REQUIRED');
       }
 
       for (const exec of execution_items) {
         const slots = Array.isArray(exec?.topic_slots) ? exec.topic_slots : [];
         const expected = Math.max(0, Math.floor(Number(exec?.count_per_week ?? 0) || 0));
-        if (!expected || slots.length !== expected) throw new Error('DETERMINISTIC_TOPIC_SLOT_COUNT_MISMATCH');
+        if (!expected || slots.length !== expected) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_TOPIC_SLOT_COUNT_MISMATCH');
         for (const slot of slots) {
           const topic = ensureNonEmptyString(slot?.topic);
-          if (!topic) throw new Error('DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
+          if (!topic) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
           const progression_step = Number(slot?.progression_step);
           if (!Number.isFinite(progression_step) || progression_step < 1) {
-            throw new Error('DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
+            throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
           }
           const intent = slot?.intent;
           const ok =
@@ -235,11 +236,11 @@ export function buildDeterministicWeeks({
             ensureNonEmptyString(intent.recommendation_alignment.source_type) &&
             ensureNonEmptyString(intent.recommendation_alignment.source_value) &&
             ensureNonEmptyString(intent.recommendation_alignment.alignment_reason);
-          if (!ok) throw new Error('DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
+          if (!ok) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
         }
         for (let i = 0; i < slots.length; i += 1) {
           const step = Number((slots[i] as any)?.progression_step);
-          if (step !== i + 1) throw new Error('DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
+          if (step !== i + 1) throw new BoltError(BOLT_ERROR_CODES.PLAN_STRUCTURE_INVALID, 'DETERMINISTIC_WEEKLY_STRATEGY_REQUIRED');
         }
       }
 

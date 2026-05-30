@@ -96,6 +96,9 @@ function unwrapAggregate(err: unknown): string[] | null {
 export function normalizePipelineError(err: unknown): NormalizedPipelineError {
   const aggregateMessages = unwrapAggregate(err);
   const baseMessage = err instanceof Error ? err.message : String(err ?? '');
+  // BoltError.code is a stable BOLT_ERROR_CODES value — capture it so
+  // dashboards / log queries can filter by it. Falls through to the
+  // generic `code` field on other Error subclasses.
   const code =
     err && typeof err === 'object' && typeof (err as { code?: unknown }).code === 'string'
       ? (err as { code: string }).code

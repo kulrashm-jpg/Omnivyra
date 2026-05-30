@@ -97,6 +97,7 @@ const SOURCE_STRATEGIES = [
 
 type MarketPulseFinding = {
   id: string;
+  canonical_event_key?: string | null;
   category: string;
   title: string;
   summary: string;
@@ -119,6 +120,25 @@ type MarketPulseFinding = {
   opportunity_window?: string | null;
   affected_business_areas?: string[] | null;
   evidence_strength?: number | null;
+  source_count?: number | null;
+  source_diversity_score?: number | null;
+  sources_json?: Array<Record<string, unknown>> | null;
+  movement_summary?: {
+    direction: 'Emerging' | 'Growing' | 'Stable' | 'Declining' | 'Accelerating';
+    momentum: 'Low' | 'Moderate' | 'High';
+    changes: string[];
+    first_observation: boolean;
+    compared_to_finding_id?: string | null;
+  } | null;
+  confidence_breakdown?: {
+    components?: {
+      source_count?: number;
+      regions_count?: number;
+      times_seen_prior?: number;
+      distinct_source_kinds?: number;
+      contradicting_findings?: number;
+    };
+  } | null;
   cluster_role?: 'isolated' | 'repeated' | 'market_wide' | 'localized_anomaly' | 'emerging_market_shift' | 'coordinated_competitor_movement' | null;
   alert_class?: 'strategic_risk' | 'competitor_escalation' | 'regulatory_exposure' | 'market_acceleration' | 'opportunity_breakout' | null;
   priority_explanation?: string | null;
@@ -181,6 +201,16 @@ type ChangeSummary = {
   }>;
 };
 
+type MarketDeltaSummary = {
+  baseline: boolean;
+  previous_run_id: string | null;
+  market_direction: 'Expanding' | 'Stable' | 'Shifting' | 'Volatile';
+  new_signals: Array<{ id: string | null; title: string; canonical_event_key: string | null; category?: string | null }>;
+  strengthening_signals: Array<{ id: string | null; title: string; canonical_event_key: string | null; category?: string | null }>;
+  weakening_signals: Array<{ id: string | null; title: string; canonical_event_key: string | null; category?: string | null }>;
+  retired_signals: Array<{ id: string | null; title: string; canonical_event_key: string | null; category?: string | null }>;
+};
+
 type RunResponse = {
   run: {
     id: string;
@@ -212,6 +242,7 @@ type RunResponse = {
     risk_pressure?: number | null;
     change_summary?: ChangeSummary | null;
     prior_run_id?: string | null;
+    market_delta_summary?: MarketDeltaSummary | null;
     /** Phase 2 executive panels. */
     momentum_overview?: MomentumOverview | null;
     category_acceleration?: CategoryAcceleration | null;
@@ -239,6 +270,783 @@ type PendingRunState = {
   status: 'pending' | 'running';
   progress_stage?: string | null;
 };
+
+type SignalSignificance = 'Critical' | 'Important' | 'Monitor' | 'Background';
+type MarketDimension = 'all' | 'technology' | 'competition' | 'talent' | 'regulation' | 'capital_markets' | 'supply_chain' | 'customer_demand' | 'geography';
+type AttentionFilter = 'all' | 'critical' | 'important' | 'growing' | 'emerging' | 'new_since_last_pulse';
+type MarketNarrative = {
+  id: string;
+  title: string;
+  direction: NonNullable<MarketPulseFinding['movement_summary']>['direction'];
+  significance: SignalSignificance;
+  supportingFindings: MarketPulseFinding[];
+  summary: string;
+};
+
+const MARKET_DIMENSIONS: Array<{ id: MarketDimension; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'technology', label: 'Technology' },
+  { id: 'competition', label: 'Competition' },
+  { id: 'talent', label: 'Talent' },
+  { id: 'regulation', label: 'Regulation' },
+  { id: 'capital_markets', label: 'Capital Markets' },
+  { id: 'supply_chain', label: 'Supply Chain' },
+  { id: 'customer_demand', label: 'Customer Demand' },
+  { id: 'geography', label: 'Geography' },
+];
+
+const ATTENTION_FILTERS: Array<{ id: AttentionFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'critical', label: 'Critical' },
+  { id: 'important', label: 'Important' },
+  { id: 'growing', label: 'Growing' },
+  { id: 'emerging', label: 'Emerging' },
+  { id: 'new_since_last_pulse', label: 'New Since Last Pulse' },
+];
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatList(items: string[]): string {
+  if (items.length <= 2) return items.join(' and ');
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+function sourceFieldText(source: Record<string, unknown>): string {
+  const fields = [
+    'role',
+    'source_role',
+    'source_type',
+    'type',
+    'kind',
+    'category',
+    'label',
+  ];
+
+  return fields
+    .map((field) => source[field])
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+}
+
+function countSourcesByExplicitRole(
+  sources: Array<Record<string, unknown>> | null | undefined,
+  role: 'analyst' | 'competitor',
+): number {
+  if (!Array.isArray(sources) || sources.length === 0) return 0;
+
+  const matched = new Set<string>();
+  sources.forEach((source, index) => {
+    const text = sourceFieldText(source);
+    if (!text.includes(role)) return;
+    const key = String(source.id ?? source.url ?? source.name ?? source.title ?? index);
+    matched.add(key);
+  });
+
+  return matched.size;
+}
+
+function sourceEvidence(finding: MarketPulseFinding): {
+  sourceCount: number;
+  distinctSourceKinds: number;
+  recurrence: number;
+  regionCount: number;
+  competitorCount: number;
+  analystCount: number;
+  historicalCount: number;
+  relatedSignalCount: number;
+} {
+  const components = finding.confidence_breakdown?.components ?? {};
+  const regions = (finding.regions ?? []).filter((region) => region && region.toLowerCase() !== 'global');
+  return {
+    sourceCount: Number(finding.source_count ?? components.source_count ?? 0),
+    distinctSourceKinds: Number(components.distinct_source_kinds ?? 0),
+    recurrence: Number(components.times_seen_prior ?? 0),
+    regionCount: regions.length || ((finding.regions ?? []).some((region) => region?.toLowerCase() === 'global') ? 1 : 0),
+    competitorCount: countSourcesByExplicitRole(finding.sources_json, 'competitor'),
+    analystCount: countSourcesByExplicitRole(finding.sources_json, 'analyst'),
+    historicalCount: finding.historical_finding_ids?.length ?? 0,
+    relatedSignalCount: finding.related_intelligence_signal_ids?.length ?? 0,
+  };
+}
+
+function textMatchesAny(value: string, patterns: string[]): boolean {
+  const normalized = value.toLowerCase();
+  return patterns.some((pattern) => normalized.includes(pattern));
+}
+
+function findingMatchesDimension(
+  finding: Pick<MarketPulseFinding, 'category' | 'title' | 'summary' | 'regions' | 'cluster_role' | 'alert_class'>,
+  dimension: MarketDimension,
+): boolean {
+  if (dimension === 'all') return true;
+
+  const category = String(finding.category ?? '');
+  const text = `${finding.title ?? ''} ${finding.summary ?? ''} ${category}`.toLowerCase();
+
+  if (dimension === 'technology') {
+    return category === 'technology_platform_shifts'
+      || category === 'product_positioning'
+      || textMatchesAny(text, ['technology', 'platform', 'ai ', 'api', 'software', 'integration', 'automation']);
+  }
+  if (dimension === 'competition') {
+    return category === 'competitor_moves'
+      || finding.cluster_role === 'coordinated_competitor_movement'
+      || finding.alert_class === 'competitor_escalation'
+      || textMatchesAny(text, ['competitor', 'rival', 'market share', 'positioning']);
+  }
+  if (dimension === 'talent') {
+    return category === 'hiring_talent' || textMatchesAny(text, ['hiring', 'talent', 'recruit', 'workforce', 'layoff']);
+  }
+  if (dimension === 'regulation') {
+    return category === 'regulatory_policy'
+      || finding.alert_class === 'regulatory_exposure'
+      || textMatchesAny(text, ['regulation', 'policy', 'compliance', 'law', 'legal']);
+  }
+  if (dimension === 'capital_markets') {
+    return category === 'capital_business_health'
+      || textMatchesAny(text, ['capital', 'funding', 'valuation', 'revenue', 'profit', 'investment', 'ipo']);
+  }
+  if (dimension === 'supply_chain') {
+    return textMatchesAny(text, ['supply chain', 'supplier', 'vendor', 'procurement', 'logistics', 'inventory', 'distribution']);
+  }
+  if (dimension === 'customer_demand') {
+    return category === 'demand_category_momentum'
+      || textMatchesAny(text, ['demand', 'customer', 'buyer', 'adoption', 'usage', 'pipeline']);
+  }
+  if (dimension === 'geography') {
+    const regions = finding.regions ?? [];
+    return category === 'growth_expansion'
+      || regions.some((region) => region && region.toLowerCase() !== 'global')
+      || textMatchesAny(text, ['region', 'market expansion', 'geography', 'north america', 'europe', 'asia']);
+  }
+
+  return true;
+}
+
+function findingMatchesAttention(finding: MarketPulseFinding, filter: AttentionFilter): boolean {
+  if (filter === 'all') return true;
+
+  const significance = deriveSignalSignificance(finding);
+  const direction = finding.movement_summary?.direction;
+
+  if (filter === 'critical') return significance === 'Critical';
+  if (filter === 'important') return significance === 'Critical' || significance === 'Important';
+  if (filter === 'growing') return direction === 'Growing' || direction === 'Accelerating';
+  if (filter === 'emerging') return direction === 'Emerging';
+  if (filter === 'new_since_last_pulse') {
+    return Boolean(finding.movement_summary?.first_observation) || finding.change_status === 'new';
+  }
+
+  return true;
+}
+
+function deriveSignalSignificance(finding: MarketPulseFinding): SignalSignificance {
+  const evidence = sourceEvidence(finding);
+  const hasCompetitorInvolvement = evidence.competitorCount > 0 || finding.cluster_role === 'coordinated_competitor_movement';
+  const hasAnalystInvolvement = evidence.analystCount > 0;
+  const hasHistoricalPersistence = evidence.recurrence > 0 || evidence.historicalCount > 0;
+  const hasRelatedSignals = evidence.relatedSignalCount > 0 || (finding.cluster_signal_ids?.length ?? 0) > 0;
+  const hasSourceDiversity = evidence.distinctSourceKinds >= 2 || evidence.sourceCount >= 3;
+  const hasGeographicSpread = evidence.regionCount >= 2;
+  const momentum = finding.movement_summary?.momentum ?? 'Low';
+  const direction = finding.movement_summary?.direction ?? null;
+  const hasHighAttentionEvidence = [
+    momentum === 'High' || direction === 'Accelerating',
+    hasCompetitorInvolvement,
+    hasAnalystInvolvement,
+    hasHistoricalPersistence,
+    hasRelatedSignals,
+    hasSourceDiversity,
+    hasGeographicSpread,
+  ].some(Boolean);
+  const hasModerateAttentionEvidence = [
+    momentum === 'Moderate' || direction === 'Growing',
+    hasHistoricalPersistence,
+    hasRelatedSignals,
+    hasSourceDiversity,
+    hasGeographicSpread,
+  ].some(Boolean);
+
+  if (finding.priority_tier === 'P0') return hasHighAttentionEvidence ? 'Critical' : 'Important';
+  if (finding.priority_tier === 'P1') return 'Important';
+  if (finding.priority_tier === 'P2') return hasModerateAttentionEvidence ? 'Monitor' : 'Background';
+  if (hasHighAttentionEvidence) return 'Important';
+  if (hasModerateAttentionEvidence) return 'Monitor';
+  return 'Background';
+}
+
+const SIGNIFICANCE_RANK: Record<SignalSignificance, number> = {
+  Critical: 4,
+  Important: 3,
+  Monitor: 2,
+  Background: 1,
+};
+
+const PRIORITY_TIER_RANK: Record<string, number> = {
+  P0: 3,
+  P1: 2,
+  P2: 1,
+};
+
+const MOMENTUM_RANK: Record<string, number> = {
+  High: 3,
+  Moderate: 2,
+  Low: 1,
+};
+
+function sortBySignalAttention(findings: MarketPulseFinding[]): MarketPulseFinding[] {
+  return [...findings].sort((a, b) => {
+    const significanceDelta = SIGNIFICANCE_RANK[deriveSignalSignificance(b)] - SIGNIFICANCE_RANK[deriveSignalSignificance(a)];
+    if (significanceDelta !== 0) return significanceDelta;
+    const tierDelta = (PRIORITY_TIER_RANK[b.priority_tier ?? ''] ?? 0) - (PRIORITY_TIER_RANK[a.priority_tier ?? ''] ?? 0);
+    if (tierDelta !== 0) return tierDelta;
+    const momentumDelta = (MOMENTUM_RANK[b.movement_summary?.momentum ?? ''] ?? 0) - (MOMENTUM_RANK[a.movement_summary?.momentum ?? ''] ?? 0);
+    if (momentumDelta !== 0) return momentumDelta;
+    const bEvidence = sourceEvidence(b);
+    const aEvidence = sourceEvidence(a);
+    return (
+      (bEvidence.relatedSignalCount + bEvidence.historicalCount + bEvidence.sourceCount + bEvidence.regionCount)
+      - (aEvidence.relatedSignalCount + aEvidence.historicalCount + aEvidence.sourceCount + aEvidence.regionCount)
+    );
+  });
+}
+
+function compactTakeaway(finding: MarketPulseFinding): string {
+  const text = finding.strategic_implication
+    || finding.interpretation_text
+    || finding.summary
+    || finding.why_it_matters
+    || finding.title;
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= 150) return normalized;
+  return `${normalized.slice(0, 147).trim()}...`;
+}
+
+function dominantDirection(findings: MarketPulseFinding[]): MarketNarrative['direction'] {
+  const directions: MarketNarrative['direction'][] = ['Accelerating', 'Growing', 'Emerging', 'Declining', 'Stable'];
+  const counts = new Map<MarketNarrative['direction'], number>();
+  findings.forEach((finding) => {
+    const direction = finding.movement_summary?.direction ?? 'Stable';
+    counts.set(direction, (counts.get(direction) ?? 0) + 1);
+  });
+  return directions.sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0))[0] ?? 'Stable';
+}
+
+function highestSignificance(findings: MarketPulseFinding[]): SignalSignificance {
+  return findings
+    .map(deriveSignalSignificance)
+    .sort((a, b) => SIGNIFICANCE_RANK[b] - SIGNIFICANCE_RANK[a])[0] ?? 'Background';
+}
+
+function narrativeTitle(label: string, direction: MarketNarrative['direction']): string {
+  if (direction === 'Accelerating') return `${label} Accelerating`;
+  if (direction === 'Growing') return `${label} Growing`;
+  if (direction === 'Emerging') return `${label} Emerging`;
+  if (direction === 'Declining') return `${label} Softening`;
+  return `${label} Holding Steady`;
+}
+
+function narrativeSummary(label: string, findings: MarketPulseFinding[]): string {
+  const titles = findings.slice(0, 3).map((finding) => finding.title);
+  const supportText = formatList(titles);
+  return `Multiple visible findings are clustering around ${label.toLowerCase()}, including ${supportText}. Read together, they show this is a connected market movement rather than a single isolated signal.`;
+}
+
+function addNarrativeCandidate(
+  groups: Map<string, { label: string; findings: Map<string, MarketPulseFinding> }>,
+  key: string,
+  label: string,
+  finding: MarketPulseFinding,
+) {
+  const existing = groups.get(key) ?? { label, findings: new Map<string, MarketPulseFinding>() };
+  existing.findings.set(finding.id, finding);
+  groups.set(key, existing);
+}
+
+function buildMarketNarratives(findings: MarketPulseFinding[]): MarketNarrative[] {
+  const ranked = sortBySignalAttention(findings);
+  const groups = new Map<string, { label: string; findings: Map<string, MarketPulseFinding> }>();
+
+  ranked.forEach((finding) => {
+    addNarrativeCandidate(groups, `category:${finding.category}`, toTitle(finding.category), finding);
+
+    if (finding.cluster_role && finding.cluster_role !== 'isolated') {
+      addNarrativeCandidate(groups, `cluster_role:${finding.cluster_role}`, toTitle(finding.cluster_role), finding);
+    }
+
+    (finding.cluster_signal_ids ?? []).forEach((id) => {
+      addNarrativeCandidate(groups, `cluster_signal:${id}`, 'Shared Signal Cluster', finding);
+    });
+
+    (finding.related_intelligence_signal_ids ?? []).forEach((id) => {
+      addNarrativeCandidate(groups, `related_signal:${id}`, 'Related Intelligence Movement', finding);
+    });
+  });
+
+  const seenSupportSets = new Set<string>();
+  return Array.from(groups.entries())
+    .map(([key, group]) => {
+      const supportingFindings = sortBySignalAttention(Array.from(group.findings.values())).slice(0, 5);
+      const supportKey = supportingFindings.map((finding) => finding.id).sort().join('|');
+      if (supportingFindings.length < 2 || seenSupportSets.has(supportKey)) return null;
+      seenSupportSets.add(supportKey);
+      const direction = dominantDirection(supportingFindings);
+      const significance = highestSignificance(supportingFindings);
+      return {
+        id: key,
+        title: narrativeTitle(group.label, direction),
+        direction,
+        significance,
+        supportingFindings,
+        summary: narrativeSummary(group.label, supportingFindings),
+      } satisfies MarketNarrative;
+    })
+    .filter((item): item is MarketNarrative => Boolean(item))
+    .sort((a, b) => {
+      const significanceDelta = SIGNIFICANCE_RANK[b.significance] - SIGNIFICANCE_RANK[a.significance];
+      if (significanceDelta !== 0) return significanceDelta;
+      const sizeDelta = b.supportingFindings.length - a.supportingFindings.length;
+      if (sizeDelta !== 0) return sizeDelta;
+      return (MOMENTUM_RANK[b.direction] ?? 0) - (MOMENTUM_RANK[a.direction] ?? 0);
+    })
+    .slice(0, 5);
+}
+
+function buildSignalExplainability(finding: MarketPulseFinding): string[] {
+  const items: string[] = [];
+  const evidence = sourceEvidence(finding);
+  const timesSeenPrior = evidence.recurrence;
+  const regions = (finding.regions ?? []).filter((region) => region && region.toLowerCase() !== 'global');
+  const historicalCount = finding.historical_finding_ids?.length ?? 0;
+  const relatedSignalCount = finding.related_intelligence_signal_ids?.length ?? 0;
+  const clusterSignalCount = finding.cluster_signal_ids?.length ?? 0;
+  const competitorSourceCount = evidence.competitorCount;
+  const analystSourceCount = evidence.analystCount;
+
+  if (evidence.sourceCount > 0 || historicalCount > 0 || relatedSignalCount > 0 || clusterSignalCount > 0) {
+    const basis: string[] = [];
+    if (evidence.sourceCount > 0) basis.push('current Market Pulse scan');
+    if (historicalCount > 0) basis.push(pluralize(historicalCount, 'historical finding'));
+    if (relatedSignalCount > 0) basis.push(pluralize(relatedSignalCount, 'related intelligence signal'));
+    if (clusterSignalCount > 0) basis.push(pluralize(clusterSignalCount, 'signal cluster'));
+    items.push(`Detection basis: ${formatList(basis)}`);
+  }
+
+  if (Number.isFinite(timesSeenPrior) && timesSeenPrior > 0) {
+    items.push(`Consecutive runs observed: ${timesSeenPrior + 1}`);
+  } else if (finding.change_status === 'new') {
+    items.push('Consecutive runs observed: first observed in this scan');
+  }
+
+  if (finding.trajectory) {
+    items.push(`Mention trend: ${toTitle(finding.trajectory)}`);
+  } else if (finding.change_status === 'updated') {
+    items.push('Mention trend: updated since the previous matching run');
+  } else if (finding.change_status === 'new') {
+    items.push('Mention trend: newly detected');
+  }
+
+  if (evidence.sourceCount > 0) {
+    const sourceText = evidence.distinctSourceKinds > 1
+      ? `${pluralize(evidence.sourceCount, 'source')} across ${pluralize(evidence.distinctSourceKinds, 'evidence type')}`
+      : pluralize(evidence.sourceCount, 'source');
+    items.push(`Source diversity: ${sourceText}`);
+  }
+
+  if (regions.length > 0) {
+    items.push(`Geographic spread: ${formatList(regions)}`);
+  } else if ((finding.regions ?? []).some((region) => region?.toLowerCase() === 'global')) {
+    items.push('Geographic spread: Global');
+  }
+
+  if (finding.cluster_role === 'coordinated_competitor_movement') {
+    items.push('Competitor participation: coordinated competitor movement detected');
+  } else if (competitorSourceCount > 0) {
+    items.push(`Competitor participation: referenced by ${pluralize(competitorSourceCount, 'competitor source')}`);
+  }
+
+  if (analystSourceCount > 0) {
+    items.push(`Analyst participation: reinforced by ${pluralize(analystSourceCount, 'analyst source')}`);
+  }
+
+  return items;
+}
+
+function SignalExplainability({ finding }: { finding: MarketPulseFinding }) {
+  const items = buildSignalExplainability(finding);
+  if (items.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+        Why this signal appeared
+      </div>
+      <ul className="mt-2 space-y-1.5 text-xs leading-5 text-slate-700">
+        {items.map((item) => (
+          <li key={item} className="flex gap-2">
+            <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+const MOVEMENT_DIRECTION_STYLE: Record<NonNullable<MarketPulseFinding['movement_summary']>['direction'], string> = {
+  Emerging: 'bg-blue-50 text-blue-800 border-blue-100',
+  Growing: 'bg-emerald-50 text-emerald-800 border-emerald-100',
+  Stable: 'bg-slate-50 text-slate-700 border-slate-200',
+  Declining: 'bg-amber-50 text-amber-800 border-amber-100',
+  Accelerating: 'bg-rose-50 text-rose-800 border-rose-100',
+};
+
+const MOVEMENT_MOMENTUM_STYLE: Record<NonNullable<MarketPulseFinding['movement_summary']>['momentum'], string> = {
+  Low: 'bg-slate-100 text-slate-700',
+  Moderate: 'bg-indigo-50 text-indigo-700',
+  High: 'bg-rose-100 text-rose-800',
+};
+
+const SIGNIFICANCE_STYLE: Record<SignalSignificance, string> = {
+  Critical: 'bg-rose-600 text-white border-rose-600',
+  Important: 'bg-amber-100 text-amber-900 border-amber-200',
+  Monitor: 'bg-blue-50 text-blue-800 border-blue-100',
+  Background: 'bg-slate-100 text-slate-600 border-slate-200',
+};
+
+function SignificancePill({ significance }: { significance: SignalSignificance }) {
+  return (
+    <span className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${SIGNIFICANCE_STYLE[significance]}`}>
+      {significance}
+    </span>
+  );
+}
+
+function SignificanceBadge({ finding }: { finding: MarketPulseFinding }) {
+  const significance = deriveSignalSignificance(finding);
+  return <SignificancePill significance={significance} />;
+}
+
+function SignalMovement({ finding }: { finding: MarketPulseFinding }) {
+  const movement = finding.movement_summary;
+  if (!movement) return null;
+  const changes = movement.changes?.length
+    ? movement.changes
+    : movement.first_observation
+      ? ['First observation.']
+      : [];
+
+  return (
+    <div className="mt-2 rounded-lg border border-slate-100 bg-white/80 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`inline-flex items-center rounded-full border px-2.5 py-1 font-semibold ${MOVEMENT_DIRECTION_STYLE[movement.direction]}`}>
+          {movement.direction}
+        </span>
+        <span className={`inline-flex items-center rounded-full px-2.5 py-1 font-semibold ${MOVEMENT_MOMENTUM_STYLE[movement.momentum]}`}>
+          Momentum: {movement.momentum}
+        </span>
+      </div>
+      {changes.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-slate-600">
+          <span className="font-semibold text-slate-700">What changed:</span>
+          {changes.map((change) => (
+            <span key={change}>{change}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExecutiveScanStrip({ findings }: { findings: MarketPulseFinding[] }) {
+  const ranked = sortBySignalAttention(findings);
+  const snapshot = ranked.reduce(
+    (acc, finding) => {
+      const significance = deriveSignalSignificance(finding);
+      const direction = finding.movement_summary?.direction;
+      if (significance === 'Critical') acc.critical += 1;
+      if (significance === 'Important') acc.important += 1;
+      if (direction === 'Growing' || direction === 'Accelerating') acc.growing += 1;
+      if (direction === 'Emerging') acc.emerging += 1;
+      if (direction === 'Declining') acc.declining += 1;
+      return acc;
+    },
+    { critical: 0, important: 0, growing: 0, emerging: 0, declining: 0 },
+  );
+  const topDevelopments = ranked.slice(0, 3);
+
+  if (ranked.length === 0) return null;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.35fr)]">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Market snapshot</div>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5 lg:grid-cols-2">
+            {[
+              ['Critical', snapshot.critical, 'text-rose-700'],
+              ['Important', snapshot.important, 'text-amber-700'],
+              ['Growing', snapshot.growing, 'text-emerald-700'],
+              ['Emerging', snapshot.emerging, 'text-blue-700'],
+              ['Declining', snapshot.declining, 'text-slate-700'],
+            ].map(([label, value, color]) => (
+              <div key={label} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                <div className={`text-lg font-bold ${color}`}>{value}</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Top developments</div>
+          <div className="mt-3 space-y-2">
+            {topDevelopments.map((finding) => {
+              const significance = deriveSignalSignificance(finding);
+              const direction = finding.movement_summary?.direction ?? 'Stable';
+              return (
+                <div key={finding.id} className="rounded-lg border border-slate-100 bg-white px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <SignificanceBadge finding={finding} />
+                    <span className="text-[11px] font-semibold text-slate-500">{direction}</span>
+                    <span className="text-sm font-semibold text-slate-900">{finding.title}</span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">{compactTakeaway(finding)}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const MARKET_DIRECTION_STYLE: Record<MarketDeltaSummary['market_direction'], string> = {
+  Expanding: 'bg-emerald-50 text-emerald-800 border-emerald-100',
+  Stable: 'bg-slate-50 text-slate-700 border-slate-200',
+  Shifting: 'bg-blue-50 text-blue-800 border-blue-100',
+  Volatile: 'bg-rose-50 text-rose-800 border-rose-100',
+};
+
+function DeltaSignalList({
+  title,
+  items,
+  tone,
+}: {
+  title: string;
+  items: MarketDeltaSummary['new_signals'];
+  tone: string;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</div>
+        <div className={`text-sm font-bold ${tone}`}>{items.length}</div>
+      </div>
+      {items.length > 0 && (
+        <ul className="mt-1.5 space-y-1 text-xs text-slate-700">
+          {items.slice(0, 3).map((item, index) => (
+            <li key={item.id ?? item.canonical_event_key ?? `${title}-${index}`} className="truncate">
+              {item.title}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function SinceLastPulseStrip({ delta }: { delta: MarketDeltaSummary | null | undefined }) {
+  if (!delta) return null;
+
+  if (delta.baseline) {
+    return (
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Since last pulse</div>
+        <p className="mt-2 text-sm font-medium text-slate-800">Baseline pulse established. Future runs will show market change.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Since last pulse</div>
+          <div className="mt-1 text-sm font-semibold text-slate-950">Market change summary</div>
+        </div>
+        <span className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wide ${MARKET_DIRECTION_STYLE[delta.market_direction]}`}>
+          {delta.market_direction}
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-2 md:grid-cols-4">
+        <DeltaSignalList title="New signals" items={delta.new_signals} tone="text-blue-700" />
+        <DeltaSignalList title="Strengthening" items={delta.strengthening_signals} tone="text-emerald-700" />
+        <DeltaSignalList title="Weakening" items={delta.weakening_signals} tone="text-amber-700" />
+        <DeltaSignalList title="Retired" items={delta.retired_signals} tone="text-slate-600" />
+      </div>
+    </section>
+  );
+}
+
+function filterDeltaSummary(delta: MarketDeltaSummary | null | undefined, dimension: MarketDimension): MarketDeltaSummary | null | undefined {
+  if (!delta || delta.baseline || dimension === 'all') return delta;
+
+  const matches = (item: MarketDeltaSummary['new_signals'][number]) => {
+    return findingMatchesDimension(
+      {
+        category: item.category ?? '',
+        title: item.title,
+        summary: '',
+        regions: [],
+        cluster_role: null,
+        alert_class: null,
+      },
+      dimension,
+    );
+  };
+  const newSignals = delta.new_signals.filter(matches);
+  const strengtheningSignals = delta.strengthening_signals.filter(matches);
+  const weakeningSignals = delta.weakening_signals.filter(matches);
+  const retiredSignals = delta.retired_signals.filter(matches);
+  const expansionPressure = newSignals.length + strengtheningSignals.length;
+  const contractionPressure = weakeningSignals.length + retiredSignals.length;
+  const marketDirection: MarketDeltaSummary['market_direction'] =
+    expansionPressure > 0 && contractionPressure > 0
+      ? 'Volatile'
+      : expansionPressure > contractionPressure
+        ? 'Expanding'
+        : contractionPressure > expansionPressure
+          ? 'Shifting'
+          : 'Stable';
+
+  return {
+    ...delta,
+    market_direction: marketDirection,
+    new_signals: newSignals,
+    strengthening_signals: strengtheningSignals,
+    weakening_signals: weakeningSignals,
+    retired_signals: retiredSignals,
+  };
+}
+
+function DimensionFilters({
+  activeDimension,
+  counts,
+  onChange,
+}: {
+  activeDimension: MarketDimension;
+  counts: Record<MarketDimension, number>;
+  onChange: (dimension: MarketDimension) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Market dimensions</div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {MARKET_DIMENSIONS.map((dimension) => {
+          const active = activeDimension === dimension.id;
+          return (
+            <button
+              key={dimension.id}
+              type="button"
+              onClick={() => onChange(dimension.id)}
+              className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                active
+                  ? 'border-slate-900 bg-slate-900 text-white'
+                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              {dimension.label} ({counts[dimension.id] ?? 0})
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function AttentionFilters({
+  activeFilter,
+  counts,
+  onChange,
+}: {
+  activeFilter: AttentionFilter;
+  counts: Record<AttentionFilter, number>;
+  onChange: (filter: AttentionFilter) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Attention</div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {ATTENTION_FILTERS.map((filter) => {
+          const active = activeFilter === filter.id;
+          return (
+            <button
+              key={filter.id}
+              type="button"
+              onClick={() => onChange(filter.id)}
+              className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                active
+                  ? 'border-indigo-700 bg-indigo-700 text-white'
+                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              {filter.label} ({counts[filter.id] ?? 0})
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function MarketNarrativesSection({ findings }: { findings: MarketPulseFinding[] }) {
+  const narratives = buildMarketNarratives(findings);
+  if (narratives.length === 0) return null;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Market narratives</div>
+          <h4 className="mt-1 text-base font-semibold text-slate-950">Broader movements across signals</h4>
+        </div>
+        <span className="text-xs text-slate-500">{narratives.length} connected stor{narratives.length === 1 ? 'y' : 'ies'}</span>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        {narratives.map((narrative) => (
+          <article key={narrative.id} className="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <SignificancePill significance={narrative.significance} />
+              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${MOVEMENT_DIRECTION_STYLE[narrative.direction]}`}>
+                {narrative.direction}
+              </span>
+            </div>
+            <h5 className="mt-2 text-sm font-bold text-slate-950">{narrative.title}</h5>
+            <div className="mt-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Supporting findings</div>
+              <ul className="mt-1.5 space-y-1 text-xs text-slate-700">
+                {narrative.supportingFindings.slice(0, 4).map((finding) => (
+                  <li key={finding.id} className="flex gap-2">
+                    <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" />
+                    <span>{finding.title}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <p className="mt-3 text-sm leading-6 text-slate-700">{narrative.summary}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 type MarketPulseLoadError = Error & {
   status?: number;
@@ -380,6 +1188,7 @@ function FindingCard({
         <div className="flex flex-wrap items-center gap-2">
           <span className={`rounded px-2 py-0.5 text-[11px] font-bold tracking-wide ${tierBadge}`}>{tier}</span>
           <span className={`text-gray-900 ${titleClass}`}>{finding.title}</span>
+          <SignificanceBadge finding={finding} />
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {finding.alert_class && ALERT_CLASS_LABEL[finding.alert_class] && (
@@ -396,6 +1205,8 @@ function FindingCard({
           <span className={`rounded-full px-2 py-0.5 text-[10px] ${changeBadge}`}>{finding.change_status}</span>
         </div>
       </div>
+
+      <SignalMovement finding={finding} />
 
       {/* Phase 1B interpretation block — replaces the legacy "summary + why_it_matters" pair when present. */}
       {finding.interpretation_text ? (
@@ -424,6 +1235,8 @@ function FindingCard({
           ))}
         </div>
       )}
+
+      <SignalExplainability finding={finding} />
 
       {/* Trust + scoring footer. */}
       <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
@@ -789,6 +1602,8 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
   const [scanSetupOpen, setScanSetupOpen] = useState(false);
   const [scanSetupAutoOpened, setScanSetupAutoOpened] = useState(false);
   const [actioningFindingId, setActioningFindingId] = useState<string | null>(null);
+  const [activeDimension, setActiveDimension] = useState<MarketDimension>('all');
+  const [activeAttentionFilter, setActiveAttentionFilter] = useState<AttentionFilter>('all');
   // Track local action overrides so the UI updates instantly without
   // re-polling the run after a user mutation.
   const [findingStateOverrides, setFindingStateOverrides] = useState<Record<string, MarketPulseFinding['user_action_state']>>({});
@@ -897,15 +1712,48 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
     return () => window.clearInterval(timer);
   }, [companyId, fetchWithAuth, runId]);
 
+  const allVisibleRankedFindings = useMemo(() => {
+    return sortBySignalAttention(runResult?.findings ?? []).filter((f) => {
+      const state = findingStateOverrides[f.id] ?? f.user_action_state ?? 'open';
+      return state === 'open' || state === 'escalated';
+    });
+  }, [runResult, findingStateOverrides]);
+
+  const dimensionCounts = useMemo(() => {
+    return MARKET_DIMENSIONS.reduce((acc, dimension) => {
+      acc[dimension.id] = allVisibleRankedFindings.filter((finding) => findingMatchesDimension(finding, dimension.id)).length;
+      return acc;
+    }, {} as Record<MarketDimension, number>);
+  }, [allVisibleRankedFindings]);
+
+  const dimensionRankedFindings = useMemo(() => {
+    return allVisibleRankedFindings.filter((finding) => findingMatchesDimension(finding, activeDimension));
+  }, [activeDimension, allVisibleRankedFindings]);
+
+  const attentionCounts = useMemo(() => {
+    return ATTENTION_FILTERS.reduce((acc, filter) => {
+      acc[filter.id] = dimensionRankedFindings.filter((finding) => findingMatchesAttention(finding, filter.id)).length;
+      return acc;
+    }, {} as Record<AttentionFilter, number>);
+  }, [dimensionRankedFindings]);
+
+  const visibleRankedFindings = useMemo(() => {
+    return dimensionRankedFindings.filter((finding) => findingMatchesAttention(finding, activeAttentionFilter));
+  }, [activeAttentionFilter, dimensionRankedFindings]);
+
+  const filteredMarketDeltaSummary = useMemo(() => {
+    return filterDeltaSummary(runResult?.run.market_delta_summary, activeDimension);
+  }, [activeDimension, runResult]);
+
   const groupedFindings = useMemo(() => {
-    const findings = runResult?.findings ?? [];
+    const findings = visibleRankedFindings;
     return {
       top: findings.filter((item) => item.change_status === 'new' || item.change_status === 'updated').slice(0, 6),
       risks: findings.filter((item) => item.impact_type === 'risk'),
       watch: findings.filter((item) => item.impact_type === 'watch'),
       opportunities: findings.filter((item) => item.impact_type === 'opportunity'),
     };
-  }, [runResult]);
+  }, [visibleRankedFindings]);
 
   // First-time visitor → auto-open Scan Setup so the form is discoverable.
   // Once history loads with at least one row, the disclosure stays whatever
@@ -940,18 +1788,14 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
   // Phase 1B: tier-grouped feed (P0 dominant, P1 visible, P2 compact).
   // Filters out resolved/snoozed by default so the feed only shows actionable items.
   const tieredFindings = useMemo(() => {
-    const findings = runResult?.findings ?? [];
-    const visible = findings.filter((f) => {
-      const state = findingStateOverrides[f.id] ?? f.user_action_state ?? 'open';
-      return state === 'open' || state === 'escalated';
-    });
+    const visible = visibleRankedFindings;
     return {
       P0: visible.filter((f) => f.priority_tier === 'P0'),
       P1: visible.filter((f) => f.priority_tier === 'P1'),
       P2: visible.filter((f) => !f.priority_tier || f.priority_tier === 'P2'),
-      hidden: findings.length - visible.length,
+      hidden: dimensionRankedFindings.length - visible.length,
     };
-  }, [runResult, findingStateOverrides]);
+  }, [dimensionRankedFindings, visibleRankedFindings]);
   const hasPrioritizedFeed = Boolean(
     runResult && tieredFindings.P0.length + tieredFindings.P1.length + tieredFindings.P2.length > 0
   );
@@ -1648,6 +2492,39 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
             )}
           </section>
 
+          {runResult && runResult.findings.length > 0 && (
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <DimensionFilters
+                activeDimension={activeDimension}
+                counts={dimensionCounts}
+                onChange={setActiveDimension}
+              />
+              <AttentionFilters
+                activeFilter={activeAttentionFilter}
+                counts={attentionCounts}
+                onChange={setActiveAttentionFilter}
+              />
+            </div>
+          )}
+
+          {runResult && dimensionRankedFindings.length > 0 && (
+            <ExecutiveScanStrip findings={dimensionRankedFindings} />
+          )}
+
+          {runResult && (
+            <SinceLastPulseStrip delta={filteredMarketDeltaSummary} />
+          )}
+
+          {runResult && visibleRankedFindings.length > 1 && (
+            <MarketNarrativesSection findings={visibleRankedFindings} />
+          )}
+
+          {runResult && runResult.findings.length > 0 && visibleRankedFindings.length === 0 && (
+            <section className="rounded-2xl border border-dashed border-slate-200 bg-white p-5 text-sm text-slate-500">
+              No Market Pulse findings match these filters yet.
+            </section>
+          )}
+
           {/* Phase 1B FEED — tier-grouped, action-rail-equipped finding cards.
               Replaces the four impact-grouped lists in the legacy Results section
               when at least one finding has a priority_tier (i.e. post-1A run). */}
@@ -1823,12 +2700,15 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
                                   </span>
                                 )}
                                 <span className="text-sm font-semibold text-gray-900">{item.title}</span>
+                                <SignificanceBadge finding={item} />
                                 <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{toTitle(item.category)}</span>
                                 <span className={`rounded-full px-2 py-0.5 text-xs ${changeBadge}`}>{toTitle(item.change_status)}</span>
                               </div>
+                              <SignalMovement finding={item} />
                               <p className="mt-2 text-sm text-gray-600">{item.summary}</p>
                               <p className="mt-2 text-sm text-gray-800"><strong>Why it matters:</strong> {item.why_it_matters}</p>
                               <p className="mt-1 text-sm text-gray-800"><strong>Recommended action:</strong> {item.recommended_action}</p>
+                              <SignalExplainability finding={item} />
                               <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
                                 <span className={`font-semibold ${confidenceColor}`}>
                                   Confidence {Math.round(item.confidence_score)}

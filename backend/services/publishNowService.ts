@@ -432,6 +432,23 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       result.post_url || '',
       result.published_at
     );
+    // P3-1 — advance the variant experiment tracker for any variant
+    // that ships with this scheduled_post. Best-effort; failures
+    // never block publish.
+    try {
+      const { resolveStrategyAttributionForScheduledPost } = await import('./creator/strategyAttributionResolver');
+      const { notifyExperimentAssetPublished } = await import('./creator/variantExperimentLifecycle');
+      const attribution = await resolveStrategyAttributionForScheduledPost(scheduled_post_id);
+      if (attribution?.variantId && attribution.companyId) {
+        notifyExperimentAssetPublished({
+          companyId: attribution.companyId,
+          variantId: attribution.variantId,
+          scheduledPostId: scheduled_post_id,
+        });
+      }
+    } catch (err) {
+      console.warn('[publishNowService] experiment publish-notify failed (non-fatal):', err instanceof Error ? err.message : String(err));
+    }
     emitCreatorEvent({
       event: CREATOR_EVENTS.ATTACHMENT_PUBLISH_SUCCESS,
       scheduledPostId: scheduled_post_id,

@@ -74,7 +74,7 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
       'Supports structured follow-up planning',
     ],
     cta: 'Open Active Leads',
-    route: '/command-center/engagement',
+    route: '/command-center/active-leads',
     accentFrom: 'from-purple-50',
     accentTo: 'to-violet-50',
     borderColor: 'border-purple-200',

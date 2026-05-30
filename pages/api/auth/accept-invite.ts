@@ -16,6 +16,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
+import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
 
 type SuccessResponse = { ok: true; email: string };
 type ErrorResponse   = { error: string; code?: string };

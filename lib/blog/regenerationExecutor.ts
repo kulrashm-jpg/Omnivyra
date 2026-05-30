@@ -63,6 +63,21 @@ export interface RegenerationOptions {
    * and trend signals so targeted improvements stay aligned.
    */
   additionalContext?: string;
+  /**
+   * Blog Regeneration Governance Parity — optional governance prompt
+   * context. When present and the resolved industry is regulated,
+   * EVERY regeneration system prompt is prepended with the canonical
+   * compliance preamble (parity with initial blog generation, image
+   * composer, text orchestrator, theme treatment).
+   *
+   * When omitted, `applyOptimizationActions` resolves it once from
+   * `blog.company_id` using the existing
+   * `buildGovernancePromptContext` helper — same path used by the
+   * blog runner and the post / thread / theme-treatment paths. Null
+   * / `industry='none'` → strict no-op (byte-identical system prompts
+   * to legacy callers).
+   */
+  governance?: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null;
 }
 
 // ── AI system prompt ──────────────────────────────────────────────────────────
@@ -71,6 +86,21 @@ const SYSTEM_PROMPT =
   'You are a professional content editor optimizing blog content for SEO, AEO, and GEO. ' +
   'Rules: do not change tone drastically; preserve meaning; improve clarity, depth, and structure. ' +
   'Always respond with valid JSON only — no markdown fences, no prose outside the JSON object.';
+
+/**
+ * Blog Regeneration Governance Parity — wraps the editor SYSTEM_PROMPT
+ * with the canonical compliance preamble when governance is present.
+ * Returns `SYSTEM_PROMPT` unchanged when `options.governance` is null
+ * / undefined / `industry='none'` — preserving byte-identical legacy
+ * behavior. Reuses the canonical
+ * `applyGovernancePreambleToSystemPrompt` helper (no second
+ * governance path).
+ */
+function effectiveSystemPrompt(options?: RegenerationOptions): string {
+  const { applyGovernancePreambleToSystemPrompt } =
+    require('../../backend/services/creator/strategyGovernancePromptContext') as typeof import('../../backend/services/creator/strategyGovernancePromptContext');
+  return applyGovernancePreambleToSystemPrompt(SYSTEM_PROMPT, options?.governance ?? null);
+}
 
 // ── Text utilities ────────────────────────────────────────────────────────────
 
@@ -168,7 +198,7 @@ async function applyAddSummary(
     response_format: { type: 'json_object' },
     operation:       'blogOptimization',
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: effectiveSystemPrompt(options) },
       {
         role: 'user',
         content: withAdditionalContext(
@@ -230,7 +260,7 @@ async function applyAddFaq(
     response_format: { type: 'json_object' },
     operation:       'blogOptimization',
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: effectiveSystemPrompt(options) },
       {
         role: 'user',
         content: withAdditionalContext(
@@ -314,7 +344,7 @@ async function applyExpandSection(
     response_format: { type: 'json_object' },
     operation:       'blogOptimization',
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: effectiveSystemPrompt(options) },
       {
         role: 'user',
         content: withAdditionalContext(
@@ -389,7 +419,7 @@ async function applyAddReferences(
     response_format: { type: 'json_object' },
     operation:       'blogOptimization',
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: effectiveSystemPrompt(options) },
       {
         role: 'user',
         content: withAdditionalContext(
@@ -518,7 +548,7 @@ async function applyAddHeadings(
     response_format: { type: 'json_object' },
     operation: 'blogOptimization',
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: effectiveSystemPrompt(options) },
       {
         role: 'user',
         content: withAdditionalContext(
@@ -595,7 +625,7 @@ async function applyFixTitleKeyword(
     response_format: { type: 'json_object' },
     operation:       'blogOptimization',
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: effectiveSystemPrompt(options) },
       {
         role: 'user',
         content: withAdditionalContext(
@@ -641,29 +671,76 @@ export async function applyOptimizationActions(
   const changes: RegenerationChange[] = [];
   let titleChange: string | undefined;
 
+  // Blog Regeneration Governance Parity — resolve governance ONCE per
+  // regeneration call. When the caller already supplied `governance`
+  // in options, it is preserved verbatim. Otherwise resolved from the
+  // blog's company_id using the same buildGovernancePromptContext
+  // helper the rest of the platform uses. Best-effort: failures leave
+  // governance=null and behavior is byte-identical to legacy callers.
+  let effectiveOptions: RegenerationOptions | undefined = options;
+  if (!options?.governance) {
+    try {
+      const { getProfile } = await import('../../backend/services/companyProfileService');
+      const { buildGovernancePromptContext } = await import('../../backend/services/creator/strategyGovernancePromptContext');
+      const profile = await getProfile(blog.company_id, { autoRefine: false });
+      if (profile) {
+        const ctx = buildGovernancePromptContext({
+          companyContext: {
+            industry: (profile as any).industry ?? null,
+            industry_list: (profile as any).industry_list ?? null,
+            category: (profile as any).category ?? null,
+            category_list: (profile as any).category_list ?? null,
+          },
+          // Long-form regeneration shares the image-lane policy by
+          // convention — same as initial blog generation, post,
+          // thread, theme treatment.
+          contentType: 'image',
+          selectedStrategy: null,
+        });
+        // Reuse the canonical restricted-strategy audit hook so the
+        // compliance trail captures regeneration paths too.
+        try {
+          const { maybeAuditRestrictedStrategySelection } =
+            await import('../../backend/services/creator/governanceItemEnricher');
+          maybeAuditRestrictedStrategySelection({
+            context: ctx,
+            companyId: blog.company_id,
+            contentType: 'blog',
+            actorUserId: null,
+          });
+        } catch {
+          // Best-effort.
+        }
+        effectiveOptions = { ...(options ?? {}), governance: ctx };
+      }
+    } catch {
+      // Best-effort — fall through with the original options.
+    }
+  }
+
   for (const action of actions) {
     try {
       switch (action.instruction_code) {
         case 'ADD_SUMMARY': {
-          const r = await applyAddSummary(blog, blocks, options);
+          const r = await applyAddSummary(blog, blocks, effectiveOptions);
           blocks = r.blocks;
           changes.push(r.change);
           break;
         }
         case 'ADD_FAQ': {
-          const r = await applyAddFaq(blog, blocks, options);
+          const r = await applyAddFaq(blog, blocks, effectiveOptions);
           blocks = r.blocks;
           changes.push(r.change);
           break;
         }
         case 'EXPAND_SECTION': {
-          const r = await applyExpandSection(blog, blocks, action, options);
+          const r = await applyExpandSection(blog, blocks, action, effectiveOptions);
           blocks = r.blocks;
           changes.push(r.change);
           break;
         }
         case 'ADD_REFERENCES': {
-          const r = await applyAddReferences(blog, blocks, options);
+          const r = await applyAddReferences(blog, blocks, effectiveOptions);
           blocks = r.blocks;
           changes.push(r.change);
           break;
@@ -675,13 +752,13 @@ export async function applyOptimizationActions(
           break;
         }
         case 'ADD_HEADINGS': {
-          const r = await applyAddHeadings(blog, blocks, options);
+          const r = await applyAddHeadings(blog, blocks, effectiveOptions);
           blocks = r.blocks;
           changes.push(r.change);
           break;
         }
         case 'FIX_TITLE_KEYWORD': {
-          const r = await applyFixTitleKeyword(blog, blocks, options);
+          const r = await applyFixTitleKeyword(blog, blocks, effectiveOptions);
           blocks      = r.blocks;
           titleChange = r.titleChange;
           changes.push(r.change);

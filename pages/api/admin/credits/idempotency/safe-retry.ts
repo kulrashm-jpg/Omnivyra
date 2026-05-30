@@ -53,7 +53,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const result = await safeRetryOperation({ surface, id, reason: reason.trim(), actorUserId: user.id });
 
-  if (!result.ok) {
+  if (result.ok === false) {
     const status =
       result.code === 'NOT_FOUND'             ? 404 :
       result.code === 'COMPLETED_SETTLEMENT'  ? 409 :   // replay protection enforced

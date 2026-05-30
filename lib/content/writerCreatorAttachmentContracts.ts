@@ -172,7 +172,28 @@ export function creatorContentAssetFamily(assetType: CreatorContentAssetType): '
 
 export function creatorRouteTypeForAsset(assetType: WriterCreatorAssetType): LegacyCreatorRouteType {
   if (assetType === 'supporting_image' || assetType === 'brand_card') return 'image';
+  // Taxonomy consolidation — banner is now an Image layout (wide-banner).
+  // Route the legacy banner writer-attach type to the consolidated image
+  // workflow; the layout preset is applied via `creatorLayoutForAsset()`
+  // below and absorbed by the page's URL `layout` query parameter.
+  if (assetType === 'banner') return 'image';
   return assetType;
+}
+
+/**
+ * Optional layout preset that the writer-creator launch flow should
+ * pass to the consolidated workflow when the legacy assetType maps
+ * to a different route type. Returns null when no layout override is
+ * needed.
+ *
+ * Mapping:
+ *   banner → image with layout=wide-banner
+ *   (slider isn't in WriterCreatorAssetType, but pre-emptive entry
+ *    documents the consolidation contract.)
+ */
+export function creatorLayoutForAsset(assetType: WriterCreatorAssetType): string | null {
+  if (assetType === 'banner') return 'wide-banner';
+  return null;
 }
 
 export function assetLabel(assetType: WriterCreatorAssetType): string {

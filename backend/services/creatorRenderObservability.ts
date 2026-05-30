@@ -14,6 +14,7 @@ export type CreatorRenderMetricName =
   | 'accessibility_rejection'
   | 'publish_live_ocr_rejection'
   | 'scheduler_validation_rejection'
+  | 'thread_multi_row_insert'
   | 'dlq_replay'
   | 'queue_reconciliation';
 

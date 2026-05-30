@@ -373,6 +373,34 @@ async function persistComments(rows: IngestCommentRow[]): Promise<void> {
   if (error) {
     throw new Error(`Failed to persist comments: ${error.message}`);
   }
+
+  // ── Strategy Analytics runtime activation (additive + best-effort) ──
+  // Mirror each persisted comment as a 'comment' strategy event so the
+  // strategy aggregator + leaderboards reflect comment activity. All
+  // failures swallowed — the canonical persist above already succeeded
+  // and analytics must never block ingestion (PHASE 6).
+  try {
+    const { recordCommentStrategyEvents } =
+      await import('./creator/strategyAnalyticsRuntime');
+    // Group comments by scheduled_post_id (rare to have >1 post per
+    // batch but handle it correctly).
+    const countByPost = new Map<string, number>();
+    for (const row of rows) {
+      const key = row.scheduled_post_id;
+      if (!key) continue;
+      countByPost.set(key, (countByPost.get(key) ?? 0) + 1);
+    }
+    await Promise.all(
+      Array.from(countByPost.entries()).map(([scheduledPostId, commentCount]) =>
+        recordCommentStrategyEvents({ scheduledPostId, commentCount }),
+      ),
+    );
+  } catch (err: unknown) {
+    console.warn(
+      '[engagementIngestion] strategy analytics recording failed (non-fatal):',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 /**

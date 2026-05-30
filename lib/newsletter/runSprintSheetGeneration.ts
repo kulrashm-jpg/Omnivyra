@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { buildGovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
 import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
@@ -536,7 +537,7 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
     const { score, analysis, weak, composite } = evaluation;
     if (composite > bestScore) { bestScore = composite; best = activeParsed; }
     if (!weak) {
-      return { needs_clarification: false, mode: 'full', confidence: 'high', template_used: true, hook_assessment: { strength: 'moderate', note: 'Newsletter-owned sprint sheet generation path used.' }, result: activeParsed };
+      return { needs_clarification: false, mode: 'full', confidence: 'high', template_used: true, hook_assessment: { strength: 'moderate', note: 'Newsletter-owned sprint sheet generation path used.' }, result: activeParsed, governance: buildGovernanceExplainabilityMetadata(null) };
     }
 
     retryReason = [
@@ -557,7 +558,7 @@ export async function runSprintSheetGeneration(input: NewsletterGenerationReques
   }
 
   if (best) {
-    return { needs_clarification: false, mode: 'full', confidence: 'medium', template_used: true, hook_assessment: { strength: 'moderate', note: 'Newsletter-owned sprint sheet generation path used.' }, result: best };
+    return { needs_clarification: false, mode: 'full', confidence: 'medium', template_used: true, hook_assessment: { strength: 'moderate', note: 'Newsletter-owned sprint sheet generation path used.' }, result: best, governance: buildGovernanceExplainabilityMetadata(null) };
   }
   throw new Error('Failed to generate Sprint Sheet newsletter');
 }

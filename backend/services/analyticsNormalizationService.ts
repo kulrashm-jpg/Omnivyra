@@ -59,6 +59,24 @@ export async function upsertPostAnalytics(row: NormalizedPostAnalytics): Promise
   if (error) {
     console.error('[analyticsNormalization] upsertPostAnalytics failed:', error.message);
   }
+
+  // ── Strategy Analytics runtime activation (additive + best-effort) ──
+  // Emits per-metric strategy events ONLY when the scheduled post has
+  // a resolvable strategy attribution. Legacy posts and posts with no
+  // creator attachment continue functioning — recordPostAnalyticsStrategyEvents
+  // swallows all errors so analytics cannot block the canonical upsert.
+  try {
+    const { recordPostAnalyticsStrategyEvents } =
+      await import('./creator/strategyAnalyticsRuntime');
+    await recordPostAnalyticsStrategyEvents(row);
+  } catch (err: unknown) {
+    // Safety net — under no circumstance may strategy analytics throw
+    // into the canonical analytics upsert path.
+    console.warn(
+      '[analyticsNormalization] strategy analytics recording failed (non-fatal):',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

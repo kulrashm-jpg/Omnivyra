@@ -14,6 +14,10 @@ import {
   getDynamicContextThreshold,
   buildDiagnosticRetryReasons,
 } from '../content/companyContextBlock';
+// Closure Pass — Phase 4. Post generation now resolves governance
+// from the same company profile it already loaded and threads it
+// onto the pipeline `item` so system prompts pick up the preamble.
+import { buildGovernancePromptContext } from '../../backend/services/creator/strategyGovernancePromptContext';
 
 export interface PostGenerationRequest {
   company_id: string;
@@ -115,6 +119,23 @@ export async function runPostGeneration(
       : undefined,
   ].filter(Boolean).join('\n\n');
 
+  // Closure Pass — Phase 4. Build the governance context from the
+  // already-loaded company profile. The post path normally has no
+  // operator-selected purpose strategy, so `selectedStrategy=null`;
+  // industry-level directives still apply.
+  const governance = profile
+    ? buildGovernancePromptContext({
+        companyContext: {
+          industry: profile.industry ?? null,
+          industry_list: profile.industry_list ?? null,
+          category: profile.category ?? null,
+          category_list: profile.category_list ?? null,
+        },
+        contentType: 'image', // posts share the image-lane policy
+        selectedStrategy: null,
+      })
+    : null;
+
   const masterItem = {
     execution_id: `post-${Date.now()}`,
     company_id: input.company_id,
@@ -135,6 +156,7 @@ export async function runPostGeneration(
       },
     ],
     ...(extraInstruction ? { extra_instruction: extraInstruction } : {}),
+    ...(governance ? { governance } : {}),
   };
 
   const variantItem = {

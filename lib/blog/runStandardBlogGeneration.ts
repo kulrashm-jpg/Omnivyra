@@ -39,6 +39,7 @@ import {
   computePromptBudgetReport,
   emitPromptBudgetTelemetry,
 } from '../../backend/services/longForm/promptBudgetTelemetry';
+import { buildGovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
 import { getProfile } from '../../backend/services/companyProfileService';
 import {
   extractCompanyIdentity,
@@ -80,6 +81,13 @@ export interface StandardBlogGenerationParams {
    * unused / heavily-used / ignored-critical fields.
    */
   companyContext?: CompanyContext;
+  /**
+   * Blog Governance Parity — optional governance prompt context.
+   * When present and the resolved industry is regulated, every
+   * system prompt built for the blog generation pipeline is prepended
+   * with the canonical compliance preamble. Null = strict no-op.
+   */
+  governance?: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null;
 }
 
 export async function runStandardHtmlBlogGeneration(
@@ -100,12 +108,13 @@ export async function runStandardHtmlBlogGeneration(
     ctx,
     companyIdentity,
     companyContext,
+    governance,
   } = params;
 
   // Phase 2.8 — Emit LONGFORM_CONTEXT_USAGE_REPORT for the assembled prompt
   // BEFORE the model call. This lets operators see exactly which strategic
   // fields actually made it into the prompt the model received.
-  const systemPromptForReport = buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity);
+  const systemPromptForReport = buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity, governance);
   const userPromptForReport = buildGenerationUserPrompt(generationInput);
   recordContextUsageReport({
     context: companyContext,
@@ -321,7 +330,7 @@ export async function runStandardHtmlBlogGeneration(
             response_format: { type: 'json_object' },
             max_tokens:      maxTokens,
             messages: [
-              { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity) },
+              { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity, governance) },
               { role: 'user',   content: buildGenerationUserPrompt(generationInput) },
               ...(previousAssistantOutput ? [{ role: 'assistant' as const, content: previousAssistantOutput }] : []),
               { role: 'user', content: `REJECTED: ${retryReason}\n\nRegenerate the COMPLETE ${contentLabel} from scratch with:\n- ${targetWc} words minimum\n- At least ${targetWc >= 1200 ? 4 : 3} strong H2 sections${contentType === 'story' ? '' : ', each with 3–5 full paragraphs (60–120 words per paragraph)'}\n- A fully written Summary that synthesizes the argument instead of repeating section labels\n- At least ${minimumRefs} credible reference entries for GEO authority${contentType === 'story' ? ' where appropriate' : ''}\n- Provide a real excerpt suitable for listings and a real meta description suitable for search engines\n- Use concrete examples, data, practitioner implications, and actionable analysis to fill each section\n- Make every major section feel complete, not merely adequate\n- Do NOT pad with filler — add genuine depth and detail\n- Do NOT create more than 6 H2 sections — make each section deeper instead of adding more thin sections\n- End each H2 section with a clear takeaway sentence\n\nReturn the same JSON format. The full ${contentLabel} must be ${targetWc}+ words and substantively deeper.` },
@@ -524,7 +533,7 @@ export async function runStandardHtmlBlogGeneration(
           response_format: { type: 'json_object' },
           max_tokens:      maxTokens,
           messages: [
-            { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity) },
+            { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity, governance) },
             { role: 'user',   content: buildGenerationUserPrompt(generationInput) },
             ...(aiResult.output ? [{ role: 'assistant' as const, content: aiResult.output }] : []),
             {
@@ -600,5 +609,6 @@ export async function runStandardHtmlBlogGeneration(
     hook_assessment,
     seo_intelligence:    ctx?.seo ?? undefined,
     trend_intelligence:  ctx?.trends ?? undefined,
+    governance:          buildGovernanceExplainabilityMetadata(governance),
   };
 }

@@ -13,6 +13,9 @@ import { executeWithCredits, makeIdempotencyKey } from '@/backend/services/credi
 import { assertOrgMembership } from '@/backend/services/requestAccessService';
 import { generateMasterContentStrict } from '@/backend/services/contentGeneration/blueprintGenerator';
 import { getContentTypeCategory } from '@/backend/services/contentGeneration/contentTypeHelpers';
+// Closure Pass — Phase 4. Activity workspace generation paths attach
+// governance to the item before calling the pipeline.
+import { enrichItemWithGovernance } from '@/backend/services/creator/governanceItemEnricher';
 // Phase-2 Step-3: master/variant enrichment persistence routes through the
 // ONE canonical write (reconciled, blank/stale-overwrite-safe, observable).
 import { updateExecutionContentByActivity } from '@/backend/services/orchestration';
@@ -892,14 +895,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       note: 'Generated platform variants',
       multiplier: Math.max(1, activePlatformTargets.length || schedules.length || 1),
       executor: async () => {
-        let reservedItemWithMaster = item;
-        if (!item.master_content && !creatorMasterText) {
-          const generatedMaster = await generateMasterContentFromIntent(item);
+        // Closure Pass — Phase 4. Enrich item with governance before
+        // any pipeline call.
+        const governedItem = await enrichItemWithGovernance(item as any);
+        let reservedItemWithMaster = governedItem;
+        if (!(governedItem as any).master_content && !creatorMasterText) {
+          const generatedMaster = await generateMasterContentFromIntent(governedItem as any);
           await persistMasterToDb(activityDbId, generatedMaster);
-          reservedItemWithMaster = { ...item, master_content: generatedMaster };
+          reservedItemWithMaster = { ...governedItem, master_content: generatedMaster };
         } else if (creatorMasterText) {
           reservedItemWithMaster = {
-            ...item,
+            ...governedItem,
             master_content: {
               id: `creator-${item.execution_id}`,
               generated_at: new Date().toISOString(),
@@ -940,14 +946,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // If no master yet: auto-generate it now (first repurpose button press on any platform).
     // Persist to DB immediately so every subsequent platform repurpose reuses the same master.
-    let itemWithMaster = item;
-    if (!item.master_content && !creatorMasterText) {
-      const generatedMaster = await generateMasterContentFromIntent(item);
+    // Closure Pass — Phase 4. Enrich item with governance before
+    // any pipeline call.
+    const itemGoverned = await enrichItemWithGovernance(item as any);
+    let itemWithMaster = itemGoverned;
+    if (!(itemGoverned as any).master_content && !creatorMasterText) {
+      const generatedMaster = await generateMasterContentFromIntent(itemGoverned as any);
       await persistMasterToDb(activityDbId, generatedMaster);
-      itemWithMaster = { ...item, master_content: generatedMaster };
+      itemWithMaster = { ...itemGoverned, master_content: generatedMaster };
     } else if (creatorMasterText) {
       itemWithMaster = {
-        ...item,
+        ...itemGoverned,
         master_content: {
           id: `creator-${item.execution_id}`,
           generated_at: new Date().toISOString(),

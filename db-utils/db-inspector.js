@@ -11,9 +11,9 @@
  *   node db-inspector.js --help             # Show help
  */
 
-const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs');
 const path = require('path');
+const { createDbUtilsClient } = require('./supabase-util-client');
 
 // Load environment variables from parent directory
 function loadEnv() {
@@ -38,10 +38,7 @@ function loadEnv() {
 loadEnv();
 
 // Initialize Supabase client
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+const supabase = createDbUtilsClient();
 
 // Color codes for console output
 const colors = {
@@ -517,5 +514,4 @@ if (require.main === module) {
 }
 
 module.exports = DatabaseInspector;
-
 

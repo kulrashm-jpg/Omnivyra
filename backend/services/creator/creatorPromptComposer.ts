@@ -20,6 +20,13 @@
  * existing image provider call can consume without further changes.
  */
 
+import { resolvePurposeStrategy } from './purposeStrategyRegistry';
+import {
+  type GovernanceExplainabilityMetadata,
+  type GovernancePromptContext,
+  governanceContextHasAnyDirective,
+} from './strategyGovernancePromptContext';
+
 /* ── Input contract ─────────────────────────────────────────────────── */
 
 export type CreatorPromptBrandKit = {
@@ -57,6 +64,26 @@ export type CreatorPromptInput = {
   brandMode?: 'brand-aware' | 'neutral' | string | null;
   /** Content type / asset type as known to the renderer (image / banner / brand_card / supporting_image). */
   contentType?: string | null;
+  /**
+   * Purpose-driven generation strategy key (e.g. 'promotional-image',
+   * 'story-carousel', 'stats'). Looked up in the PurposeStrategyRegistry;
+   * when present, the matching strategy materially influences prompt
+   * directives, composition hierarchy, scene selection, branding
+   * intensity, typography weight, CTA intensity, slide-arc generation
+   * (carousel), and information architecture (infographic).
+   * Null / absent → fall back to the existing prompt composition path.
+   */
+  purposeKey?: string | null;
+  /**
+   * Creator Governance → Prompt Composer Integration — Phase 1+2.
+   * Optional governance prompt context. When present and the
+   * resolved industry is regulated, the composer adds a `governance`
+   * layer carrying compliance directives that the LLM should follow.
+   * Additive only — no existing prompt sections are removed. Null /
+   * absent / industry='none' → strict no-op (zero change in composed
+   * prompt vs. prior behavior).
+   */
+  governance?: GovernancePromptContext | null;
 };
 
 export type CreatorPromptLayers = {
@@ -69,6 +96,20 @@ export type CreatorPromptLayers = {
   composition: string[];
   negative: string[];
   quality: string[];
+  /**
+   * Purpose-strategy layer. Populated when the input carries a
+   * purposeKey that resolves in the PurposeStrategyRegistry. Contains
+   * the strategy's prompt directives + scene-selection hints. Empty
+   * array when no strategy matched.
+   */
+  purpose: string[];
+  /**
+   * Creator Governance → Prompt Composer Integration — Phase 2.
+   * Compliance directives derived from the resolved
+   * strategyGovernancePolicy. Empty array when no industry policy
+   * applies (industry='none') or no governance context was supplied.
+   */
+  governance: string[];
 };
 
 export type CreatorComposedPrompt = {
@@ -82,6 +123,33 @@ export type CreatorComposedPrompt = {
   premium: boolean;
   /** Multimodal references collected from the input. */
   references: ReferenceImage[];
+  /**
+   * Purpose strategy that was applied (if any). Surface in preview
+   * metadata as "Generated As: <generatedAsLabel>" and "Why this
+   * structure was chosen: <whyChosen>".
+   */
+  purposeStrategy: {
+    id: string;
+    generatedAsLabel: string;
+    whyChosen: string;
+    densityBias: string;
+    brandingIntensity: string;
+    typographyWeight: string;
+    ctaIntensity: string;
+    slideArcRoles: string[] | null;
+    informationArchitecturePattern: string | null;
+  } | null;
+  /**
+   * Creator Governance → Prompt Composer Integration — Phase 5.
+   * Explainability metadata describing which governance signals the
+   * composer applied. Always present; carries `industry='none'` +
+   * `warningsApplied: 0` when no policy was active.
+   *
+   * Callers surface this on `generation_metadata.governance` so the
+   * post-execution UI + audit log can show exactly what compliance
+   * guidance shaped the asset.
+   */
+  governance: GovernanceExplainabilityMetadata;
 };
 
 export type ReferenceImagePurpose =
@@ -607,6 +675,33 @@ function collectReferenceImages(input: CreatorPromptInput): ReferenceImage[] {
   return refs;
 }
 
+/**
+ * Premium-compatibility filter for creative-direction templates.
+ * The premium variants (cinematic_*, editorial_*, premium_*, etc.)
+ * are reserved for premium=true paths. When the prompt is non-premium,
+ * filter the strategy's affinity list to non-premium templates only
+ * so we never accidentally promote a low-brand prompt to a premium
+ * template via the purpose-strategy affinity bias.
+ */
+function isTemplatePremiumCompatible(
+  template: CreativeDirectionTemplate,
+  premium: boolean,
+): boolean {
+  const PREMIUM_TEMPLATES = new Set<CreativeDirectionTemplate>([
+    'cinematic_product_launch',
+    'founder_storytelling',
+    'editorial_feature_reveal',
+    'ambient_productivity',
+    'premium_ai_editorial',
+    'product_ecosystem_visual',
+    'minimal_product_hero',
+    'realistic_workflow_scene',
+    'premium_brand_campaign',
+  ]);
+  const isPremium = PREMIUM_TEMPLATES.has(template);
+  return premium ? true : !isPremium;
+}
+
 export function composeCreatorImagePrompt(
   input: CreatorPromptInput,
   options?: ComposeOptions,
@@ -622,10 +717,60 @@ export function composeCreatorImagePrompt(
     ctLow === 'banner' || ctLow === 'brand_card' || ctLow === 'image'
   );
   const premium = options?.premium ?? autoPremium;
-  const template = options?.forceTemplate ?? selectCreativeDirection(input, {
-    premium,
-    brandPreference: options?.brandPreference ?? null,
-  });
+
+  // Resolve the purpose strategy from the registry. When present, its
+  // creativeDirectionAffinity acts as a bias for the creative-direction
+  // selector — preferred templates whose profile matches the purpose
+  // intent are tried first; the existing selector logic remains the
+  // tiebreaker when no affinity match is available.
+  const purposeStrategy = resolvePurposeStrategy(input.contentType ?? input.eyebrow ?? '', input.purposeKey);
+  const affinityTemplate = purposeStrategy
+    ? purposeStrategy.creativeDirectionAffinity.find((t) => isTemplatePremiumCompatible(t, premium)) ?? null
+    : null;
+  const template = options?.forceTemplate
+    ?? affinityTemplate
+    ?? selectCreativeDirection(input, {
+      premium,
+      brandPreference: options?.brandPreference ?? null,
+    });
+
+  // Build the purpose layer — directives + scene-selection hints.
+  // Empty array when no strategy resolved.
+  const purposeLayer: string[] = purposeStrategy
+    ? [
+        `Purpose strategy: ${purposeStrategy.generatedAsLabel} — ${purposeStrategy.whyChosen}`,
+        ...purposeStrategy.promptDirectives,
+        ...purposeStrategy.sceneSelectionHints,
+        `Density discipline: ${purposeStrategy.densityBias}.`,
+        `Branding intensity: ${purposeStrategy.brandingIntensity}.`,
+        `Typography weight: ${purposeStrategy.typographyWeight}.`,
+        `CTA intensity: ${purposeStrategy.ctaIntensity}.`,
+        ...(purposeStrategy.slideArc
+          ? [`Slide arc (in order): ${purposeStrategy.slideArc.map((s) => s.role).join(' → ')}. Each slide must accomplish: ${purposeStrategy.slideArc.map((s) => `${s.role}: ${s.intent}`).join(' | ')}`]
+          : []),
+        ...(purposeStrategy.informationArchitecture
+          ? [
+              `Information architecture: ${purposeStrategy.informationArchitecture.pattern}.`,
+              `Section blueprint: ${purposeStrategy.informationArchitecture.sectionBlueprint.join(' → ')}.`,
+              `Hierarchy notes: ${purposeStrategy.informationArchitecture.hierarchyNotes}`,
+            ]
+          : []),
+      ]
+    : [];
+
+  // Composition hints from the strategy augment (not replace) the
+  // default composition layer so existing composition discipline is
+  // preserved as a baseline.
+  const compositionBase = buildCompositionLayer(input);
+  const compositionLayer = purposeStrategy
+    ? [...compositionBase, ...purposeStrategy.compositionHints]
+    : compositionBase;
+
+  // Creator Governance → Prompt Composer Integration — Phase 2+3+4.
+  // Compliance directives — additive only. When no governance context
+  // is supplied OR industry='none', the layer is empty and the
+  // composed prompt is byte-identical to prior behavior.
+  const governanceLayer = buildGovernanceLayer(input.governance ?? null);
 
   const layers: CreatorPromptLayers = {
     campaign: buildCampaignLayer(input),
@@ -634,9 +779,11 @@ export function composeCreatorImagePrompt(
     product: product.lines,
     visualDirection: buildVisualDirectionLayer(template),
     realism: [...REALISM_DIRECTIVES],
-    composition: buildCompositionLayer(input),
+    composition: compositionLayer,
     negative: [...NEGATIVE_DIRECTIVES_BASE],
     quality: buildQualityLayer(input),
+    purpose: purposeLayer,
+    governance: governanceLayer,
   };
 
   // Mode-shared header preserved verbatim from the prior implementation so
@@ -656,6 +803,11 @@ export function composeCreatorImagePrompt(
     header,
     ...layers.campaign,
     ...layers.asset,
+    // Purpose layer fires BEFORE brand/product/visual-direction so the
+    // strategy intent frames everything that follows. When no
+    // strategy resolved, the layer is empty and the existing
+    // composition path is unchanged.
+    ...layers.purpose,
     ...layers.brand,
     ...layers.product,
     ...layers.visualDirection,
@@ -663,6 +815,11 @@ export function composeCreatorImagePrompt(
     ...layers.composition,
     ...layers.quality,
     ...layers.negative,
+    // Creator Governance → Prompt Composer Integration — Phase 2.
+    // Governance directives fire AFTER the negative-directive base so
+    // industry-specific cautions land alongside (not before) the
+    // suppression discipline. Empty layer = no behavior change.
+    ...layers.governance,
     ...textBanFooter,
   ].filter(Boolean).join('\n');
 
@@ -678,5 +835,80 @@ export function composeCreatorImagePrompt(
     qualityFlags,
     premium,
     references,
+    purposeStrategy: purposeStrategy
+      ? {
+          id: purposeStrategy.id,
+          generatedAsLabel: purposeStrategy.generatedAsLabel,
+          whyChosen: purposeStrategy.whyChosen,
+          densityBias: purposeStrategy.densityBias,
+          brandingIntensity: purposeStrategy.brandingIntensity,
+          typographyWeight: purposeStrategy.typographyWeight,
+          ctaIntensity: purposeStrategy.ctaIntensity,
+          slideArcRoles: purposeStrategy.slideArc ? purposeStrategy.slideArc.map((s) => s.role) : null,
+          informationArchitecturePattern: purposeStrategy.informationArchitecture?.pattern ?? null,
+        }
+      : null,
+    governance: buildGovernanceMetadata(input.governance ?? null, governanceLayer.length),
+  };
+}
+
+/* ── Governance layer + metadata ─────────────────────────────────── */
+
+/**
+ * Build the additive governance prompt layer. Returns an empty array
+ * when no governance context is supplied OR the resolved industry
+ * carries no directives (industry='none'), preserving the prior
+ * composed-prompt output byte-for-byte.
+ *
+ * Phase 2 — compliance directives are injected as-is, one per line.
+ * Phase 4 — when the selected strategy is restricted, an extra
+ * caution line is prepended.
+ */
+function buildGovernanceLayer(
+  ctx: GovernancePromptContext | null,
+): string[] {
+  if (!ctx || !governanceContextHasAnyDirective(ctx)) return [];
+  const out: string[] = [];
+  if (ctx.industry !== 'none' && ctx.compliancePromptDirectives.length > 0) {
+    out.push(`Compliance directives (${ctx.industry} industry policy, risk: ${ctx.riskLevel}):`);
+    for (const directive of ctx.compliancePromptDirectives) out.push(directive);
+  }
+  if (ctx.selectedStrategyIsRestricted) {
+    out.push(
+      `Use extra caution because the selected strategy "${ctx.selectedStrategy ?? 'unknown'}" is governed by industry policy: ${ctx.selectedStrategyGovernanceReason ?? 'restricted by policy'}.`,
+    );
+  } else if (ctx.selectedStrategyIsDeprioritized) {
+    out.push(
+      `The selected strategy "${ctx.selectedStrategy ?? 'unknown'}" is deprioritized by industry policy: ${ctx.selectedStrategyGovernanceReason ?? 'deprioritized by policy'}. Apply the compliance directives above with extra discipline.`,
+    );
+  }
+  return out;
+}
+
+/**
+ * Build the explainability metadata exposed on the composed prompt.
+ * Always present so downstream consumers can rely on a stable shape.
+ */
+function buildGovernanceMetadata(
+  ctx: GovernancePromptContext | null,
+  warningsApplied: number,
+): CreatorComposedPrompt['governance'] {
+  if (!ctx) {
+    return {
+      industry: 'none',
+      riskLevel: 'none',
+      selectedStrategy: null,
+      warningsApplied: 0,
+      selectedStrategyIsRestricted: false,
+      selectedStrategyIsDeprioritized: false,
+    };
+  }
+  return {
+    industry: ctx.industry,
+    riskLevel: ctx.riskLevel,
+    selectedStrategy: ctx.selectedStrategy,
+    warningsApplied,
+    selectedStrategyIsRestricted: ctx.selectedStrategyIsRestricted,
+    selectedStrategyIsDeprioritized: ctx.selectedStrategyIsDeprioritized,
   };
 }

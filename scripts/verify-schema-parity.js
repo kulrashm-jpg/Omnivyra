@@ -93,6 +93,43 @@ const REQUIRED_COLUMNS = [
 
   // scheduled_posts — idempotency for retries / resumes (BLOCKING: scheduler INSERTs reference it)
   { severity: 'BLOCKING', table: 'scheduled_posts',     column: 'idempotency_key',     motivation: 'INSERT … ON CONFLICT (idempotency_key) DO NOTHING — without it, retries duplicate posts.' },
+
+  // active_leads — Phase 1 of the Active Leads object model
+  // (migration 20260817_active_leads_object_model.sql). Entries
+  // are INFO in Phase 1 because no runtime code writes the table
+  // yet — only the operator backfill script does. Phase 2 (APIs)
+  // upgrades the user-mutated columns to BLOCKING.
+  { severity: 'INFO', table: 'active_leads', column: 'organization_id',   motivation: 'Tenant scoping for the Lead object.' },
+  { severity: 'INFO', table: 'active_leads', column: 'contact_id',        motivation: 'Person anchor — half of the rollup key.' },
+  { severity: 'INFO', table: 'active_leads', column: 'opportunity_type',  motivation: 'Other half of the rollup key.' },
+  { severity: 'INFO', table: 'active_leads', column: 'status',            motivation: 'Spec status enum (new/reviewing/contacted/qualified/won/lost/dismissed/snoozed).' },
+  { severity: 'INFO', table: 'active_leads', column: 'owner_user_id',     motivation: 'Spec: assigned owner; nullable = unassigned.' },
+  { severity: 'INFO', table: 'active_leads', column: 'intent_score',      motivation: 'Rollup score from attached signals.' },
+  { severity: 'INFO', table: 'active_leads', column: 'icp_score',         motivation: 'Rollup score from attached signals.' },
+  { severity: 'INFO', table: 'active_leads', column: 'confidence_score',  motivation: 'Rollup score from attached signals.' },
+  { severity: 'INFO', table: 'active_leads', column: 'total_score',       motivation: 'Rollup score from attached signals — primary triage sort.' },
+  { severity: 'INFO', table: 'active_leads', column: 'source_platforms',  motivation: 'Deduped platform union across attached signals.' },
+  { severity: 'INFO', table: 'active_leads', column: 'signal_count',      motivation: 'Denormalized signal count for list rendering.' },
+  { severity: 'INFO', table: 'active_leads', column: 'first_seen_at',     motivation: 'Spec: First Seen.' },
+  { severity: 'INFO', table: 'active_leads', column: 'last_seen_at',      motivation: 'Spec: Last Seen.' },
+  { severity: 'INFO', table: 'active_leads', column: 'last_activity_at',  motivation: 'Spec: Last Activity — primary triage sort.' },
+  { severity: 'INFO', table: 'active_leads', column: 'company_name',      motivation: 'Spec: Company (v1 plain text).' },
+  { severity: 'INFO', table: 'active_leads', column: 'snoozed_until',     motivation: 'Snooze expiry; unsnooze pass flips status back to reviewing.' },
+  { severity: 'INFO', table: 'active_leads', column: 'status_changed_at', motivation: 'Status audit.' },
+  { severity: 'INFO', table: 'active_leads', column: 'status_changed_by', motivation: 'Status audit attribution.' },
+
+  // opportunity_feed_items — attachment column added by the
+  // same migration. INFO in Phase 1; Phase 2 upgrades to BLOCKING
+  // (auto-attach trigger / service path).
+  { severity: 'INFO', table: 'opportunity_feed_items', column: 'active_lead_id', motivation: 'Link to active_leads. NULL = not yet rolled up.' },
+
+  // opportunity_feed_items — PR-OPA-1 verbatim signal excerpt for the
+  // "What was said" UI block. WARN: missing column means new rows
+  // throw at PostgREST insert (signal_excerpt is part of the writer
+  // payload), but existing reads tolerate NULL — so deploy without
+  // migration partially breaks pipeline writes. Upgrade to BLOCKING
+  // once migration is verified applied.
+  { severity: 'WARN', table: 'opportunity_feed_items', column: 'signal_excerpt', motivation: 'PR-OPA-1: verbatim source excerpt (max 300 chars). Writer populates on every classification; missing column makes inserts fail.' },
 ];
 
 async function main() {

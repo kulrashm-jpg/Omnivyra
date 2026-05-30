@@ -25,8 +25,13 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import { supabase } from '../db/supabaseClient';
 import { normalizePipelineError, type NormalizedPipelineError } from '../../lib/shared/bolt/normalizePipelineError';
+import { classifyBoltFailure, type ClassifiedBoltFailure } from '../../lib/shared/bolt/classifyBoltFailure';
+import type { StrategySnapshot } from '../../lib/shared/bolt/captureStrategySnapshot';
 import { getUserFriendlyMessage } from '../utils/userFriendlyErrors';
+
+const STACK_EXCERPT_BYTES = 2_000;
 
 export type BoltPipelineMode = 'week_plan' | 'daily_plan' | 'schedule' | 'campaign_schedule' | 'repurpose' | string;
 export type BoltCampaignType = 'bolt-text' | 'bolt-creator' | 'bolt-combined' | string;
@@ -48,6 +53,14 @@ export interface PersistPipelineFailureInput {
   campaignId?: string | null;
   /** Per-stage start (defaults to `runStartedAt` if omitted). */
   stageStartedAt?: number;
+  /** Optional strategy id when known. Best-effort — not all stages carry one. */
+  strategyId?: string | null;
+  /** Snapshot of strategy/execution-config at failure time, for the
+   *  super-admin failure dashboard's differential view. Best-effort. */
+  strategySnapshot?: StrategySnapshot | null;
+  /** company_id when known. Stamped on the failure summary row so
+   *  per-tenant filtering doesn't need a runs round-trip. */
+  companyId?: string | null;
 }
 
 export interface PersistPipelineFailureResult {
@@ -55,6 +68,102 @@ export interface PersistPipelineFailureResult {
   userMessage: string;
   /** Full normalized error for callers that want to log/forward it. */
   normalized: NormalizedPipelineError;
+  /** Operator-facing classification used by the failure dashboard. */
+  classification: ClassifiedBoltFailure;
+}
+
+function truncate(text: string | null, limit: number): string | null {
+  if (text == null) return null;
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}\n…[truncated ${text.length - limit} bytes]`;
+}
+
+/**
+ * Best-effort write to the bolt_failure_summary table. Never throws.
+ *
+ * On every failure we:
+ *   1. Clear is_terminal on prior rows for this run (so the dashboard's
+ *      one-row-per-run filter always reflects the LATEST catch site).
+ *   2. Insert a new row with is_terminal=true.
+ *
+ * Step 1 is best-effort; if it fails we still insert the new row.
+ * Worst case: a dashboard query without `is_terminal` filtering sees
+ * multiple rows, which is the documented behaviour anyway.
+ *
+ * Outer-pipeline catches and per-stage catches BOTH write a row. The
+ * outer catch typically fires AFTER the per-stage one, so the outer
+ * row ends up flagged terminal — which is correct, because the outer
+ * catch is the last word on whether the run actually died.
+ */
+async function persistFailureSummaryRow(args: {
+  runId: string;
+  stage: string;
+  companyId: string | null;
+  campaignId: string | null;
+  strategyId: string | null;
+  pipelineMode: string | null;
+  campaignType: string | null;
+  normalized: NormalizedPipelineError;
+  classification: ClassifiedBoltFailure;
+  strategySnapshot: StrategySnapshot | null;
+}): Promise<void> {
+  // Resolve current_stage from the run row best-effort. The catch site
+  // already knows `stage`, but current_stage on the run row can race
+  // ahead of the stage that actually threw — capturing both is the
+  // whole point of the spec's "failed_stage vs current_stage" pair.
+  let currentStage: string | null = null;
+  let resolvedCompanyId = args.companyId;
+  try {
+    const { data: runRow } = await supabase
+      .from('bolt_execution_runs')
+      .select('current_stage, company_id')
+      .eq('id', args.runId)
+      .maybeSingle();
+    if (runRow && typeof runRow === 'object') {
+      currentStage = (runRow as { current_stage?: string | null }).current_stage ?? null;
+      if (!resolvedCompanyId) {
+        resolvedCompanyId = (runRow as { company_id?: string | null }).company_id ?? null;
+      }
+    }
+  } catch {
+    // Falls back to args; missing current_stage is fine.
+  }
+
+  try {
+    await ownedDbTable('bolt_failure_summary')
+      .update({ is_terminal: false })
+      .eq('run_id', args.runId)
+      .eq('is_terminal', true);
+  } catch {
+    // Non-fatal — the new row will still be inserted with is_terminal=true.
+  }
+
+  try {
+    await ownedDbTable('bolt_failure_summary').insert({
+      run_id: args.runId,
+      campaign_id: args.campaignId,
+      company_id: resolvedCompanyId,
+      strategy_id: args.strategyId,
+      failed_stage: args.stage,
+      current_stage: currentStage,
+      pipeline_mode: args.pipelineMode,
+      campaign_type: args.campaignType,
+      raw_error_message: args.normalized.message,
+      stack_excerpt: truncate(args.normalized.stack, STACK_EXCERPT_BYTES),
+      provider: args.classification.provider,
+      normalized_error_type: args.classification.category,
+      retriable: args.classification.retriable,
+      strategy_snapshot: args.strategySnapshot ?? null,
+      is_terminal: true,
+    });
+  } catch (insertErr) {
+    console.error('[bolt/failure-summary-insert-failed]', {
+      run_id: args.runId,
+      stage: args.stage,
+      category: args.classification.category,
+      insert_error: insertErr instanceof Error ? insertErr.message : String(insertErr),
+    });
+  }
 }
 
 /**
@@ -67,10 +176,21 @@ export interface PersistPipelineFailureResult {
 export async function persistPipelineFailure(
   input: PersistPipelineFailureInput
 ): Promise<PersistPipelineFailureResult> {
-  const { runId, stage, error, runStartedAt, pipelineMode, campaignType, campaignId, stageStartedAt } = input;
+  const { runId, stage, error, runStartedAt, pipelineMode, campaignType, campaignId, stageStartedAt, strategyId, strategySnapshot, companyId } = input;
 
   const normalized = normalizePipelineError(error);
-  const userMessage = await getUserFriendlyMessage(error, 'campaign').catch(() => {
+  const classification = classifyBoltFailure({
+    normalized,
+    error,
+    stage,
+    pipelineMode: pipelineMode ?? null,
+  });
+  // Pass the classified category as an extra context hint to the
+  // user-friendly resolver. The resolver reads the hint when matching
+  // mappings — see expanded mappings in userFriendlyErrorService.ts.
+  const userMessage = await getUserFriendlyMessage(error, 'campaign', {
+    boltCategory: classification.category,
+  }).catch(() => {
     // userFriendlyErrors should never throw, but if its DB lookup blows up,
     // fall back to the normalized message rather than crashing the catch path.
     return normalized.message;
@@ -90,6 +210,11 @@ export async function persistPipelineFailure(
     code: normalized.code,
     type: normalized.type,
     retriable: normalized.retriable,
+    // Operator-facing classification + provider attribution. Read by
+    // the failure dashboard; logged here so it's also visible in
+    // log streams without joining back to bolt_failure_summary.
+    category: classification.category,
+    provider: classification.provider,
     failed_after_ms: failedAfterMs,
     stage_duration_ms: stageDurationMs,
     details: normalized.details,
@@ -152,7 +277,24 @@ export async function persistPipelineFailure(
     });
   }
 
-  return { userMessage, normalized };
+  // Additive: write a row to bolt_failure_summary for the operator
+  // dashboard. Never throws — own try/catch internally. Existing
+  // bolt_execution_runs + bolt_execution_events writes above are
+  // unchanged so the UI contract is preserved.
+  await persistFailureSummaryRow({
+    runId,
+    stage,
+    companyId: companyId ?? null,
+    campaignId: campaignId ?? null,
+    strategyId: strategyId ?? null,
+    pipelineMode: pipelineMode ?? null,
+    campaignType: campaignType ?? null,
+    normalized,
+    classification,
+    strategySnapshot: strategySnapshot ?? null,
+  });
+
+  return { userMessage, normalized, classification };
 }
 
 /**

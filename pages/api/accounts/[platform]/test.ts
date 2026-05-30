@@ -9,6 +9,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getToken } from '../../../../backend/auth/tokenStore';
+import { bearerAuthorization } from '../../../../lib/httpAuthHeaders';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -74,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Make test API call
     const response = await fetch(endpoint, {
       headers: {
-        Authorization: `Bearer ${token.access_token}`,
+        Authorization: bearerAuthorization(token.access_token),
       },
     });
 

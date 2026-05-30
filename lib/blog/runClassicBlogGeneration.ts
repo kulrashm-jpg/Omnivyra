@@ -220,7 +220,14 @@ export async function runClassicBlogGeneration(args: {
   generationInput: BlogGenerationInput;
   targetWords: number;
   angleLabel?: string;
+  /** Blog Governance Parity — optional governance prompt context. */
+  governance?: import('../../backend/services/creator/strategyGovernancePromptContext').GovernancePromptContext | null;
 }): Promise<ClassicDraft | null> {
+  // Blog Governance Parity — lazy-imported shared helper.
+  const { applyGovernancePreambleToSystemPrompt } =
+    await import('../../backend/services/creator/strategyGovernancePromptContext');
+  const govPreamble = (base: string) =>
+    applyGovernancePreambleToSystemPrompt(base, args.governance ?? null);
   const paragraphBlueprints = collectParagraphBlueprints(args.templateBlocks);
   const paragraphTarget = Math.max(
     args.targetWords >= 2000 ? 180 : args.targetWords >= 1200 ? 145 : 120,
@@ -275,7 +282,7 @@ export async function runClassicBlogGeneration(args: {
       messages: [
         {
           role: 'system',
-          content:
+          content: govPreamble(
             `You are writing a Classic long-form B2B blog article.\n` +
             `Return JSON only with this exact shape:\n` +
             `{\n` +
@@ -306,7 +313,8 @@ export async function runClassicBlogGeneration(args: {
             `- Include at least one contrarian insight or non-obvious observation per major section.\n` +
             `- Replace buzzwords with concrete examples (e.g., instead of "optimize efficiency", describe a specific workflow improvement).\n` +
             `- The article must read as if written BY this specific company, not ABOUT a generic topic.\n` +
-            (args.generationInput.writingStyleInstructions ? `\nWRITING STYLE:\n${args.generationInput.writingStyleInstructions}\n` : ''),
+            (args.generationInput.writingStyleInstructions ? `\nWRITING STYLE:\n${args.generationInput.writingStyleInstructions}\n` : '')
+          ),
         },
         {
           role: 'user',
@@ -378,7 +386,7 @@ export async function runClassicBlogGeneration(args: {
           messages: [
             {
               role: 'system',
-              content:
+              content: govPreamble(
                 `You are writing one section of a Classic long-form B2B article.\n` +
                 `Return JSON only: { "html": "<p>...</p><p>...</p>" }\n` +
                 `Rules:\n` +
@@ -389,6 +397,7 @@ export async function runClassicBlogGeneration(args: {
                 `- Include at least one specific scenario or real-world example\n` +
                 `- Do not use bullets, headings, or placeholders\n` +
                 buildSectionEnforcementPrompt(_sectionIdentity, blueprint.index - 1),
+              ),
             },
             {
               role: 'user',
@@ -426,7 +435,7 @@ export async function runClassicBlogGeneration(args: {
         messages: [
           {
             role: 'system',
-            content:
+            content: govPreamble(
               `You are writing the support blocks for a Classic blog article.\n` +
               `Return JSON only:\n` +
               `{\n` +
@@ -442,6 +451,7 @@ export async function runClassicBlogGeneration(args: {
               `- callout_body must be a sharp strategic takeaway sentence or short paragraph\n` +
               `- summary_body must be at least ${summaryTarget} words\n` +
               `- references must include at least 3 credible sources with real titles and URLs whenever possible\n`,
+            ),
           },
           {
             role: 'user',

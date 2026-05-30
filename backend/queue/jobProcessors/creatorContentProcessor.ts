@@ -121,8 +121,51 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
     const primaryPlatform = String(targetPlatformsArr[0] || 'linkedin').toLowerCase();
     const orchestrationContentType = content_type === 'carousel' ? 'carousel' : content_type === 'story' ? 'story' : 'video';
 
+    // Campaign Multi-Variant Execution Completion — Phase 2. Resolve
+    // FULL campaign variant plan (best-effort). Absence preserves prior
+    // single-asset behavior.
+    let variantPlan: import('../../services/creator/campaignVariantApplier').CampaignVariantPlan | null = null;
+    const campaignIdForVariant = (activity_workspace as any)?.campaign_id
+      ? String((activity_workspace as any).campaign_id)
+      : null;
+    if (campaignIdForVariant) {
+      try {
+        const { supabase } = await import('../../db/supabaseClient');
+        const { data: campaignRow } = await supabase
+          .from('campaign_versions')
+          .select('campaign_snapshot')
+          .eq('campaign_id', campaignIdForVariant)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (campaignRow) {
+          const { resolveCampaignVariantPlan } = await import('../../services/creator/campaignVariantApplier');
+          variantPlan = resolveCampaignVariantPlan({
+            campaign: campaignRow,
+            companyId: company_id,
+            campaignId: campaignIdForVariant,
+            platform: primaryPlatform,
+            creatorId: String((activity_workspace as any)?.user_id || '') || null,
+          });
+        }
+      } catch (error) {
+        console.warn('[creator-content-processor][campaign-variant-resolve-failed]', {
+          campaign_id: campaignIdForVariant,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const isFanOut = variantPlan !== null && variantPlan.decisions.length > 1;
+    const singleAppliedVariant = variantPlan && variantPlan.decisions[0]
+      ? {
+          strategy_id: variantPlan.strategy_id,
+          variant_id: variantPlan.decisions[0].variant_id,
+          variant_family: variantPlan.decisions[0].variant_family,
+        }
+      : null;
+
     void job.updateProgress(35);
-    const orchestrated = await runCreatorOrchestration({
+    const baseOrchestratorInput = {
       campaignId: String((activity_workspace as any)?.campaign_id || `creator-${company_id}`),
       companyId: company_id,
       userId: String((activity_workspace as any)?.user_id || '') || null,
@@ -135,8 +178,27 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
       creatorCard: creator_context,
       enrichedIntent: activity_workspace && typeof activity_workspace === 'object' ? activity_workspace as Record<string, unknown> : null,
       existingContent: null,
-      origin: 'queue',
-    });
+      origin: 'queue' as const,
+    };
+    let fanOutResult: import('../../services/creator/campaignVariantFanOut').CampaignFanOutResult | null = null;
+    let orchestrated;
+    if (isFanOut && variantPlan) {
+      const { runCampaignVariantFanOut } = await import('../../services/creator/campaignVariantFanOut');
+      fanOutResult = await runCampaignVariantFanOut({
+        plan: variantPlan,
+        orchestratorInput: baseOrchestratorInput,
+      });
+      const first = fanOutResult.generated_asset;
+      if (!first || !first.result) {
+        throw new Error(`fan-out produced no successful assets (${fanOutResult.generated_assets.length} attempted)`);
+      }
+      orchestrated = first.result;
+    } else {
+      orchestrated = await runCreatorOrchestration({
+        ...baseOrchestratorInput,
+        appliedVariant: singleAppliedVariant,
+      });
+    }
     const canonicalOutput = orchestrated.output;
 
     void job.updateProgress(55);
@@ -151,29 +213,187 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
       },
       asset_type: canonicalOutput.asset_type,
     };
-    // Secondary platforms: adapt only (no re-render — the orchestrator
-    // owns the canonical render for the primary platform, and the queue
-    // processor's contract is variant adaptation, not re-rendering).
+    // Fan-Out Completion — Phase 1+2+3. Secondary-platform adaptation
+    // is now applied to every successful fan-out asset (was: only the
+    // first asset's canonicalOutput). Each per-asset adaptation:
+    //   - reuses the existing engine.adaptForPlatform pipeline (no new
+    //     adaptation architecture)
+    //   - is wrapped in try/catch so a single adaptation failure does
+    //     NOT abort the campaign (Phase 2 — partial failure safety)
+    //   - inherits the variant envelope from the per-asset orchestrator
+    //     output via media_bundle.metadata, so attribution survives
+    //     unchanged (Phase 3 — preserves strategy_id / variant_id /
+    //     variant_family / experiment_id)
+    //
+    // `perAssetAdaptations` is shaped as
+    //   { variant_id → { platform → { ok, asset_payload?, packaging?, error? } } }
+    // The legacy `platform_variants` map is preserved (mirrors the
+    // PRIMARY successful asset) so single-asset callers see no change.
+    const perAssetAdaptations: Record<string, Record<string, {
+      ok: boolean;
+      asset_payload?: Record<string, unknown>;
+      packaging?: Record<string, unknown>;
+      asset_type?: string;
+      error?: string;
+    }>> = {};
     if (targetPlatformsArr.length > 1) {
       const engine = createCreatorExecutionEngine();
-      for (const platform of targetPlatformsArr.slice(1)) {
-        const adapted = await engine.adaptForPlatform(canonicalOutput, platform);
-        platformVariants[platform] = {
-          asset_payload: safeObject((adapted.asset_payload as Record<string, unknown>).platform_payload) || adapted.asset_payload,
-          packaging: adapted.packaging.platform_variants[platform] ?? {
-            caption: adapted.packaging.caption,
-            hashtags: adapted.packaging.hashtags,
+      // Build the list of outputs to adapt. Fan-out → all successful
+      // results; single-asset → just the primary orchestrator output.
+      type AdaptTarget = {
+        variantKey: string;
+        output: typeof canonicalOutput;
+      };
+      const adaptTargets: AdaptTarget[] = fanOutResult
+        ? fanOutResult.generated_assets
+            .filter((a) => a.ok && a.result)
+            .map((a) => ({
+              variantKey: a.variant_id,
+              output: a.result!.output,
+            }))
+        : [{ variantKey: 'primary', output: canonicalOutput }];
+
+      for (const { variantKey, output } of adaptTargets) {
+        perAssetAdaptations[variantKey] = perAssetAdaptations[variantKey] ?? {};
+        // Mark the primary platform as already-adapted (the
+        // orchestrator already adapted+rendered it for this asset).
+        perAssetAdaptations[variantKey][primaryPlatform] = {
+          ok: true,
+          asset_payload: safeObject((output.asset_payload as Record<string, unknown>).platform_payload) || output.asset_payload,
+          packaging: output.packaging.platform_variants[primaryPlatform] ?? {
+            caption: output.packaging.caption,
+            hashtags: output.packaging.hashtags,
           },
-          asset_type: adapted.asset_type,
+          asset_type: output.asset_type,
         };
+        for (const platform of targetPlatformsArr.slice(1)) {
+          try {
+            const adapted = await engine.adaptForPlatform(output, platform);
+            perAssetAdaptations[variantKey][platform] = {
+              ok: true,
+              asset_payload: safeObject((adapted.asset_payload as Record<string, unknown>).platform_payload) || adapted.asset_payload,
+              packaging: adapted.packaging.platform_variants[platform] ?? {
+                caption: adapted.packaging.caption,
+                hashtags: adapted.packaging.hashtags,
+              },
+              asset_type: adapted.asset_type,
+            };
+            // Legacy single-platform map mirrors the FIRST successful
+            // (primary asset's) secondary-platform adaptation so
+            // existing callers see the same shape they always did.
+            if (!fanOutResult && !platformVariants[platform]) {
+              platformVariants[platform] = perAssetAdaptations[variantKey][platform];
+            }
+          } catch (error) {
+            perAssetAdaptations[variantKey][platform] = {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            };
+            console.warn('[creatorContentProcessor][secondary-adapt-failed]', {
+              variant_id: variantKey,
+              platform,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+      // Fan-out case: legacy `platform_variants` mirrors the FIRST
+      // successful asset's adaptation map so single-asset callers
+      // continue to see the canonical shape.
+      if (fanOutResult) {
+        const firstVariantKey = fanOutResult.generated_asset?.variant_id ?? null;
+        if (firstVariantKey && perAssetAdaptations[firstVariantKey]) {
+          for (const [platform, entry] of Object.entries(perAssetAdaptations[firstVariantKey])) {
+            if (entry.ok && !platformVariants[platform]) {
+              platformVariants[platform] = {
+                asset_payload: entry.asset_payload,
+                packaging: entry.packaging,
+                asset_type: entry.asset_type,
+              };
+            }
+          }
+        }
       }
     }
 
-    // Step 7: Estimate cost & deduct credits
+    // Step 7: Estimate cost & deduct credits.
+    // Fan-Out Completion — Phase 4/6. Cost is computed per generated
+    // asset so the post-execution report can surface the real (not
+    // estimated) credit usage of a multi-asset run.
     void job.updateProgress(75);
-    const estimatedTokens = estimateCreatorTokens(canonicalOutput.asset_instruction.blueprint, content_type);
-    const costUsd = await estimateCost(estimatedTokens, content_type);
+    const successfulOutputs = fanOutResult
+      ? fanOutResult.generated_assets
+          .filter((a) => a.ok && a.result)
+          .map((a) => a.result!.output)
+      : [canonicalOutput];
+    let aggregatedCostUsd = 0;
+    const perAssetCostUsd: Array<{ variant_id: string | null; cost_usd: number }> = [];
+    for (let i = 0; i < successfulOutputs.length; i++) {
+      const out = successfulOutputs[i];
+      const tokens = estimateCreatorTokens(out.asset_instruction.blueprint, content_type);
+      const c = await estimateCost(tokens, content_type);
+      aggregatedCostUsd += c;
+      const variantId = fanOutResult
+        ? fanOutResult.generated_assets.filter((a) => a.ok)[i]?.variant_id ?? null
+        : null;
+      perAssetCostUsd.push({ variant_id: variantId, cost_usd: c });
+    }
+    const costUsd = aggregatedCostUsd;
     await deductCredits(company_id, `content_${content_type}`, costUsd);
+
+    // Cost Estimate Accuracy — Phase 5. Record the (estimated vs actual)
+    // observation against the historical store so the calibration
+    // surface can compute mean variance per (content_type × mode).
+    // Best-effort — never blocks generation.
+    try {
+      const { estimateCampaignVariantBilling } =
+        await import('../../services/creator/campaignVariantBillingEstimator');
+      const { recordCostObservation } =
+        await import('../../services/creator/costObservationStore');
+      const variantMode = (variantPlan?.mode ?? 'no_variant') as
+        | 'single_variant' | 'best_variant' | 'top_3_variants' | 'experiment' | 'no_variant';
+      // Re-compute the estimate the operator would have seen so the
+      // observation pairs against the SAME assumption set the UI
+      // showed. (We don't have the UI's payload here; reproducing
+      // the estimate locally is the canonical record.)
+      let estimatedUsd = 0;
+      if (campaignIdForVariant) {
+        try {
+          const { supabase: sb } = await import('../../db/supabaseClient');
+          const { data: campaignRow } = await sb
+            .from('campaign_versions')
+            .select('campaign_snapshot')
+            .eq('campaign_id', campaignIdForVariant)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (campaignRow) {
+            const estimate = estimateCampaignVariantBilling({
+              campaign: campaignRow,
+              companyId: company_id,
+              campaignId: campaignIdForVariant,
+              platform: primaryPlatform,
+              creatorId: String((activity_workspace as any)?.user_id || '') || null,
+              contentType: content_type,
+              targetPlatforms: targetPlatformsArr,
+            });
+            estimatedUsd = estimate.total_estimated_usd;
+          }
+        } catch {
+          // No-op; fall through to estimated=0 → variance reported as null.
+        }
+      }
+      recordCostObservation({
+        companyId: company_id,
+        contentType: String(content_type ?? ''),
+        variantMode,
+        assetCount: successfulOutputs.length,
+        estimatedUsd,
+        actualUsd: costUsd,
+      });
+    } catch {
+      // Best-effort.
+    }
 
     // Step 8: Build decision trace
     void job.updateProgress(85);
@@ -213,6 +433,38 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
       // id so downstream consumers can reference creator_assets.
       creator_asset_id: orchestrated.persistedAssetId,
       render_strategy: orchestrated.renderStrategy,
+      // Fan-Out Completion — Phase 1+2+3. Per-asset secondary-platform
+      // adaptation status. Single-asset callers ignore this field.
+      per_asset_adaptations: perAssetAdaptations,
+      // Fan-Out Completion — Phase 6. Per-asset cost rollup for the
+      // post-execution report. Single-asset callers see one entry.
+      per_asset_cost_usd: perAssetCostUsd,
+      // Cost Estimate Accuracy — Phase 5. Surface (estimated, actual,
+      // variance) so the post-execution UI can render the comparison.
+      cost_observation: (() => {
+        const { listRecentObservations } =
+          require('../../services/creator/costObservationStore') as typeof import('../../services/creator/costObservationStore');
+        const recent = listRecentObservations({ companyId: company_id, limit: 1 });
+        return recent[0] ?? null;
+      })(),
+      // Campaign Multi-Variant Execution Completion — Phase 6.
+      // Multi-asset response payload (additive — single-asset callers
+      // ignore these fields).
+      ...(fanOutResult ? {
+        generated_assets: fanOutResult.generated_assets.map((a) => ({
+          rank: a.rank,
+          variant_id: a.variant_id,
+          variant_family: a.variant_family,
+          strategy_id: a.strategy_id,
+          experiment_id: a.experiment_id,
+          persisted_asset_id: a.result?.persistedAssetId ?? null,
+          ok: a.ok,
+          ...(a.error ? { error: a.error } : {}),
+        })),
+        variant_mode: fanOutResult.mode,
+        variant_strategy_id: fanOutResult.strategy_id,
+        experiment_id: fanOutResult.experiment_id,
+      } : {}),
     };
   } catch (error) {
     console.error(`[creatorContentProcessor] Error processing ${content_type}:`, error);

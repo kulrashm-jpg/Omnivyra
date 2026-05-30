@@ -11,6 +11,8 @@ import { isSupportedManualVideoUpload } from '../../lib/shared/contentTypeClassi
 import { logPipelineEvent } from '../../lib/shared/observability';
 import { applyTransition } from '../../lib/shared/creatorLifecycleStateMachine';
 import { enqueueBoltCreatorRowExecution, awaitBoltCreatorRowExecution } from './creator/boltCreatorQueueBridge';
+import { BoltError, BOLT_ERROR_CODES } from '../../lib/shared/bolt/boltErrorCodes';
+import { recordRowFailure } from './boltRowFailureDiagnostics';
 
 type DailyPlanRow = {
   id: string;
@@ -199,13 +201,22 @@ export async function runCreatorAssetGenerationRuntime(input: {
   userId?: string | null;
   mode: CreatorAssetGenerationMode;
   onProgress?: (stage: string) => void;
+  /** BOLT run id — when provided, per-row failures are recorded into
+   *  bolt_row_failure_diagnostics so the failure dashboard can show
+   *  which specific rows failed to render. Diagnostics are skipped when
+   *  this is missing (non-BOLT callers). */
+  runId?: string | null;
 }): Promise<CreatorAssetGenerationResult> {
   const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
     .select('id, user_id, company_id')
     .eq('id', input.campaignId)
     .maybeSingle();
   if (campaignError || !campaign) {
-    throw new Error(`Campaign not found for creator asset generation: ${input.campaignId}`);
+    throw new BoltError(
+      BOLT_ERROR_CODES.SCHEDULING_CAMPAIGN_NOT_FOUND,
+      `Campaign not found for creator asset generation: ${input.campaignId}`,
+      { details: { campaign_id: input.campaignId } }
+    );
   }
 
   const companyId = String(input.companyId || (campaign as any).company_id || '').trim();
@@ -220,7 +231,11 @@ export async function runCreatorAssetGenerationRuntime(input: {
     userId = String((companyUser as any)?.user_id || '').trim();
   }
   if (!companyId || !userId) {
-    throw new Error('Creator asset generation requires company_id and user_id');
+    throw new BoltError(
+      BOLT_ERROR_CODES.CREATOR_ASSET_CONTEXT_INCOMPLETE,
+      'Creator asset generation requires company_id and user_id',
+      { details: { campaign_id: input.campaignId } }
+    );
   }
 
   const { data, error } = await ownedDbTable('daily_content_plans')
@@ -228,7 +243,11 @@ export async function runCreatorAssetGenerationRuntime(input: {
     .eq('campaign_id', input.campaignId)
     .order('date', { ascending: true })
     .order('week_number', { ascending: true });
-  if (error) throw new Error(`Failed to load creator daily plans: ${error.message}`);
+  if (error) throw new BoltError(
+    BOLT_ERROR_CODES.CREATOR_ASSET_DAILY_PLANS_LOAD_FAILED,
+    `Failed to load creator daily plans: ${error.message}`,
+    { cause: error, details: { campaign_id: input.campaignId, db_error: error.message } }
+  );
 
   const rows = Array.isArray(data) ? data as DailyPlanRow[] : [];
   // Phase 6 — engine + render + persist + FSM chain delegated to the
@@ -341,6 +360,25 @@ export async function runCreatorAssetGenerationRuntime(input: {
             content_type: job.contentType,
             message: result.failure_reason,
           });
+          // Per-row diagnostic. Policy: SKIP-AND-RECORD — the runtime
+          // already swallows the per-row failure into final_status so
+          // the overall stage doesn't abort. We record the row so the
+          // failure dashboard surfaces it without changing aggregation.
+          if (input.runId) {
+            await recordRowFailure({
+              runId: input.runId,
+              campaignId: input.campaignId,
+              companyId: input.companyId,
+              dailyPlanId: typeof job.row.id === 'string' ? job.row.id : null,
+              weekNumber: typeof job.row.week_number === 'number' ? job.row.week_number : null,
+              platform: typeof job.primaryPlatform === 'string' ? job.primaryPlatform : null,
+              contentType: typeof job.contentType === 'string' ? job.contentType : null,
+              stage: 'creator-asset-generation',
+              code: BOLT_ERROR_CODES.CREATOR_ASSET_RENDER_FAILED,
+              message: result.failure_reason || 'Creator row rendering failed',
+              details: { rendered: false, failure_branch: 'worker_reported_failure' },
+            });
+          }
         } else {
           skippedCount++;
         }
@@ -352,6 +390,23 @@ export async function runCreatorAssetGenerationRuntime(input: {
           content_type: job.contentType,
           message,
         });
+        // Per-row diagnostic for the enqueue-side failure (worker
+        // never ran). Same SKIP-AND-RECORD policy.
+        if (input.runId) {
+          await recordRowFailure({
+            runId: input.runId,
+            campaignId: input.campaignId,
+            companyId: input.companyId,
+            dailyPlanId: typeof job.row.id === 'string' ? job.row.id : null,
+            weekNumber: typeof job.row.week_number === 'number' ? job.row.week_number : null,
+            platform: typeof job.primaryPlatform === 'string' ? job.primaryPlatform : null,
+            contentType: typeof job.contentType === 'string' ? job.contentType : null,
+            stage: 'creator-asset-generation',
+            code: BOLT_ERROR_CODES.CREATOR_ASSET_QUEUE_FAILURE,
+            message: message || 'Creator row enqueue failed',
+            details: { rendered: false, failure_branch: 'enqueue_rejected' },
+          });
+        }
         // Safety-net DB write: the worker never ran, so the row would
         // otherwise stay in a stale state. Mirrors the prior sequential
         // failure path.

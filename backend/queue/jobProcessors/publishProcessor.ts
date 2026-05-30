@@ -408,6 +408,23 @@ async function processPublishJobInner(params: {
         result.post_url || '',
         result.published_at
       );
+      // P1-B — advance variant experiment tracker. Mirrors the pattern
+      // used in publishNowService. Best-effort; failures never block
+      // publish success.
+      try {
+        const { resolveStrategyAttributionForScheduledPost } = await import('../../services/creator/strategyAttributionResolver');
+        const { notifyExperimentAssetPublished } = await import('../../services/creator/variantExperimentLifecycle');
+        const attribution = await resolveStrategyAttributionForScheduledPost(scheduled_post_id);
+        if (attribution?.variantId && attribution.companyId) {
+          notifyExperimentAssetPublished({
+            companyId: attribution.companyId,
+            variantId: attribution.variantId,
+            scheduledPostId: scheduled_post_id,
+          });
+        }
+      } catch (err) {
+        console.warn('[publishProcessor] experiment publish-notify failed (non-fatal):', err instanceof Error ? err.message : String(err));
+      }
 
       // Step 7: Update queue job to completed
       await updateQueueJobStatus(jobId as string, 'completed', {

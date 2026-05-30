@@ -2,6 +2,14 @@ import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
+// Variant Experience Embedding (PHASE 5 + 8) — campaign creation
+// surfaces the variant mode picker + experiment dashboard so
+// operators see what variant generation will fire when the campaign
+// runs, and can review past experiment results.
+import { ExperimentResultsPanel } from '../../components/variant-experience/ExperimentResultsPanel';
+import { VariantWinnerCard } from '../../components/variant-experience/VariantWinnerCard';
+import { useStrategyAnalytics, useVariantExperiments } from '../../components/variant-experience/useVariantApi';
+import { CampaignVariantConfigPanel } from '../../components/variant-experience/CampaignVariantConfigPanel';
 
 interface CampaignCard {
   id: string;
@@ -262,7 +270,201 @@ export default function CampaignsSubPage() {
             </div>
           ))}
         </div>
+
+        {/* Variant Experience hub embedding — PHASE 8 + 12. Shows
+            active experiments + top winner cards so operators can
+            assess the current campaign's experiment results without
+            switching to the dedicated Variant Experience page. */}
+        <CampaignVariantHubSection companyId={user?.defaultCompanyId ?? ''} />
       </div>
     </div>
+  );
+}
+
+/* ── Campaign Variant Hub Section ─────────────────────────────────
+ * Surfaces variant winner + experiment data on the campaign hub.
+ * Renders only when companyId is available. Auto-refreshes via the
+ * hook's `refreshKey` on every navigation.
+ */
+function CampaignVariantHubSection({ companyId }: { companyId: string }) {
+  const router = useRouter();
+  const analytics = useStrategyAnalytics({ companyId });
+  const experiments = useVariantExperiments({ companyId });
+  // Campaign-scoped variant config editor (P1-2). Operators can pick
+  // from a dropdown of their existing campaigns OR paste an id by
+  // hand. The dropdown pulls from the existing list endpoint —
+  // no new endpoint required.
+  const [campaignIdInput, setCampaignIdInput] = React.useState('');
+  const [activeCampaignId, setActiveCampaignId] = React.useState('');
+  const [defaultStrategy, setDefaultStrategy] = React.useState<string>('image:educational-image');
+  const [campaignList, setCampaignList] = React.useState<Array<{ id: string; name: string; hasVariantConfig: boolean }>>([]);
+  const [campaignListLoading, setCampaignListLoading] = React.useState(false);
+  const [campaignListError, setCampaignListError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    setCampaignListLoading(true);
+    setCampaignListError(null);
+    (async () => {
+      try {
+        const response = await fetch('/api/campaigns?limit=50', { credentials: 'include' });
+        const payload = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok || !payload?.success) {
+          setCampaignListError(payload?.error || `Request failed (${response.status})`);
+          return;
+        }
+        // P3-3 — annotate each campaign with whether it already has
+        // a variant_strategy persisted. The list endpoint echoes
+        // execution_config when present (in `campaign_snapshot.execution_config`).
+        const list = Array.isArray(payload.campaigns)
+          ? (payload.campaigns as Array<Record<string, unknown>>)
+              .map((c) => {
+                const snap = c.campaign_snapshot as Record<string, unknown> | undefined;
+                const ec = (snap?.execution_config ?? c.execution_config) as Record<string, unknown> | undefined;
+                const hasVariantConfig = Boolean(
+                  ec && typeof ec === 'object' && !Array.isArray(ec) && (ec as Record<string, unknown>)['variant_strategy'],
+                );
+                return {
+                  id: typeof c.id === 'string' ? c.id : '',
+                  name: typeof c.name === 'string' && c.name.trim() ? c.name : '(unnamed)',
+                  hasVariantConfig,
+                };
+              })
+              .filter((c) => c.id)
+          : [];
+        setCampaignList(list);
+      } catch (err) {
+        if (!cancelled) setCampaignListError(err instanceof Error ? err.message : 'Failed to load campaigns');
+      } finally {
+        if (!cancelled) setCampaignListLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [companyId]);
+  if (!companyId) return null;
+  const declaredWinners = (analytics.data?.execution.winner_recommendations ?? []).slice(0, 3);
+  const strategyOptions = (analytics.data?.dimensions ?? []).map((dim) => dim.strategy_id);
+  return (
+    <section className="mt-10 space-y-6">
+      <header className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Variant Experience</p>
+          <h2 className="text-xl font-semibold text-gray-900">Winners + experiments in this org</h2>
+        </div>
+        <button
+          type="button"
+          onClick={() => router.push('/command-center/variant-experience')}
+          className="text-xs font-semibold text-indigo-700 hover:text-indigo-800"
+        >
+          Open Variant Experience dashboard →
+        </button>
+      </header>
+
+      {/* Variant config persistence for an existing campaign id —
+          round-trips through campaign_snapshot.execution_config so no
+          schema change is required. Operators can find the campaign
+          id under any of the campaign edit / detail pages. */}
+      <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+        <header className="mb-3">
+          <h3 className="text-sm font-semibold text-gray-900">Campaign variant configuration</h3>
+          <p className="mt-1 text-xs text-gray-500">
+            Paste a campaign id and save a variant strategy that the campaign runner replays at generation time.
+          </p>
+        </header>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex-1 min-w-[260px]">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Pick a campaign</span>
+            <select
+              value={campaignIdInput.startsWith('manual:') ? '' : campaignIdInput}
+              onChange={(e) => setCampaignIdInput(e.target.value)}
+              disabled={campaignListLoading || campaignList.length === 0}
+              className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:bg-gray-50 disabled:text-gray-400"
+            >
+              <option value="">
+                {campaignListLoading
+                  ? 'Loading campaigns…'
+                  : campaignList.length === 0
+                    ? 'No campaigns found — paste an id below'
+                    : '— select a campaign —'}
+              </option>
+              {campaignList.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.hasVariantConfig ? '★ ' : ''}{c.name} · {c.id.slice(0, 8)}…
+                </option>
+              ))}
+            </select>
+            {campaignListError ? (
+              <p className="mt-1 text-[11px] text-rose-700">{campaignListError}</p>
+            ) : (
+              <p className="mt-1 text-[11px] italic text-gray-500">★ = variant strategy already configured</p>
+            )}
+          </label>
+          <label className="min-w-[220px]">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">…or paste a campaign id</span>
+            <input
+              type="text"
+              value={campaignIdInput}
+              onChange={(e) => setCampaignIdInput(e.target.value)}
+              placeholder="e.g. 12345678-90ab-…"
+              className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </label>
+          <label className="min-w-[200px]">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Default strategy</span>
+            <select
+              value={defaultStrategy}
+              onChange={(e) => setDefaultStrategy(e.target.value)}
+              className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            >
+              {strategyOptions.map((sid) => <option key={sid} value={sid}>{sid}</option>)}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => setActiveCampaignId(campaignIdInput.trim())}
+            disabled={!campaignIdInput.trim()}
+            className="rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-indigo-500 disabled:opacity-50"
+          >
+            Load
+          </button>
+        </div>
+        {activeCampaignId ? (
+          <div className="mt-4">
+            <CampaignVariantConfigPanel
+              companyId={companyId}
+              campaignId={activeCampaignId}
+              defaultStrategyId={defaultStrategy}
+            />
+          </div>
+        ) : (
+          <p className="mt-4 text-xs italic text-gray-500">
+            Enter a campaign id above and click Load to edit its variant configuration.
+          </p>
+        )}
+      </div>
+
+      {declaredWinners.length > 0 ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {declaredWinners.map((winner) => (
+            <VariantWinnerCard key={winner.strategy_id} winner={winner} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-dashed border-gray-300 bg-white/70 p-6 text-sm text-gray-500">
+          No declared variant winners yet — once the in-flight campaigns ship enough engagement, the winner engine will surface its picks here.
+        </div>
+      )}
+
+      <ExperimentResultsPanel
+        active={experiments.experiments.filter((e) => e.state !== 'completed')}
+        completed={experiments.experiments.filter((e) => e.state === 'completed')}
+        onComplete={async (experimentId) => {
+          await experiments.complete(experimentId);
+          experiments.refetch();
+          analytics.refetch();
+        }}
+      />
+    </section>
   );
 }

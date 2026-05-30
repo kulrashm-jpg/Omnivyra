@@ -1000,7 +1000,7 @@ export function useDashboardState() {
 
   const openIntelligenceTab = useCallback((view: IntelligenceWorkspaceView = 'market-pulse') => {
     if (view === 'active-leads') {
-      void router.push('/command-center/engagement');
+      void router.push('/command-center/active-leads');
       return;
     }
     setIntelligenceView(view);

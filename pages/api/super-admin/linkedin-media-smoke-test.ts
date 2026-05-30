@@ -111,6 +111,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     mimeType,
     auth: { accessToken: token.access_token, authorUrn },
   });
+  const outcomeKind = outcome.ok === true ? outcome.result.kind : null;
+  const outcomeFromCache = outcome.ok === true ? outcome.result.fromCache : null;
+  const outcomeErrorCode = outcome.ok === false ? outcome.error.code : null;
 
   // Read back the URN cache state for verification (Step 2.D).
   const { data: row } = await supabase
@@ -134,9 +137,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       mime_type: mimeType ?? null,
       inferred_kind: inferredKind,
       outcome_ok: outcome.ok,
-      outcome_kind: outcome.ok ? outcome.result.kind : null,
-      outcome_from_cache: outcome.ok ? outcome.result.fromCache : null,
-      outcome_error_code: outcome.ok ? null : outcome.error.code,
+      outcome_kind: outcomeKind,
+      outcome_from_cache: outcomeFromCache,
+      outcome_error_code: outcomeErrorCode,
       latency_ms: Date.now() - startedAtMs,
     },
   });

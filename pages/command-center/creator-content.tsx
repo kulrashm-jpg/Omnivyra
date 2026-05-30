@@ -2,12 +2,14 @@ import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 
+// Taxonomy consolidation — user-facing creator types reduced to 3.
+// Banner is now a Wide Banner layout under Image. Slider is now a
+// Widescreen Presentation layout under Carousel. Both legacy URLs
+// continue to work via the redirect effect in [type].tsx.
 type CreatorTypeId =
   | 'image'
   | 'carousel'
-  | 'banner'
-  | 'infographic'
-  | 'slider';
+  | 'infographic';
 
 type CreatorCard = {
   id: CreatorTypeId;
@@ -28,11 +30,11 @@ const CREATOR_CARDS: CreatorCard[] = [
     id: 'image',
     title: 'Image',
     category: 'Static Visual',
-    outcome: 'Single-image creative built around one clear message or hook',
-    description: 'Create a focused visual asset with AI-guided message framing, visual hook, and platform-ready packaging.',
+    outcome: 'Single-image creative — promotional banner, quote, brand statement, or product showcase',
+    description: 'Create a focused visual with AI-guided purpose, layout, and platform-ready packaging. Includes Square, Portrait, Landscape, and Wide Banner layouts.',
     bullets: [
-      'Useful for social, blog support, and campaigns',
-      'Strong fit for simple visual communication',
+      'Purposes: Promotional · Educational · Quote · Product Showcase · Brand Focus',
+      'Layouts: Square · Portrait · Landscape · Wide Banner',
       'Quickest creator-content workflow',
     ],
     cta: 'Create Image',
@@ -45,11 +47,11 @@ const CREATOR_CARDS: CreatorCard[] = [
     id: 'carousel',
     title: 'Carousel',
     category: 'Multi-Slide',
-    outcome: 'Slide-based content designed for education, authority, and campaign reuse',
-    description: 'Develop a structured multi-slide asset with AI support for message sequencing, visual direction, and platform packaging.',
+    outcome: 'Slide-based content for education, frameworks, story, product showcases, and decks',
+    description: 'Develop a structured multi-slide asset with AI support for sequencing, visual direction, and packaging. Includes Standard and Widescreen Presentation layouts.',
     bullets: [
-      'Best for educational and authority-led content',
-      'Can later be used in campaign workflows',
+      'Styles: Educational · Framework · Story · Product Showcase · Presentation',
+      'Layouts: Standard Carousel · Widescreen Presentation',
       'Supports direct social publishing handoff',
     ],
     cta: 'Create Carousel',
@@ -59,30 +61,13 @@ const CREATOR_CARDS: CreatorCard[] = [
     ctaColor: 'bg-blue-600 hover:bg-blue-700',
   },
   {
-    id: 'banner',
-    title: 'Banner',
-    category: 'Promotional',
-    outcome: 'Banner-style asset with promotional clarity and clean visual hierarchy',
-    description: 'Build banner-led creative for announcements, promotions, and campaign placements using AI-defined copy and visual direction.',
-    bullets: [
-      'Good for website, campaign, and social use',
-      'Single-message high-clarity format',
-      'AI can define the brief and packaging',
-    ],
-    cta: 'Create Banner',
-    accentFrom: 'from-orange-50',
-    accentTo: 'to-amber-50',
-    borderColor: 'border-orange-200',
-    ctaColor: 'bg-orange-600 hover:bg-orange-700',
-  },
-  {
     id: 'infographic',
     title: 'Infographic',
     category: 'Visual Explain',
-    outcome: 'Information-dense visual asset structured for clarity and retention',
-    description: 'Develop infographic-style creative that turns ideas, data, or process explanations into a clear visual communication asset.',
+    outcome: 'Information-dense visual structured for clarity and retention',
+    description: 'Turn data, processes, frameworks, or roadmaps into clear visual communication — statistics, comparisons, timelines, and more.',
     bullets: [
-      'Best for explainers, frameworks, and stats',
+      'Structures: Statistics · Process · Timeline · Comparison · Framework · Roadmap',
       'Can support long-form content later',
       'Good bridge between writer and creator content',
     ],
@@ -91,23 +76,6 @@ const CREATOR_CARDS: CreatorCard[] = [
     accentTo: 'to-purple-50',
     borderColor: 'border-violet-200',
     ctaColor: 'bg-violet-600 hover:bg-violet-700',
-  },
-  {
-    id: 'slider',
-    title: 'Slider',
-    category: 'Presentation Flow',
-    outcome: 'Slide-based asset designed for structured presentation and campaign reuse',
-    description: 'Develop a slider-style creative flow where AI helps define sequence, hierarchy, and message progression.',
-    bullets: [
-      'Strong fit for presentation-like communication',
-      'Useful for internal and external reuse',
-      'Built as a structured multi-block asset',
-    ],
-    cta: 'Create Slider',
-    accentFrom: 'from-sky-50',
-    accentTo: 'to-indigo-50',
-    borderColor: 'border-sky-200',
-    ctaColor: 'bg-sky-600 hover:bg-sky-700',
   },
 ];
 

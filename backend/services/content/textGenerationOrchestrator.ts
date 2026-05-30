@@ -24,6 +24,10 @@ import {
   type MasterContentPayload,
   type PlatformVariantPayload,
 } from '../contentGenerationPipeline';
+import type {
+  GovernanceExplainabilityMetadata,
+  GovernancePromptContext,
+} from '../creator/strategyGovernancePromptContext';
 
 export type TextGenerationOrigin =
   | 'direct-api'      // Direct API's post / thread text-only branch
@@ -47,7 +51,25 @@ export type TextGenerationInput = {
   extraInstruction?: string;
   /** Free-form context (subtype/constraints/etc.) forwarded as enrichment. */
   creatorCard?: Record<string, unknown>;
+  /**
+   * Creator Governance Parity For Text Content — Phase 1+2+3.
+   * Optional governance prompt context. When present and the
+   * resolved industry is regulated, the orchestrator appends a
+   * compact compliance directive block to the LLM prompt and surfaces
+   * the same explainability shape the visual composer does.
+   * Null / absent / industry='none' → strict no-op (zero change in
+   * the master + variant payloads vs. prior behavior).
+   */
+  governance?: GovernancePromptContext | null;
 };
+
+/**
+ * Text-side governance explainability envelope. Mirrors the shape
+ * exposed by the visual composer's `composed.governance` so callers
+ * see one parity contract across image / carousel / infographic /
+ * post / thread.
+ */
+export type TextGovernanceMetadata = GovernanceExplainabilityMetadata;
 
 export type TextGenerationResult = {
   success: true;
@@ -59,7 +81,74 @@ export type TextGenerationResult = {
   platformVariant: PlatformVariantPayload;
   /** Resolved primary platform (normalized lowercase). */
   primaryPlatform: string;
+  /**
+   * Creator Governance Parity For Text Content — Phase 5.
+   * Always present. industry='none' + warningsApplied=0 when no
+   * governance context was supplied.
+   */
+  governance: TextGovernanceMetadata;
 };
+
+/**
+ * Build the additive governance instruction block. Returns null when
+ * no governance context is supplied OR the resolved industry has no
+ * directives — yielding a strict no-op so non-regulated callers see
+ * the original prompt unchanged.
+ *
+ * Phase 2 — compliance directives prepended; Phase 4 — restricted /
+ * deprioritized caution line appended.
+ */
+function buildTextGovernanceInstruction(
+  governance: GovernancePromptContext | null | undefined,
+): string | null {
+  if (!governance) return null;
+  const { governanceContextHasAnyDirective } =
+    require('../creator/strategyGovernancePromptContext') as typeof import('../creator/strategyGovernancePromptContext');
+  if (!governanceContextHasAnyDirective(governance)) return null;
+  const lines: string[] = [];
+  if (governance.industry !== 'none' && governance.compliancePromptDirectives.length > 0) {
+    lines.push(`Compliance directives (${governance.industry} industry policy, risk: ${governance.riskLevel}):`);
+    for (const d of governance.compliancePromptDirectives) lines.push(`- ${d}`);
+  }
+  if (governance.selectedStrategyIsRestricted) {
+    lines.push(
+      `Use extra caution because the selected strategy "${governance.selectedStrategy ?? 'unknown'}" is governed by industry policy: ${governance.selectedStrategyGovernanceReason ?? 'restricted by policy'}.`,
+    );
+  } else if (governance.selectedStrategyIsDeprioritized) {
+    lines.push(
+      `The selected strategy "${governance.selectedStrategy ?? 'unknown'}" is deprioritized by industry policy: ${governance.selectedStrategyGovernanceReason ?? 'deprioritized by policy'}. Apply the compliance directives above with extra discipline.`,
+    );
+  }
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
+/**
+ * Build the explainability metadata envelope. Always returns a
+ * stable shape so callers don't need to handle "governance absent".
+ */
+function buildTextGovernanceMetadata(
+  governance: GovernancePromptContext | null | undefined,
+  warningsApplied: number,
+): TextGovernanceMetadata {
+  if (!governance) {
+    return {
+      industry: 'none',
+      riskLevel: 'none',
+      selectedStrategy: null,
+      warningsApplied: 0,
+      selectedStrategyIsRestricted: false,
+      selectedStrategyIsDeprioritized: false,
+    };
+  }
+  return {
+    industry: governance.industry,
+    riskLevel: governance.riskLevel,
+    selectedStrategy: governance.selectedStrategy,
+    warningsApplied,
+    selectedStrategyIsRestricted: governance.selectedStrategyIsRestricted,
+    selectedStrategyIsDeprioritized: governance.selectedStrategyIsDeprioritized,
+  };
+}
 
 /**
  * Build the pipeline's `item` envelope from the normalized orchestrator
@@ -92,11 +181,29 @@ function buildPipelineItem(input: TextGenerationInput, primaryPlatform: string):
       },
     ],
   };
-  if (input.extraInstruction && input.extraInstruction.trim()) {
-    item.extra_instruction = input.extraInstruction.trim();
+  // Compose the final extra_instruction by prefixing any governance
+  // compliance block (when present) to the caller-supplied
+  // extraInstruction. Both are optional — the merged value is set
+  // only when at least one is non-empty. Additive: legacy callers
+  // without governance see the previous extraInstruction string
+  // unchanged.
+  const governanceBlock = buildTextGovernanceInstruction(input.governance ?? null);
+  const callerInstruction = input.extraInstruction?.trim() || '';
+  const merged = [governanceBlock, callerInstruction].filter(Boolean).join('\n\n');
+  if (merged) {
+    item.extra_instruction = merged;
   }
   if (input.creatorCard && Object.keys(input.creatorCard).length > 0) {
     item.creator_card = input.creatorCard;
+  }
+  // Creator System-Prompt Governance Integration. Thread the
+  // governance context through to the pipeline as a top-level item
+  // field so blueprintGenerator + platformVariantGenerator can read
+  // it when building their system prompts. Additive — when null,
+  // pipeline sites that read it via `item.governance` get null and
+  // skip the preamble injection (byte-identical to legacy callers).
+  if (input.governance) {
+    item.governance = input.governance;
   }
   return item;
 }
@@ -123,6 +230,15 @@ export async function runTextGeneration(input: TextGenerationInput): Promise<Tex
     throw new Error(`text orchestrator: failed to produce variant for platform "${primaryPlatform}"`);
   }
 
+  // Creator Governance Parity For Text Content — Phase 5.
+  // Explainability metadata: warningsApplied = number of compliance
+  // directive lines actually injected into the prompt.
+  const governanceBlock = buildTextGovernanceInstruction(input.governance ?? null);
+  const warningsApplied = governanceBlock
+    ? governanceBlock.split('\n').filter((l) => l.trim().startsWith('-')).length
+    : 0;
+  const governanceMetadata = buildTextGovernanceMetadata(input.governance ?? null, warningsApplied);
+
   return {
     success: true,
     origin: input.origin,
@@ -131,5 +247,6 @@ export async function runTextGeneration(input: TextGenerationInput): Promise<Tex
     masterContent,
     platformVariant,
     primaryPlatform,
+    governance: governanceMetadata,
   };
 }

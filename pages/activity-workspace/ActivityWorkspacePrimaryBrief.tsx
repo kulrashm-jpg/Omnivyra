@@ -5,6 +5,7 @@ import {
   isAttachmentRequiredFormat,
   normalizeCreatorFormat,
 } from '@/lib/shared/creatorGovernanceRegistry';
+import { bearerAuthorization } from '@/lib/httpAuthHeaders';
 
 function extractAttachmentRowState(input: {
   dailyRaw: Record<string, unknown>;
@@ -465,7 +466,7 @@ async function postUploadFileResumable(input: {
       chunkSize: 6 * 1024 * 1024, // 6 MB — matches Supabase recommended chunk
       removeFingerprintOnSuccess: true,
       headers: {
-        authorization: `Bearer ${supabaseAnonKey}`,
+        authorization: bearerAuthorization(supabaseAnonKey),
         'x-upsert': 'true',
       },
       uploadDataDuringCreation: true,

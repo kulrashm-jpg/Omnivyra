@@ -1,4 +1,5 @@
 // Social Media OAuth Configuration and API Integration
+import { bearerAuthorization } from './httpAuthHeaders';
 export interface SocialAuthConfig {
   clientId: string;
   clientSecret: string;
@@ -104,7 +105,7 @@ export const getUserProfile = async (platform: string, accessToken: string): Pro
 
   const response = await fetch(url, {
     headers: {
-      'Authorization': `Bearer ${accessToken}`,
+      'Authorization': bearerAuthorization(accessToken),
       'Accept': 'application/json'
     }
   });

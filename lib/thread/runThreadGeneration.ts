@@ -15,6 +15,11 @@ import {
   getDynamicContextThreshold,
   buildDiagnosticRetryReasons,
 } from '../content/companyContextBlock';
+// Closure Pass — Phase 4. Thread generation now resolves governance
+// and threads it through `runTextGeneration` + the pipeline `item`
+// so system prompts pick up the preamble. Reuses the company profile
+// already loaded for identity resolution.
+import { buildGovernancePromptContext } from '../../backend/services/creator/strategyGovernancePromptContext';
 
 export interface ThreadGenerationRequest {
   company_id: string;
@@ -77,6 +82,20 @@ export async function runThreadGeneration(
   // a modified extra_instruction WITH the original item shape; that
   // path is preserved as a behavior-equivalent retry surface until the
   // orchestrator exposes a retry hook.
+  // Closure Pass — Phase 4. Build the governance context from the
+  // already-loaded company profile (best-effort; null when no profile).
+  const governance = profile
+    ? buildGovernancePromptContext({
+        companyContext: {
+          industry: profile.industry ?? null,
+          industry_list: profile.industry_list ?? null,
+          category: profile.category ?? null,
+          category_list: profile.category_list ?? null,
+        },
+        contentType: 'image', // threads share the image-lane policy
+        selectedStrategy: null,
+      })
+    : null;
   const initial = await runTextGeneration({
     origin: 'thread-api',
     companyId: input.company_id,
@@ -89,6 +108,7 @@ export async function runThreadGeneration(
     cta: input.cta,
     templateName: input.template_name,
     extraInstruction: extraInstruction || undefined,
+    governance,
   });
   let master_content: MasterContentPayload = initial.masterContent;
   let platform_variant: PlatformVariantPayload = initial.platformVariant;
@@ -115,6 +135,7 @@ export async function runThreadGeneration(
       },
     ],
     ...(extraInstruction ? { extra_instruction: extraInstruction } : {}),
+    ...(governance ? { governance } : {}),
   };
 
   // D3: short-form company-context gate. Lightweight single regen on failure.

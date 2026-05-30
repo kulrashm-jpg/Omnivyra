@@ -62,7 +62,7 @@ const NAV_ITEMS = [
     children: [
       { label: 'Engagement Center', href: '/command-center/engagement' },
       { label: 'Market Pulse',      href: '/dashboard/intelligence?intelTab=market-pulse' },
-      { label: 'Active Leads',      href: '/command-center/engagement' },
+      { label: 'Active Leads',      href: '/command-center/active-leads' },
       { label: 'Intelligence',      href: '/intelligence' },
     ],
   },

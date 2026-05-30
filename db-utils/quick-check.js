@@ -5,9 +5,9 @@
  * Simple utility to quickly check database schema and data
  */
 
-const { createClient } = require('@supabase/supabase-js');
 const fs = require('fs');
 const path = require('path');
+const { createDbUtilsClient } = require('./supabase-util-client');
 
 // Load environment variables from parent directory
 function loadEnv() {
@@ -31,10 +31,7 @@ function loadEnv() {
 // Load environment variables
 loadEnv();
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+const supabase = createDbUtilsClient();
 
 async function checkTable(tableName) {
   try {
@@ -138,5 +135,4 @@ async function main() {
 }
 
 main().catch(console.error);
-
 

@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { buildGovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
 import { enhanceSystemPromptForNewsletter } from './shared/pipeline';
 import { instantiateNewsletterTemplate, getDefaultNewsletterTemplates } from './defaultNewsletterTemplates';
 import { calculateNewsletterQualityScore } from './newsletterValidation';
@@ -756,6 +757,7 @@ export async function runSplitScreenInsightGeneration(
         template_used: true,
         hook_assessment: { strength: 'moderate', note: 'Newsletter-owned split-screen insight generation path used.' },
         result: parsed,
+        governance: buildGovernanceExplainabilityMetadata(null),
       };
     }
 
@@ -782,6 +784,7 @@ export async function runSplitScreenInsightGeneration(
       template_used: true,
       hook_assessment: { strength: 'moderate', note: 'Newsletter-owned split-screen insight generation path used.' },
       result: best,
+      governance: buildGovernanceExplainabilityMetadata(null),
     };
   }
 

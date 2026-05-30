@@ -166,6 +166,51 @@ function blocksToHtml(blocks: unknown[]): string {
         if (src) parts.push(`<img src="${src}" alt="${alt}" />`);
         break;
       }
+      case 'creator_asset': {
+        // P1-A — publishAllVariants honors the operator's "Publish all"
+        // toggle on CreatorAssetBlock. When the flag is true AND the
+        // block carries `variants[]`, iterate every successfully-
+        // generated variant and emit one figure each. When the flag is
+        // false / absent OR variants[] missing, fall back to the legacy
+        // single-asset render using the block's mirrored top-level
+        // fields (which point at `selectedVariantId`).
+        const title = typeof b['title'] === 'string' ? b['title'] : '';
+        const caption = typeof b['caption'] === 'string' ? b['caption'] : '';
+        const variants = Array.isArray(b['variants']) ? b['variants'] as Array<Record<string, unknown>> : null;
+        const publishAll = b['publishAllVariants'] === true;
+        if (publishAll && variants && variants.length > 0) {
+          // Multi-variant publish: one <figure> per generated variant.
+          // Variants in `'generated'` state with a `url` are emitted;
+          // failed / pending variants are skipped.
+          for (const v of variants) {
+            if (!v || typeof v !== 'object') continue;
+            const state = typeof v['state'] === 'string' ? v['state'] : 'generated';
+            if (state !== 'generated') continue;
+            const variantUrl = typeof v['url'] === 'string' ? v['url'] : '';
+            if (!variantUrl) continue;
+            const variantFamily = typeof v['variant_family'] === 'string' ? v['variant_family'] : '';
+            const variantCaption = typeof v['caption'] === 'string' ? v['caption'] : caption;
+            const altText = title || caption || variantFamily.toUpperCase() || 'Creator asset';
+            const figureCaption = variantCaption || (variantFamily ? `Variant ${variantFamily.toUpperCase()}` : '');
+            parts.push(figureCaption
+              ? `<figure><img src="${variantUrl}" alt="${altText}" /><figcaption>${figureCaption}</figcaption></figure>`
+              : `<img src="${variantUrl}" alt="${altText}" />`);
+          }
+        } else {
+          // Single-variant publish (legacy behavior). Mirrors the
+          // block's `url` (which already points at `selectedVariantId`'s
+          // asset when variants exist; otherwise the original single
+          // asset).
+          const url = typeof b['url'] === 'string' ? b['url'] : '';
+          if (url) {
+            const altText = title || caption || 'Creator asset';
+            parts.push(caption
+              ? `<figure><img src="${url}" alt="${altText}" /><figcaption>${caption}</figcaption></figure>`
+              : `<img src="${url}" alt="${altText}" />`);
+          }
+        }
+        break;
+      }
     }
   }
 

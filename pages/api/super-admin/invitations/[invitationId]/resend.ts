@@ -30,6 +30,7 @@ import {
 } from '../../../../../backend/services/auditActorService';
 import { enqueueEmailJob } from '../../../../../backend/services/emailJobsService';
 import { requireAdminRateLimit } from '../../../../../backend/services/requestAccessService';
+import { getCanonicalAppUrl } from '../../../../../backend/config/getCanonicalAppUrl';
 import { createHmac, createHash } from 'crypto';
 
 function appUrl(): string {

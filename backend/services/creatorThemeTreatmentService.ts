@@ -23,6 +23,10 @@ import { runCompletionWithOperation } from './aiGateway';
 import { CREATOR_CONTENT_SYSTEM_PROMPTS } from '../prompts/creatorContentPromptsV1';
 import { config as appConfig } from '@/config';
 import { resolveCreatorBrandKit } from './creatorBrandKit';
+import type {
+  GovernanceExplainabilityMetadata,
+  GovernancePromptContext,
+} from './creator/strategyGovernancePromptContext';
 
 function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -46,7 +50,24 @@ export type CreatorThemeTreatmentInput = {
   objective?: string;
   summary?: string;
   creatorCard?: Record<string, unknown>;
+  /**
+   * Creator Governance Parity For Text Content — Phase 4.
+   * Optional governance prompt context. When present and the
+   * resolved industry is regulated, the theme-treatment generator
+   * appends a compact compliance directive block to the LLM prompt
+   * and surfaces the same explainability shape the visual composer
+   * and text orchestrator do.
+   */
+  governance?: GovernancePromptContext | null;
 };
+
+/**
+ * Theme-treatment governance explainability envelope. Mirrors the
+ * shape exposed by the visual composer's `composed.governance` so
+ * callers see one parity contract across image / carousel /
+ * infographic / post / thread / theme treatment.
+ */
+export type ThemeTreatmentGovernanceMetadata = GovernanceExplainabilityMetadata;
 
 export type CreatorThemeTreatmentOutput = {
   intent_type: 'creator';
@@ -96,7 +117,63 @@ export type CreatorThemeTreatmentOutput = {
   };
   generation_prompt: string;
   metadata: Record<string, unknown>;
+  /**
+   * Creator Governance Parity For Text Content — Phase 5.
+   * Always present. industry='none' + warningsApplied=0 when no
+   * governance context was supplied.
+   */
+  governance: ThemeTreatmentGovernanceMetadata;
 };
+
+/* ── Governance helpers (shared shape with text orchestrator) ────── */
+
+function buildThemeTreatmentGovernanceInstruction(
+  governance: GovernancePromptContext | null | undefined,
+): string | null {
+  if (!governance) return null;
+  const { governanceContextHasAnyDirective } =
+    require('./creator/strategyGovernancePromptContext') as typeof import('./creator/strategyGovernancePromptContext');
+  if (!governanceContextHasAnyDirective(governance)) return null;
+  const lines: string[] = [];
+  if (governance.industry !== 'none' && governance.compliancePromptDirectives.length > 0) {
+    lines.push(`Compliance directives (${governance.industry} industry policy, risk: ${governance.riskLevel}):`);
+    for (const d of governance.compliancePromptDirectives) lines.push(`- ${d}`);
+  }
+  if (governance.selectedStrategyIsRestricted) {
+    lines.push(
+      `Use extra caution because the selected strategy "${governance.selectedStrategy ?? 'unknown'}" is governed by industry policy: ${governance.selectedStrategyGovernanceReason ?? 'restricted by policy'}.`,
+    );
+  } else if (governance.selectedStrategyIsDeprioritized) {
+    lines.push(
+      `The selected strategy "${governance.selectedStrategy ?? 'unknown'}" is deprioritized by industry policy: ${governance.selectedStrategyGovernanceReason ?? 'deprioritized by policy'}. Apply the compliance directives above with extra discipline.`,
+    );
+  }
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
+function buildThemeTreatmentGovernanceMetadata(
+  governance: GovernancePromptContext | null | undefined,
+  warningsApplied: number,
+): ThemeTreatmentGovernanceMetadata {
+  if (!governance) {
+    return {
+      industry: 'none',
+      riskLevel: 'none',
+      selectedStrategy: null,
+      warningsApplied: 0,
+      selectedStrategyIsRestricted: false,
+      selectedStrategyIsDeprioritized: false,
+    };
+  }
+  return {
+    industry: governance.industry,
+    riskLevel: governance.riskLevel,
+    selectedStrategy: governance.selectedStrategy,
+    warningsApplied,
+    selectedStrategyIsRestricted: governance.selectedStrategyIsRestricted,
+    selectedStrategyIsDeprioritized: governance.selectedStrategyIsDeprioritized,
+  };
+}
 
 const DURATION_BY_FORMAT: Record<string, number> = {
   video: 180,
@@ -138,8 +215,32 @@ export async function generateCreatorThemeTreatment(input: CreatorThemeTreatment
     assetType: input.contentType,
   });
 
-  const systemPrompt = CREATOR_CONTENT_SYSTEM_PROMPTS.video_script(creatorContext);
-  const userPrompt = `Generate a complete theme treatment for this creator brief.
+  // Phase 1 — Theme Treatment System Prompt Governance. Prepend the
+  // shared compliance preamble onto the registry-built system prompt
+  // so the LLM receives industry directives at SYSTEM level, parity
+  // with the visual + text paths. The registry factory itself is
+  // unchanged; this preserves existing prompt-registry behavior.
+  // When no governance context is supplied OR industry='none', the
+  // preamble is null and the system prompt is byte-identical to the
+  // prior call.
+  const baseSystemPrompt = CREATOR_CONTENT_SYSTEM_PROMPTS.video_script(creatorContext);
+  const systemPromptPreamble = (() => {
+    const { buildSystemPromptGovernancePreamble } =
+      require('./creator/strategyGovernancePromptContext') as typeof import('./creator/strategyGovernancePromptContext');
+    return buildSystemPromptGovernancePreamble(input.governance ?? null);
+  })();
+  const systemPrompt = systemPromptPreamble
+    ? `${systemPromptPreamble}\n\n${baseSystemPrompt}`
+    : baseSystemPrompt;
+  // Creator Governance Parity For Text Content — Phase 4. The
+  // compliance block is prepended to the user prompt so the
+  // directives travel with the topic / audience / objective fields
+  // the model uses to plan scenes. Additive only: when no governance
+  // context is supplied or industry='none', the block is absent and
+  // the user prompt is byte-identical to prior callers.
+  const governanceBlock = buildThemeTreatmentGovernanceInstruction(input.governance ?? null);
+  const governancePrefix = governanceBlock ? `${governanceBlock}\n\n` : '';
+  const userPrompt = `${governancePrefix}Generate a complete theme treatment for this creator brief.
 
 Format: ${input.contentType}
 Topic: ${input.topic}
@@ -251,6 +352,17 @@ Return JSON only matching the script format in the system prompt.`;
           target_duration_seconds: targetDuration,
           platform,
           generated_by: 'creator_theme_treatment',
+          // Creator Governance Parity For Text Content — Phase 5.
+          // Mirror the theme-treatment governance metadata onto
+          // media_bundle.metadata so downstream surfaces read it
+          // off creator_attachment_metadata exactly as they do for
+          // visual + text assets.
+          governance: (() => {
+            const warningsApplied = governanceBlock
+              ? governanceBlock.split('\n').filter((l) => l.trim().startsWith('-')).length
+              : 0;
+            return buildThemeTreatmentGovernanceMetadata(input.governance ?? null, warningsApplied);
+          })(),
         },
       },
     },
@@ -263,5 +375,11 @@ Return JSON only matching the script format in the system prompt.`;
       attachment_required: true,
       target_duration_seconds: targetDuration,
     },
+    governance: (() => {
+      const warningsApplied = governanceBlock
+        ? governanceBlock.split('\n').filter((l) => l.trim().startsWith('-')).length
+        : 0;
+      return buildThemeTreatmentGovernanceMetadata(input.governance ?? null, warningsApplied);
+    })(),
   };
 }

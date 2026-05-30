@@ -450,7 +450,7 @@ export default function IntelMixView({ d }: { d: S }) {
                           strategicFocus: selectedAspects,
                           duration,
                         }}
-                        onApplyTopic={(topic) => setStrategicText(topic)}
+                        onApplySuggestion={(suggestion) => setStrategicText(suggestion.topic)}
                       />
                     </div>
                   )}
@@ -585,7 +585,7 @@ export default function IntelMixView({ d }: { d: S }) {
                         strategicFocus: selectedAspects,
                         duration,
                       }}
-                      onApplyTopic={(topic) => setStrategicText(topic)}
+                      onApplySuggestion={(suggestion) => setStrategicText(suggestion.topic)}
                     />
                   </div>
                 )}

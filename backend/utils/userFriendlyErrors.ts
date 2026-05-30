@@ -12,9 +12,10 @@
 import {
   resolveUserFriendlyMessage,
   type ErrorContext,
+  type ResolveOptions,
 } from '../services/userFriendlyErrorService';
 
-export type { ErrorContext };
+export type { ErrorContext, ResolveOptions };
 
 /** Built-in defaults when DB is unavailable or table is empty */
 const BUILTIN_FALLBACKS: Record<ErrorContext, string> = {
@@ -52,12 +53,13 @@ function isAlreadyUserFriendly(msg: string): boolean {
  */
 export async function getUserFriendlyMessage(
   err: unknown,
-  context: ErrorContext = 'generic'
+  context: ErrorContext = 'generic',
+  options?: ResolveOptions
 ): Promise<string> {
   const raw = err instanceof Error ? err.message : String(err ?? '');
   if (raw && isAlreadyUserFriendly(raw)) return raw;
 
-  const resolved = await resolveUserFriendlyMessage(err, context);
+  const resolved = await resolveUserFriendlyMessage(err, context, options);
   if (resolved) return resolved.message;
 
   return BUILTIN_FALLBACKS[context];

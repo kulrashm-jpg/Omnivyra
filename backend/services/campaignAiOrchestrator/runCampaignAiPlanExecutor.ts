@@ -1,4 +1,5 @@
 import { supabase } from '../../db/supabaseClient';
+import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorCodes';
 import { getLatestCampaignVersionByCampaignId } from '../../db/campaignVersionStore';
 import { getPrimaryCampaignType, BACKWARD_COMPAT_DEFAULTS } from '../campaignContextConfig';
 import { recommendationDurationSeed, toValidWeeks } from '../campaign-ai/campaignAiPlanningContext';
@@ -34,10 +35,16 @@ export async function executeRunCampaignAiPlan(
 
   if (input.mode === 'generate_plan') {
     if (!campaignRow) {
-      throw new Error('Campaign not found. Please save the campaign and try again.');
+      throw new BoltError(
+        BOLT_ERROR_CODES.SCHEDULING_CAMPAIGN_NOT_FOUND,
+        'Campaign not found. Please save the campaign and try again.',
+      );
     }
     if (!versionRow) {
-      throw new Error('Campaign version not found. Please save the campaign and try again.');
+      throw new BoltError(
+        BOLT_ERROR_CODES.CAMPAIGN_VERSION_NOT_FOUND,
+        'Campaign version not found. Please save the campaign and try again.',
+      );
     }
   }
 

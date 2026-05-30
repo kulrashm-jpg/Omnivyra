@@ -67,6 +67,44 @@ type RateLimitHeaders = {
   used: number | null;
 };
 
+/**
+ * PR-OPA-5 — shape of /user/{username}/about response (subset).
+ * Reddit returns a `thing` envelope `{ kind: 't2', data: { ... } }`.
+ */
+type RedditUserAboutResponse = {
+  kind?: string;
+  data?: {
+    name?: string;
+    link_karma?: number;
+    comment_karma?: number;
+    total_karma?: number;
+    created_utc?: number;
+    is_employee?: boolean;
+    has_verified_email?: boolean;
+    verified?: boolean;
+    subreddit?: {
+      public_description?: string | null;
+      title?: string | null;
+    } | null;
+  };
+};
+
+/** PR-OPA-5 — enrichment cache shape. All fields nullable. */
+type CachedRedditProfile = {
+  profile_bio: string | null;
+  karma_tier: 'high' | 'medium' | 'low' | 'new' | null;
+  account_age_years: number | null;
+};
+
+function karmaTierFor(totalKarma: number | null | undefined, ageYears: number | null): CachedRedditProfile['karma_tier'] {
+  if (totalKarma == null) return null;
+  if (ageYears != null && ageYears < 0.5) return 'new';
+  if (totalKarma >= 10000) return 'high';
+  if (totalKarma >= 1000) return 'medium';
+  if (totalKarma >= 100) return 'low';
+  return 'new';
+}
+
 function readRateLimit(headers: Headers): RateLimitHeaders {
   const rem = headers.get('x-ratelimit-remaining');
   const reset = headers.get('x-ratelimit-reset');
@@ -88,6 +126,60 @@ async function fetchOAuthToken(organizationId: string): Promise<string | null> {
   // tenant_id == organization_id in the consolidated token model.
   const token = await getToken(organizationId, organizationId, 'reddit');
   return token?.access_token ?? null;
+}
+
+/**
+ * PR-OPA-5 — fetch a Reddit user's public /about profile. Returns
+ * nullable triple. Any HTTP / parse / network failure falls back to
+ * empty so the calling enrichment loop can continue. Per spec:
+ * "Signal ingestion must continue if profile lookup fails."
+ */
+async function fetchRedditUserProfile(
+  username: string,
+  token: string,
+  deadline: number,
+): Promise<CachedRedditProfile> {
+  const empty: CachedRedditProfile = {
+    profile_bio: null,
+    karma_tier: null,
+    account_age_years: null,
+  };
+  if (Date.now() >= deadline) return empty;
+  try {
+    const remaining = Math.max(0, deadline - Date.now());
+    if (remaining <= 0) return empty;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.min(remaining, 10_000));
+    let resp: Response;
+    try {
+      resp = await fetch(`${REDDIT_API}/user/${encodeURIComponent(username)}/about`, {
+        headers: { Authorization: `Bearer ${token}`, 'User-Agent': USER_AGENT },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!resp.ok) return empty;
+    const body = (await resp.json()) as RedditUserAboutResponse;
+    const d = body?.data ?? {};
+    const bioRaw = d.subreddit?.public_description;
+    const bio = typeof bioRaw === 'string' && bioRaw.trim().length > 0 ? bioRaw.trim() : null;
+    const ageYears = typeof d.created_utc === 'number'
+      ? Math.max(0, (Date.now() / 1000 - d.created_utc) / (365.25 * 24 * 3600))
+      : null;
+    const totalKarma = typeof d.total_karma === 'number'
+      ? d.total_karma
+      : (typeof d.link_karma === 'number' || typeof d.comment_karma === 'number'
+          ? (d.link_karma ?? 0) + (d.comment_karma ?? 0)
+          : null);
+    return {
+      profile_bio: bio,
+      karma_tier: karmaTierFor(totalKarma, ageYears),
+      account_age_years: ageYears != null ? Math.round(ageYears * 10) / 10 : null,
+    };
+  } catch {
+    return empty;
+  }
 }
 
 export const redditListeningConnector: ListeningConnector = {
@@ -349,6 +441,44 @@ export const redditListeningConnector: ListeningConnector = {
     }
 
     if (Date.now() >= deadline) partial = true;
+
+    // ---------- PR-OPA-5: profile enrichment ----------
+    // Mirrors the GitHub PR-OPA-4 pattern: one /user/{name}/about call
+    // per unique author, cached per execution, bounded by the same
+    // deadline. Failures are silent and never block signal ingestion.
+    if (signals.length > 0 && Date.now() < deadline) {
+      const uniqueLogins = new Set<string>();
+      for (const s of signals) {
+        if (s.author_handle) uniqueLogins.add(s.author_handle);
+      }
+      const profileCache = new Map<string, CachedRedditProfile>();
+      for (const login of uniqueLogins) {
+        if (Date.now() >= deadline) {
+          partial = true;
+          break;
+        }
+        const profile = await fetchRedditUserProfile(login, token, deadline);
+        profileCache.set(login, profile);
+      }
+      for (const s of signals) {
+        const handle = s.author_handle;
+        if (!handle) continue;
+        const profile = profileCache.get(handle);
+        if (!profile) continue;
+        const anyField =
+          profile.profile_bio != null
+          || profile.karma_tier != null
+          || profile.account_age_years != null;
+        if (anyField) {
+          s.metadata = {
+            ...s.metadata,
+            ...(profile.profile_bio       !== null ? { profile_bio:       profile.profile_bio }       : {}),
+            ...(profile.karma_tier        !== null ? { karma_tier:        profile.karma_tier }        : {}),
+            ...(profile.account_age_years !== null ? { account_age_years: profile.account_age_years } : {}),
+          };
+        }
+      }
+    }
 
     return {
       signals,

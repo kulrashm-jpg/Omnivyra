@@ -402,7 +402,11 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
         active_platform_targets: platform_targets,
       } as Parameters<typeof generateMasterContentFromIntent>[0];
 
-      const master = await generateMasterContentFromIntent(item);
+      // Closure Pass — Phase 4. Enrich item with governance before
+      // pipeline call.
+      const { enrichItemWithGovernance } = await import('../../services/creator/governanceItemEnricher');
+      const governedItem = await enrichItemWithGovernance(item as any) as typeof item;
+      const master = await generateMasterContentFromIntent(governedItem);
       masterContent = master.content;
       masterId = master.id;
       console.log('[bolt-job] master generated via LLM', { topic, masterId, preview: masterContent.slice(0, 80) });
@@ -489,7 +493,10 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
 
     variantByKey = new Map<string, string>();
     try {
-      const variants = await buildPlatformVariantsFromMaster(itemForVariants as unknown as Parameters<typeof generateMasterContentFromIntent>[0]);
+      // Closure Pass — Phase 4. Enrich item with governance.
+      const { enrichItemWithGovernance } = await import('../../services/creator/governanceItemEnricher');
+      const governedVariantsItem = await enrichItemWithGovernance(itemForVariants as any) as typeof itemForVariants;
+      const variants = await buildPlatformVariantsFromMaster(governedVariantsItem as unknown as Parameters<typeof generateMasterContentFromIntent>[0]);
       for (const v of variants) {
         const vp  = String(v.platform   || '').toLowerCase();
         const vct = String(v.content_type || '').toLowerCase();
