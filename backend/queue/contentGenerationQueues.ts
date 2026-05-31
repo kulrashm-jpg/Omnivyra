@@ -284,6 +284,11 @@ export async function startContentWorkers(processor: (job: any) => Promise<any>)
       connection: getConnectionConfig(),
       prefix: getQueuePrefix(),
       concurrency: config.concurrency,
+      // Reduce idle Redis polling to match the tuned core pool (getWorker in
+      // bullmqClient.ts). Job pickup stays event-driven; only the idle blocking
+      // wait and the stall-detection scan cadence change.
+      drainDelay: 300,
+      stalledInterval: 1_800_000,
     });
 
     worker.on('completed', (job) => {
@@ -329,6 +334,11 @@ export async function startCreatorContentWorkers(processor: (job: any) => Promis
       connection: getConnectionConfig(),
       prefix: getQueuePrefix(),
       concurrency: config.concurrency,
+      // Reduce idle Redis polling to match the tuned core pool (getWorker in
+      // bullmqClient.ts). Job pickup stays event-driven; only the idle blocking
+      // wait and the stall-detection scan cadence change.
+      drainDelay: 300,
+      stalledInterval: 1_800_000,
     });
 
     worker.on('completed', (job) => {
@@ -365,6 +375,11 @@ export async function startBoltContentWorkers(processor: (job: any) => Promise<a
     connection: getConnectionConfig(),
     prefix: getQueuePrefix(),
     concurrency: config.concurrency,
+    // Reduce idle Redis polling to match the tuned core pool (getWorker in
+    // bullmqClient.ts). Job pickup stays event-driven; only the idle blocking
+    // wait and the stall-detection scan cadence change.
+    drainDelay: 300,
+    stalledInterval: 1_800_000,
   });
 
   worker.on('completed', (job) => {
@@ -391,6 +406,11 @@ export async function startWhatsAppBroadcastWorker(processor: (job: any) => Prom
     connection: getConnectionConfig(),
     prefix: getQueuePrefix(),
     concurrency: config.concurrency,
+    // Reduce idle Redis polling to match the tuned core pool (getWorker in
+    // bullmqClient.ts). Job pickup stays event-driven; only the idle blocking
+    // wait and the stall-detection scan cadence change.
+    drainDelay: 300,
+    stalledInterval: 1_800_000,
   });
 
   worker.on('completed', (job) => {
@@ -413,6 +433,11 @@ export async function startWhatsAppWebhookWorker(processor: (job: any) => Promis
     connection: getConnectionConfig(),
     prefix: getQueuePrefix(),
     concurrency: config.concurrency,
+    // Reduce idle Redis polling to match the tuned core pool (getWorker in
+    // bullmqClient.ts). Job pickup stays event-driven; only the idle blocking
+    // wait and the stall-detection scan cadence change.
+    drainDelay: 300,
+    stalledInterval: 1_800_000,
   });
   worker.on('completed', (job) => {
     console.info('[wa-webhook-worker][completed]', { jobId: job.id });
@@ -441,6 +466,11 @@ export async function startAnalyticsIngestionWorker(processor: (job: any) => Pro
       connection: getConnectionConfig(),
       prefix: getQueuePrefix(),
       concurrency: config.concurrency,
+      // Reduce idle Redis polling to match the tuned core pool (getWorker in
+      // bullmqClient.ts). Job pickup stays event-driven; only the idle blocking
+      // wait and the stall-detection scan cadence change.
+      drainDelay: 300,
+      stalledInterval: 1_800_000,
     });
     _diag('startAnalyticsIngestionWorker:worker-constructed', { concurrency: config.concurrency });
   } catch (e) {
