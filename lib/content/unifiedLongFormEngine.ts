@@ -213,6 +213,15 @@ import {
   getAutonomousPromotionAudit,
   type AutonomousPromotionAudit,
 } from '../../backend/services/longForm/autonomousPromotionCoordinator';
+import {
+  buildOrganizationPerspective,
+  type OrganizationPerspective,
+} from '../../backend/services/longForm/organizationPerspectiveEngine';
+import {
+  evaluateThoughtLeadershipQuality,
+  ThoughtLeadershipQualityGateError,
+  type ThoughtLeadershipQualityReport,
+} from '../../backend/services/longForm/thoughtLeadershipQualityGate';
 
 export interface UnifiedLongFormGenerationInput
   extends Omit<BlogGenerationRequest, 'contentType' | 'formatType' | 'template_blocks' | 'target_words'> {
@@ -292,6 +301,8 @@ export interface UnifiedLongFormEngineTrace {
   performanceInsights?: PerformanceInsights;
   generatedFeatureSnapshot?: ContentPerformanceFeatureSnapshot;
   contentEvaluation?: LongFormContentEvaluationResult;
+  organizationPerspective?: OrganizationPerspective;
+  thoughtLeadershipQuality?: ThoughtLeadershipQualityReport;
 }
 
 export type UnifiedLongFormGenerationResult = BlogGenerationResult & {
@@ -733,6 +744,17 @@ export async function runUnifiedLongFormGeneration(
   // Phase 4.3 — Build grounding profile when sources are supplied. The
   // result is threaded into the planning engine; downstream factual /
   // citation / source-integrity validators consume it.
+  const organizationPerspective = input.organizationPerspective ?? buildOrganizationPerspective({
+    topic: input.topic,
+    companyContext: input.companyContext,
+    selectedAngle: input.selected_angle,
+    answers: input.answers,
+  });
+  const inputWithPerspective = {
+    ...input,
+    organizationPerspective,
+  };
+
   let builtGrounding: BuiltGroundingProfile | undefined;
   if (input.groundingInput && (
     (input.groundingInput.companyBlogs?.length ?? 0) > 0
@@ -755,7 +777,7 @@ export async function runUnifiedLongFormGeneration(
     try {
       const plannedStart = Date.now();
       const planned = await runPlannedLongFormGeneration({
-        ...input,
+        ...inputWithPerspective,
         formatType,
         groundingProfile: builtGrounding?.profile,
       });
@@ -816,7 +838,7 @@ export async function runUnifiedLongFormGeneration(
         let compatibilityFailureReason: string | undefined;
         try {
           await runBlogGeneration({
-            ...input,
+            ...inputWithPerspective,
             contentType: normalizedContentType,
             formatType: formatType as BlogGenerationRequest['formatType'],
             template_blocks: input.templateBlocks,
@@ -864,8 +886,27 @@ export async function runUnifiedLongFormGeneration(
         accumulateBurnInComparison(snapshot);
       }
 
+      // Enterprise quality gate. Failed thought-leadership output is
+      // blocked before it can surface as a usable blog draft.
+      const thoughtLeadershipQuality = planned.generation.needs_clarification === false && planned.generation.mode === 'full'
+        ? evaluateThoughtLeadershipQuality({
+            output: planned.generation.result,
+            companyContext: input.companyContext,
+            organizationPerspective,
+          })
+        : undefined;
+      if (thoughtLeadershipQuality && !thoughtLeadershipQuality.passed) {
+        throw new ThoughtLeadershipQualityGateError(thoughtLeadershipQuality);
+      }
+
       return {
         ...planned.generation,
+        ...(thoughtLeadershipQuality
+          ? {
+              thought_leadership_quality: thoughtLeadershipQuality,
+              quality_passed: thoughtLeadershipQuality.passed,
+            }
+          : {}),
         engine_trace: {
           ...traceBase,
           generationLogic: 'planned-sectionwise-v1',
@@ -885,6 +926,8 @@ export async function runUnifiedLongFormGeneration(
           performanceInsights: planned.performanceInsights,
           generatedFeatureSnapshot: planned.generatedFeatureSnapshot,
           contentEvaluation,
+          organizationPerspective,
+          thoughtLeadershipQuality,
         },
       };
     } catch (error) {
@@ -894,7 +937,13 @@ export async function runUnifiedLongFormGeneration(
       // emit a structured LONGFORM_ENGINE_FALLBACK event with the original
       // error message, stack, and full request metadata before delegating
       // to the compatibility core.
+      if (error instanceof ThoughtLeadershipQualityGateError) {
+        throw error;
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('Publication blocked: duplicate sections remain')) {
+        throw error;
+      }
       const errorStack = error instanceof Error ? error.stack : undefined;
       const fallbackEvent: LongFormEngineFallbackPayload = emitEngineFallback({
         fallback_reason: errorMessage,
@@ -1013,7 +1062,7 @@ export async function runUnifiedLongFormGeneration(
       });
 
       const result = await runBlogGeneration({
-        ...input,
+        ...inputWithPerspective,
         contentType: normalizedContentType,
         formatType: formatType as BlogGenerationRequest['formatType'],
         template_blocks: input.templateBlocks,
@@ -1030,6 +1079,7 @@ export async function runUnifiedLongFormGeneration(
           fallback_triggered: true,
           fallback_reason: fallbackEvent.fallback_reason,
           fallback_stack: fallbackEvent.fallback_stack,
+          organizationPerspective,
         },
       };
     }
@@ -1074,7 +1124,7 @@ export async function runUnifiedLongFormGeneration(
   });
 
   const result = await runBlogGeneration({
-    ...input,
+    ...inputWithPerspective,
     contentType: normalizedContentType,
     formatType: formatType as BlogGenerationRequest['formatType'],
     template_blocks: input.templateBlocks,
@@ -1089,6 +1139,7 @@ export async function runUnifiedLongFormGeneration(
       attempted_engine: 'compatibility-core',
       final_engine: 'compatibility-core',
       fallback_triggered: false,
+      organizationPerspective,
     },
   };
 }

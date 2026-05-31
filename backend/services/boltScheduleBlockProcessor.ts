@@ -270,7 +270,7 @@ async function createBlogEntry(
     company_id:       companyId,
     title:            topic,
     slug:             buildBlogSlug(topic),
-    content_markdown: masterContent,
+    content:          masterContent,
     status:           'scheduled',
     published_at:     scheduledDate,
     created_by:       userId,

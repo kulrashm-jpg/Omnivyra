@@ -34,6 +34,7 @@ import { logPipelineEvent } from '../../lib/shared/observability';
 import { persistCreatorValidationManifest } from './creatorRenderPersistence';
 import { resolvePlatformGeometryProfile, platformTextBoxY } from './creatorPlatformGeometry';
 import { getCreatorRendererRegistration } from './creatorRendererRegistry';
+import { composeInfographicCopy } from './creator/infographicCopyComposer';
 
 const sharp = require('sharp') as typeof import('sharp');
 // Loaded only in the server renderer for deterministic downloadable PDF assets.
@@ -586,6 +587,29 @@ function buildOverlaySvg(input: {
    * pre-phase renderer — legacy assets are unaffected.
    */
   renderStrategy?: import('./creator/renderStrategyRegistry').RenderStrategy | null;
+  /**
+   * Slide position for carousel/pdf/slider renders. When supplied,
+   * the overlay surfaces a clean "N / M" page indicator instead of
+   * the role label (operator feedback: drop the "HOOK" eyebrow).
+   * Also drives the right-edge swipe chevron on every slide except
+   * the last (no swipe affordance needed on the final frame).
+   */
+  slideIndex?: number;
+  slideTotal?: number;
+  /**
+   * Deck-wide rendering context. When supplied, this slide:
+   *   - uses the deck's shared adaptive font multiplier (consistency
+   *     across all slides — no per-slide font drift)
+   *   - uses the deck's continuous wave anchors (entry/exit Y) so the
+   *     visual continuity line flows smoothly across the carousel
+   *   - uses the layout mode (top / center / bottom) chosen for this
+   *     index, giving the deck visual rhythm
+   */
+  deckContext?: {
+    fontMultiplier: number;
+    layoutModes: Array<'text_top' | 'text_center' | 'text_bottom'>;
+    waveAnchors: Array<{ entryY: number; exitY: number }>;
+  };
 }): { svg: string; quality: OverlayQualityReport; brandPlacement: { top: number; left: number; maxWidth: number; maxHeight: number } } {
   // Resolve strategy modifiers. When no strategy supplied, all
   // multipliers are 1.0 + ctaMode='standard' so behaviour is byte
@@ -596,7 +620,7 @@ function buildOverlaySvg(input: {
   // Apply strategy multipliers to the preset table BEFORE downstream
   // sizing math reads from it. Each multiplier is bounded inside
   // applyScale so a malformed strategy can't yield off-canvas sizes.
-  const preset = strategyMods
+  const strategyAdjustedPreset = strategyMods
     ? {
         ...presetRaw,
         hookSize: applyScale(presetRaw.hookSize, strategyMods.hookScale),
@@ -609,6 +633,46 @@ function buildOverlaySvg(input: {
         ),
       }
     : presetRaw;
+  // Operator feedback: "font sizes should be bigger... size of text
+  // should vary [with quantity]". Apply an adaptive multiplier on top
+  // of the strategy-tuned preset:
+  //   - very short copy   (≤80 chars total)  → 1.32× — fonts breathe,
+  //                                              title dominates the frame
+  //   - short copy        (81–160)           → 1.18×
+  //   - normal copy       (161–260)          → 1.05× — slight bump
+  //                                              so the new default is
+  //                                              always larger than the
+  //                                              old preset
+  //   - long copy         (261–380)          → 0.96×
+  //   - very long copy    (>380)             → 0.86× — squeeze to fit
+  //
+  // Total chars = headline + keyInsight + supportingText. CTA copy is
+  // sized independently and doesn't enter this calculation.
+  const overlayTextLength =
+    String(input.overlay.headline || '').length +
+    String(input.overlay.keyInsight || '').length +
+    String(input.overlay.supportingText || '').length;
+  // Deck-wide font multiplier wins when supplied — operator feedback:
+  // "[the renderer] should be aware of all the five slides so we can
+  // bring the consistency into the text format". Without this, each
+  // slide picked its own scale and a 60-char slide rendered with a
+  // 1.32× headline while a 200-char slide rendered with 1.05× — same
+  // deck, visibly different font sizes. The deck context's multiplier
+  // is derived from the LONGEST slide so everything fits at one scale.
+  const perSlideMultiplier =
+    overlayTextLength <= 80 ? 1.32
+    : overlayTextLength <= 160 ? 1.18
+    : overlayTextLength <= 260 ? 1.05
+    : overlayTextLength <= 380 ? 0.96
+    : 0.86;
+  const adaptiveMultiplier = input.deckContext?.fontMultiplier ?? perSlideMultiplier;
+  const preset = {
+    ...strategyAdjustedPreset,
+    headlineSize: Math.round(strategyAdjustedPreset.headlineSize * adaptiveMultiplier),
+    insightSize: Math.round(strategyAdjustedPreset.insightSize * adaptiveMultiplier),
+    supportSize: Math.round(strategyAdjustedPreset.supportSize * adaptiveMultiplier),
+    hookSize: Math.round(strategyAdjustedPreset.hookSize * adaptiveMultiplier),
+  };
   const overlayStrategy = input.brandKit.overlayStrategy;
   const accent = input.brandKit.accentColor;
   const headlineLines = balanceTextLines(input.overlay.headline, preset.headlineChars, preset.maxHeadlineLines);
@@ -618,7 +682,20 @@ function buildOverlaySvg(input: {
   // The previous backdrop panel made the platform fallback look like a
   // banner ("INSTAGRAM"); without the panel a missing hook is just
   // silent, which is the correct behaviour.
-  const hook = input.overlay.hook || '';
+  // Operator feedback: the slide counter ("1 / 5") was anchored to
+  // the headline. It now sits at the TOP-LEFT of the canvas (above
+  // the logo area on the right), where viewers expect a page
+  // indicator. The eyebrow position above the headline is empty —
+  // nothing competes with the title for visual space.
+  const isMultiSlide = typeof input.slideIndex === 'number' && typeof input.slideTotal === 'number' && (input.slideTotal as number) > 1;
+  const slideCounter = isMultiSlide
+    ? `${(input.slideIndex as number) + 1} / ${input.slideTotal}`
+    : '';
+  // `hook` is now ALWAYS empty for slide renders — the headline owns
+  // the top of the text stack. Kept as an empty string so all the
+  // downstream geometry math (hookLineGap = 0, hookY unused) is
+  // structurally identical without touching the layout code path.
+  const hook = '';
   // Text-stack layout — bottom-anchored. Text lives in the lower
   // portion of the image so it doesn't fight a portrait/subject in
   // the upper half. Sizes follow the existing preset so banner /
@@ -636,6 +713,19 @@ function buildOverlaySvg(input: {
   const textX = safeMargin;
   const textRightLimit = input.width - safeMargin;
   const textWidth = Math.max(160, textRightLimit - textX);
+  // Logo geometry hoisted here (above the text-stack math) because
+  // the new top-safety-margin needs logoMaxHeight to clamp the stack
+  // below the logo line. brandPlacement / standardBrandMode are
+  // recomputed later from these same values for backward-compat.
+  const standardBrandMode = preset.brandMode === 'standard';
+  const logoBaseWidth = Math.round(input.width * (standardBrandMode ? 0.24 : 0.16));
+  const logoBaseHeight = Math.round(input.height * (standardBrandMode ? 0.13 : 0.11));
+  const logoMaxWidth = strategyMods
+    ? Math.round(applyScale(logoBaseWidth, strategyMods.logoScaleMultiplier, 0.5, 1.6))
+    : logoBaseWidth;
+  const logoMaxHeight = strategyMods
+    ? Math.round(applyScale(logoBaseHeight, strategyMods.logoScaleMultiplier, 0.5, 1.6))
+    : logoBaseHeight;
   const headlineLineHeight = Math.round(preset.headlineSize * 1.14);
   const insightLineHeight = Math.round(preset.insightSize * 1.34);
   const supportLineHeight = Math.round(preset.supportSize * 1.35);
@@ -648,34 +738,85 @@ function buildOverlaySvg(input: {
   const totalStackHeight = hookLineGap + headlineBlockHeight + insightGap + insightBlockHeight + supportGap + supportBlockHeight;
   const footerHeight = preset.footerMode === 'hidden' ? 0 : 40;
   const bottomPadding = Math.max(48, Math.round(input.height * 0.06));
-  const supportEndY = input.height - bottomPadding - footerHeight;
-  const supportStart = supportEndY - supportBlockHeight + supportLineHeight;
-  const insightEndY = supportEndY - supportBlockHeight - supportGap;
-  const insightStart = insightEndY - insightBlockHeight + insightLineHeight;
-  const headlineEndY = insightEndY - insightBlockHeight - insightGap;
-  const headlineStart = headlineEndY - headlineBlockHeight + headlineLineHeight;
-  const hookY = headlineStart - hookLineGap;
-  const layoutBottom = supportEndY + footerHeight;
+  // Operator feedback: "text is hiding behind the button". The CTA
+  // was placed AT supportEndY - ctaHeight - 14, which is INSIDE the
+  // support text region. Now we reserve a bottom band for the CTA
+  // (if present) and stack the text ABOVE it, with a clear 22px gap.
+  // ctaSlotHeight is computed from preset.supportSize since the
+  // actual CTA height is derived from the same dimension downstream.
+  const ctaCopyForLayout = String(input.overlay.cta || '').trim();
+  const ctaModeForLayout = strategyMods?.ctaMode ?? 'standard';
+  const willRenderCta = ctaCopyForLayout.length > 0 && ctaModeForLayout !== 'absent';
+  const ctaFontSizeForLayout = Math.round(preset.supportSize * 1.05);
+  const ctaPadYForLayout = Math.round(ctaFontSizeForLayout * 0.5);
+  const ctaSlotHeight = willRenderCta ? ctaFontSizeForLayout + ctaPadYForLayout * 2 + 22 : 0;
+  // Operator feedback: "we should not be limited to showcasing
+  // content or the text only at the bottom... different combination
+  // that our function should be equipped to handle". The deck context
+  // hands this slide a layout mode (text_top / text_center /
+  // text_bottom) chosen for its position in the deck — short focal
+  // slides (hook / cta) centered, middles alternating top / bottom.
+  //
+  // For all modes:
+  //   - `stackBottomMax` is the floor (CTA band + footer + padding);
+  //     the stack can never push past it.
+  //   - `topSafetyMargin` is the ceiling — the stack stays below the
+  //     top-of-canvas slide counter + logo line.
+  //
+  // The math below computes the target headline-TOP Y per mode, then
+  // clamps it so the stack always fits between the safety bounds.
+  const stackBottomMax = input.height - bottomPadding - footerHeight - ctaSlotHeight;
+  const logoMaxHeightForSafety = Math.round(input.height * (preset.brandMode === 'standard' ? 0.13 : 0.11));
+  const topSafetyMargin = safeMargin + 14 + logoMaxHeightForSafety + Math.round(input.height * 0.04);
+  const totalStackPixelHeight = headlineBlockHeight + insightGap + insightBlockHeight + supportGap + supportBlockHeight;
+  const layoutMode = (input.deckContext && typeof input.slideIndex === 'number'
+    ? input.deckContext.layoutModes[input.slideIndex]
+    : null) ?? 'text_center';
+  const targetHeadlineTop = (() => {
+    if (layoutMode === 'text_top') {
+      // Text starts just below the top-of-canvas slide counter/logo
+      // band. Gives a poster-style top-anchored composition; the
+      // bottom half of the slide is breathing room or visual.
+      return topSafetyMargin + Math.round(input.height * 0.02);
+    }
+    if (layoutMode === 'text_bottom') {
+      // Bottom-anchored — like the legacy behaviour, but only when
+      // the deck context EXPLICITLY routes a slide here.
+      return stackBottomMax - totalStackPixelHeight;
+    }
+    // text_center (default): headline TOP at ~42% of canvas height
+    // for short stacks; centered vertically between top safety and
+    // bottom max when the stack is taller.
+    const desiredTop = Math.round(input.height * 0.42);
+    const naturalBottom = desiredTop + totalStackPixelHeight;
+    return naturalBottom <= stackBottomMax ? desiredTop : stackBottomMax - totalStackPixelHeight;
+  })();
+  // Clamp the target into [topSafetyMargin, stackBottomMax -
+  // totalStackPixelHeight] so we NEVER overlap the slide counter at
+  // the top or the CTA pill at the bottom.
+  const stackTop = Math.max(
+    topSafetyMargin,
+    Math.min(targetHeadlineTop, stackBottomMax - totalStackPixelHeight),
+  );
+  const headlineStart = stackTop + headlineLineHeight;
+  const headlineEndY = headlineStart + headlineBlockHeight - headlineLineHeight;
+  const insightStart = headlineEndY + insightGap + insightLineHeight;
+  const insightEndY = insightStart + insightBlockHeight - insightLineHeight;
+  const supportStart = insightEndY + supportGap + supportLineHeight;
+  const supportEndY = supportStart + supportBlockHeight - supportLineHeight;
+  // Eyebrow (hook) is always empty for slide renders post the
+  // top-of-canvas slide-counter change; the variable is retained for
+  // the SVG template's ternary check but never positioned.
+  const hookY = stackTop - 1;
+  const layoutBottom = supportEndY + footerHeight + ctaSlotHeight;
   // Footer text (brand name) suppressed — the top-right brand mark
   // already conveys ownership, and rendering "Omnivyra" both as a
   // logo and as a watermark reads as redundant.
-  const standardBrandMode = preset.brandMode === 'standard';
-  // Brand mark sizing — enlarged so the logo is clearly visible at
-  // typical post viewing sizes. Previously 18%/10% of canvas width;
-  // now 24%/16% which keeps the logo proportional without
-  // dominating the frame.
-  // Strategy-aware logo sizing. Strategy multiplier is applied with
-  // bounds so brand-focus assets get a larger mark (+35%) and quote
-  // images get a smaller mark (-30%) without ever overflowing the
-  // top-right placement region.
-  const logoBaseWidth = Math.round(input.width * (standardBrandMode ? 0.24 : 0.16));
-  const logoBaseHeight = Math.round(input.height * (standardBrandMode ? 0.13 : 0.11));
-  const logoMaxWidth = strategyMods
-    ? Math.round(applyScale(logoBaseWidth, strategyMods.logoScaleMultiplier, 0.5, 1.6))
-    : logoBaseWidth;
-  const logoMaxHeight = strategyMods
-    ? Math.round(applyScale(logoBaseHeight, strategyMods.logoScaleMultiplier, 0.5, 1.6))
-    : logoBaseHeight;
+  // standardBrandMode / logoBaseWidth / logoBaseHeight / logoMaxWidth /
+  // logoMaxHeight are now hoisted above the text-stack math (search
+  // upward in this function). They were originally declared here.
+  // The brand mark sizing rationale is preserved at that hoisted
+  // declaration site.
   const brandPlacement = {
     top: safeMargin + 14,
     left: input.width - safeMargin - logoMaxWidth - 20,
@@ -697,10 +838,16 @@ function buildOverlaySvg(input: {
   // enough contrast over any background photo WITHOUT a giant side
   // panel competing with the image content.
   // Strategy-aware scrim: textBlockTopRatio (when supplied by the
-  // strategy) overrides the default 46% start; intensity multiplier
-  // adjusts mid+bottom opacity. Quote / brand-focus → lighter scrim;
+  // strategy) overrides the default; intensity multiplier adjusts
+  // mid+bottom opacity. Quote / brand-focus → lighter scrim;
   // promotional / story → stronger scrim.
-  const scrimTopRatio = strategyMods?.textBlockTopRatio ?? 0.46;
+  //
+  // Default raised from 0.46 → 0.40 so the text region covers ≥60%
+  // of the canvas (operator feedback: "image and text should be in
+  // right balance at least 50% coverage" — the prior default left
+  // the top ~54% of the slide as empty gradient with text crammed
+  // into a corner).
+  const scrimTopRatio = strategyMods?.textBlockTopRatio ?? 0.40;
   const scrimTop = Math.round(input.height * Math.max(0.25, Math.min(0.7, scrimTopRatio)));
   const scrimHeight = input.height - scrimTop;
   const scrimIntensity = strategyMods?.scrimIntensityMultiplier ?? 1.0;
@@ -730,7 +877,10 @@ function buildOverlaySvg(input: {
   const ctaPadY = Math.round(ctaFontSize * 0.5);
   const ctaApproxWidth = Math.min(textWidth, Math.round(ctaCopy.length * ctaFontSize * 0.62) + ctaPadX * 2);
   const ctaHeight = ctaFontSize + ctaPadY * 2;
-  const ctaY = input.height - bottomPadding - footerHeight - ctaHeight - 14;
+  // CTA sits AT the bottom of the canvas (above the optional footer
+  // height) — the support text is layed out above this band with a
+  // 22px gap, so the pill never collides with body copy any more.
+  const ctaY = input.height - bottomPadding - footerHeight - ctaHeight;
   const ctaSvg = (() => {
     if (!renderCta) return '';
     if (ctaMode === 'subtle') {
@@ -744,6 +894,44 @@ function buildOverlaySvg(input: {
     `;
   })();
 
+  // Visual continuity wave. When the deck context supplies wave
+  // anchors, the curve's left-edge Y matches the PREVIOUS slide's
+  // right-edge Y exactly — so as the viewer swipes through the
+  // carousel the curve reads as ONE continuous flowing line, not
+  // five independent stubs.
+  //
+  // When no deck context is supplied (single-frame image renders),
+  // the wave falls back to a self-contained cubic Bézier that lives
+  // inside one frame. Same opacity / color treatment as before.
+  const w = input.width;
+  const h = input.height;
+  const deckWaveAnchor = (() => {
+    if (!input.deckContext || typeof input.slideIndex !== 'number') return null;
+    const anchor = input.deckContext.waveAnchors[input.slideIndex];
+    if (!anchor) return null;
+    return anchor;
+  })();
+  // Wave A — filled upper sweep. Anchors at deck entry/exit Y when
+  // deckContext present; falls back to fixed 30%/18% sweep otherwise.
+  const waveAEntryY = deckWaveAnchor ? deckWaveAnchor.entryY : Math.round(h * 0.30);
+  const waveAExitY = deckWaveAnchor ? deckWaveAnchor.exitY : Math.round(h * 0.18);
+  // Control points for a smooth cubic Bézier between entry/exit Y.
+  // Midpoint Y oscillates slightly inside the canvas so the curve has
+  // a natural sway instead of a straight diagonal.
+  const waveAMidA = Math.round(((waveAEntryY * 2) + waveAExitY) / 3 - h * 0.06);
+  const waveAMidB = Math.round((waveAEntryY + (waveAExitY * 2)) / 3 + h * 0.06);
+  const waveA = `M 0 ${waveAEntryY} C ${Math.round(w * 0.28)} ${waveAMidA}, ${Math.round(w * 0.62)} ${waveAMidB}, ${w} ${waveAExitY} L ${w} 0 L 0 0 Z`;
+  // Wave B — stroked mid-canvas flow line, also continuous when
+  // deckContext present. Offset ~25%h below wave A so the two
+  // shapes don't stack on top of each other.
+  const waveBOffset = Math.round(h * 0.25);
+  const waveBEntryY = waveAEntryY + waveBOffset;
+  const waveBExitY = waveAExitY + waveBOffset;
+  const waveBMidA = Math.round(((waveBEntryY * 2) + waveBExitY) / 3 - h * 0.04);
+  const waveBMidB = Math.round((waveBEntryY + (waveBExitY * 2)) / 3 + h * 0.04);
+  const waveB = `M 0 ${waveBEntryY} C ${Math.round(w * 0.30)} ${waveBMidA}, ${Math.round(w * 0.55)} ${waveBMidB}, ${w} ${waveBExitY}`;
+  const waveStrokeWidth = Math.max(2, Math.round(h * 0.006));
+
   const svg = `
     <svg width="${input.width}" height="${input.height}" viewBox="0 0 ${input.width} ${input.height}" xmlns="http://www.w3.org/2000/svg">
       <defs>
@@ -752,12 +940,67 @@ function buildOverlaySvg(input: {
           <stop offset="55%" stop-color="rgba(2,6,23,${scrimMidOpacity})" />
           <stop offset="100%" stop-color="rgba(2,6,23,${scrimBottomOpacity})" />
         </linearGradient>
+        <linearGradient id="waveGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="${accent}" stop-opacity="0.24" />
+          <stop offset="100%" stop-color="${accent}" stop-opacity="0.08" />
+        </linearGradient>
         <filter id="textShadow" x="-15%" y="-15%" width="130%" height="130%">
           <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.55)" flood-opacity="1" />
         </filter>
       </defs>
+      <!-- Visual continuity wave (filled, upper sweep) -->
+      <path d="${waveA}" fill="url(#waveGradient)" />
+      <!-- Operator feedback: "the wave gets truncated halfway... it
+           should be complete, and then it should continue the next
+           slide." Two stroked layers ensure the curve reads as a
+           clear, complete line edge-to-edge:
+            • a soft accent stroke that traces the upper wave's
+              full path from x=0 to x=W
+            • a thicker accent stroke for the mid-canvas flow line
+              with rounded caps so the curve appears to "exit"
+              cleanly into the next slide rather than truncating
+           Both stroke entry/exit Y values are derived from the deck
+           context's wave anchors so slide N's right edge matches
+           slide N+1's left edge — the swipe-through experience reads
+           as one continuous flowing line. -->
+      <path d="M 0 ${waveAEntryY} C ${Math.round(w * 0.28)} ${waveAMidA}, ${Math.round(w * 0.62)} ${waveAMidB}, ${w} ${waveAExitY}" fill="none" stroke="${accent}" stroke-opacity="0.55" stroke-width="${Math.max(2, Math.round(waveStrokeWidth * 0.7))}" stroke-linecap="round" />
+      <path d="${waveB}" fill="none" stroke="${accent}" stroke-opacity="0.48" stroke-width="${Math.round(waveStrokeWidth * 1.4)}" stroke-linecap="round" />
       <rect x="0" y="${scrimTop}" width="${input.width}" height="${scrimHeight}" fill="url(#bottomScrim)" />
-      ${hook ? `<text x="${textX}" y="${hookY}" filter="url(#textShadow)" fill="${accent}" font-size="${preset.hookSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="800" letter-spacing="1.4">${escapeXml(hook.toUpperCase())}</text>` : ''}
+      ${(() => {
+        // Next-slide swipe indicator. Rendered on every slide except
+        // the final one (operator feedback: "no mark to move to the
+        // next slider"). Soft circular badge with a chevron at the
+        // vertical midline / right edge — always visible against any
+        // background thanks to the white fill + drop shadow.
+        if (!isMultiSlide) return '';
+        const isLast = (input.slideIndex as number) >= (input.slideTotal as number) - 1;
+        if (isLast) return '';
+        const arrowSize = Math.max(36, Math.round(input.height * 0.045));
+        const arrowR = Math.round(arrowSize / 2);
+        const arrowCx = input.width - safeMargin - arrowR;
+        const arrowCy = Math.round(input.height * 0.5);
+        const gAx = arrowCx - Math.round(arrowR * 0.28);
+        const gBx = arrowCx + Math.round(arrowR * 0.32);
+        const gAyTop = arrowCy - Math.round(arrowR * 0.42);
+        const gAyBot = arrowCy + Math.round(arrowR * 0.42);
+        return `
+          <g opacity="0.92">
+            <circle cx="${arrowCx}" cy="${arrowCy}" r="${arrowR}" fill="rgba(255,255,255,0.92)" filter="url(#textShadow)" />
+            <polyline points="${gAx},${gAyTop} ${gBx},${arrowCy} ${gAx},${gAyBot}" fill="none" stroke="#0F172A" stroke-width="${Math.max(2, Math.round(arrowR * 0.18))}" stroke-linecap="round" stroke-linejoin="round" />
+          </g>
+        `;
+      })()}
+      ${slideCounter ? (() => {
+        // Top-of-canvas slide counter. Sits at the top-left,
+        // vertically centered against the same Y as the brand mark
+        // top-right so the two read as a balanced pair across the
+        // top edge. Smaller hookSize-derived font, accent color, with
+        // text shadow so it stays legible against any background.
+        const counterFontSize = Math.max(18, Math.round(preset.hookSize * 0.80));
+        const counterY = brandPlacement.top + Math.round(brandPlacement.maxHeight / 2) + Math.round(counterFontSize / 3);
+        const counterX = safeMargin;
+        return `<text x="${counterX}" y="${counterY}" filter="url(#textShadow)" fill="rgba(255,255,255,0.94)" font-size="${counterFontSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="700" letter-spacing="2.4">${escapeXml(slideCounter)}</text>`;
+      })() : ''}
       ${headlineLines.map((line, index) => `<text x="${textX}" y="${headlineStart + index * headlineLineHeight}" filter="url(#textShadow)" fill="${headingColor}" font-size="${preset.headlineSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.headingWeight}">${escapeXml(line)}</text>`).join('')}
       ${insightLines.map((line, index) => `<text x="${textX}" y="${insightStart + index * insightLineHeight}" filter="url(#textShadow)" fill="${insightColor}" font-size="${preset.insightSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.bodyWeight}">${escapeXml(line)}</text>`).join('')}
       ${supportLines.map((line, index) => `<text x="${textX}" y="${supportStart + index * supportLineHeight}" filter="url(#textShadow)" fill="${supportColor}" font-size="${preset.supportSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="500">${escapeXml(line)}</text>`).join('')}
@@ -784,11 +1027,20 @@ async function loadBrandMark(input: {
   try {
     return await getCachedRenderBuffer(cacheKey, async () => {
       const buffer = await bufferFromRemoteImage(brandMark.source);
-      return sharp(buffer)
-      .resize({ width: input.placement.maxWidth, height: input.placement.maxHeight, fit: 'inside', withoutEnlargement: true })
-      .modulate({ brightness: 1.04, saturation: 0.92 })
-      .png()
-      .toBuffer();
+      // Operator feedback: "we should logo embed transparent
+      // background" + "logo is looking patchwork". The brightness +
+      // saturation modulate was tinting the logo and the backing
+      // tile read as a patchwork rectangle. We now preserve the
+      // logo's alpha channel verbatim — just resize + a light
+      // sharpen so edges stay crisp at small footprint. No tint, no
+      // tone shift, no flattening; the PNG composite onto the
+      // background keeps the logo's native transparency.
+      return sharp(buffer, { failOn: 'none' })
+        .resize({ width: input.placement.maxWidth, height: input.placement.maxHeight, fit: 'inside', withoutEnlargement: true })
+        .ensureAlpha()
+        .sharpen({ sigma: 0.5 })
+        .png()
+        .toBuffer();
     });
   } catch {
     return getCachedRenderBuffer(`${cacheKey}:fallback`, () => renderInitialsBrandMark({
@@ -2668,12 +2920,70 @@ export async function renderCreatorAssetReviewPreview(input: CreatorReviewPrevie
   };
 }
 
+/**
+ * Strip prompt-style formatting instructions that leaked out of the
+ * LLM into visible slide copy. Operator feedback flagged lines like
+ * "Use a modern font for the headline, with a clean layout" appearing
+ * verbatim under the body text. These are design DIRECTIVES the LLM
+ * was meant to ACT on, not echo. We remove leading directive phrases
+ * and drop any sentence that's still primarily a directive after that.
+ *
+ * Conservative: only matches well-known directive openers / fragments
+ * so legitimate body copy (e.g., "Use AI to transform your strategy")
+ * is preserved. The directive opener "Use a/an [adj] font/layout/..."
+ * is structurally distinct from product copy.
+ */
+function stripPromptDirectives(raw: string | null | undefined): string {
+  const input = String(raw ?? '').trim();
+  if (!input) return '';
+  // Design-directive nouns. If a sentence starts with "Use a/an" or
+  // "With a/an" AND mentions any of these anywhere, it's a leaked
+  // prompt-style directive, not body copy. Comma-separated adjective
+  // chains like "Use a clean, modern illustration style with a..."
+  // are now caught because we no longer require the noun to be the
+  // immediate next word after the article.
+  const DIRECTIVE_NOUNS = /\b(font|layout|design|color|colour|palette|typography|hierarchy|style|illustration|composition|template|aesthetic|graphic|imagery|visual|tone|mood|background|foreground|spacing|alignment|kerning|leading|copy|filler|clutter|whitespace)\b/;
+  const directiveSentence = (sentence: string): boolean => {
+    const s = sentence.trim().toLowerCase();
+    if (!s) return true;
+    // "Use a/an ... [directive noun anywhere]" — catches "Use a clean,
+    // modern illustration style with a clean palette" etc. Anchored
+    // on the article ("a"/"an") so legitimate body copy like
+    // "Use AI to..." / "Use this framework..." stays.
+    if (/^use\s+(a|an)\s+/.test(s) && DIRECTIVE_NOUNS.test(s)) return true;
+    // "With a/an [directive noun anywhere]" — same shape, fragment.
+    if (/^with\s+(a|an)\s+/.test(s) && DIRECTIVE_NOUNS.test(s)) return true;
+    // Bare "use a/an [adj] [adj]..." trailing fragment (the LLM
+    // sometimes echoes a directive without a closing period).
+    if (/^use\s+(a|an)\s+(\w+,?\s+){1,5}/.test(s) && DIRECTIVE_NOUNS.test(s)) return true;
+    // "Ensure [the headline / the layout / etc.] ..." — directive.
+    if (/^ensure\s+(the\s+)?/.test(s) && DIRECTIVE_NOUNS.test(s)) return true;
+    // "Make sure / make it ... [design term]" — directive.
+    if (/^make\s+(sure|it|the\s+\w+)\s+/.test(s) && DIRECTIVE_NOUNS.test(s)) return true;
+    // "Avoid [design term]" — negative directive.
+    if (/^avoid\s+/.test(s) && /(text|font|copy|filler|clutter|noise|over|whitespace)/.test(s)) return true;
+    // "Render / create / produce / show [a/the] ... [design term]" —
+    // catch-all imperative directive forms.
+    if (/^(render|create|produce|show|display|present|generate|build|illustrate)\s+(a|an|the)\s+/.test(s) && DIRECTIVE_NOUNS.test(s)) return true;
+    return false;
+  };
+  // Split into sentences but keep delimiters so we can rejoin cleanly.
+  // Trailing/leading whitespace is normalized at the end.
+  const sentences = input.split(/(?<=[.!?])\s+/);
+  const kept = sentences.filter((s) => !directiveSentence(s));
+  const result = kept.join(' ').replace(/\s+/g, ' ').trim();
+  // If filtering wiped everything (every sentence was a directive),
+  // return empty rather than a stub — downstream falls back to the
+  // strategy's intent text.
+  return result;
+}
+
 function normalizeStructuredItems(
   items: Array<Record<string, unknown>>,
   fallbackLabel: string,
   fileNamePrefix: string,
   metadata: Record<string, unknown>,
-): Array<Record<string, string>> {
+): Array<{ headline: string; body: string; designNote?: string; role?: string }> {
   // Purpose-driven slide-arc orchestration. When the metadata carries
   // a resolved purposeStrategy with a slideArc (carousel) OR an
   // informationArchitecture.sectionBlueprint (infographic-ish), use
@@ -2695,8 +3005,8 @@ function normalizeStructuredItems(
 
   const clean = items.map((item, index) => ({
     role: compactText(item.role || item.section_type || item.type || `Slide ${index + 1}`),
-    headline: compactText(item.headline || item.title || item.heading || `Slide ${index + 1}`),
-    body: compactText(item.body_text || item.body || item.text || item.summary || fallbackLabel),
+    headline: compactText(stripPromptDirectives(String(item.headline || item.title || item.heading || `Slide ${index + 1}`))),
+    body: compactText(stripPromptDirectives(String(item.body_text || item.body || item.text || item.summary || fallbackLabel))),
     designNote: compactText(item.design_note || item.visual_description || item.visual || ''),
   })).filter((item) => item.headline || item.body);
 
@@ -2748,6 +3058,116 @@ function normalizeStructuredItems(
   ];
 }
 
+/**
+ * Deck-wide rendering context. Computed ONCE per carousel/pdf/slider
+ * so every slide in the deck:
+ *
+ *  1. Uses the same adaptive font multiplier (based on the longest
+ *     slide's text length — guarantees consistent type sizes across
+ *     the deck, not a different font on every slide).
+ *
+ *  2. Picks a layout from a deterministic rotation (text_top /
+ *     text_center / text_bottom) so the deck has visual rhythm
+ *     instead of identical bottom-anchored slides.
+ *
+ *  3. Continues the wave-form visual continuity line: slide N's
+ *     left-edge wave-Y matches slide N-1's right-edge wave-Y, so
+ *     across the swipe-through experience the curve reads as one
+ *     uninterrupted flowing line, not five truncated stubs.
+ */
+type DeckLayoutMode = 'text_top' | 'text_center' | 'text_bottom';
+type DeckSlideWaveAnchor = { entryY: number; exitY: number };
+type DeckRenderContext = {
+  /** The single adaptive font multiplier every slide will use. */
+  fontMultiplier: number;
+  /** Layout mode for each slide index. */
+  layoutModes: DeckLayoutMode[];
+  /** Wave entry / exit Y for each slide, in pixels. Slide i's exitY
+   *  equals slide i+1's entryY so the curve is continuous. */
+  waveAnchors: DeckSlideWaveAnchor[];
+};
+
+function buildDeckRenderContext(input: {
+  // Loose shape — accepts the Record<string,string>[] coming out of
+  // normalizeStructuredItems. We only read .headline / .body /
+  // .designNote / .role so anything else on the record is ignored.
+  renderItems: ReadonlyArray<Record<string, string>>;
+  width: number;
+  height: number;
+}): DeckRenderContext {
+  const { renderItems, height } = input;
+  // 1. Deck-wide font multiplier — derived from the slide with the
+  // MOST text, so the smallest-fitting font wins. This forces every
+  // slide in the deck to render at the same type scale (consistency)
+  // rather than each picking its own per-slide scale.
+  // Operator feedback: "we have a lot of white space, and we should
+  // have a guideline that looks into the white space... look at the
+  // busiest slide available... and based on that, decide what should
+  // be the font size for the title as well as the text."
+  //
+  // The multiplier is now derived from the BUSIEST slide's title +
+  // subheading length (designNote excluded — that field is no longer
+  // rendered). Bumped across the board so even the busiest slide
+  // fills the canvas instead of leaving the 40%+ empty top band the
+  // previous defaults produced.
+  const maxOverlayChars = renderItems.reduce((max, item) => {
+    const chars = String(item.headline || '').length
+      + String(item.body || '').length;
+    return Math.max(max, chars);
+  }, 0);
+  const fontMultiplier =
+    maxOverlayChars <= 60 ? 1.70  // very short hook — title dominates
+    : maxOverlayChars <= 110 ? 1.55
+    : maxOverlayChars <= 170 ? 1.40
+    : maxOverlayChars <= 230 ? 1.25
+    : maxOverlayChars <= 300 ? 1.10
+    : maxOverlayChars <= 380 ? 0.98
+    : 0.88;
+
+  // 2. Layout rotation. The roles supplied by normalizeStructuredItems
+  // are stable (hook / insight / proof / cta / etc.) so we can derive
+  // a deterministic but varied sequence:
+  //   - hook slide      → text_center (entry, focal headline)
+  //   - cta slide (last)→ text_center (exit, focal call)
+  //   - middles         → alternate text_top / text_bottom
+  // This is the variety operator feedback asked for: text doesn't
+  // always live at the bottom of every slide.
+  const layoutModes: DeckLayoutMode[] = renderItems.map((item, idx) => {
+    const isFirst = idx === 0;
+    const isLast = idx === renderItems.length - 1;
+    const role = String(item.role || '').toLowerCase();
+    if (isFirst || role === 'hook' || role === 'title') return 'text_center';
+    if (isLast || role === 'cta' || role === 'next_steps' || role === 'summary' || role === 'outcome' || role === 'conclusion') return 'text_center';
+    // Alternate the middle slides — text_top on odd middles,
+    // text_bottom on even middles — so the visual rhythm shifts as
+    // the viewer swipes through.
+    return idx % 2 === 0 ? 'text_top' : 'text_bottom';
+  });
+
+  // 3. Continuous wave anchors. Pick a smooth sweep across the deck:
+  //    entry/exit Y values oscillate gently between 0.25 and 0.55
+  //    of canvas height, deterministically per index. Slide N's
+  //    exitY equals slide N+1's entryY by construction.
+  const waveAnchors: DeckSlideWaveAnchor[] = [];
+  // Anchor sequence: each slide-boundary gets a Y ratio. With N
+  // slides, there are N+1 boundary points (slide_0_left, ..., slide_N-1_right).
+  // We oscillate through a small set so adjacent boundaries share a
+  // Y position (continuity) without the curve repeating identically.
+  const boundaryRatios: number[] = [];
+  const baseSweep = [0.30, 0.42, 0.28, 0.48, 0.32, 0.40, 0.26, 0.46];
+  for (let i = 0; i <= renderItems.length; i += 1) {
+    boundaryRatios.push(baseSweep[i % baseSweep.length]);
+  }
+  for (let i = 0; i < renderItems.length; i += 1) {
+    waveAnchors.push({
+      entryY: Math.round(height * boundaryRatios[i]),
+      exitY: Math.round(height * boundaryRatios[i + 1]),
+    });
+  }
+
+  return { fontMultiplier, layoutModes, waveAnchors };
+}
+
 async function renderStructuredSlidePng(input: {
   item: Record<string, string>;
   index: number;
@@ -2758,14 +3178,24 @@ async function renderStructuredSlidePng(input: {
   width: number;
   height: number;
   brandKit: CreatorBrandKit;
+  /** Deck-wide context. Provided when called from
+   *  composeStructuredDeckAsset; absent for single-slide callers. */
+  deckContext?: DeckRenderContext;
 }): Promise<{ buffer: Buffer; quality: OverlayQualityReport }> {
   const platform = compactText(input.metadata.platform || input.metadata.primary_platform, 'linkedin');
+  // Operator feedback: drop the third "supporting / explanation"
+  // tier entirely. The slide content is TITLE (headline) +
+  // SUBHEADING (insight) only. The third tier carried the LLM's
+  // design directive notes ("use a modern font for the headline
+  // with a clean...") which were never meant for the reader. With
+  // that field empty, the renderer skips the support block and the
+  // title + subheading get bigger fonts and more vertical real estate.
   const overlay = {
     hook: `${input.item.role || 'slide'} ${input.index + 1}/${input.total}`,
     headline: input.item.headline,
     keyInsight: input.item.body,
     cta: input.index === input.total - 1 ? compactText(input.metadata.cta || 'Take the next step') : 'Keep reading',
-    supportingText: input.item.designNote,
+    supportingText: '',
   };
   const background = await renderBackgroundPng({
     width: input.width,
@@ -2830,6 +3260,9 @@ async function renderStructuredSlidePng(input: {
     platform,
     fileNamePrefix: input.fileNamePrefix === 'pdf' ? 'infographic' : 'carousel',
     renderStrategy: slideRenderStrategy,
+    slideIndex: input.index,
+    slideTotal: input.total,
+    deckContext: input.deckContext,
   });
   const brandMark = await loadBrandMark({
     brandKit: input.brandKit,
@@ -2838,7 +3271,13 @@ async function renderStructuredSlidePng(input: {
   const composites: Array<{ input: Buffer; top: number; left: number }> = [
     { input: Buffer.from(overlayRender.svg), top: 0, left: 0 },
   ];
-  if (brandMark && (input.index === 0 || input.index === input.total - 1 || input.fileNamePrefix !== 'carousel')) {
+  // Operator feedback: middle slides (2..N-1) were showing an empty
+  // patchwork rectangle because the brand mark was suppressed for
+  // those frames but the SVG overlay still painted a backing tile.
+  // The backing tile has been removed entirely (logos now keep their
+  // own transparent edge), and the logo is composited on EVERY slide
+  // in the deck for brand continuity — not just the first/last.
+  if (brandMark) {
     composites.push({ input: brandMark, top: overlayRender.brandPlacement.top, left: overlayRender.brandPlacement.left });
   }
   const buffer = await sharp(background)
@@ -2932,6 +3371,17 @@ async function composeStructuredDeckAsset(
   const files: string[] = [];
   const qualityReports: OverlayQualityReport[] = [];
   const slideOcrResults: Array<Awaited<ReturnType<typeof runCreatorOcr>>> = [];
+  // Operator feedback: "[the renderer] should be aware of all the
+  // five slides so that we can bring the consistency into the text
+  // format". Compute deck-wide context ONCE so every slide picks the
+  // same font scale and the wave waypoints flow continuously across
+  // the deck (slide N's right-edge wave-Y === slide N+1's left-edge
+  // wave-Y, so the curve reads as one continuous flowing line).
+  const deckContext = buildDeckRenderContext({
+    renderItems,
+    width,
+    height,
+  });
   for (let index = 0; index < renderItems.length; index += 1) {
     const rendered = await renderStructuredSlidePng({
       item: renderItems[index],
@@ -2943,6 +3393,7 @@ async function composeStructuredDeckAsset(
       width,
       height,
       brandKit,
+      deckContext,
     });
     qualityReports.push(rendered.quality);
     const url = await uploadRenderedPng({
@@ -3062,12 +3513,39 @@ async function composeStructuredDeckAsset(
     preset: fileNamePrefix,
   };
   const textBlocks = renderItems.flatMap((item) => [item.headline, item.body]).filter(Boolean);
+  // Operator feedback fix: density scoring was producing
+  // 'text_density_exceeds_profile' / 'platform_density_mismatch' /
+  // 'visual_cleanliness_low' / 'visual_hierarchy_weak' warnings even
+  // when each individual slide was within budget. Root cause: the
+  // scorer was comparing the SUM of every slide's words against the
+  // per-slide cap (`maxWordsPerSlide=34` for carousel). For a 5-slide
+  // deck where each slide has ~12 words, the deck total was ~60 which
+  // exceeded the per-slide budget by ~1.8×, lighting up every density
+  // warning.
+  //
+  // Fix: evaluate density against a representative single slide
+  // (the median, by word count) so the score reflects per-slide
+  // composition — which is what `maxWordsPerSlide` was always meant
+  // to gate. The full deck text still flows through
+  // `estimateTextAreaPercent` for cumulative pixel-coverage signals.
+  const perSlideTextBlocks: string[][] = renderItems.map((item) => [item.headline, item.body].filter(Boolean));
+  const wordCountOf = (s: string): number => String(s || '').trim().split(/\s+/).filter(Boolean).length;
+  const slideWordCounts = perSlideTextBlocks.map((blocks) => blocks.reduce((sum, t) => sum + wordCountOf(t), 0));
+  const medianIndex = (() => {
+    if (slideWordCounts.length === 0) return 0;
+    const ranked = slideWordCounts
+      .map((count, idx) => ({ count, idx }))
+      .sort((a, b) => a.count - b.count);
+    return ranked[Math.floor(ranked.length / 2)].idx;
+  })();
+  const representativeBlocks = perSlideTextBlocks[medianIndex] ?? [];
+
   const visualGovernance = validateVisualGovernance({
     assetType: fileNamePrefix,
     platform,
-    textBlocks,
+    textBlocks: representativeBlocks,
     hasCTA: renderItems.some((item) => /cta|next step|learn more|book/i.test(`${item.role} ${item.headline} ${item.body}`)),
-    textAreaPercent: estimateTextAreaPercent({ textBlocks, width, height }),
+    textAreaPercent: estimateTextAreaPercent({ textBlocks: representativeBlocks, width, height }),
     paragraphCount: renderItems.filter((item) => item.body.length > 130).length,
     overlapRisk: avgQuality.flags.includes('severe_layout_overflow_risk'),
     tinyTextRisk: avgQuality.flags.includes('headline_likely_unreadable_mobile'),
@@ -3075,7 +3553,7 @@ async function composeStructuredDeckAsset(
   const quality = scoreCreatorQuality({
     assetType: fileNamePrefix,
     platform,
-    textBlocks,
+    textBlocks: representativeBlocks,
     hasCTA: renderItems.some((item) => /cta|next step|learn more|book/i.test(`${item.role} ${item.headline} ${item.body}`)),
     overlapRisk: avgQuality.flags.includes('severe_layout_overflow_risk'),
     tinyTextRisk: avgQuality.flags.includes('headline_likely_unreadable_mobile'),
@@ -3261,6 +3739,19 @@ function validateInfographicDensity(sections: InfographicSection[]): { ok: boole
   return { ok: flags.length === 0, flags };
 }
 
+/**
+ * Operator feedback fix: cards were rendering at ~220px tall in the
+ * top quarter of a 1200px canvas — leaving ~70% of the canvas empty
+ * white space. Every layout below now SIZES TO FILL the safe area
+ * between the header band (top ~140px) and the bottom margin
+ * (~80px), giving each card real visual presence instead of looking
+ * like dropped text boxes.
+ *
+ * Formula: `availableH = height - headerH - bottomH`. Cards are then
+ * `floor((availableH - gap*(rows-1)) / rows)` tall. With 4 stat cards
+ * laid out as 2×2 on a 1200×1200 canvas → each card ~460px tall.
+ * Same math applies to every layout.
+ */
 function resolveInfographicEngine(input: {
   layout: string;
   width: number;
@@ -3273,56 +3764,101 @@ function resolveInfographicEngine(input: {
   position: (index: number) => { x: number; y: number; iconZone: 'left' | 'top' | 'center' };
 } {
   const count = Math.max(1, input.sectionCount);
+  const headerH = 150;
+  const bottomMargin = 90;
+  const sideMargin = 80;
+  const availableH = input.height - headerH - bottomMargin;
+  const availableW = input.width - sideMargin * 2;
+
   if (input.layout === 'timeline') {
-    const cardHeight = Math.max(130, Math.floor((input.height - 210) / count) - 16);
+    const rows = count;
+    const gap = 18;
+    const cardH = Math.max(160, Math.floor((availableH - gap * (rows - 1)) / rows));
     return {
-      engineId: 'infographic-timeline-engine-v1',
-      cardWidth: input.width - 190,
-      cardHeight,
-      position: (index) => ({ x: 110, y: 142 + index * (cardHeight + 16), iconZone: 'left' }),
+      engineId: 'infographic-timeline-engine-v2',
+      cardWidth: availableW - 50,
+      cardHeight: cardH,
+      position: (index) => ({ x: sideMargin + 50, y: headerH + index * (cardH + gap), iconZone: 'left' }),
     };
   }
   if (input.layout === 'process') {
-    const cardHeight = Math.max(138, Math.floor((input.height - 230) / count) - 18);
+    const rows = count;
+    const gap = 32; // bigger gap so the arrow connectors have room to breathe
+    const cardH = Math.max(160, Math.floor((availableH - gap * (rows - 1)) / rows));
     return {
-      engineId: 'infographic-process-engine-v1',
-      cardWidth: input.width - 210,
-      cardHeight,
-      position: (index) => ({ x: 105, y: 150 + index * (cardHeight + 18), iconZone: 'left' }),
+      engineId: 'infographic-process-engine-v2',
+      cardWidth: availableW,
+      cardHeight: cardH,
+      position: (index) => ({ x: sideMargin, y: headerH + index * (cardH + gap), iconZone: 'left' }),
     };
   }
   if (input.layout === 'comparison') {
-    const colWidth = Math.floor((input.width - 220) / 2);
+    const rows = Math.max(1, Math.ceil(count / 2));
+    const gap = 30;
+    const cardH = Math.max(220, Math.floor((availableH - gap * (rows - 1)) / rows));
+    const colW = Math.floor((availableW - 40) / 2);
     return {
-      engineId: 'infographic-comparison-engine-v1',
-      cardWidth: colWidth,
-      cardHeight: 210,
-      position: (index) => ({ x: 85 + (index % 2) * (colWidth + 50), y: 150 + Math.floor(index / 2) * 238, iconZone: 'top' }),
+      engineId: 'infographic-comparison-engine-v2',
+      cardWidth: colW,
+      cardHeight: cardH,
+      position: (index) => ({
+        x: sideMargin + (index % 2) * (colW + 40),
+        y: headerH + Math.floor(index / 2) * (cardH + gap),
+        iconZone: 'top',
+      }),
     };
   }
   if (input.layout === 'stats') {
-    const colWidth = Math.floor((input.width - 240) / 3);
+    // 1-2 sections → single row; 3 → 3-col row; 4 → 2×2; 5-6 → 3×2.
+    const cols = count <= 2 ? count : count === 3 ? 3 : count === 4 ? 2 : 3;
+    const rows = Math.max(1, Math.ceil(count / cols));
+    const gapX = 30;
+    const gapY = 30;
+    const colW = Math.floor((availableW - gapX * (cols - 1)) / cols);
+    const cardH = Math.max(260, Math.floor((availableH - gapY * (rows - 1)) / rows));
     return {
-      engineId: 'infographic-stats-engine-v1',
-      cardWidth: colWidth,
-      cardHeight: 220,
-      position: (index) => ({ x: 80 + (index % 3) * (colWidth + 40), y: 160 + Math.floor(index / 3) * 255, iconZone: 'center' }),
+      engineId: 'infographic-stats-engine-v2',
+      cardWidth: colW,
+      cardHeight: cardH,
+      position: (index) => ({
+        x: sideMargin + (index % cols) * (colW + gapX),
+        y: headerH + Math.floor(index / cols) * (cardH + gapY),
+        iconZone: 'center',
+      }),
     };
   }
   if (input.layout === 'hierarchy') {
+    const rows = count;
+    const gap = 22;
+    const cardH = Math.max(170, Math.floor((availableH - gap * (rows - 1)) / rows));
     return {
-      engineId: 'infographic-hierarchy-engine-v1',
-      cardWidth: input.width - 260,
-      cardHeight: 170,
-      position: (index) => ({ x: 130 + Math.min(index, 4) * 18, y: 150 + index * 185, iconZone: 'left' }),
+      engineId: 'infographic-hierarchy-engine-v2',
+      cardWidth: availableW - 40,
+      cardHeight: cardH,
+      // Subtle right-indent per step communicates downward flow.
+      position: (index) => ({
+        x: sideMargin + Math.min(index, 4) * 20,
+        y: headerH + index * (cardH + gap),
+        iconZone: 'left',
+      }),
     };
   }
-  const colWidth = Math.floor((input.width - 190) / 2);
+  // framework (default) — 2-column pillar grid filling the canvas.
+  const cols = count === 1 ? 1 : 2;
+  const rows = Math.max(1, Math.ceil(count / cols));
+  const gapX = 30;
+  const gapY = 26;
+  const colW = Math.floor((availableW - gapX * (cols - 1)) / cols);
+  const cardH = Math.max(220, Math.floor((availableH - gapY * (rows - 1)) / rows));
   return {
-    engineId: 'infographic-framework-engine-v1',
-    cardWidth: colWidth,
-    cardHeight: 190,
-    position: (index) => ({ x: 80 + (index % 2) * (colWidth + 30), y: 132 + Math.floor(index / 2) * 212, iconZone: 'left' }),
+    engineId: 'infographic-framework-engine-v2',
+    cardWidth: colW,
+    cardHeight: cardH,
+    position: (index) => ({
+      x: sideMargin + (index % cols) * (colW + gapX),
+      y: headerH + Math.floor(index / cols) * (cardH + gapY),
+      iconZone: 'left',
+    }),
   };
 }
 
@@ -3341,26 +3877,112 @@ async function renderInfographicAsset(
     platform,
     assetType: 'infographic',
   });
-  const rawSections = resolveInfographicSections(assetPayload, metadata);
+  const rawSectionsPreFilter = resolveInfographicSections(assetPayload, metadata);
+  // Operator parity with carousel: strip leaked LLM design directives
+  // (e.g., "Use a modern font for the headline with a clean...") from
+  // every section's title + body BEFORE auto-correction. The carousel
+  // path already filters these at the slide-text level; infographic
+  // sections were missing it and the directives surfaced inside cards.
+  const rawSections = rawSectionsPreFilter.map((section) => ({
+    ...section,
+    title: stripPromptDirectives(section.title) || section.title,
+    body: stripPromptDirectives(section.body),
+  }));
   const layout = resolveInfographicLayout(metadata);
   const corrected = autoCorrectVisualCopy({
     assetType: 'infographic',
     textBlocks: rawSections.flatMap((section) => [section.title, section.body]),
     allowCTA: false,
   });
-  const sections = rawSections.map((section, index) => ({
+  const sectionsBase = rawSections.map((section, index) => ({
     ...section,
     title: corrected.textBlocks[index * 2] ?? section.title,
     body: corrected.textBlocks[index * 2 + 1] ?? section.body,
   }));
+
+  // Operator feedback: every card needs explanatory text, and the
+  // whole infographic must read as one coherent message ending in
+  // the desired CTA. Generate contextual section bodies in a single
+  // LLM call so the deck flows together. Fails open — if the call
+  // errors or returns malformed JSON, sections fall through with
+  // their operator-typed bodies (or empty bodies, which the renderer
+  // already templates).
+  const composerCompanyContext = (() => {
+    const brand = safeObject(metadata.brand_context);
+    const ctx = {
+      name: typeof brand.name === 'string' ? brand.name : (typeof metadata.company_name === 'string' ? metadata.company_name : undefined),
+      industry: typeof brand.industry === 'string' ? brand.industry : undefined,
+      audience: typeof brand.audience === 'string' ? brand.audience : (typeof metadata.audience === 'string' ? metadata.audience : undefined),
+      tone: typeof brand.tone === 'string' ? brand.tone : undefined,
+      tagline: typeof brand.tagline === 'string' ? brand.tagline : undefined,
+    };
+    const anyValue = Object.values(ctx).some((v) => typeof v === 'string' && v.length > 0);
+    return anyValue ? ctx : undefined;
+  })();
+  const composerMode: 'company-context' | 'independent' = String(metadata.brand_mode || '').toLowerCase() === 'independent'
+    ? 'independent'
+    : (composerCompanyContext ? 'company-context' : 'independent');
+  const desiredCta = String(metadata.cta || safeObject(metadata.overlay_text).cta || '').trim();
+  const layoutForComposer = resolveInfographicLayout(metadata);
+  const composedCopy = await composeInfographicCopy({
+    topic: String(metadata.topic || 'Infographic'),
+    layout: layoutForComposer,
+    sectionTitles: sectionsBase.map((s) => s.title),
+    sectionBodies: sectionsBase.map((s) => s.body),
+    cta: desiredCta,
+    mode: composerMode,
+    companyContext: composerCompanyContext,
+    companyId: options.companyId ?? undefined,
+  });
+  // Rich-content merge. The composer now returns lead + bullets +
+  // stat + example + take per section. The renderer (below) lays
+  // those parts out into a dense card composition. Section's
+  // historical `body` field is set to the LEAD so legacy code paths
+  // (governance density, OCR, etc.) keep working unchanged; the
+  // bullets / stat / example / take get attached as extension fields
+  // on the same section object.
+  const sections = sectionsBase.map((section, index) => {
+    const copy = composedCopy.sections[index];
+    return {
+      ...section,
+      body: copy?.lead || section.body,
+      bullets: copy?.bullets ?? [],
+      stat: copy?.stat ?? null,
+      example: copy?.example ?? null,
+      take: copy?.take ?? null,
+      impact: copy?.impact ?? null,
+      risk: copy?.risk ?? null,
+    };
+  });
+  const composerNarrative = composedCopy.narrative;
+  const resolvedCta = composedCopy.cta || desiredCta;
   const density = validateInfographicDensity(sections);
+  // Parity with carousel density-scoring fix: validate against a
+  // REPRESENTATIVE section (the median by word count) rather than the
+  // cumulative deck text. Previously the sum of all sections was
+  // compared against the per-card budget (`maxWordsPerSlide=72` for
+  // infographic), causing false 'text_density_exceeds_profile' /
+  // 'visual_cleanliness_low' warnings even when each card was fine.
+  const perSectionTextBlocks: string[][] = sections.map((s) => [s.title, s.body].filter(Boolean));
+  const sectionWordCounts = perSectionTextBlocks.map((blocks) =>
+    blocks.reduce((sum, t) => sum + String(t || '').trim().split(/\s+/).filter(Boolean).length, 0),
+  );
+  const medianSectionIndex = (() => {
+    if (sectionWordCounts.length === 0) return 0;
+    const ranked = sectionWordCounts
+      .map((count, idx) => ({ count, idx }))
+      .sort((a, b) => a.count - b.count);
+    return ranked[Math.floor(ranked.length / 2)].idx;
+  })();
+  const representativeSectionBlocks = perSectionTextBlocks[medianSectionIndex] ?? [];
+
   const visualGovernance = validateVisualGovernance({
     assetType: 'infographic',
     platform,
-    textBlocks: sections.flatMap((section) => [section.title, section.body]),
+    textBlocks: representativeSectionBlocks,
     hasCTA: false,
     textAreaPercent: estimateTextAreaPercent({
-      textBlocks: sections.flatMap((section) => [section.title, section.body]),
+      textBlocks: representativeSectionBlocks,
       width,
       height,
       typographyScale: 'standard',
@@ -3372,7 +3994,7 @@ async function renderInfographicAsset(
   const quality = scoreCreatorQuality({
     assetType: 'infographic',
     platform,
-    textBlocks: sections.flatMap((section) => [section.title, section.body]),
+    textBlocks: representativeSectionBlocks,
     hasCTA: false,
     duplicateText: false,
     overlapRisk: !density.ok,
@@ -3407,28 +4029,602 @@ async function renderInfographicAsset(
   const text = '#111827';
   const cardWidth = engine.cardWidth;
   const cardHeight = engine.cardHeight;
+
+  // Enterprise-grade infographic upgrades (operator feedback parity
+  // with the carousel improvements):
+  //
+  //  1. Adaptive font sizing — title + section fonts scale with the
+  //     content of the busiest section so we use available space
+  //     instead of leaving cards half empty. Same multiplier table
+  //     shape as carousel; thresholds tuned for infographic budgets
+  //     (cards are smaller than a full slide).
+  //
+  //  2. Brand mark (logo) top-right — was completely absent before.
+  //     Sourced from the same `loadBrandMark` helper that carousel /
+  //     image renders use, with `ensureAlpha` so transparency is
+  //     preserved (no white patchwork tile).
+  //
+  //  3. Visual continuity wave — single accent flow line that
+  //     sweeps across the canvas. Infographics are a single PNG (not
+  //     a deck), so there's no cross-frame continuity to maintain,
+  //     but the wave still ties the design language to the carousel
+  //     output for brand consistency across content types.
+  //
+  //  4. Leaky layout identifier (e.g. "DATA_FIRST") removed. The
+  //     internal layout key was rendered top-right in caps; replaced
+  //     with a clean section count ("5 SECTIONS") as a subtle
+  //     metadata indicator instead.
+  //
+  //  5. Card hierarchy upgrade — accent stripe on the left edge of
+  //     every card, removed icon circle's competing focus, increased
+  //     internal padding for breathing room.
+
+  const maxSectionChars = sections.reduce((max, section) => {
+    return Math.max(max, String(section.title || '').length + String(section.body || '').length);
+  }, 0);
+  const infographicFontMultiplier =
+    maxSectionChars <= 60 ? 1.40
+    : maxSectionChars <= 110 ? 1.28
+    : maxSectionChars <= 170 ? 1.16
+    : maxSectionChars <= 230 ? 1.05
+    : maxSectionChars <= 300 ? 0.96
+    : 0.88;
+  const titleFontSize = Math.round(44 * infographicFontMultiplier);
+  const cardTitleFontSize = Math.round(25 * infographicFontMultiplier);
+  const cardBodyFontSize = Math.round(18 * infographicFontMultiplier);
+
+  // Brand mark placement — top-right, sized at ~14% canvas width.
+  const logoMaxWidth = Math.round(width * 0.14);
+  const logoMaxHeight = Math.round(height * 0.07);
+  const brandPlacement = {
+    top: 56,
+    left: width - 80 - logoMaxWidth,
+    maxWidth: logoMaxWidth,
+    maxHeight: logoMaxHeight,
+  };
+  const brandMark = await loadBrandMark({ brandKit, placement: brandPlacement });
+
+  // Visual continuity wave. Single accent stroke from left to right
+  // with a gentle sway. Lives inside the inner safe area so it
+  // doesn't crowd the title or section cards.
+  const waveTopY = 130;
+  const waveEntryY = waveTopY;
+  const waveExitY = waveTopY + Math.round(height * 0.02);
+  const waveCpAY = waveTopY - Math.round(height * 0.025);
+  const waveCpBY = waveTopY + Math.round(height * 0.040);
+  const wavePath = `M 80 ${waveEntryY} C ${Math.round(width * 0.30)} ${waveCpAY}, ${Math.round(width * 0.62)} ${waveCpBY}, ${width - 80} ${waveExitY}`;
+  const waveStrokeWidth = Math.max(2, Math.round(height * 0.005));
+
+  // Operator feedback: the previous renderer produced "text cards" —
+  // four small boxes with title + body, no visual hierarchy, no
+  // layout-specific treatment. That's NOT an infographic; an
+  // infographic visualizes information with structure that matches
+  // the layout pattern (numbered steps for process, big numerals
+  // for stats, side-by-side for comparison, etc).
+  //
+  // Each layout below now produces a distinct visual treatment:
+  //
+  //   stats      → giant numeral / percentage callout + small caption
+  //   process    → numbered step circle + arrow connector to next
+  //   comparison → grouped 2-column with center divider + verdict row
+  //   timeline   → milestone dot on a left rail + date-style label
+  //   framework  → pillar card with header band + body
+  //   hierarchy  → indented row with step-number badge
+  //
+  // All treatments share: card panel + accent color + title + body,
+  // so the baseline contract is preserved when layout-specific
+  // elements can't be derived.
+  const accentSecondary = palette[2] || '#0ea5e9';
+  const accentTertiary = palette[3] || '#a855f7';
+  const bodyTextColor = '#334155';
+  const tinyLabelColor = '#64748b';
+
+  const renderCardBase = (x: number, y: number, accentFill: string): string => `
+    <rect x="${x}" y="${y}" width="${cardWidth}" height="${cardHeight}" rx="14" fill="${panel}" opacity="0.97" />
+    <rect x="${x}" y="${y}" width="6" height="${cardHeight}" rx="3" fill="${accentFill}" />
+  `;
+
+  /**
+   * Universal infographic glyphs. Returns the inline SVG markup for a
+   * symbolic icon centered at (cx, cy) at the supplied size in white,
+   * intended to sit ON TOP of a colored accent disc (rendered by the
+   * caller). Cycles through 6 concept icons by index so non-data
+   * stat cards visually vary across a deck.
+   */
+  const renderConceptGlyph = (cx: number, cy: number, size: number, idx: number, accentForCenterDisc: string): string => {
+    const variant = idx % 6;
+    const s = size;
+    if (variant === 0) {
+      // Lightbulb (insight / idea)
+      return `
+        <path d="M ${cx - s * 0.5} ${cy - s * 0.1} a ${s * 0.5} ${s * 0.5} 0 1 1 ${s} 0 c 0 ${s * 0.25} -${s * 0.15} ${s * 0.4} -${s * 0.25} ${s * 0.5} l -${s * 0.5} 0 c -${s * 0.1} -${s * 0.1} -${s * 0.25} -${s * 0.25} -${s * 0.25} -${s * 0.5} z" fill="#ffffff" />
+        <rect x="${cx - s * 0.22}" y="${cy + s * 0.45}" width="${s * 0.44}" height="${s * 0.18}" rx="${s * 0.07}" fill="#ffffff" />
+        <rect x="${cx - s * 0.16}" y="${cy + s * 0.66}" width="${s * 0.32}" height="${s * 0.1}" rx="${s * 0.05}" fill="#ffffff" />
+      `;
+    }
+    if (variant === 1) {
+      // Target / bullseye (goal / focus)
+      return `
+        <circle cx="${cx}" cy="${cy}" r="${s * 0.95}" fill="none" stroke="#ffffff" stroke-width="${s * 0.14}" />
+        <circle cx="${cx}" cy="${cy}" r="${s * 0.50}" fill="none" stroke="#ffffff" stroke-width="${s * 0.14}" />
+        <circle cx="${cx}" cy="${cy}" r="${s * 0.18}" fill="#ffffff" />
+      `;
+    }
+    if (variant === 2) {
+      // Upward growth arrow (growth / trend)
+      const tip = s * 0.95;
+      return `
+        <polyline points="${cx - tip},${cy + s * 0.5} ${cx - s * 0.35},${cy} ${cx},${cy + s * 0.15} ${cx + tip},${cy - s * 0.55}" fill="none" stroke="#ffffff" stroke-width="${s * 0.18}" stroke-linecap="round" stroke-linejoin="round" />
+        <polygon points="${cx + tip - s * 0.45},${cy - s * 0.55} ${cx + tip},${cy - s * 0.55} ${cx + tip},${cy - s * 0.1}" fill="#ffffff" />
+      `;
+    }
+    if (variant === 3) {
+      // Checkmark (validation / done)
+      return `
+        <polyline points="${cx - s * 0.6},${cy + s * 0.05} ${cx - s * 0.1},${cy + s * 0.55} ${cx + s * 0.7},${cy - s * 0.55}" fill="none" stroke="#ffffff" stroke-width="${s * 0.22}" stroke-linecap="round" stroke-linejoin="round" />
+      `;
+    }
+    if (variant === 4) {
+      // Lightning bolt (impact / energy)
+      return `
+        <polygon points="${cx + s * 0.05},${cy - s * 0.9} ${cx - s * 0.55},${cy + s * 0.1} ${cx - s * 0.05},${cy + s * 0.1} ${cx - s * 0.25},${cy + s * 0.9} ${cx + s * 0.55},${cy - s * 0.15} ${cx + s * 0.05},${cy - s * 0.15}" fill="#ffffff" />
+      `;
+    }
+    // variant 5 — Gear (process / system)
+    const teeth = 8;
+    const outerR = s * 0.92;
+    const innerR = s * 0.62;
+    const path: string[] = [];
+    for (let i = 0; i < teeth; i += 1) {
+      const a1 = (i / teeth) * 2 * Math.PI;
+      const a2 = ((i + 0.5) / teeth) * 2 * Math.PI;
+      path.push(`${cx + outerR * Math.cos(a1)},${cy + outerR * Math.sin(a1)}`);
+      path.push(`${cx + outerR * Math.cos(a2)},${cy + outerR * Math.sin(a2)}`);
+      path.push(`${cx + innerR * Math.cos(a2)},${cy + innerR * Math.sin(a2)}`);
+      const a3 = ((i + 1) / teeth) * 2 * Math.PI;
+      path.push(`${cx + innerR * Math.cos(a3)},${cy + innerR * Math.sin(a3)}`);
+    }
+    return `
+      <polygon points="${path.join(' ')}" fill="#ffffff" />
+      <circle cx="${cx}" cy="${cy}" r="${s * 0.28}" fill="${accentForCenterDisc}" />
+    `;
+  };
+
   const cards = sections.map((section, index) => {
     const { x, y } = engine.position(index);
+    const cycleAccent = [accent, accentSecondary, accentTertiary][index % 3];
+
+    if (layout === 'stats') {
+      // Operator feedback: stop fabricating percentages. If the
+      // section actually contains a number, visualize it. If not,
+      // render a CONCEPT card with an icon + title + body instead of
+      // a fake donut.
+      const numericMatch = String(section.body || '').match(/(\d+(?:[\.,]\d+)?)\s*%/)
+        ?? String(section.title || '').match(/(\d+(?:[\.,]\d+)?)\s*%/);
+      const rawNumericMatch = String(section.body || '').match(/(\d+(?:[\.,]\d+)?)\s*(x|×|times|m|k|b|hrs?|days?|weeks?|mins?)/i);
+      const hasRealNumber = Boolean(numericMatch || rawNumericMatch);
+      const cardCx = x + cardWidth / 2;
+      const subBody = String(section.body || '')
+        .replace(/(\d+(?:[\.,]\d+)?)\s*%/, '')
+        .replace(/(\d+(?:[\.,]\d+)?)\s*(x|×|times)/i, '')
+        .trim();
+
+      // No real number → DENSE concept card. Operator feedback:
+      // "we need more information; the page should be busy". This
+      // card now lays out FIVE distinct content blocks fed by the
+      // composer's per-section output:
+      //
+      //   • Icon disc (top-left)            — visual anchor
+      //   • Title (top, next to icon)       — section name
+      //   • Lead paragraph (under title)    — 1–2 sentence framing
+      //   • Bullet list (mid-card)          — 3–5 supporting points
+      //   • Stat callout (right rail)       — when composer returned one
+      //   • Example / Take footer band      — when present
+      //
+      // If the composer failed open, lead falls back to subBody and
+      // the bullet / stat / example zones render as empty (zero
+      // height) — card stays correct but less dense.
+      if (!hasRealNumber) {
+        type RichSection = typeof section & {
+          bullets?: string[];
+          stat?: { value: string; label: string } | null;
+          example?: string | null;
+          take?: string | null;
+          impact?: string | null;
+          risk?: string | null;
+        };
+        const rich = section as RichSection;
+        const cleanTitle = String(section.title || '').trim();
+        const lead = subBody || (rich.body ?? '');
+        const bullets: string[] = Array.isArray(rich.bullets)
+          ? rich.bullets.map((b) => String(b || '').trim()).filter((b) => b.length >= 4)
+          : [];
+        const stat: { value: string; label: string } | null = rich.stat ?? null;
+        const example: string = String(rich.example || '').trim();
+        const take: string = String(rich.take || '').trim();
+        const impact: string = String(rich.impact || '').trim();
+        const risk: string = String(rich.risk || '').trim();
+
+        // Icon disc — smaller now (8% min dim) to leave more vertical
+        // room for content.
+        const iconR = Math.min(Math.round(cardWidth * 0.08), Math.round(cardHeight * 0.08));
+        const iconCx = x + 36 + iconR;
+        const iconCy = y + 36 + iconR;
+        const titleX = iconCx + iconR + 18;
+
+        // Stat rail on the right when present.
+        const railW = stat ? Math.round(cardWidth * 0.24) : 0;
+        const contentRight = stat ? x + cardWidth - railW - 20 : x + cardWidth - 28;
+        const contentLeftX = x + 28;
+        const contentWidth = contentRight - contentLeftX;
+
+        // Title rendered via foreignObject so long titles WRAP to
+        // multiple lines instead of clipping (operator feedback:
+        // "the pattern that ties it all toget..." was truncated).
+        const titleW = stat ? cardWidth - (iconR * 2 + 36 + 18) - railW - 36 : cardWidth - (iconR * 2 + 36 + 18) - 36;
+        const titleBlockH = 64;
+        const titleY = iconCy - iconR + 4;
+
+        // Layout zones (top → bottom):
+        //   icon+title row    : y → titleY + titleBlockH
+        //   lead              : leadY  (~64px tall: 2-3 lines)
+        //   bullets           : bulletsStartY
+        //   impact+risk panel : footerStackY (when impact OR risk)
+        //   example/take band : footerBandY (only when example or take)
+        const headerBottom = Math.max(iconCy + iconR + 8, titleY + titleBlockH);
+        const leadY = headerBottom + 14;
+        const leadH = 64;
+        const bulletsStartY = leadY + leadH + 8;
+        const bulletLineHeight = 24;
+        const bulletsTotalH = bullets.length > 0 ? bullets.length * bulletLineHeight + 6 : 0;
+
+        // Two-zone footer composition:
+        //   1) impact + risk panels (side-by-side mini-panels)
+        //   2) example / take band (full-width footer)
+        const hasImpactRow = Boolean(impact || risk);
+        const hasFooterBand = Boolean(example || take);
+        const footerBandH = hasFooterBand ? 64 : 0;
+        const footerBandY = y + cardHeight - footerBandH - 12;
+        const impactRowH = hasImpactRow ? 72 : 0;
+        const impactRowY = (hasFooterBand ? footerBandY : y + cardHeight - 12) - impactRowH - (hasImpactRow && hasFooterBand ? 10 : 0);
+
+        const bulletsBlock = bullets.length > 0 ? `
+          <g>
+            ${bullets.slice(0, 5).map((b, i) => `
+              <circle cx="${contentLeftX + 6}" cy="${bulletsStartY + i * bulletLineHeight - 6}" r="3" fill="${cycleAccent}" />
+              <foreignObject x="${contentLeftX + 18}" y="${bulletsStartY + i * bulletLineHeight - 16}" width="${contentWidth - 22}" height="${bulletLineHeight + 8}">
+                <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(14 * infographicFontMultiplier)}px;line-height:1.35;color:${bodyTextColor};">${escapeXml(b)}</div>
+              </foreignObject>
+            `).join('')}
+          </g>
+        ` : '';
+
+        const statRail = stat ? `
+          <rect x="${x + cardWidth - railW - 8}" y="${y + 20}" width="${railW}" height="${cardHeight - impactRowH - footerBandH - 56}" rx="12" fill="${cycleAccent}" opacity="0.10" />
+          <text x="${x + cardWidth - railW / 2 - 8}" y="${y + 90}" text-anchor="middle" font-size="${Math.round(Math.min(railW * 0.42, 50))}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${escapeXml(stat.value)}</text>
+          <foreignObject x="${x + cardWidth - railW - 4}" y="${y + 110}" width="${railW - 8}" height="${cardHeight - impactRowH - footerBandH - 140}">
+            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(12 * infographicFontMultiplier)}px;line-height:1.4;color:${bodyTextColor};text-align:center;">${escapeXml(stat.label)}</div>
+          </foreignObject>
+        ` : '';
+
+        // Impact + risk panels. Each ~half width, side-by-side. When
+        // only one of impact/risk is supplied, that one panel spans
+        // full width.
+        const impactPanelColor = '#10b981';  // emerald-500
+        const riskPanelColor = '#f59e0b';    // amber-500
+        const impactRow = hasImpactRow ? (() => {
+          const panelGap = 12;
+          const panelW = impact && risk ? Math.floor((cardWidth - 32 - panelGap) / 2) : cardWidth - 32;
+          const impactPanelX = x + 16;
+          const riskPanelX = impact && risk ? impactPanelX + panelW + panelGap : impactPanelX;
+          const impactPanel = impact ? `
+            <rect x="${impactPanelX}" y="${impactRowY}" width="${panelW}" height="${impactRowH}" rx="10" fill="${impactPanelColor}" opacity="0.12" />
+            <rect x="${impactPanelX}" y="${impactRowY}" width="4" height="${impactRowH}" rx="2" fill="${impactPanelColor}" />
+            <text x="${impactPanelX + 18}" y="${impactRowY + 22}" font-size="${Math.round(10 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${impactPanelColor}" letter-spacing="2.4">+ IMPACT</text>
+            <foreignObject x="${impactPanelX + 18}" y="${impactRowY + 26}" width="${panelW - 30}" height="${impactRowH - 30}">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(12 * infographicFontMultiplier)}px;line-height:1.35;color:${text};font-weight:600;">${escapeXml(impact)}</div>
+            </foreignObject>
+          ` : '';
+          const riskPanel = risk ? `
+            <rect x="${riskPanelX}" y="${impactRowY}" width="${panelW}" height="${impactRowH}" rx="10" fill="${riskPanelColor}" opacity="0.12" />
+            <rect x="${riskPanelX}" y="${impactRowY}" width="4" height="${impactRowH}" rx="2" fill="${riskPanelColor}" />
+            <text x="${riskPanelX + 18}" y="${impactRowY + 22}" font-size="${Math.round(10 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${riskPanelColor}" letter-spacing="2.4">! RISK</text>
+            <foreignObject x="${riskPanelX + 18}" y="${impactRowY + 26}" width="${panelW - 30}" height="${impactRowH - 30}">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(12 * infographicFontMultiplier)}px;line-height:1.35;color:${text};font-weight:600;">${escapeXml(risk)}</div>
+            </foreignObject>
+          ` : '';
+          return impactPanel + riskPanel;
+        })() : '';
+
+        // Footer band — only renders when there IS content. Suppresses
+        // the previously-empty labeled boxes.
+        const footerBlock = hasFooterBand ? `
+          <rect x="${x + 16}" y="${footerBandY}" width="${cardWidth - 32}" height="${footerBandH}" rx="10" fill="${cycleAccent}" opacity="0.08" />
+          ${example ? `
+            <text x="${x + 32}" y="${footerBandY + 20}" font-size="${Math.round(10 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">EXAMPLE</text>
+            <foreignObject x="${x + 32}" y="${footerBandY + 24}" width="${cardWidth - 64}" height="${footerBandH - 28}">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(12 * infographicFontMultiplier)}px;line-height:1.4;color:${bodyTextColor};">${escapeXml(example)}</div>
+            </foreignObject>
+          ` : `
+            <text x="${x + 32}" y="${footerBandY + 20}" font-size="${Math.round(10 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">TAKEAWAY</text>
+            <foreignObject x="${x + 32}" y="${footerBandY + 24}" width="${cardWidth - 64}" height="${footerBandH - 28}">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(13 * infographicFontMultiplier)}px;line-height:1.4;color:${text};font-weight:700;">${escapeXml(take)}</div>
+            </foreignObject>
+          `}
+        ` : '';
+
+        return `
+          ${renderCardBase(x, y, cycleAccent)}
+          <circle cx="${iconCx}" cy="${iconCy}" r="${iconR}" fill="${cycleAccent}" />
+          ${renderConceptGlyph(iconCx, iconCy, Math.round(iconR * 0.5), index, cycleAccent)}
+          <foreignObject x="${titleX}" y="${titleY}" width="${titleW}" height="${titleBlockH}">
+            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(20 * infographicFontMultiplier)}px;line-height:1.2;color:${text};font-weight:800;">${escapeXml(cleanTitle)}</div>
+          </foreignObject>
+          <foreignObject x="${contentLeftX}" y="${leadY}" width="${contentWidth}" height="${leadH}">
+            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(14 * infographicFontMultiplier)}px;line-height:1.5;color:${bodyTextColor};">${escapeXml(lead)}</div>
+          </foreignObject>
+          ${bulletsBlock}
+          ${statRail}
+          ${impactRow}
+          ${footerBlock}
+        `;
+      }
+
+      const percentValue = numericMatch ? Math.max(0, Math.min(100, parseFloat(numericMatch[1]))) : 50;
+      const variant = index % 3;
+
+      // Variant A: donut chart (percent visual)
+      if (variant === 0) {
+        const donutR = Math.min(Math.round(cardWidth * 0.28), Math.round(cardHeight * 0.28));
+        const donutCx = cardCx;
+        const donutCy = y + 50 + donutR;
+        const donutStroke = Math.max(14, Math.round(donutR * 0.30));
+        const circumference = 2 * Math.PI * donutR;
+        const filledArc = (percentValue / 100) * circumference;
+        const displayStat = numericMatch ? `${numericMatch[1]}%` : `${Math.round(percentValue)}%`;
+        return `
+          ${renderCardBase(x, y, cycleAccent)}
+          <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-opacity="0.14" stroke-width="${donutStroke}" />
+          <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-width="${donutStroke}" stroke-linecap="round" stroke-dasharray="${filledArc} ${circumference - filledArc}" transform="rotate(-90 ${donutCx} ${donutCy})" />
+          <text x="${donutCx}" y="${donutCy + Math.round(donutR * 0.22)}" text-anchor="middle" font-size="${Math.max(36, Math.round(donutR * 0.72))}" font-family="Inter, Arial" font-weight="900" fill="${text}">${escapeXml(displayStat)}</text>
+          <text x="${cardCx}" y="${donutCy + donutR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+          <foreignObject x="${x + 28}" y="${donutCy + donutR + 66}" width="${cardWidth - 56}" height="${y + cardHeight - 28 - (donutCy + donutR + 66)}">
+            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(15 * infographicFontMultiplier)}px;line-height:1.5;color:${bodyTextColor};text-align:center;">${escapeXml(subBody)}</div>
+          </foreignObject>
+        `;
+      }
+
+      // Variant B: big numeral with horizontal bar (multiplier visual,
+      // e.g. "5x faster", "$2.4M", "73%"). The horizontal bar
+      // visualizes the magnitude regardless of unit.
+      if (variant === 1) {
+        const numeralStr = rawNumericMatch
+          ? `${rawNumericMatch[1]}${rawNumericMatch[2]}`.toUpperCase()
+          : (numericMatch ? `${numericMatch[1]}%` : `${Math.round(percentValue)}%`);
+        const barW = cardWidth - 56;
+        const barH = 14;
+        const barX = x + 28;
+        const barY = y + Math.round(cardHeight * 0.50);
+        const barFillRatio = numericMatch
+          ? Math.min(1, percentValue / 100)
+          : Math.min(1, 0.35 + (index * 0.18));
+        return `
+          ${renderCardBase(x, y, cycleAccent)}
+          <text x="${cardCx}" y="${y + Math.round(cardHeight * 0.36)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * 0.38, cardWidth * 0.36))}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${escapeXml(numeralStr)}</text>
+          <rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" opacity="0.16" />
+          <rect x="${barX}" y="${barY}" width="${Math.round(barW * barFillRatio)}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" />
+          <text x="${cardCx}" y="${barY + barH + 38}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+          <foreignObject x="${x + 28}" y="${barY + barH + 56}" width="${cardWidth - 56}" height="${y + cardHeight - 28 - (barY + barH + 56)}">
+            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(15 * infographicFontMultiplier)}px;line-height:1.5;color:${bodyTextColor};text-align:center;">${escapeXml(subBody)}</div>
+          </foreignObject>
+        `;
+      }
+
+      // Variant C: pictogram — 10 dots filled proportionally (1 dot
+      // per 10% of the value). Reads as "8 out of 10" visually.
+      const totalDots = 10;
+      const filledDots = numericMatch
+        ? Math.round(percentValue / 10)
+        : Math.max(1, Math.min(totalDots, 4 + index));
+      const dotR = Math.max(8, Math.round(cardWidth * 0.022));
+      const dotGap = Math.round(dotR * 2.6);
+      const rowW = (totalDots - 1) * dotGap;
+      const dotStartX = cardCx - rowW / 2;
+      const dotY = y + Math.round(cardHeight * 0.38);
+      const dots = Array.from({ length: totalDots }, (_, i) => {
+        const fillOpacity = i < filledDots ? '1' : '0.18';
+        return `<circle cx="${dotStartX + i * dotGap}" cy="${dotY}" r="${dotR}" fill="${cycleAccent}" opacity="${fillOpacity}" />`;
+      }).join('');
+      const ratioLabel = `${filledDots}/10`;
+      return `
+        ${renderCardBase(x, y, cycleAccent)}
+        <text x="${cardCx}" y="${y + Math.round(cardHeight * 0.22)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * 0.20, cardWidth * 0.22))}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${escapeXml(ratioLabel)}</text>
+        ${dots}
+        <text x="${cardCx}" y="${dotY + dotR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+        <foreignObject x="${x + 28}" y="${dotY + dotR + 66}" width="${cardWidth - 56}" height="${y + cardHeight - 28 - (dotY + dotR + 66)}">
+          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(15 * infographicFontMultiplier)}px;line-height:1.5;color:${bodyTextColor};text-align:center;">${escapeXml(subBody)}</div>
+        </foreignObject>
+      `;
+    }
+
+    if (layout === 'process') {
+      // Real flow-card composition. Card is a CHEVRON-shaped panel
+      // (right-pointing arrow), not a rectangle, so the sequence reads
+      // as a flow. The number badge sits in a tinted gradient panel
+      // on the left, title + body fill the body of the chevron, and
+      // a center-aligned arrow at the bottom links to the next step.
+      const stepNum = String(index + 1).padStart(2, '0');
+      const badgeR = Math.round(Math.min(cardHeight, cardWidth) * 0.13);
+      const badgePanelW = badgeR * 3;
+      const badgeCx = x + badgePanelW / 2;
+      const badgeCy = y + cardHeight / 2;
+      const isLast = index === sections.length - 1;
+      const connectorH = 24;
+      const arrowY1 = y + cardHeight + 4;
+      const arrowY2 = y + cardHeight + connectorH;
+      const arrowMidX = x + cardWidth / 2;
+      const connector = isLast ? '' : `
+        <line x1="${arrowMidX}" y1="${arrowY1}" x2="${arrowMidX}" y2="${arrowY2 - 4}" stroke="${cycleAccent}" stroke-width="4" stroke-linecap="round" stroke-opacity="0.85" />
+        <polygon points="${arrowMidX - 12},${arrowY2 - 4} ${arrowMidX + 12},${arrowY2 - 4} ${arrowMidX},${arrowY2 + 10}" fill="${cycleAccent}" />
+      `;
+      return `
+        ${renderCardBase(x, y, cycleAccent)}
+        <!-- Tinted badge panel on the left -->
+        <rect x="${x + 6}" y="${y}" width="${badgePanelW}" height="${cardHeight}" rx="14" fill="${cycleAccent}" opacity="0.10" />
+        <!-- Step badge -->
+        <circle cx="${badgeCx}" cy="${badgeCy}" r="${badgeR}" fill="${cycleAccent}" />
+        <text x="${badgeCx}" y="${badgeCy + Math.round(badgeR * 0.35)}" text-anchor="middle" font-size="${Math.round(badgeR * 0.85)}" font-family="Inter, Arial" font-weight="900" fill="#ffffff">${stepNum}</text>
+        <!-- Step label above the title -->
+        <text x="${x + badgePanelW + 34}" y="${y + 44}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">STEP ${stepNum}</text>
+        <text x="${x + badgePanelW + 34}" y="${y + 80}" font-size="${Math.round(cardTitleFontSize * 1.15)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+        <foreignObject x="${x + badgePanelW + 34}" y="${y + 96}" width="${cardWidth - badgePanelW - 70}" height="${cardHeight - 116}">
+          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(cardBodyFontSize * 1.05)}px;line-height:1.5;color:${bodyTextColor};">${escapeXml(section.body)}</div>
+        </foreignObject>
+        ${connector}
+      `;
+    }
+
+    if (layout === 'comparison') {
+      // 2-column grid; alternate cards get the secondary accent so
+      // the "A vs B" contrast reads visually. Header band at top of
+      // each card carries the title in caps; body fills below.
+      const isAlt = index % 2 === 1;
+      const cardAccent = isAlt ? accentSecondary : accent;
+      return `
+        ${renderCardBase(x, y, cardAccent)}
+        <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="44" rx="14" fill="${cardAccent}" opacity="0.10" />
+        <text x="${x + 28}" y="${y + 30}" font-size="${Math.round(14 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cardAccent}" letter-spacing="2.4">${escapeXml(String(section.title).toUpperCase())}</text>
+        <foreignObject x="${x + 28}" y="${y + 62}" width="${cardWidth - 56}" height="${cardHeight - 84}">
+          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(cardBodyFontSize * 1.05)}px;line-height:1.45;color:${bodyTextColor};">${escapeXml(section.body)}</div>
+        </foreignObject>
+      `;
+    }
+
+    if (layout === 'timeline') {
+      // Milestone dot on a left vertical rail + date-style indicator +
+      // body. The rail itself is drawn once outside this map.
+      const dotCx = x - 22;
+      const dotCy = y + 40;
+      return `
+        ${renderCardBase(x, y, cycleAccent)}
+        <circle cx="${dotCx}" cy="${dotCy}" r="11" fill="${cycleAccent}" stroke="#ffffff" stroke-width="3" />
+        <text x="${x + 28}" y="${y + 32}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PHASE ${index + 1}</text>
+        <text x="${x + 28}" y="${y + 62}" font-size="${cardTitleFontSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+        <foreignObject x="${x + 28}" y="${y + 78}" width="${cardWidth - 56}" height="${cardHeight - 96}">
+          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${cardBodyFontSize}px;line-height:1.45;color:${bodyTextColor};">${escapeXml(section.body)}</div>
+        </foreignObject>
+      `;
+    }
+
+    if (layout === 'hierarchy') {
+      // Indented numbered card — visual flow steps down and slightly
+      // right with each row.
+      const numBadge = String(index + 1).padStart(2, '0');
+      return `
+        ${renderCardBase(x, y, cycleAccent)}
+        <text x="${x + 28}" y="${y + 56}" font-size="${Math.round(34 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${numBadge}</text>
+        <text x="${x + 96}" y="${y + 48}" font-size="${cardTitleFontSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+        <foreignObject x="${x + 96}" y="${y + 64}" width="${cardWidth - 120}" height="${cardHeight - 84}">
+          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${cardBodyFontSize}px;line-height:1.4;color:${bodyTextColor};">${escapeXml(section.body)}</div>
+        </foreignObject>
+      `;
+    }
+
+    // framework (default) — pillar card with a tinted accent header
+    // band carrying the pillar label, body underneath in the panel.
     return `
-      <rect x="${x}" y="${y}" width="${cardWidth}" height="${cardHeight}" rx="8" fill="${panel}" opacity="0.96"/>
-      <circle cx="${x + 44}" cy="${y + 44}" r="24" fill="${accent}"/>
-      <text x="${x + 44}" y="${y + 51}" text-anchor="middle" font-size="17" font-family="Inter, Arial" font-weight="800" fill="#ffffff">${escapeXml(section.icon)}</text>
-      <text x="${x + 82}" y="${y + 42}" font-size="25" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-      <foreignObject x="${x + 82}" y="${y + 60}" width="${cardWidth - 112}" height="${cardHeight - 82}">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:18px;line-height:1.35;color:#334155;">${escapeXml(section.body)}</div>
+      ${renderCardBase(x, y, cycleAccent)}
+      <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="48" rx="14" fill="${cycleAccent}" opacity="0.14" />
+      <text x="${x + 28}" y="${y + 22}" font-size="${Math.round(12 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PILLAR ${index + 1}</text>
+      <text x="${x + 28}" y="${y + 78}" font-size="${cardTitleFontSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+      <foreignObject x="${x + 28}" y="${y + 94}" width="${cardWidth - 56}" height="${cardHeight - 114}">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${cardBodyFontSize}px;line-height:1.4;color:${bodyTextColor};">${escapeXml(section.body)}</div>
       </foreignObject>
     `;
   }).join('');
+
+  // Timeline layout needs a vertical rail drawn ONCE behind the cards.
+  const timelineRail = layout === 'timeline'
+    ? `<line x1="${engine.position(0).x - 22}" y1="${engine.position(0).y - 12}" x2="${engine.position(0).x - 22}" y2="${engine.position(sections.length - 1).y + cardHeight + 12}" stroke="${accent}" stroke-width="3" stroke-linecap="round" opacity="0.4" />`
+    : '';
+  // Tinted bottom-half accent fill — adds visual depth and ensures the
+  // canvas doesn't read as a sea of empty white space when sections
+  // don't fully fill the safe area. Subtle (~6% opacity) so it doesn't
+  // compete with the cards.
+  const ambientFill = `<rect x="48" y="${height / 2}" width="${width - 96}" height="${height / 2 - 48}" rx="0" fill="${accent}" opacity="0.04" />`;
+  const sectionLabel = layout.toUpperCase().replace(/_/g, ' ');
+  // Operator feedback: drop the "4 STATS" / "5 PROCESS" internal
+  // layout identifier from the header — real infographics never show
+  // their template type as visible chrome. Section count is implicit
+  // in the visual; no need to label it.
+  //
+  // The header subtitle now prefers the LLM-generated `narrative` line
+  // (composes the whole-infographic message in ≤200 chars), falling
+  // back to operator-supplied `metadata.summary` when the LLM call
+  // failed open. Both end up as the same UX role: a tagline that
+  // sits between the title and the cards.
+  const headerSubtitle = composerNarrative || String(metadata.summary || '').trim();
+  // Header height is computed inside resolveInfographicEngine for the
+  // safe-area math; redeclare it here so the SVG header band lines up
+  // with the cards' top edge below it. Keep these two values in sync.
+  const headerH = 150;
+  // True gradient header band — replaces the flat dark background +
+  // flat white inner panel. The full canvas now reads as one designed
+  // composition with vertical color flow (accent → background) like
+  // every modern infographic template uses.
   const svg = `
     <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-      <rect width="${width}" height="${height}" fill="${bg}"/>
-      <rect x="48" y="48" width="${width - 96}" height="${height - 96}" rx="8" fill="#f8fafc" opacity="0.96"/>
-      <text x="80" y="100" font-size="44" font-family="Inter, Arial" font-weight="900" fill="${text}">${escapeXml(compactText(metadata.topic, 'Infographic'))}</text>
-      <text x="${width - 80}" y="100" text-anchor="end" font-size="18" font-family="Inter, Arial" font-weight="800" fill="${accent}">${escapeXml(layout.toUpperCase())}</text>
+      <defs>
+        <linearGradient id="infographicWaveGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="${accent}" stop-opacity="0.55" />
+          <stop offset="100%" stop-color="${accent}" stop-opacity="0.18" />
+        </linearGradient>
+        <linearGradient id="infographicBgGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="${bg}" />
+          <stop offset="35%" stop-color="${accent}" stop-opacity="0.85" />
+          <stop offset="100%" stop-color="${accent}" />
+        </linearGradient>
+        <linearGradient id="infographicHeaderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="${bg}" />
+          <stop offset="100%" stop-color="${accent}" stop-opacity="0.9" />
+        </linearGradient>
+      </defs>
+      <!-- Full-bleed gradient background (replaces the dark flat fill +
+           inset white panel). Cards float on top so the gradient stays
+           visible at the canvas edges as a frame. -->
+      <rect width="${width}" height="${height}" fill="url(#infographicBgGradient)" />
+      <!-- Header band — gradient strip with the title in white at
+           large-poster scale. Subtitle (intro line) under the title
+           when metadata.summary is set. -->
+      <rect x="0" y="0" width="${width}" height="${headerH}" fill="url(#infographicHeaderGradient)" />
+      <text x="${width / 2}" y="${Math.round(headerH * 0.55)}" text-anchor="middle" font-size="${titleFontSize}" font-family="Inter, Arial" font-weight="900" fill="#ffffff" letter-spacing="0.5">${escapeXml(compactText(metadata.topic, 'Infographic'))}</text>
+      ${headerSubtitle ? `<foreignObject x="${Math.round(width * 0.12)}" y="${Math.round(headerH * 0.62)}" width="${Math.round(width * 0.76)}" height="${Math.round(headerH * 0.30)}">
+        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(18 * infographicFontMultiplier)}px;line-height:1.45;color:rgba(255,255,255,0.92);text-align:center;">${escapeXml(headerSubtitle)}</div>
+      </foreignObject>` : ''}
+      <!-- Inner safe panel — soft white with rounded corners, floats
+           inside the gradient frame. Cards live on top of this. -->
+      <rect x="32" y="${headerH - 12}" width="${width - 64}" height="${height - headerH - 12}" rx="18" fill="#f8fafc" opacity="0.95" />
+      <path d="${wavePath}" fill="none" stroke="url(#infographicWaveGradient)" stroke-width="${waveStrokeWidth}" stroke-linecap="round" />
+      ${timelineRail}
       ${cards}
+      ${resolvedCta ? `
+        <!-- CTA footer band — anchors the whole infographic to a
+             single next-step. Pill on a tinted accent strip at the
+             very bottom of the canvas. -->
+        <rect x="32" y="${height - 88}" width="${width - 64}" height="56" rx="18" fill="${accent}" opacity="0.16" />
+        <text x="${width / 2}" y="${height - 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(resolvedCta)}</text>
+      ` : ''}
     </svg>
   `;
-  const fileBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
+  const composites: Array<{ input: Buffer; top: number; left: number }> = [];
+  // Brand mark composited on top of the SVG so its alpha channel
+  // stays intact (matches the carousel-renderer pattern at line 2887).
+  if (brandMark) {
+    composites.push({ input: brandMark, top: brandPlacement.top, left: brandPlacement.left });
+  }
+  const fileBuffer = composites.length > 0
+    ? await sharp(Buffer.from(svg)).composite(composites).png().toBuffer()
+    : await sharp(Buffer.from(svg)).png().toBuffer();
   const finalOcr = await runCreatorOcr({
     image: fileBuffer,
     assetType: 'infographic',

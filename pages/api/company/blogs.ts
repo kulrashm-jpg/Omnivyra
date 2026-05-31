@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { createBlog, type BlogStatus } from '@/backend/services/blogService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Get company_id from query or body
@@ -63,38 +64,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .slice(0, 80);
 
       const excerpt = body.excerpt?.trim() || null;
-      const content_markdown = body.content_markdown ?? '';
-      const content_html = body.content_html ?? null;
+      const content = body.content ?? body.content_markdown ?? '';
       const featured_image_url = body.featured_image_url?.trim() || null;
       const category = body.category?.trim() || null;
       const tags = Array.isArray(body.tags) ? body.tags : body.tags ? [body.tags] : [];
-      const media_blocks = body.media_blocks ?? null;
       const content_blocks = body.content_blocks ?? null;
       const seo_meta_title = body.seo_meta_title?.trim() || null;
       const seo_meta_description = body.seo_meta_description?.trim() || null;
-      const status = ['draft', 'scheduled', 'published'].includes(body.status) ? body.status : 'draft';
+      const status: BlogStatus = ['draft', 'scheduled', 'published'].includes(body.status) ? body.status : 'draft';
       const is_featured = !!body.is_featured;
       const published_at = status === 'published' ? body.published_at || new Date().toISOString() : null;
       const angle_type = body.angle_type?.trim() || null;
-      const primary_keyword = typeof body.primary_keyword === 'string' ? body.primary_keyword.trim() || null : null;
-      const secondary_keywords = Array.isArray(body.secondary_keywords)
-        ? body.secondary_keywords.filter((k: unknown) => typeof k === 'string').slice(0, 5)
-        : null;
       const content_type = ['article', 'whitepaper', 'newsletter', 'story', 'guide'].includes(body.content_type) ? body.content_type : 'blog';
 
-      const { data: inserted, error } = await supabase
-        .from('blogs')
-        .insert({
-          company_id,
+      const inserted = await createBlog(
+        company_id,
+        auth.userId,
+        {
           title,
+          content,
           slug,
           excerpt,
-          content_markdown,
-          content_html,
           featured_image_url,
           category,
           tags,
-          media_blocks,
           content_blocks,
           seo_meta_title,
           seo_meta_description,
@@ -102,22 +95,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           is_featured,
           published_at,
           angle_type,
-          primary_keyword,
-          secondary_keywords,
           content_type,
-          created_by: auth.userId,
-        })
-        .select('id, slug, status')
-        .single();
+        },
+      );
 
-      if (error) {
-        if (error.code === '23505') {
-          return res.status(409).json({ error: 'Slug already exists' });
-        }
-        return res.status(500).json({ error: error.message });
-      }
-
-      return res.status(201).json(inserted);
+      return res.status(201).json({ id: inserted.id, slug: inserted.slug, status: inserted.status });
     } catch (err: unknown) {
       return res.status(500).json({
         error: err instanceof Error ? err.message : 'Internal server error',

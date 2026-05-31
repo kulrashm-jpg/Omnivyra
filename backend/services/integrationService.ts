@@ -425,6 +425,7 @@ export async function publishBlog(
       status: 'draft',
       integration_id: integration.id,
       external_id: null,
+      external_url: null,
       published_at: null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),

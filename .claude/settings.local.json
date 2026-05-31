@@ -275,7 +275,14 @@
       "Bash(wsl --status)",
       "Bash(wsl --version)",
       "Bash(sed -n '300,360p' /c/virality/config/env.schema.ts)",
-      "Bash(sed -n '155,175p' /c/virality/config/env.schema.ts)"
+      "Bash(sed -n '155,175p' /c/virality/config/env.schema.ts)",
+      "PowerShell(Copy-Item C:\\\\virality\\\\backend\\\\queue\\\\bullmqClient.ts C:\\\\tmp\\\\z_bullmqClient.txt)",
+      "PowerShell(Copy-Item C:\\\\virality\\\\backend\\\\queue\\\\contentGenerationQueues.ts C:\\\\tmp\\\\z_contentGenerationQueues.txt)",
+      "PowerShell(Copy-Item C:\\\\virality\\\\backend\\\\scheduler\\\\cron.ts C:\\\\tmp\\\\z_cron.txt)",
+      "PowerShell(Copy-Item C:\\\\virality\\\\backend\\\\scheduler\\\\schedulerService.ts C:\\\\tmp\\\\z_schedulerService.txt)",
+      "PowerShell(\"done\")",
+      "PowerShell(Write-Output \"=== middleware \\(is dir?\\) ===\"; \\(Get-Item \"C:\\\\virality\\\\middleware\"\\).PSIsContainer; Write-Output \"=== middleware tree ===\"; Get-ChildItem \"C:\\\\virality\\\\middleware\" -Recurse -File | ForEach-Object { $_.FullName.Replace\\(\"C:\\\\virality\\\\\",\"\"\\) }; Write-Output \"=== bolt api ===\"; Get-ChildItem \"C:\\\\virality\\\\pages\\\\api\\\\bolt\" -File | ForEach-Object { $_.Name })",
+      "PowerShell($out='C:\\\\tmp\\\\cqc.txt'; $c = Get-Content 'C:\\\\virality\\\\backend\\\\queue\\\\contentGenerationQueues.ts'; \\($c[39..175] -join \"`n\"\\) | Set-Content $out -Encoding utf8; \"lines total: $\\($c.Count\\)\")"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

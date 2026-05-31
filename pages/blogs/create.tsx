@@ -47,7 +47,7 @@ const WORD_TIERS = [
     description: 'A richer editorial build for nuanced arguments, stronger supporting detail, and a more defensible market position.',
     bestFor: 'Thought leadership, problem breakdowns, framework-led content',
     pace: 'Focused',
-    depth: 'Strategic depth',
+    depth: 'Strategic',
     strategicFit: 'Ideal when your audience expects more than surface-level advice and your brand needs to teach with authority.',
     accent: 'from-violet-500 via-fuchsia-500 to-purple-600',
     panelClass: 'from-violet-50 via-white to-fuchsia-50',
@@ -63,7 +63,7 @@ const WORD_TIERS = [
     description: 'A premium long-form format built for category ownership, comprehensive search coverage, and executive-grade substance.',
     bestFor: 'Pillar pages, flagship resources, category-defining narratives',
     pace: 'Deliberate',
-    depth: 'Cornerstone level',
+    depth: 'Cornerstone',
     strategicFit: 'Best when the goal is durable authority and a content asset that can anchor campaigns, sales enablement, and SEO.',
     accent: 'from-emerald-500 via-teal-500 to-cyan-600',
     panelClass: 'from-emerald-50 via-white to-teal-50',
@@ -101,7 +101,7 @@ export default function BlogCreatePage() {
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">
-        <div className="mx-auto max-w-6xl">
+        <div className="mx-auto max-w-7xl">
           <Link href="/command-center/content" className="mb-8 inline-flex items-center gap-2 text-sm text-gray-600 transition-colors hover:text-gray-900">
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
@@ -161,7 +161,7 @@ export default function BlogCreatePage() {
             </div>
           </div>
 
-          <div className="grid gap-5 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             {WORD_TIERS.map((tier) => {
               const Icon = tier.icon;
 
@@ -169,47 +169,47 @@ export default function BlogCreatePage() {
                 <button
                   key={tier.words}
                   onClick={() => router.push(`/blogs/intelligence?words=${tier.words}`)}
-                  className={`group relative overflow-hidden rounded-[28px] border bg-gradient-to-br ${tier.panelClass} ${tier.borderClass} p-6 text-left shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)]`}
+                  className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-gradient-to-br ${tier.panelClass} ${tier.borderClass} p-4 text-left shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)]`}
                 >
                   <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${tier.accent}`} />
 
-                  <div className="mb-5 flex items-start justify-between gap-3">
-                    <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${tier.iconClass} shadow-sm`}>
+                  <div className="mb-4 flex items-start justify-between gap-3 pt-2">
+                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tier.iconClass} shadow-sm`}>
                       <Icon className="h-5 w-5" />
                     </div>
-                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${tier.badgeClass}`}>
+                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold leading-none ${tier.badgeClass}`}>
                       {tier.label}
                     </span>
                   </div>
 
-                  <div className="mb-5">
+                  <div className="mb-4 min-h-[150px]">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Recommended Asset</p>
                     <h3 className="mt-2 text-xl font-semibold text-slate-950">{tier.title}</h3>
-                    <p className="mt-3 text-sm leading-6 text-slate-600">{tier.description}</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">{tier.description}</p>
                   </div>
 
-                  <div className="mb-5 grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3">
+                  <div className="mb-3 grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-lg border border-white/80 bg-white/80 px-3 py-2">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Pace</p>
-                      <p className="mt-1 text-sm font-medium text-slate-800">{tier.pace}</p>
+                      <p className="mt-0.5 text-sm font-medium leading-5 text-slate-800">{tier.pace}</p>
                     </div>
-                    <div className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Depth</p>
-                      <p className="mt-1 text-sm font-medium text-slate-800">{tier.depth}</p>
+                    <div className="rounded-lg border border-white/80 bg-white/80 px-3 py-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Focus</p>
+                      <p className="mt-0.5 text-sm font-medium leading-5 text-slate-800">{tier.depth}</p>
                     </div>
                   </div>
 
-                  <div className="mb-5 rounded-2xl border border-slate-200/80 bg-white/70 px-4 py-4">
+                  <div className="mb-3 min-h-[104px] rounded-xl border border-slate-200/80 bg-white/70 px-3 py-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Best For</p>
-                    <p className="mt-2 text-sm text-slate-700">{tier.bestFor}</p>
+                    <p className="mt-2 text-sm leading-5 text-slate-700">{tier.bestFor}</p>
                   </div>
 
-                  <div className="mb-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-4">
+                  <div className="mb-4 min-h-[128px] rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-3 py-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Strategic Fit</p>
-                    <p className="mt-2 text-sm leading-6 text-slate-600">{tier.strategicFit}</p>
+                    <p className="mt-2 text-sm leading-5 text-slate-600">{tier.strategicFit}</p>
                   </div>
 
-                  <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-900 transition-all group-hover:gap-2.5">
+                  <span className="mt-auto inline-flex items-center gap-1.5 text-sm font-semibold text-slate-900 transition-all group-hover:gap-2.5">
                     Continue with this direction <ArrowRight className="h-4 w-4" />
                   </span>
                 </button>

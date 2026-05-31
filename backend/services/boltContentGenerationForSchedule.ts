@@ -316,7 +316,7 @@ export async function generateContentForDailyPlans(
           company_id: campaignCompanyId,
           title: blogTitle,
           slug: blogSlug,
-          content_markdown: master.content,
+          content: master.content,
           status: 'scheduled',
           published_at: scheduledDate,
           created_by: campaignUserId,

@@ -189,16 +189,24 @@ describe('Carousel strategies are measurably distinct (Story ≠ Framework ≠ E
     expect(new Set(sequences).size).toBe(5);
   });
 
-  test('story carousel arc starts with hook + problem + journey', () => {
+  test('story carousel arc starts with hook + problem + journey and closes with a CTA', () => {
     const story = strategies.find((s) => s.purposeKey === 'story-carousel')!;
     const roles = story.slideArc!.map((r) => r.role);
-    expect(roles).toEqual(['hook', 'problem', 'journey', 'transformation', 'outcome']);
+    expect(roles).toEqual(['hook', 'problem', 'journey', 'transformation', 'outcome', 'cta']);
   });
 
-  test('framework carousel arc reveals 3 parallel pillars', () => {
+  test('framework carousel arc reveals 3 parallel pillars and closes with a CTA', () => {
     const fw = strategies.find((s) => s.purposeKey === 'framework-carousel')!;
     const roles = fw.slideArc!.map((r) => r.role);
-    expect(roles).toEqual(['hook', 'overview', 'pillar_1', 'pillar_2', 'pillar_3', 'conclusion']);
+    expect(roles).toEqual(['hook', 'overview', 'pillar_1', 'pillar_2', 'pillar_3', 'conclusion', 'cta']);
+  });
+
+  test('educational carousel arc closes with a soft CTA after the summary slide', () => {
+    const edu = strategies.find((s) => s.purposeKey === 'educational-carousel')!;
+    const roles = edu.slideArc!.map((r) => r.role);
+    expect(roles).toEqual(['hook', 'concept', 'explanation', 'example', 'summary', 'cta']);
+    const ctaSlide = edu.slideArc!.find((r) => r.role === 'cta')!;
+    expect(ctaSlide.intent.toLowerCase()).toMatch(/soft|save|share|follow/);
   });
 
   test('product-showcase carousel arc ends with cta + has 2 feature slides', () => {
@@ -214,6 +222,18 @@ describe('Carousel strategies are measurably distinct (Story ≠ Framework ≠ E
     expect(roles[0]).toBe('title');
     expect(roles[1]).toBe('agenda');
     expect(roles[roles.length - 1]).toBe('next_steps');
+  });
+
+  test('every non-absent carousel strategy lands its CTA in the slide arc — parity with image CTA intensity', () => {
+    // Image strategies surface CTA via single-frame ctaIntensity. Carousel
+    // strategies must land that intensity on an explicit slide so the CTA
+    // suggestion is operator-visible (not implicit in the model's output).
+    // 'next_steps' counts as the presentation-carousel CTA equivalent.
+    for (const s of strategies) {
+      if (s.ctaIntensity === 'absent') continue;
+      const lastRole = s.slideArc![s.slideArc!.length - 1].role;
+      expect(['cta', 'next_steps']).toContain(lastRole);
+    }
   });
 });
 

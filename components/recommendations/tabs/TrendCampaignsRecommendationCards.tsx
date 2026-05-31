@@ -654,7 +654,13 @@ export default function TrendCampaignsRecommendationCards(props: TrendCampaignsR
                               campaign_duration: durationWeeks,
                               tentative_start: tentativeStartDate.toISOString().split('T')[0],
                               campaign_goal: campaignGoal,
-                              campaign_mode: campaignMode,
+                              // Normalize the UI's display-tier values
+                              // ('text_based' | 'creator_dependent') into the
+                              // canonical strategy-mode vocabulary the BOLT
+                              // pre-execution validator + pipeline expect
+                              // ('text' | 'creator' | 'combined'). Default
+                              // mirrors the UI default of 'text_based'.
+                              campaign_mode: campaignMode === 'creator_dependent' ? 'creator' : 'text',
                               content_formats: contentFormats,
                             }
                           : null;

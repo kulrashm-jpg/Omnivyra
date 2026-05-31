@@ -35,8 +35,20 @@ export const BOLT_TEXT_CONTENT_TYPES = new Set([
   'poll',
 ]);
 
-/** Content types excluded from BOLT (media/visual formats). */
+/** Content types excluded from BOLT (media/visual formats + long-form text).
+ *  The docstring at the top of the file says BOLT excludes blog / whitepaper
+ *  / story; this list now actually enforces that. Without `blog` here the
+ *  sanitiser was letting blog-typed entries reach the planner, where the
+ *  blueprint validator rejected them as unsupported content types. */
 export const BOLT_EXCLUDED_CONTENT_TYPES = new Set([
+  'blog',
+  'blogs',
+  'whitepaper',
+  'whitepapers',
+  'white_paper',
+  'white_papers',
+  'newsletter',
+  'newsletters',
   'video',
   'reel',
   'reels',
@@ -112,7 +124,11 @@ export function filterBoltContentTypeMix(mix: string[] | undefined | null): stri
     const s = String(item ?? '').trim();
     if (!s) continue;
     const lower = s.toLowerCase();
-    const excluded = ['video', 'reel', 'carousel', 'slider', 'image', 'banner', 'short'];
+    // Sync with BOLT_EXCLUDED_CONTENT_TYPES at top of file. Adding
+    // long-form text formats (blog/whitepaper/newsletter) here so they
+    // get converted to `5 post` instead of passing through unchanged
+    // and then being rejected downstream by the blueprint validator.
+    const excluded = ['video', 'reel', 'carousel', 'slider', 'image', 'banner', 'short', 'blog', 'whitepaper', 'white_paper', 'newsletter'];
     const isExcluded = excluded.some((x) => lower.includes(x));
     if (isExcluded) {
       const numMatch = s.match(/^(\d+)\s/);
@@ -129,7 +145,7 @@ export function filterBoltContentTypeMix(mix: string[] | undefined | null): stri
 const BOLT_EXCLUDED_PLATFORMS_LIST = ['youtube', 'tiktok'];
 
 /** Content type strings that indicate non-text (excluded from BOLT). */
-const BOLT_EXCLUDED_CONTENT_SUBSTRINGS = ['video', 'reel', 'carousel', 'slider', 'image', 'banner', 'short'];
+const BOLT_EXCLUDED_CONTENT_SUBSTRINGS = ['video', 'reel', 'carousel', 'slider', 'image', 'banner', 'short', 'blog', 'whitepaper', 'white_paper', 'newsletter'];
 
 /**
  * Sanitize a BOLT plan to text-only: remove YouTube/TikTok from platform allocation,

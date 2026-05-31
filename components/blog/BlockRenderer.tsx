@@ -189,13 +189,61 @@ function RenderMedia({ block }: { block: MediaBlock }) {
 }
 
 function RenderCreatorAsset({ block }: { block: CreatorAssetBlock }) {
-  const assetUrl = block.url || block.files?.find(Boolean) || '';
-  if (!block.assetId && !assetUrl) return null;
+  // Multi-asset content types (carousel / infographic) carry their full
+  // image set in `block.files`. The legacy single-image branch was
+  // reading only `block.url || files[0]`, which silently dropped every
+  // slide / section after the first. Treat any creatorType that can
+  // legitimately produce multiple frames as a multi-asset render.
+  const files = Array.isArray(block.files) ? block.files.filter(Boolean) : [];
+  const primaryUrl = block.url || files[0] || '';
+  const isMultiAsset =
+    (block.creatorType === 'carousel'
+      || block.creatorType === 'infographic'
+      || block.creatorType === 'slider')
+    && files.length > 1;
+
+  if (!block.assetId && !primaryUrl && files.length === 0) return null;
+
+  const figureClass = getFormattedBlockClass(
+    block,
+    'my-10 overflow-hidden rounded-2xl border border-violet-100 bg-violet-50/50 p-4',
+  );
+
+  if (isMultiAsset) {
+    const slideLabel = block.creatorType === 'infographic' ? 'Section' : 'Slide';
+    return (
+      <figure className={figureClass}>
+        <div className="space-y-3">
+          {files.map((src, idx) => (
+            <div key={`${src}-${idx}`} className="overflow-hidden rounded-xl bg-white shadow-sm">
+              <div className="flex items-center justify-between px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700">
+                <span>{slideLabel} {idx + 1} of {files.length}</span>
+              </div>
+              <img
+                src={src}
+                alt={`${block.title || 'Creator asset'} — ${slideLabel.toLowerCase()} ${idx + 1}`}
+                loading="lazy"
+                className="w-full object-cover"
+              />
+            </div>
+          ))}
+        </div>
+        {(block.title || block.caption) && (
+          <figcaption className="mt-3 text-sm text-[#6B7C93]">
+            {block.title && <span className="font-semibold text-[#0B1F33]">{block.title}</span>}
+            {block.title && block.caption && <span> - </span>}
+            {block.caption}
+          </figcaption>
+        )}
+      </figure>
+    );
+  }
+
   return (
-    <figure className={getFormattedBlockClass(block, 'my-10 overflow-hidden rounded-2xl border border-violet-100 bg-violet-50/50 p-4')}>
-      {assetUrl ? (
+    <figure className={figureClass}>
+      {primaryUrl ? (
         <img
-          src={assetUrl}
+          src={primaryUrl}
           alt={block.title || 'Creator asset'}
           loading="lazy"
           className="w-full rounded-xl object-cover shadow-sm"

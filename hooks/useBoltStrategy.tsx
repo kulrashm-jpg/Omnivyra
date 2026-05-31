@@ -1019,7 +1019,16 @@ export function useBoltStrategy() {
       tentative_start: campaignStartDate || new Date().toISOString().split('T')[0],
       campaign_goal: combinedGoal,
       campaign_goals: goals,
-      campaign_mode: 'fast',
+      // Root-cause fix: this hook handles the BOLT TEXT strategy
+      // (ContentFormat = post|tweet|short_story|article|poll — all
+      // text formats). The prior value `'fast'` was a UI-flow tag
+      // (BOLT vs. slower flows) mistakenly written into the strategy-
+      // mode slot. The pipeline + pre-execution validator expect one
+      // of: text | creator | combined. With this hook only producing
+      // text formats, the canonical value is 'text'.
+      // The campaign-creation "fast" tag lives on snapshotPayload.mode
+      // (boltPipelineService.ts:386), NOT here — that field is unchanged.
+      campaign_mode: 'text',
       // Tone drives the existing `communication_style` consumer downstream.
       // Empty tone → default to 'professional' (existing fallback).
       communication_style: lowerTones.length > 0 ? lowerTones : ['professional'],

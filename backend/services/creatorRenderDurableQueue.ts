@@ -288,6 +288,13 @@ export function createCreatorRenderWorker(processor: (job: Job<CreatorDurableRen
     }
   }, {
     connection: connection(),
+    // CRITICAL: Worker must use the same prefix as the Queue +
+    // QueueEvents in this file (lines 70 + 80). Without this, BullMQ
+    // namespaces the worker's Redis keys under the default `bull:`
+    // while the queue uses `getQueuePrefix()` — the worker polls a
+    // different keyspace and never sees enqueued jobs, manifesting as
+    // "queue has the job but no worker is consuming it".
+    prefix: getQueuePrefix(),
     concurrency: Number(config.CREATOR_RENDER_WORKER_CONCURRENCY ?? 3) || 3,
     // Explicit conservative stalled detection. creator-render was on the
     // BullMQ default (30s); pinned to 60s — fast crash recovery for this

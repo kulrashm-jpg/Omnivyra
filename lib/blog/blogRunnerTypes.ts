@@ -25,6 +25,8 @@ import type {
   CompanyProfile,
 } from '../../backend/services/companyProfile/types';
 import type { GovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
+import type { OrganizationPerspective } from '../../backend/services/longForm/organizationPerspectiveEngine';
+import type { ThoughtLeadershipQualityReport } from '../../backend/services/longForm/thoughtLeadershipQualityGate';
 
 /**
  * Phase 2.4 — Expanded strategic context surface.
@@ -171,6 +173,7 @@ export interface BlogGenerationRequest {
   template_blocks?: import('./blockTypes').ContentBlock[];
   template_name?: string;
   cache_version?: string;
+  organizationPerspective?: OrganizationPerspective;
 }
 
 // ── Result discriminated union ────────────────────────────────────────────────
@@ -207,6 +210,15 @@ export type BlogGenerationResult =
        * envelope cascade which produced metadata-only payloads.
        */
       editorial_diagnostics?: LightweightEditorialDiagnostics;
+      thought_leadership_quality?: ThoughtLeadershipQualityReport;
+      /**
+       * Forensic Audit — Phase 7. Non-fatal quality flag. When the
+       * thought-leadership quality gate runs, this is set to `false` if
+       * the gate failed and `true` otherwise. The draft is ALWAYS
+       * returned alongside; routes must NOT return HTTP 4xx solely
+       * because `quality_passed === false`.
+       */
+      quality_passed?:     boolean;
       governance:          GovernanceExplainabilityMetadata;
     };
 

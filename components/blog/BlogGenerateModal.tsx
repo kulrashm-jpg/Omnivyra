@@ -68,10 +68,32 @@ interface Props {
     confidence:     'high' | 'medium',
     hookAssessment: HookAssessment,
     angleType:      AngleType | null,
-  ) => void;
+  ) => void | Promise<void>;
 }
 
 type Step = 'theme' | 'clarify' | 'angles' | 'generating';
+type GenerationKind = 'angles' | 'full';
+
+type QualityGateReport = {
+  failures?: string[];
+  companyPovScore?: number;
+  strategicValueScore?: number;
+  executiveRelevanceScore?: number;
+  rebrandResistanceScore?: number;
+  genericityScore?: number;
+  editorialBodyScore?: number;
+  duplicationScore?: number;
+  frameworkPresence?: { passed?: boolean; score?: number };
+  executiveAudience?: { issues?: string[]; businessImplicationSignals?: string[] };
+  editorialBody?: { issues?: string[] };
+  contentDuplication?: { issues?: string[] };
+};
+
+type GenerationTrackerStep = {
+  label: string;
+  detail: string;
+  minProgress: number;
+};
 
 const INTENT_OPTIONS = [
   { value: '',           label: 'Any — let AI decide' },
@@ -103,6 +125,23 @@ const ANGLE_META: Record<AngleType, { icon: React.ReactNode; color: string; bord
 };
 
 const STEPS: Step[] = ['theme', 'clarify', 'angles', 'generating'];
+
+const ANGLE_TRACKER_STEPS: GenerationTrackerStep[] = [
+  { label: 'Read input', detail: 'Checking topic, intent, and company context.', minProgress: 5 },
+  { label: 'Clarify signal', detail: 'Deciding whether more context is needed.', minProgress: 25 },
+  { label: 'Build angles', detail: 'Creating distinct editorial directions.', minProgress: 55 },
+  { label: 'Rank direction', detail: 'Applying market and performance signals.', minProgress: 78 },
+];
+
+const FULL_TRACKER_STEPS: GenerationTrackerStep[] = [
+  { label: 'Lock angle', detail: 'Applying the selected editorial direction.', minProgress: 5 },
+  { label: 'Build organization POV', detail: 'Injecting company viewpoint and strategic recommendation.', minProgress: 18 },
+  { label: 'Plan argument', detail: 'Creating executive thesis, framework, and section roles.', minProgress: 34 },
+  { label: 'Write sections', detail: 'Drafting section-by-section with no repeated hooks.', minProgress: 52 },
+  { label: 'Check duplication', detail: 'Removing repeated section substance and stale scaffolding.', minProgress: 70 },
+  { label: 'Run quality gates', detail: 'Scoring strategic value, executive relevance, POV, and structure.', minProgress: 86 },
+  { label: 'Prepare draft', detail: 'Assembling final HTML, metadata, and editor blocks.', minProgress: 96 },
+];
 
 function stepProgress(step: Step, hasClarify: boolean): number {
   if (step === 'theme')      return 25;
@@ -157,6 +196,29 @@ export default function BlogGenerateModal({
   const [step,         setStep]         = useState<Step>('theme');
   const [hadClarify,   setHadClarify]   = useState(false);
   const [error,        setError]        = useState('');
+  const [generationKind, setGenerationKind] = useState<GenerationKind>('angles');
+  const [generationProgress, setGenerationProgress] = useState(0);
+  const [qualityReport, setQualityReport] = useState<QualityGateReport | null>(null);
+  const [openingEditor, setOpeningEditor] = useState(false);
+
+  React.useEffect(() => {
+    if (step !== 'generating') {
+      setGenerationProgress(0);
+      setOpeningEditor(false);
+      return undefined;
+    }
+    const ceiling = generationKind === 'full' ? 94 : 88;
+    const interval = window.setInterval(() => {
+      setGenerationProgress((current) => {
+        if (current >= ceiling) return current;
+        const increment = generationKind === 'full'
+          ? current < 55 ? 6 : current < 80 ? 3 : 1
+          : current < 60 ? 10 : 4;
+        return Math.min(ceiling, current + increment);
+      });
+    }, generationKind === 'full' ? 900 : 500);
+    return () => window.clearInterval(interval);
+  }, [generationKind, step]);
 
   // Keep topic in sync when caller changes initialTopic (e.g. route query prefill)
   React.useEffect(() => {
@@ -298,6 +360,9 @@ export default function BlogGenerateModal({
   async function submitTheme() {
     if (!topic.trim()) { setError('Please enter a topic.'); return; }
     setError('');
+    setQualityReport(null);
+    setGenerationKind('angles');
+    setGenerationProgress(5);
     setStep('generating'); // temporary loading state
 
     try {
@@ -312,6 +377,7 @@ export default function BlogGenerateModal({
       ]);
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Something went wrong.'); setStep('theme'); return; }
+      setGenerationProgress(100);
 
       if (data.needs_clarification) {
         setQuestions(data.questions ?? []);
@@ -335,6 +401,9 @@ export default function BlogGenerateModal({
   // ── Submit answers → fetch angles ─────────────────────────────────────────
   async function submitAnswers() {
     setError('');
+    setQualityReport(null);
+    setGenerationKind('angles');
+    setGenerationProgress(5);
     setStep('generating'); // temporary loading state
 
     try {
@@ -349,6 +418,7 @@ export default function BlogGenerateModal({
       ]);
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Something went wrong.'); setStep('clarify'); return; }
+      setGenerationProgress(100);
 
       setAngles(data.angles ?? []);
       setRecommendedAngle(data.recommended_angle ?? null);
@@ -367,6 +437,10 @@ export default function BlogGenerateModal({
   async function generateFull() {
     if (!selectedAngle) return;
     setError('');
+    setQualityReport(null);
+    setOpeningEditor(false);
+    setGenerationKind('full');
+    setGenerationProgress(5);
     setStep('generating');
 
     try {
@@ -377,7 +451,19 @@ export default function BlogGenerateModal({
         body:    JSON.stringify(buildBody({ mode: 'full', selected_angle: selectedAngle })),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Generation failed.'); setStep('angles'); return; }
+      if (!res.ok) {
+        const report = data.thought_leadership_quality && typeof data.thought_leadership_quality === 'object'
+          ? data.thought_leadership_quality as QualityGateReport
+          : null;
+        setQualityReport(report);
+        setError(report?.failures?.length
+          ? `Quality gate blocked this draft: ${report.failures.join('; ')}`
+          : data.error || 'Generation failed.');
+        setGenerationProgress(100);
+        setStep('angles');
+        return;
+      }
+      setGenerationProgress(100);
 
       const confidence: 'high' | 'medium' = data.confidence ?? 'medium';
       const hookAssessment: HookAssessment = data.hook_assessment ?? { strength: 'moderate', note: '' };
@@ -390,8 +476,11 @@ export default function BlogGenerateModal({
         resultWithSeo.secondary_keywords = seo.secondary_keywords;
       }
 
-      onGenerated(resultWithSeo, confidence, hookAssessment, selectedAngle?.type ?? null);
+      setOpeningEditor(true);
+      setGenerationProgress(100);
+      await onGenerated(resultWithSeo, confidence, hookAssessment, selectedAngle?.type ?? null);
     } catch {
+      setOpeningEditor(false);
       setError('Network error. Please try again.');
       setStep('angles');
     }
@@ -400,6 +489,8 @@ export default function BlogGenerateModal({
   // ── Render ────────────────────────────────────────────────────────────────
 
   const progress = stepProgress(step, hadClarify);
+  const trackerSteps = generationKind === 'full' ? FULL_TRACKER_STEPS : ANGLE_TRACKER_STEPS;
+  const activeTrackerIndex = Math.max(0, trackerSteps.findLastIndex((item) => generationProgress >= item.minProgress));
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
@@ -651,9 +742,37 @@ export default function BlogGenerateModal({
               )}
 
               {error && (
-                <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 shrink-0" /> {error}
-                </p>
+                <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 px-3 py-3">
+                  <p className="text-sm text-red-700 flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" /> {error}
+                  </p>
+                  {qualityReport ? (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2 text-[11px]">
+                        {[
+                          ['POV', qualityReport.companyPovScore],
+                          ['Strategic', qualityReport.strategicValueScore],
+                          ['Executive', qualityReport.executiveRelevanceScore],
+                          ['Rebrand', qualityReport.rebrandResistanceScore],
+                          ['Editorial body', qualityReport.editorialBodyScore],
+                          ['Duplication', qualityReport.duplicationScore],
+                        ].map(([label, score]) => (
+                          <div key={String(label)} className="rounded-lg bg-white/80 px-2 py-1.5 text-gray-700">
+                            <span className="font-semibold">{label}</span>
+                            <span className="float-right tabular-nums">{typeof score === 'number' ? score : '—'}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {(qualityReport.editorialBody?.issues?.length || qualityReport.executiveAudience?.issues?.length || qualityReport.contentDuplication?.issues?.length) ? (
+                        <ul className="space-y-1 text-[11px] leading-4 text-red-700">
+                          {[...(qualityReport.editorialBody?.issues ?? []), ...(qualityReport.executiveAudience?.issues ?? []), ...(qualityReport.contentDuplication?.issues ?? [])]
+                            .slice(0, 4)
+                            .map((issue) => <li key={issue}>• {issue}</li>)}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               )}
 
               <div className="flex justify-end pt-1">
@@ -696,9 +815,37 @@ export default function BlogGenerateModal({
               </div>
 
               {error && (
-                <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 shrink-0" /> {error}
-                </p>
+                <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 px-3 py-3">
+                  <p className="text-sm text-red-700 flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" /> {error}
+                  </p>
+                  {qualityReport ? (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2 text-[11px]">
+                        {[
+                          ['POV', qualityReport.companyPovScore],
+                          ['Strategic', qualityReport.strategicValueScore],
+                          ['Executive', qualityReport.executiveRelevanceScore],
+                          ['Rebrand', qualityReport.rebrandResistanceScore],
+                          ['Editorial body', qualityReport.editorialBodyScore],
+                          ['Duplication', qualityReport.duplicationScore],
+                        ].map(([label, score]) => (
+                          <div key={String(label)} className="rounded-lg bg-white/80 px-2 py-1.5 text-gray-700">
+                            <span className="font-semibold">{label}</span>
+                            <span className="float-right tabular-nums">{typeof score === 'number' ? score : '—'}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {(qualityReport.editorialBody?.issues?.length || qualityReport.executiveAudience?.issues?.length || qualityReport.contentDuplication?.issues?.length) ? (
+                        <ul className="space-y-1 text-[11px] leading-4 text-red-700">
+                          {[...(qualityReport.editorialBody?.issues ?? []), ...(qualityReport.executiveAudience?.issues ?? []), ...(qualityReport.contentDuplication?.issues ?? [])]
+                            .slice(0, 4)
+                            .map((issue) => <li key={issue}>• {issue}</li>)}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               )}
 
               <div className="flex items-center justify-between pt-1">
@@ -868,9 +1015,37 @@ export default function BlogGenerateModal({
               </div>
 
               {error && (
-                <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 shrink-0" /> {error}
-                </p>
+                <div className="space-y-3 rounded-xl border border-red-200 bg-red-50 px-3 py-3">
+                  <p className="text-sm text-red-700 flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" /> {error}
+                  </p>
+                  {qualityReport ? (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2 text-[11px]">
+                        {[
+                          ['POV', qualityReport.companyPovScore],
+                          ['Strategic', qualityReport.strategicValueScore],
+                          ['Executive', qualityReport.executiveRelevanceScore],
+                          ['Rebrand', qualityReport.rebrandResistanceScore],
+                          ['Editorial body', qualityReport.editorialBodyScore],
+                          ['Duplication', qualityReport.duplicationScore],
+                        ].map(([label, score]) => (
+                          <div key={String(label)} className="rounded-lg bg-white/80 px-2 py-1.5 text-gray-700">
+                            <span className="font-semibold">{label}</span>
+                            <span className="float-right tabular-nums">{typeof score === 'number' ? score : '—'}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {(qualityReport.editorialBody?.issues?.length || qualityReport.executiveAudience?.issues?.length || qualityReport.contentDuplication?.issues?.length) ? (
+                        <ul className="space-y-1 text-[11px] leading-4 text-red-700">
+                          {[...(qualityReport.editorialBody?.issues ?? []), ...(qualityReport.executiveAudience?.issues ?? []), ...(qualityReport.contentDuplication?.issues ?? [])]
+                            .slice(0, 4)
+                            .map((issue) => <li key={issue}>• {issue}</li>)}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               )}
 
               <div className="flex items-center justify-between pt-1">
@@ -893,7 +1068,7 @@ export default function BlogGenerateModal({
 
           {/* ── STEP 4: Generating ───────────────────────────────────────── */}
           {step === 'generating' && (
-            <div className="px-6 py-14 flex flex-col items-center gap-4 text-center">
+            <div className="px-6 py-10 flex flex-col items-center gap-5 text-center">
               <div className="relative">
                 <div className="w-14 h-14 rounded-full bg-indigo-100 flex items-center justify-center">
                   <Sparkles className="h-6 w-6 text-indigo-600" />
@@ -902,33 +1077,51 @@ export default function BlogGenerateModal({
               </div>
               <div>
                 <p className="text-base font-bold text-gray-900">
-                  {angles.length === 0 ? 'Generating angle options…' : `Writing your ${contentLabel}…`}
+                  {openingEditor ? 'Opening editor...' : angles.length === 0 ? 'Generating angle options...' : `Writing your ${contentLabel}...`}
                 </p>
                 <p className="text-sm text-gray-500 mt-1 max-w-xs">
-                  {angles.length === 0
+                  {openingEditor
+                    ? 'Your draft is ready. Moving directly to the blog editor.'
+                    : angles.length === 0
                     ? 'Analysing the topic and identifying three editorial directions.'
-                    : 'Constructing the narrative section by section. Takes 15–30 seconds.'}
+                    : 'Constructing the narrative section by section and running quality gates.'}
                 </p>
               </div>
-              {angles.length > 0 && (
-                <div className="flex flex-col gap-1.5 text-xs text-gray-400 mt-2">
-                  {[
-                    'Applying the selected angle',
-                    'Writing key insights',
-                    selectedBlogIds.length > 0 ? 'Checking series for continuity' : 'Crafting narrative structure',
-                    'Writing each section with depth',
-                    'Generating SEO metadata',
-                  ].map((label, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <div
-                        className="w-1.5 h-1.5 rounded-full bg-indigo-300 animate-pulse"
-                        style={{ animationDelay: `${i * 0.3}s` }}
-                      />
-                      {label}
-                    </div>
-                  ))}
+              <div className="w-full max-w-sm rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 text-left">
+                <div className="mb-3 flex items-center justify-between text-xs font-semibold text-indigo-800">
+                  <span>{generationKind === 'full' ? 'Blog generation progress' : 'Angle generation progress'}</span>
+                  <span className="tabular-nums">{Math.max(5, Math.round(generationProgress))}%</span>
                 </div>
-              )}
+                <div className="h-2 overflow-hidden rounded-full bg-white">
+                  <div
+                    className="h-full rounded-full bg-indigo-600 transition-all duration-500"
+                    style={{ width: `${Math.max(5, generationProgress)}%` }}
+                  />
+                </div>
+                <div className="mt-4 space-y-3">
+                  {trackerSteps.map((item, index) => {
+                    const complete = generationProgress >= item.minProgress && index < activeTrackerIndex;
+                    const active = index === activeTrackerIndex;
+                    return (
+                      <div key={item.label} className="flex gap-3">
+                        <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+                          complete
+                            ? 'border-emerald-500 bg-emerald-500 text-white'
+                            : active
+                              ? 'border-indigo-500 bg-white text-indigo-600'
+                              : 'border-gray-200 bg-white text-gray-300'
+                        }`}>
+                          {complete ? <Check className="h-3 w-3" /> : active ? <Loader2 className="h-3 w-3 animate-spin" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+                        </div>
+                        <div>
+                          <p className={`text-xs font-semibold ${active || complete ? 'text-gray-900' : 'text-gray-400'}`}>{item.label}</p>
+                          <p className={`text-[11px] leading-4 ${active ? 'text-gray-600' : 'text-gray-400'}`}>{item.detail}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
 

@@ -1469,7 +1469,20 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
           // skip or fail with a generic message. Throws a BoltError
           // whose code is one of the BLUEPRINT_* family; the per-stage
           // catch picks it up and persistPipelineFailure surfaces it.
-          assertValidBoltBlueprint(plan);
+          //
+          // Regression fix: text-mode runs pass through
+          // `sanitizeBoltPlanForTextOnly` inside runCommitPlan (line ~814),
+          // which strips/converts excluded content types (blog, video,
+          // reel, …) into BOLT-text formats. The validator must see the
+          // SAME post-sanitiser plan, otherwise it rejects values the
+          // sanitiser would have cleaned up (observed: `blog` rejected
+          // → BLUEPRINT_INVALID_CONTENT_TYPE → BLUEPRINT_SAVE_FAILED
+          // friendly message). Pre-sanitise here, then hand the original
+          // plan to runCommitPlan (which sanitises again — idempotent).
+          const planForValidation = requiresMediaFlow
+            ? plan
+            : { weeks: sanitizeBoltPlanForTextOnly(plan.weeks) };
+          assertValidBoltBlueprint(planForValidation);
           await runCommitPlan(campaignId, plan, payload.executionConfig as Record<string, unknown>, requiresMediaFlow);
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,

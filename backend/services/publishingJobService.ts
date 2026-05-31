@@ -31,6 +31,8 @@ export interface PublishingJob {
   locked_by?: string | null;
   locked_at?: string | null;
   lock_expires_at?: string | null;
+  external_id?: string | null;
+  external_url?: string | null;
 }
 
 export interface CreatePublishingJobInput {
@@ -113,7 +115,7 @@ export async function claimDuePublishingJobs(input: {
   return claimed;
 }
 
-export async function executePublishingJob(jobId: string, workerId = 'inline-worker'): Promise<{ success: boolean; message: string; external_id?: string }> {
+export async function executePublishingJob(jobId: string, workerId = 'inline-worker'): Promise<{ success: boolean; message: string; external_id?: string; external_url?: string }> {
   const claimed = await ownedDbTable('publishing_jobs')
     .update({
       status: 'processing',
@@ -130,7 +132,7 @@ export async function executePublishingJob(jobId: string, workerId = 'inline-wor
   return executeClaimedPublishingJob(claimed.data as PublishingJob, workerId);
 }
 
-export async function executeClaimedPublishingJob(job: PublishingJob, workerId: string): Promise<{ success: boolean; message: string; external_id?: string }> {
+export async function executeClaimedPublishingJob(job: PublishingJob, workerId: string): Promise<{ success: boolean; message: string; external_id?: string; external_url?: string }> {
   if (!isCmsProvider(job.provider)) {
     await markJobFailure(job, `Unsupported CMS provider: ${job.provider}`, 'validation');
     return { success: false, message: `Unsupported CMS provider: ${job.provider}` };
@@ -249,12 +251,13 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
             status: 'published',
             published_at: new Date().toISOString(),
             external_id: result.externalId ?? null,
+            external_url: result.externalUrl ?? null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', job.blog_id)
           .eq('company_id', job.company_id);
       }
-      return { success: true, message: result.message, external_id: result.externalId };
+      return { success: true, message: result.message, external_id: result.externalId, external_url: result.externalUrl };
     }
 
     await markJobFailure(job, result.message, category, attemptNumber, result.providerResponse, duration);
@@ -354,11 +357,13 @@ async function loadPublishingIntegration(job: PublishingJob) {
   return integration;
 }
 
-async function markJobPublished(job: PublishingJob, result: { providerResponse?: unknown; externalId?: string; message: string }, duration: number): Promise<void> {
+async function markJobPublished(job: PublishingJob, result: { providerResponse?: unknown; externalId?: string; externalUrl?: string; message: string }, duration: number): Promise<void> {
   const response = (result.providerResponse ?? {}) as Record<string, unknown>;
   await ownedDbTable('publishing_jobs')
     .update({
       status: 'published',
+      external_id: result.externalId ?? null,
+      external_url: result.externalUrl ?? null,
       provider_response: response,
       provider_response_snapshots: [...(Array.isArray(job.provider_response_snapshots) ? job.provider_response_snapshots : []), response],
       last_error: null,
@@ -372,7 +377,11 @@ async function markJobPublished(job: PublishingJob, result: { providerResponse?:
     })
     .eq('id', job.id);
 
-  await logPublishingEvent(job, 'publish_succeeded', 'info', result.message, { external_id: result.externalId, duration_ms: duration });
+  await logPublishingEvent(job, 'publish_succeeded', 'info', result.message, {
+    external_id: result.externalId,
+    external_url: result.externalUrl,
+    duration_ms: duration,
+  });
 }
 
 async function markJobFailure(

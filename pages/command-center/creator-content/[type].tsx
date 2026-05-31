@@ -1,7 +1,6 @@
 import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../../components/CompanyContext';
-import { launchCampaignFromContent } from '../../../lib/content/launchCampaignFromContent';
 import { launchSocialPostingFromContent } from '../../../lib/content/socialPosting';
 import { buildCreatorContentBlocks, launchBlogFromCreator } from '../../../lib/content/creatorContentBridge';
 import { buildCreatorFlowContext, serializeCreatorFlowContext, type CreatorFlowContext } from '../../../lib/content/creatorFlowContext';
@@ -39,6 +38,7 @@ import {
   type CreatorTypeForVariant,
 } from '../../../lib/variants/creatorStrategyMapping';
 import { runVariantFanOut } from '../../../lib/variants/fanOutRunner';
+import { resolvePurposeStrategy } from '../../../backend/services/creator/purposeStrategyRegistry';
 
 type CreatorTypeId =
   | 'carousel'
@@ -81,6 +81,182 @@ const DEFAULT_CTA_PRESETS: ReadonlyArray<string> = [
   'Contact us',
   'Shop now',
 ];
+
+/**
+ * Operator feedback: every field should offer a starter chip the
+ * operator can click to begin. Sentence-derived suggestions only fire
+ * when a writer source / typed body exists; this static fallback
+ * guarantees chips appear from the very first render on a blank page.
+ *
+ * Keyed by content type → field id → 4–6 example chips. Field IDs
+ * cover both the overlay text panel (hook / headline / supportingText
+ * / keyInsight) and the free-form question rows below (topic /
+ * audience / keyMessage / dataPoints / refinement / objective).
+ *
+ * Generic enough to be a non-presumptuous starting point yet specific
+ * enough that the operator can pick one and refine. When the operator
+ * later types content, the live sentence-derived chips re-rank
+ * everything; the starters drop down the list naturally.
+ */
+const STARTER_CHIPS_BY_CONTENT_TYPE: Record<string, Record<string, ReadonlyArray<string>>> = {
+  infographic: {
+    hook: [
+      'Stop scrolling',
+      'Here is the truth',
+      'The one thing about this',
+      'What most teams miss',
+      'Read this in 30 seconds',
+    ],
+    headline: [
+      'The complete breakdown',
+      'A clearer way to think about this',
+      'Five steps that change everything',
+      'What the data actually says',
+      'Why this matters now',
+    ],
+    supportingText: [
+      'Backed by real customer data',
+      'Used by leading teams',
+      'Built for clarity, not noise',
+      'A practical view for operators',
+    ],
+    keyInsight: [
+      'The pattern that ties it all together',
+      'One insight that reframes the question',
+      'The non-obvious answer to a familiar problem',
+    ],
+    topic: [
+      'Customer acquisition funnel breakdown',
+      'Decision framework for X',
+      'Process map of [workflow]',
+      'ROI of [investment] in 5 stats',
+      'Comparison of [option A] vs [option B]',
+    ],
+    audience: [
+      'Operations leaders',
+      'Founders and early-stage CEOs',
+      'Marketing teams driving growth',
+      'Mid-market buyers evaluating tools',
+    ],
+    keyMessage: [
+      'The clearest path from problem to outcome',
+      'A simple framework that compresses complexity',
+      'What changes when you adopt this approach',
+    ],
+    dataPoints: [
+      '3 stats + 2 process steps + 1 takeaway',
+      'Stat → context → action (per section)',
+      'Before vs after comparison rows',
+      'Phase 1 → 2 → 3 milestones with owners',
+    ],
+    refinement: [
+      'Keep it minimal — no decorative noise',
+      'High contrast, dense data tables ok',
+      'Brand-first palette; no rainbow gradients',
+      'One concept per section, generous spacing',
+    ],
+  },
+  carousel: {
+    hook: [
+      'Stop scrolling — this matters',
+      'A different take on a tired topic',
+      'The first slide nobody tells you',
+      'If you only swipe one slide today',
+    ],
+    headline: [
+      'Five lessons in five slides',
+      'The framework, broken down',
+      'What we learned the hard way',
+      'A clearer way to think about this',
+    ],
+    supportingText: [
+      'From real teams, real outcomes',
+      'Built from customer interviews',
+      'A practical 5-step view',
+    ],
+    keyInsight: [
+      'The pattern across every success story',
+      'One insight that changes everything',
+      'What experts skip but matters most',
+    ],
+    topic: [
+      'Lessons from a recent customer story',
+      '5-step framework for [outcome]',
+      'Before/after of [transformation]',
+      'Common myth + the real answer',
+    ],
+    audience: [
+      'B2B buyers evaluating tools',
+      'Marketing leaders driving pipeline',
+      'Operators looking for clarity',
+    ],
+    keyMessage: [
+      'The shift in thinking that unlocks results',
+      'One reframe, five concrete next steps',
+    ],
+  },
+  image: {
+    hook: [
+      'Stop the scroll',
+      'A single thought that lands',
+      'The one image they will remember',
+    ],
+    headline: [
+      'A bold statement worth saving',
+      'The thesis in one line',
+    ],
+    supportingText: [
+      'Backed by [proof point]',
+      'Built for [audience]',
+    ],
+    keyInsight: [
+      'The reframe that matters',
+      'A single takeaway worth holding',
+    ],
+    topic: [
+      'A bold claim about [topic]',
+      'A counter-intuitive truth',
+      'A clear statement of position',
+    ],
+    audience: [
+      'Decision-makers evaluating options',
+      'Practitioners deep in execution',
+    ],
+    keyMessage: [
+      'The single sentence that captures the idea',
+    ],
+  },
+  banner: {
+    headline: [
+      'A bold offer headline',
+      'The clearest value statement',
+      'What this campaign promises',
+    ],
+    supportingText: [
+      'Built for high-intent traffic',
+      'A short proof line that lands',
+    ],
+  },
+  brand_card: {
+    headline: [
+      'Who we are, in one line',
+      'What we stand for',
+    ],
+    supportingText: [
+      'A founder note that builds trust',
+    ],
+  },
+};
+
+/**
+ * Returns starter chips for a given content type + field id.
+ * Returns an empty array when no starters are defined for that
+ * combination — callers can safely concatenate without null-guarding.
+ */
+function getStarterChips(contentType: string | undefined, fieldId: string): readonly string[] {
+  const ct = String(contentType || '').toLowerCase();
+  return STARTER_CHIPS_BY_CONTENT_TYPE[ct]?.[fieldId] ?? [];
+}
 
 type WorkflowConfig = {
   title: string;
@@ -1327,6 +1503,31 @@ export default function CreatorTypeWorkflowPage() {
   const generationInFlightRef = React.useRef(false);
   const saveInFlightRef = React.useRef(false);
   const processedWriterPrefillRef = React.useRef('');
+  // Output panel ref + previous-result tracker. When `result`
+  // transitions from null → non-null, we scroll the panel into view
+  // so the operator can see the generated carousel/image/etc.
+  // immediately — without this, on narrow viewports the output
+  // stacks below the form and is easy to miss.
+  const resultPanelRef = React.useRef<HTMLDivElement | null>(null);
+  const hadResultRef = React.useRef(false);
+  // Render-job progress tracker. Carousel / infographic / pdf / slider
+  // render in a durable background job; the polling effect updates this
+  // state every 2s so the banner can show a real progress bar instead
+  // of a generic spinner.
+  const [renderJobProgress, setRenderJobProgress] = React.useState<{
+    percent: number;
+    status: 'queued' | 'active' | 'completed' | 'failed' | 'cancelled' | 'dead_letter' | 'waiting';
+    attempts: number;
+    /** Wall-clock seconds the job has spent in queued/waiting (worker
+     *  hasn't picked it up). After ~20s this signals that no render
+     *  worker is running locally (`npm run dev` without `dev:full`). */
+    queuedSeconds: number;
+  } | null>(null);
+  // Inline-render escape hatch state. When the durable queue stalls
+  // (no worker consuming), the operator can trigger a synchronous
+  // render via /api/command-center/creator-content/render-inline.
+  const [inlineRenderInFlight, setInlineRenderInFlight] = React.useState(false);
+  const [inlineRenderError, setInlineRenderError] = React.useState<string | null>(null);
   const writerCompositionIntent = writerSource?.compositionIntent ?? null;
   const writerAttachmentMode: AttachmentMode | null = writerCompositionIntent?.attachmentMode ?? null;
   const writerAssetType: WriterCreatorAssetType | null = writerCompositionIntent?.assetType ?? null;
@@ -1718,25 +1919,19 @@ export default function CreatorTypeWorkflowPage() {
     [answers, brandMode, brandPresence, brandProfile, config, writerSource],
   );
 
-  if (!authChecked || isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-slate-700" />
-      </div>
-    );
-  }
-
-  if (!user?.userId) return null;
-
-  if (!config) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-        <div className="rounded-2xl border border-gray-200 bg-white px-6 py-5 text-sm text-gray-600">
-          Unknown creator content type.
-        </div>
-      </div>
-    );
-  }
+  // Rendering Forensic Audit follow-up. The early returns for
+  // `!authChecked || isLoading`, `!user`, and `!config` were here at the
+  // top of the component, but several hooks below them (useMemo /
+  // useEffect / useCallback at lines for availablePlatforms, the
+  // platform-snap effect, overlayFieldSuggestions,
+  // freeformFieldSuggestions, and buildGenerationBody) get skipped on
+  // renders where the early return fires. When the auth check completes
+  // or user/config loads, React sees a different hook count and throws
+  // "Rendered more hooks than during the previous render."
+  // ALL early returns have been relocated to just before the final JSX
+  // render path (right above the `const selectedSubtype =
+  // config.subtypeOptions.find(...)` access that requires non-null
+  // config). All hooks above that point fire on every render.
 
   const setAnswer = (id: string, value: string) => {
     setAnswers((current) => ({ ...current, [id]: value }));
@@ -1819,6 +2014,176 @@ export default function CreatorTypeWorkflowPage() {
     }
   }, [availablePlatforms, selectedPlatform, writerSource]);
 
+  // Auto-scroll the generated-output panel into view the moment a
+  // generation succeeds. On narrow viewports the right column stacks
+  // below the form, so without this the operator stares at the form
+  // wondering where their carousel went.
+  React.useEffect(() => {
+    if (!result) {
+      hadResultRef.current = false;
+      return;
+    }
+    if (hadResultRef.current) return;
+    hadResultRef.current = true;
+    const node = resultPanelRef.current;
+    if (node && typeof node.scrollIntoView === 'function') {
+      try {
+        node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch {
+        node.scrollIntoView();
+      }
+    }
+  }, [result]);
+
+  // Carousel / infographic / pdf / slider rendering is durable-queued
+  // (canonical creatorAssetRegistry: `render_strategy: 'queue'`). The
+  // generate API returns immediately with
+  //   media_bundle.metadata = { render_async: true, render_job: {...} }
+  // and NO `files`. Without polling, the operator sees slide text but
+  // never the actual slide PNGs.
+  //
+  // This effect watches `result` for the async-render marker, polls the
+  // render-job endpoint every 2s, and merges the rendered bundle
+  // (url + files) into the result state once the job completes. Stops
+  // polling on completion / failure / cancellation / unmount.
+  React.useEffect(() => {
+    if (!result) {
+      setRenderJobProgress(null);
+      return;
+    }
+    const bundleMeta = (result.output?.asset_payload?.media_bundle?.metadata ?? {}) as Record<string, unknown>;
+    const isAsync = bundleMeta.render_async === true;
+    if (!isAsync) {
+      setRenderJobProgress(null);
+      return;
+    }
+    const filesAlready = Array.isArray(result.output?.asset_payload?.media_bundle?.files)
+      && (result.output.asset_payload.media_bundle!.files as string[]).filter(Boolean).length > 0;
+    if (filesAlready) {
+      setRenderJobProgress(null);
+      return;
+    }
+    const renderJob = (bundleMeta.render_job ?? null) as { id?: string | number } | null;
+    const jobId = renderJob && typeof renderJob === 'object'
+      ? String((renderJob as { id?: unknown }).id ?? '').trim()
+      : '';
+    if (!jobId) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 90; // ~3 minutes at 2s/poll
+    const POLL_MS = 2000;
+    const startedAt = Date.now();
+    let firstActiveAt: number | null = null;
+    // Seed the progress state so the banner shows 0% immediately rather
+    // than waiting for the first poll response.
+    setRenderJobProgress({ percent: 0, status: 'queued', attempts: 0, queuedSeconds: 0 });
+
+    const poll = async (): Promise<void> => {
+      if (cancelled) return;
+      attempts += 1;
+      try {
+        const response = await fetch(`/api/command-center/creator-content/render-job/${encodeURIComponent(jobId)}`, {
+          credentials: 'include',
+        });
+        if (cancelled) return;
+        if (response.ok) {
+          const payload = await response.json().catch(() => null) as {
+            success?: boolean;
+            render_job?: {
+              status?: string;
+              progress?: number;
+              attemptsMade?: number;
+              result?: { url?: string; files?: string[]; metadata?: Record<string, unknown> };
+            };
+          } | null;
+          const status = payload?.render_job?.status;
+          const rawPercent = Number(payload?.render_job?.progress ?? 0);
+          const safePercent = Number.isFinite(rawPercent)
+            ? Math.max(0, Math.min(100, Math.round(rawPercent)))
+            : 0;
+          const attemptsMade = Number(payload?.render_job?.attemptsMade ?? 0);
+          if (!cancelled) {
+            const normalizedStatus = ((): typeof renderJobProgress extends null ? never : NonNullable<typeof renderJobProgress>['status'] => {
+              switch (status) {
+                case 'completed': return 'completed';
+                case 'active': return 'active';
+                case 'failed': return 'failed';
+                case 'cancelled': return 'cancelled';
+                case 'dead_letter': return 'dead_letter';
+                case 'waiting': return 'waiting';
+                default: return 'queued';
+              }
+            })();
+            // Track when the worker first picked up the job so we can
+            // distinguish "queued (worker may be down)" from "active
+            // (worker rendering but slow)" purely from elapsed time.
+            if (normalizedStatus === 'active' && firstActiveAt === null) {
+              firstActiveAt = Date.now();
+            }
+            const queuedSeconds = normalizedStatus === 'queued' || normalizedStatus === 'waiting'
+              ? Math.round((Date.now() - startedAt) / 1000)
+              : 0;
+            setRenderJobProgress({
+              percent: status === 'completed' ? 100 : safePercent,
+              status: normalizedStatus,
+              attempts: attemptsMade,
+              queuedSeconds,
+            });
+          }
+          if (status === 'completed' && payload?.render_job?.result) {
+            const renderedBundle = payload.render_job.result;
+            const renderedFiles = Array.isArray(renderedBundle.files)
+              ? renderedBundle.files.filter((f): f is string => typeof f === 'string' && Boolean(f))
+              : [];
+            const renderedUrl = typeof renderedBundle.url === 'string' ? renderedBundle.url : '';
+            if (renderedFiles.length > 0 || renderedUrl) {
+              setResult((current) => {
+                if (!current) return current;
+                const payload2 = current.output.asset_payload;
+                const existingBundle = payload2.media_bundle ?? {};
+                const mergedBundle = {
+                  ...existingBundle,
+                  ...(renderedUrl ? { url: renderedUrl } : {}),
+                  ...(renderedFiles.length > 0 ? { files: renderedFiles } : {}),
+                  metadata: {
+                    ...(existingBundle.metadata ?? {}),
+                    ...(renderedBundle.metadata ?? {}),
+                    render_async: false,
+                    render_completed_at: new Date().toISOString(),
+                  },
+                };
+                return {
+                  ...current,
+                  output: {
+                    ...current.output,
+                    asset_payload: {
+                      ...payload2,
+                      media_bundle: mergedBundle,
+                    },
+                  },
+                };
+              });
+            }
+            return; // stop polling
+          }
+          if (status === 'failed' || status === 'cancelled' || status === 'dead_letter') {
+            setError(`Slide rendering ${status}. The structured copy below is preserved; click Generate to retry.`);
+            return; // stop polling
+          }
+        }
+      } catch {
+        // Best-effort — keep polling until MAX_ATTEMPTS.
+      }
+      if (attempts >= MAX_ATTEMPTS) return;
+      window.setTimeout(() => { void poll(); }, POLL_MS);
+    };
+
+    window.setTimeout(() => { void poll(); }, POLL_MS);
+
+    return () => { cancelled = true; };
+  }, [result]);
+
   // Each source sentence is allocated to AT MOST one field (priority
   // order: hook → headline → supporting → keyInsight) so the four chip
   // lists never repeat the same underlying sentence. Falls back to the
@@ -1895,19 +2260,34 @@ export default function CreatorTypeWorkflowPage() {
     const supporting  = allocate(supportingCandidates, 3, limits.supportingText);
     const insight     = allocate(insightCandidates,    3, limits.keyInsight);
 
-    // Seed fallback — when there is no writer body to mine, whatever the
-    // operator has already typed (topic, key message, or the hook itself)
-    // seeds every still-empty overlay slot. Each slot gets a DISTINCT
-    // framing of the seed so no two chips render the same text. If a
-    // templated framing would overflow a field's cap, that field is
-    // left blank rather than falling back to a duplicate raw seed.
+    // Operator feedback: "hook, headlines, supporting text, [key
+    // insight] — pretty much all where we are sharing these
+    // suggestions should be unique, should not be duplicated at all".
+    //
+    // The previous seed-derived framings ("Introducing: X", "Here's
+    // what X brings", "Why X matters now") were intentionally varied
+    // but read as duplicates of the same root phrase — and the
+    // "Here's what [seed] brings" template produced broken double-
+    // word strings like "Here's what What most teams miss brings".
+    // Both behaviours removed. The operator's typed seeds now only
+    // surface on the HOOK field (their natural home as the attention
+    // grabber); the other three slots fall straight through to the
+    // starter pool.
+    //
+    // A single global `globalChipKeys` set tracks every chip across
+    // every slot, so duplicates can NEVER appear in two different
+    // fields — even if the starter pools happen to overlap.
+    const globalChipKeys = new Set<string>();
+    const seedChips = [hook, headline, supporting, insight];
+    for (const slot of seedChips) {
+      for (const chip of slot) globalChipKeys.add(normalize(chip));
+    }
+
     const seeds = [
       title,
       String(overlayText.hook || '').trim(),
       String(answers.keyMessage || '').trim(),
     ].filter(Boolean);
-    // Deduplicate seeds so the same source string never claims itself
-    // twice when topic + hook happen to be identical.
     const seenSeeds = new Set<string>();
     const dedupedSeeds = seeds.filter((s) => {
       const k = normalize(s);
@@ -1915,42 +2295,44 @@ export default function CreatorTypeWorkflowPage() {
       seenSeeds.add(k);
       return true;
     });
-    const tryFill = (slot: string[], text: string, max: number): boolean => {
-      if (slot.length > 0) return false;
-      if (text.length > max) return false; // overflow → skip (no duplicate fallback)
-      const chipText = compact(text, max);
-      if (!chipText) return false;
-      // Block exact-text duplicates across fields — if any other field
-      // already shows the same chip, skip rather than duplicate.
-      const chipKey = normalize(chipText);
-      if (
-        hook.some((c) => normalize(c) === chipKey) ||
-        headline.some((c) => normalize(c) === chipKey) ||
-        supporting.some((c) => normalize(c) === chipKey) ||
-        insight.some((c) => normalize(c) === chipKey)
-      ) return false;
-      slot.push(chipText);
-      return true;
-    };
+    // Seeds only fill the HOOK field — and only when HOOK has no
+    // sentence-derived chip yet. They no longer get re-framed into
+    // headline / supporting / insight (that was the duplication
+    // source). The other slots fall through to starters below.
     for (const seed of dedupedSeeds) {
-      const seedKey = normalize(seed);
-      if (!seedKey || claimed.has(seedKey)) continue;
-      const capitalized = seed.charAt(0).toUpperCase() + seed.slice(1);
-      let consumed = false;
-      // Each field gets a structurally DISTINCT framing so the opening
-      // words and sentence shape differ visibly — Hook stays as the raw
-      // seed (the attention grabber), Headline reads as a label-prefixed
-      // announcement, Supporting Text wraps the seed mid-sentence, Key
-      // Insight uses a positioning frame.
-      if (tryFill(hook,       capitalized,                          limits.hook))           consumed = true;
-      if (tryFill(headline,   `Introducing: ${capitalized}`,         limits.headline))       consumed = true;
-      if (tryFill(supporting, `Here's what ${capitalized} brings`,   limits.supportingText)) consumed = true;
-      if (tryFill(insight,    `Why ${capitalized} matters now`,      limits.keyInsight))     consumed = true;
-      if (consumed) claimed.add(seedKey);
+      if (hook.length > 0) break;
+      const key = normalize(seed);
+      if (!key || globalChipKeys.has(key)) continue;
+      if (seed.length > limits.hook) continue;
+      const value = compact(seed.charAt(0).toUpperCase() + seed.slice(1), limits.hook);
+      if (!value) continue;
+      hook.push(value);
+      globalChipKeys.add(normalize(value));
     }
 
+    // Starter-chip fallback. Each field draws from its content-type
+    // pool. The global key set prevents the same chip from being
+    // assigned to two different fields. Each field is capped at 4
+    // chips — enough to feel useful without overwhelming the layout.
+    const mergeStarters = (slot: string[], fieldId: string, max: number): void => {
+      const starters = getStarterChips(type, fieldId);
+      for (const candidate of starters) {
+        if (slot.length >= 4) break;
+        const value = compact(candidate, max);
+        if (!value) continue;
+        const key = normalize(value);
+        if (globalChipKeys.has(key)) continue;
+        slot.push(value);
+        globalChipKeys.add(key);
+      }
+    };
+    mergeStarters(hook, 'hook', limits.hook);
+    mergeStarters(headline, 'headline', limits.headline);
+    mergeStarters(supporting, 'supportingText', limits.supportingText);
+    mergeStarters(insight, 'keyInsight', limits.keyInsight);
+
     return { hook, headline, supportingText: supporting, keyInsight: insight };
-  }, [writerSource?.body, writerSource?.title, answers.topic, answers.keyMessage, overlayText.hook]);
+  }, [writerSource?.body, writerSource?.title, answers.topic, answers.keyMessage, overlayText.hook, type]);
 
   // Suggestions for the freeform "Who is this for?" (audience) and "What
   // is the main message?" (keyMessage) form fields. Sourced from real
@@ -1996,7 +2378,71 @@ export default function CreatorTypeWorkflowPage() {
     pushUnique(keyMessage, answers.topic, 200);
     pushUnique(keyMessage, writerSource?.title, 200);
 
-    return { audience, keyMessage };
+    // CTA candidates — strategy-aware. Resolves the selected purpose
+    // strategy and surfaces its `ctaSuggestions` array as click-ready
+    // chips under the "Desired CTA" input. The CTA cap is intentionally
+    // higher than other freeform chips because operators expect to see
+    // every CTA the strategy curated (typically 4–5 click-ready phrases).
+    const cta: string[] = [];
+    const ctaStrategy = resolvePurposeStrategy(type, answers.subtype);
+    const ctaCap = 6;
+    const pushUniqueCta = (value: string | undefined | null): void => {
+      const compacted = compact(capFirst(String(value || '')), 64);
+      if (!compacted) return;
+      const key = norm(compacted);
+      if (cta.some((existing) => norm(existing) === key)) return;
+      if (cta.length >= ctaCap) return;
+      cta.push(compacted);
+    };
+    // Operator's typed overlay CTA is offered first if present.
+    pushUniqueCta(overlayText.cta);
+    if (ctaStrategy?.ctaSuggestions?.length) {
+      for (const suggestion of ctaStrategy.ctaSuggestions) {
+        pushUniqueCta(suggestion);
+      }
+    }
+
+    // Operator feedback: chips must be unique across every field.
+    // We track a global key set spanning audience / keyMessage / cta /
+    // topic / dataPoints / refinement / objective so a starter chip
+    // can never appear in two different question lists.
+    const globalFreeformKeys = new Set<string>();
+    for (const c of audience) globalFreeformKeys.add(norm(c));
+    for (const c of keyMessage) globalFreeformKeys.add(norm(c));
+    for (const c of cta) globalFreeformKeys.add(norm(c));
+
+    const buildStarterList = (fieldId: string, max: number, alreadyPicked: string[] = []): string[] => {
+      const list: string[] = [...alreadyPicked];
+      const starters = getStarterChips(type, fieldId);
+      for (const starter of starters) {
+        if (list.length >= MAX_CHIPS) break;
+        const compacted = compact(capFirst(String(starter || '')), max);
+        if (!compacted) continue;
+        const key = norm(compacted);
+        if (globalFreeformKeys.has(key)) continue;
+        list.push(compacted);
+        globalFreeformKeys.add(key);
+      }
+      return list;
+    };
+    // Merge starters AFTER operator-derived values so live brand /
+    // writer signals stay in front.
+    const audienceWithStarters = buildStarterList('audience', 80, audience);
+    const keyMessageWithStarters = buildStarterList('keyMessage', 200, keyMessage);
+    const topic = buildStarterList('topic', 120);
+    const dataPoints = buildStarterList('dataPoints', 200);
+    const refinement = buildStarterList('refinement', 200);
+    const objective = buildStarterList('objective', 200);
+
+    return {
+      audience: audienceWithStarters,
+      keyMessage: keyMessageWithStarters,
+      cta,
+      topic,
+      dataPoints,
+      refinement,
+      objective,
+    };
   }, [
     writerSource?.audience,
     writerSource?.body,
@@ -2004,8 +2450,11 @@ export default function CreatorTypeWorkflowPage() {
     brandOverrides.audience,
     brandProfile?.audience,
     answers.topic,
+    answers.subtype,
     overlayText.hook,
     overlayText.keyInsight,
+    overlayText.cta,
+    type,
   ]);
 
   const handleUseExistingAsset = (asset: SavedCreatorAsset) => {
@@ -2489,27 +2938,72 @@ export default function CreatorTypeWorkflowPage() {
     }
   };
 
-  const handleLaunchCampaign = () => {
-    if (actionInProgress || !hasUsableCreatorOutput(result)) {
-      if (!hasUsableCreatorOutput(result)) setError('Generate a usable creator output before using it in a campaign.');
-      return;
-    }
-    setActionInProgress('campaign');
+  const handleRenderInline = async () => {
+    if (!result || inlineRenderInFlight) return;
+    const assetPayload = result.output?.asset_payload as Record<string, unknown> | undefined;
+    if (!assetPayload) return;
+    setInlineRenderInFlight(true);
+    setInlineRenderError(null);
     try {
-      const context = buildCurrentContext(result.primary_platform);
-      launchCampaignFromContent({
-        router,
-        contentType: config.contentType as any,
-        title: String(answers.topic || config.title),
-        excerpt: result.output.packaging.meta_description || result.output.packaging.caption,
-        tags: result.output.packaging.hashtags,
-        formatType: result.output.asset_type,
-        sourceId: selectedAsset?.id || null,
-        contentMarkdown: `${result.output.packaging.caption}\n\n${serializeCreatorFlowContext(context)}`,
+      const response = await fetch('/api/command-center/creator-content/render-inline', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asset_payload: assetPayload,
+          company_id: selectedCompanyId,
+        }),
       });
-    } catch (launchError) {
-      setError(launchError instanceof Error ? launchError.message : 'Could not open this output in Campaigns.');
-      setActionInProgress(null);
+      const payload = await response.json().catch(() => null) as {
+        success?: boolean;
+        rendered?: { url?: string; files?: string[]; metadata?: Record<string, unknown> };
+        error?: string;
+        message?: string;
+      } | null;
+      if (!response.ok || !payload?.success || !payload.rendered) {
+        const msg = payload?.message || payload?.error || `Inline render failed (HTTP ${response.status})`;
+        setInlineRenderError(msg);
+        return;
+      }
+      const renderedFiles = Array.isArray(payload.rendered.files)
+        ? payload.rendered.files.filter((f): f is string => typeof f === 'string' && Boolean(f))
+        : [];
+      const renderedUrl = typeof payload.rendered.url === 'string' ? payload.rendered.url : '';
+      if (renderedFiles.length === 0 && !renderedUrl) {
+        setInlineRenderError('Inline render returned no images.');
+        return;
+      }
+      setResult((current) => {
+        if (!current) return current;
+        const payload2 = current.output.asset_payload;
+        const existingBundle = payload2.media_bundle ?? {};
+        const mergedBundle = {
+          ...existingBundle,
+          ...(renderedUrl ? { url: renderedUrl } : {}),
+          ...(renderedFiles.length > 0 ? { files: renderedFiles } : {}),
+          metadata: {
+            ...(existingBundle.metadata ?? {}),
+            ...(payload.rendered!.metadata ?? {}),
+            render_async: false,
+            render_completed_at: new Date().toISOString(),
+            rendered_via: 'inline_fallback',
+          },
+        };
+        return {
+          ...current,
+          output: {
+            ...current.output,
+            asset_payload: {
+              ...payload2,
+              media_bundle: mergedBundle,
+            },
+          },
+        };
+      });
+    } catch (err) {
+      setInlineRenderError(err instanceof Error ? err.message : 'Inline render failed.');
+    } finally {
+      setInlineRenderInFlight(false);
     }
   };
 
@@ -2599,28 +3093,6 @@ export default function CreatorTypeWorkflowPage() {
       });
     } catch (repurposeError) {
       setError(repurposeError instanceof Error ? repurposeError.message : 'Could not repurpose this output.');
-      setActionInProgress(null);
-    }
-  };
-
-  const handleDuplicateOutput = () => {
-    if (actionInProgress || !hasUsableCreatorOutput(result) || typeof window === 'undefined') {
-      if (!hasUsableCreatorOutput(result)) setError('Generate a usable creator output before duplicating it.');
-      return;
-    }
-    setActionInProgress('duplicate');
-    try {
-      const token = `creator_duplicate_${Date.now()}`;
-      window.sessionStorage.setItem(token, JSON.stringify({
-        result,
-        answers,
-        context: buildCurrentContext(result.primary_platform),
-        duplicated_at: new Date().toISOString(),
-      }));
-      setNotice('Duplicated this creator output as a temporary reusable draft for this browser session.');
-    } catch {
-      setError('Could not duplicate this output in the browser session.');
-    } finally {
       setActionInProgress(null);
     }
   };
@@ -2888,6 +3360,31 @@ export default function CreatorTypeWorkflowPage() {
     ? previewMetadata.visual_governance_warnings.map(String).filter(Boolean)
     : [];
   const slides = Array.isArray(result?.output.asset_payload.slides) ? result.output.asset_payload.slides : [];
+
+  // Relocated from the top of the component (post Rendering Forensic
+  // Audit). These early returns must fire AFTER every hook in the
+  // component has been called this render — otherwise React sees a
+  // different hook count between renders. All three branches are pure
+  // rendering decisions; they do not depend on state that hasn't been
+  // computed by this point.
+  if (!authChecked || isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
+        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-slate-700" />
+      </div>
+    );
+  }
+  if (!user?.userId) return null;
+  if (!config) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
+        <div className="rounded-2xl border border-gray-200 bg-white px-6 py-5 text-sm text-gray-600">
+          Unknown creator content type.
+        </div>
+      </div>
+    );
+  }
+
   const selectedSubtype = config.subtypeOptions.find((option) => option.value === answers.subtype) || config.subtypeOptions[0];
   const proposalLine = [
     refinedSuggestion || selectedSuggestion?.summary || '',
@@ -2936,6 +3433,14 @@ export default function CreatorTypeWorkflowPage() {
                 <div className="grid gap-3 md:grid-cols-3">
                   {config.subtypeOptions.map((option) => {
                     const selected = (answers.subtype || config.subtypeOptions[0]?.value) === option.value;
+                    // Pre-generation CTA suggestion. Looks up the
+                    // strategy's CTA intensity + the CTA-slide intent
+                    // text so the operator sees, at strategy-pick
+                    // time, what the closing CTA will land like.
+                    const optionStrategy = resolvePurposeStrategy(type, option.value);
+                    const optionCtaIntensity = optionStrategy?.ctaIntensity ?? null;
+                    const optionCtaSlide = optionStrategy?.slideArc
+                      ?.find((s) => s.role === 'cta' || s.role === 'next_steps')?.intent ?? null;
                     return (
                       <button
                         key={option.value}
@@ -2951,6 +3456,24 @@ export default function CreatorTypeWorkflowPage() {
                         <p className={`mt-1 text-xs leading-5 ${selected ? 'text-slate-200' : 'text-gray-500'}`}>
                           {option.description}
                         </p>
+                        {optionCtaIntensity || optionCtaSlide ? (
+                          <div
+                            className={`mt-2 rounded-lg px-2 py-1.5 text-[10px] leading-4 ${
+                              selected
+                                ? 'bg-white/15 text-slate-100'
+                                : 'bg-emerald-50 text-emerald-900'
+                            }`}
+                          >
+                            {optionCtaIntensity ? (
+                              <p className="font-semibold uppercase tracking-wider">
+                                CTA: {optionCtaIntensity}
+                              </p>
+                            ) : null}
+                            {optionCtaSlide ? (
+                              <p className="mt-0.5">{optionCtaSlide}</p>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </button>
                     );
                   })}
@@ -3187,6 +3710,74 @@ export default function CreatorTypeWorkflowPage() {
                 </div>
               </div>
 
+              {(() => {
+                // Selected-asset visual preview. Surfaces the slide
+                // images of the existing saved carousel/infographic so
+                // operators can SEE what they're reusing before they
+                // generate. Falls back to the single image when the
+                // asset is a single-frame type.
+                if (!selectedAsset) return null;
+                const meta = selectedAsset.creator_metadata;
+                const savedFiles: string[] = Array.isArray(meta?.files)
+                  ? (meta!.files as string[]).filter(Boolean)
+                  : [];
+                if (savedFiles.length === 0) return null;
+                const savedType = getSavedAssetCreatorType(selectedAsset);
+                const isCarousel = savedFiles.length > 1
+                  || /carousel|pdf|slider|infographic/i.test(savedType);
+                const sectionLabel = /infographic/i.test(savedType) ? 'Sections' : 'Slides';
+                return (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 px-4 py-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800">
+                        Selected Asset Preview · {selectedAsset.name}
+                      </p>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                        {savedFiles.length} {savedFiles.length === 1 ? 'frame' : sectionLabel.toLowerCase()}
+                      </span>
+                    </div>
+                    {isCarousel ? (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {savedFiles.map((src, idx) => (
+                          <a
+                            key={`${src}-${idx}`}
+                            href={src}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`Open ${sectionLabel.slice(0, -1)} ${idx + 1}`}
+                            className="block overflow-hidden rounded-xl border border-emerald-100 bg-white"
+                          >
+                            <div className="flex items-center justify-between bg-emerald-50/60 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                              <span>{sectionLabel.slice(0, -1)} {idx + 1} / {savedFiles.length}</span>
+                            </div>
+                            <img
+                              src={src}
+                              alt={`${selectedAsset.name} ${sectionLabel.slice(0, -1)} ${idx + 1}`}
+                              loading="lazy"
+                              className="block h-44 w-full object-cover"
+                            />
+                          </a>
+                        ))}
+                      </div>
+                    ) : (
+                      <a
+                        href={savedFiles[0]}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block overflow-hidden rounded-xl border border-emerald-100 bg-white"
+                      >
+                        <img
+                          src={savedFiles[0]}
+                          alt={selectedAsset.name}
+                          loading="lazy"
+                          className="block w-full object-cover"
+                        />
+                      </a>
+                    )}
+                  </div>
+                );
+              })()}
+
               {writerSource ? (
                 <div className="rounded-2xl border border-indigo-100 bg-indigo-50/80 px-4 py-4">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-700">Source Content</p>
@@ -3399,9 +3990,21 @@ export default function CreatorTypeWorkflowPage() {
               ) : null}
 
               {config.fields.map((field) => {
+                // Field-id → chip-array mapping. Every freeform text
+                // field gets starter chips so the operator always has
+                // a clickable suggestion (operator feedback: "for all
+                // these issues offer suggestions that can be picked
+                // to start with"). For 'single-select' fields we
+                // don't render chips because the buttons themselves
+                // are the picks.
                 const freeformChips: string[] =
                   field.id === 'audience' ? freeformFieldSuggestions.audience
                   : field.id === 'keyMessage' ? freeformFieldSuggestions.keyMessage
+                  : field.id === 'cta' ? freeformFieldSuggestions.cta
+                  : field.id === 'topic' ? (freeformFieldSuggestions as Record<string, string[]>).topic ?? []
+                  : field.id === 'dataPoints' ? (freeformFieldSuggestions as Record<string, string[]>).dataPoints ?? []
+                  : field.id === 'refinement' ? (freeformFieldSuggestions as Record<string, string[]>).refinement ?? []
+                  : field.id === 'objective' ? (freeformFieldSuggestions as Record<string, string[]>).objective ?? []
                   : [];
                 return (
                 <div key={field.id} className="block">
@@ -3628,7 +4231,10 @@ export default function CreatorTypeWorkflowPage() {
           </div>
 
           <div className="space-y-6">
-            <div className="rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
+            <div
+              ref={resultPanelRef}
+              className="rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8 scroll-mt-24"
+            >
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
                 {result ? 'Generated Output' : 'Pick A Direction'}
               </p>
@@ -3737,6 +4343,127 @@ export default function CreatorTypeWorkflowPage() {
                       ))}
                     </div>
                   </div>
+
+                  {(() => {
+                    // Async-render status banner. Carousel / infographic
+                    // / pdf / slider go through a durable queue
+                    // (creatorAssetRegistry: render_strategy='queue'),
+                    // so generation returns before the slide PNGs are
+                    // ready. The polling effect at the top of this
+                    // component pulls them in once the job completes,
+                    // but the operator needs a visible signal that the
+                    // rendering is still in flight.
+                    const bundleMeta = (result.output.asset_payload.media_bundle?.metadata ?? {}) as Record<string, unknown>;
+                    const renderAsync = bundleMeta.render_async === true;
+                    const hasFiles = Array.isArray(result.output.asset_payload.media_bundle?.files)
+                      && (result.output.asset_payload.media_bundle!.files as string[]).filter(Boolean).length > 0;
+                    if (!renderAsync || hasFiles) return null;
+                    const percent = renderJobProgress?.percent ?? 0;
+                    const status = renderJobProgress?.status ?? 'queued';
+                    const queuedSeconds = renderJobProgress?.queuedSeconds ?? 0;
+                    // If the job sits in queued/waiting for >25s, no
+                    // render worker is consuming the queue. In dev that
+                    // typically means `npm run dev` (--app-only) was used
+                    // instead of `npm run dev:full`. Surface that
+                    // explicitly so the operator stops staring at a
+                    // frozen 0% bar.
+                    const workerStalled = (status === 'queued' || status === 'waiting') && queuedSeconds >= 25;
+                    const isQueued = status === 'queued' || status === 'waiting';
+                    const isActive = status === 'active';
+                    // Status label is fully honest: it never says
+                    // "rendering" when the job is in fact just sitting
+                    // in a queue waiting for a worker.
+                    const statusLabel = workerStalled
+                      ? 'Render worker not responding'
+                      : isQueued
+                        ? `Queued — waiting for a render worker (${queuedSeconds}s)`
+                        : isActive
+                          ? 'Rendering slides'
+                          : status === 'completed'
+                            ? 'Finalizing'
+                            : 'Rendering slides';
+                    const bannerColor = workerStalled ? 'rose' : 'amber';
+                    // Progress-bar fill: honest. 0 means 0. We never
+                    // paint a fake minimum just to make the bar visible.
+                    // While queued, the bar is empty and the (indeterminate)
+                    // animated stripe communicates "we're waiting".
+                    return (
+                      <div className={`rounded-2xl border ${bannerColor === 'rose' ? 'border-rose-300 bg-rose-50' : 'border-amber-200 bg-amber-50'} px-4 py-3`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`inline-block h-2 w-2 rounded-full ${
+                                workerStalled
+                                  ? 'bg-rose-500'
+                                  : isActive
+                                    ? 'animate-pulse bg-emerald-500'
+                                    : 'animate-pulse bg-amber-500'
+                              }`}
+                              aria-hidden="true"
+                            />
+                            <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${workerStalled ? 'text-rose-900' : 'text-amber-900'}`}>
+                              {statusLabel}
+                            </p>
+                          </div>
+                          <span className={`text-xs font-semibold tabular-nums ${workerStalled ? 'text-rose-900' : 'text-amber-900'}`}>
+                            {percent}%
+                          </span>
+                        </div>
+                        <div
+                          className={`mt-3 h-2 w-full overflow-hidden rounded-full ${workerStalled ? 'bg-rose-100' : 'bg-amber-100'}`}
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={percent}
+                          aria-label="Slide rendering progress"
+                        >
+                          {isQueued && percent === 0 ? (
+                            // Indeterminate stripe for the queued state.
+                            // No fake fill — the actual value is 0 and the
+                            // animated pulse makes that visually honest.
+                            <div className="h-full w-full animate-pulse rounded-full bg-amber-200" />
+                          ) : (
+                            <div
+                              className={`h-full rounded-full ${workerStalled ? 'bg-rose-400' : 'bg-amber-500'} transition-[width] duration-700 ease-out`}
+                              style={{ width: `${percent}%` }}
+                            />
+                          )}
+                        </div>
+                        {workerStalled ? (
+                          <>
+                            <p className="mt-2 text-sm leading-6 text-rose-900">
+                              The render queue has the job but no worker is consuming it. In local dev this usually means the app was started with <code className="rounded bg-rose-100 px-1 py-0.5 text-[12px] font-mono">npm run dev</code> instead of <code className="rounded bg-rose-100 px-1 py-0.5 text-[12px] font-mono">npm run dev:full</code> — the latter starts the creator-render worker.
+                            </p>
+                            <p className="mt-1 text-[11px] text-rose-700">
+                              Or bypass the queue entirely and render synchronously in this request. Slide structure + copy below are preserved either way.
+                            </p>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => { void handleRenderInline(); }}
+                                disabled={inlineRenderInFlight}
+                                className="rounded-2xl bg-rose-700 px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {inlineRenderInFlight ? 'Rendering inline… this can take 30–60s' : 'Render inline now'}
+                              </button>
+                              {inlineRenderError ? (
+                                <span className="text-[11px] font-medium text-rose-800">{inlineRenderError}</span>
+                              ) : null}
+                            </div>
+                          </>
+                        ) : (
+                          <p className="mt-2 text-sm leading-6 text-amber-900">
+                            Slide structure and copy are ready below. Slide images render asynchronously and will appear here automatically — usually within 30–60 seconds. Stay on this page.
+                          </p>
+                        )}
+                        {renderJobProgress?.attempts && renderJobProgress.attempts > 1 ? (
+                          <p className="mt-1 text-[11px] text-amber-700">
+                            Retry attempt {renderJobProgress.attempts} — the worker had a transient issue and is trying again.
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
 
                   {isThemeTreatment && (
                     <div className="space-y-4">
@@ -4003,22 +4730,96 @@ export default function CreatorTypeWorkflowPage() {
                     </div>
                   )}
 
-                  {slides.length > 0 && (
-                    <div>
-                      <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">Slide Structure</p>
-                      <div className="space-y-2">
-                        {slides.map((slide, index) => (
-                          <div key={`${index}-${String(slide.slide_number ?? index + 1)}`} className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
-                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
-                              Slide {String(slide.slide_number ?? index + 1)} - {String(slide.role ?? 'content')}
+                  {slides.length > 0 && (() => {
+                    // Carousel/Infographic/Slider preview. The actual
+                    // slide images come back in `media_bundle.files` (one
+                    // URL per slide, same index as `slides`). Pair them
+                    // with the slide structure metadata so each slide
+                    // renders as a self-contained card with both visual
+                    // and copy. The legacy "Preview" block above only
+                    // showed the URLs as thumbnails; this block now
+                    // makes the carousel preview the primary surface.
+                    //
+                    // Strategy lookup surfaces the selected strategy's
+                    // CTA intensity + the CTA-slide intent text so the
+                    // operator can see WHY the LLM is producing a
+                    // particular CTA framing for the last slide.
+                    const slideMediaUrls = Array.isArray(result?.output.asset_payload.media_bundle?.files)
+                      ? (result.output.asset_payload.media_bundle!.files as string[]).filter(Boolean)
+                      : [];
+                    const slideStrategy = resolvePurposeStrategy(type, answers.subtype);
+                    const ctaSlideIntent = slideStrategy?.slideArc
+                      ?.find((s) => s.role === 'cta' || s.role === 'next_steps')
+                      ?.intent ?? null;
+                    return (
+                      <div>
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
+                            {type === 'infographic' ? 'Sections' : 'Slide Structure'} · {slides.length} {type === 'infographic' ? 'sections' : 'slides'}
+                          </p>
+                          {slideStrategy ? (
+                            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-800">
+                              CTA intensity: {slideStrategy.ctaIntensity}
+                            </span>
+                          ) : null}
+                        </div>
+                        {ctaSlideIntent ? (
+                          <div className="mb-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-800">
+                              Suggested CTA for the closing slide
                             </p>
-                            <p className="mt-1 text-sm font-semibold text-gray-900">{String(slide.headline ?? '')}</p>
-                            <p className="mt-1 text-sm text-gray-600">{String(slide.body_text ?? '')}</p>
+                            <p className="mt-1 text-sm leading-6 text-emerald-900">{ctaSlideIntent}</p>
                           </div>
-                        ))}
+                        ) : null}
+                        <div className="space-y-3">
+                          {slides.map((slide, index) => {
+                            const slideUrl = slideMediaUrls[index] || '';
+                            const role = String(slide.role ?? 'content');
+                            const isCta = role === 'cta' || role === 'next_steps';
+                            return (
+                              <div
+                                key={`${index}-${String(slide.slide_number ?? index + 1)}`}
+                                className={`overflow-hidden rounded-2xl border ${isCta ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-100 bg-gray-50'}`}
+                              >
+                                <div className="flex flex-col gap-3 sm:flex-row">
+                                  {slideUrl ? (
+                                    <a
+                                      href={slideUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      title="Open full size"
+                                      className="block w-full shrink-0 overflow-hidden bg-gray-100 sm:w-56"
+                                    >
+                                      <img
+                                        src={slideUrl}
+                                        alt={`${type} ${role} ${index + 1}`}
+                                        loading="lazy"
+                                        className="block h-full w-full object-cover"
+                                      />
+                                    </a>
+                                  ) : null}
+                                  <div className="flex-1 px-4 py-3">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
+                                        {type === 'infographic' ? 'Section' : 'Slide'} {String(slide.slide_number ?? index + 1)} · {role}
+                                      </p>
+                                      {isCta ? (
+                                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-800">
+                                          Suggested CTA
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <p className="mt-1 text-sm font-semibold text-gray-900">{String(slide.headline ?? '')}</p>
+                                    <p className="mt-1 text-sm text-gray-600">{String(slide.body_text ?? '')}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">Customize With AI</p>
@@ -4110,27 +4911,11 @@ export default function CreatorTypeWorkflowPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={handleLaunchCampaign}
-                          disabled={Boolean(actionInProgress)}
-                          className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {actionInProgress === 'campaign' ? 'Opening Campaign...' : 'Use In Campaign'}
-                        </button>
-                        <button
-                          type="button"
                           onClick={handleDownloadBrief}
                           disabled={Boolean(actionInProgress)}
                           className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {actionInProgress === 'download' ? 'Preparing...' : 'Download'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleDuplicateOutput}
-                          disabled={Boolean(actionInProgress)}
-                          className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {actionInProgress === 'duplicate' ? 'Duplicating...' : 'Duplicate'}
                         </button>
                       </div>
                     </>

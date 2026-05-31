@@ -38,6 +38,7 @@ import {
 import { runUnifiedLongFormGeneration } from '../../../lib/content/unifiedLongFormEngine';
 import type { BlogAngle } from '../../../lib/blog/blogGenerationEngine';
 import { isValidBlogFormat } from '../../../lib/blog/blogStructureTemplates';
+import { ThoughtLeadershipQualityGateError } from '../../../backend/services/longForm/thoughtLeadershipQualityGate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -138,6 +139,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       return res.status(200).json(result);
     } catch (error) {
+      // Enterprise quality gate: failed blog drafts are blocked instead of
+      // being returned as usable generation output.
+      if (error instanceof ThoughtLeadershipQualityGateError) {
+        return res.status(422).json({
+          error: error.message,
+          quality_passed: false,
+          thought_leadership_quality: error.report,
+        });
+      }
       console.error('[blogs/generate] runBlogGeneration error:', error);
       return res.status(500).json({
         error: error instanceof Error ? error.message : 'Failed to generate blog',

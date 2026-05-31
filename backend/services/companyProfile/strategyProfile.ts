@@ -87,7 +87,7 @@ async function fetchCompanyBlogSamples(companyId: string): Promise<string[]> {
   try {
     const { data, error } = await supabase
       .from('blogs')
-      .select('title, excerpt, content_type, content_html, content_blocks, content_markdown')
+      .select('title, excerpt, content_type, content, content_blocks')
       .eq('company_id', companyId)
       .order('updated_at', { ascending: false })
       .limit(MAX_BLOG_SAMPLES);
@@ -97,11 +97,10 @@ async function fetchCompanyBlogSamples(companyId: string): Promise<string[]> {
       .map((row) => {
         const title = cleanText((row as Record<string, unknown>).title);
         const excerpt = cleanText((row as Record<string, unknown>).excerpt);
-        const markdown = cleanText((row as Record<string, unknown>).content_markdown);
-        const html = cleanText((row as Record<string, unknown>).content_html).replace(/<[^>]+>/g, ' ');
+        const content = cleanText((row as Record<string, unknown>).content).replace(/<[^>]+>/g, ' ');
         const blocks = extractTextFromContentBlocks((row as Record<string, unknown>).content_blocks);
         const contentType = cleanText((row as Record<string, unknown>).content_type) || 'blog';
-        const sample = truncateSample([title, excerpt, markdown, html, blocks].filter(Boolean).join(' '));
+        const sample = truncateSample([title, excerpt, content, blocks].filter(Boolean).join(' '));
         return sample ? `[${contentType}] ${sample}` : '';
       })
       .filter(Boolean);

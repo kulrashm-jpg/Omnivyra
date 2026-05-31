@@ -49,7 +49,7 @@ export const contentTypeConfig: Record<LongFormContentType, LongFormContentTypeC
     narrativeRules: ['Build a progressive argument', 'Avoid repeating prior series coverage'],
     citationStyle: 'references',
     depthLevel: 'deep',
-    structureStyle: 'H2-led editorial body with key insights, summary, and references',
+    structureStyle: 'Executive thought-leadership argument with key insights, strategic sections, summary, and references',
     summaryStyle: 'Standalone synthesis with next-step implications',
     insightDensity: 'high',
     researchEnforcement: 'recommended',

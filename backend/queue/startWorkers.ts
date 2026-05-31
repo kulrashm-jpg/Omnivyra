@@ -18,7 +18,9 @@ function _diag(stage: string, extra?: Record<string, unknown>): void {
   } catch { /* never throw from diagnostics */ }
 }
 _diag('startWorkers.ts:module-loaded');
-import { getWorker, getUsageProtectionReady } from './bullmqClient';
+import { getWorker, getUsageProtectionReady, withHeavyJobSlot } from './bullmqClient';
+import { createCreatorRenderWorker } from '../services/creatorRenderDurableQueue';
+import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcessor';
 import { processPublishJob } from './jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from './jobProcessors/engagementPollingProcessor';
 import { processBoltJob } from './jobProcessors/boltProcessor';
@@ -39,6 +41,7 @@ let intelligencePollingWorker: ReturnType<typeof getIntelligencePollingWorker>;
 let listeningExecutionWorker: ReturnType<typeof getWorker>;
 let semanticIndexingWorker: ReturnType<typeof getWorker>;
 let replayPartitionWorker: ReturnType<typeof getWorker>;
+let creatorRenderWorker: ReturnType<typeof createCreatorRenderWorker> | null = null;
 // Async planner refinement worker. Started AFTER usage protection is ready
 // so its first job sees the same gating as inline planner calls. Graceful
 // drain on shutdown — `worker.close()` waits for in-flight refinements to
@@ -54,6 +57,9 @@ const shutdown = async () => {
   await listeningExecutionWorker?.close?.();
   await semanticIndexingWorker?.close?.();
   await replayPartitionWorker?.close?.();
+  if (creatorRenderWorker) {
+    try { await creatorRenderWorker.close(); } catch { /* best-effort */ }
+  }
   // Refinement worker close MUST be awaited last so other queues drain first
   // (their failure paths can enqueue refinement jobs). close() with no args
   // performs graceful drain — waits for active jobs, refuses new ones.
@@ -495,6 +501,50 @@ export async function startWorkers(): Promise<void> {
     _diag('startWorkers:replayPartitionWorker-attach-failed', {
       error: e instanceof Error ? e.message : String(e),
     });
+  }
+
+  // ── CREATOR-RENDER DURABLE WORKER ───────────────────────────────────────
+  // Carousel / infographic / pdf / slider rendering goes through the
+  // `creator-render` BullMQ queue (creatorRenderDurableQueue.ts). Without
+  // a worker bound to that queue, jobs sit in `queued` forever and the
+  // UI shows a "no worker is consuming it" diagnostic. `npm run dev:full`
+  // used to skip this registration; production used `backend/workers/main.ts`
+  // which DID register it — leaving dev silently broken. This wires the
+  // same worker into the unified dev bootstrap so carousel renders actually
+  // complete locally.
+  try {
+    const { getQueuePrefix } = await import('./bullmqClient');
+    const prefix = getQueuePrefix();
+    creatorRenderWorker = createCreatorRenderWorker((job) =>
+      withHeavyJobSlot(() => processCreatorRenderJob(job)),
+    );
+    creatorRenderWorker.on('failed', (job, err) =>
+      console.error('[creator-render-worker] failed', {
+        jobId: job?.id,
+        error: err?.message ?? String(err),
+      }));
+    creatorRenderWorker.on('error', (err) =>
+      console.error('[creator-render-worker] error:', err?.message ?? err));
+    creatorRenderWorker.on('active', (job) =>
+      console.log('[creator-render-worker] active', { jobId: job?.id, name: job?.name }));
+    creatorRenderWorker.on('completed', (job) =>
+      console.log('[creator-render-worker] completed', { jobId: job?.id }));
+    // Explicit boot diagnostic — prints queue name + prefix so when the
+    // UI says "no worker consuming" you can verify from the boot logs
+    // whether the worker IS up AND on the matching prefix.
+    console.log(`[workers] creator-render worker started (queue="creator-render", prefix="${prefix ?? '<default>'}")`);
+    _diag('startWorkers:creator-render-registered', { prefix });
+  } catch (err) {
+    _diag('startWorkers:creator-render-register-error', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    // LOUD failure — was previously console.warn which is easy to miss
+    // in a verbose boot log. Use console.error + full stack so it surfaces.
+    console.error(
+      '[creator-render-worker] REGISTRATION FAILED — slide rendering will not work:',
+      err instanceof Error ? `${err.message}\n${err.stack}` : err,
+    );
   }
 
   process.on('SIGINT', shutdown);

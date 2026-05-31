@@ -18,6 +18,10 @@ import {
 import { flattenBlocks } from '../../lib/blog/blockUtils';
 
 export type ImproveArea = 'structure' | 'depth' | 'geo' | 'linking' | 'seo';
+export type PostBlogStatus = {
+  type: 'info' | 'success' | 'error';
+  message: string;
+};
 
 interface ContentQualityPanelProps {
   blocks: ContentBlock[];
@@ -42,6 +46,8 @@ interface ContentQualityPanelProps {
   websiteIntegrationReason?: string;
   /** Whether a post-blog-to-website call is currently in flight. */
   isPostingBlog?: boolean;
+  /** Inline publish status/error shown beside the website posting action. */
+  postBlogStatus?: PostBlogStatus | null;
 }
 
 type ScoreConfig = {
@@ -117,6 +123,7 @@ export function ContentQualityPanel({
   websiteIntegrationAvailable,
   websiteIntegrationReason,
   isPostingBlog,
+  postBlogStatus,
 }: ContentQualityPanelProps) {
   const scoreConfig = getScoreConfig(formState.content_type);
 
@@ -384,24 +391,37 @@ export function ContentQualityPanel({
 
       {onPostBlogToWebsite ? (
         <div className="border-t border-gray-100 px-4 pb-4 pt-3">
-          <button
-            type="button"
-            onClick={onPostBlogToWebsite}
-            disabled={!websiteIntegrationAvailable || !!isPostingBlog}
-            title={
-              websiteIntegrationAvailable
-                ? 'Publish this blog to your connected website'
-                : websiteIntegrationReason || 'Connect your website CMS and lead capture to enable posting.'
-            }
-            className={`flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-opacity ${
-              websiteIntegrationAvailable
-                ? 'bg-amber-600 text-white hover:opacity-90'
-                : 'cursor-not-allowed bg-gray-200 text-gray-500'
-            } disabled:opacity-60`}
-          >
-            {isPostingBlog ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />}
-            Post Blog (website)
-          </button>
+          <div className="flex items-start gap-2">
+            <button
+              type="button"
+              onClick={onPostBlogToWebsite}
+              disabled={!websiteIntegrationAvailable || !!isPostingBlog}
+              title={
+                websiteIntegrationAvailable
+                  ? 'Publish this blog to your connected website'
+                  : websiteIntegrationReason || 'Connect your website CMS and lead capture to enable posting.'
+              }
+              className={`flex min-w-[148px] items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-opacity ${
+                websiteIntegrationAvailable
+                  ? 'bg-amber-600 text-white hover:opacity-90'
+                  : 'cursor-not-allowed bg-gray-200 text-gray-500'
+              } disabled:opacity-60`}
+            >
+              {isPostingBlog ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />}
+              Post Blog (website)
+            </button>
+            {postBlogStatus && (
+              <p className={`min-w-0 flex-1 pt-0.5 text-[10px] leading-snug ${
+                postBlogStatus.type === 'error'
+                  ? 'text-red-600'
+                  : postBlogStatus.type === 'success'
+                    ? 'text-emerald-600'
+                    : 'text-gray-500'
+              }`}>
+                {postBlogStatus.message}
+              </p>
+            )}
+          </div>
           {!websiteIntegrationAvailable && websiteIntegrationReason && (
             <p className="mt-1.5 text-[10px] leading-snug text-gray-500">{websiteIntegrationReason}</p>
           )}

@@ -202,12 +202,12 @@ export default function BlogGeneratePage() {
     if (prefillTopic) setTopic((cur) => (cur ? cur : prefillTopic));
   }, [prefillTopic]);
 
-  const handleGenerated = (
+  const handleGenerated = async (
     output: BlogGenerationOutput & { content_blocks?: unknown[] },
     confidence: 'high' | 'medium',
     hookAssessment: { strength: 'strong' | 'moderate' | 'weak'; note: string },
     angleType: string | null,
-  ) => {
+  ): Promise<void> => {
     const token = `blog_prefill_${Date.now()}`;
     const payload = {
       output,
@@ -229,8 +229,9 @@ export default function BlogGeneratePage() {
       // ignore storage error; fallback route still works
     }
 
-    // Route to blog editor for refinement and posting
-    router.push({ pathname: '/blogs/new', query: { prefill: token } });
+    // Route directly to the editor and keep the generator overlay mounted
+    // until navigation resolves, so the suggestions page does not flash.
+    await router.replace({ pathname: '/blogs/new', query: { prefill: token } });
   };
 
   const fetchSuggestions = async () => {

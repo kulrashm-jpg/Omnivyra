@@ -97,4 +97,34 @@ describe('assertValidBoltBlueprint', () => {
       expect((e as BoltError).category).toBe('BLUEPRINT_FAILURE');
     }
   });
+
+  test('does NOT throw when only error is BLUEPRINT_MISSING_CTA (warning-class)', () => {
+    // The planner's week-level shape doesn't always carry a CTA field;
+    // CTA guidance is also injected at the daily-row level downstream.
+    // Treating CTA absence as fatal over-rejected real plans in production
+    // (run b2e27985-de46-48ee-8196-3b1f330ae0ad / 2026-05-30 23:46 UTC).
+    expect(() => assertValidBoltBlueprint({
+      weeks: [{
+        week_number: 1,
+        platform_allocation: { linkedin: 3 },
+        activities: [
+          { content_type: 'post' },
+          { content_type: 'tweet' },
+          { content_type: 'article' },
+        ],
+        // intentionally no cta / recommended_cta_style / activity-level cta
+      }],
+    })).not.toThrow();
+  });
+
+  test('still throws when CTA is missing AND a hard error is present', () => {
+    expect(() => assertValidBoltBlueprint({
+      weeks: [{
+        week_number: 1,
+        platform_allocation: { linkedin: 3 },
+        // no activities → BLUEPRINT_INVALID_ACTIVITY_COUNT is the hard
+        // error; CTA missing is a co-warning. Hard error still throws.
+      }],
+    })).toThrow(BoltError);
+  });
 });

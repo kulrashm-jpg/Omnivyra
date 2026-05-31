@@ -116,6 +116,7 @@ import {
 } from '../../../lib/shared/creatorGovernanceRegistry';
 import { validateBoltPreExecution } from '../../../backend/services/boltPreExecutionValidator';
 import { BOLT_ERROR_CODE_FRIENDLY_MESSAGES } from '../../../lib/shared/bolt/boltErrorCodes';
+import { probeBoltSchemaReadiness } from '../../../backend/services/boltSchemaReadiness';
 import { computeSiblingDifferential } from '../../../backend/services/boltStrategyDifferential';
 import { resolveCampaignMode } from '../../../lib/shared/bolt/formatGovernance';
 
@@ -131,6 +132,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    // ── Schema readiness gate (memoized — one probe per process) ──────
+    // Verifies bolt_execution_runs has the lock/heartbeat columns the
+    // pipeline writes on every progress event. Without them, writes
+    // throw at PostgREST and the abandonment sweeper kills the run
+    // after 90s with a generic "technical glitch" message. Catching
+    // it here gives the operator a precise error + remediation step.
+    const readiness = await probeBoltSchemaReadiness();
+    if (!readiness.ready) {
+      return res.status(503).json({
+        error: 'BOLT execution is unavailable: schema migration required.',
+        code: 'BOLT_SCHEMA_NOT_READY',
+        missing_columns: readiness.missing_blocking.map((c) => c.column),
+        remediation: 'Apply migration 20260725_bolt_execution_resilience_columns.sql (idempotent). See backend/services/boltSchemaReadiness.ts.',
+      });
+    }
+
     const body = req.body || {};
     const companyId = typeof body.companyId === 'string' ? body.companyId.trim() : null;
     if (!companyId) {

@@ -5,7 +5,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../components/blog/BlogEditorForm';
-import { ContentQualityPanel, type ImproveArea } from '../../components/content/ContentQualityPanel';
+import { ContentQualityPanel, type ImproveArea, type PostBlogStatus } from '../../components/content/ContentQualityPanel';
 import EditorShareActions from '../../components/content/EditorShareActions';
 import { createDefaultBlogTemplate } from '../../lib/blog/blogTemplate';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../lib/blog/topicDetection';
@@ -19,6 +19,18 @@ import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 import type { CreatorFlowContext } from '../../lib/content/creatorFlowContext';
 
 const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
+const CMS_INTEGRATION_TYPES = new Set([
+  'wordpress',
+  'custom_blog_api',
+  'ghost',
+  'drupal',
+  'joomla',
+  'webflow',
+  'shopify',
+  'hubspot',
+  'wix',
+  'squarespace',
+]);
 
 type PrefillPayload = {
   output?: (BlogGenerationOutput & { content_blocks?: unknown[]; content_markdown?: string }) | null;
@@ -46,6 +58,7 @@ export default function BlogNewPage() {
   const [cmsIntegration, setCmsIntegration] = useState<{ id: string; type: string; name: string } | null>(null);
   const [hasLeadCapture, setHasLeadCapture] = useState<boolean>(false);
   const [isPostingBlog, setIsPostingBlog] = useState<boolean>(false);
+  const [postBlogStatus, setPostBlogStatus] = useState<PostBlogStatus | null>(null);
   const [targetWordCount, setTargetWordCount] = useState<number>(800);
   const [formatType, setFormatType] = useState<BlogFormatType | undefined>(undefined);
   const [primaryKeyword, setPrimaryKeyword] = useState<string | null>(null);
@@ -157,7 +170,7 @@ export default function BlogNewPage() {
       .then((data) => {
         const list = Array.isArray(data?.integrations) ? data.integrations : [];
         const connectedCms = list.find((i: { type: string; status: string; id: string; name: string }) =>
-          i.type !== 'lead_webhook' && i.status === 'connected',
+          CMS_INTEGRATION_TYPES.has(i.type) && i.status === 'connected',
         );
         const connectedLead = list.find((i: { type: string; status: string }) =>
           i.type === 'lead_webhook' && i.status === 'connected',
@@ -308,47 +321,53 @@ export default function BlogNewPage() {
     return () => { if (dupTimerRef.current) clearTimeout(dupTimerRef.current); };
   }, [liveState?.title, liveState?.tags, existingPosts]);
 
-  const handleSubmit = async (state: BlogFormState) => {
+  const saveBlogState = async (state: BlogFormState): Promise<string | null> => {
     if (!selectedCompanyId) {
-      setError('Company context required to save blog post.');
-      return;
+      throw new Error('Company context required to save blog post.');
     }
 
+    const endpoint = isEditing && editId
+      ? `/api/blogs/${encodeURIComponent(editId)}?company_id=${encodeURIComponent(selectedCompanyId)}`
+      : '/api/company/blogs';
+    const method = isEditing && editId ? 'PUT' : 'POST';
+    const res = await fetch(endpoint, {
+      method,
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        company_id: selectedCompanyId,
+        title:                state.title,
+        slug:                 state.slug || undefined,
+        excerpt:              state.excerpt || undefined,
+        content_markdown:     state.content_markdown,
+        content_html:         undefined,
+        content_blocks:       state.content_blocks.length ? state.content_blocks : undefined,
+        featured_image_url:   state.featured_image_url || undefined,
+        category:             state.category || undefined,
+        tags:                 state.tags,
+        media_blocks:         state.media_blocks.length ? state.media_blocks : undefined,
+        seo_meta_title:       state.seo_meta_title || undefined,
+        seo_meta_description: state.seo_meta_description || undefined,
+        status:               state.status,
+        is_featured:          state.is_featured,
+        published_at:         state.status === 'published' ? new Date().toISOString() : state.published_at || undefined,
+        primary_keyword:      primaryKeyword || undefined,
+        secondary_keywords:   secondaryKeywords?.length ? secondaryKeywords : undefined,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error || 'Save failed');
+    const nextId = (data?.id ?? data?.blog?.id ?? editId) || null;
+    setSavedId(nextId);
+    return nextId;
+  };
+
+  const handleSubmit = async (state: BlogFormState) => {
     setError(null);
+    setPostBlogStatus(null);
     setIsSaving(true);
     try {
-      const endpoint = isEditing && editId
-        ? `/api/blogs/${encodeURIComponent(editId)}?company_id=${encodeURIComponent(selectedCompanyId)}`
-        : '/api/company/blogs';
-      const method = isEditing && editId ? 'PUT' : 'POST';
-      const res = await fetch(endpoint, {
-        method,
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: selectedCompanyId,
-          title:                state.title,
-          slug:                 state.slug || undefined,
-          excerpt:              state.excerpt || undefined,
-          content_markdown:     state.content_markdown,
-          content_html:         undefined,
-          content_blocks:       state.content_blocks.length ? state.content_blocks : undefined,
-          featured_image_url:   state.featured_image_url || undefined,
-          category:             state.category || undefined,
-          tags:                 state.tags,
-          media_blocks:         state.media_blocks.length ? state.media_blocks : undefined,
-          seo_meta_title:       state.seo_meta_title || undefined,
-          seo_meta_description: state.seo_meta_description || undefined,
-          status:               state.status,
-          is_featured:          state.is_featured,
-          published_at:         state.status === 'published' ? new Date().toISOString() : state.published_at || undefined,
-          primary_keyword:      primaryKeyword || undefined,
-          secondary_keywords:   secondaryKeywords?.length ? secondaryKeywords : undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Save failed');
-      setSavedId((data?.id ?? data?.blog?.id ?? editId) || null);
+      await saveBlogState(state);
       setPrefillNotice(isEditing ? 'Blog updated. You can now copy, export, or mark it as used.' : 'Blog post saved. You can now copy, export, or mark it as used.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');
@@ -362,18 +381,22 @@ export default function BlogNewPage() {
       setError('Company context required to post the blog.');
       return;
     }
-    if (!savedId) {
-      setError('Save the blog as a draft first, then post it to the website.');
-      return;
-    }
     if (!cmsIntegration) {
       setError('Connect a website CMS integration before posting.');
       return;
     }
+    if (!liveState) {
+      setError('Blog draft is still loading. Try again in a moment.');
+      return;
+    }
     setError(null);
+    setPostBlogStatus({ type: 'info', message: 'Saving draft before publishing...' });
     setIsPostingBlog(true);
     try {
-      const res = await fetch(`/api/blogs/${encodeURIComponent(savedId)}/publish`, {
+      const blogId = savedId || await saveBlogState({ ...liveState, status: 'draft' });
+      if (!blogId) throw new Error('Could not save the blog before posting.');
+      setPostBlogStatus({ type: 'info', message: `Draft saved. Queuing publish to ${cmsIntegration.name}...` });
+      const res = await fetch(`/api/blogs/${encodeURIComponent(blogId)}/publish`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -386,9 +409,15 @@ export default function BlogNewPage() {
       if (!res.ok || data?.success === false) {
         throw new Error(data?.message || data?.error || 'Publish failed');
       }
+      const successMessage = data?.message
+        ? String(data.message)
+        : `Publishing job queued for ${cmsIntegration.name}.`;
+      setPostBlogStatus({ type: 'success', message: successMessage });
       setPrefillNotice(`Blog posted to website via ${cmsIntegration.name}.`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Publish failed');
+      const message = e instanceof Error ? e.message : 'Publish failed';
+      setPostBlogStatus({ type: 'error', message });
+      setError(message);
     } finally {
       setIsPostingBlog(false);
     }
@@ -536,14 +565,14 @@ export default function BlogNewPage() {
             {/* ── Quality panel (sticky right sidebar) ────────────────────── */}
             <div className="hidden lg:block w-[280px] shrink-0 sticky top-6 self-start">
               {liveState && (() => {
-                const websiteIntegrationAvailable = Boolean(cmsIntegration && savedId);
+                const websiteIntegrationAvailable = Boolean(cmsIntegration);
                 let websiteIntegrationReason: string | undefined;
                 if (!cmsIntegration) {
                   websiteIntegrationReason = 'Connect a website CMS (WordPress, HubSpot, etc.) in Integrations to enable posting.';
                 } else if (!hasLeadCapture) {
-                  websiteIntegrationReason = `Connected to ${cmsIntegration.name}. Add a lead-capture webhook for full attribution.`;
+                  websiteIntegrationReason = `Connected to ${cmsIntegration.name}. Posting is available; add lead capture for full attribution.`;
                 } else if (!savedId) {
-                  websiteIntegrationReason = 'Save the blog as a draft first, then post it to your website.';
+                  websiteIntegrationReason = 'Posting is available. We will save this draft before publishing it.';
                 }
                 return (
                   <ContentQualityPanel
@@ -567,6 +596,7 @@ export default function BlogNewPage() {
                     websiteIntegrationAvailable={websiteIntegrationAvailable}
                     websiteIntegrationReason={websiteIntegrationReason}
                     isPostingBlog={isPostingBlog}
+                    postBlogStatus={postBlogStatus}
                     companyIdentity={companyIdentity}
                   />
                 );

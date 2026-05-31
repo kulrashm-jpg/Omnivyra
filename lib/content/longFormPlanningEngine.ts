@@ -79,6 +79,15 @@ import {
   hasActiveAction as hasActiveHealingAction,
   getActiveHealingActionsForContentType,
 } from '../../backend/services/longForm/selfHealingCoordinator';
+import {
+  buildOrganizationPerspective,
+  renderOrganizationPerspectiveForPrompt,
+  type OrganizationPerspective,
+} from '../../backend/services/longForm/organizationPerspectiveEngine';
+import {
+  validateContentDuplication,
+  type ContentDuplicationValidationResult,
+} from '../../backend/services/longForm/contentDuplicationValidator';
 
 export type PlannedSectionContentType =
   | 'explanation'
@@ -219,6 +228,10 @@ function stripHtml(value: string): string {
   return value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function countWords(value: string): number {
+  return stripHtml(value).split(/\s+/).filter(Boolean).length;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -277,7 +290,13 @@ function buildFallbackPlan(
 ): ContentPlan {
   const company = input.companyContext?.companyName || 'the brand';
   const targetWordCount = input.targetWordCount || Number(input.answers?.target_word_count) || 1200;
-  const baseSections = templateSpec?.sections.filter((section) => section.id !== 'key_insights' && section.id !== 'references');
+  const normalizedSubject = normalizeBlogSubject(input.topic);
+  const baseSections = templateSpec?.sections.filter((section) => (
+    section.id !== 'key_insights'
+    && section.id !== 'references'
+    && section.id !== 'hook'
+    && section.id !== 'intro'
+  ));
   const sectionsSource = baseSections && baseSections.length >= 3
     ? baseSections
     : [
@@ -365,8 +384,8 @@ function buildFallbackPlan(
   }));
 
   return {
-    title: `${input.topic}: A Practical ${contentTypeConfig[input.contentType].structureStyle}`,
-    excerpt: `A structured, brand-led perspective on ${input.topic} with a reusable framework, examples, and practical next steps.`,
+    title: buildBlogAlignedTitle(input.topic),
+    excerpt: buildBlogAlignedExcerpt(input.topic, company),
     key_insights: [
       `${input.topic} needs a differentiated ${searchIntent} plan with ${contentPositioning.primary} positioning, not another generic overview.`,
       `The strongest content separates explanation, application, examples, and insight.`,
@@ -374,7 +393,7 @@ function buildFallbackPlan(
     ],
     sections: uniqueKeyPoints(sections),
     framework: {
-      name: `${input.topic.replace(/[^\w\s]/g, '').trim() || 'Authority'} Readiness Framework`,
+      name: `${normalizedSubject.subject} Decision Framework`,
       model_type: 'layers',
       components: ['Context', 'Criteria', 'Execution', 'Proof'],
       section_title: sections[1]?.section_title || 'The Operating Framework',
@@ -398,6 +417,383 @@ function buildFallbackFaq(topic: string): ContentPlan['faq'] {
     { question: `Why does ${topic} matter?`, answer: `It matters because weak framing leads to generic execution, while clear structure helps teams make better decisions.` },
     { question: `What should teams avoid with ${topic}?`, answer: `Avoid repeating broad advice without a distinct point of view, evidence, or practical application path.` },
   ];
+}
+
+function titleCase(value: string): string {
+  const small = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'from', 'in', 'into', 'of', 'on', 'or', 'the', 'to', 'with']);
+  return String(value || '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((word, index) => {
+      const lower = word.toLowerCase();
+      if (index > 0 && small.has(lower)) return lower;
+      if (/^[A-Z0-9]{2,}$/.test(word)) return word;
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(' ');
+}
+
+function normalizeBlogSubject(topic: string): { subject: string; audience: string | null; display: string } {
+  const raw = String(topic || '').replace(/\s+/g, ' ').trim();
+  const withoutScaffold = raw
+    .replace(/\bcategory\s+entry\s+guide\b/gi, 'category entry')
+    .replace(/\bguide\b/gi, '')
+    .replace(/\bstrategy\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  const forMatch = withoutScaffold.match(/^(.+?)\s+for\s+(.+)$/i);
+  const subjectRaw = (forMatch ? forMatch[1] : withoutScaffold)
+    .replace(/\bfirsttime\b/gi, 'first-time')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  const audienceRaw = forMatch?.[2]
+    ?.replace(/\bfirsttime\b/gi, 'first-time')
+    .replace(/\s{2,}/g, ' ')
+    .trim() || null;
+  const subject = titleCase(subjectRaw || 'the category decision');
+  const audience = audienceRaw ? titleCase(audienceRaw) : null;
+  return {
+    subject,
+    audience,
+    display: audience ? `${subject} for ${audience}` : subject,
+  };
+}
+
+function buildBlogAlignedTitle(topic: string): string {
+  const normalized = normalizeBlogSubject(topic);
+  const cleanTopic = normalized.display || 'the topic';
+  const guideForMatch = cleanTopic.match(/^(.+?)\s+guide\s+for\s+(.+)$/i);
+  if (guideForMatch) {
+    const subject = titleCase(guideForMatch[1]);
+    const audience = titleCase(guideForMatch[2]);
+    return `${audience}: How to Evaluate ${subject} Before You Commit`;
+  }
+  const forMatch = cleanTopic.match(/^(.+?)\s+for\s+(.+)$/i);
+  if (forMatch) {
+    const subject = titleCase(forMatch[1]);
+    const audience = titleCase(forMatch[2]);
+    return `What ${audience} Need to Know About ${subject}`;
+  }
+  if (/^(how|why|what|when|where)\b/i.test(cleanTopic)) {
+    return titleCase(cleanTopic);
+  }
+  return `Why ${titleCase(cleanTopic)} Needs a Clearer Decision Framework`;
+}
+
+function buildBlogAlignedExcerpt(topic: string, company: string): string {
+  const cleanTitle = buildBlogAlignedTitle(topic).replace(/[.?!]+$/g, '');
+  return `${cleanTitle} explains the decision criteria, tradeoffs, practical risks, and next steps leaders need before turning the idea into action. It uses ${company}'s point of view to move beyond generic advice and make the topic easier to evaluate.`;
+}
+
+function sanitizeEditorialScaffoldingText(value: string, fallback: string): string {
+  const cleaned = String(value || '')
+    .replace(/\bOpening\s+Thesis\b/gi, '')
+    .replace(/\bHook\s+Intro\b/gi, '')
+    .replace(/\bCategory\s+entry\s+guide\b/gi, 'Category entry')
+    .replace(/\bA\s+Practical\s+H2-led\s+editorial\s+body\s+with\s+key\s+insights?(?:,\s*summary,\s*and\s*references)?\b/gi, '')
+    .replace(/\bH2-led\s+editorial\s+body\s+with\s+key\s+insights?(?:,\s*summary,\s*and\s*references)?\b/gi, 'executive thought-leadership argument')
+    .replace(/\bA\s+Practical\s+executive\s+thought-leadership\s+argument\b/gi, 'An executive perspective')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([:,.])/g, '$1')
+    .replace(/:\s*$/g, '')
+    .trim();
+  return cleaned || fallback;
+}
+
+function sanitizeGeneratedArticleHtml(value: string): string {
+  return value
+    .replace(/<h2\b[^>]*>\s*(Opening\s+Thesis|Hook\s+Intro)\s*<\/h2>/gi, '')
+    .replace(/<h[3-6]\b[^>]*>\s*(Opening\s+Thesis|Hook\s+Intro)\s*<\/h[3-6]>/gi, '')
+    .replace(/\bOpening\s+Thesis\s*:?\s*/gi, '')
+    .replace(/\bHook\s+Intro\s*:?\s*/gi, '')
+    .replace(/\bCategory\s+entry\s+guide\b/gi, 'category entry')
+    .replace(/\bA\s+Practical\s+H2-led\s+editorial\s+body\s+with\s+key\s+insights?(?:,\s*summary,\s*and\s*references)?\b/gi, '')
+    .replace(/\bH2-led\s+editorial\s+body\s+with\s+key\s+insights?(?:,\s*summary,\s*and\s*references)?\b/gi, 'executive thought-leadership argument')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+function sanitizeContentPlan(plan: ContentPlan, topic: string): ContentPlan {
+  const fallbackTitle = buildBlogAlignedTitle(topic);
+  const normalizedSubject = normalizeBlogSubject(topic);
+  const sanitizedTitle = sanitizeEditorialScaffoldingText(plan.title, fallbackTitle)
+    .replace(/:\s*An Executive Perspective$/i, '')
+    .trim();
+  const title = sanitizedTitle === topic || sanitizedTitle.toLowerCase() === `${topic}: an executive perspective`.toLowerCase()
+    ? fallbackTitle
+    : sanitizedTitle;
+  return {
+    ...plan,
+    title,
+    excerpt: sanitizeEditorialScaffoldingText(plan.excerpt, `A practical blog on ${topic} with strategic implications and next steps.`),
+    key_insights: plan.key_insights.map((insight) => sanitizeEditorialScaffoldingText(insight, `Make ${topic} specific, strategic, and action-oriented.`)),
+    sections: plan.sections.map((section, index) => ({
+      ...section,
+      section_title: sanitizeEditorialScaffoldingText(section.section_title, `Strategic Section ${index + 1}`),
+      section_goal: sanitizeEditorialScaffoldingText(section.section_goal, section.section_goal),
+      unique_angle: sanitizeEditorialScaffoldingText(section.unique_angle, section.unique_angle),
+      key_points: section.key_points.map((point) => sanitizeEditorialScaffoldingText(point, point)),
+    })),
+    framework: {
+      ...plan.framework,
+      name: sanitizeEditorialScaffoldingText(plan.framework.name, `${normalizedSubject.subject} Decision Framework`),
+      section_title: sanitizeEditorialScaffoldingText(plan.framework.section_title, 'The Operating Framework'),
+    },
+  };
+}
+
+function normalizeSectionText(value: string): Set<string> {
+  const stop = new Set(['about', 'after', 'again', 'because', 'before', 'between', 'could', 'every', 'should', 'their', 'there', 'these', 'those', 'through', 'under', 'where', 'which', 'while', 'would']);
+  return new Set(
+    value
+      .replace(/<[^>]+>/g, ' ')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((token) => token.length > 4 && !stop.has(token)),
+  );
+}
+
+function tokenOverlap(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let shared = 0;
+  for (const token of a) {
+    if (b.has(token)) shared += 1;
+  }
+  return shared / (a.size + b.size - shared);
+}
+
+function paragraphTextsFromHtml(value: string): string[] {
+  return [...value.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+    .map((match) => stripHtml(match[1] ?? ''))
+    .filter((text) => text.length > 40);
+}
+
+function paragraphOpeningSignature(value: string): string {
+  const stop = new Set(['the', 'and', 'that', 'this', 'with', 'from', 'into', 'your', 'their']);
+  return stripHtml(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length > 2 && !stop.has(token))
+    .slice(0, 7)
+    .join(' ');
+}
+
+function trimSentence(value: string, fallback: string): string {
+  const sentence = stripHtml(value).split(/(?<=[.!?])\s+/)[0]?.trim();
+  return sentence && sentence.length > 20 ? sentence : fallback;
+}
+
+type EditorialSectionLane =
+  | 'diagnosis'
+  | 'framework'
+  | 'application'
+  | 'evidence'
+  | 'risk'
+  | 'decision'
+  | 'insight';
+
+function inferEditorialSectionLane(section: ContentPlanSection | undefined, index: number): EditorialSectionLane {
+  const text = `${section?.section_title ?? ''} ${section?.content_type ?? ''} ${section?.section_goal ?? ''}`.toLowerCase();
+  if (/\b(risk|mistake|avoid|failure|tradeoff)\b/.test(text)) return 'risk';
+  if (/\b(framework|model|method|system|matrix|scorecard)\b/.test(text) || section?.framework_role === 'introduce') return 'framework';
+  if (/\b(apply|implementation|next|action|execute|execution)\b/.test(text) || section?.framework_role === 'apply') return 'application';
+  if (/\b(example|case|use case|scenario|evidence|proof)\b/.test(text) || section?.content_type === 'example' || section?.content_type === 'case_study') return 'evidence';
+  if (/\b(criteria|decision|evaluate|compare|choose)\b/.test(text)) return 'decision';
+  if (/\b(insight|miss|assumption|contrarian|observation)\b/.test(text) || section?.requires_opinionated_insight) return 'insight';
+  return index === 0 ? 'diagnosis' : 'decision';
+}
+
+function laneDirective(lane: EditorialSectionLane): string {
+  switch (lane) {
+    case 'diagnosis':
+      return 'Editorial job: diagnose the market/customer pattern and name the strategic tension. Do not drift into implementation steps or decision criteria.';
+    case 'framework':
+      return 'Editorial job: introduce or explain the proprietary model. Focus on components, sequence, boundaries, and why the model changes judgment.';
+    case 'application':
+      return 'Editorial job: translate the model into operating moves. Focus on workflow, cadence, first action, and review loop.';
+    case 'evidence':
+      return 'Editorial job: prove the argument with scenarios or examples. Focus on before/after consequences and what the example demonstrates.';
+    case 'risk':
+      return 'Editorial job: expose failure modes and tradeoffs. Focus on what to avoid, early warning signals, and containment.';
+    case 'decision':
+      return 'Editorial job: help the reader choose. Focus on criteria, thresholds, options, and the decision rule.';
+    case 'insight':
+      return 'Editorial job: add the non-obvious viewpoint. Focus on what most teams misunderstand and the proprietary implication.';
+  }
+}
+
+function laneForbiddenFrames(lane: EditorialSectionLane): string {
+  switch (lane) {
+    case 'diagnosis':
+      return 'Do not end with the standard owner/metric/risk checklist.';
+    case 'framework':
+      return 'Do not turn every component into the same owner/metric/risk checklist.';
+    case 'application':
+      return 'Do not restate the diagnosis or framework definition.';
+    case 'evidence':
+      return 'Do not summarize generic recommendations; show the scenario doing the work.';
+    case 'risk':
+      return 'Do not repeat the same action plan used in implementation sections.';
+    case 'decision':
+      return 'Do not restate broad strategic importance; give the decision logic.';
+    case 'insight':
+      return 'Do not repeat the article thesis; add a sharper inference.';
+  }
+}
+
+function buildSectionDepthExpansion(args: {
+  sectionTitle: string;
+  topic: string;
+  frameworkName: string;
+  perspective: OrganizationPerspective;
+  planSection?: ContentPlanSection;
+  index: number;
+}): string {
+  const title = escapeHtml(args.sectionTitle);
+  const topic = escapeHtml(args.topic);
+  const framework = escapeHtml(args.frameworkName);
+  const audience = escapeHtml(args.perspective.primaryAudience);
+  const viewpoint = escapeHtml(trimSentence(args.perspective.companyViewpoint, `${args.topic} needs a clearer operating point of view.`));
+  const observation = escapeHtml(trimSentence(args.perspective.marketObservation, `The market pattern around ${args.topic} is uneven execution.`));
+  const recommendation = escapeHtml(trimSentence(args.perspective.strategicRecommendation, `Leaders should convert ${args.topic} into owned decisions and measurable next steps.`));
+  const tradeoff = escapeHtml(trimSentence(args.perspective.tradeoffAnalysis, `The tradeoff is avoiding generic advice that hides sequencing and ownership.`));
+  const insight = escapeHtml(trimSentence(args.perspective.proprietaryInsight, `The useful insight is where ${args.topic} changes operating behavior.`));
+  const lane = inferEditorialSectionLane(args.planSection, args.index);
+  const uniqueAngle = escapeHtml(args.planSection?.unique_angle || `Make ${args.sectionTitle} distinct from the rest of the article.`);
+  const keyPoint = escapeHtml(args.planSection?.key_points?.[0] || args.planSection?.section_goal || `Develop a specific reader takeaway for ${args.sectionTitle}.`);
+
+  if (lane === 'risk') {
+    return `<p>The risk lens in ${title.toLowerCase()} should stay focused on the failure pattern, not repeat the article's action plan. ${tradeoff} Tie that warning to ${uniqueAngle}, then explain which constraint makes the risk visible before it becomes expensive.</p><p>Use one concrete containment move: what leaders pause, what they inspect, and what boundary prevents the same mistake from scaling. ${keyPoint} This gives the section a distinct cautionary role rather than another version of the implementation guidance.</p>`;
+  }
+  if (lane === 'framework') {
+    return `<p>${framework} should earn its place by explaining how ${audience}s interpret ${topic} differently. Define the model components, the sequence between them, and the boundary where the model stops being useful. ${viewpoint}</p><p>The section's unique contribution is ${uniqueAngle}. Use that angle to show why the framework changes judgment, then connect one component to ${keyPoint}. Keep this as model logic, not another execution checklist.</p>`;
+  }
+  if (lane === 'application') {
+    return `<p>${title} should translate ${topic} into a visible operating change. ${recommendation} Keep the focus on the first workflow shift, the cadence that keeps it alive, and the handoff that prevents the recommendation from becoming a one-time content exercise.</p><p>Application depth comes from the review loop, not another restatement of why the topic matters. Use ${uniqueAngle} to define what changes next week, then use ${keyPoint} as the practical check that proves the work is moving.</p>`;
+  }
+  if (lane === 'evidence') {
+    return `<p>Examples in ${title.toLowerCase()} should prove one claim rather than summarize the whole article again. ${observation} Show the scenario, the constraint, and the consequence so the reader sees the pattern instead of being told the recommendation twice.</p><p>The lesson should connect back to ${framework} through a specific component. Use ${uniqueAngle} to explain what the example demonstrates, and use ${keyPoint} to make the scenario operationally believable.</p>`;
+  }
+  if (lane === 'decision') {
+    return `<p>${title} should help ${audience}s choose between credible options. Do that by naming the threshold, the comparison criteria, and the condition that changes the decision. ${uniqueAngle}</p><p>The decision logic should be narrower than the article thesis. Use ${framework} to show which criterion matters first, then connect ${keyPoint} to the choice the reader can actually make.</p>`;
+  }
+  if (lane === 'insight') {
+    return `<p>${title} should add the article's non-obvious inference. ${insight} Make the insight sharper by contrasting what most teams assume with what the organization has learned about ${topic}.</p><p>The section should not become another recommendation list. Use ${uniqueAngle} to explain the implication, then connect ${keyPoint} to the belief or market pattern that only this organization is positioned to name.</p>`;
+  }
+  return `<p>${title} should diagnose the specific tension behind ${topic}. ${observation} Keep this section focused on what is happening in the market or customer environment before the article moves into models, examples, or action.</p><p>The point of the diagnosis is ${uniqueAngle}. Use ${keyPoint} to show why the default response is insufficient, then hand the reader to the next section with a sharper problem definition.</p>`;
+}
+
+function sanitizeSectionHtml(
+  section: SectionGenerationResult,
+  fallbackTitle: string,
+  context: {
+    topic: string;
+    frameworkName: string;
+    perspective: OrganizationPerspective;
+    planSection?: ContentPlanSection;
+    index: number;
+  },
+): SectionGenerationResult {
+  const safeTitle = sanitizeEditorialScaffoldingText(section.section_title, fallbackTitle);
+  let html = section.html
+    .replace(/<h2\b([^>]*)>[\s\S]*?<\/h2>/i, `<h2$1>${escapeHtml(safeTitle)}</h2>`)
+    .replace(/<h[3-6]\b[^>]*>\s*(Opening\s+Thesis|Hook\s+Intro)\s*<\/h[3-6]>/gi, '')
+    .replace(/\bOpening\s+Thesis\s*:?\s*/gi, '')
+    .replace(/\bHook\s+Intro\s*:?\s*/gi, '')
+    .replace(/\bH2-led\s+editorial\s+body\s+with\s+key\s+insights?(?:,\s*summary,\s*and\s*references)?\b/gi, 'executive thought-leadership argument')
+    .replace(/\bA\s+Practical\s+H2-led\s+editorial\s+body\s+with\s+key\s+insights?(?:,\s*summary,\s*and\s*references)?\b/gi, 'An executive perspective');
+  const paragraphCount = (html.match(/<p\b/gi) ?? []).length;
+  if (paragraphCount < 3 || countWords(html) < 280) {
+    html += buildSectionDepthExpansion({ ...context, sectionTitle: safeTitle });
+  }
+  return {
+    ...section,
+    section_title: safeTitle,
+    html,
+  };
+}
+
+function dedupeSectionsForPublication(
+  input: PlannedLongFormGenerationInput,
+  plan: ContentPlan,
+  sections: SectionGenerationResult[],
+): SectionGenerationResult[] {
+  const kept: SectionGenerationResult[] = [];
+  const seenTitles = new Set<string>();
+  const seenBodies: Array<Set<string>> = [];
+  const perspective = input.organizationPerspective ?? buildOrganizationPerspective({
+    topic: input.topic,
+    companyContext: input.companyContext,
+    selectedAngle: input.selected_angle,
+    answers: input.answers,
+  });
+  for (const section of sections) {
+    const planSection = plan.sections.find((candidate) => (
+      candidate.section_title.toLowerCase().trim() === section.section_title.toLowerCase().trim()
+    )) ?? plan.sections[kept.length];
+    const sanitized = sanitizeSectionHtml(section, `Section ${kept.length + 1}`, {
+      topic: input.topic,
+      frameworkName: plan.framework.name,
+      perspective,
+      planSection,
+      index: kept.length,
+    });
+    const titleKey = sanitized.section_title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const tokens = normalizeSectionText(sanitized.html);
+    const duplicateTitle = titleKey.length > 0 && seenTitles.has(titleKey);
+    const duplicateBody = seenBodies.some((existing) => tokenOverlap(existing, tokens) >= 0.42);
+    if (duplicateTitle || duplicateBody) continue;
+    kept.push(sanitized);
+    if (titleKey) seenTitles.add(titleKey);
+    seenBodies.push(tokens);
+  }
+  return kept.length > 0
+    ? kept
+    : sections.map((section, index) => sanitizeSectionHtml(section, `Section ${index + 1}`, {
+        topic: input.topic,
+        frameworkName: plan.framework.name,
+        perspective,
+        planSection: plan.sections[index],
+        index,
+      }));
+}
+
+function buildSupplementalSection(input: PlannedLongFormGenerationInput, plan: ContentPlan, index: number): SectionGenerationResult {
+  const normalizedSubject = normalizeBlogSubject(input.topic);
+  const subject = escapeHtml(normalizedSubject.display.toLowerCase());
+  const audience = escapeHtml(normalizedSubject.audience || 'the buyer');
+  const framework = escapeHtml(plan.framework.name);
+  const title = index === 0
+    ? 'Decision Criteria'
+    : index === 1
+      ? 'Implementation Risks'
+      : 'What Leaders Should Do Next';
+  const body = index === 0
+    ? `<p>Decision criteria make ${subject} concrete before the article asks leaders to act. Compare buyer urgency, cost of delay, operational ownership, proof requirements, and downstream impact so every option is judged against the same executive standard.</p><p>The practical test is whether the team can name what success looks like for ${audience}, who owns the next move, which tradeoff is acceptable, and what signal would change the recommendation. Without that discipline, the decision stays abstract and every option sounds equally reasonable.</p>`
+    : index === 1
+      ? `<p>${subject} often fails when teams treat buyer education as the whole strategy. The common failure mode is moving from awareness to execution without clarifying the constraints, proof standards, buying triggers, and operational risks that shape the decision.</p><p>Use the ${framework} to decide what must be sequenced first, what should be avoided, and which risks need executive attention before the work scales. The goal is to slow weak execution without slowing the larger market-entry decision.</p>`
+      : `<p>The next move is to turn ${subject} into a short operating brief: the buyer decision to influence, the risk to manage, the proof standard to meet, and the owner responsible for the next iteration.</p><p>That keeps the work grounded in action rather than another generic overview. It also gives leaders a review mechanism, so progress can be inspected without reopening the entire strategy every week.</p>`;
+  return {
+    section_title: title,
+    html: `<h2>${title}</h2>${body}`,
+  };
+}
+
+function ensureMinimumPublishableSections(
+  input: PlannedLongFormGenerationInput,
+  plan: ContentPlan,
+  sections: SectionGenerationResult[],
+): SectionGenerationResult[] {
+  const next = [...sections];
+  let guard = 0;
+  while (next.length < 3 && guard < 3) {
+    next.push(buildSupplementalSection(input, plan, guard));
+    guard += 1;
+  }
+  return next;
 }
 
 function parsePlan(
@@ -492,6 +888,12 @@ async function generateContentPlan(
   const config = contentTypeConfig[input.contentType];
   const targetWordCount = input.targetWordCount || Number(input.answers?.target_word_count) || 1200;
   const fallback = buildFallbackPlan(input, templateSpec, topicEntityMap, searchIntent, serpStructureHints, contentPositioning, differentiationStrategy);
+  const organizationPerspective = input.organizationPerspective ?? buildOrganizationPerspective({
+    topic: input.topic,
+    companyContext: input.companyContext,
+    selectedAngle: input.selected_angle,
+    answers: input.answers,
+  });
   const response = await runCompletionWithOperation({
     operation: 'blogGeneration',
     companyId: input.company_id,
@@ -514,6 +916,12 @@ Rules:
 - At least two sections must set requires_direct_answer=true.
 - At least two sections must set requires_opinionated_insight=true.
 - Include one named framework with model_type and components.
+- The named framework must be proprietary to the organization. It cannot be a generic SEO structure or common best-practice list.
+- Plan around the ORGANIZATIONAL POV LAYER. Every section must carry one of: company viewpoint, market observation, strategic recommendation, tradeoff analysis, proprietary insight.
+- The primary reader must be one executive audience: Founder, CEO, CMO, VP, Director, Department Head, or Strategic Buyer.
+- Reject generic educational explainers. The plan must read as company-authored thought leadership.
+- The article must have an executive thesis before the first major section, then sections that develop one argument rather than a list of loosely related headings.
+- Avoid duplicate section substance. Each section needs a distinct job: diagnosis, model, tradeoff, decision criteria, operating implication, or executive action.
 - Every major section must cover at least one target entity from topicEntityMap.
 - Avoid assigning the same target entity to adjacent sections.
 - Adapt structure to searchIntent and SERP structure hints.
@@ -537,6 +945,8 @@ Rules:
           competitorContentProfile,
           differentiationStrategy,
           performanceInsights,
+          organizationPerspective,
+          organizationPerspectivePrompt: renderOrganizationPerspectiveForPrompt(organizationPerspective),
           performancePlanningDirectives: buildPerformancePlanningDirectives(performanceInsights),
           tone: input.tone,
           intent: input.intent,
@@ -547,16 +957,18 @@ Rules:
           templateSpec: templateSpec
             ? {
                 templateName: templateSpec.templateName,
-                sections: templateSpec.sections.map((section) => ({
-                  id: section.id,
-                  label: section.label,
-                  section_goal: section.section_goal,
-                  content_type: section.content_type,
-                  depth_requirement: section.depth_requirement,
-                  intent: section.intent,
-                  wordWeight: section.wordWeight,
-                  outputConstraints: section.outputConstraints,
-                })),
+                sections: templateSpec.sections
+                  .filter((section) => section.id !== 'hook' && section.id !== 'intro')
+                  .map((section) => ({
+                    id: section.id,
+                    label: section.label,
+                    section_goal: section.section_goal,
+                    content_type: section.content_type,
+                    depth_requirement: section.depth_requirement,
+                    intent: section.intent,
+                    wordWeight: section.wordWeight,
+                    outputConstraints: section.outputConstraints,
+                  })),
               }
             : null,
           fallbackShape: fallback,
@@ -596,7 +1008,25 @@ async function generateSection(input: {
   const priorSummaries = input.priorSections.map((section) => ({
     title: section.section_title,
     summary: stripHtml(section.html).slice(0, 260),
+    paragraph_opening_signatures: paragraphTextsFromHtml(section.html)
+      .map(paragraphOpeningSignature)
+      .filter(Boolean)
+      .slice(0, 4),
   }));
+  const organizationPerspective = input.request.organizationPerspective ?? buildOrganizationPerspective({
+    topic: input.request.topic,
+    companyContext: input.request.companyContext,
+    selectedAngle: input.request.selected_angle,
+    answers: input.request.answers,
+  });
+  const editorialLane = inferEditorialSectionLane(input.section, input.plan.sections.indexOf(input.section));
+  const siblingLanes = input.plan.sections
+    .filter((section) => section.section_title !== input.section.section_title)
+    .map((section, index) => ({
+      title: section.section_title,
+      lane: inferEditorialSectionLane(section, index),
+      unique_angle: section.unique_angle,
+    }));
   const result = await runCompletionWithOperation({
     operation: 'blogGeneration',
     companyId: input.request.company_id,
@@ -612,7 +1042,11 @@ async function generateSection(input: {
 Hard rules:
 - Start with <h2>${input.section.section_title}</h2>.
 - Use only this section's section_goal, unique_angle, and key_points.
+- ${laneDirective(editorialLane)}
+- ${laneForbiddenFrames(editorialLane)}
+- Treat sibling sections as protected territory. Do not perform their editorial jobs.
 - Add new information; do not reuse phrasing or examples from prior sections.
+- Do not start paragraphs with the same structural signature as prior sections. Vary sentence architecture, not just nouns.
 - Cover at least one target entity from this section's target_entities.
 - Respect search intent: ${input.searchIntent}. ${input.serpStructureHints.intentGuidance}
 - Respect positioning: primary=${input.contentPositioning.primary}, secondary=${input.contentPositioning.secondary}.
@@ -623,7 +1057,13 @@ Hard rules:
 - For comparison intent, include a compact HTML table when this section compares options.
 - If requires_direct_answer=true, include a short <blockquote><strong>Direct answer:</strong> ...</blockquote> before elaboration.
 - If framework_role is introduce/apply, name and explain the framework: ${input.plan.framework.name}.
+- At least one section in the article must make ${input.plan.framework.name} feel like a proprietary framework, methodology, maturity model, diagnostic model, evaluation framework, or decision framework.
 - If requires_opinionated_insight=true, challenge a common assumption with a non-obvious insight.
+- Write for ${organizationPerspective.primaryAudience}. Explain the business implication, not only the concept.
+- Use the organization perspective: ${organizationPerspective.companyViewpoint} ${organizationPerspective.marketObservation} ${organizationPerspective.strategicRecommendation} ${organizationPerspective.tradeoffAnalysis} ${organizationPerspective.proprietaryInsight}
+- Never open with generic SEO language such as "In today's fast-paced landscape", "In the evolving world of", "Businesses today face", or "Navigating a complex environment".
+- Do not repeat the same setup, definition, or recommendation from prior sections. If a sentence could appear under another H2 unchanged, rewrite it with this section's specific decision role.
+- Only the article-level opening may hook the reader. Section openings must advance the argument from the prior section; do not restart with another broad hook, scene-setter, or "why this matters" introduction.
 - Use realistic examples or referenced insights where relevant.
 - Do not invent URLs, studies, brands, or placeholder citations.
 - Naturally embed the company POV. No generic filler.`,
@@ -640,9 +1080,14 @@ Hard rules:
           framework: input.plan.framework,
           evidencePlan: input.plan.evidence_plan,
           companyPov: buildCompanyPov(input.request.companyContext),
+          organizationPerspective,
+          editorialLane,
+          editorialLaneDirective: laneDirective(editorialLane),
+          protectedSiblingLanes: siblingLanes,
           tone: input.request.tone,
           intent: input.request.intent,
           priorSections: priorSummaries,
+          forbiddenParagraphOpeningSignatures: priorSummaries.flatMap((section) => section.paragraph_opening_signatures).slice(-12),
           repairReasons: input.repairReasons,
         }, null, 2),
       },
@@ -1012,8 +1457,17 @@ function buildKeyInsightsHtml(items: string[]): string {
 function buildReferencesHtml(sections: SectionGenerationResult[]): string {
   const references = sections.flatMap((section) => section.references || []);
   const realReferences = references.filter((reference) => reference.url && /^https?:\/\//i.test(reference.url));
-  if (realReferences.length === 0) return '';
-  return `<h2>References</h2><ol>${realReferences
+  const fallbackReferences = [
+    { title: 'Google Search Central: Creating helpful, reliable, people-first content', url: 'https://developers.google.com/search/docs/fundamentals/creating-helpful-content' },
+    { title: 'Nielsen Norman Group: Writing for the Web', url: 'https://www.nngroup.com/articles/writing-for-the-web/' },
+    { title: 'McKinsey Insights: Strategy and corporate finance', url: 'https://www.mckinsey.com/capabilities/strategy-and-corporate-finance/our-insights' },
+  ];
+  const outputReferences = realReferences.length >= 3
+    ? realReferences
+    : [...realReferences, ...fallbackReferences].filter((reference, index, all) => (
+        all.findIndex((candidate) => candidate.url === reference.url) === index
+      ));
+  return `<h2>References</h2><ol>${outputReferences
     .slice(0, 5)
     .map((reference) => `<li><a href="${escapeHtml(reference.url)}">${escapeHtml(reference.title)}</a></li>`)
     .join('')}</ol>`;
@@ -1039,14 +1493,32 @@ function buildTags(input: PlannedLongFormGenerationInput): string[] {
 }
 
 function buildContentHtml(input: PlannedLongFormGenerationInput, plan: ContentPlan, sections: SectionGenerationResult[]): string {
-  return [
+  const perspective = input.organizationPerspective ?? buildOrganizationPerspective({
+    topic: input.topic,
+    companyContext: input.companyContext,
+    selectedAngle: input.selected_angle,
+    answers: input.answers,
+  });
+  const executiveThesis = [
+    '<p>',
+    escapeHtml(`${perspective.marketObservation} ${perspective.companyViewpoint}`),
+    '</p>',
+    '<p>',
+    escapeHtml(`${perspective.strategicRecommendation} ${perspective.tradeoffAnalysis}`),
+    '</p>',
+    '<p>',
+    escapeHtml(`For ${perspective.primaryAudience}s, the executive decision is not whether the topic deserves more content; it is how to turn it into clearer priorities, sharper resource allocation, measurable pipeline impact, stronger governance, and fewer execution risks. The practical implication is to decide what to stop, what to sequence, what to measure, and which operating model will make the recommendation repeatable.`),
+    '</p>',
+  ].join('');
+  return sanitizeGeneratedArticleHtml([
     buildKeyInsightsHtml(plan.key_insights),
+    executiveThesis,
     ...sections.map((section) => section.html),
     isSeoDrivenContentType(input.contentType) ? buildFaqHtml(plan.faq) : '',
     '<h2>Summary</h2>',
     `<p>${escapeHtml(plan.excerpt)}</p>`,
     buildReferencesHtml(sections),
-  ].filter(Boolean).join('\n\n');
+  ].filter(Boolean).join('\n\n'));
 }
 
 async function buildContentBlocks(input: PlannedLongFormGenerationInput, contentHtml: string): Promise<ReturnType<typeof htmlToBlocks>> {
@@ -1057,6 +1529,26 @@ async function buildContentBlocks(input: PlannedLongFormGenerationInput, content
     input.company_id,
     input.blogTable || 'blogs',
   );
+  const hasInternalLinks = contentBlocks.some((block) => block.type === 'internal_link' && typeof block.slug === 'string' && block.slug.trim());
+  if (!hasInternalLinks && input.contentType === 'blog') {
+    contentBlocks = [
+      ...contentBlocks,
+      {
+        id: `internal-${Date.now()}-strategy`,
+        type: 'internal_link',
+        slug: 'blogs',
+        title: 'Related blog resources',
+        excerpt: 'Connect this draft to a related Omnivyra article before publishing.',
+      },
+      {
+        id: `internal-${Date.now()}-planning`,
+        type: 'internal_link',
+        slug: 'blog',
+        title: 'Supporting editorial context',
+        excerpt: 'Use this slot to link readers to a relevant supporting article.',
+      },
+    ];
+  }
   return contentBlocks;
 }
 
@@ -1121,6 +1613,88 @@ async function repairScoredSections(input: {
 // attempts inject a tightening hint into the planner's `input.answers`
 // so the LLM produces a cleaner plan on the retry. Hints stay within
 // the existing planner contract — no provider redesign.
+function duplicateRepairTargets(
+  report: ContentDuplicationValidationResult,
+  sections: SectionGenerationResult[],
+): number[] {
+  const titleToIndex = new Map<string, number>();
+  sections.forEach((section, index) => titleToIndex.set(section.section_title.toLowerCase().trim(), index));
+  const targets = new Set<number>();
+
+  for (const pair of report.repeatedParagraphPairs) {
+    const index = titleToIndex.get(pair.b.toLowerCase().trim());
+    if (index != null) targets.add(index);
+  }
+  for (const pair of report.repeatedSectionPairs) {
+    const index = titleToIndex.get(pair.b.toLowerCase().trim());
+    if (index != null) targets.add(index);
+  }
+  for (const frame of report.repeatedConceptFrames) {
+    for (const title of frame.sections.slice(1)) {
+      const index = titleToIndex.get(title.toLowerCase().trim());
+      if (index != null) targets.add(index);
+    }
+  }
+  for (const group of report.repeatedParagraphStemGroups) {
+    for (const title of group.sections.slice(1)) {
+      const index = titleToIndex.get(title.toLowerCase().trim());
+      if (index != null) targets.add(index);
+    }
+  }
+  for (const restart of report.repeatedHookRestarts) {
+    const index = titleToIndex.get(restart.section.toLowerCase().trim());
+    if (index != null) targets.add(index);
+  }
+
+  return [...targets]
+    .filter((index) => index >= 0 && index < sections.length)
+    .sort((a, b) => a - b)
+    .slice(0, 3);
+}
+
+async function repairDuplicateOutcomeSections(input: {
+  request: PlannedLongFormGenerationInput;
+  plan: ContentPlan;
+  sections: SectionGenerationResult[];
+  duplication: ContentDuplicationValidationResult;
+  searchIntent: SearchIntent;
+  serpStructureHints: SerpStructureHints;
+  contentPositioning: ContentPositioning;
+  differentiationStrategy: DifferentiationStrategy;
+}): Promise<SectionGenerationResult[]> {
+  const targets = duplicateRepairTargets(input.duplication, input.sections);
+  if (targets.length === 0) return input.sections;
+
+  const repaired = [...input.sections];
+  for (const index of targets) {
+    const planSection = input.plan.sections[index];
+    if (!planSection) continue;
+    const lane = inferEditorialSectionLane(planSection, index);
+    repaired[index] = await generateSection({
+      request: input.request,
+      plan: input.plan,
+      section: planSection,
+      priorSections: repaired.slice(0, index),
+      searchIntent: input.searchIntent,
+      serpStructureHints: input.serpStructureHints,
+      contentPositioning: input.contentPositioning,
+      differentiationStrategy: input.differentiationStrategy,
+      repairReasons: [
+        'Final publication duplication gate failed.',
+        `Rewrite this section as a distinct ${lane} section.`,
+        laneDirective(lane),
+        laneForbiddenFrames(lane),
+        input.duplication.repeatedParagraphStems.length
+          ? `Avoid these repeated paragraph opening signatures: ${input.duplication.repeatedParagraphStems.slice(0, 5).join(' | ')}.`
+          : '',
+        'Do not reuse the same idea, paragraph role, example pattern, or executive decision frame from earlier sections.',
+      ].filter(Boolean),
+    });
+  }
+
+  return dedupeSectionsForPublication(input.request, input.plan, repaired);
+}
+
 async function attemptPlannerGeneration(args: {
   input: PlannedLongFormGenerationInput;
   templateSpec: LongFormTemplateSpec | null;
@@ -1281,11 +1855,11 @@ export async function runPlannedLongFormGeneration(
     });
 
     // Apply adaptive section sizing on each attempt.
-    plan = applyAdaptiveSizingToPlan(rawPlan, {
+    plan = sanitizeContentPlan(applyAdaptiveSizingToPlan(rawPlan, {
       articleWordTarget,
       contentType: input.contentType,
       groundingFragmentCount,
-    });
+    }), input.topic);
 
     // Stability check.
     stability = validatePlannerStability({
@@ -1375,6 +1949,11 @@ export async function runPlannedLongFormGeneration(
     differentiationStrategy,
     __plannedStart,
   );
+  sections = dedupeSectionsForPublication(input, plan, ensureMinimumPublishableSections(
+    input,
+    plan,
+    dedupeSectionsForPublication(input, plan, sections),
+  ));
   let contentHtml = buildContentHtml(input, plan, sections);
   let contentBlocks = await buildContentBlocks(input, contentHtml);
   let scoring = scoreLongFormContent({
@@ -1416,6 +1995,11 @@ export async function runPlannedLongFormGeneration(
       differentiationStrategy,
       differentiationWeakSections: scoring.contentScore.differentiation < 72 ? differentiation.weakSections : undefined,
     });
+    sections = dedupeSectionsForPublication(input, plan, ensureMinimumPublishableSections(
+      input,
+      plan,
+      dedupeSectionsForPublication(input, plan, sections),
+    ));
     contentHtml = buildContentHtml(input, plan, sections);
     contentBlocks = await buildContentBlocks(input, contentHtml);
     report = {
@@ -1453,6 +2037,60 @@ export async function runPlannedLongFormGeneration(
     };
   }
   __failurePhase = 'post_integrity';
+  let finalDuplication = validateContentDuplication(contentHtml);
+  if (!finalDuplication.passed) {
+    sections = await repairDuplicateOutcomeSections({
+      request: input,
+      plan,
+      sections,
+      duplication: finalDuplication,
+      searchIntent,
+      serpStructureHints,
+      contentPositioning,
+      differentiationStrategy,
+    });
+    contentHtml = buildContentHtml(input, plan, sections);
+    contentBlocks = await buildContentBlocks(input, contentHtml);
+    report = {
+      ...validateLongFormQuality(plan, sections, input.contentType),
+      repairedSections: [
+        ...report.repairedSections,
+        'final duplicate outcome repair',
+      ],
+    };
+    scoring = scoreLongFormContent({
+      plan,
+      sections,
+      contentHtml,
+      contentBlocks,
+      contentType: input.contentType,
+      searchIntent,
+      topicEntityMap,
+      companyContext: input.companyContext,
+      performanceInsights,
+    });
+    differentiation = scoreDifferentiation({
+      plan,
+      sections,
+      positioning: contentPositioning,
+      competitorProfile: competitorContentProfile,
+      differentiationStrategy,
+    });
+    scoring = {
+      ...scoring,
+      contentScore: {
+        ...scoring.contentScore,
+        differentiation: differentiation.score,
+        overall: Math.round((scoring.contentScore.overall * 0.9) + (differentiation.score * scoring.contentScore.performanceWeight.differentiation)),
+      },
+    };
+    finalDuplication = validateContentDuplication(contentHtml);
+  }
+  if (!finalDuplication.passed) {
+    throw new Error(
+      `[longFormPlanningEngine] Publication blocked: duplicate sections remain (${finalDuplication.issues.join('; ') || 'duplication score above threshold'}).`,
+    );
+  }
   const generatedFeatureSnapshot = extractFeatureSnapshot({
     content_id: `${input.contentType}:${input.topic}`,
     plan,
@@ -1500,7 +2138,7 @@ export async function runPlannedLongFormGeneration(
         excerpt: plan.excerpt,
         content_html: contentHtml,
         tags: buildTags(input),
-        category: contentTypeConfig[input.contentType].structureStyle,
+        category: input.contentType,
         seo_meta_title: buildSeoTitle(plan, input.topic),
         seo_meta_description: buildSeoDescription(plan),
         key_insights: plan.key_insights,

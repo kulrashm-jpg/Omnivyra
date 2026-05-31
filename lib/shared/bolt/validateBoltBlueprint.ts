@@ -230,6 +230,15 @@ export function validateBoltBlueprint(plan: { weeks: unknown[] } | null | undefi
 export function assertValidBoltBlueprint(plan: { weeks: unknown[] } | null | undefined): void {
   const r = validateBoltBlueprint(plan);
   if (r.ok) return;
-  const first = r.errors[0];
+  // BLUEPRINT_MISSING_CTA is warning-class: the planner's week-level
+  // shape doesn't always carry a CTA field (CTA guidance is also
+  // injected at the daily-row level downstream), so blocking the
+  // commit-plan stage on this alone over-rejects. Mirrors the
+  // assertDailyPlanRowValid pattern for DAILY_PLAN_INVALID_CTA.
+  // Warnings still appear in r.errors so the failure dashboard
+  // surfaces them; only hard errors throw.
+  const hardErrors = r.errors.filter((e) => e.code !== BOLT_ERROR_CODES.BLUEPRINT_MISSING_CTA);
+  if (hardErrors.length === 0) return;
+  const first = hardErrors[0];
   throw new BoltError(first.code, first.message, { details: { ...first.details, totals: r.totals } });
 }

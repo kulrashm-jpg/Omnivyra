@@ -41,6 +41,7 @@ import { runConversationMemoryWorker }  from './conversationMemoryWorker';
 import { runCacheWarmup }            from '../services/cacheWarmup';
 import { startAutoScalingMonitor }   from '../services/autoScalingSignal';
 import { getMetricsSnapshot }        from '../services/metricsCollector';
+import { runPublishingWorker }       from '../services/publishingJobService';
 import { createCreatorRenderWorker, recoverOrphanedCreatorRenderJobs } from '../services/creatorRenderDurableQueue';
 import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcessor';
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
@@ -212,6 +213,31 @@ async function ensureRedisReady(): Promise<void> {
  * has diverged since deploy, the predeploy snapshot would already
  * have caught it.
  */
+function startPublishingJobsLoop(): () => void {
+  const workerId = `publishing-jobs-${process.pid}`;
+  let running = false;
+
+  const runOnce = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const result = await runPublishingWorker({ workerId, limit: 5 });
+      const processed = result.published + result.retrying + result.failed + result.deadLettered;
+      if (result.claimed > 0 || processed > 0) {
+        console.info('[publishing-jobs] cycle completed', { workerId, ...result });
+      }
+    } catch (err) {
+      console.error('[publishing-jobs] cycle failed:', err instanceof Error ? err.message : String(err));
+    } finally {
+      running = false;
+    }
+  };
+
+  void runOnce();
+  const timer = setInterval(() => { void runOnce(); }, 30_000);
+  return () => clearInterval(timer);
+}
+
 function logBootProvenance(): void {
   const env = process.env;
   let redisHost = 'unknown';
@@ -290,6 +316,8 @@ async function main(): Promise<void> {
     });
 
   // Autoscaling monitor — fires signal when queue depth > 500 or latency > 10s
+  const stopPublishingJobsLoop = startPublishingJobsLoop();
+
   let _cachedLatency = 0;
   setInterval(async () => {
     try { _cachedLatency = (await getMetricsSnapshot()).avgLatencyMs; } catch { /* ignore */ }
@@ -306,7 +334,8 @@ async function main(): Promise<void> {
   console.info('[main] all workers running', {
     queues: ['publish', 'bolt-execution', 'engagement-polling',
              'intelligence-polling', 'ai-heavy', 'engine-jobs',
-             'lead-thread-recompute', 'conversation-memory-rebuild', 'creator-render'],
+             'lead-thread-recompute', 'conversation-memory-rebuild', 'creator-render',
+             'publishing_jobs'],
     boltConcurrency,
     pid: process.pid,
   });
@@ -316,6 +345,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     console.info(`[main] ${signal} received — shutting down gracefully`);
     stopMonitor();
+    stopPublishingJobsLoop();
     clearInterval(orphanRecoveryTimer);
     await Promise.allSettled([
       publishWorker.close(),

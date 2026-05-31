@@ -6,7 +6,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 import { getIntegration, getActiveIntegration, type Integration } from './integrationService';
 import { extractBlogContext } from '../../lib/blog/blockExtractor';
-import { createPublishingJob } from './publishingJobService';
+import { createPublishingJob, executePublishingJob } from './publishingJobService';
 import { isCmsProvider } from './cms/registry';
 import { captureBlogPublishSnapshotSafely } from './publishSnapshotCaptureService';
 
@@ -29,14 +29,16 @@ export interface Blog {
   seo_meta_description: string | null;
   is_featured:          boolean;
   views_count:          number;
+  content_type?:        string | null;
   status:               BlogStatus;
   integration_id:       string | null;
   external_id:          string | null;
+  external_url?:        string | null;
   published_at:         string | null;
   created_at:           string;
   updated_at:           string;
   angle_type:           string | null;
-  hook_strength:        string | null;
+  hook_strength?:       string | null;
   scheduled_publish_at?: string | null;
 }
 
@@ -55,7 +57,9 @@ export interface CreateBlogInput {
   website_id?:          string | null;
   scheduled_publish_at?: string | null;
   angle_type?:          string | null;
-  hook_strength?:       string | null;
+  content_type?:        string | null;
+  status?:              BlogStatus;
+  published_at?:        string | null;
 }
 
 export interface UpdateBlogInput {
@@ -74,13 +78,15 @@ export interface UpdateBlogInput {
   scheduled_publish_at?: string | null;
   status?:              BlogStatus;
   angle_type?:          string | null;
-  hook_strength?:       string | null;
+  content_type?:        string | null;
+  published_at?:        string | null;
 }
 
 export interface PublishResult {
   success:      boolean;
   message:      string;
   external_id?: string;
+  external_url?: string;
   hosted?:      boolean;
 }
 
@@ -115,7 +121,7 @@ async function resolveUniqueSlug(companyId: string, base: string): Promise<strin
 
 // ─── Content blocks → HTML (for external publish) ─────────────────────────────
 
-function blocksToHtml(blocks: unknown[]): string {
+function legacyBlocksToHtml(blocks: unknown[]): string {
   if (!Array.isArray(blocks)) return '';
   const parts: string[] = [];
 
@@ -217,6 +223,234 @@ function blocksToHtml(blocks: unknown[]): string {
   return parts.join('\n');
 }
 
+void legacyBlocksToHtml;
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttribute(value: string): string {
+  return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+function readString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readBlocks(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+const wpStyles = {
+  article: 'font-family:Inter,Arial,sans-serif;color:#3D4F61;line-height:1.75;font-size:17px;max-width:760px;margin:0 auto;',
+  h2: 'font-size:30px;line-height:1.22;color:#0B1F33;font-weight:750;margin:48px 0 18px;border-bottom:1px solid #E5E7EB;padding-bottom:12px;',
+  h3: 'font-size:23px;line-height:1.3;color:#0B1F33;font-weight:700;margin:34px 0 14px;',
+  paragraphWrap: 'margin:0 0 22px;color:#3D4F61;line-height:1.75;',
+  panel: 'margin:32px 0;border:1px solid #DBEAFE;background:#F5F9FF;border-radius:16px;padding:22px;',
+  panelTitle: 'margin:0 0 12px;color:#0A66C2;font-size:13px;letter-spacing:.12em;text-transform:uppercase;font-weight:750;',
+  callout: 'margin:32px 0;border-left:4px solid #0A66C2;background:#F5F9FF;border-radius:0 14px 14px 0;padding:18px 22px;',
+  quote: 'margin:32px 0;border-left:4px solid #0A66C2;background:#F5F9FF;border-radius:0 14px 14px 0;padding:18px 22px;color:#3D4F61;',
+  figure: 'margin:34px 0;',
+  image: 'display:block;width:100%;height:auto;border-radius:16px;box-shadow:0 12px 28px rgba(15,23,42,.12);',
+  caption: 'margin-top:10px;text-align:center;color:#6B7C93;font-size:14px;font-style:italic;',
+  assetFrame: 'margin:0 0 18px;padding:12px;border:1px solid #EDE9FE;background:#FAF5FF;border-radius:16px;',
+  assetLabel: 'margin:0 0 8px;color:#6D28D9;font-size:12px;letter-spacing:.12em;text-transform:uppercase;font-weight:750;',
+  linkCard: 'display:block;margin:30px 0;border:1px solid #DBEAFE;background:#F8FBFF;border-radius:16px;padding:18px;text-decoration:none;color:#0B1F33;',
+};
+
+function styled(tag: string, style: string, body: string, attrs = ''): string {
+  return `<${tag}${attrs} style="${escapeAttribute(style)}">${body}</${tag}>`;
+}
+
+function styleParagraphHtml(html: string): string {
+  if (!html) return '';
+  return `<div style="${escapeAttribute(wpStyles.paragraphWrap)}">${html}</div>`;
+}
+
+function renderListItems(items: unknown[], ordered: boolean): string {
+  const tag = ordered ? 'ol' : 'ul';
+  const rendered = items
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map((item) => {
+      const text = readString(item, 'text');
+      const children = renderListItems(readBlocks(item.children), ordered);
+      if (!text && !children) return '';
+      return `<li style="margin:8px 0;color:#3D4F61;line-height:1.65;">${text || ''}${children}</li>`;
+    })
+    .filter(Boolean)
+    .join('');
+  return rendered ? `<${tag} style="margin:18px 0 24px;padding-left:26px;">${rendered}</${tag}>` : '';
+}
+
+function renderCreatorAsset(block: Record<string, unknown>): string {
+  const title = readString(block, 'title') || 'Creator asset';
+  const caption = readString(block, 'caption');
+  const files = readBlocks(block.files)
+    .map((file) => typeof file === 'string' ? file.trim() : '')
+    .filter(Boolean);
+  const primaryUrl = readString(block, 'url');
+  const variants = readBlocks(block.variants)
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
+  const publishAll = block.publishAllVariants === true;
+  const selectedVariantId = readString(block, 'selectedVariantId');
+  const selectedVariantFiles = !publishAll && selectedVariantId
+    ? variants.flatMap((variant) => {
+        if (readString(variant, 'variant_id') !== selectedVariantId) return [];
+        const variantUrl = readString(variant, 'url');
+        const variantFileUrls = readBlocks(variant.files)
+          .map((file) => typeof file === 'string' ? file.trim() : '')
+          .filter(Boolean);
+        return variantFileUrls.length > 0 ? variantFileUrls : (variantUrl ? [variantUrl] : []);
+      })
+    : [];
+  const variantFiles = publishAll
+    ? variants.flatMap((variant) => {
+        const state = readString(variant, 'state') || 'generated';
+        if (state !== 'generated') return [];
+        const variantUrl = readString(variant, 'url');
+        const variantFileUrls = readBlocks(variant.files)
+          .map((file) => typeof file === 'string' ? file.trim() : '')
+          .filter(Boolean);
+        return variantFileUrls.length > 0 ? variantFileUrls : (variantUrl ? [variantUrl] : []);
+      })
+    : [];
+  const urls = [...variantFiles, ...selectedVariantFiles, ...(files.length > 0 ? files : primaryUrl ? [primaryUrl] : [])]
+    .filter((url, index, all) => all.indexOf(url) === index);
+  if (urls.length === 0) return '';
+  const images = urls.map((url, index) =>
+    `<div style="${escapeAttribute(wpStyles.assetFrame)}">${urls.length > 1 ? `<p style="${escapeAttribute(wpStyles.assetLabel)}">Asset ${index + 1} of ${urls.length}</p>` : ''}<img src="${escapeAttribute(url)}" alt="${escapeAttribute(urls.length > 1 ? `${title} ${index + 1}` : title)}" style="${escapeAttribute(wpStyles.image)}" /></div>`,
+  ).join('\n');
+  return caption
+    ? `<figure style="${escapeAttribute(wpStyles.figure)}">${images}<figcaption style="${escapeAttribute(wpStyles.caption)}">${escapeHtml(caption)}</figcaption></figure>`
+    : `<figure style="${escapeAttribute(wpStyles.figure)}">${images}</figure>`;
+}
+
+function blockToHtml(block: unknown): string {
+  if (!block || typeof block !== 'object') return '';
+  const b = block as Record<string, unknown>;
+  const type = readString(b, 'type');
+
+  switch (type) {
+    case 'heading': {
+      const rawLevel = typeof b.level === 'number' ? b.level : 2;
+      const level = rawLevel === 3 ? 3 : 2;
+      const text = readString(b, 'text');
+      const anchor = readString(b, 'anchor');
+      return text
+        ? styled(`h${level}`, level === 2 ? wpStyles.h2 : wpStyles.h3, escapeHtml(text), anchor ? ` id="${escapeAttribute(anchor)}"` : '')
+        : '';
+    }
+    case 'paragraph':
+    case 'text': {
+      const html = readString(b, 'html');
+      const text = readString(b, 'text');
+      if (html) return styleParagraphHtml(html);
+      return text ? styled('p', wpStyles.paragraphWrap, escapeHtml(text)) : '';
+    }
+    case 'summary': {
+      const body = readString(b, 'body');
+      return body
+        ? `<section class="omnivera-summary" style="${escapeAttribute(wpStyles.panel)}">${styled('p', wpStyles.panelTitle, 'Summary')}${styled('p', wpStyles.paragraphWrap, `<strong>${escapeHtml(body)}</strong>`)}</section>`
+        : '';
+    }
+    case 'key_insights': {
+      const title = readString(b, 'title') || 'Key Insights';
+      const items = readBlocks(b.items)
+        .map((item) => typeof item === 'string' ? item.trim() : '')
+        .filter(Boolean);
+      return items.length > 0
+        ? `<section class="omnivera-key-insights" style="${escapeAttribute(wpStyles.panel)}">${styled('h3', wpStyles.panelTitle, escapeHtml(title))}<ol style="margin:0;padding-left:22px;">${items.map((item) => `<li style="margin:8px 0;line-height:1.6;">${escapeHtml(item)}</li>`).join('')}</ol></section>`
+        : '';
+    }
+    case 'callout': {
+      const title = readString(b, 'title');
+      const body = readString(b, 'body');
+      if (!title && !body) return '';
+      return `<aside class="omnivera-callout" style="${escapeAttribute(wpStyles.callout)}">${title ? styled('h3', wpStyles.panelTitle, escapeHtml(title)) : ''}${body ? styled('p', wpStyles.paragraphWrap, escapeHtml(body)) : ''}</aside>`;
+    }
+    case 'quote': {
+      const text = readString(b, 'text');
+      const author = readString(b, 'author');
+      const source = readString(b, 'source');
+      return text
+        ? `<blockquote style="${escapeAttribute(wpStyles.quote)}">${styled('p', 'margin:0 0 10px;font-size:18px;line-height:1.65;font-style:italic;', escapeHtml(text))}${author || source ? `<footer style="color:#6B7C93;font-size:14px;">${escapeHtml([author, source].filter(Boolean).join(' - '))}</footer>` : ''}</blockquote>`
+        : '';
+    }
+    case 'list':
+      return renderListItems(readBlocks(b.items), readString(b, 'listType') === 'numbered');
+    case 'image': {
+      const url = readString(b, 'url') || readString(b, 'src');
+      const alt = readString(b, 'alt');
+      const caption = readString(b, 'caption');
+      if (!url) return '';
+      return caption
+        ? `<figure style="${escapeAttribute(wpStyles.figure)}"><img src="${escapeAttribute(url)}" alt="${escapeAttribute(alt)}" style="${escapeAttribute(wpStyles.image)}" /><figcaption style="${escapeAttribute(wpStyles.caption)}">${escapeHtml(caption)}</figcaption></figure>`
+        : `<figure style="${escapeAttribute(wpStyles.figure)}"><img src="${escapeAttribute(url)}" alt="${escapeAttribute(alt)}" style="${escapeAttribute(wpStyles.image)}" /></figure>`;
+    }
+    case 'media': {
+      const url = readString(b, 'url');
+      const title = readString(b, 'title') || url;
+      const description = readString(b, 'description');
+      return url
+        ? `<p style="${escapeAttribute(wpStyles.linkCard)}"><a href="${escapeAttribute(url)}" style="color:#0A66C2;font-weight:700;">${escapeHtml(title)}</a>${description ? `<br />${escapeHtml(description)}` : ''}</p>`
+        : '';
+    }
+    case 'divider':
+      return '<hr style="margin:36px 0;border:0;border-top:1px solid #E5E7EB;" />';
+    case 'references': {
+      const items = readBlocks(b.items)
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        .map((item) => {
+          const title = readString(item, 'title');
+          const url = readString(item, 'url');
+          if (!title && !url) return '';
+          return url
+            ? `<li><a href="${escapeAttribute(url)}">${escapeHtml(title || url)}</a></li>`
+            : `<li>${escapeHtml(title)}</li>`;
+        })
+        .filter(Boolean)
+        .join('');
+      return items ? `<section class="omnivera-references" style="${escapeAttribute(wpStyles.panel)}">${styled('h3', wpStyles.panelTitle, 'References')}<ol style="margin:0;padding-left:22px;">${items}</ol></section>` : '';
+    }
+    case 'internal_link': {
+      const slug = readString(b, 'slug');
+      const title = readString(b, 'title') || slug;
+      const excerpt = readString(b, 'excerpt');
+      return slug
+        ? `<a href="/blog/${escapeAttribute(slug)}" style="${escapeAttribute(wpStyles.linkCard)}"><strong>${escapeHtml(title)}</strong>${excerpt ? `<br />${escapeHtml(excerpt)}` : ''}</a>`
+        : '';
+    }
+    case 'columns': {
+      const columns = readBlocks(b.columns)
+        .filter((column): column is Record<string, unknown> => !!column && typeof column === 'object')
+        .map((column) => readBlocks(column.blocks).map(blockToHtml).filter(Boolean).join('\n'))
+        .filter(Boolean)
+        .join('\n');
+      return columns ? `<div class="omnivera-columns" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:24px;margin:28px 0;">${columns}</div>` : '';
+    }
+    case 'creator_asset':
+      return renderCreatorAsset(b);
+    default: {
+      const html = readString(b, 'html');
+      const text = readString(b, 'text') || readString(b, 'body');
+      if (html) return html;
+      return text ? styled('p', wpStyles.paragraphWrap, escapeHtml(text)) : '';
+    }
+  }
+}
+
+function blocksToHtml(blocks: unknown[]): string {
+  if (!Array.isArray(blocks)) return '';
+  const body = blocks.map(blockToHtml).filter(Boolean).join('\n');
+  return body ? `<article class="omnivera-published-blog" style="${escapeAttribute(wpStyles.article)}">${body}</article>` : '';
+}
+
 // ─── CRUD ────────────────────────────────────────────────────────────────────
 
 export async function createBlog(
@@ -247,8 +481,9 @@ export async function createBlog(
       is_featured:          input.is_featured          ?? false,
       scheduled_publish_at: input.scheduled_publish_at ?? null,
       angle_type:           input.angle_type           ?? null,
-      hook_strength:        input.hook_strength        ?? null,
-      status:               'draft',
+      content_type:         input.content_type         ?? 'blog',
+      status:               input.status               ?? 'draft',
+      published_at:         input.published_at         ?? null,
     })
     .select('*')
     .single();
@@ -360,29 +595,47 @@ export async function publishBlogPost(
       if (!isCmsProvider(integration.type)) {
         result = { success: false, message: `Unsupported integration type: ${integration.type}` };
       } else {
+        const jobType = blog.external_id
+          ? 'update_post'
+          : blog.scheduled_publish_at
+            ? 'schedule_post'
+            : 'publish_post';
+        const idempotencyKey = blog.external_id
+          ? `blog:${blog.id}:update:${integration.id}:${new Date().toISOString().slice(0, 16)}`
+          : `blog:${blog.id}:publish:${integration.id}`;
         const job = await createPublishingJob({
           companyId,
           websiteId: blog.website_id ?? integration.website_id ?? null,
           connectionId: integration.website_connection_id ?? null,
           blogId: blog.id,
           provider: integration.type,
-          jobType: blog.scheduled_publish_at ? 'schedule_post' : 'publish_post',
-          idempotencyKey: `blog:${blog.id}:publish:${integration.id}`,
+          jobType,
+          idempotencyKey,
           scheduledFor: blog.scheduled_publish_at ?? null,
           requestPayload: {
+            ...(blog.external_id ? { external_id: blog.external_id } : {}),
             html_content: htmlContent,
             title: blog.title,
             slug: blog.slug,
           },
           createdBy: blog.created_by,
         });
-        result = {
-          success: true,
-          message: job.scheduled_for
-            ? 'Publishing job scheduled. The worker will publish it at the scheduled time.'
-            : 'Publishing job queued. The worker will publish it shortly.',
-          external_id: undefined,
-        };
+        if (job.scheduled_for) {
+          result = {
+            success: true,
+            message: 'Publishing job scheduled. The worker will publish it at the scheduled time.',
+            external_id: undefined,
+            external_url: undefined,
+          };
+        } else {
+          const execution = await executePublishingJob(job.id, 'blog-publish-api');
+          result = {
+            success: execution.success,
+            message: execution.message,
+            external_id: execution.external_id,
+            external_url: execution.external_url,
+          };
+        }
       }
     }
   } else {
@@ -394,9 +647,10 @@ export async function publishBlogPost(
   }
 
   await ownedDbTable('blogs').update({
-    status:         result.success ? (blog.scheduled_publish_at ? 'scheduled' : 'draft') : 'failed',
-    published_at:   null,
+    status:         result.success ? (blog.scheduled_publish_at ? 'scheduled' : 'published') : 'failed',
+    published_at:   result.success && !blog.scheduled_publish_at ? new Date().toISOString() : null,
     external_id:    result.external_id ?? null,
+    external_url:   result.external_url ?? null,
     integration_id: usedIntegrationId,
     updated_at:     new Date().toISOString(),
   }).eq('id', id).eq('company_id', companyId);
@@ -418,4 +672,3 @@ export async function publishBlogPost(
 }
 
 // ─── Internal: publish to external platform ──────────────────────────────────
-

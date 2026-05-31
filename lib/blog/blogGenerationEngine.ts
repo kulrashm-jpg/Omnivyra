@@ -8,7 +8,7 @@
  * Hard rules baked into prompts:
  *   - No hallucination — reason from first principles if unsure
  *   - Narrative construction, not content dumping
- *   - Required structure: Key Insights → Hook Intro → 3–5 H2s → Summary → References
+ *   - Required structure: Key Insights → executive intro → 3–5 H2s → Summary → References
  *   - Minimum 2–3 real references
  *   - Thought leadership tone — analytical, never promotional
  */
@@ -19,6 +19,7 @@ import {
   buildIdentityLock,
   buildAntiGenericRules,
 } from '../content/companyContextBlock';
+import type { OrganizationPerspective } from '../../backend/services/longForm/organizationPerspectiveEngine';
 
 /**
  * Wrap a base system prompt with mandatory company enforcement.
@@ -109,6 +110,8 @@ export interface BlogGenerationInput {
    * (performanceLearningsPrompt, keywordContextPrompt, trendContextPrompt, freshnessDirective).
    */
   unifiedPromptContext?: string;
+  /** Mandatory organization-level POV layer for thought-leadership content. */
+  organizationPerspective?: OrganizationPerspective;
 }
 
 export interface SeriesSummary {
@@ -527,7 +530,7 @@ Your task: generate a complete, publication-ready blog post that reads like it w
     ? `7. **Structure is mandatory** — follow the ${formatType.toUpperCase()} structure exactly (see below)`
     : `7. **Structure is mandatory** — follow it exactly:
    - Key Insights block (4–5 bullet points, each 15–25 words, standalone value for scanners)
-   - Hook intro (120–180 words, opens with a sharp insight, problem, or counterintuitive claim — NOT a question)
+   - Opening thesis (120–180 words, opens with a sharp insight, problem, or counterintuitive claim — NOT a question)
    - ${sectionCount} H2 sections (each **${minPerSection}–${wordsPerSection} words**, builds on the previous)
    - Summary (120–180 words, distilled so the reader knows what to do next)
 ${refRule}`;
@@ -691,6 +694,18 @@ export function buildGenerationUserPrompt(input: BlogGenerationInput): string {
 
   if (input.tone) lines.push(`TONE: ${input.tone}`);
 
+  if (input.organizationPerspective) {
+    const p = input.organizationPerspective;
+    lines.push('\n## ORGANIZATIONAL POV LAYER (MANDATORY)');
+    lines.push(`Primary executive audience: ${p.primaryAudience}`);
+    lines.push(`Company viewpoint: ${p.companyViewpoint}`);
+    lines.push(`Market observation: ${p.marketObservation}`);
+    lines.push(`Strategic recommendation: ${p.strategicRecommendation}`);
+    lines.push(`Tradeoff analysis: ${p.tradeoffAnalysis}`);
+    lines.push(`Proprietary insight: ${p.proprietaryInsight}`);
+    lines.push('Every major section must use this POV. If the article would remain valid after replacing the company with a generic consultancy, the draft is invalid.');
+  }
+
   // ── Writing style guide from WritingStyleEngine ───────────────────────────
   if (input.writingStyleInstructions) {
     lines.push(`\n${input.writingStyleInstructions}`);
@@ -827,7 +842,7 @@ export function buildGenerationUserPrompt(input: BlogGenerationInput): string {
   lines.push(`REQUIREMENTS:
 - Apply ALL system prompt rules without exception
 - Build a clear argument, not a list of observations
-- The hook intro must NOT start with a question${input.selected_angle ? '\n- Use the provided hook sentence as the opening of the intro paragraph' : ''}
+- The opening thesis must NOT start with a question${input.selected_angle ? '\n- Use the provided hook sentence as the opening of the intro paragraph' : ''}
 - Each H2 section must end with a clear takeaway sentence
 - References must be real and authoritative (well-known publications, research firms, or reputable platforms) — minimum ${refMin}
 - key_insights must be standalone, quotable statements — a reader (or AI engine) who only reads them should understand the article's core value

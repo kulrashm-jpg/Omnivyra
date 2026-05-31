@@ -95,6 +95,14 @@ import {
   buildGovernanceExplainabilityMetadata,
   type GovernancePromptContext,
 } from '../../backend/services/creator/strategyGovernancePromptContext';
+import {
+  buildOrganizationPerspective,
+  type OrganizationPerspective,
+} from '../../backend/services/longForm/organizationPerspectiveEngine';
+import {
+  evaluateThoughtLeadershipQuality,
+  ThoughtLeadershipQualityGateError,
+} from '../../backend/services/longForm/thoughtLeadershipQualityGate';
 
 type FullBlogGenerationResult = Extract<
   BlogGenerationResult,
@@ -179,6 +187,31 @@ function attachBlogGovernanceMetadata(
   return {
     ...result,
     governance: buildGovernanceExplainabilityMetadata(governance),
+  };
+}
+
+function applyThoughtLeadershipGate(
+  result: BlogGenerationResult,
+  input: {
+    companyContext?: CompanyContext;
+    organizationPerspective: OrganizationPerspective;
+  },
+): BlogGenerationResult {
+  if (!isFullBlogGenerationResult(result)) return result;
+  // Enterprise quality gate. Failed thought-leadership output is blocked
+  // before it can surface as a usable blog draft.
+  const report = evaluateThoughtLeadershipQuality({
+    output: result.result,
+    companyContext: input.companyContext,
+    organizationPerspective: input.organizationPerspective,
+  });
+  if (!report.passed) {
+    throw new ThoughtLeadershipQualityGateError(report);
+  }
+  return {
+    ...result,
+    thought_leadership_quality: report,
+    quality_passed: report.passed,
   };
 }
 
@@ -448,6 +481,13 @@ export async function runBlogGeneration(
     builtFromFallback,
   });
 
+  const organizationPerspective = req.organizationPerspective ?? buildOrganizationPerspective({
+    topic: topic.trim(),
+    companyContext,
+    selectedAngle: selected_angle,
+    answers: contextualAnswers,
+  });
+
   const baseInput: BlogGenerationInput = {
     ...themeInput,
     answers:        hasContextualAnswers ? contextualAnswers : undefined,
@@ -459,6 +499,7 @@ export async function runBlogGeneration(
     formatType,
     templateName: effectiveTemplateName,
     primaryKeyword: extractPrimaryKeyword(topic.trim()),
+    organizationPerspective,
   };
 
   // ── Mode: angles ────────────────────────────────────────────────────────────
@@ -688,7 +729,10 @@ export async function runBlogGeneration(
       });
       if (templateResult !== null) {
         const result = attachEditorialDiagnostics(templateResult, ctx, { generationStartMs });
-        return attachBlogGovernanceMetadata(result, governance);
+        return attachBlogGovernanceMetadata(applyThoughtLeadershipGate(result, {
+          companyContext,
+          organizationPerspective,
+        }), governance);
       }
     }
 
@@ -712,13 +756,19 @@ export async function runBlogGeneration(
       governance,
     });
     const result = attachEditorialDiagnostics(standardResult, ctx, { generationStartMs });
-    return attachBlogGovernanceMetadata(result, governance);
+    return attachBlogGovernanceMetadata(applyThoughtLeadershipGate(result, {
+      companyContext,
+      organizationPerspective,
+    }), governance);
 
   } catch (err) {
     // C3: CompanyContextEnforcementError must propagate to the API route so
-    // the caller returns a 422 quality-gate response instead of silently
+    // the caller returns a 422 enforcement response instead of silently
     // shipping a weak fallback.
     if (err instanceof Error && err.name === 'CompanyContextEnforcementError') {
+      throw err;
+    }
+    if (err instanceof ThoughtLeadershipQualityGateError) {
       throw err;
     }
 
@@ -741,6 +791,9 @@ export async function runBlogGeneration(
       hook_assessment:     { strength: 'moderate', note: 'Review before publishing.' },
       governance:          buildGovernanceExplainabilityMetadata(governance),
     }, ctx, { generationStartMs });
-    return attachBlogGovernanceMetadata(fallbackResult, governance);
+    return attachBlogGovernanceMetadata(applyThoughtLeadershipGate(fallbackResult, {
+      companyContext,
+      organizationPerspective,
+    }), governance);
   }
 }

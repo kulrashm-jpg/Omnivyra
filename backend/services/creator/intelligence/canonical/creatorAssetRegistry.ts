@@ -167,7 +167,16 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     // not surface there. See validateAttachmentPayload for the matching
     // server-side guard.
     writer_source_eligibility: ['thread'],
-    render_strategy: 'queue',
+    // Forensic fix — render strategy moved from 'queue' to 'inline'.
+    // The async queue path required a creator-render BullMQ worker
+    // whose registration was missing from dev bootstrap AND had a
+    // separate prefix-mismatch bug; jobs sat at progress=0 with no
+    // worker consuming them. Inline rendering blocks the API request
+    // for ~30–60s but is deterministic and works on every code path
+    // (Direct API + BOLT + queue worker) without depending on a
+    // separate render fleet. Re-enable 'queue' once the worker fleet
+    // is verified end-to-end in the target environment.
+    render_strategy: 'inline',
   },
   infographic: {
     canonical_key: 'infographic',
@@ -183,7 +192,9 @@ export const CREATOR_ASSET_REGISTRY: Record<CanonicalAssetKey, CreatorAssetDefin
     payload_shape_contract: { required_key: 'visual_descriptor', json_type: 'object' },
     writer_attachment_subtypes: ['infographic'],
     writer_source_eligibility: ['post', 'thread'],
-    render_strategy: 'queue',
+    // Forensic fix — same reasoning as the carousel entry above.
+    // Inline rendering eliminates the worker dependency entirely.
+    render_strategy: 'inline',
   },
   story: {
     canonical_key: 'story',

@@ -41,6 +41,7 @@ import { isValidBlogFormat } from '../../../../lib/blog/blogStructureTemplates';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
+import { ThoughtLeadershipQualityGateError } from '../../../../backend/services/longForm/thoughtLeadershipQualityGate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -140,6 +141,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (err) {
     if (err instanceof PaymentRequiredError) {
       return res.status(402).json({ error: err.message, code: err.code });
+    }
+    // Enterprise quality gate: failed blog drafts are blocked instead of
+    // being returned as usable generation output.
+    if (err instanceof ThoughtLeadershipQualityGateError) {
+      return res.status(422).json({
+        error: err.message,
+        quality_passed: false,
+        thought_leadership_quality: err.report,
+      });
     }
     throw err;
   }

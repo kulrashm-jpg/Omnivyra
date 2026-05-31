@@ -84,6 +84,13 @@ export type PurposeStrategy = {
   typographyWeight: TypographyWeight;
   ctaIntensity: CtaIntensity;
 
+  /* ── CTA suggestions (operator-facing) ────────────────────────── */
+  /** Strategy-tuned CTA copy chips surfaced under the "Desired CTA"
+   *  input. Short, click-ready phrases that match the strategy's
+   *  ctaIntensity. Empty when the strategy is CTA-absent (quote
+   *  image). */
+  ctaSuggestions?: ReadonlyArray<string>;
+
   /* ── Creative-direction selector bias ─────────────────────────── */
   /** Preferred creative-direction templates (selector reads first match). */
   creativeDirectionAffinity: CreativeDirectionTemplate[];
@@ -121,6 +128,7 @@ const PROMOTIONAL_IMAGE: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'lead',
   ctaIntensity: 'strong',
+  ctaSuggestions: ['Shop now', 'Start free trial', 'Get it today', 'Claim the offer', 'Reserve your spot'],
   creativeDirectionAffinity: [
     'cinematic_product_launch',
     'product_launch',
@@ -153,6 +161,7 @@ const EDUCATIONAL_IMAGE: PurposeStrategy = {
   brandingIntensity: 'subtle',
   typographyWeight: 'support',
   ctaIntensity: 'subtle',
+  ctaSuggestions: ['Learn more', 'Read the breakdown', 'Save for later', 'See the full guide'],
   creativeDirectionAffinity: [
     'editorial_modern_startup',
     'clean_editorial_product',
@@ -185,6 +194,7 @@ const QUOTE_IMAGE: PurposeStrategy = {
   brandingIntensity: 'subtle',
   typographyWeight: 'feature',
   ctaIntensity: 'absent',
+  ctaSuggestions: [],
   creativeDirectionAffinity: [
     'founder_storytelling',
     'executive_insight',
@@ -217,6 +227,7 @@ const PRODUCT_SHOWCASE_IMAGE: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'support',
   ctaIntensity: 'standard',
+  ctaSuggestions: ['See pricing', 'Book a demo', 'Try it free', 'Tour the product'],
   creativeDirectionAffinity: [
     'minimal_product_hero',
     'clean_editorial_product',
@@ -249,6 +260,7 @@ const BRAND_FOCUS_IMAGE: PurposeStrategy = {
   brandingIntensity: 'strong',
   typographyWeight: 'support',
   ctaIntensity: 'subtle',
+  ctaSuggestions: ['Follow us', 'Discover our story', 'Learn what we stand for', 'Join the community'],
   creativeDirectionAffinity: [
     'premium_brand_campaign',
     'founder_storytelling',
@@ -265,10 +277,11 @@ const EDUCATIONAL_CAROUSEL: PurposeStrategy = {
   purposeKey: 'educational-carousel',
   displayLabel: 'Educational',
   generatedAsLabel: 'Educational Carousel',
-  whyChosen: 'Slide arc: Hook → Concept → Explanation → Example → Summary. Each slide builds learning.',
+  whyChosen: 'Slide arc: Hook → Concept → Explanation → Example → Summary → CTA. Each slide builds learning; the CTA invites continued engagement.',
   promptDirectives: [
     'Carousel orchestration: produce slides that build understanding step by step. Each slide must teach one specific thing.',
     'Hook slide must be a curiosity gap or framing question. Summary slide must recap the core idea in one line.',
+    'CTA slide must extend the learning loop — suggest a save, share, or follow-up action, not a hard conversion ask.',
   ],
   compositionHints: [
     'Per-slide composition: one dominant illustration concept per slide, supporting text low-density.',
@@ -281,6 +294,7 @@ const EDUCATIONAL_CAROUSEL: PurposeStrategy = {
   brandingIntensity: 'subtle',
   typographyWeight: 'lead',
   ctaIntensity: 'subtle',
+  ctaSuggestions: ['Save for later', 'Follow for more lessons', 'Share with your team', 'Bookmark this thread'],
   creativeDirectionAffinity: ['editorial_modern_startup', 'clean_editorial_product'],
   slideArc: [
     { role: 'hook', intent: 'Open with a curiosity gap, contradiction, or framing question.' },
@@ -288,6 +302,7 @@ const EDUCATIONAL_CAROUSEL: PurposeStrategy = {
     { role: 'explanation', intent: 'Unpack the concept with the simplest possible explanation or analogy.' },
     { role: 'example', intent: 'Ground the concept in a specific worked example or scenario.' },
     { role: 'summary', intent: 'Recap the takeaway in one memorable line.' },
+    { role: 'cta', intent: 'Soft CTA — invite the reader to save, share, or follow for the next lesson. No hard conversion ask.' },
   ],
 };
 
@@ -297,10 +312,11 @@ const FRAMEWORK_CAROUSEL: PurposeStrategy = {
   purposeKey: 'framework-carousel',
   displayLabel: 'Framework',
   generatedAsLabel: 'Framework Carousel',
-  whyChosen: 'Slide arc: Hook → Framework Overview → Pillar 1 → Pillar 2 → Pillar 3 → Conclusion. Structured pillar reveal.',
+  whyChosen: 'Slide arc: Hook → Framework Overview → Pillar 1 → Pillar 2 → Pillar 3 → Conclusion → CTA. Structured pillar reveal closing with a direct next step.',
   promptDirectives: [
     'Carousel orchestration: produce slides that introduce a 3-pillar framework. Each pillar must be parallel in shape, weight, and depth.',
     'Overview slide must show all 3 pillars at a glance. Pillar slides must each deep-dive on one.',
+    'CTA slide must offer a clear next step — try the framework, download a worksheet, or book a deeper conversation. Standard intensity, not aggressive.',
   ],
   compositionHints: [
     'Per-slide composition: shape-motif continuity across pillars; identical layout grid; only pillar-specific accent shifts.',
@@ -313,6 +329,7 @@ const FRAMEWORK_CAROUSEL: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'lead',
   ctaIntensity: 'standard',
+  ctaSuggestions: ['Try the framework', 'Download the worksheet', 'Book a deeper conversation', 'Get the full playbook'],
   creativeDirectionAffinity: ['executive_insight', 'editorial_modern_startup', 'automation_orchestration'],
   slideArc: [
     { role: 'hook', intent: 'Set up the problem the framework solves.' },
@@ -321,6 +338,7 @@ const FRAMEWORK_CAROUSEL: PurposeStrategy = {
     { role: 'pillar_2', intent: 'Deep-dive on the second pillar — same structural shape as pillar 1.' },
     { role: 'pillar_3', intent: 'Deep-dive on the third pillar — same structural shape as pillars 1 + 2.' },
     { role: 'conclusion', intent: 'Synthesize how the three pillars work together; close with the framework name.' },
+    { role: 'cta', intent: 'Standard CTA — invite the reader to apply the framework: try it, download the worksheet, or book a deeper conversation.' },
   ],
 };
 
@@ -330,10 +348,11 @@ const STORY_CAROUSEL: PurposeStrategy = {
   purposeKey: 'story-carousel',
   displayLabel: 'Story',
   generatedAsLabel: 'Story Carousel',
-  whyChosen: 'Slide arc: Hook → Problem → Journey → Transformation → Outcome. Narrative arc across slides.',
+  whyChosen: 'Slide arc: Hook → Problem → Journey → Transformation → Outcome → CTA. Narrative arc closing with a reflective CTA that invites the reader into the story.',
   promptDirectives: [
     'Carousel orchestration: produce a narrative arc. Each slide advances the story in time or stakes.',
     'Use changing lighting / palette progression across slides to signal narrative transformation.',
+    'CTA slide must land softly — invite the reader to reflect, share, or follow the protagonist. No hard sales close.',
   ],
   compositionHints: [
     'Per-slide composition: cinematic framing on hook + outcome; quieter editorial framing on middle beats.',
@@ -346,6 +365,7 @@ const STORY_CAROUSEL: PurposeStrategy = {
   brandingIntensity: 'subtle',
   typographyWeight: 'feature',
   ctaIntensity: 'subtle',
+  ctaSuggestions: ['Have you experienced this?', 'Follow the journey', 'Share your story', 'Save this story'],
   creativeDirectionAffinity: ['founder_storytelling', 'cinematic_product_launch', 'editorial_modern_startup'],
   slideArc: [
     { role: 'hook', intent: 'Open with the inciting moment or curiosity that earns the swipe.' },
@@ -353,6 +373,7 @@ const STORY_CAROUSEL: PurposeStrategy = {
     { role: 'journey', intent: 'Show the path — what changed, what was tried, what the protagonist learned.' },
     { role: 'transformation', intent: 'Show the pivot or breakthrough that resolves the problem.' },
     { role: 'outcome', intent: 'Close with the outcome and one line of insight that lands the story.' },
+    { role: 'cta', intent: 'Soft CTA — invite the reader into the story: reflect on a similar moment, share, or follow for the next chapter.' },
   ],
 };
 
@@ -378,6 +399,7 @@ const PRODUCT_SHOWCASE_CAROUSEL: PurposeStrategy = {
   brandingIntensity: 'strong',
   typographyWeight: 'lead',
   ctaIntensity: 'strong',
+  ctaSuggestions: ['Start free trial', 'Book a demo', 'See pricing', 'Try it today'],
   creativeDirectionAffinity: ['minimal_product_hero', 'dashboard_centric', 'product_ecosystem_visual'],
   slideArc: [
     { role: 'problem', intent: 'Frame the customer problem this product solves; one concrete pain point.' },
@@ -410,6 +432,7 @@ const PRESENTATION_CAROUSEL: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'feature',
   ctaIntensity: 'standard',
+  ctaSuggestions: ['Schedule a walkthrough', 'Get the deck', 'Talk to our team', 'Continue the conversation'],
   creativeDirectionAffinity: ['executive_insight', 'premium_ai_editorial', 'editorial_modern_startup'],
   slideArc: [
     { role: 'title', intent: 'Title slide — deck name, presenter context, single hero impression.' },
@@ -444,6 +467,7 @@ const STATISTICS_INFOGRAPHIC: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'feature',
   ctaIntensity: 'subtle',
+  ctaSuggestions: ['Get the full report', 'Download the data', 'Share these stats', 'See the methodology'],
   creativeDirectionAffinity: ['dashboard_centric', 'editorial_modern_startup'],
   informationArchitecture: {
     pattern: 'data_first',
@@ -474,6 +498,7 @@ const PROCESS_INFOGRAPHIC: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'lead',
   ctaIntensity: 'subtle',
+  ctaSuggestions: ['Try the process', 'Download the checklist', 'Walk through the steps', 'Save this playbook'],
   creativeDirectionAffinity: ['productivity_workflow', 'automation_orchestration'],
   informationArchitecture: {
     pattern: 'sequence_first',
@@ -504,6 +529,7 @@ const TIMELINE_INFOGRAPHIC: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'feature',
   ctaIntensity: 'subtle',
+  ctaSuggestions: ['Plan your timeline', 'Get the roadmap', 'Schedule a planning session', 'Save this timeline'],
   creativeDirectionAffinity: ['editorial_modern_startup', 'executive_insight'],
   informationArchitecture: {
     pattern: 'chronology_first',
@@ -534,6 +560,7 @@ const COMPARISON_INFOGRAPHIC: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'lead',
   ctaIntensity: 'standard',
+  ctaSuggestions: ['Compare your options', 'See which fits you', 'Talk to us about your choice', 'Get the full comparison'],
   creativeDirectionAffinity: ['dashboard_centric', 'executive_insight', 'editorial_modern_startup'],
   informationArchitecture: {
     pattern: 'side_by_side',
@@ -564,6 +591,7 @@ const FRAMEWORK_INFOGRAPHIC: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'lead',
   ctaIntensity: 'subtle',
+  ctaSuggestions: ['Apply the framework', 'Try it on your team', 'Book a workshop', 'Save the framework'],
   creativeDirectionAffinity: ['executive_insight', 'automation_orchestration', 'editorial_modern_startup'],
   informationArchitecture: {
     pattern: 'structured_pillars',
@@ -594,6 +622,7 @@ const ROADMAP_INFOGRAPHIC: PurposeStrategy = {
   brandingIntensity: 'balanced',
   typographyWeight: 'feature',
   ctaIntensity: 'standard',
+  ctaSuggestions: ['See the roadmap', 'Schedule a planning call', 'Get the milestones', 'Map this to your team'],
   creativeDirectionAffinity: ['executive_insight', 'automation_orchestration', 'productivity_workflow'],
   informationArchitecture: {
     pattern: 'phased_progression',

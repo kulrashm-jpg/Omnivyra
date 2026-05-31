@@ -33,12 +33,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'PUT' || req.method === 'PATCH') {
     const {
-      title, content, content_blocks, slug, excerpt, featured_image_url, category, tags,
-      seo_meta_title, seo_meta_description, is_featured, angle_type, hook_strength,
+      title, content, content_markdown, content_blocks, slug, excerpt, featured_image_url, category, tags,
+      seo_meta_title, seo_meta_description, is_featured, angle_type,
+      status, content_type,
     } = req.body || {};
     const updates: UpdateBlogInput = {};
     if (title                !== undefined && typeof title    === 'string') updates.title               = title;
     if (content              !== undefined && typeof content  === 'string') updates.content             = content;
+    if (content_markdown     !== undefined && typeof content_markdown === 'string') updates.content      = content_markdown;
     if (slug                 !== undefined) updates.slug                = typeof slug === 'string' ? slug : undefined;
     if (excerpt              !== undefined) updates.excerpt             = typeof excerpt === 'string' ? excerpt : null;
     if (featured_image_url   !== undefined) updates.featured_image_url  = typeof featured_image_url === 'string' ? featured_image_url : null;
@@ -49,7 +51,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (is_featured          !== undefined) updates.is_featured          = is_featured === true;
     if (content_blocks       !== undefined && Array.isArray(content_blocks)) updates.content_blocks = content_blocks;
     if (angle_type           !== undefined) updates.angle_type           = typeof angle_type    === 'string' ? angle_type    : null;
-    if (hook_strength        !== undefined) updates.hook_strength        = typeof hook_strength === 'string' ? hook_strength : null;
+    if (content_type         !== undefined) updates.content_type         = typeof content_type  === 'string' ? content_type  : null;
+    if (status               !== undefined && ['draft', 'scheduled', 'published', 'failed', 'archived'].includes(status)) updates.status = status;
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
     try {
       const blog = await updateBlog(id, companyId, updates);
