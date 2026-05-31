@@ -120,8 +120,8 @@ export const envSchema = z.object({
     .number()
     .int()
     .min(0)
-    .default(200000)
-    .describe('Daily request limit for Upstash Redis (free tier = 500k/month ≈ 16k/day; set conservative ceiling)'),
+    .default(5000000)
+    .describe('Daily Redis command hard cap (commands/day). Default 5,000,000; warning fires at 60% (3,000,000).'),
   
   REDIS_OVERFLOW_CAP_PER_QUEUE: z
     .number()

@@ -45,7 +45,7 @@
  *
  * Env vars:
  *   REDIS_MAX_BYTES                — fallback maxmemory (bytes); default 256 MB
- *   UPSTASH_DAILY_REQUEST_LIMIT    — daily command cap; default 25 000
+ *   UPSTASH_DAILY_REQUEST_LIMIT    — daily command cap; default 5,000,000
  *   REDIS_OVERFLOW_CAP_PER_QUEUE   — max buffered jobs per queue; default 200
  */
 
@@ -148,7 +148,10 @@ type DrainCallback = (queueName: string, jobs: OverflowEntry[]) => Promise<void>
 // Constants / thresholds
 // ─────────────────────────────────────────────────────────────────────────────
 
-const WARN_PCT     = 0.70;
+// Alert (warning) fires at 60% so that with the 5,000,000/day cap the first
+// alert lands at 3,000,000 commands. Throttle/critical remain a protective ramp
+// toward the cap (4.25M / 4.75M).
+const WARN_PCT     = 0.60;
 const THROTTLE_PCT = 0.85;
 const CRITICAL_PCT = 0.95;
 
@@ -366,11 +369,13 @@ function nextUtcMidnight(): string {
 
 async function computeRequestUsage(redis: IORedis, totalCommandsProcessed: number): Promise<RequestUsage> {
   const baseline   = await loadDailyBaseline(redis, totalCommandsProcessed);
-  // Default is 25,000 — a conservative limit between the free tier (10k) and paid entry tier.
-  // ALWAYS set UPSTASH_DAILY_REQUEST_LIMIT explicitly in your .env — do not rely on this default.
+  // Default is 5,000,000 commands/day — the hard cap we operate under. ALWAYS
+  // set UPSTASH_DAILY_REQUEST_LIMIT explicitly in your .env to match the plan
+  // you actually paid for; this default is only the fallback when neither the
+  // admin override nor the env var is set.
   const dailyLimit = _adminDailyLimit > 0
     ? _adminDailyLimit
-    : parseInt(process.env.UPSTASH_DAILY_REQUEST_LIMIT ?? '25000', 10);
+    : parseInt(process.env.UPSTASH_DAILY_REQUEST_LIMIT ?? '5000000', 10);
   const dailyUsed  = Math.max(0, totalCommandsProcessed - baseline);
   return {
     dailyUsed,
@@ -924,7 +929,7 @@ export function startUsageProtection(getRedis: () => IORedis): Promise<void> {
   if (!envIsExplicit('REDIS_MAX_BYTES') && !envIsExplicit('UPSTASH_DAILY_REQUEST_LIMIT')) {
     process.stderr.write(
       `⚠️  [redis][usageProtection] Neither REDIS_MAX_BYTES nor UPSTASH_DAILY_REQUEST_LIMIT\n` +
-      `   is set. Using defaults: 256 MB memory cap, 25,000 commands/day.\n` +
+      `   is set. Using defaults: 256 MB memory cap, 5,000,000 commands/day.\n` +
       `   Set these in .env to match your actual Redis tier.\n`,
     );
   } else if (!envIsExplicit('REDIS_MAX_BYTES')) {
