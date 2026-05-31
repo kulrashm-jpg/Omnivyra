@@ -295,7 +295,11 @@ export function buildQueueReport(redisOpsPerMin?: number): QueueReport {
 // ── Redis persistence ──────────────────────────────────────────────────────────
 
 const REPORT_KEY = 'omnivyra:queue:report';
-const REPORT_TTL = 5 * 60;   // 5 minutes
+// TTL must exceed the flush cadence (10 min, startQueueReportFlush below) or the
+// key expires between writes and the queue dashboard reads null. Set to 30 min
+// (3× cadence) so a normally-running flusher always refreshes well before expiry,
+// while a dead flusher still goes stale within a useful window.
+const REPORT_TTL = 30 * 60;   // 30 minutes (3× the 10-min flush cadence)
 
 /** Persist report to Redis. Called periodically by the flush timer. */
 export async function persistQueueReport(redis: IORedis, redisOpsPerMin?: number): Promise<void> {

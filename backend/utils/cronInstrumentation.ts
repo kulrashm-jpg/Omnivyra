@@ -34,7 +34,14 @@ const REPORT_KEY    = 'omnivyra:cron:report';
 const INSTANCE_KEY  = 'omnivyra:cron:instances';
 const CYCLE_LOG_KEY = 'omnivyra:cron:cycles:recent';
 
-const REPORT_TTL_S    = 5 * 60;          // 5 minutes — stale if cron dies
+// TTL must exceed the longest gap between cron cycles or the report/cycle-log
+// keys expire between writes and the cron dashboard 503s. Cron writes these on
+// each cycle; the longest normal gap is the 4h safety-net base tick
+// (BASE_TICK_MS in scheduler/cron.ts). Set to 12h (3× that) so a normally-
+// running cron always refreshes before expiry, while a truly dead cron still
+// goes stale within half a day. Applied to both omnivyra:cron:report and
+// omnivyra:cron:cycles:recent (line 228 / 231).
+const REPORT_TTL_S    = 12 * 60 * 60;    // 12 hours (3× the 4h base-tick cadence)
 const INSTANCE_TTL_MS = 15 * 60 * 1_000; // 15 minutes — 3× heartbeat window
 const HEARTBEAT_MS    = 5 * 60_000;      // write heartbeat every 5 min (was 60s — saves 5,760 ops/day)
 const CYCLE_LOG_MAX   = 20;              // keep last 20 cycle records
