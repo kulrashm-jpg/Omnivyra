@@ -149,8 +149,14 @@ function decode(raw: string): string {
 
 const KEY_PREFIX = 'infra:metrics:system:5min';
 const INDEX_KEY  = 'infra:metrics:system:index';
-const TTL_SECS   = 30 * 24 * 60 * 60;   // 30 days
-const INTERVAL   = 5 * 60 * 1_000;       // 5 minutes
+// Retention reduced 30d → 7d: the only consumers (super-admin system-trends and
+// system-intelligence) query at most a 7-day window, so 30d was pure waste.
+const TTL_SECS   = 7 * 24 * 60 * 60;    // 7 days
+// Write cadence reduced 5min → 30min: monitoring-only snapshots. A 7-day trend
+// chart at 30-min resolution is ~336 points (still smooth); cuts both write
+// volume and steady-state keyspace ~6×. Key suffix kept as ":5min" for
+// backward-compatible reads of existing snapshots.
+const INTERVAL   = 30 * 60 * 1_000;      // 30 minutes
 
 // ── Internal state ─────────────────────────────────────────────────────────────
 

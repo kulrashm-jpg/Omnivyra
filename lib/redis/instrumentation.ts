@@ -7,7 +7,7 @@
  *      object in a JS Proxy. Every command call is counted by (feature, command).
  *   2. `startInstrumentation(getClient)` starts two background timers:
  *      - Every 60 s  → structured log flush (top features + commands)
- *      - Every 5 min → snapshot persisted to Redis key infra:metrics:redis:5min:{ts}
+ *      - Every 30 min → snapshot persisted to Redis key infra:metrics:redis:5min:{ts} (TTL 6h)
  *   3. Every 1 000th command → milestone log line.
  *   4. `getMetricsReport()` returns the live in-memory snapshot on demand.
  *
@@ -475,24 +475,31 @@ export function startInstrumentation(
     }));
   }, 60_000);
 
-  // ── 5-minute persist ─────────────────────────────────────────────────────
+  // ── 30-minute persist ─────────────────────────────────────────────────────
+  // Cadence reduced 5min → 30min (monitoring-only). The only consumer,
+  // super-admin redis-metrics, renders the last 12 snapshots; at 30-min cadence
+  // that is a 6-hour history window. Each persisted snapshot now aggregates a
+  // 30-min counter window instead of 5-min (opsPerMin remains a live 60s rolling
+  // figure, unaffected). Key suffix kept as ":5min" for backward-compatible reads.
   _persistTimer = setInterval(async () => {
     try {
       const r = getMetricsReport();
 
-      // Record peak for this window before resetting
+      // Record peak for this window before resetting (48 entries × 30min = 24h)
       peakLog.push({ ts: Date.now(), opsPerMin: r.opsPerMin });
-      if (peakLog.length > 48) peakLog.splice(0, peakLog.length - 48); // keep 4 h
+      if (peakLog.length > 48) peakLog.splice(0, peakLog.length - 48);
 
       const ts  = Math.floor(Date.now() / 1_000);
       const key = `infra:metrics:redis:5min:${ts}`;
-      await getRedisClient().set(key, JSON.stringify(r), 'EX', 7 * 24 * 3600); // TTL 7 days
+      // TTL reduced 7d → 6h: consumer only ever reads the most-recent 12 keys
+      // (= 6h at the 30-min cadence), so 7d retention was pure keyspace waste.
+      await getRedisClient().set(key, JSON.stringify(r), 'EX', 6 * 3600); // TTL 6 hours
 
       resetCounters();
     } catch (err) {
       console.warn('[redis][instrumentation] persist failed:', (err as Error)?.message);
     }
-  }, 5 * 60_000);
+  }, 30 * 60_000);
 
   // Allow Node.js to exit even if timers are still pending
   if (typeof _flushTimer.unref === 'function') _flushTimer.unref();

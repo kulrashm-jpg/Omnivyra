@@ -86,7 +86,17 @@ export interface ActivityCostBreakdown {
 
 let metricsBuffer: ComputeMetric[] = [];
 const BUFFER_FLUSH_SIZE = 100;
-const BUFFER_FLUSH_INTERVAL_MS = 60000; // 1 minute
+// Flush cadence reduced 1min → 30min (monitoring-only). The size cap above still
+// forces a flush every 100 buffered metrics, so under load flush latency is
+// unchanged; only light/idle traffic batches for longer. Trade-off: up to
+// BUFFER_FLUSH_SIZE metrics (or 30min) may be lost on a hard crash — acceptable
+// for cost-estimation telemetry.
+const BUFFER_FLUSH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+// TTL for the compute metric lists. Previously these keys had NO expiry (only a
+// count-based LTRIM), so a list for any sourceType/feature that stopped emitting
+// would persist forever — an unbounded keyspace leak. Readers default to a 24h
+// window, so 48h retention covers the dashboards with margin.
+const COMPUTE_LIST_TTL_S = 48 * 60 * 60; // 48 hours
 
 let flushTimer: NodeJS.Timeout | null = null;
 
@@ -159,16 +169,25 @@ async function flushMetricsBuffer(): Promise<void> {
 
     // Store each metric in a Redis list (trim to last 24h worth)
     const now = new Date();
+    const touchedKeys = new Set<string>();
     for (const metric of toFlush) {
       const key = `railway:compute:metrics:${metric.sourceType}`;
       await redis.lpush(key, JSON.stringify(metric));
       // Keep only last 10000 entries per source type
       await redis.ltrim(key, 0, 9999);
+      touchedKeys.add(key);
 
       // Also track by feature
       const featureKey = `railway:compute:feature:${metric.feature}`;
       await redis.lpush(featureKey, JSON.stringify(metric));
       await redis.ltrim(featureKey, 0, 4999);
+      touchedKeys.add(featureKey);
+    }
+
+    // Refresh a sliding TTL on each list touched this flush (once per key, not
+    // per metric). Without this these lists never expire — the keyspace leak.
+    for (const key of touchedKeys) {
+      await redis.expire(key, COMPUTE_LIST_TTL_S);
     }
 
     // Update "last flush" timestamp
