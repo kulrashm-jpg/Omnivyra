@@ -499,8 +499,12 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                               return (
                                 <div
                                   key={`week-${dateKey}-act-${index}`}
-                                  className={`text-[11px] px-1.5 py-0.5 rounded truncate inline-flex items-center gap-0.5 ${colorClass}`}
-                                  title={`${getPlatformLabel(activity.platform)} · ${resolveDisplayContentTypeLabel(activity)} · ${deriveCreatorStatusLabel(activity).label} · ${isCreatorProduced(activity) ? 'Creator' : 'AI'}`}
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={(e) => { e.stopPropagation(); handleActivityEventClick(activity); }}
+                                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleActivityEventClick(activity); } }}
+                                  className={`text-[11px] px-1.5 py-0.5 rounded truncate inline-flex items-center gap-0.5 cursor-pointer hover:opacity-80 ${colorClass}`}
+                                  title={`${getPlatformLabel(activity.platform)} · ${resolveDisplayContentTypeLabel(activity)} · ${deriveCreatorStatusLabel(activity).label} · ${isCreatorProduced(activity) ? 'Creator' : 'AI'} — click to preview`}
                                 >
                                   <PlatformIcon platform={activity.platform} size={10} />
                                   <span className={`shrink-0 w-1.5 h-1.5 rounded-full ${STATUS_DOT_CLASS[deriveCreatorStatusLabel(activity).group] ?? 'bg-gray-400'}`} />

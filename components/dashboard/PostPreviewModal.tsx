@@ -92,7 +92,7 @@ const obj = (v: unknown): Record<string, any> =>
 function WorkflowChecklist({ event }: { event: ActivityEvent }) {
   const steps = deriveWorkflowChecklist(event);
   return (
-    <div className="px-4 py-3 border-b border-gray-100">
+    <div className="px-4 py-3 border-t border-gray-100">
       <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Progress</p>
       <ol className="space-y-1">
         {steps.map((s) => (
@@ -284,9 +284,12 @@ export default function PostPreviewModal({
             components/preview/platforms/*. The dispatcher resolves the
             renderer from the payload's platform. */}
         <div className="flex-1 overflow-y-auto">
+          {/* Lead with the platform-faithful preview — this is the "how it
+              looks once posted on the social platform" view the user expects
+              on click. Progress + brief follow as secondary context. */}
+          <PlatformPreview payload={previewPayload} />
           {/* Workflow progression — makes "where is this in the pipeline" explicit. */}
           <WorkflowChecklist event={event} />
-          <PlatformPreview payload={previewPayload} />
           {/* Video items: Omnivyra ships a brief, not the video. Show it inline. */}
           {isCreatorProduced(event) && <VideoBriefPanel event={event} />}
         </div>
