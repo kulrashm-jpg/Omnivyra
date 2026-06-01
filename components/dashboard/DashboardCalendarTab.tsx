@@ -37,7 +37,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
     fetchStageEvents, getCalendarStageAppearance, getCampaignTotalWeeks,
     getDaysInMonth, getWeekDays, getWeekLabel,
     getPlatformColorForCalendar, getCalendarActivitiesForDate, getPlatformBorderColor,
-    getCalendarDayItems, getEventStage, handleActivityEventClick, handleRescheduleDrop,
+    getCalendarDayItems, getEventStage, handleActivityEventClick, handleUploadCreatorAsset, handleRescheduleDrop,
     RepurposeDots, formatDateKey, parseDateKey,
     getMsgTotal, getMsgUnread, selectedCalendarCampaign,
     campaignIds, handleViewCampaign,
@@ -543,12 +543,22 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                                   </button>
                                 )}
                               </div>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleActivityEventClick(activity); }}
-                                className="ml-2 shrink-0 text-sm text-indigo-600 hover:text-indigo-800"
-                              >
-                                Open
-                              </button>
+                              {activity.canonical_group === 'pending' ? (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleUploadCreatorAsset(activity, e); }}
+                                  className="ml-2 shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-500 text-white hover:bg-amber-600 text-xs font-semibold"
+                                  title="Upload the creator asset to schedule this post"
+                                >
+                                  ⬆ Upload media
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleActivityEventClick(activity); }}
+                                  className="ml-2 shrink-0 text-sm text-indigo-600 hover:text-indigo-800"
+                                >
+                                  Open
+                                </button>
+                              )}
                             </div>
                           );
                         }

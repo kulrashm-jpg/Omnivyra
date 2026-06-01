@@ -73,13 +73,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: error.message });
     }
 
-    // Step 3: Update calendar_events_index event_date
-    const newDateStr = newDate.toISOString().slice(0, 10);
-    await supabase
-      .from('calendar_events_index')
-      .update({ event_date: newDateStr })
-      .eq('scheduled_post_id', postId)
-      .eq('event_type', 'activity');
+    // calendar_events_index teardown: the manual event_date sync here was
+    // redundant (the scheduled_posts UPDATE trigger maintained it) and the
+    // index is being removed. The scheduled_posts.scheduled_for update above is
+    // the source of truth; the calendar reads it via activity-events.
 
     try {
       if (post.social_account_id && post.status === 'scheduled') {

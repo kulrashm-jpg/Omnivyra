@@ -244,6 +244,57 @@ export function useCampaignCalendar() {
       setIsLoading(true);
       setError(null);
       try {
+        // Calendar unification: the per-campaign calendar is now the SAME
+        // scheduled feed as the dashboard. PRIMARY source = /api/calendar/
+        // activity-events (real scheduled_posts + pending video rows). We fall
+        // back to the plan blueprint only when nothing is scheduled/pending yet
+        // (so a freshly-planned campaign still shows its activities).
+        if (companyId) {
+          try {
+            const evRes = await fetch(
+              `/api/calendar/activity-events?companyId=${encodeURIComponent(companyId)}&campaignId=${encodeURIComponent(campaignId)}&stageFilter=all&start=2000-01-01&end=2100-12-31`
+            );
+            if (evRes.ok) {
+              const evEvents: any[] = await evRes.json();
+              if (Array.isArray(evEvents) && evEvents.length > 0) {
+                const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                const evMapped: CalendarActivity[] = evEvents.map((ev, i) => {
+                  const date = String(ev.date || '').slice(0, 10);
+                  const dd = new Date(`${date}T00:00:00`);
+                  const day = Number.isFinite(dd.getTime()) ? WEEKDAYS[dd.getDay()] : 'Monday';
+                  const sf = ev.scheduled_for ? new Date(ev.scheduled_for) : null;
+                  const time = sf && Number.isFinite(sf.getTime()) ? sf.toISOString().slice(11, 16) : '09:00';
+                  const grp = String(ev.canonical_group || '');
+                  const execution_status: ExecutionStatus =
+                    grp === 'scheduled' || grp === 'published' ? 'SCHEDULED' : 'PENDING';
+                  return {
+                    execution_id: String(ev.execution_id || ev.scheduled_post_id || `evt-${i}`),
+                    week_number: 0,
+                    day,
+                    date,
+                    time,
+                    title: String(ev.title || 'Scheduled post'),
+                    platform: String(ev.platform || 'linkedin'),
+                    content_type: String(ev.asset_type || ev.content_type || 'post'),
+                    execution_status,
+                    execution_jobs: [],
+                    // raw_item carries canonical_label/group (badge), pending,
+                    // daily_plan_id (upload deep-link) + content/cta.
+                    raw_item: ev as Record<string, unknown>,
+                  };
+                });
+                if (!cancelled) {
+                  setActivities(evMapped);
+                  setCampaignName(`Campaign ${campaignId} Calendar`);
+                }
+                return; // outer finally clears isLoading
+              }
+            }
+          } catch {
+            // fall through to the plan-blueprint source
+          }
+        }
+
         const response = await fetch(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`);
         if (!response.ok) throw new Error('Failed to load campaign plan');
         const payload = await response.json();
