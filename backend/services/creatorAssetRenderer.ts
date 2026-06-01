@@ -257,10 +257,25 @@ async function renderBackgroundPng(input: {
   const width = input.width ?? 1200;
   const height = input.height ?? 1200;
   const colors = input.colors?.filter((color) => /^#[0-9a-f]{6}$/i.test(color)).slice(0, 3) || [];
-  const primary = colors[0] || '#111827';
-  const secondary = colors[1] || '#2563eb';
-  const accent = colors[2] || '#14b8a6';
   const variant = parseInt(createHash('sha1').update(input.variantId || 'creator-default').digest('hex').slice(0, 4), 16);
+  // Background DYNAMISM: stay on-brand (same palette) but vary the gradient
+  // arrangement + direction per asset so consecutive generations don't all
+  // read as the identical blue template. Operator feedback: "the background
+  // image should keep changing to showcase the platform's flexibility."
+  const base = [colors[0] || '#111827', colors[1] || '#2563eb', colors[2] || '#14b8a6'];
+  const rot = variant % 3;
+  const primary = base[rot % 3];
+  const secondary = base[(rot + 1) % 3];
+  const accent = base[(rot + 2) % 3];
+  // Rotate the gradient direction through a small set of angles.
+  const DIRS = [
+    { x1: '0%', y1: '0%', x2: '100%', y2: '100%' }, // diagonal ↘
+    { x1: '0%', y1: '0%', x2: '0%', y2: '100%' },   // vertical ↓
+    { x1: '100%', y1: '0%', x2: '0%', y2: '100%' }, // diagonal ↙
+    { x1: '0%', y1: '0%', x2: '100%', y2: '0%' },   // horizontal →
+  ];
+  const dir = DIRS[variant % DIRS.length];
+  const midStop = 46 + (variant % 22); // 46–67%
   const topCircleX = width - 130 - (variant % 90);
   const topCircleY = 110 + (variant % 70);
   const bottomCircleX = 110 + (variant % 80);
@@ -269,9 +284,9 @@ async function renderBackgroundPng(input: {
   const svg = `
     <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <linearGradient id="bg" x1="${dir.x1}" y1="${dir.y1}" x2="${dir.x2}" y2="${dir.y2}">
           <stop offset="0%" stop-color="${primary}" />
-          <stop offset="58%" stop-color="${secondary}" />
+          <stop offset="${midStop}%" stop-color="${secondary}" />
           <stop offset="100%" stop-color="${accent}" />
         </linearGradient>
       </defs>
@@ -1017,12 +1032,13 @@ async function loadBrandMark(input: {
 }): Promise<Buffer | null> {
   const brandMark = normalizeBrandMark(input.brandKit);
   const cacheKey = `brandmark:${input.brandKit.tenantId || 'tenant'}:${input.brandKit.companyId || 'company'}:${input.brandKit.renderIdentityHash}:${brandMark.type}:${brandMark.source}:${input.placement.maxWidth}x${input.placement.maxHeight}`;
+  // Brand mark policy: render the COMPANY LOGO only. When no real logo/favicon
+  // URL resolved, do NOT fall back to an initials monogram (operator feedback:
+  // the "OM"/"OAIM" initials badge reads as a placeholder, not company brand).
+  // Returning null makes every caller skip the composite (all guard `if
+  // (brandMark)`), so a logo-less company gets a clean slide instead of initials.
   if (brandMark.type === 'initials' || !/^https?:\/\//i.test(brandMark.source)) {
-    return getCachedRenderBuffer(cacheKey, () => renderInitialsBrandMark({
-      initials: brandMark.fallbackInitials,
-      brandKit: input.brandKit,
-      placement: input.placement,
-    }));
+    return null;
   }
   try {
     return await getCachedRenderBuffer(cacheKey, async () => {
@@ -1043,11 +1059,9 @@ async function loadBrandMark(input: {
         .toBuffer();
     });
   } catch {
-    return getCachedRenderBuffer(`${cacheKey}:fallback`, () => renderInitialsBrandMark({
-      initials: brandMark.fallbackInitials,
-      brandKit: input.brandKit,
-      placement: input.placement,
-    }));
+    // Remote logo failed to load — skip the mark rather than substituting
+    // initials. A missing logo is preferable to a placeholder monogram.
+    return null;
   }
 }
 
@@ -2882,7 +2896,10 @@ export async function renderCreatorAssetReviewPreview(input: CreatorReviewPrevie
   });
   const brandColors = brandKit.normalizedPalette;
   const overlay = normalizeOverlayText({ assetPayload, metadata, title: input.title, body: input.body });
-  const background = await renderBackgroundPng({ width, height, colors: brandColors, variantId: brandKit.layoutVariantId });
+  // Seed the background with a per-ASSET token (the title) so different assets
+  // for the same company don't all render the identical gradient — layoutVariantId
+  // alone is constant per brand. Stays on-brand (same palette), varies arrangement.
+  const background = await renderBackgroundPng({ width, height, colors: brandColors, variantId: `${brandKit.layoutVariantId}:${String(input.title || '').slice(0, 48)}` });
   const overlayRender = buildOverlaySvg({
     width,
     height,
@@ -3201,7 +3218,9 @@ async function renderStructuredSlidePng(input: {
     width: input.width,
     height: input.height,
     colors: input.brandKit.normalizedPalette,
-    variantId: `${input.brandKit.layoutVariantId}-${input.index}`,
+    // Per-slide index keeps slides within a carousel distinct; mixing the
+    // slide body keeps DIFFERENT carousels distinct from each other too.
+    variantId: `${input.brandKit.layoutVariantId}:${input.index}:${String(input.item?.body || '').slice(0, 48)}`,
   });
   // Strategy-aware carousel/infographic slide rendering — read the
   // resolved purpose_strategy.id from metadata and look up the

@@ -443,146 +443,172 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       willSynth: executionItems.length === 0,
     });
 
-    // Synthesize execution_items from blueprint data when not present (BOLT campaigns, legacy campaigns).
-    // This ensures daily distribution works even when the AI plan did not produce explicit execution_items.
-    if (executionItems.length === 0) {
-      const synthPlatforms = Object.keys(weekBlueprint.platform_allocation || {})
+    // ── Resolve the distribution context ONCE. Used by BOTH the
+    //    synth-from-blueprint path (when the AI gave no execution_items) AND
+    //    the format_frequency reconciliation below (when it did). Pure, cheap
+    //    derivations — safe to compute even when execution_items are present.
+    const synthSlotPlatforms = (() => {
+      const fromAllocation = Object.keys(weekBlueprint.platform_allocation || {})
         .map(normalizePlatformKey)
         .filter(Boolean);
-      const platforms = synthPlatforms.length > 0
-        ? synthPlatforms
+      return fromAllocation.length > 0
+        ? fromAllocation
         : (eligiblePlatforms && eligiblePlatforms.length > 0 ? eligiblePlatforms.slice(0, 2) : ['linkedin']);
-      // User's explicit format_frequency keys take precedence over AI-generated content_type_mix.
-      // This ensures the distribution strictly honours what the user selected on the strategy page.
-      const userFormats = formatFrequency && Object.keys(formatFrequency).length > 0
-        ? Object.keys(formatFrequency).map((t) => t.trim().toLowerCase()).filter(Boolean)
-        : null;
-      const contentTypes = (
-        userFormats ??
-        (Array.isArray(weekBlueprint.content_type_mix) && weekBlueprint.content_type_mix.length > 0
-          ? weekBlueprint.content_type_mix
-          : ['post'])
-      ).map((t) => String(t || '').trim().toLowerCase()).filter(Boolean);
-      console.log('[generate-weekly-structure] content type resolution', {
-        formatFrequency,
-        userFormats,
-        contentTypeMix: weekBlueprint.content_type_mix,
-        resolvedContentTypes: contentTypes,
-      });
-      const totalCount = postsPerWeek ?? Math.max(
-        2,
-        Object.values(weekBlueprint.platform_allocation || {}).reduce((sum: number, n: unknown) => sum + Number(n), 0) || 3
-      );
-      // 1. Primary: topics_to_cover[] or topics[].topicTitle
-      const rawTopics: string[] = Array.isArray(weekBlueprint.topics_to_cover) && (weekBlueprint.topics_to_cover as unknown[]).length > 0
-        ? (weekBlueprint.topics_to_cover as unknown[]).map((t) => String(t ?? '').trim()).filter(Boolean)
-        : Array.isArray(weekBlueprint.topics) && (weekBlueprint.topics as any[]).length > 0
-          ? (weekBlueprint.topics as any[]).map((t: any) => String(t?.topicTitle ?? t ?? '').trim()).filter(Boolean)
-          : [];
-
-      // 2. Fallback: extract per-piece topics from platform_content_breakdown.
-      //    BOLT AI populates these as ["(1) Topic A", "(2) Topic B"] per content item.
-      //    Strip numeric prefixes like "(1) " so they read naturally.
-      const pcdTopics: string[] = [];
-      if (weekBlueprint.platform_content_breakdown && typeof weekBlueprint.platform_content_breakdown === 'object') {
-        const seen = new Set<string>();
-        for (const items of Object.values(weekBlueprint.platform_content_breakdown as Record<string, any[]>)) {
-          if (!Array.isArray(items)) continue;
-          for (const item of items) {
-            const perPieceTopics = Array.isArray(item?.topics) ? item.topics : (typeof item?.topic === 'string' && item.topic ? [item.topic] : []);
-            for (const raw of perPieceTopics) {
-              const clean = String(raw ?? '').replace(/^\(\d+\)\s*/, '').trim();
-              if (clean && !seen.has(clean.toLowerCase())) {
-                seen.add(clean.toLowerCase());
-                pcdTopics.push(clean);
-              }
+    })();
+    // User's explicit format_frequency keys take precedence over AI-generated
+    // content_type_mix — the distribution strictly honours what the user
+    // selected on the strategy page.
+    const userFormats = formatFrequency && Object.keys(formatFrequency).length > 0
+      ? Object.keys(formatFrequency).map((t) => t.trim().toLowerCase()).filter(Boolean)
+      : null;
+    const synthContentTypes = (
+      userFormats ??
+      (Array.isArray(weekBlueprint.content_type_mix) && weekBlueprint.content_type_mix.length > 0
+        ? weekBlueprint.content_type_mix
+        : ['post'])
+    ).map((t) => String(t || '').trim().toLowerCase()).filter(Boolean);
+    const synthTotalCount = postsPerWeek ?? Math.max(
+      2,
+      Object.values(weekBlueprint.platform_allocation || {}).reduce((sum: number, n: unknown) => sum + Number(n), 0) || 3
+    );
+    // Topic resolution: topics_to_cover > platform_content_breakdown > phase_label
+    const rawTopics: string[] = Array.isArray(weekBlueprint.topics_to_cover) && (weekBlueprint.topics_to_cover as unknown[]).length > 0
+      ? (weekBlueprint.topics_to_cover as unknown[]).map((t) => String(t ?? '').trim()).filter(Boolean)
+      : Array.isArray(weekBlueprint.topics) && (weekBlueprint.topics as any[]).length > 0
+        ? (weekBlueprint.topics as any[]).map((t: any) => String(t?.topicTitle ?? t ?? '').trim()).filter(Boolean)
+        : [];
+    // Fallback: per-piece topics from platform_content_breakdown ("(1) Topic A").
+    const pcdTopics: string[] = [];
+    if (weekBlueprint.platform_content_breakdown && typeof weekBlueprint.platform_content_breakdown === 'object') {
+      const seen = new Set<string>();
+      for (const items of Object.values(weekBlueprint.platform_content_breakdown as Record<string, any[]>)) {
+        if (!Array.isArray(items)) continue;
+        for (const item of items) {
+          const perPieceTopics = Array.isArray(item?.topics) ? item.topics : (typeof item?.topic === 'string' && item.topic ? [item.topic] : []);
+          for (const raw of perPieceTopics) {
+            const clean = String(raw ?? '').replace(/^\(\d+\)\s*/, '').trim();
+            if (clean && !seen.has(clean.toLowerCase())) {
+              seen.add(clean.toLowerCase());
+              pcdTopics.push(clean);
             }
           }
         }
       }
+    }
+    const synthTopics = rawTopics.length > 1
+      ? rawTopics
+      : rawTopics.length === 1 && pcdTopics.length > 0
+        ? pcdTopics
+        : rawTopics.length === 1
+          ? rawTopics
+          : pcdTopics.length > 0
+            ? pcdTopics
+            : [String(weekBlueprint.phase_label || weekBlueprint.primary_objective || `Week ${weekNumber} content`).trim()];
+    const synthCtaType = String(weekBlueprint.cta_type || 'Engage').trim() || 'Engage';
+    const synthObjective = String(weekBlueprint.primary_objective || weekBlueprint.phase_label || 'Build brand awareness').trim() || 'Build brand awareness';
+    const synthDefaultCountPerType = Math.max(1, Math.round(synthTotalCount / Math.max(1, synthContentTypes.length)));
+    const synthTargetAudience = compressedContext?.target_audience || 'our target audience';
+    let synthGlobalIdx = (weekNumber - 1) * synthTotalCount;
+    let globalTopicIdx = 0;
 
-      // Use most specific topic list available: topics_to_cover > platform_content_breakdown > phase_label
-      const topics = rawTopics.length > 1
-        ? rawTopics
-        : rawTopics.length === 1 && pcdTopics.length > 0
-          ? pcdTopics  // pcd gives more granularity than single topics_to_cover entry
-          : rawTopics.length === 1
-            ? rawTopics
-            : pcdTopics.length > 0
-              ? pcdTopics
-              : [String(weekBlueprint.phase_label || weekBlueprint.primary_objective || `Week ${weekNumber} content`).trim()];
+    // Build N topic_slots for a content type (shared by synth + reconciliation).
+    // deriveSubTopic wraps each base topic in a content-type-specific angle so
+    // every card gets a distinct, on-format title.
+    const buildTopicSlots = (contentType: string, count: number): Array<{ topic: string | null; global_progression_index: number; intent: any }> => {
+      const slots: Array<{ topic: string | null; global_progression_index: number; intent: any }> = [];
+      for (let k = 0; k < count; k++) {
+        synthGlobalIdx++;
+        const baseTopic = synthTopics[globalTopicIdx % synthTopics.length]!;
+        const topic = deriveSubTopic(baseTopic, contentType, k, synthTargetAudience);
+        globalTopicIdx++;
+        const requiresMediaBrief =
+          ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'short', 'shorts', 'podcast', 'image'].includes(contentType) ||
+          requiresCreatorCreativeGuidance(contentType);
+        slots.push({
+          topic,
+          global_progression_index: synthGlobalIdx,
+          intent: {
+            objective: synthObjective,
+            cta_type: synthCtaType,
+            target_audience: synthTargetAudience,
+            brief_summary: `${topic}: ${synthObjective}`,
+            pain_point: deriveSynthPainPoint(topic),
+            outcome_promise: deriveSynthOutcomePromise(topic, contentType),
+            // Text enrichment (non-creator types)
+            ...(!requiresMediaBrief ? {
+              hook: deriveTextHook(topic, contentType),
+              key_points: deriveKeyPoints(topic, synthObjective, contentType),
+              seo_focus: deriveSEOFocus(topic, synthObjective),
+              keywords: deriveKeywords(topic, synthObjective),
+              hashtags: deriveHashtags(topic, contentType, synthObjective),
+              repurpose_angles: deriveRepurposeAngles(topic, contentType),
+            } : {}),
+            // Creator enrichment
+            ...(requiresMediaBrief ? {
+              visual_hook: deriveVisualHook(topic, contentType),
+              image_prompt: deriveImagePrompt(topic, contentType, synthSlotPlatforms),
+              video_prompt: contentType !== 'carousel' ? deriveVideoPrompt(topic, contentType, synthSlotPlatforms) : undefined,
+              scene_direction: deriveSceneDirection(topic, contentType),
+              keywords: deriveKeywords(topic, synthObjective),
+              hashtags: deriveHashtags(topic, contentType, synthObjective),
+            } : {}),
+          },
+        });
+      }
+      return slots;
+    };
 
-      const ctaType = String(weekBlueprint.cta_type || 'Engage').trim() || 'Engage';
-      const objective = String(weekBlueprint.primary_objective || weekBlueprint.phase_label || 'Build brand awareness').trim() || 'Build brand awareness';
-      const defaultCountPerType = Math.max(1, Math.round(totalCount / contentTypes.length));
-      let synthGlobalIdx = (weekNumber - 1) * totalCount;
-      // Use specific target audience from campaign context (built from execution_config.target_audience); fall back to generic
-      const synthTargetAudience = compressedContext?.target_audience || 'our target audience';
-      // Track a global topic index so different content types don't all start at topic 0
-      let globalTopicIdx = 0;
-      console.log('[weekly-structure][synth-topics]', {
-        totalCount,
-        topicsAvailable: topics.length,
-        contentTypes,
-        isRepeatedTopicTriggered: topics.length < totalCount,
-        firstFewTopics: topics.slice(0, 4),
+    // Synthesize execution_items from blueprint data when the AI plan did not
+    // produce explicit ones (BOLT / legacy campaigns).
+    if (executionItems.length === 0) {
+      console.log('[generate-weekly-structure] content type resolution', {
+        formatFrequency,
+        userFormats,
+        contentTypeMix: weekBlueprint.content_type_mix,
+        resolvedContentTypes: synthContentTypes,
       });
-      for (const contentType of contentTypes) {
-        // Honour per-format frequency from user selection; fall back to equal distribution
+      for (const contentType of synthContentTypes) {
         const countPerType = formatFrequency?.[contentType] != null
           ? Math.max(1, Math.round(Number(formatFrequency[contentType])))
-          : defaultCountPerType;
-        const topic_slots: Array<{ topic: string | null; global_progression_index: number; intent: any }> = [];
-        for (let k = 0; k < countPerType; k++) {
-          synthGlobalIdx++;
-          // Each activity card must have a distinct title. When the same raw topic
-          // is used across content types (e.g. "Brand Awareness" for both poll and
-          // short_story), deriveSubTopic wraps it in a content-type-specific angle
-          // so Poll #1, Story #1 get different titles like "Poll: what's your..." vs
-          // "Short story: the day...". We ALWAYS apply deriveSubTopic since:
-          //  (a) it's designed for this — each angle template is scoped by content_type
-          //  (b) topics from the AI plan are usually theme-level, not per-card unique
-          //  (c) the prior gate (topics.length < totalCount) left duplicates unchanged
-          //      when the AI returned exactly N unique topics for N slots
-          const baseTopic = topics[globalTopicIdx % topics.length]!;
-          const topic = deriveSubTopic(baseTopic, contentType, k, synthTargetAudience);
-          globalTopicIdx++;
-          const requiresMediaBrief =
-            ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'short', 'shorts', 'podcast', 'image'].includes(contentType) ||
-            requiresCreatorCreativeGuidance(contentType);
-          topic_slots.push({
-            topic,
-            global_progression_index: synthGlobalIdx,
-            intent: {
-              objective,
-              cta_type: ctaType,
-              target_audience: synthTargetAudience,
-              brief_summary: `${topic}: ${objective}`,
-              pain_point: deriveSynthPainPoint(topic),
-              outcome_promise: deriveSynthOutcomePromise(topic, contentType),
-              // Text enrichment (non-creator types)
-              ...(!requiresMediaBrief ? {
-                hook: deriveTextHook(topic, contentType),
-                key_points: deriveKeyPoints(topic, objective, contentType),
-                seo_focus: deriveSEOFocus(topic, objective),
-                keywords: deriveKeywords(topic, objective),
-                hashtags: deriveHashtags(topic, contentType, objective),
-                repurpose_angles: deriveRepurposeAngles(topic, contentType),
-              } : {}),
-              // Creator enrichment
-              ...(requiresMediaBrief ? {
-                visual_hook: deriveVisualHook(topic, contentType),
-                image_prompt: deriveImagePrompt(topic, contentType, platforms),
-                video_prompt: contentType !== 'carousel' ? deriveVideoPrompt(topic, contentType, platforms) : undefined,
-                scene_direction: deriveSceneDirection(topic, contentType),
-                keywords: deriveKeywords(topic, objective),
-                hashtags: deriveHashtags(topic, contentType, objective),
-              } : {}),
-            },
-          });
-        }
-        executionItems.push({ content_type: contentType, selected_platforms: platforms, count_per_week: countPerType, topic_slots });
+          : synthDefaultCountPerType;
+        executionItems.push({ content_type: contentType, selected_platforms: synthSlotPlatforms, count_per_week: countPerType, topic_slots: buildTopicSlots(contentType, countPerType) });
       }
+    } else if (userFormats && userFormats.length > 0) {
+      // RECONCILE AI-provided execution_items against the user's explicit
+      // format_frequency. The synth path above already honours format_frequency;
+      // without this, AI-emitted counts silently win and the user's selected
+      // per-type counts (e.g. 3 carousel + 3 image) are NOT produced (observed:
+      // only 2 carousels, 0 images). Pad missing types/slots, trim overflow, and
+      // drop content types the user did not select — making format_frequency the
+      // single authority on counts for BOTH the AI and synth paths.
+      const aiByType = new Map<string, ExecutionItemInput>();
+      for (const it of executionItems) {
+        const existing = aiByType.get(it.content_type);
+        if (!existing) {
+          aiByType.set(it.content_type, { ...it, topic_slots: Array.isArray(it.topic_slots) ? [...it.topic_slots] : [] });
+        } else {
+          existing.topic_slots = [...(existing.topic_slots ?? []), ...(Array.isArray(it.topic_slots) ? it.topic_slots : [])];
+        }
+      }
+      const reconciled: ExecutionItemInput[] = [];
+      for (const type of userFormats) {
+        const desired = Math.max(1, Math.round(Number(formatFrequency![type] ?? 1)));
+        const existing = aiByType.get(type);
+        let slots = existing && Array.isArray(existing.topic_slots) ? [...existing.topic_slots] : [];
+        if (slots.length > desired) {
+          slots = slots.slice(0, desired);
+        } else if (slots.length < desired) {
+          slots = [...slots, ...buildTopicSlots(type, desired - slots.length)];
+        }
+        const plats = existing && existing.selected_platforms.length > 0 ? existing.selected_platforms : synthSlotPlatforms;
+        reconciled.push({ content_type: type, selected_platforms: plats, count_per_week: desired, topic_slots: slots });
+      }
+      console.log('[weekly-structure][reconcile-format-frequency]', {
+        formatFrequency,
+        aiTypes: [...aiByType.keys()],
+        reconciled: reconciled.map((r) => ({ type: r.content_type, count: r.count_per_week, slots: r.topic_slots?.length ?? 0 })),
+      });
+      executionItems = reconciled;
     }
 
     // ── DEDUPE GUARD: ensure no two activity cards share the same topic ──────

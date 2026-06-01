@@ -648,6 +648,37 @@ const DEFAULT_ANGLES: Array<(theme: string, audience: string) => string> = [
   (t, a) => `The ${a} guide to ${t.toLowerCase()}`,
 ];
 
+/**
+ * Strip PLANNING META-SCAFFOLD from a card title so it reads as clean,
+ * publishable copy rather than an internal planning instruction.
+ *
+ * The activity-card title doubles as the published caption (carousel/image
+ * marketing copy mirrors it), so phrases like "5 slides on …", trailing
+ * "every {audience} should see", and the upstream "Stop Doing {X} the Hard
+ * Way" angle wrapper leak into what the reader sees. Operator feedback:
+ * "we should have text that clearly defines the message, not 'five slides
+ * on …' or progress." This unwraps those scaffolds to the core message.
+ * Pure + idempotent; never returns empty (falls back to the raw input).
+ */
+export function sanitizeCardTitle(raw: string): string {
+  const original = String(raw || '').trim();
+  let s = original;
+  // Unwrap clickbait angle wrappers to the core topic.
+  s = s.replace(/\bstop doing\s+(.+?)\s+the hard way\b/gi, '$1');
+  // Drop count/format scaffolds: "5 slides on …", "60s reel:", "in 30 seconds".
+  s = s.replace(/^\s*\d+\s+slides?\s+on\s+/i, '');
+  s = s.replace(/^\s*\d+\s*s(ec(ond)?s?)?\b\s*reel\s*[:—-]\s*/i, 'Reel: ');
+  s = s.replace(/\b—?\s*in\s+\d+\s+seconds?\b/gi, '');
+  // Drop trailing audience-echo scaffolds: "… every {audience} should see /
+  // share / know / bookmark", "… that every {audience} should …", "… {audience}
+  // need / miss / wish they …".
+  s = s.replace(/\s+(that\s+)?every\s+.+?\s+(should|need to|needs to|needs?)\b.*$/i, '');
+  s = s.replace(/\s+(the\s+\w+\s+)?every\s+.+?\s+(should|need|needs|needs to)\b.*$/i, '');
+  // Collapse leftover whitespace + dangling separators.
+  s = s.replace(/\s{2,}/g, ' ').replace(/[\s:—-]+$/, '').trim();
+  return s || original;
+}
+
 export function deriveSubTopic(
   weekTheme: string,
   contentType: string,
@@ -657,7 +688,11 @@ export function deriveSubTopic(
   const ct = contentType.toLowerCase();
   const angles = SUB_TOPIC_ANGLES[ct] ?? DEFAULT_ANGLES;
   const audience = targetAudience || 'your audience';
-  return angles[slotIndex % angles.length]!(weekTheme, audience);
+  // Clean the base theme first (removes upstream "Stop Doing … the Hard Way"
+  // style wrappers), then sanitize the composed title so the published
+  // caption never carries planning scaffold.
+  const cleanTheme = sanitizeCardTitle(weekTheme);
+  return sanitizeCardTitle(angles[slotIndex % angles.length]!(cleanTheme, audience));
 }
 
 export function buildTopicReference(weekNumber: number, topicIndex: number): string {
