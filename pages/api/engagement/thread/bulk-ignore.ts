@@ -8,6 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { recordThreadEvents } from '../../../../backend/services/engagementThreadEventService';
 
 const MAX_BATCH = 20;
 
@@ -53,13 +54,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { error: updateErr } = await supabase
       .from('engagement_threads')
-      .update({ ignored: true, updated_at: new Date().toISOString() })
+      .update({ ignored: true, ignored_by: access.userId, updated_at: new Date().toISOString() })
       .eq('organization_id', organizationId)
       .in('id', validIds);
 
     if (updateErr) {
       console.warn('[engagement/thread/bulk-ignore]', updateErr.message);
       return res.status(500).json({ error: 'Failed to ignore threads' });
+    }
+
+    try {
+      await recordThreadEvents({
+        organizationId,
+        threadIds: validIds,
+        actorUserId: access.userId,
+        eventType: 'ignored',
+      });
+    } catch (eventErr) {
+      console.warn('[engagement/thread/bulk-ignore] thread-event log failed:', (eventErr as Error)?.message);
     }
 
     return res.status(200).json({ success: true, ignored: validIds.length });

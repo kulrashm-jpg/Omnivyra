@@ -459,6 +459,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       classification_category: t.classification_category ?? null,
       triage_priority: t.triage_priority ?? null,
       sentiment: t.sentiment ?? null,
+      assigned_to: t.assigned_to ?? null,
+      assigned_at: t.assigned_at ?? null,
+      assignee_name: t.assignee_name ?? null,
       latest_message_type: messageTypeByThread.get(t.thread_id) ?? null,
       latest_message_direction: messageDirectionByThread.get(t.thread_id) ?? null,
       latest_message_author_self:

@@ -16,6 +16,11 @@ import {
   parseMessageDateMs,
 } from '../../lib/engagement/messageTime';
 
+const THREAD_COLUMNS_BASE =
+  'id, platform, platform_thread_id, source_id, organization_id, priority_score, unread_count, raw_payload, created_at, updated_at';
+const THREAD_COLUMNS_WITH_COLLABORATION =
+  `${THREAD_COLUMNS_BASE}, assigned_to, assigned_at`;
+
 export type GetThreadsFilters = {
   organization_id: string;
   platform?: string | null;
@@ -45,7 +50,38 @@ export type ThreadSummary = {
   classification_category?: string | null;
   triage_priority?: number | null;
   sentiment?: string | null;
+  assigned_to?: string | null;
+  assigned_at?: string | null;
+  assignee_name?: string | null;
 };
+
+type EngagementThreadRow = {
+  id: string;
+  platform: string;
+  platform_thread_id?: string | null;
+  source_id?: string | null;
+  organization_id?: string | null;
+  priority_score?: number | string | null;
+  unread_count?: number | string | null;
+  raw_payload?: Record<string, unknown> | null;
+  assigned_to?: string | null;
+  assigned_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+function isMissingEngagementThreadCollaborationColumn(error: { message?: string; code?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const message = (error.message ?? '').toLowerCase();
+  return (
+    error.code === 'PGRST204' ||
+    message.includes('engagement_threads.assigned_to') ||
+    message.includes('engagement_threads.assigned_at') ||
+    message.includes('could not find the') && message.includes('engagement_threads') ||
+    message.includes('assigned_to') && message.includes('does not exist') ||
+    message.includes('assigned_at') && message.includes('does not exist')
+  );
+}
 
 async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
   const { data: roleUsers } = await supabase
@@ -213,31 +249,41 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
     }
   }
 
-  let query = supabase
-    .from('engagement_threads')
-    .select('id, platform, platform_thread_id, source_id, organization_id, priority_score, unread_count, raw_payload, created_at, updated_at')
-    .eq('organization_id', filters.organization_id)
-    .order('updated_at', { ascending: false })
-    .limit(Math.min(1000, Math.max(limit * 2, 300)));
+  const buildThreadQuery = (columns: string) => {
+    let query = supabase
+      .from('engagement_threads')
+      .select(columns)
+      .eq('organization_id', filters.organization_id)
+      .order('updated_at', { ascending: false })
+      .limit(Math.min(1000, Math.max(limit * 2, 300)));
 
-  if (filters.platform) {
-    query = query.eq('platform', filters.platform);
-  }
-  if (filters.exclude_ignored) {
-    query = query.eq('ignored', false);
-  }
-  if (filters.source_id) {
-    query = query.eq('source_id', filters.source_id);
-  }
-  if (dateScopedThreadIds) {
-    query = query.in('id', dateScopedThreadIds);
-  }
+    if (filters.platform) {
+      query = query.eq('platform', filters.platform);
+    }
+    if (filters.exclude_ignored) {
+      query = query.eq('ignored', false);
+    }
+    if (filters.source_id) {
+      query = query.eq('source_id', filters.source_id);
+    }
+    if (dateScopedThreadIds) {
+      query = query.in('id', dateScopedThreadIds);
+    }
+    return query;
+  };
 
-  const { data: threads, error } = await query;
+  let { data: threads, error } = await buildThreadQuery(THREAD_COLUMNS_WITH_COLLABORATION);
+  if (error && isMissingEngagementThreadCollaborationColumn(error)) {
+    console.warn('[engagementThreadService] collaboration columns missing; retrying inbox query without assignment metadata', {
+      message: error.message,
+      code: error.code,
+    });
+    ({ data: threads, error } = await buildThreadQuery(THREAD_COLUMNS_BASE));
+  }
   if (error) {
     throw new Error(`Failed to fetch threads: ${error.message}`);
   }
-  const list = threads ?? [];
+  const list = (threads ?? []) as unknown as EngagementThreadRow[];
 
   const threadIds = list.map((t: { id: string }) => t.id);
   if (threadIds.length === 0) {
@@ -344,6 +390,26 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       firstAuthorByThread.set(m.thread_id, a?.display_name ?? a?.username ?? 'Unknown');
     }
   });
+
+  // Resolve assignee display names for assigned threads (best-effort).
+  const assigneeNameById = new Map<string, string>();
+  const assignedUserIds = Array.from(
+    new Set(
+      list
+        .map((t: { assigned_to?: string | null }) => t.assigned_to)
+        .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    )
+  );
+  if (assignedUserIds.length > 0) {
+    const { data: assignees } = await supabase
+      .from('user_company_roles')
+      .select('user_id, name')
+      .eq('company_id', filters.organization_id)
+      .in('user_id', assignedUserIds);
+    (assignees ?? []).forEach((r: { user_id: string; name: string | null }) => {
+      if (r.name) assigneeNameById.set(r.user_id, r.name);
+    });
+  }
 
   const results: ThreadSummary[] = [];
   for (const t of list) {
@@ -459,6 +525,9 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       classification_category: classification?.classification_category ?? null,
       triage_priority: classification?.triage_priority ?? null,
       sentiment: classification?.sentiment ?? null,
+      assigned_to: t.assigned_to ?? null,
+      assigned_at: t.assigned_at ?? null,
+      assignee_name: t.assigned_to ? assigneeNameById.get(t.assigned_to) ?? null : null,
     });
     if (results.length >= limit) break;
   }

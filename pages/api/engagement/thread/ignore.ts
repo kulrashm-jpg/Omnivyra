@@ -8,6 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { recordThreadEvent } from '../../../../backend/services/engagementThreadEventService';
 
 type Body = {
   thread_id?: string;
@@ -52,12 +53,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { error: updateError } = await supabase
       .from('engagement_threads')
-      .update({ ignored: true, updated_at: new Date().toISOString() })
+      .update({ ignored: true, ignored_by: access.userId, updated_at: new Date().toISOString() })
       .eq('id', threadId);
 
     if (updateError) {
       console.warn('[engagement/thread/ignore] update error', updateError.message);
       return res.status(500).json({ error: 'Failed to ignore thread' });
+    }
+
+    try {
+      await recordThreadEvent({
+        organizationId,
+        threadId,
+        actorUserId: access.userId,
+        eventType: 'ignored',
+      });
+    } catch (eventErr) {
+      console.warn('[engagement/thread/ignore] thread-event log failed:', (eventErr as Error)?.message);
     }
 
     return res.status(200).json({ success: true });

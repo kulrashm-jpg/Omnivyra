@@ -133,6 +133,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         suggested_text: null,
         playbook_id: null,
         execution_mode: capability.mode ?? 'api',
+        // Attribution: operator who initiated the like (server-derived).
+        acting_user_id: roleGate.userId ?? null,
       },
       true,
       { source: 'manual', persist: true, auto_insert: true }

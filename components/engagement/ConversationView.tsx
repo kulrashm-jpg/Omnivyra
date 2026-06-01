@@ -16,13 +16,17 @@ import {
 } from '@/lib/engagement/messageTime';
 import { MessageList } from './inbox/MessageList';
 import { ThreadHeader } from './inbox/ThreadHeader';
+import { ThreadCollaborationPanel } from './ThreadCollaborationPanel';
 import { useMessageActions } from '@/hooks/useMessageActions';
+import { useReplyLock } from '@/hooks/useReplyLock';
 
 export interface ConversationViewProps {
   thread: InboxThread | null;
   messages: EngagementMessage[];
   loading?: boolean;
   organizationId: string;
+  /** Current operator's user id — drives "assign to me" and lock-owner display. */
+  actingUserId?: string;
   emptyStateTitle?: string;
   emptyStateDescription?: string;
   onRefresh?: () => void;
@@ -49,6 +53,7 @@ export const ConversationView = React.memo(function ConversationView({
   messages,
   loading = false,
   organizationId,
+  actingUserId = '',
   emptyStateTitle = 'Select a conversation to start',
   emptyStateDescription = 'Choose a thread from the queue to review context and respond.',
   onRefresh,
@@ -137,6 +142,18 @@ export const ConversationView = React.memo(function ConversationView({
   }, [messages]);
 
   const replyTarget = replyingTo ?? latestReplyableMessage ?? latestMessage;
+
+  // Soft-lock: mark this thread as being reviewed as soon as it is opened, so
+  // teammates see the active owner before anyone starts typing.
+  const threadReviewActive = Boolean(thread?.thread_id);
+  const { lock: replyLock, override: overrideReplyLock } = useReplyLock({
+    organizationId,
+    threadId: thread?.thread_id,
+    active: threadReviewActive,
+  });
+  const lockedByOther =
+    !!replyLock && !replyLock.locked && !!replyLock.held_by && replyLock.held_by !== actingUserId;
+
   const prefillReplyToken = typeof router.query.prefill_reply === 'string' ? router.query.prefill_reply : '';
 
   React.useEffect(() => {
@@ -387,6 +404,14 @@ export const ConversationView = React.memo(function ConversationView({
         onViewLeadSignal={() => router.push('/command-center/active-leads')}
       />
 
+      <ThreadCollaborationPanel
+        organizationId={organizationId}
+        threadId={thread.thread_id}
+        actingUserId={actingUserId}
+        assignedTo={thread.assigned_to ?? null}
+        assigneeName={thread.assignee_name ?? null}
+        onAssignmentChange={onRefresh}
+      />
 
       <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
         <MessageList
@@ -436,6 +461,18 @@ export const ConversationView = React.memo(function ConversationView({
         (m) => m.is_pending_outbound === true && m.thread_id === thread.thread_id,
       ) && (
         <div ref={composerRef} className="p-4 border-t border-slate-200 space-y-4">
+          {lockedByOther && (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <span>Another teammate is reviewing this conversation.</span>
+              <button
+                type="button"
+                onClick={() => { void overrideReplyLock(); }}
+                className="ml-auto shrink-0 text-xs font-medium text-amber-800 underline hover:text-amber-900"
+              >
+                Reply anyway
+              </button>
+            </div>
+          )}
           {/* Reply-target banner — makes it explicit which comment the
               composer is threaded under, otherwise the composer sits at
               the bottom of the page and the user can't tell whether it's

@@ -13,6 +13,7 @@ export interface ThreadViewProps {
   messages: EngagementMessage[];
   loading?: boolean;
   organizationId: string;
+  actingUserId?: string;
   emptyStateTitle?: string;
   emptyStateDescription?: string;
   onRefresh?: () => void;
@@ -36,6 +37,7 @@ export const ThreadView = React.memo(function ThreadView({
   messages,
   loading = false,
   organizationId,
+  actingUserId,
   emptyStateTitle,
   emptyStateDescription,
   onRefresh,
@@ -54,6 +56,7 @@ export const ThreadView = React.memo(function ThreadView({
       messages={messages}
       loading={loading}
       organizationId={organizationId}
+      actingUserId={actingUserId}
       emptyStateTitle={emptyStateTitle}
       emptyStateDescription={emptyStateDescription}
       onRefresh={onRefresh}
