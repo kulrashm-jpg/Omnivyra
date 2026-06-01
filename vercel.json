@@ -26,6 +26,14 @@
     {
       "path": "/api/cron/integration-health-sweep",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/sweep-stuck-publishing",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/reconcile-recent-publishes",
+      "schedule": "*/10 * * * *"
     }
   ],
   "experimentalServices": {
