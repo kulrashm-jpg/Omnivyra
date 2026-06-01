@@ -278,6 +278,19 @@ export function useDashboardState() {
           content: ev.content || null,
           media_urls: Array.isArray(ev.media_urls) ? ev.media_urls : [],
           media_types: Array.isArray(ev.media_types) ? ev.media_types : [],
+          // ── Creator visibility (additive) — without these the tiles
+          //    can't show status / AI-vs-creator and the drawer brief is dead.
+          asset_type: ev.asset_type,
+          pending: ev.pending,
+          daily_plan_id: ev.daily_plan_id,
+          cta: ev.cta,
+          canonical_state: ev.canonical_state,
+          canonical_badge: ev.canonical_badge,
+          canonical_label: ev.canonical_label,
+          canonical_group: ev.canonical_group,
+          theme_treatment: ev.theme_treatment,
+          creator_guidance: ev.creator_guidance,
+          marketing_package: ev.marketing_package,
         }));
         setCalendarStageEvents(all.filter((ev) => getEventStage(ev) === stage));
       })
@@ -651,7 +664,7 @@ export function useDashboardState() {
         list.forEach((ev: any) => {
           const d = ev.date || '';
           if (!d) return;
-          allItems.push({ type: 'activity', date: d, platform: ev.platform, title: ev.title, repurpose_index: 1, repurpose_total: 1, campaign_id: ev.campaign_id, content_type: ev.content_type || 'post', execution_id: ev.execution_id, scheduled_post_id: ev.scheduled_post_id, status: ev.status, scheduled_for: ev.scheduled_for, is_overdue: ev.is_overdue, content: ev.content || null, media_urls: Array.isArray(ev.media_urls) ? ev.media_urls : [], media_types: Array.isArray(ev.media_types) ? ev.media_types : [] });
+          allItems.push({ type: 'activity', date: d, platform: ev.platform, title: ev.title, repurpose_index: 1, repurpose_total: 1, campaign_id: ev.campaign_id, content_type: ev.content_type || 'post', execution_id: ev.execution_id, scheduled_post_id: ev.scheduled_post_id, status: ev.status, scheduled_for: ev.scheduled_for, is_overdue: ev.is_overdue, content: ev.content || null, media_urls: Array.isArray(ev.media_urls) ? ev.media_urls : [], media_types: Array.isArray(ev.media_types) ? ev.media_types : [], asset_type: ev.asset_type, pending: ev.pending, daily_plan_id: ev.daily_plan_id, cta: ev.cta, canonical_state: ev.canonical_state, canonical_badge: ev.canonical_badge, canonical_label: ev.canonical_label, canonical_group: ev.canonical_group, theme_treatment: ev.theme_treatment, creator_guidance: ev.creator_guidance, marketing_package: ev.marketing_package });
         });
         // Recompute repurpose_index/total campaign-wide: group by title across ALL dates,
         // sort chronologically — total = how many times topic appears in campaign.

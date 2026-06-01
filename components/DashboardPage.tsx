@@ -396,6 +396,7 @@ export default function DashboardPage() {
           onClose={() => setPostPreview(null)}
           onPublish={handlePublishNow}
           onReschedule={handleRescheduleFromModal}
+          onUpload={(evt) => { setPostPreview(null); d.handleUploadCreatorAsset(evt); }}
           onOpenWorkspace={(evt) => {
             setPostPreview(null);
             if (evt.execution_id) {

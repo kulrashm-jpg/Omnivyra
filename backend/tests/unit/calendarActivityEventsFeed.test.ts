@@ -39,8 +39,9 @@ const videoPendingRow = {
   content_status: 'awaiting_media_upload',
   content: {
     creator_lifecycle_state: 'awaiting_media_upload',
-    theme_treatment: { summary: 'Reel brief', CTA_direction: 'Watch now' },
-    marketing_package: { cta: 'Watch now' },
+    theme_treatment: { summary: 'Reel brief', CTA_direction: 'Watch now', hook_scene: { text: 'Open with the pain point' } },
+    creator_guidance: { production_notes: 'Shoot vertical', talking_points: ['Point A', 'Point B'] },
+    marketing_package: { cta: 'Watch now', caption: 'Reel caption', hashtags: ['#reel'] },
   },
   scheduled_post_id: null,
   title: 'Reel teaser',
@@ -149,6 +150,24 @@ describe('calendar activity-events — unified feed', () => {
     expect(pending.execution_id).toBe('exec-v'); // workspace deep-link
     expect(pending.scheduled_for).toBeTruthy();   // card shows a time
     expect(pending.scheduled_post_id).toBeNull();
+  });
+
+  test('pending video row carries the structured VIDEO CREATION BRIEF inline', async () => {
+    const res = await callFeed({});
+    const events = res.body as any[];
+    const pending = events.find((e) => e.daily_plan_id === 'plan-v');
+    expect(pending.theme_treatment).toMatchObject({ hook_scene: { text: 'Open with the pain point' } });
+    expect(pending.creator_guidance).toMatchObject({ talking_points: ['Point A', 'Point B'] });
+    expect(pending.marketing_package).toMatchObject({ caption: 'Reel caption', hashtags: ['#reel'] });
+  });
+
+  test('AI scheduled row does NOT carry creator brief blocks (drawer never shows a brief for AI assets)', async () => {
+    const res = await callFeed({});
+    const events = res.body as any[];
+    const scheduled = events.find((e) => e.scheduled_post_id === 'sp-1');
+    expect(scheduled.theme_treatment).toBeUndefined();
+    expect(scheduled.creator_guidance).toBeUndefined();
+    expect(scheduled.marketing_package).toBeUndefined();
   });
 
   test('autonomous render_ready row is NEVER emitted as pending', async () => {

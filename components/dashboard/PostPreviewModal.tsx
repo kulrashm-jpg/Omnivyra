@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Calendar, ExternalLink, Send } from 'lucide-react';
+import { Calendar, ExternalLink, Send, Upload } from 'lucide-react';
 import PlatformIcon from '../ui/PlatformIcon';
 import {
   PLATFORM_CARD_CONFIG,
@@ -11,6 +11,11 @@ import {
   resolveDisplayContentType,
   resolveDisplayContentTypeLabel,
 } from '../../lib/calendar/assetTypeDisplay';
+import {
+  deriveCreatorStatusLabel,
+  deriveWorkflowChecklist,
+  isCreatorProduced,
+} from '../../lib/shared/creatorStatusLabel';
 
 export type ActivityEvent = {
   type: 'activity';
@@ -54,6 +59,14 @@ export type ActivityEvent = {
   canonical_badge?: string;
   canonical_label?: string;
   canonical_group?: 'pending' | 'ready' | 'scheduled' | 'published' | 'failed' | 'draft';
+  // ── Video creation brief (additive; only the pending/video branch of the
+  //    calendar feed populates these — drawer renders the brief inline). ──
+  /** theme/treatment block from daily_content_plans.content.theme_treatment. */
+  theme_treatment?: Record<string, any> | null;
+  /** creator guidance block (hook/scenes/talking points/visual guidance). */
+  creator_guidance?: Record<string, any> | null;
+  /** marketing package (caption/hashtags/promotion copy/publishing notes). */
+  marketing_package?: Record<string, any> | null;
 };
 
 const PLATFORM_CONFIG = PLATFORM_CARD_CONFIG;
@@ -65,6 +78,117 @@ interface PostPreviewModalProps {
   onOpenWorkspace: (evt: ActivityEvent) => void;
   onPublish?: (postId: string) => Promise<{ success: boolean; error?: string }>;
   onReschedule?: (postId: string, newDate: string) => Promise<{ success: boolean; error?: string }>;
+  /** Upload-video action for creator-produced (video/reel/short) items. */
+  onUpload?: (evt: ActivityEvent) => void;
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+const arr = (v: unknown): string[] =>
+  Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x.trim() : String(x ?? ''))).filter(Boolean) : [];
+const obj = (v: unknown): Record<string, any> =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, any>) : {};
+
+/** Workflow progression checklist (✓ / ⏳ / □) — visibility only. */
+function WorkflowChecklist({ event }: { event: ActivityEvent }) {
+  const steps = deriveWorkflowChecklist(event);
+  return (
+    <div className="px-4 py-3 border-b border-gray-100">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">Progress</p>
+      <ol className="space-y-1">
+        {steps.map((s) => (
+          <li key={s.label} className="flex items-center gap-2 text-xs">
+            <span
+              className={
+                s.done ? 'text-emerald-600' : s.current ? 'text-amber-500' : 'text-gray-300'
+              }
+            >
+              {s.done ? '✓' : s.current ? '⏳' : '□'}
+            </span>
+            <span className={s.done ? 'text-gray-700' : s.current ? 'text-gray-900 font-medium' : 'text-gray-400'}>
+              {s.label}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/** One labelled brief field; renders a string or a bulleted list. Skips empties. */
+function BriefField({ label, value }: { label: string; value: string | string[] }) {
+  const list = Array.isArray(value) ? value : [];
+  const text = Array.isArray(value) ? '' : value;
+  if (Array.isArray(value) ? list.length === 0 : !text) return null;
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-400">{label}</p>
+      {Array.isArray(value) ? (
+        <ul className="mt-0.5 list-disc list-inside text-xs text-gray-700 space-y-0.5">
+          {list.map((item, i) => <li key={i}>{item}</li>)}
+        </ul>
+      ) : (
+        <p className="mt-0.5 text-xs text-gray-700 whitespace-pre-line">{text}</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * VIDEO CREATION BRIEF — Omnivyra does NOT generate the video; it hands the
+ * creator this brief. Rendered inline in the drawer for video/reel/short
+ * items, sourced from the widened pending event (theme_treatment /
+ * creator_guidance / marketing_package). Resilient to missing fields.
+ */
+function VideoBriefPanel({ event }: { event: ActivityEvent }) {
+  const tt = obj(event.theme_treatment);
+  const guidance = obj(event.creator_guidance);
+  const marketing = obj(event.marketing_package);
+  const hookScene = obj(tt.hook_scene);
+  const ctaScene = obj(tt.cta_scene);
+
+  const hook = str(hookScene.text) || str(hookScene.dialogue) || str(tt.hook);
+  const scenes = Array.isArray(tt.scenes)
+    ? (tt.scenes as any[]).map((s) => str(obj(s).text) || str(obj(s).dialogue) || str(obj(s).description) || str(obj(s).beat)).filter(Boolean)
+    : [];
+  const cta = str(ctaScene.platform_cta) || str(ctaScene.text) || str(marketing.cta) || str(event.cta);
+  const visualGuidance = [str(guidance.production_notes), ...arr(guidance.b_roll_ideas).map((b) => `B-roll: ${b}`)]
+    .filter(Boolean)
+    .join('\n');
+  const publishingNotes = [
+    tt.aspect_ratio ? `Aspect ratio: ${str(tt.aspect_ratio)}` : '',
+    tt.duration_seconds ? `Target duration: ${tt.duration_seconds}s` : '',
+  ].filter(Boolean).join('\n');
+
+  const hasAnything =
+    hook || scenes.length || arr(guidance.talking_points).length || visualGuidance ||
+    cta || str(marketing.caption) || arr(marketing.hashtags).length || str(event.content);
+
+  return (
+    <div className="px-4 py-3 bg-indigo-50/40 border-t border-indigo-100">
+      <div className="flex items-center gap-1.5 mb-2">
+        <span className="text-[11px] font-bold uppercase tracking-wide text-indigo-600">🎬 Video Creation Brief</span>
+      </div>
+      {!hasAnything ? (
+        <p className="text-xs text-gray-500">
+          Brief is being prepared. Open the workspace for the full production guidance.
+        </p>
+      ) : (
+        <div className="space-y-2.5">
+          <BriefField label="Title" value={str(event.title)} />
+          <BriefField label="Core Message / Objective" value={str(event.content)} />
+          <BriefField label="Hook" value={hook} />
+          <BriefField label="Scene Flow" value={scenes} />
+          <BriefField label="Talking Points" value={arr(guidance.talking_points)} />
+          <BriefField label="Visual Guidance" value={visualGuidance} />
+          <BriefField label="CTA" value={cta} />
+          <BriefField label="Caption" value={str(marketing.caption)} />
+          <BriefField label="Hashtags" value={arr(marketing.hashtags).map((h) => (h.startsWith('#') ? h : `#${h}`))} />
+          <BriefField label="Promotion Copy" value={str(marketing.meta_description)} />
+          <BriefField label="Publishing Notes" value={publishingNotes} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function PostPreviewModal({
@@ -73,6 +197,7 @@ export default function PostPreviewModal({
   onOpenWorkspace,
   onPublish,
   onReschedule,
+  onUpload,
 }: PostPreviewModalProps) {
   const [publishState, setPublishState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [publishError, setPublishError] = useState('');
@@ -159,7 +284,11 @@ export default function PostPreviewModal({
             components/preview/platforms/*. The dispatcher resolves the
             renderer from the payload's platform. */}
         <div className="flex-1 overflow-y-auto">
+          {/* Workflow progression — makes "where is this in the pipeline" explicit. */}
+          <WorkflowChecklist event={event} />
           <PlatformPreview payload={previewPayload} />
+          {/* Video items: Omnivyra ships a brief, not the video. Show it inline. */}
+          {isCreatorProduced(event) && <VideoBriefPanel event={event} />}
         </div>
 
         {/* Footer */}
@@ -203,18 +332,36 @@ export default function PostPreviewModal({
                   {event.repurpose_index}/{event.repurpose_total}
                 </span>
               )}
-              {currentStatus && (
-                <span className={`px-2 py-0.5 rounded-full capitalize shrink-0 ${
-                  currentStatus === 'published' ? 'bg-emerald-100 text-emerald-700'
-                    : event.is_overdue ? 'bg-red-100 text-red-700'
-                    : currentStatus === 'scheduled' ? 'bg-blue-100 text-blue-700'
-                    : 'bg-gray-100 text-gray-600'
-                }`}>
-                  {event.is_overdue && currentStatus !== 'published' ? 'overdue' : currentStatus}
-                </span>
-              )}
+              {(() => {
+                // Standardized creator status label (shared mapper). Publish
+                // success inside the modal overrides to Published; overdue
+                // still surfaces as a distinct warning.
+                const derived = deriveCreatorStatusLabel(event);
+                const isPublished = currentStatus === 'published' || publishState === 'success' || derived.key === 'PUBLISHED';
+                const label = isPublished ? 'Published' : (event.is_overdue ? 'Overdue' : derived.label);
+                const cls = isPublished ? 'bg-emerald-100 text-emerald-700'
+                  : event.is_overdue ? 'bg-red-100 text-red-700'
+                  : derived.group === 'scheduled' ? 'bg-purple-100 text-purple-700'
+                  : derived.group === 'pending' ? 'bg-amber-100 text-amber-700'
+                  : derived.group === 'failed' ? 'bg-red-100 text-red-700'
+                  : derived.group === 'ready' ? 'bg-yellow-100 text-yellow-700'
+                  : 'bg-gray-100 text-gray-600';
+                return <span className={`px-2 py-0.5 rounded-full shrink-0 ${cls}`}>{label}</span>;
+              })()}
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
+              {/* Creator video items awaiting upload — the system only shipped a
+                  brief; the user produces & uploads the video here. */}
+              {onUpload && isCreatorProduced(event) && event.canonical_group === 'pending' && publishState !== 'success' && (
+                <button
+                  onClick={() => onUpload(event)}
+                  className="px-3 py-1.5 text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg flex items-center gap-1.5"
+                  title="Upload your video to schedule this post"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Upload Video</span>
+                </button>
+              )}
               {canReschedule && publishState !== 'success' && (
                 <button
                   onClick={() => { setShowReschedule((v) => !v); setRescheduleState('idle'); setRescheduleError(''); }}

@@ -292,6 +292,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             : (() => { try { return JSON.parse(String(r.content || '')); } catch { return {}; } })();
           const themeTreatment = (pendingContent.theme_treatment && typeof pendingContent.theme_treatment === 'object') ? pendingContent.theme_treatment : {};
           const marketingPackage = (pendingContent.marketing_package && typeof pendingContent.marketing_package === 'object') ? pendingContent.marketing_package : {};
+          const creatorGuidance = (pendingContent.creator_guidance && typeof pendingContent.creator_guidance === 'object') ? pendingContent.creator_guidance : {};
           const pendingBrief = String(
             themeTreatment.summary || themeTreatment.hook || pendingContent.summary || r.topic || ''
           ).trim() || null;
@@ -326,6 +327,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             is_overdue: false,
             content: pendingBrief,
             cta: pendingCta,
+            // Structured VIDEO CREATION BRIEF — pending/video rows only, so
+            // the drawer can render it inline (no extra screen / fetch).
+            // Scheduled + BOLT Text branches never carry these.
+            theme_treatment: themeTreatment,
+            creator_guidance: creatorGuidance,
+            marketing_package: marketingPackage,
             media_urls: [],
             media_types: [],
           } as any);
