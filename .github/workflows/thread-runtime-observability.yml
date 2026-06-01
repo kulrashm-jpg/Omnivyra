@@ -74,6 +74,12 @@ jobs:
       SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
       NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
+      # ioredis connects lazily / retries in background; no live Redis is needed
+      # because the jest suite mocks all data access. localhost is never reached.
+      REDIS_URL: 'redis://localhost:6379'
+      OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+      # ENCRYPTION_KEY schema requires exactly 64 hex chars — fake, not a real key.
+      ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
