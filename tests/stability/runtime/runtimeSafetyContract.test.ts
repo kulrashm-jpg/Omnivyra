@@ -22,7 +22,13 @@ describe('stability/runtime safety contract', () => {
       ...listRepoFiles('backend', ['.ts', '.tsx', '.js', '.jsx']),
     ];
 
+    // Test files are not runtime app code — they legitimately import operator
+    // tooling to exercise it and are never bundled into the shipped app.
+    const isTestFile = (file: string) =>
+      /(?:\.test\.|\.spec\.|(?:^|\/)(?:tests|__tests__|__mocks__)\/)/.test(file);
+
     const offenders = runtimeFiles.filter((file) => {
+      if (isTestFile(file)) return false;
       const source = readRepoFile(file);
       return source.includes('scripts/operator') || source.includes('operatorSafety');
     });

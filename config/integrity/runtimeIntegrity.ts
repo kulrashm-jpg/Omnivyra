@@ -34,6 +34,24 @@ const STARTUP_FILES = [
 ] as const;
 const SAFE_SETUP_GLOBS = ['scripts/setup-helpers/'] as const;
 
+/** Test files are NOT runtime app code — they legitimately import operator
+ *  tooling / service-role refs to exercise it, and are never bundled into the
+ *  shipped app. Exclude them from the runtime-app-code scans. */
+function isTestFile(file: string): boolean {
+  return /(?:\.test\.|\.spec\.|(?:^|\/)(?:tests|__tests__|__mocks__)\/)/.test(file);
+}
+
+/** Operator scripts self-declare a mutation classification header
+ *  (`MUTATION_LEVEL: NONE` for read-only verification/diagnostic tooling).
+ *  Read-only scripts legitimately open a (read-only) DB client without the
+ *  mutation-safety gate — that gate is hard-blocking and is meant only for
+ *  mutation-capable scripts. Detect the declaration from RAW source because the
+ *  header lives in a block comment that stripComments() removes. Mutation-capable
+ *  scripts (any level other than NONE) remain fully subject to the safety scan. */
+function isDeclaredReadOnlyOperatorScript(source: string): boolean {
+  return /MUTATION_LEVEL:\s*NONE\b/i.test(source);
+}
+
 export function collectRuntimeIntegrityFindings(): IntegrityFinding[] {
   // Warn-only governance check: visibility for drift, never a runtime fixer.
   const findings: IntegrityFinding[] = [];
@@ -67,6 +85,7 @@ export function collectRuntimeIntegrityFindings(): IntegrityFinding[] {
   }
 
   for (const file of RUNTIME_DIRS.flatMap((dir) => listFiles(dir, CODE_EXTENSIONS))) {
+    if (isTestFile(file)) continue;
     const source = readRepoFile(file);
     if (source.includes('scripts/operator') || source.includes('scripts/archive') || source.includes('operatorSafety')) {
       findings.push({
@@ -113,6 +132,10 @@ export function collectOperatorSafetyFindings(): IntegrityFinding[] {
   for (const file of listFiles('scripts/operator', OPERATOR_EXTENSIONS)) {
     if (file.endsWith('/README.md') || file.includes('/sql/')) continue;
     const source = readRepoFile(file);
+    // Read-only verification/diagnostic operator scripts (MUTATION_LEVEL: NONE)
+    // are exempt from the mutation-safety entrypoint requirement — the gate is
+    // hard-blocking and would break legitimate read-only/programmatic use.
+    if (isDeclaredReadOnlyOperatorScript(source)) continue;
     const scanSource = stripComments(source);
     const tokenIndexes = OPERATOR_REMOTE_TOKENS
       .map((token) => ({ token, index: scanSource.indexOf(token) }))
