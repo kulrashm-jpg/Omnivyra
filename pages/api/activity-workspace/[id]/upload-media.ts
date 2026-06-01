@@ -46,6 +46,7 @@ import {
   LIFECYCLE_STATES,
 } from '@/lib/shared/creatorLifecycleStateMachine';
 import { validateMediaUpload } from '@/backend/services/mediaUploadValidationService';
+import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
 
 type UploadMediaBody = {
   media_url?: unknown;
@@ -255,7 +256,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     reason: 'auto_transition_after_validation',
   });
 
-  await ownedDbTable('daily_content_plans')
+  const { error: readyWriteError } = await ownedDbTable('daily_content_plans')
     .update({
       content: JSON.stringify(toReady.content),
       content_status: toReady.contentStatus,
@@ -264,15 +265,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       updated_at: new Date().toISOString(),
     })
     .eq('id', id);
+  if (readyWriteError) {
+    return res.status(500).json({ error: `Failed to record upload: ${readyWriteError.message}` });
+  }
+
+  // Post-upload auto-schedule: now that the row is ready_for_schedule,
+  // schedule THIS row immediately (insert scheduled_posts + enqueue + flip to
+  // 'scheduled') without rerunning the BOLT pipeline. Best-effort and
+  // idempotent — on skip/error the row stays ready_for_schedule.
+  const scheduleResult = await autoScheduleReadyCreatorRowById(id);
 
   return res.status(200).json({
     success: true,
     validation,
     from: currentState,
-    to: toReady.to,
+    to: scheduleResult.status === 'scheduled' || scheduleResult.status === 'already_scheduled'
+      ? CREATOR_LIFECYCLE_STATES.SCHEDULED
+      : toReady.to,
     intermediate: toUploaded.to,
     daily_plan_id: id,
     content_type: contentType,
     uploaded_media_url: mediaUrl,
+    scheduled: scheduleResult.status === 'scheduled' || scheduleResult.status === 'already_scheduled',
+    scheduled_post_id: scheduleResult.scheduledPostId,
+    schedule_status: scheduleResult.status,
   });
 }

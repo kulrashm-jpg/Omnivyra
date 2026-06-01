@@ -14,7 +14,6 @@ import type { BoltStrategyCard } from '../pages/api/bolt/strategy-cards';
 import type { BOLTProgress } from './BOLTProgressModal';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
 import BoltPlatformPicker from './bolt/BoltPlatformPicker';
-import { isCrossPlatformShareableFormat } from '../lib/shared/bolt/crossPlatformSharing';
 import {
   CREATOR_FORMAT_CAPABILITY,
   type CreatorContentFormat,
@@ -22,7 +21,6 @@ import {
 import { platformSupportsCapability } from '../lib/shared/social/platformCapabilities';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
 type OutcomeView = 'week_plan' | 'daily_plan' | 'schedule';
-type SharingMode = 'shared' | 'unique' | 'ai';
 
 const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: string }[] = [
   { value: 'week_plan',  label: 'Week Plan',  icon: '📋', hint: 'High-level weekly content blueprint' },
@@ -35,16 +33,19 @@ const BOLT_STATE_KEY = 'bolt-creator-strategy-state';
 // Round-7 Phase 2: cross-platform-sharing eligibility moved to
 // `lib/shared/bolt/crossPlatformSharing.ts` (single source of truth).
 
+// Two lanes (see useBoltCreator `supportsScheduling`):
+//   • Video / Reel / Short  → attachment-required, capped at Daily Plan
+//     (human uploads media URL per row in the Activity Workspace).
+//   • Carousel / Image / Infographic → autonomous, can run through to Schedule.
+// Banner / PDF / Slider stay in the governance registry for other surfaces
+// but are intentionally not offered on this builder.
 const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: string; hint: string }[] = [
   { value: 'video',       label: 'Video',       icon: '🎬', hint: 'Long-form video content' },
   { value: 'reel',        label: 'Reel',        icon: '🎥', hint: 'Short vertical video (15–90s)' },
   { value: 'short',       label: 'Short',       icon: '⚡', hint: 'YouTube / TikTok short' },
   { value: 'carousel',    label: 'Carousel',    icon: '🖼️', hint: 'Multi-slide visual story' },
   { value: 'image',       label: 'Image',       icon: '📸', hint: 'Static photo or graphic' },
-  { value: 'banner',      label: 'Banner',      icon: '🎨', hint: 'Promotional visual asset' },
   { value: 'infographic', label: 'Infographic', icon: '📊', hint: 'Visual explainer asset' },
-  { value: 'pdf',         label: 'PDF',         icon: '📄', hint: 'Document-style creator asset' },
-  { value: 'slider',      label: 'Slider',      icon: '🎞️', hint: 'Presentation-style slide asset' },
 ];
 
 const DURATION_OPTIONS = [
@@ -416,7 +417,6 @@ export default function BoltCreatorView({ d }: { d: S }) {
     setOfferings,
     setOutcomeView,
     setSelectedIds,
-    setSharingMode,
     setShowChat,
     setStrategicFocus,
     setSuggestions,
@@ -429,7 +429,6 @@ export default function BoltCreatorView({ d }: { d: S }) {
     platformHidden,
     platformsLoading,
     platformBlocked,
-    sharingMode,
     showChat,
     sourceContentToken,
     sourcePayload,
@@ -626,48 +625,6 @@ export default function BoltCreatorView({ d }: { d: S }) {
               </div>
             </div>
 
-            {/* Content Sharing */}
-            <div className="px-5 pt-4 pb-4 border-t border-gray-100">
-              <div className="flex items-center gap-2 mb-2">
-                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide">Content Sharing</label>
-                <span className="text-[10px] text-gray-400">— how content is distributed across platforms</span>
-              </div>
-              <div className="flex gap-2">
-                {([
-                  { value: 'shared' as SharingMode, label: 'Shared',     icon: '🔗', hint: 'Same post on all platforms' },
-                  { value: 'unique' as SharingMode, label: 'Unique',     icon: '✦',  hint: 'Distinct content per platform' },
-                  { value: 'ai'     as SharingMode, label: 'AI Decides', icon: '🤖', hint: 'AI checks format compatibility' },
-                ] as const).map((opt) => {
-                  const isSharedDisabled = opt.value === 'shared' && contentFormats.length > 0 && contentFormats.some((f) => !isCrossPlatformShareableFormat(String(f)));
-                  return (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => { if (!isSharedDisabled) setSharingMode(opt.value); }}
-                      disabled={isSharedDisabled}
-                      className={`flex-1 flex flex-col items-center gap-0.5 px-2 py-2.5 rounded-xl border-2 text-center transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
-                        sharingMode === opt.value
-                          ? 'border-blue-400 bg-blue-50 text-blue-900'
-                          : 'border-gray-200 text-gray-600 hover:border-blue-300 hover:bg-blue-50/40'
-                      }`}
-                    >
-                      <span className="text-base leading-none">{opt.icon}</span>
-                      <span className="text-[11px] font-bold mt-1">{opt.label}</span>
-                      <span className="text-[9px] text-gray-400 leading-tight">{opt.hint}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              {contentFormats.some((f) => !isCrossPlatformShareableFormat(String(f))) && (
-                <p className="text-[10px] text-amber-600 mt-2 leading-snug">
-                  ⚠ {contentFormats.filter((f) => !isCrossPlatformShareableFormat(String(f))).map((f) => {
-                    const formatLabel = String(f);
-                    return formatLabel.charAt(0).toUpperCase() + formatLabel.slice(1);
-                  }).join(', ')} {contentFormats.filter((f) => !isCrossPlatformShareableFormat(String(f))).length === 1 ? 'does' : 'do'} not support cross-platform sharing — Shared mode is unavailable.
-                </p>
-              )}
-            </div>
-
             {/* Platforms — re-filtered per the formats the user has selected.
                 Map: format → capability (CREATOR_FORMAT_CAPABILITY) → registry
                 lookup. Without this the picker only honors the coarse
@@ -747,7 +704,11 @@ export default function BoltCreatorView({ d }: { d: S }) {
             <div className="px-5 pt-4 pb-2 border-t border-gray-100">
               <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">View In</label>
               <div className="flex gap-2">
-                {VIEW_OPTIONS.map((opt) => {
+                {/* Schedule is offered only when every selected format is
+                    autonomous (Carousel/Image/Infographic). Any video-type
+                    format caps the campaign at Daily Plan, so we hide the
+                    Schedule option entirely rather than show it disabled. */}
+                {VIEW_OPTIONS.filter((opt) => opt.value !== 'schedule' || supportsScheduling).map((opt) => {
                   const disabled = opt.value === 'schedule' && !supportsScheduling;
                   return (
                   <label key={opt.value} className={`flex items-center gap-1.5 select-none ${disabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}>
@@ -1038,12 +999,6 @@ export default function BoltCreatorView({ d }: { d: S }) {
               <div className="bg-blue-50 rounded-xl p-3">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-blue-400 mb-1.5">Mode</p>
                 <p className="text-blue-700 font-medium">🎬 Creator Required</p>
-              </div>
-              <div className="bg-gray-50 rounded-xl p-3">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">Sharing</p>
-                <p className="text-gray-700 font-medium">
-                  {sharingMode === 'shared' ? '🔗 Shared across platforms' : sharingMode === 'unique' ? '✦ Unique per platform' : '🤖 AI decides'}
-                </p>
               </div>
             </div>
 

@@ -709,6 +709,8 @@ type BoltCreatorRowJobData = {
   summary: string;
   template_id: string | null;
   max_retries: number;
+  /** Auto-schedule an autonomous row on render completion (Schedule outcomes). */
+  auto_schedule_on_render?: boolean;
 };
 
 // Phase 4 — local `extractMediaUrlsLocal` consolidated into the shared
@@ -793,6 +795,26 @@ async function processBoltCreatorRowJob(job: Job, payload: BoltCreatorRowJobData
         updated_at: new Date().toISOString(),
       })
       .eq('id', payload.daily_plan_id);
+
+    // Calendar unification: when this autonomous asset finished rendering in a
+    // SCHEDULE outcome, auto-create its scheduled_post immediately (reusing the
+    // just-rendered media) so it lands on the Schedule calendar without a
+    // pipeline re-run. Best-effort + idempotent (creator-render:<id> key +
+    // lifecycle guard); the BOLT schedule stage remains the backstop. Gated on
+    // the run flag so Daily-Plan (RENDER_ONLY) stays plan-only.
+    if (readiness.ready && payload.auto_schedule_on_render) {
+      const renderedUrls = Array.isArray((mergedContent.rendered_asset as any)?.urls)
+        ? ((mergedContent.rendered_asset as any).urls as unknown[]).filter((u) => typeof u === 'string' && u.trim())
+        : [];
+      if (renderedUrls.length > 0) {
+        try {
+          const { scheduleRenderedAutonomousRowById } = await import('../../services/creator/creatorRowScheduler');
+          await scheduleRenderedAutonomousRowById(payload.daily_plan_id);
+        } catch (scheduleErr: any) {
+          console.warn('[bolt-creator-row][autonomous-auto-schedule-failed]', payload.daily_plan_id, scheduleErr?.message);
+        }
+      }
+    }
 
     void job.updateProgress(100);
     return {

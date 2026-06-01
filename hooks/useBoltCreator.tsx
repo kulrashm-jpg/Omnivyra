@@ -14,7 +14,6 @@ import type { BoltStrategyCard } from '../pages/api/bolt/strategy-cards';
 import type { BOLTProgress } from '../components/BOLTProgressModal';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
 import { useBoltPlatformPicker } from './useBoltPlatformPicker';
-import { FORMATS_SUPPORTING_CROSS_PLATFORM } from '../lib/shared/bolt/crossPlatformSharing';
 import { CREATOR_FORMAT_CAPABILITY, type CreatorContentFormat } from '../lib/shared/bolt/creatorFormatCapability';
 import { platformSupportsCapability } from '../lib/shared/social/platformCapabilities';
 import {
@@ -27,7 +26,6 @@ import {
 } from '../lib/shared/creatorGovernanceRegistry';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
 type OutcomeView = 'week_plan' | 'daily_plan' | 'schedule';
-type SharingMode = 'shared' | 'unique' | 'ai';
 
 const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: string }[] = [
   { value: 'week_plan',  label: 'Week Plan',  icon: '📋', hint: 'High-level weekly content blueprint' },
@@ -54,17 +52,18 @@ function clampStartDateToToday(value: string | null | undefined): string {
 // `lib/shared/bolt/crossPlatformSharing.ts` — see that module for the
 // (non-capability) rationale.
 
+// Canonical list of formats offered on the BOLT Creator builder. Kept in
+// sync with the rendered list in components/BoltCreatorView.tsx. Used here
+// to sanitize a restored sessionStorage selection.
 const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: string; hint: string }[] = [
   { value: 'video',       label: 'Video',       icon: '🎬', hint: 'Long-form video content' },
   { value: 'reel',        label: 'Reel',        icon: '🎥', hint: 'Short vertical video (15–90s)' },
   { value: 'short',       label: 'Short',       icon: '⚡', hint: 'YouTube / TikTok short' },
   { value: 'carousel',    label: 'Carousel',    icon: '🖼️', hint: 'Multi-slide visual story' },
   { value: 'image',       label: 'Image',       icon: '📸', hint: 'Static photo or graphic' },
-  { value: 'banner',      label: 'Banner',      icon: '🎨', hint: 'Promotional visual asset' },
   { value: 'infographic', label: 'Infographic', icon: '📊', hint: 'Visual explainer asset' },
-  { value: 'pdf',         label: 'PDF',         icon: '📄', hint: 'Document-style creator asset' },
-  { value: 'slider',      label: 'Slider',      icon: '🎞️', hint: 'Presentation-style slide asset' },
 ];
+const ALLOWED_CREATOR_FORMATS = new Set<CreatorContentFormat>(CONTENT_FORMATS.map((f) => f.value));
 
 const DURATION_OPTIONS = [
   { value: 1, label: '1 Week' },
@@ -380,7 +379,6 @@ export function useBoltCreator() {
   const [formatFrequency, setFormatFrequency] = useState<Partial<Record<CreatorContentFormat, number>>>({});
   const [duration, setDuration] = useState(4);
   const [themeSource, setThemeSource] = useState<ThemeSource>('hybrid');
-  const [sharingMode, setSharingMode] = useState<SharingMode>('ai');
   // Round-6: capability-aware platform picker (creator capability).
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const platformPicker = useBoltPlatformPicker(companyId, 'bolt-creator');
@@ -442,20 +440,16 @@ export function useBoltCreator() {
 
   // View selector
   const [outcomeView, setOutcomeView] = useState<OutcomeView>('week_plan');
-  const selectedGovernance = contentFormats
-    .map((format) => getCreatorGovernance(format))
-    .filter(Boolean);
-  // Per-row eligibility model: scheduling is available as long as AT LEAST
-  // ONE selected format is autonomous-renderable. Attachment-required
-  // formats (video/reel/short/podcast) no longer disable scheduling — they
-  // hold individually in `awaiting_media_upload` while autonomous rows
-  // schedule normally.
   const hasAttachmentRequiredFormats = contentFormats.some((format) => isAttachmentRequiredFormat(format));
   const hasAutonomousRenderableFormats = contentFormats.some((format) => isAutonomousRenderableFormat(format));
+  // Schedule is offered ONLY when EVERY selected format is autonomous-
+  // renderable (Carousel/Image/Infographic). A single video-type format
+  // (Video/Reel/Short) — even mixed with an autonomous one — caps the
+  // campaign at Daily Plan: those rows need a human-uploaded media URL in
+  // the Activity Workspace before they can be scheduled.
   const supportsScheduling =
     contentFormats.length > 0 &&
-    selectedGovernance.length === contentFormats.length &&
-    hasAutonomousRenderableFormats;
+    contentFormats.every((format) => isAutonomousRenderableFormat(format));
   const supportsAutonomousCreatorExecution =
     contentFormats.length > 0 &&
     contentFormats.some((format) => supportsAutonomousExecution(format));
@@ -500,11 +494,14 @@ export function useBoltCreator() {
       if (s.audience)          setAudience(s.audience);
       if (s.strategicFocus)    setStrategicFocus(s.strategicFocus);
       if (s.offerings)         setOfferings(s.offerings);
-      if (s.contentFormats)    setContentFormats(s.contentFormats);
+      // Drop any format no longer offered on this builder (e.g. a stale
+      // banner/pdf/slider selection saved before the lane refactor).
+      if (Array.isArray(s.contentFormats)) {
+        setContentFormats(s.contentFormats.filter((f: CreatorContentFormat) => ALLOWED_CREATOR_FORMATS.has(f)));
+      }
       if (s.formatFrequency)   setFormatFrequency(s.formatFrequency);
       if (s.duration)          setDuration(s.duration);
       if (s.themeSource)       setThemeSource(s.themeSource);
-      if (s.sharingMode)       setSharingMode(s.sharingMode);
       if (s.cards)             setCards(s.cards);
       if (s.hasGenerated)      setHasGenerated(s.hasGenerated);
       if (s.outcomeView)       setOutcomeView(s.outcomeView);
@@ -544,7 +541,7 @@ export function useBoltCreator() {
       sessionStorage.setItem(BOLT_STATE_KEY, JSON.stringify({
         topic, goals, audience, strategicFocus, offerings,
         contentFormats, formatFrequency, duration, themeSource,
-        cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms,
+        cards, hasGenerated, outcomeView, campaignStartDate, selectedPlatforms,
         // Same memory shape BOLT Text persists — versioned so future
         // shape migrations can branch on it.
         campaignMemory: {
@@ -554,7 +551,7 @@ export function useBoltCreator() {
         },
       }));
     } catch {}
-  }, [topic, goals, audience, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms, acceptedSuggestions, memoryUpdatedAt]);
+  }, [topic, goals, audience, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, campaignStartDate, selectedPlatforms, acceptedSuggestions, memoryUpdatedAt]);
 
   useEffect(() => {
     if (authChecked && !user?.userId) router.replace('/login');
@@ -721,11 +718,10 @@ export function useBoltCreator() {
       content_formats: contentFormats,
       selected_platforms: selectedPlatforms,
       creator_governance: Object.fromEntries(contentFormats.map((format) => [format, getCreatorGovernance(format)])),
-      cross_platform_sharing: sharingMode === 'shared'
-        ? { enabled: true }
-        : sharingMode === 'unique'
-          ? { enabled: false }
-          : true, // 'ai' → let AI decide based on format compatibility
+      // Content Sharing UI removed — default to AI-decide (the prior
+      // default). `true` = let AI decide cross-platform sharing based on
+      // per-format compatibility. Downstream consumers already handle this.
+      cross_platform_sharing: true,
     };
 
     try {
@@ -797,7 +793,10 @@ export function useBoltCreator() {
       if (outcomeView === 'daily_plan') {
         router.push(`/campaign-daily-plan/${completedCampaignId}?${qs.toString()}`);
       } else if (outcomeView === 'schedule') {
-        router.push(`/campaign-calendar/${completedCampaignId}?${qs.toString()}`);
+        // Land on the dashboard's Calendar tab (the global calendar), not the
+        // per-campaign "attached" /campaign-calendar/[id] view. The dashboard
+        // deep-links to its calendar via ?tab=calendar (useDashboardState).
+        router.push(`/dashboard?tab=calendar&${qs.toString()}`);
       } else {
         router.push(`/campaign-details/${completedCampaignId}?mode=fast&${qs.toString()}`);
       }
@@ -917,7 +916,6 @@ export function useBoltCreator() {
     setOfferings,
     setOutcomeView,
     setSelectedIds,
-    setSharingMode,
     setShowChat,
     setStrategicFocus,
     setSuggestions,
@@ -930,7 +928,6 @@ export function useBoltCreator() {
     platformHidden: platformPicker.hidden,
     platformsLoading: platformPicker.loading,
     platformBlocked: platformPicker.blocked,
-    sharingMode,
     showChat,
     sourceContentToken,
     sourcePayload,

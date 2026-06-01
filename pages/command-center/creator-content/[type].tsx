@@ -1542,29 +1542,21 @@ export default function CreatorTypeWorkflowPage() {
 
   React.useEffect(() => {
     const defaults = config ? buildDefaultAnswers(config) : {};
+    // Operator feedback: when navigating to a creator-content type
+    // from header or cards, no field should be prefilled — every
+    // visit should start clean. The writer-prefill flow
+    // (?source=writer&prefill=token) is an EXPLICIT carry-over that
+    // continues to work via its own sessionStorage handshake below;
+    // it does NOT use this localStorage draft.
+    //
+    // Side effect: also wipe any stale draft from a prior session so
+    // it doesn't get re-applied on a future navigation.
     let restored: Record<string, unknown> | null = null;
     if (type && typeof window !== 'undefined') {
       try {
-        const raw = window.localStorage.getItem(getCreatorDraftStorageKey(type));
-        restored = raw ? JSON.parse(raw) as Record<string, unknown> : null;
-        const savedAt = typeof restored?.saved_at === 'string' ? Date.parse(restored.saved_at) : 0;
-        const isStale = Boolean(savedAt && Date.now() - savedAt > CREATOR_DRAFT_MAX_AGE_MS);
-        if (isStale) {
-          window.localStorage.removeItem(getCreatorDraftStorageKey(type));
-          restored = null;
-        }
-        // Direct-route isolation: if this load is NOT a writer prefill flow
-        // but the saved draft was hydrated from a prior writer session,
-        // discard the draft and start fresh. The direct creator route
-        // must never carry writer-imported content from a previous session.
-        const hasIncomingWriterPrefill =
-          router.query.source === 'writer' && typeof router.query.prefill === 'string';
-        if (!hasIncomingWriterPrefill && restored && typeof restored.writer_source_id === 'string' && restored.writer_source_id) {
-          window.localStorage.removeItem(getCreatorDraftStorageKey(type));
-          restored = null;
-        }
+        window.localStorage.removeItem(getCreatorDraftStorageKey(type));
       } catch {
-        restored = null;
+        // localStorage access can fail in private-mode browsers — silent.
       }
     }
     // URL layout override (consolidation alias redirect) — when the
@@ -1701,33 +1693,15 @@ export default function CreatorTypeWorkflowPage() {
     }
   }, [config, router.isReady, router.query.asset_type, router.query.attachment_mode, router.query.platform, router.query.prefill, router.query.source, router.query.source_text_transform, type]);
 
-  React.useEffect(() => {
-    if (!type || typeof window === 'undefined') return;
-    const persistTimer = window.setTimeout(() => {
-      try {
-        window.localStorage.setItem(getCreatorDraftStorageKey(type), JSON.stringify({
-          answers,
-          selectedSuggestionId,
-          brandMode,
-          brandPresence,
-          brandSelections,
-          brandOverrides,
-          selectedAssetId,
-          selectedPlatform,
-          overlayText,
-          standaloneAttachmentMode,
-          recommendedAttachmentMode,
-          // Tag drafts hydrated from a writer session so the direct
-          // creator route can discard them on its next clean visit.
-          writer_source_id: writerSource ? writerSource.sourceId : null,
-          saved_at: new Date().toISOString(),
-        }));
-      } catch {
-        // Draft persistence is best-effort; generation should keep working.
-      }
-    }, 250);
-    return () => window.clearTimeout(persistTimer);
-  }, [answers, brandMode, brandOverrides, brandPresence, brandSelections, overlayText, standaloneAttachmentMode, recommendedAttachmentMode, selectedAssetId, selectedPlatform, selectedSuggestionId, type, writerSource]);
+  // Operator feedback: navigating to a creator-content type from
+  // header or content cards must NOT prefill any field. We kill the
+  // localStorage draft persistence entirely — the mount effect above
+  // already wipes any stored draft on every visit. With nothing
+  // saved AND nothing restored, every visit starts genuinely fresh.
+  //
+  // The writer-prefill flow (?source=writer&prefill=token) is
+  // unaffected — it uses sessionStorage with a one-time token, not
+  // this draft cache.
 
   React.useEffect(() => {
     if (!selectedCompanyId) {
