@@ -86,14 +86,6 @@ ALTER TABLE community_ai_actions
 ALTER TABLE community_ai_actions
   ADD COLUMN IF NOT EXISTS intent_classification JSONB;
 
--- Acting (operator) user who initiated the action. Server-derived from the
--- authenticated session; never client-supplied. NULL for legacy/automated rows.
-ALTER TABLE community_ai_actions
-  ADD COLUMN IF NOT EXISTS acting_user_id UUID;
-
-CREATE INDEX IF NOT EXISTS idx_community_ai_actions_acting_user
-  ON community_ai_actions (organization_id, acting_user_id);
-
 CREATE INDEX IF NOT EXISTS idx_community_ai_actions_discovered_user
   ON community_ai_actions(tenant_id, organization_id, discovered_user_id);
 
