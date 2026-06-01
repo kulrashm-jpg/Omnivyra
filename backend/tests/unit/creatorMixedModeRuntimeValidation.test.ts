@@ -12,6 +12,10 @@ const store: {
   calls: {
     engine: number;
     render: number;
+    // Queue-bridge call counts (the current render path: the runtime enqueues
+    // each autonomous row and awaits the worker result — no real worker runs).
+    bridgeEnqueue: number;
+    bridgeAwait: number;
   };
 } = {
   campaigns: [],
@@ -21,6 +25,8 @@ const store: {
   calls: {
     engine: 0,
     render: 0,
+    bridgeEnqueue: 0,
+    bridgeAwait: 0,
   },
 };
 
@@ -66,6 +72,8 @@ function resetStore(contentTypes: string[]) {
   store.scheduledPosts = [];
   store.calls.engine = 0;
   store.calls.render = 0;
+  store.calls.bridgeEnqueue = 0;
+  store.calls.bridgeAwait = 0;
 }
 
 function applyFilters(rows: Row[], filters: Record<string, any>) {
@@ -258,9 +266,44 @@ jest.mock('../../services/executionEngines', () => ({
   })),
 }));
 
+// CURRENT ARCHITECTURE: the runtime no longer renders autonomous rows
+// in-process. It enqueues each renderable row onto the creator-content queue
+// bridge and awaits the worker's per-row result. We mock the bridge so the
+// runtime's classify → enqueue → tally path is validated deterministically
+// with NO BullMQ/worker dependency. The worker-side persistence
+// (daily_content_plans render_ready + scheduled_posts) is the worker's job and
+// is covered by the creatorRowScheduler / creatorContentProcessor tests — not
+// asserted here.
+jest.mock('../../services/creator/boltCreatorQueueBridge', () => ({
+  enqueueBoltCreatorRowExecution: jest.fn(async (payload: any) => {
+    store.calls.bridgeEnqueue += 1;
+    return { queueName: 'creator-carousel', jobId: `bolt-creator-row-${payload.daily_plan_id}` };
+  }),
+  awaitBoltCreatorRowExecution: jest.fn(async (handle: any) => {
+    store.calls.bridgeAwait += 1;
+    // Simulate a successful worker render for every enqueued autonomous row.
+    return {
+      ok: true,
+      rendered: true,
+      awaiting_upload: false,
+      failed: false,
+      failure_reason: null,
+      persisted_asset_id: `asset-${handle?.jobId ?? 'x'}`,
+      lifecycle_state: 'render_ready',
+    };
+  }),
+}));
+
 describe('creator mixed-mode runtime validation', () => {
-  test('pure autonomous creator campaign renders assets and does not mark guidance rows', async () => {
-    resetStore(['infographic', 'carousel']);
+  // Autonomous flows (image / carousel / infographic): the runtime enqueues
+  // each renderable row onto the queue bridge and tallies the worker's
+  // rendered result. No in-process rendering, no worker dependency.
+  test.each([
+    ['image'],
+    ['carousel'],
+    ['infographic'],
+  ])('autonomous %s row is enqueued to the worker and tallied as rendered', async (contentType) => {
+    resetStore([contentType]);
 
     const result = await runCreatorAssetGenerationRuntime({
       campaignId: 'campaign-1',
@@ -271,22 +314,47 @@ describe('creator mixed-mode runtime validation', () => {
 
     expect(result).toMatchObject({
       mode: 'RENDER_ONLY',
-      rendered_count: 2,
+      rendered_count: 1,
+      awaiting_media_upload_count: 0,
       guidance_ready_count: 0,
       failed_count: 0,
       final_status: 'render_ready',
     });
-    expect(store.calls.engine).toBe(2);
-    expect(store.calls.render).toBe(2);
-    expect(store.creatorAssets).toHaveLength(2);
-    expect(store.scheduledPosts).toHaveLength(0);
-    expect(store.dailyPlans.every((row) => row.content_status === 'render_ready')).toBe(true);
-    expect(store.dailyPlans.every((row) => JSON.parse(row.content).rendered_asset.export_ready === true)).toBe(true);
+    // Routed through the queue bridge (current architecture) — NOT the
+    // retired in-process renderer/engine.
+    expect(store.calls.bridgeEnqueue).toBe(1);
+    expect(store.calls.bridgeAwait).toBe(1);
+    expect(store.calls.render).toBe(0);
+    expect(store.calls.engine).toBe(0);
+    // The row is NOT marked awaiting/guidance — autonomous rows render, they
+    // never enter the manual-upload path.
+    expect(store.dailyPlans.some((row) => row.content_status === 'awaiting_media_upload')).toBe(false);
     expect(store.dailyPlans.some((row) => row.content_status === 'guidance_ready')).toBe(false);
   });
 
-  test('pure attachment-required campaign emits awaiting_media_upload without render, assets, or retries', async () => {
-    resetStore(['reel', 'short', 'podcast']);
+  test('pure autonomous campaign (image + carousel + infographic) renders every row via the bridge', async () => {
+    resetStore(['image', 'carousel', 'infographic']);
+
+    const result = await runCreatorAssetGenerationRuntime({
+      campaignId: 'campaign-1',
+      companyId: 'company-1',
+      userId: 'user-1',
+      mode: 'RENDER_ONLY',
+    });
+
+    expect(result).toMatchObject({
+      mode: 'RENDER_ONLY',
+      rendered_count: 3,
+      awaiting_media_upload_count: 0,
+      failed_count: 0,
+      final_status: 'render_ready',
+    });
+    expect(store.calls.bridgeEnqueue).toBe(3);
+    expect(store.calls.bridgeAwait).toBe(3);
+  });
+
+  test('pure video/reel/short campaign emits WAITING_FOR_ASSET without rendering or enqueuing', async () => {
+    resetStore(['video', 'reel', 'short']);
 
     const result = await runCreatorAssetGenerationRuntime({
       campaignId: 'campaign-1',
@@ -303,18 +371,19 @@ describe('creator mixed-mode runtime validation', () => {
       failed_count: 0,
       final_status: 'awaiting_media_upload',
     });
-    expect(store.calls.engine).toBe(0);
-    expect(store.calls.render).toBe(0);
-    expect(store.creatorAssets).toHaveLength(0);
-    expect(store.scheduledPosts).toHaveLength(0);
+    // Attachment rows never touch the render bridge.
+    expect(store.calls.bridgeEnqueue).toBe(0);
+    expect(store.calls.bridgeAwait).toBe(0);
+    // markAwaitingMediaUpload is done IN-PROCESS by the runtime, so these
+    // assertions remain valid against the current architecture.
     expect(store.dailyPlans.every((row) => row.content_status === 'awaiting_media_upload')).toBe(true);
     expect(store.dailyPlans.every((row) => row.retry_count === 0)).toBe(true);
     expect(store.dailyPlans.every((row) => JSON.parse(row.content).creator_lifecycle_state === 'awaiting_media_upload')).toBe(true);
     expect(store.dailyPlans.every((row) => JSON.parse(row.content).render_policy.skipped_reason === 'attachment_required_format_awaiting_media_upload')).toBe(true);
   });
 
-  test('mixed-mode campaign renders autonomous rows and holds attachment-required row in awaiting_media_upload', async () => {
-    resetStore(['infographic', 'carousel', 'reel']);
+  test('mixed-mode campaign renders autonomous rows via the bridge and holds video in awaiting_media_upload', async () => {
+    resetStore(['image', 'carousel', 'infographic', 'video']);
 
     const result = await runCreatorAssetGenerationRuntime({
       campaignId: 'campaign-1',
@@ -325,26 +394,21 @@ describe('creator mixed-mode runtime validation', () => {
 
     expect(result).toMatchObject({
       mode: 'MIXED',
-      rendered_count: 2,
+      rendered_count: 3,
       awaiting_media_upload_count: 1,
       guidance_ready_count: 1, // legacy alias preserved
       failed_count: 0,
       final_status: 'partially_rendered',
     });
-    expect(store.calls.engine).toBe(2);
-    expect(store.calls.render).toBe(2);
-    expect(store.creatorAssets).toHaveLength(2);
-    expect(store.scheduledPosts).toHaveLength(0);
-    // Autonomous rows reach render_ready.
-    expect(store.dailyPlans.filter((row) => row.content_status === 'render_ready')).toHaveLength(2);
-    // Attachment-required row holds in awaiting_media_upload — autonomous rows
-    // are NOT downgraded to render_only-globally, NOT blocked, NOT marked
-    // guidance_ready as a terminal state.
-    expect(store.dailyPlans.filter((row) => row.content_status === 'awaiting_media_upload')).toHaveLength(1);
+    // 3 autonomous rows enqueued; the video row held in-process (not enqueued).
+    expect(store.calls.bridgeEnqueue).toBe(3);
+    expect(store.calls.bridgeAwait).toBe(3);
+    const video = store.dailyPlans.find((row) => row.content_type === 'video')!;
+    expect(video.content_status).toBe('awaiting_media_upload');
+    expect(JSON.parse(video.content).creator_lifecycle_state).toBe('awaiting_media_upload');
+    expect(JSON.parse(video.content).render_policy.skipped_reason).toBe('attachment_required_format_awaiting_media_upload');
+    // Autonomous rows are NOT marked guidance_ready as a terminal state.
     expect(store.dailyPlans.some((row) => row.content_status === 'guidance_ready')).toBe(false);
-    const reel = store.dailyPlans.find((row) => row.content_type === 'reel')!;
-    expect(JSON.parse(reel.content).creator_lifecycle_state).toBe('awaiting_media_upload');
-    expect(JSON.parse(reel.content).render_policy.skipped_reason).toBe('attachment_required_format_awaiting_media_upload');
   });
 
   test('mixed-mode and attachment-required formats no longer trigger campaign-wide scheduling vetoes', () => {

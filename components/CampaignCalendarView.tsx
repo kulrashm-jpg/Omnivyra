@@ -304,7 +304,7 @@ export default function CampaignCalendarView({ d }: { d: S }) {
               </button>
             )}
             <span className="text-xs text-gray-600 bg-white border border-gray-200 rounded-full px-2 py-1">
-              Tentative scheduling only
+              Schedule calendar
             </span>
           </div>
         </div>
@@ -591,6 +591,18 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                           <ExternalLink className="h-3 w-3" />
                                           Open Activity Detail
                                         </button>
+                                        {/* WAITING_FOR_ASSET (video/reel/short): deep-link to the
+                                            activity workspace where the upload flips the row to
+                                            SCHEDULED (post-upload auto-schedule). Same single calendar. */}
+                                        {String((rawItem as any)?.canonical_group) === 'pending' && (rawItem as any)?.execution_id && (
+                                          <a
+                                            href={`/activity-workspace?campaignId=${encodeURIComponent(String((rawItem as any)?.campaign_id || campaignId))}&executionId=${encodeURIComponent(String((rawItem as any)?.execution_id))}`}
+                                            className="inline-flex items-center gap-1 border border-amber-200 bg-amber-500 text-white rounded px-3 py-1.5 text-xs font-semibold hover:bg-amber-600"
+                                            title="Upload the creator asset to schedule this post"
+                                          >
+                                            ⬆ Upload media
+                                          </a>
+                                        )}
                                         {scheduledExecIds.has(String(activity.execution_id)) && (
                                           <button
                                             type="button"

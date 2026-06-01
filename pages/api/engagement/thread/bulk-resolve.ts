@@ -8,6 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { recordThreadEvents } from '../../../../backend/services/engagementThreadEventService';
 
 const MAX_BATCH = 20;
 
@@ -65,6 +66,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (updateErr) {
       console.warn('[engagement/thread/bulk-resolve]', updateErr.message);
       return res.status(500).json({ error: 'Failed to resolve opportunities' });
+    }
+
+    try {
+      await recordThreadEvents({
+        organizationId,
+        threadIds: toResolve,
+        actorUserId: access.userId,
+        eventType: 'resolved',
+      });
+    } catch (eventErr) {
+      console.warn('[engagement/thread/bulk-resolve] thread-event log failed:', (eventErr as Error)?.message);
     }
 
     return res.status(200).json({ success: true, resolved: toResolve.length });

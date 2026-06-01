@@ -39,6 +39,7 @@ import {
   CREATOR_LIFECYCLE_STATES,
 } from '../../lib/shared/creatorGovernanceRegistry';
 import { applyTransition } from '../../lib/shared/creatorLifecycleStateMachine';
+import { scheduleCreatorAttachmentPost } from './creator/creatorRowScheduler';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -1105,108 +1106,36 @@ async function processCreatorStructuredSchedule(input: {
         skippedCount++;
         continue;
       }
-      const uploadedMediaUrl = String(attachedContent.uploaded_media_url || '').trim();
-      const marketingPackage = (attachedContent.marketing_package && typeof attachedContent.marketing_package === 'object' && !Array.isArray(attachedContent.marketing_package))
-        ? attachedContent.marketing_package as Record<string, unknown>
-        : {};
-      const themeTreatment = (attachedContent.theme_treatment && typeof attachedContent.theme_treatment === 'object' && !Array.isArray(attachedContent.theme_treatment))
-        ? attachedContent.theme_treatment as Record<string, unknown>
-        : {};
-      const captionFromPackage = String((marketingPackage.caption || (themeTreatment as any)?.marketing_package?.caption || '') as string).trim();
-      const captionFallback = String(row.topic || row.title || (attachedContent as any).caption || '').trim();
-      const finalCaption = captionFromPackage || captionFallback || `${rowContentType} for ${platformAttached}`;
-      const hashtagsRaw = Array.isArray(marketingPackage.hashtags) ? marketingPackage.hashtags : [];
-      const finalHashtags = hashtagsRaw.map((tag) => String(tag).trim()).filter(Boolean);
-      const scheduledForAttached = buildScheduledForFromDailyPlan(row.date, row.scheduled_time ?? undefined);
-
-      const { data: insertedAttached, error: attachedInsertError } = await ownedDbTable('scheduled_posts')
-        .insert({
-          user_id: userId,
-          social_account_id: socialAccountAttached,
+      // Delegate the insert+enqueue+lifecycle-flip to the shared core so the
+      // batch path and the post-upload trigger never diverge. The core adds
+      // the deterministic idempotency_key + collision recovery, so a row that
+      // was already auto-scheduled on upload is a safe no-op here.
+      const attachedResult = await scheduleCreatorAttachmentPost({
+        row: {
+          id: row.id,
           campaign_id: campaignId,
-          platform: toDbPlatformKey(platformAttached),
-          content_type: toDbContentType(platformAttached, rowContentType, typeMapByPlatform),
-          title: String(row.topic || row.title || '').trim() || undefined,
-          content: finalCaption,
-          hashtags: finalHashtags.length > 0 ? finalHashtags : null,
-          media_urls: [uploadedMediaUrl],
-          scheduled_for: scheduledForAttached.toISOString(),
-          status: 'scheduled',
-          repurpose_index: 1,
-          repurpose_total: 1,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .select('id')
-        .maybeSingle();
-
-      if (attachedInsertError) {
-        if (!skippedPlatforms.includes(platformAttached)) skippedPlatforms.push(platformAttached);
-        await ownedDbTable('daily_content_plans')
-          .update({
-            content: JSON.stringify({
-              ...attachedContent,
-              schedule_error: attachedInsertError.message,
-            }),
-            content_status: CREATOR_LIFECYCLE_STATES.READY_FOR_SCHEDULE,
-            failure_reason: attachedInsertError.message,
-            failure_type: 'transient',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', row.id);
-        skippedCount++;
-        continue;
-      }
-
-      const scheduledPostIdAttached = (insertedAttached as { id?: string } | null)?.id ?? null;
-      if (scheduledPostIdAttached) {
-        try {
-          await enqueueScheduledPostAt(
-            String(scheduledPostIdAttached),
-            String(userId),
-            String(socialAccountAttached),
-            scheduledForAttached.toISOString(),
-          );
-        } catch (enqueueError: any) {
-          console.warn('[creator-schedule][attachment-enqueue-failed]', enqueueError?.message);
-        }
-      }
-
-      const scheduledTransition = applyTransition(attachedContent, CREATOR_LIFECYCLE_STATES.SCHEDULED, {
-        contentPatch: {
-          scheduled_post_id: scheduledPostIdAttached,
-          scheduled_at: new Date().toISOString(),
+          date: row.date,
+          scheduled_time: row.scheduled_time,
+          topic: row.topic,
+          title: row.title,
+          content_type: rowContentType,
         },
-        reason: 'attachment_required_scheduled',
+        attachedContent,
+        userId,
+        campaignId,
+        platform: platformAttached,
+        socialAccountId: socialAccountAttached,
+        dbPlatform: toDbPlatformKey(platformAttached),
+        dbContentType: toDbContentType(platformAttached, rowContentType, typeMapByPlatform),
       });
-      // Set the tightened FK column on daily_content_plans so the publish
-      // rollback path (publishNowService.markAttachmentRowPublishFailed)
-      // can do a direct lookup. Falls back silently if the column doesn't
-      // exist (pre-migration environments).
-      try {
-        await ownedDbTable('daily_content_plans')
-          .update({
-            content: JSON.stringify(scheduledTransition.content),
-            content_status: scheduledTransition.contentStatus,
-            scheduled_post_id: scheduledPostIdAttached,
-            failure_reason: null,
-            failure_type: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', row.id);
-      } catch {
-        // Pre-migration fallback (no `scheduled_post_id` column yet).
-        await ownedDbTable('daily_content_plans')
-          .update({
-            content: JSON.stringify(scheduledTransition.content),
-            content_status: scheduledTransition.contentStatus,
-            failure_reason: null,
-            failure_type: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', row.id);
+      if (attachedResult.status === 'scheduled' || attachedResult.status === 'already_scheduled') {
+        scheduledCount++;
+      } else {
+        if (attachedResult.status === 'error' && !skippedPlatforms.includes(platformAttached)) {
+          skippedPlatforms.push(platformAttached);
+        }
+        skippedCount++;
       }
-      scheduledCount++;
       continue;
     } else if (rowGovernance && !rowGovernance.schedulable) {
       // Non-attachment non-schedulable formats (e.g. text-only post/thread
@@ -1243,6 +1172,15 @@ async function processCreatorStructuredSchedule(input: {
     }
 
     const parsed = tryParseExecutionContent(row.content);
+    // Calendar unification: an autonomous row may already have been
+    // auto-scheduled at render completion (creatorContentProcessor →
+    // scheduleRenderedAutonomousRowById, Schedule outcomes). Skip the heavy
+    // generate→render→schedule path for those rows so we never double-schedule
+    // or wastefully re-render. Count them as scheduled.
+    if (parsed.creator_lifecycle_state === 'scheduled' || (typeof parsed.scheduled_post_id === 'string' && parsed.scheduled_post_id)) {
+      scheduledCount++;
+      continue;
+    }
     const topic = String(row.topic || row.title || parsed.topicTitle || 'Untitled').trim();
     const targetPlatforms = [platform];
     const creatorCard = parsed.creator_card && typeof parsed.creator_card === 'object'

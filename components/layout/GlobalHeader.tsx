@@ -118,7 +118,7 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       {
         label: 'Creator Content',
         href: '/command-center/creator-content',
-        description: '5 AI-supported creator content types',
+        description: '3 AI-supported creator content types',
         contentSectionId: 'creator',
       },
     ],
@@ -476,7 +476,7 @@ function NavDropdown({
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2.5">
+            <div className={`grid gap-2.5 ${expandedContentSection.id === 'creator' ? 'grid-cols-3' : 'grid-cols-2'}`}>
               {expandedContentSection.items.map((contentItem, index) => {
                 const childActive = isPathMatch(router.asPath, contentItem.route);
                 const keyboardFocused = focusedItemIndex === index;

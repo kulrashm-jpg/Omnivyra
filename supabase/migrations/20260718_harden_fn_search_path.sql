@@ -16,9 +16,20 @@
 
 ALTER FUNCTION public.create_organization_credits_on_company_insert() SET search_path = public, extensions;
 ALTER FUNCTION public.delete_intelligence_signals_older_than_365_days() SET search_path = public, extensions;
-ALTER FUNCTION public.fn_calendar_events_index_on_scheduled_post_insert() SET search_path = public, extensions;
-ALTER FUNCTION public.fn_calendar_events_index_on_scheduled_post_platform_title() SET search_path = public, extensions;
-ALTER FUNCTION public.fn_calendar_events_index_on_scheduled_post_update() SET search_path = public, extensions;
+-- Guarded: these three functions are torn down by
+-- 20260601061500_drop_calendar_events_index.sql. Wrapped in exception-handling
+-- DO blocks so an in-order migration replay AFTER that teardown does not fail
+-- with 42P01 (undefined_function). No-op when absent; preserves the search_path
+-- hardening when the functions are still present. Idempotent and safe to re-run.
+DO $$ BEGIN
+  ALTER FUNCTION public.fn_calendar_events_index_on_scheduled_post_insert() SET search_path = public, extensions;
+EXCEPTION WHEN undefined_function THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER FUNCTION public.fn_calendar_events_index_on_scheduled_post_platform_title() SET search_path = public, extensions;
+EXCEPTION WHEN undefined_function THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER FUNCTION public.fn_calendar_events_index_on_scheduled_post_update() SET search_path = public, extensions;
+EXCEPTION WHEN undefined_function THEN NULL; END $$;
 ALTER FUNCTION public.get_12_week_campaign_overview(uuid) SET search_path = public, extensions;
 ALTER FUNCTION public.get_12_week_plan_overview(uuid) SET search_path = public, extensions;
 ALTER FUNCTION public.get_campaign_progress(uuid) SET search_path = public, extensions;

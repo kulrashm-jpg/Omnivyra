@@ -340,6 +340,10 @@ export async function runCreatorAssetGenerationRuntime(input: {
         summary: String(job.parsed.summary ?? job.parsed.whatProblemAreWeAddressing ?? job.creatorCard.summary ?? ''),
         template_id: typeof job.parsed.template_id === 'string' ? job.parsed.template_id : job.row.template_id ?? null,
         max_retries: job.maxRetries,
+        // Autonomous rows auto-schedule on render completion ONLY for
+        // Schedule outcomes (SCHEDULE_AND_RENDER / MIXED). RENDER_ONLY
+        // (Daily-Plan) stays plan-only — no auto-scheduling.
+        auto_schedule_on_render: input.mode === 'SCHEDULE_AND_RENDER' || input.mode === 'MIXED',
       });
       return { job, result: await awaitBoltCreatorRowExecution(handle) };
     }));

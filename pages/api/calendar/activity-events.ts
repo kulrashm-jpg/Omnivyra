@@ -252,7 +252,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       try {
         let pq = supabase
           .from('daily_content_plans')
-          .select('id, campaign_id, platform, content_type, content_status, content, scheduled_post_id, title, topic, date')
+          .select('id, campaign_id, platform, content_type, content_status, content, scheduled_post_id, title, topic, date, scheduled_time, execution_id')
           .in('campaign_id', campaignIdFilter && campaignIds.includes(campaignIdFilter) ? [campaignIdFilter] : campaignIds)
           .is('scheduled_post_id', null);
         if (!stageFilter) {
@@ -284,6 +284,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
           const badge = CANONICAL_BADGE[canonical];
           const pendingType = String(r.content_type || 'post').trim();
+          // Enrich the WAITING_FOR_ASSET card so it can show a brief + CTA +
+          // scheduled time + an upload deep-link (daily_plan_id). All derived
+          // from the row's creator guidance content; never throws.
+          const pendingContent = (r.content && typeof r.content === 'object' && !Array.isArray(r.content))
+            ? r.content as Record<string, any>
+            : (() => { try { return JSON.parse(String(r.content || '')); } catch { return {}; } })();
+          const themeTreatment = (pendingContent.theme_treatment && typeof pendingContent.theme_treatment === 'object') ? pendingContent.theme_treatment : {};
+          const marketingPackage = (pendingContent.marketing_package && typeof pendingContent.marketing_package === 'object') ? pendingContent.marketing_package : {};
+          const pendingBrief = String(
+            themeTreatment.summary || themeTreatment.hook || pendingContent.summary || r.topic || ''
+          ).trim() || null;
+          const pendingCta = String(
+            marketingPackage.cta || themeTreatment.CTA_direction || themeTreatment.cta || ''
+          ).trim() || null;
+          const pendingTime = String(r.scheduled_time || '').match(/^(\d{1,2}):(\d{2})/);
+          const pendingScheduledFor = `${dateStr}T${pendingTime ? `${pendingTime[1].padStart(2, '0')}:${pendingTime[2]}` : '09:00'}:00`;
           events.push({
             date: dateStr,
             platform: normalizePlatform(r.platform || ''),
@@ -296,16 +312,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // canonical asset type is the same value as the row's content_type.
             asset_type: pendingType,
             scheduled_post_id: null as any,
-            execution_id: null,
+            // daily_content_plans row id — drives the calendar card's
+            // "Upload media" deep-link into the activity workspace.
+            daily_plan_id: r.id,
+            execution_id: r.execution_id || null,
             status: 'pending',
             canonical_state: canonical,
             canonical_badge: badge.short, // 'V' (Awaiting Video Upload)
             canonical_label: badge.label, // 'Awaiting Video Upload'
             canonical_group: badge.group, // 'pending' (video-upload only)
             pending: true,
-            scheduled_for: null,
+            scheduled_for: pendingScheduledFor,
             is_overdue: false,
-            content: null,
+            content: pendingBrief,
+            cta: pendingCta,
             media_urls: [],
             media_types: [],
           } as any);

@@ -54,6 +54,7 @@ export function launchSocialPostingFromContent({
   tags,
   excerpt,
   sourceId,
+  platform,
 }: {
   router: NextRouter;
   contentType: SocialPostingContentType;
@@ -62,15 +63,16 @@ export function launchSocialPostingFromContent({
   tags?: string[] | null;
   excerpt?: string | null;
   sourceId?: string | null;
-}) {
-  if (typeof window === 'undefined') return;
+  platform?: string | null;
+}): boolean {
+  if (typeof window === 'undefined') return false;
 
   const trimmedTitle = String(title || '').trim();
   const trimmedContent = String(content || '').trim();
   const trimmedExcerpt = String(excerpt || '').trim();
 
   if (!trimmedTitle || !trimmedContent) {
-    throw new Error('Add a title and draft content before sharing to social.');
+    return false;
   }
 
   const token = `social_posting_${contentType.replace(/[^a-z]/g, '_')}_${Date.now()}`;
@@ -108,6 +110,8 @@ export function launchSocialPostingFromContent({
       prefill: token,
       topic: trimmedTitle,
       ...(sourceId ? { sourceId } : {}),
+      ...(platform ? { platform } : {}),
     },
   });
+  return true;
 }

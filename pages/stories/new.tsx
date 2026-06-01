@@ -7,17 +7,99 @@ import { useRouter } from 'next/router';
 import { BlogEditorForm, type BlogFormState } from '../../components/blog/BlogEditorForm';
 import { ContentQualityPanel, type ImproveArea } from '../../components/content/ContentQualityPanel';
 import EditorShareActions from '../../components/content/EditorShareActions';
-import { createDefaultBlogTemplate } from '../../lib/blog/blogTemplate';
+import { createBlock } from '../../lib/blog/blockUtils';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../lib/blog/topicDetection';
 import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
+import type { ContentBlock, HeadingBlock } from '../../lib/blog/blockTypes';
 import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
 import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 
-const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
+function createDefaultStoryTemplate() {
+  const opening = createBlock('paragraph');
+  const moment = createBlock('heading') as HeadingBlock;
+  moment.text = 'The Moment Everything Shifted';
+  moment.anchor = 'the-moment-everything-shifted';
+  const momentBody = createBlock('paragraph');
+  const friction = createBlock('heading') as HeadingBlock;
+  friction.text = 'The Friction Underneath';
+  friction.anchor = 'the-friction-underneath';
+  const frictionBody = createBlock('paragraph');
+  const turn = createBlock('heading') as HeadingBlock;
+  turn.text = 'The Turn';
+  turn.anchor = 'the-turn';
+  const turnBody = createBlock('paragraph');
+  const reflection = createBlock('heading') as HeadingBlock;
+  reflection.text = 'What Stayed With Them';
+  reflection.anchor = 'what-stayed-with-them';
+  const reflectionBody = createBlock('paragraph');
+  return [opening, moment, momentBody, friction, frictionBody, turn, turnBody, reflection, reflectionBody];
+}
+
+const DEFAULT_TEMPLATE = createDefaultStoryTemplate();
+
+function sanitizeStoryEditorText(value: string): string {
+  return String(value || '')
+    .replace(/^The Moment The Turning Point That Changed Everything Became Real$/i, 'The Turn in the Room')
+    .replace(/^The Moment The Turning Point Became Real$/i, 'The Turn in the Room')
+    .replace(/^The Moment (.+?) Became Real$/i, '$1')
+    .replace(/^The Choice That Changed The Turning Point$/i, 'The Choice That Changed the Room')
+    .replace(/\bThe Moment The Turning Point\b/gi, 'The Turning Point')
+    .replace(/\b(short story|long story|episodic story)\s*:\s*/gi, '')
+    .replace(/\bThe Moment It Became Real should stay close to one compact scene[^.]*\.\s*/gi, '')
+    .replace(/\bthe turning point that changed everything becomes real through a specific moment, not through an explanation\.\s*/gi, '')
+    .replace(/\bPut the reader close to a person, team, customer, place, or object that makes the tension visible\.\s*/gi, '')
+    .replace(/\bUse one concrete detail:[^.]*\.\s*/gi, '')
+    .replace(/\bThat detail gives the beat its own job in the story\.\s*/gi, '')
+    .replace(/\bLet the turn emerge from action:[^.]*\.\s*/gi, '')
+    .replace(/\bDo not restate the topic as advice\.\s*/gi, '')
+    .replace(/\bshould stay close\b/gi, 'stays close')
+    .replace(/\bshould move\b/gi, 'moves')
+    .replace(/\bshould deepen\b/gi, 'deepens')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function isLeakedStoryGuidance(value: string): boolean {
+  return /\b(should stay close|Put the reader close|Use one concrete detail|Let the turn emerge|Do not restate the topic|that detail gives the beat)\b/i.test(value);
+}
+
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function sanitizeStoryBlocks(blocks: BlogFormState['content_blocks']): BlogFormState['content_blocks'] {
+  return blocks
+    .map((block): ContentBlock | null => {
+      if (block.type === 'heading') {
+        const text = sanitizeStoryEditorText(block.text);
+        return { ...block, text };
+      }
+      if (block.type === 'paragraph') {
+        const plain = stripHtml(block.html);
+        if (isLeakedStoryGuidance(plain)) return null;
+        return { ...block, html: sanitizeStoryEditorText(block.html) };
+      }
+      if (block.type === 'summary') {
+        const body = sanitizeStoryEditorText(block.body);
+        return body ? { ...block, body } : null;
+      }
+      if (block.type === 'callout') {
+        const title = block.title ? sanitizeStoryEditorText(block.title) : block.title;
+        const body = sanitizeStoryEditorText(block.body);
+        return { ...block, title, body };
+      }
+      if (block.type === 'quote') {
+        const text = sanitizeStoryEditorText(block.text);
+        return text ? { ...block, text } : null;
+      }
+      return block;
+    })
+    .filter((block): block is ContentBlock => Boolean(block));
+}
 
 type PrefillPayload = {
   output?: (BlogGenerationOutput & { content_blocks?: unknown[]; content_markdown?: string }) | null;
@@ -169,14 +251,15 @@ export default function StoryNewPage() {
         setTargetWordCount(parsed.target_word_count);
       }
       if (output) {
+        const resolvedBlocks = sanitizeStoryBlocks(resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE));
         setPrefillInitial({
-          title: output.title || '',
-          excerpt: output.excerpt || '',
+          title: sanitizeStoryEditorText(output.title || ''),
+          excerpt: sanitizeStoryEditorText(output.excerpt || ''),
           category: output.category || '',
           tags: Array.isArray(output.tags) ? output.tags : [],
           seo_meta_title: output.seo_meta_title || '',
           seo_meta_description: output.seo_meta_description || '',
-          content_blocks: resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE),
+          content_blocks: resolvedBlocks,
           content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
         });
         const outputAny = output as unknown as Record<string, unknown>;
@@ -390,6 +473,16 @@ export default function StoryNewPage() {
           <div className="flex gap-6 items-start">
             {/* ── Editor ─────────────────────────────────────────────────── */}
             <div className="flex-1 min-w-0 rounded-lg border border-gray-200 bg-white p-6 shadow">
+              <div className="mb-5 rounded-xl border border-pink-100 bg-pink-50 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-pink-700">Story Direction</p>
+                <div className="mt-2 grid gap-2 text-sm leading-6 text-pink-950 sm:grid-cols-2">
+                  <p>Start inside someone’s experience: a founder, customer, operator, buyer, or team under pressure.</p>
+                  <p>Use story beat headings: scene, friction, turn, aftermath, reflection.</p>
+                  <p>Add anecdotes: a meeting moment, customer question, draft revision, delayed launch, or remembered line.</p>
+                  <p>Give every beat new information: do not restate the same tension, topic phrase, or lesson under another heading.</p>
+                  <p>Close with meaning or emotional payoff, not a truncated summary.</p>
+                </div>
+              </div>
               <BlogEditorForm
                 initial={{
                   content_blocks: DEFAULT_TEMPLATE,

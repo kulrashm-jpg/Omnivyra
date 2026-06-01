@@ -52,6 +52,7 @@ import {
   sniffMimeFromBytes,
   compareSniffedToClientMime,
 } from '@/backend/services/mediaUploadValidationService';
+import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
 
 const UPLOAD_BUCKET = 'media-uploads';
 const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -400,6 +401,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: `Failed to record upload: ${writeError.message}` });
   }
 
+  // Post-upload auto-schedule: schedule THIS row now (insert scheduled_posts +
+  // enqueue + flip to 'scheduled') without rerunning the BOLT pipeline.
+  // Best-effort + idempotent — on skip/error the row stays ready_for_schedule.
+  const scheduleResult = await autoScheduleReadyCreatorRowById(id);
+  const didSchedule = scheduleResult.status === 'scheduled' || scheduleResult.status === 'already_scheduled';
+
   // Best-effort replacement: drop the prior storage object now that the
   // new URL is recorded.
   const priorObjectPath = extractStorageObjectPath(priorUploadedUrl);
@@ -412,13 +419,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     validation,
     from: currentState,
     intermediate: toUploaded.to,
-    to: toReady.to,
+    to: didSchedule ? CREATOR_LIFECYCLE_STATES.SCHEDULED : toReady.to,
     daily_plan_id: id,
     content_type: contentType,
     uploaded_media_url: publicUrl,
     upload_source: source,
     uploaded_mime_type: mimeBase,
     uploaded_size_bytes: sizeBytes,
+    scheduled: didSchedule,
+    scheduled_post_id: scheduleResult.scheduledPostId,
+    schedule_status: scheduleResult.status,
     storage: { bucket: UPLOAD_BUCKET, object_path: storagePath },
   });
 }

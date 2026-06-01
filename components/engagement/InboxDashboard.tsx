@@ -45,11 +45,15 @@ import {
 
 export interface InboxDashboardProps {
   organizationId: string;
+  /** Current operator's user id — drives the "Assigned to me" filter and the
+   *  per-thread assignment / reply-lock collaboration UI. */
+  actingUserId?: string;
   className?: string;
 }
 
 function InboxDashboardComponent({
   organizationId,
+  actingUserId = '',
   className = '',
 }: InboxDashboardProps) {
   const router = useRouter();
@@ -83,6 +87,7 @@ function InboxDashboardComponent({
   const [mobileTab, setMobileTab] = useState<'threads' | 'conversation' | 'assistant'>('threads');
   const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
   const [activeQueueFilter, setActiveQueueFilter] = useState<ThreadQueueGroup | 'all' | 'People Reacted'>('Needs Response');
+  const [assigneeFilter, setAssigneeFilter] = useState<'all' | 'mine' | 'unassigned'>('all');
   const [authorFilter, setAuthorFilter] = useState<{ authorName: string; platform: string } | null>(
     null
   );
@@ -179,14 +184,23 @@ function InboxDashboardComponent({
   const threadIdFromUrl = typeof router.query.thread === 'string' ? router.query.thread : null;
 
   const filteredItems = useMemo((): InboxThread[] => {
-    if (!authorFilter) return items;
-    return items.filter(
-      (t) =>
-        (t.author_name === authorFilter.authorName ||
-          t.author_username === authorFilter.authorName) &&
-        t.platform === authorFilter.platform
-    );
-  }, [items, authorFilter]);
+    let base = items;
+    if (authorFilter) {
+      base = base.filter(
+        (t) =>
+          (t.author_name === authorFilter.authorName ||
+            t.author_username === authorFilter.authorName) &&
+          t.platform === authorFilter.platform
+      );
+    }
+    // Collaboration assignee filter (Assigned to me / Unassigned / All).
+    if (assigneeFilter === 'mine') {
+      base = actingUserId ? base.filter((t) => t.assigned_to === actingUserId) : base;
+    } else if (assigneeFilter === 'unassigned') {
+      base = base.filter((t) => !t.assigned_to);
+    }
+    return base;
+  }, [items, authorFilter, assigneeFilter, actingUserId]);
   // Split filteredItems into the two universes the UI cares about:
   //   - dmThreads:      DMs and direct conversations (Needs Response domain)
   //   - postThreads:    activity on the user's posts (People Reaction domain)
@@ -820,6 +834,25 @@ function InboxDashboardComponent({
                 </span>
               </button>
             </div>
+            {/* Collaboration assignee filter (Batch 2). */}
+            <div className="flex shrink-0 items-center gap-1 border-b border-slate-200 bg-white px-3 py-2 text-xs">
+              <span className="mr-1 font-medium text-slate-400">Assignee:</span>
+              {([
+                { key: 'all', label: 'All' },
+                { key: 'mine', label: 'Assigned to me' },
+                { key: 'unassigned', label: 'Unassigned' },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setAssigneeFilter(opt.key)}
+                  aria-pressed={assigneeFilter === opt.key}
+                  className={`rounded-full px-2.5 py-1 font-medium transition ${assigneeFilter === opt.key ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             <ThreadList
               items={visibleQueueItems}
               loading={loading}
@@ -850,6 +883,7 @@ function InboxDashboardComponent({
             messages={messages}
             loading={messagesLoading && messages.length === 0}
             organizationId={organizationId}
+            actingUserId={actingUserId}
             emptyStateTitle={conversationEmptyState.title}
             emptyStateDescription={conversationEmptyState.description}
             onRefresh={refreshMessages}

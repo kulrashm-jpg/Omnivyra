@@ -4,10 +4,81 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
 import { captureTokenProviderCost } from '../../../backend/services/billing/blackHoleCostCapture';
 
+type CardContentType =
+  | 'blog'
+  | 'newsletter'
+  | 'post'
+  | 'thread'
+  | 'story'
+  | 'article'
+  | 'guide'
+  | 'whitepaper'
+  | 'case-study';
+
 function getOpenAiClient(): OpenAI {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
   return new OpenAI({ apiKey });
+}
+
+function normalizeCardContentType(contentType?: string): CardContentType {
+  const normalized = String(contentType || '').trim().toLowerCase();
+  if (
+    normalized === 'newsletter'
+    || normalized === 'post'
+    || normalized === 'thread'
+    || normalized === 'story'
+    || normalized === 'article'
+    || normalized === 'guide'
+    || normalized === 'whitepaper'
+    || normalized === 'case-study'
+  ) {
+    return normalized;
+  }
+  return 'blog';
+}
+
+function hasCompanyAudienceContext(companyContext?: string): boolean {
+  const normalized = String(companyContext || '').trim().toLowerCase();
+  if (normalized.length < 80) return false;
+  return /\b(audience|customer|customers|buyer|buyers|client|clients|market|segment|founder|ceo|cmo|vp|director|team|teams|smb|enterprise|industry|persona|icp)\b/.test(normalized);
+}
+
+function isRedundantQuestion(question: string, companyContext?: string): boolean {
+  if (!hasCompanyAudienceContext(companyContext)) return false;
+  return /\b(target audience|audience for this|who is your audience|who are you targeting|industry professionals|potential customers|investors|market impact|specific aspects|features, benefits|what benefits|which audience|ideal reader|reader persona|customer segment)\b/i.test(question);
+}
+
+function getContentTypeName(contentType: CardContentType, contentLabel?: string): string {
+  const label = contentLabel?.trim();
+  if (label) return label;
+  if (contentType === 'case-study') return 'case study';
+  return contentType;
+}
+
+function getFocusedFallbackQuestion(contentType: CardContentType, contentLabel?: string): string {
+  const label = getContentTypeName(contentType, contentLabel);
+  switch (contentType) {
+    case 'story':
+      return 'Which concrete moment should anchor the story: launch day, customer reaction, team decision, or founder realization?';
+    case 'newsletter':
+      return 'What reader payoff should this newsletter deliver: signal, interpretation, lesson, or action?';
+    case 'guide':
+      return 'What practical outcome should this guide help the reader complete?';
+    case 'whitepaper':
+      return 'What executive decision or market argument should this whitepaper make clearer?';
+    case 'article':
+      return 'What editorial angle should this article take: observation, opinion, analysis, or recommendation?';
+    case 'case-study':
+      return 'What customer change, proof point, or before-after result should this case study center on?';
+    case 'thread':
+      return 'What sequence should this thread follow: problem, proof, lesson, or launch narrative?';
+    case 'post':
+      return 'What single point should this post make for the company audience?';
+    case 'blog':
+    default:
+      return `What angle should this ${label} take for the company audience?`;
+  }
 }
 
 function getCardSystemPrompt(params: {
@@ -19,24 +90,22 @@ function getCardSystemPrompt(params: {
   existingTopics?: string[];
   currentPhase?: string;
 }): string {
-  const contentType = params.contentType === 'newsletter'
-    ? 'newsletter'
-    : params.contentType === 'post'
-    ? 'post'
-    : params.contentType === 'thread'
-    ? 'thread'
-    : 'blog';
+  const contentType = normalizeCardContentType(params.contentType);
   const contentLabel = params.contentLabel?.trim() || contentType;
   const modeLabel = params.contentModeLabel?.trim();
   const companyName = params.companyName?.trim() || 'the company';
   const companyContext = params.companyContext?.trim();
   const existingTopics = Array.isArray(params.existingTopics) ? params.existingTopics.slice(0, 6) : [];
   const currentPhase = params.currentPhase?.trim();
+  const audienceInstruction = hasCompanyAudienceContext(companyContext)
+    ? 'Company context already contains audience and market signals. Infer audience, buyer, positioning, and strategic purpose from it. Do not ask the user to repeat those basics.'
+    : 'If audience is not inferable from company context, ask only one concise audience question and then proceed.';
   const sharedContext = [
     `Company: ${companyName}`,
     companyContext ? `Company context: ${companyContext}` : null,
     existingTopics.length > 0 ? `Existing related topics: ${existingTopics.join(' | ')}` : null,
     currentPhase ? `Current conversation phase: ${currentPhase}` : null,
+    audienceInstruction,
   ].filter(Boolean).join('\n');
 
   if (contentType === 'newsletter') {
@@ -46,12 +115,17 @@ Use this company context while you guide the user:
 ${sharedContext}
 
 Your role is to:
-1. Understand the newsletter idea, audience, and strategic purpose
+1. Understand the newsletter idea and strategic purpose
 2. Guide the user toward a strong newsletter angle instead of a generic article topic
 3. Shape the recommendation around newsletter thinking, recurring reader value, and a clear payoff
-4. Keep the recommendation aligned to the selected newsletter mode${modeLabel ? `: ${modeLabel}` : ''}
+4. Use company context as the default source for audience, market, positioning, and point of view
+5. Keep the recommendation aligned to the selected newsletter mode${modeLabel ? `: ${modeLabel}` : ''}
 
-Important: Ask ONE focused question at a time. Keep responses concise and actionable.
+Important:
+- Ask ONE focused question at a time. Keep responses concise and actionable.
+- Do not ask the user to repeat audience, company positioning, buyer, market, or benefits when company context is available.
+- If the user gives a clear newsletter idea and company context is available, generate the card instead of continuing discovery.
+- If a follow-up is needed, ask only for newsletter-specific payoff, cadence, signal, or reader action.
 
 Newsletter-specific guidance:
 - Recommend newsletter-worthy ideas, not generic SEO article titles
@@ -61,7 +135,7 @@ Newsletter-specific guidance:
 - If the selected mode is "Analyze a market shift", favor leverage, positioning, and strategic implications
 - If the selected mode is "Teach something actionable", favor practical execution, frameworks, and immediate next steps
 
-When the user provides enough information (idea, intent, audience, key message), generate a JSON response in this format:
+When the user provides enough information (idea plus audience/market inferred from company context), generate a JSON response in this format:
 {
   "done": true,
   "card": {
@@ -79,7 +153,7 @@ When the user provides enough information (idea, intent, audience, key message),
 Otherwise respond with:
 {
   "done": false,
-  "nextQuestion": "your next guiding question"
+  "nextQuestion": "your one focused newsletter-specific follow-up"
 }
 
 Always respond ONLY with valid JSON (no markdown, no extra text).`;
@@ -124,6 +198,53 @@ Otherwise respond with:
 {
   "done": false,
   "nextQuestion": "your one focused follow-up question"
+}
+
+Always respond ONLY with valid JSON (no markdown, no extra text).`;
+  }
+
+  if (contentType === 'story') {
+    return `You are an expert narrative strategist helping create strategic STORY recommendation cards for ${companyName}.
+
+Use this company context while you guide the user:
+${sharedContext}
+
+The user is creating a story, not a blog post. A story card should turn the user's idea into a memorable narrative moment with a person, tension, turn, and lesson.
+
+Your role is to:
+1. Use company context as the source of truth for audience, positioning, market, and strategic POV
+2. Turn the user's idea into a story angle anchored in a concrete moment
+3. Infer audience and intent when the company context makes them clear
+4. Ask at most ONE follow-up, and only if the story lacks a usable moment, person, or tension
+5. Keep the experience fast; do not run a generic discovery interview
+
+Hard rules:
+- Never call the output a "blog post" or ask for "the target audience for this blog post"
+- Do not ask for company audience, market, benefits, or positioning when company context is available
+- If the user gives a launch, event, decision, customer situation, or transformation, generate the card immediately
+- If a follow-up is unavoidable, ask for the missing story anchor only, such as: "Which moment should anchor the story: launch day, customer reaction, team decision, or founder realization?"
+- The topic must be short, memorable, and story-like. Avoid prefixes like "Short Story:" and avoid duplicated wording such as "The Moment The Turning Point..."
+- The reason must explain why this works as a story for ${companyName}'s audience
+
+When you have enough information, return:
+{
+  "done": true,
+  "card": {
+    "topic": "string - short memorable story title or angle",
+    "intent": "awareness|authority|conversion|retention",
+    "audience": "string - inferred from company context if user did not specify",
+    "reason": "string explaining the story moment, tension, turn, and why it matters for ${companyName}",
+    "priority": "high|medium|low",
+    "tone": "string describing the tone",
+    "writingStyle": "string describing the narrative style",
+    "relatedTopics": ["array", "of", "related", "story", "angles"]
+  }
+}
+
+Otherwise return:
+{
+  "done": false,
+  "nextQuestion": "your single story-specific follow-up"
 }
 
 Always respond ONLY with valid JSON (no markdown, no extra text).`;
@@ -175,27 +296,67 @@ Otherwise (only when something material is still missing):
 Always respond ONLY with valid JSON (no markdown, no extra text).`;
   }
 
-  return `You are an expert content strategist helping create strategic blog content recommendations.
+  const longFormRole = (() => {
+    switch (contentType) {
+      case 'article':
+        return 'editorial article strategist';
+      case 'guide':
+        return 'practical guide strategist';
+      case 'whitepaper':
+        return 'executive whitepaper strategist';
+      case 'case-study':
+        return 'case study strategist';
+      case 'blog':
+      default:
+        return 'strategic blog content strategist';
+    }
+  })();
+
+  const contentNoun = getContentTypeName(contentType, contentLabel);
+  const typeSpecificGuidance = (() => {
+    switch (contentType) {
+      case 'article':
+        return '- Shape an article-worthy editorial angle with a clear opinion, observation, analysis, or recommendation.';
+      case 'guide':
+        return '- Shape a guide-worthy practical outcome: what the reader can decide, build, audit, or improve.';
+      case 'whitepaper':
+        return '- Shape a whitepaper-worthy executive argument with market logic, decision criteria, and proof needs.';
+      case 'case-study':
+        return '- Shape a case-study-worthy proof narrative around before, intervention, after, and measurable change.';
+      case 'blog':
+      default:
+        return '- Shape a blog-worthy angle with strategic POV, reader value, and a concrete business implication.';
+    }
+  })();
+
+  return `You are an expert ${longFormRole} helping create strategic ${contentNoun} recommendation cards.
 
 Use this company context while you guide the user:
 ${sharedContext}
 
 Your role is to:
 1. Understand the topic and intent the user wants to explore
-2. Guide them through refining the topic into a clear, actionable blog recommendation
-3. Help them identify the target audience and key messages
-4. Ensure the content aligns with their overall marketing strategy
+2. Use company context as the source of truth for audience, buyer, market, positioning, and strategic POV
+3. Guide the user toward a clear, actionable ${contentNoun} recommendation
+4. Infer target audience and key messages from company context when available
+5. Ensure the content aligns with their overall marketing strategy and the selected writer content type
 
-Important: Ask ONE focused question at a time. Keep responses concise and actionable.
+Important:
+- Ask ONE focused question at a time. Keep responses concise and actionable.
+- Do not ask the user to repeat target audience, market, or positioning already present in company context.
+- Do not use blog wording for non-blog content. The output is a ${contentNoun}.
+- If the user gives a clear topic and company context is available, proceed to the card instead of asking generic discovery questions.
+- If a follow-up is unavoidable, ask only for the missing creative or editorial angle specific to ${contentNoun}.
+${typeSpecificGuidance}
 
-When the user provides enough information (topic, intent, audience, key messages), generate a JSON response in this format:
+When the user provides enough information (topic plus audience/market inferred from company context), generate a JSON response in this format:
 {
   "done": true,
   "card": {
     "topic": "string",
     "intent": "awareness|authority|conversion|retention",
-    "audience": "string",
-    "reason": "string explaining why this blog post matters",
+    "audience": "string - inferred from company context if user did not specify",
+    "reason": "string explaining why this ${contentNoun} matters for ${companyName}",
     "priority": "high|medium|low",
     "tone": "string describing the tone (e.g., professional, conversational, educational)",
     "writingStyle": "string describing the style",
@@ -206,7 +367,7 @@ When the user provides enough information (topic, intent, audience, key messages
 Otherwise respond with:
 {
   "done": false,
-  "nextQuestion": "your next guiding question"
+  "nextQuestion": "your one focused ${contentNoun}-specific follow-up"
 }
 
 Always respond ONLY with valid JSON (no markdown, no extra text).`;
@@ -259,10 +420,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { role: 'system', content: systemPrompt },
       // Include previous conversation turns
       ...(Array.isArray(conversation)
-        ? conversation.map((m: any) => ({
-            role: (m.role || 'user') as 'user' | 'assistant',
-            content: String(m.content || m.message || ''),
-          }))
+        ? conversation.map((m: unknown) => {
+            const turn = typeof m === 'object' && m !== null ? m as Record<string, unknown> : {};
+            return {
+              role: turn.role === 'assistant' ? 'assistant' : 'user',
+              content: String(turn.content || turn.message || ''),
+            } satisfies OpenAI.ChatCompletionMessageParam;
+          })
         : []),
       // Add the current message
       { role: 'user', content: String(message) },
@@ -322,13 +486,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({
       done: false,
-      nextQuestion: parsed.nextQuestion || 'What would you like to write about?',
+      nextQuestion: parsed.nextQuestion && !isRedundantQuestion(
+        parsed.nextQuestion,
+        typeof metadata?.companyContext === 'string' ? metadata.companyContext : undefined,
+      )
+        ? parsed.nextQuestion
+        : getFocusedFallbackQuestion(
+          normalizeCardContentType(typeof contentType === 'string' ? contentType : undefined),
+          typeof metadata?.contentLabel === 'string' ? metadata.contentLabel : undefined,
+        ),
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Blog card chat failed:', err);
     return res.status(500).json({
       error: 'Failed to process blog card chat',
-      details: err?.message || null,
+      details: err instanceof Error ? err.message : null,
     });
   }
 }

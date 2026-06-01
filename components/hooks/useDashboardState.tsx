@@ -542,6 +542,24 @@ export function useDashboardState() {
     setPostPreview(evt);
   };
 
+  /**
+   * Creator unification: a WAITING_FOR_ASSET (video/reel/short) card's
+   * "Upload media" action deep-links into the activity workspace — the
+   * existing upload UI + endpoints there flip the row to SCHEDULED
+   * (post-upload auto-schedule) and it returns to the calendar as scheduled.
+   * No creator-specific scheduling view; the calendar stays the single
+   * surface and just hands off to the upload step.
+   */
+  const handleUploadCreatorAsset = (evt: ActivityEvent, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!evt.campaign_id || !evt.execution_id) {
+      // Fall back to the campaign calendar if we can't address the row.
+      if (evt.campaign_id) router.push(`/campaign-calendar/${encodeURIComponent(evt.campaign_id)}`);
+      return;
+    }
+    router.push(`/activity-workspace?campaignId=${encodeURIComponent(evt.campaign_id)}&executionId=${encodeURIComponent(evt.execution_id)}`);
+  };
+
   const handleRescheduleFromModal = async (postId: string, newDate: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const res = await fetchWithAuth('/api/schedule/reschedule', {
@@ -1037,6 +1055,7 @@ export function useDashboardState() {
     getDaysInMonth, getWeekDays, getWeekLabel, calendarFilteredCampaigns,
     getPlatformColorForCalendar, getCalendarActivitiesForDate, getPlatformBorderColor,
     RepurposeDots, handleRescheduleDrop, getCalendarDayItems, handleActivityEventClick,
+    handleUploadCreatorAsset,
     handleRescheduleFromModal, handlePublishNow, handleChatSend, handleViewCampaign,
     handleExpandToWeekPlans, loadDashboardData, handleDeleteCampaign, confirmDeleteCampaign,
     getStageLabel, draggedActivity, setDraggedActivity, dropTargetDate, setDropTargetDate,

@@ -25,6 +25,9 @@ type CommunityAiAction = {
   suggested_text: string | null;
   playbook_id?: string | null;
   discovered_user_id?: string | null;
+  /** Operator who initiated this action (server-derived). Persisted on the
+   *  community_ai_actions row for multi-user attribution. */
+  acting_user_id?: string | null;
   requires_approval?: boolean | null;
   execution_mode?: ExecutionMode | null;
   tone_used?: string | null;
@@ -1103,6 +1106,7 @@ export const executeAction = async (
           execution_mode: action.execution_mode ?? null,
           playbook_id: action.playbook_id ?? null,
           tone_used: action.tone_used ?? null,
+          acting_user_id: action.acting_user_id ?? null,
           status: 'pending',
           execution_correlation_id: correlationId,
           approved_at: new Date().toISOString(),
@@ -1111,7 +1115,7 @@ export const executeAction = async (
         });
       if (insertError && !String(insertError.code || '').match(/^23505$/)) {
         // 23505 = unique_violation (row inserted concurrently) — safe to ignore.
-        console.warn('[executor.auto_insert] insert failed:', insertError.message);
+        throw new Error(`community_ai_action_auto_insert_failed:${insertError.message}`);
       }
     }
   }

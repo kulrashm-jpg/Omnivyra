@@ -28,6 +28,7 @@ import { resolveEngagementCapability } from '../../../backend/services/engagemen
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
 import { recordSuggestionAccepted } from '../../../backend/services/aiSuggestionTrackingService';
 import { isDmMessageType } from '../../../lib/engagement/messageRoles';
+import { recordThreadEvent } from '../../../backend/services/engagementThreadEventService';
 
 type ReplyBody = {
   organization_id?: string;
@@ -669,6 +670,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         target_id: targetId,
         suggested_text: replyText,
         playbook_id: null,
+        // Attribution: the operator who initiated this reply/DM. Server-derived
+        // from the authenticated session (never trusted from the client).
+        acting_user_id: roleGate.userId ?? null,
         // capability.mode tells us: 'api' for comment replies, 'browser'
         // for DMs. The executor respects this and either calls the
         // connector or persists a community_ai_actions row with
@@ -695,6 +699,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         correlation_id: callerCorrelationId,
       }
     );
+
+    // Collaboration timeline: record who replied / DM'd. Attribution is
+    // server-derived from the session.
+    if (result?.ok && body.thread_id) {
+      // Timeline logging is best-effort: it must never fail a successful reply
+      // (e.g. before the engagement_thread_events migration is applied).
+      try {
+        await recordThreadEvent({
+          organizationId,
+          threadId: body.thread_id,
+          actorUserId: roleGate.userId ?? null,
+          eventType: 'replied',
+          detail: { action_type: isDm ? 'dm' : 'reply', status: result.status },
+        });
+      } catch (eventErr) {
+        console.warn('[engagement/reply] thread-event log failed:', (eventErr as Error)?.message);
+      }
+    }
 
     // Browser-mode (DM) actions queue for the Chrome extension and return
     // status='dispatched' rather than 'executed'. That's a SUCCESSFUL queue,

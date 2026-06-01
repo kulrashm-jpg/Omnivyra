@@ -78,6 +78,11 @@ export type InboxThread = {
    *  banner shows a "demo" tag for the former so the user can tell at a
    *  glance the numbers are not live. */
   post_stats_source?: string | null;
+  /** Collaboration (Batch 2): the org user this thread is assigned to, when set.
+   *  Drives the Assigned-to-me / Unassigned queue filters and the assignee chip. */
+  assigned_to?: string | null;
+  assigned_at?: string | null;
+  assignee_name?: string | null;
 };
 
 // Inbox refresh cadence. 1 hour was the original placeholder; an

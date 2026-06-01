@@ -61,6 +61,7 @@ import {
   recordUploadSpoofAttempt,
   recordUploadFailure,
 } from '@/backend/services/creatorUploadAbuseGuardService';
+import { autoScheduleReadyCreatorRowById } from '@/backend/services/creator/creatorRowScheduler';
 
 // Disable Next.js body parser so formidable can stream the upload.
 export const config = {
@@ -574,6 +575,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: `Failed to record upload: ${writeError.message}` });
   }
 
+  // Post-upload auto-schedule: schedule THIS row now (insert scheduled_posts +
+  // enqueue + flip to 'scheduled') without rerunning the BOLT pipeline.
+  // Best-effort + idempotent — on skip/error the row stays ready_for_schedule.
+  const scheduleResult = await autoScheduleReadyCreatorRowById(id);
+  const didSchedule = scheduleResult.status === 'scheduled' || scheduleResult.status === 'already_scheduled';
+  const finalLifecycle = didSchedule ? CREATOR_LIFECYCLE_STATES.SCHEDULED : toReady.to;
+
   // Best-effort: now that the new URL is persisted, drop the prior storage
   // object (re-upload replacement). Failures are logged but do not impact
   // the user-facing success path.
@@ -620,7 +628,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     success: true,
     validation,
     from: currentState,
-    to: toReady.to,
+    to: finalLifecycle,
     intermediate: toUploaded.to,
     daily_plan_id: id,
     content_type: contentType,
@@ -628,6 +636,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     upload_source: source,
     uploaded_mime_type: mimeBase,
     uploaded_size_bytes: fileSize,
+    scheduled: didSchedule,
+    scheduled_post_id: scheduleResult.scheduledPostId,
+    schedule_status: scheduleResult.status,
     storage: {
       bucket: UPLOAD_BUCKET,
       object_path: objectPath,

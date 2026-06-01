@@ -38,16 +38,14 @@ export const CONTENT_NAV_SECTIONS: ContentNavSection[] = [
   {
     id: 'creator',
     label: 'Creator Content',
-    description: '5 AI-supported creator content types',
+    description: '3 AI-supported creator content types',
     summary: 'Compose visual assets with governed layout, platform sizing, and render safety.',
     badge: 'Visual assets',
     href: '/command-center/creator-content',
     items: [
       { id: 'image', label: 'Image', route: '/command-center/creator-content/image', description: 'Single-message static visual' },
       { id: 'carousel', label: 'Carousel', route: '/command-center/creator-content/carousel', description: 'Multi-slide narrative asset' },
-      { id: 'banner', label: 'Banner', route: '/command-center/creator-content/banner', description: 'Promotional banner creative' },
       { id: 'infographic', label: 'Infographic', route: '/command-center/creator-content/infographic', description: 'Structured visual explanation' },
-      { id: 'slider', label: 'Slider', route: '/command-center/creator-content/slider', description: 'Presentation-flow slide asset' },
     ],
   },
 ];

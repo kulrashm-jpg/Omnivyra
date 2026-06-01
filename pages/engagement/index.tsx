@@ -24,8 +24,9 @@ import { useCompanyContext } from '@/components/CompanyContext';
 import { InboxDashboard } from '@/components/engagement/InboxDashboard';
 
 export default function EngagementCommandCenterPage() {
-  const { selectedCompanyId } = useCompanyContext();
+  const { selectedCompanyId, user } = useCompanyContext();
   const organizationId = selectedCompanyId || '';
+  const actingUserId = user?.userId || '';
 
   return (
     <>
@@ -34,7 +35,7 @@ export default function EngagementCommandCenterPage() {
       </Head>
       <div className="min-h-[calc(100vh-4rem)] bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-6 sm:px-4 lg:px-6">
         <div className="mx-auto max-w-7xl rounded-[28px] border border-white/80 bg-white/92 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm">
-          <InboxDashboard organizationId={organizationId} className="min-h-[70vh]" />
+          <InboxDashboard organizationId={organizationId} actingUserId={actingUserId} className="min-h-[70vh]" />
         </div>
       </div>
     </>

@@ -390,6 +390,15 @@ export default function ArticleNewPage() {
           <div className="flex gap-6 items-start">
             {/* ── Editor ─────────────────────────────────────────────────── */}
             <div className="flex-1 min-w-0 rounded-lg border border-gray-200 bg-white p-6 shadow">
+              <div className="mb-5 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+                <p className="font-semibold">Article Direction</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  <p>Lead with an editorial angle, reported observation, or tension instead of an SEO-style explainer.</p>
+                  <p>Use article headings such as lede, context, analysis, counterpoint, implication, and closing perspective.</p>
+                  <p>Balance evidence, interpretation, and point of view; avoid step-by-step guide framing unless it supports the argument.</p>
+                  <p>End with a complete implication-led close, not a truncated summary or generic CTA.</p>
+                </div>
+              </div>
               <BlogEditorForm
                 initial={{
                   content_blocks: DEFAULT_TEMPLATE,

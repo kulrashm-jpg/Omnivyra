@@ -9,7 +9,6 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { createMessage, listMessages } from '../../../backend/services/collaborationMessageService';
 import { processMentions } from '../../../backend/services/collaborationMentionService';
-import { supabase } from '../../../backend/db/supabaseClient';
 
 function parseDate(v: unknown): string | null {
   const s = typeof v === 'string' ? v.trim() : '';
@@ -82,12 +81,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         insert,
       });
 
-      await supabase.from('calendar_events_index').insert({
-        company_id: access.companyId,
-        campaign_id: campaignId,
-        event_date: date,
-        event_type: 'message',
-      });
+      // calendar_events_index teardown: the 'message' index row was only read
+      // by the (now-removed) /api/calendar/batch route. calendar_messages above
+      // is the canonical store; message counts read it via message-counts.ts.
 
       processMentions(message.id, 'calendar', text, access.companyId, access.userId).catch((e) =>
         console.error('[calendar/messages] processMentions:', e)

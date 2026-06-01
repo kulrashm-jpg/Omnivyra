@@ -48,6 +48,13 @@ export type BoltCreatorRowPayload = {
   summary: string;
   template_id: string | null;
   max_retries: number;
+  /**
+   * When true, an AUTONOMOUS row (image/carousel/infographic) is
+   * auto-scheduled the moment it finishes rendering (Schedule outcomes only).
+   * Set from the run mode in creatorAssetGenerationRuntime; the render worker
+   * reads it to decide whether to call scheduleRenderedAutonomousRowById.
+   */
+  auto_schedule_on_render?: boolean;
 };
 
 export type BoltCreatorRowResult = {
@@ -98,9 +105,13 @@ export async function enqueueBoltCreatorRowExecution(
   const attemptsCfg = CONTENT_QUEUE_CONFIG[queueName]?.attempts ?? 2;
   const attempts = Math.max(attemptsCfg, payload.max_retries || 1);
   const jobName = `bolt-creator-row:${payload.daily_plan_id}`;
-  // Use the daily_plan_id as the jobId for idempotency — re-enqueues
-  // for the same row collapse to the same job (BullMQ rejects duplicate
-  // jobIds), making the pipeline's enqueue step safely re-runnable.
+  // BullMQ rejects a custom jobId containing ':' ("Custom Id cannot contain
+  // :") — it is BullMQ's internal key delimiter. The job NAME may contain it,
+  // but the jobId must not, so we use a hyphen-delimited id. daily_plan_id is
+  // a UUID, so this stays per-row idempotent — re-enqueues for the same row
+  // collapse to the same job (BullMQ rejects duplicate jobIds), making the
+  // pipeline's enqueue step safely re-runnable.
+  const jobId = `bolt-creator-row-${payload.daily_plan_id}`;
   const job = await queue.add(jobName, {
     bolt_payload: payload,
     // legacy creatorContentProcessor fields kept null so the
@@ -121,10 +132,10 @@ export async function enqueueBoltCreatorRowExecution(
       summary: payload.summary,
     },
   }, {
-    jobId: jobName,
+    jobId,
     attempts,
   });
-  return { queueName, jobId: String(job.id ?? jobName) };
+  return { queueName, jobId: String(job.id ?? jobId) };
 }
 
 export async function awaitBoltCreatorRowExecution(

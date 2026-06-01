@@ -390,6 +390,15 @@ export default function GuideNewPage() {
           <div className="flex gap-6 items-start">
             {/* ── Editor ─────────────────────────────────────────────────── */}
             <div className="flex-1 min-w-0 rounded-lg border border-gray-200 bg-white p-6 shadow">
+              <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
+                <p className="font-semibold">Guide Direction</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  <p>Make the asset instructional and sequential: prerequisites, framework, implementation, checks, and next steps.</p>
+                  <p>Use guide headings that teach action, decisions, examples, mistakes, and validation.</p>
+                  <p>Every section should help the reader do something, avoid a risk, or assess progress.</p>
+                  <p>Keep title, excerpt, and close complete and guide-native; avoid opinion article or generic blog framing.</p>
+                </div>
+              </div>
               <BlogEditorForm
                 initial={{
                   content_blocks: DEFAULT_TEMPLATE,

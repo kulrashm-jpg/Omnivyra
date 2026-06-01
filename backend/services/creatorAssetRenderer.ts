@@ -4245,12 +4245,17 @@ async function renderInfographicAsset(
         const impact: string = String(rich.impact || '').trim();
         const risk: string = String(rich.risk || '').trim();
 
-        // Icon disc — smaller now (8% min dim) to leave more vertical
-        // room for content.
+        // CRITICAL FIX (operator feedback: "text is missing all
+        // across"): librsvg (which sharp uses) does NOT render HTML
+        // content inside <foreignObject> reliably — every previous
+        // foreignObject text block came out empty in the PNG output.
+        // We're now using native SVG <text> with manual word-wrapping
+        // via balanceTextLines for EVERY text block on the card.
+
+        // Icon disc — smaller (8% min dim).
         const iconR = Math.min(Math.round(cardWidth * 0.08), Math.round(cardHeight * 0.08));
         const iconCx = x + 36 + iconR;
         const iconCy = y + 36 + iconR;
-        const titleX = iconCx + iconR + 18;
 
         // Stat rail on the right when present.
         const railW = stat ? Math.round(cardWidth * 0.24) : 0;
@@ -4258,112 +4263,160 @@ async function renderInfographicAsset(
         const contentLeftX = x + 28;
         const contentWidth = contentRight - contentLeftX;
 
-        // Title rendered via foreignObject so long titles WRAP to
-        // multiple lines instead of clipping (operator feedback:
-        // "the pattern that ties it all toget..." was truncated).
-        const titleW = stat ? cardWidth - (iconR * 2 + 36 + 18) - railW - 36 : cardWidth - (iconR * 2 + 36 + 18) - 36;
-        const titleBlockH = 64;
-        const titleY = iconCy - iconR + 4;
+        // Font sizing — all in pixel-space, no multipliers smaller
+        // than 1.0 so text is always legible.
+        const titleSize = Math.round(20 * infographicFontMultiplier);
+        const leadSize = Math.round(14 * infographicFontMultiplier);
+        const bulletSize = Math.round(13 * infographicFontMultiplier);
+        const panelLabelSize = Math.round(10 * infographicFontMultiplier);
+        const panelTextSize = Math.round(12 * infographicFontMultiplier);
+        const footerLabelSize = Math.round(10 * infographicFontMultiplier);
+        const footerTextSize = Math.round(12 * infographicFontMultiplier);
 
-        // Layout zones (top → bottom):
-        //   icon+title row    : y → titleY + titleBlockH
-        //   lead              : leadY  (~64px tall: 2-3 lines)
-        //   bullets           : bulletsStartY
-        //   impact+risk panel : footerStackY (when impact OR risk)
-        //   example/take band : footerBandY (only when example or take)
-        const headerBottom = Math.max(iconCy + iconR + 8, titleY + titleBlockH);
-        const leadY = headerBottom + 14;
-        const leadH = 64;
-        const bulletsStartY = leadY + leadH + 8;
-        const bulletLineHeight = 24;
-        const bulletsTotalH = bullets.length > 0 ? bullets.length * bulletLineHeight + 6 : 0;
+        // Character budgets for word wrap. Inter at body weights
+        // averages ~0.58× font size per character; this estimate is
+        // intentionally conservative so the wrap fires BEFORE the
+        // SVG text element actually overflows its zone.
+        const charsPerLine = (fontPx: number, width: number) => Math.max(8, Math.floor(width / (fontPx * 0.58)));
 
-        // Two-zone footer composition:
-        //   1) impact + risk panels (side-by-side mini-panels)
-        //   2) example / take band (full-width footer)
+        // Title — wraps up to 2 lines next to the icon.
+        const titleX = iconCx + iconR + 18;
+        const titleZoneW = (stat ? cardWidth - (iconR * 2 + 36 + 18) - railW - 36 : cardWidth - (iconR * 2 + 36 + 18) - 36);
+        const titleLines = balanceTextLines(cleanTitle, charsPerLine(titleSize, titleZoneW), 2);
+        const titleLineH = Math.round(titleSize * 1.2);
+        const titleStartY = iconCy - iconR + titleSize;
+        const titleBlockH = titleLines.length * titleLineH;
+        const titleSvg = titleLines.map((line, i) => `<text x="${titleX}" y="${titleStartY + i * titleLineH}" font-size="${titleSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(line)}</text>`).join('');
+
+        // Footer-up layout: compute footer geometry first so we know
+        // how much vertical space the lead + bullets have.
         const hasImpactRow = Boolean(impact || risk);
         const hasFooterBand = Boolean(example || take);
-        const footerBandH = hasFooterBand ? 64 : 0;
+        const footerBandH = hasFooterBand ? 70 : 0;
         const footerBandY = y + cardHeight - footerBandH - 12;
-        const impactRowH = hasImpactRow ? 72 : 0;
+        const impactRowH = hasImpactRow ? 78 : 0;
         const impactRowY = (hasFooterBand ? footerBandY : y + cardHeight - 12) - impactRowH - (hasImpactRow && hasFooterBand ? 10 : 0);
 
-        const bulletsBlock = bullets.length > 0 ? `
-          <g>
-            ${bullets.slice(0, 5).map((b, i) => `
-              <circle cx="${contentLeftX + 6}" cy="${bulletsStartY + i * bulletLineHeight - 6}" r="3" fill="${cycleAccent}" />
-              <foreignObject x="${contentLeftX + 18}" y="${bulletsStartY + i * bulletLineHeight - 16}" width="${contentWidth - 22}" height="${bulletLineHeight + 8}">
-                <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(14 * infographicFontMultiplier)}px;line-height:1.35;color:${bodyTextColor};">${escapeXml(b)}</div>
-              </foreignObject>
-            `).join('')}
-          </g>
-        ` : '';
+        const headerBottom = Math.max(iconCy + iconR + 12, titleStartY + titleBlockH + 4);
+        const leadY = headerBottom + 18;
+        const leadCharsPerLine = charsPerLine(leadSize, contentWidth);
+        // Lead — up to 3 lines.
+        const leadLines = balanceTextLines(lead, leadCharsPerLine, 3);
+        const leadLineH = Math.round(leadSize * 1.45);
+        const leadSvg = leadLines.map((line, i) => `<text x="${contentLeftX}" y="${leadY + i * leadLineH}" font-size="${leadSize}" font-family="Inter, Arial" font-weight="500" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('');
+        const leadBlockH = leadLines.length * leadLineH;
 
-        const statRail = stat ? `
-          <rect x="${x + cardWidth - railW - 8}" y="${y + 20}" width="${railW}" height="${cardHeight - impactRowH - footerBandH - 56}" rx="12" fill="${cycleAccent}" opacity="0.10" />
-          <text x="${x + cardWidth - railW / 2 - 8}" y="${y + 90}" text-anchor="middle" font-size="${Math.round(Math.min(railW * 0.42, 50))}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${escapeXml(stat.value)}</text>
-          <foreignObject x="${x + cardWidth - railW - 4}" y="${y + 110}" width="${railW - 8}" height="${cardHeight - impactRowH - footerBandH - 140}">
-            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(12 * infographicFontMultiplier)}px;line-height:1.4;color:${bodyTextColor};text-align:center;">${escapeXml(stat.label)}</div>
-          </foreignObject>
-        ` : '';
+        // Bullets — each up to 2 lines, indented under a dot. Max 4
+        // bullets per card (cards are dense already).
+        const bulletsStartY = leadY + leadBlockH + 12;
+        const bulletLineH = Math.round(bulletSize * 1.4);
+        const bulletCharsPerLine = charsPerLine(bulletSize, contentWidth - 18);
+        const maxBullets = 4;
+        let bulletYCursor = bulletsStartY;
+        const bulletsSvgParts: string[] = [];
+        for (const bullet of bullets.slice(0, maxBullets)) {
+          const lines = balanceTextLines(bullet, bulletCharsPerLine, 2);
+          if (lines.length === 0) continue;
+          // Stop if the next bullet would push into the footer zone.
+          if (bulletYCursor + lines.length * bulletLineH > impactRowY - 14) break;
+          bulletsSvgParts.push(`<circle cx="${contentLeftX + 4}" cy="${bulletYCursor - Math.round(bulletSize * 0.3)}" r="3" fill="${cycleAccent}" />`);
+          for (let li = 0; li < lines.length; li += 1) {
+            bulletsSvgParts.push(`<text x="${contentLeftX + 16}" y="${bulletYCursor + li * bulletLineH}" font-size="${bulletSize}" font-family="Inter, Arial" font-weight="500" fill="${bodyTextColor}">${escapeXml(lines[li])}</text>`);
+          }
+          bulletYCursor += lines.length * bulletLineH + 4;
+        }
+        const bulletsSvg = bulletsSvgParts.join('');
 
-        // Impact + risk panels. Each ~half width, side-by-side. When
-        // only one of impact/risk is supplied, that one panel spans
-        // full width.
-        const impactPanelColor = '#10b981';  // emerald-500
-        const riskPanelColor = '#f59e0b';    // amber-500
-        const impactRow = hasImpactRow ? (() => {
+        // Stat rail (right side, optional).
+        let statRail = '';
+        if (stat) {
+          const statBoxX = x + cardWidth - railW - 8;
+          const statBoxY = y + 20;
+          const statBoxH = cardHeight - impactRowH - footerBandH - 56;
+          const statValueSize = Math.round(Math.min(railW * 0.42, 50));
+          const statLabelSize = Math.round(11 * infographicFontMultiplier);
+          const statLabelLines = balanceTextLines(stat.label, Math.max(10, Math.floor((railW - 16) / (statLabelSize * 0.55))), 4);
+          const statLabelLineH = Math.round(statLabelSize * 1.35);
+          const statLabelStartY = statBoxY + 110;
+          statRail = `
+            <rect x="${statBoxX}" y="${statBoxY}" width="${railW}" height="${statBoxH}" rx="12" fill="${cycleAccent}" opacity="0.10" />
+            <text x="${statBoxX + railW / 2}" y="${statBoxY + 70}" text-anchor="middle" font-size="${statValueSize}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${escapeXml(stat.value)}</text>
+            ${statLabelLines.map((line, i) => `<text x="${statBoxX + railW / 2}" y="${statLabelStartY + i * statLabelLineH}" text-anchor="middle" font-size="${statLabelSize}" font-family="Inter, Arial" font-weight="500" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('')}
+          `;
+        }
+
+        // Impact + risk panels. Tightened to fix truncation:
+        //  - char width estimate raised 0.55 → 0.58 so wraps fire
+        //    before the SVG text actually overflows the panel rect
+        //  - max lines raised 2 → 3 so longer impact/risk sentences
+        //    don't lose their tail
+        //  - panel height auto-sized from line count, not fixed
+        const impactPanelColor = '#10b981';
+        const riskPanelColor = '#f59e0b';
+        let impactRow = '';
+        let renderedImpactRowH = impactRowH;
+        if (hasImpactRow) {
           const panelGap = 12;
           const panelW = impact && risk ? Math.floor((cardWidth - 32 - panelGap) / 2) : cardWidth - 32;
+          const panelInnerW = panelW - 32;
+          const panelValueLineH = Math.round(panelTextSize * 1.35);
+          const wrapPanelValue = (v: string): string[] => {
+            const cpl = Math.max(10, Math.floor(panelInnerW / (panelTextSize * 0.58)));
+            return balanceTextLines(v, cpl, 3);
+          };
+          const impactLines = impact ? wrapPanelValue(impact) : [];
+          const riskLines = risk ? wrapPanelValue(risk) : [];
+          const maxLines = Math.max(impactLines.length, riskLines.length, 1);
+          renderedImpactRowH = 28 + maxLines * panelValueLineH + 8;
+          const renderPanel = (px: number, label: string, lines: string[], color: string): string => {
+            if (lines.length === 0) return '';
+            const labelY = impactRowY + 22;
+            const valueStartY = impactRowY + 42;
+            return `
+              <rect x="${px}" y="${impactRowY}" width="${panelW}" height="${renderedImpactRowH}" rx="10" fill="${color}" opacity="0.13" />
+              <rect x="${px}" y="${impactRowY}" width="4" height="${renderedImpactRowH}" rx="2" fill="${color}" />
+              <text x="${px + 18}" y="${labelY}" font-size="${panelLabelSize}" font-family="Inter, Arial" font-weight="800" fill="${color}" letter-spacing="2.4">${escapeXml(label)}</text>
+              ${lines.map((line, i) => `<text x="${px + 18}" y="${valueStartY + i * panelValueLineH}" font-size="${panelTextSize}" font-family="Inter, Arial" font-weight="600" fill="${text}">${escapeXml(line)}</text>`).join('')}
+            `;
+          };
           const impactPanelX = x + 16;
           const riskPanelX = impact && risk ? impactPanelX + panelW + panelGap : impactPanelX;
-          const impactPanel = impact ? `
-            <rect x="${impactPanelX}" y="${impactRowY}" width="${panelW}" height="${impactRowH}" rx="10" fill="${impactPanelColor}" opacity="0.12" />
-            <rect x="${impactPanelX}" y="${impactRowY}" width="4" height="${impactRowH}" rx="2" fill="${impactPanelColor}" />
-            <text x="${impactPanelX + 18}" y="${impactRowY + 22}" font-size="${Math.round(10 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${impactPanelColor}" letter-spacing="2.4">+ IMPACT</text>
-            <foreignObject x="${impactPanelX + 18}" y="${impactRowY + 26}" width="${panelW - 30}" height="${impactRowH - 30}">
-              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(12 * infographicFontMultiplier)}px;line-height:1.35;color:${text};font-weight:600;">${escapeXml(impact)}</div>
-            </foreignObject>
-          ` : '';
-          const riskPanel = risk ? `
-            <rect x="${riskPanelX}" y="${impactRowY}" width="${panelW}" height="${impactRowH}" rx="10" fill="${riskPanelColor}" opacity="0.12" />
-            <rect x="${riskPanelX}" y="${impactRowY}" width="4" height="${impactRowH}" rx="2" fill="${riskPanelColor}" />
-            <text x="${riskPanelX + 18}" y="${impactRowY + 22}" font-size="${Math.round(10 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${riskPanelColor}" letter-spacing="2.4">! RISK</text>
-            <foreignObject x="${riskPanelX + 18}" y="${impactRowY + 26}" width="${panelW - 30}" height="${impactRowH - 30}">
-              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(12 * infographicFontMultiplier)}px;line-height:1.35;color:${text};font-weight:600;">${escapeXml(risk)}</div>
-            </foreignObject>
-          ` : '';
-          return impactPanel + riskPanel;
-        })() : '';
+          impactRow = [
+            renderPanel(impactPanelX, '+ IMPACT', impactLines, impactPanelColor),
+            renderPanel(riskPanelX, '! RISK', riskLines, riskPanelColor),
+          ].join('');
+        }
 
-        // Footer band — only renders when there IS content. Suppresses
-        // the previously-empty labeled boxes.
-        const footerBlock = hasFooterBand ? `
-          <rect x="${x + 16}" y="${footerBandY}" width="${cardWidth - 32}" height="${footerBandH}" rx="10" fill="${cycleAccent}" opacity="0.08" />
-          ${example ? `
-            <text x="${x + 32}" y="${footerBandY + 20}" font-size="${Math.round(10 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">EXAMPLE</text>
-            <foreignObject x="${x + 32}" y="${footerBandY + 24}" width="${cardWidth - 64}" height="${footerBandH - 28}">
-              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(12 * infographicFontMultiplier)}px;line-height:1.4;color:${bodyTextColor};">${escapeXml(example)}</div>
-            </foreignObject>
-          ` : `
-            <text x="${x + 32}" y="${footerBandY + 20}" font-size="${Math.round(10 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">TAKEAWAY</text>
-            <foreignObject x="${x + 32}" y="${footerBandY + 24}" width="${cardWidth - 64}" height="${footerBandH - 28}">
-              <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(13 * infographicFontMultiplier)}px;line-height:1.4;color:${text};font-weight:700;">${escapeXml(take)}</div>
-            </foreignObject>
-          `}
-        ` : '';
+        // Footer band (example or take). Same fix: tighter char-width
+        // estimate + 3-line allowance so the example sentence isn't
+        // chopped mid-thought.
+        let footerBlock = '';
+        let renderedFooterBandH = footerBandH;
+        if (hasFooterBand) {
+          const label = example ? 'EXAMPLE' : 'TAKEAWAY';
+          const value = example || take;
+          const innerW = cardWidth - 64;
+          const valueCharsPerLine = Math.max(20, Math.floor(innerW / (footerTextSize * 0.58)));
+          const valueLines = balanceTextLines(value, valueCharsPerLine, 3);
+          const valueLineH = Math.round(footerTextSize * 1.4);
+          renderedFooterBandH = 30 + valueLines.length * valueLineH + 6;
+          const valueStartY = footerBandY + 38;
+          const valueColor = example ? bodyTextColor : text;
+          const valueWeight = example ? '500' : '700';
+          footerBlock = `
+            <rect x="${x + 16}" y="${footerBandY}" width="${cardWidth - 32}" height="${renderedFooterBandH}" rx="10" fill="${cycleAccent}" opacity="0.08" />
+            <text x="${x + 32}" y="${footerBandY + 20}" font-size="${footerLabelSize}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">${label}</text>
+            ${valueLines.map((line, i) => `<text x="${x + 32}" y="${valueStartY + i * valueLineH}" font-size="${footerTextSize}" font-family="Inter, Arial" font-weight="${valueWeight}" fill="${valueColor}">${escapeXml(line)}</text>`).join('')}
+          `;
+        }
 
         return `
           ${renderCardBase(x, y, cycleAccent)}
           <circle cx="${iconCx}" cy="${iconCy}" r="${iconR}" fill="${cycleAccent}" />
           ${renderConceptGlyph(iconCx, iconCy, Math.round(iconR * 0.5), index, cycleAccent)}
-          <foreignObject x="${titleX}" y="${titleY}" width="${titleW}" height="${titleBlockH}">
-            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(20 * infographicFontMultiplier)}px;line-height:1.2;color:${text};font-weight:800;">${escapeXml(cleanTitle)}</div>
-          </foreignObject>
-          <foreignObject x="${contentLeftX}" y="${leadY}" width="${contentWidth}" height="${leadH}">
-            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(14 * infographicFontMultiplier)}px;line-height:1.5;color:${bodyTextColor};">${escapeXml(lead)}</div>
-          </foreignObject>
-          ${bulletsBlock}
+          ${titleSvg}
+          ${leadSvg}
+          ${bulletsSvg}
           ${statRail}
           ${impactRow}
           ${footerBlock}
@@ -4595,12 +4648,38 @@ async function renderInfographicAsset(
       <rect width="${width}" height="${height}" fill="url(#infographicBgGradient)" />
       <!-- Header band — gradient strip with the title in white at
            large-poster scale. Subtitle (intro line) under the title
-           when metadata.summary is set. -->
+           when metadata.summary is set. The title is LEFT-aligned
+           and width-constrained to leave room for the brand logo on
+           the right; long titles wrap to 2 lines instead of running
+           through the logo. -->
       <rect x="0" y="0" width="${width}" height="${headerH}" fill="url(#infographicHeaderGradient)" />
-      <text x="${width / 2}" y="${Math.round(headerH * 0.55)}" text-anchor="middle" font-size="${titleFontSize}" font-family="Inter, Arial" font-weight="900" fill="#ffffff" letter-spacing="0.5">${escapeXml(compactText(metadata.topic, 'Infographic'))}</text>
-      ${headerSubtitle ? `<foreignObject x="${Math.round(width * 0.12)}" y="${Math.round(headerH * 0.62)}" width="${Math.round(width * 0.76)}" height="${Math.round(headerH * 0.30)}">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(18 * infographicFontMultiplier)}px;line-height:1.45;color:rgba(255,255,255,0.92);text-align:center;">${escapeXml(headerSubtitle)}</div>
-      </foreignObject>` : ''}
+      ${(() => {
+        const titleText = compactText(metadata.topic, 'Infographic');
+        const titleLeftX = 80;
+        // Reserve right margin for the brand mark area (logo width +
+        // ~24px breathing room).
+        const titleZoneW = brandPlacement.left - titleLeftX - 24;
+        const titleCharsPerLine = Math.max(10, Math.floor(titleZoneW / (titleFontSize * 0.55)));
+        const titleLines = balanceTextLines(titleText, titleCharsPerLine, 2);
+        const titleLineH = Math.round(titleFontSize * 1.1);
+        // Vertically center the multi-line title block in the header.
+        const titleBlockH = titleLines.length * titleLineH;
+        const titleStartY = Math.round((headerH - titleBlockH) / 2) + titleFontSize;
+        return titleLines.map((line, i) => `<text x="${titleLeftX}" y="${titleStartY + i * titleLineH}" font-size="${titleFontSize}" font-family="Inter, Arial" font-weight="900" fill="#ffffff" letter-spacing="0.5">${escapeXml(line)}</text>`).join('');
+      })()}
+      ${headerSubtitle ? (() => {
+        // Native SVG text — librsvg doesn't render foreignObject HTML
+        // reliably. Word-wrap the subtitle below the title; render
+        // each line as its own <text> element.
+        const subSize = Math.round(15 * infographicFontMultiplier);
+        const subLeftX = 80;
+        const subZoneW = brandPlacement.left - subLeftX - 24;
+        const subCharsPerLine = Math.max(20, Math.floor(subZoneW / (subSize * 0.55)));
+        const subLines = balanceTextLines(headerSubtitle, subCharsPerLine, 2);
+        const subLineH = Math.round(subSize * 1.4);
+        const subStartY = Math.round(headerH * 0.78);
+        return subLines.map((line, i) => `<text x="${subLeftX}" y="${subStartY + i * subLineH}" font-size="${subSize}" font-family="Inter, Arial" font-weight="500" fill="rgba(255,255,255,0.92)">${escapeXml(line)}</text>`).join('');
+      })() : ''}
       <!-- Inner safe panel — soft white with rounded corners, floats
            inside the gradient frame. Cards live on top of this. -->
       <rect x="32" y="${headerH - 12}" width="${width - 64}" height="${height - headerH - 12}" rx="18" fill="#f8fafc" opacity="0.95" />

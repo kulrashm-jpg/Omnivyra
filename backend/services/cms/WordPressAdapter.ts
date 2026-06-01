@@ -201,10 +201,11 @@ export class WordPressAdapter extends BaseCmsAdapter {
     const categories = blog.category ? await this.ensureTaxonomyTerms(context, 'categories', [blog.category], apiBase) : [];
     const tags = blog.tags?.length ? await this.ensureTaxonomyTerms(context, 'tags', blog.tags, apiBase) : [];
     const featuredMedia = await this.resolveFeaturedMedia(context, blog.featured_image_url, blog.title, apiBase);
+    const embeddedMedia = await this.rewriteEmbeddedImages(context, input.htmlContent, blog.title, apiBase);
     const authorId = await this.resolveAuthorId(context, apiBase);
     const payload: Record<string, unknown> = {
       title: blog.seo_meta_title || blog.title,
-      content: input.htmlContent,
+      content: embeddedMedia.htmlContent,
       status: input.status ?? 'publish',
       slug: blog.slug ?? undefined,
       meta: {
@@ -220,19 +221,20 @@ export class WordPressAdapter extends BaseCmsAdapter {
     if (featuredMedia?.id) payload.featured_media = Number(featuredMedia.id);
     if (authorId) payload.author = authorId;
 
-    const postPath = (base: string) =>
-      externalId
-        ? `${base}/posts/${encodeURIComponent(externalId)}`
+    const postPath = (base: string, targetExternalId?: string) =>
+      targetExternalId
+        ? `${base}/posts/${encodeURIComponent(targetExternalId)}`
         : `${base}/posts`;
 
-    const doRequest = (base: string) =>
-      this.fetchWithTimeout(postPath(base), {
+    const doRequest = (base: string, targetExternalId?: string) =>
+      this.fetchWithTimeout(postPath(base, targetExternalId), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Basic ${credentials}` },
         body: JSON.stringify(payload),
       }, context.timeoutMs ?? 15_000);
 
-    let res = await doRequest(apiBase);
+    let res = await doRequest(apiBase, externalId);
+    let recreatedFromMissingExternalId = false;
 
     // Self-healing: a 404 on a previously-working base means the REST root
     // moved (install relocated / subdir or proxy change). Rediscover once,
@@ -246,8 +248,13 @@ export class WordPressAdapter extends BaseCmsAdapter {
       });
       if (repaired.apiBase && repaired.apiBase !== apiBase) {
         apiBase = repaired.apiBase;
-        res = await doRequest(apiBase);
+        res = await doRequest(apiBase, externalId);
       }
+    }
+
+    if (externalId && res.status === 404) {
+      res = await doRequest(apiBase);
+      recreatedFromMissingExternalId = true;
     }
 
     const data = await res.json().catch(() => null);
@@ -257,7 +264,14 @@ export class WordPressAdapter extends BaseCmsAdapter {
         message: `Published to WordPress${data?.link ? ': ' + data.link : '.'}`,
         externalId: data?.id ? String(data.id) : undefined,
         externalUrl: data?.link,
-        providerResponse: data,
+        providerResponse: {
+          wordpress: data,
+          embedded_media: {
+            uploaded: embeddedMedia.uploaded,
+            failed: embeddedMedia.failed,
+          },
+          recreated_from_missing_external_id: recreatedFromMissingExternalId,
+        },
       };
     }
     if (res.status === 401 || res.status === 403) {
@@ -324,6 +338,15 @@ export class WordPressAdapter extends BaseCmsAdapter {
 
   private async resolveFeaturedMedia(context: CmsAdapterContext, sourceUrl: string | null | undefined, title: string, apiBase: string): Promise<CmsMediaUploadResult | null> {
     if (!sourceUrl) return null;
+    return this.resolveRemoteMedia(context, sourceUrl, title, apiBase);
+  }
+
+  private async resolveRemoteMedia(
+    context: CmsAdapterContext,
+    sourceUrl: string,
+    altText: string,
+    apiBase: string,
+  ): Promise<CmsMediaUploadResult | null> {
     const cached = await ownedDbTable('cms_media_assets')
       .select('external_id, external_url')
       .eq('connection_id', context.connectionId)
@@ -337,7 +360,7 @@ export class WordPressAdapter extends BaseCmsAdapter {
     const contentType = mediaRes.headers.get('content-type') || 'image/jpeg';
     const bytes = Buffer.from(await mediaRes.arrayBuffer());
     const filename = this.filenameFromUrl(sourceUrl, contentType);
-    const uploaded = await this.uploadMedia(context, { filename, contentType, body: bytes, altText: title }, apiBase);
+    const uploaded = await this.uploadMedia(context, { filename, contentType, body: bytes, altText }, apiBase);
     if (uploaded.id) {
       try {
         if (context.companyId) {
@@ -351,7 +374,7 @@ export class WordPressAdapter extends BaseCmsAdapter {
             external_url: uploaded.url ?? null,
             content_type: contentType,
             upload_status: 'uploaded',
-            metadata: { title },
+            metadata: { altText },
           });
         }
       } catch {
@@ -359,6 +382,85 @@ export class WordPressAdapter extends BaseCmsAdapter {
       }
     }
     return uploaded;
+  }
+
+  private async rewriteEmbeddedImages(
+    context: CmsAdapterContext,
+    htmlContent: string,
+    title: string,
+    apiBase: string,
+  ): Promise<{ htmlContent: string; uploaded: number; failed: Array<{ sourceUrl: string; reason: string }> }> {
+    const candidates = this.extractEmbeddedImages(htmlContent);
+    if (candidates.length === 0) return { htmlContent, uploaded: 0, failed: [] };
+
+    let rewritten = htmlContent;
+    let uploaded = 0;
+    const failed: Array<{ sourceUrl: string; reason: string }> = [];
+    const siteHost = this.hostFromUrl(context.config.site_url);
+
+    for (const candidate of candidates) {
+      const sourceHost = this.hostFromUrl(candidate.sourceUrl);
+      if (siteHost && sourceHost === siteHost) continue;
+
+      const media = await this.resolveRemoteMedia(
+        context,
+        candidate.sourceUrl,
+        candidate.altText || title,
+        apiBase,
+      );
+      if (!media?.url) {
+        failed.push({ sourceUrl: candidate.sourceUrl, reason: 'upload_failed' });
+        continue;
+      }
+      rewritten = rewritten.split(candidate.rawSrc).join(media.url);
+      uploaded += 1;
+    }
+
+    return { htmlContent: rewritten, uploaded, failed };
+  }
+
+  private extractEmbeddedImages(htmlContent: string): Array<{ rawSrc: string; sourceUrl: string; altText: string }> {
+    const imageTags = htmlContent.match(/<img\b[^>]*>/gi) ?? [];
+    const bySource = new Map<string, { rawSrc: string; sourceUrl: string; altText: string }>();
+
+    for (const tag of imageTags) {
+      const rawSrc = this.extractHtmlAttribute(tag, 'src');
+      if (!rawSrc) continue;
+      const sourceUrl = this.decodeHtmlAttribute(rawSrc);
+      if (!/^https?:\/\//i.test(sourceUrl)) continue;
+      if (bySource.has(sourceUrl)) continue;
+      bySource.set(sourceUrl, {
+        rawSrc,
+        sourceUrl,
+        altText: this.decodeHtmlAttribute(this.extractHtmlAttribute(tag, 'alt') ?? ''),
+      });
+    }
+
+    return Array.from(bySource.values());
+  }
+
+  private extractHtmlAttribute(tag: string, attribute: string): string | null {
+    const pattern = new RegExp(`\\b${attribute}\\s*=\\s*(["'])(.*?)\\1`, 'i');
+    const match = tag.match(pattern);
+    return match?.[2] ?? null;
+  }
+
+  private decodeHtmlAttribute(value: string): string {
+    return value
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>');
+  }
+
+  private hostFromUrl(value: string | null | undefined): string | null {
+    if (!value) return null;
+    try {
+      return new URL(value).host.toLowerCase();
+    } catch {
+      return null;
+    }
   }
 
   private async resolveAuthorId(context: CmsAdapterContext, apiBase: string): Promise<number | null> {

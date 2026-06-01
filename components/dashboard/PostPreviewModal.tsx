@@ -43,6 +43,17 @@ export type ActivityEvent = {
   is_overdue?: boolean;
   media_urls?: string[];
   media_types?: string[];
+  // ── Creator unification (additive) ──
+  /** True for WAITING_FOR_ASSET (video/reel/short) rows awaiting upload. */
+  pending?: boolean;
+  /** daily_content_plans row id — drives the "Upload media" deep-link. */
+  daily_plan_id?: string | null;
+  /** Short brief shown on the pending card (also surfaced via `content`). */
+  cta?: string | null;
+  canonical_state?: string;
+  canonical_badge?: string;
+  canonical_label?: string;
+  canonical_group?: 'pending' | 'ready' | 'scheduled' | 'published' | 'failed' | 'draft';
 };
 
 const PLATFORM_CONFIG = PLATFORM_CARD_CONFIG;
