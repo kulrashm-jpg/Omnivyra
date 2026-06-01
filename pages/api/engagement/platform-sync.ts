@@ -12,6 +12,7 @@ type SyncCommandRow = {
   platform: string;
   status: string | null;
   created_at?: string | null;
+  target_id?: string | null;
 };
 
 function normalizePlatform(platform: unknown): string {
@@ -44,18 +45,26 @@ function parseSince(value: unknown): string {
   return new Date(parsed).toISOString();
 }
 
-async function enqueuePlatformSync(organizationId: string, platform: string, requestedAt: string): Promise<SyncCommandRow> {
+type LinkedInSyncSurface = 'dm' | 'comments';
+
+async function enqueuePlatformSync(
+  organizationId: string,
+  platform: string,
+  requestedAt: string,
+  surface: LinkedInSyncSurface = 'dm',
+): Promise<SyncCommandRow> {
   const bucket = Math.floor(Date.parse(requestedAt) / IDEMPOTENCY_BUCKET_MS);
-  const idempotencyKey = `platform-sync:${organizationId}:${platform}:${bucket}`;
+  const idempotencyKey = `platform-sync:${organizationId}:${platform}:${surface}:${bucket}`;
   const actionId = randomUUID();
   const correlationId = randomUUID();
+  const isCommentSync = surface === 'comments';
   const row = {
     id: actionId,
     tenant_id: organizationId,
     organization_id: organizationId,
     platform,
     action_type: 'dm',
-    target_id: `sync-dm-inbox:${platform}`,
+    target_id: isCommentSync ? `sync-comments-inbox:${platform}` : `sync-dm-inbox:${platform}`,
     suggested_text: null,
     risk_level: 'low',
     requires_human_approval: false,
@@ -66,8 +75,8 @@ async function enqueuePlatformSync(organizationId: string, platform: string, req
     idempotency_key: idempotencyKey,
     command_chain: [
       {
-        action_type: 'sync_dm_inbox',
-        payload: { navigate: true },
+        action_type: isCommentSync ? 'sync_comments_inbox' : 'sync_dm_inbox',
+        payload: isCommentSync ? { navigate: true, source: 'platform_sync' } : { navigate: true },
       },
     ],
     command_chain_index: 0,
@@ -79,7 +88,7 @@ async function enqueuePlatformSync(organizationId: string, platform: string, req
   const { data, error } = await supabase
     .from('community_ai_actions')
     .insert(row)
-    .select('id, platform, status, created_at')
+    .select('id, platform, status, created_at, target_id')
     .single();
 
   if (!error && data) return data as SyncCommandRow;
@@ -87,7 +96,7 @@ async function enqueuePlatformSync(organizationId: string, platform: string, req
   if ((error as { code?: string } | null)?.code === '23505') {
     const { data: existing, error: existingError } = await supabase
       .from('community_ai_actions')
-      .select('id, platform, status, created_at')
+      .select('id, platform, status, created_at, target_id')
       .eq('organization_id', organizationId)
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle();
@@ -204,7 +213,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const commands: SyncCommandRow[] = [];
 
       for (const platform of platforms) {
-        commands.push(await enqueuePlatformSync(organizationId, platform, requestedAt));
+        commands.push(await enqueuePlatformSync(organizationId, platform, requestedAt, 'dm'));
+        if (platform === 'linkedin') {
+          commands.push(await enqueuePlatformSync(organizationId, platform, requestedAt, 'comments'));
+        }
       }
 
       return res.status(200).json({

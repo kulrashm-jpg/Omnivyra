@@ -238,6 +238,19 @@ const VALIDATORS: Record<string, (p: any) => Validation> = {
     if (unknown) return { ok: false, code: 'UNKNOWN_FIELD', message: unknown };
     return { ok: true, payload: { navigate: p.navigate === true } };
   },
+  'linkedin.sync_comments_inbox': (p) => {
+    // Opt-in navigate flag lets the extension move to a LinkedIn feed
+    // surface before scraping visible post comments/reaction counts.
+    const unknown = allowOnly(p, ['navigate', 'source']);
+    if (unknown) return { ok: false, code: 'UNKNOWN_FIELD', message: unknown };
+    return {
+      ok: true,
+      payload: {
+        navigate: p.navigate === true,
+        source: typeof p.source === 'string' ? p.source : undefined,
+      },
+    };
+  },
 };
 
 for (const platform of ['linkedin', 'facebook', 'instagram', 'twitter', 'x']) {

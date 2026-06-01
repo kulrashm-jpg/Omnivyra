@@ -475,6 +475,12 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
     const rows = normalizeCommentsForPlatform(scheduled_post_id, post.platform, raw);
     await persistComments(rows);
     const ingested = rows.length;
+    console.info('[engagementIngestion] ingestComments completed', {
+      scheduled_post_id,
+      platform: post.platform,
+      platform_post_id: platformPostId,
+      ingested,
+    });
     if (ingested > 0) {
       let organizationId: string | null = null;
       if (post.campaign_id) {
@@ -505,6 +511,12 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
     }
     return { success: true, ingested };
   } catch (e: any) {
+    console.warn('[engagementIngestion] ingestComments failed', {
+      scheduled_post_id,
+      platform: post.platform,
+      platform_post_id: platformPostId,
+      error: e?.message ?? 'Failed to fetch or persist comments',
+    });
     return {
       success: false,
       ingested: 0,
@@ -541,6 +553,11 @@ export async function ingestRecentPublishedPosts(): Promise<{
       errors.push({ scheduled_post_id: p.id, error: result.error });
     }
   }
+  console.info('[engagementIngestion] ingestRecentPublishedPosts completed', {
+    processed: list.length,
+    total_ingested: totalIngested,
+    errors: errors.length,
+  });
   return {
     processed: list.length,
     totalIngested,

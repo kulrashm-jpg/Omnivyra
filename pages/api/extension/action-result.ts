@@ -283,12 +283,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    if (finalStatus === 'executed' && String(existing.action_type || '').toLowerCase() === 'dm') {
+    const targetId = String((existing as { target_id?: string | null }).target_id ?? '');
+    const isSyncCommand = /^sync-(dm|comments)-inbox:/i.test(targetId);
+    if (finalStatus === 'executed' && String(existing.action_type || '').toLowerCase() === 'dm' && !isSyncCommand) {
       const mirrorResult = await mirrorOutboundDmAction({
         organizationId: session.orgId,
         actionId: commandId,
         platform: existing.platform ?? null,
-        targetId: (existing as { target_id?: string | null }).target_id ?? null,
+        targetId,
         text:
           (existing as { final_text?: string | null }).final_text
           ?? (existing as { suggested_text?: string | null }).suggested_text

@@ -133,6 +133,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const incomingPosts = Array.isArray(body.posts) ? body.posts : [];
   const incomingComments = Array.isArray(body.comments) ? body.comments : [];
+  console.info('[extension/events/comments] received', {
+    platform,
+    organizationId,
+    posts: incomingPosts.length,
+    comments: incomingComments.length,
+  });
   if (incomingPosts.length === 0 && incomingComments.length === 0) {
     return res.status(200).json({ success: true, threads_upserted: 0, messages_upserted: 0 });
   }
@@ -209,7 +215,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .select('id')
         .single();
       if (insertErr) {
-        console.warn('[extension/events/comments] thread insert failed:', insertErr.message);
+        console.warn('[extension/events/comments] thread insert failed:', {
+          message: insertErr.message,
+          platform,
+          organizationId,
+          postUrn,
+        });
         continue;
       }
       if (inserted?.id) {
@@ -376,7 +387,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             .select('id')
             .maybeSingle();
           if (updateErr) {
-            console.warn('[extension/events/comments] duplicate message refresh failed:', updateErr.message);
+            console.warn('[extension/events/comments] duplicate message refresh failed:', {
+              message: updateErr.message,
+              platform,
+              organizationId,
+              postUrn,
+              platformMessageId: syncRecord.platform_message_id,
+            });
             duplicatesRejected += 1;
             continue;
           }
@@ -386,7 +403,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           duplicatesUpdated += 1;
           continue;
         }
-        console.warn('[extension/events/comments] message insert failed:', insertErr.message);
+        console.warn('[extension/events/comments] message insert failed:', {
+          message: insertErr.message,
+          platform,
+          organizationId,
+          postUrn,
+          platformMessageId: syncRecord.platform_message_id,
+        });
         continue;
       }
       if (insertedMessage?.id) {
@@ -402,16 +425,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .in('id', Array.from(touchedThreadIds));
     }
 
-    return res.status(200).json({
+    const responsePayload = {
       success: true,
       platform,
       threads_upserted: threadsUpserted,
       messages_upserted: messagesUpserted,
       duplicates_updated: duplicatesUpdated,
       duplicates_rejected: duplicatesRejected,
+    };
+    console.info('[extension/events/comments] persisted', {
+      platform,
+      organizationId,
+      ...responsePayload,
     });
+    return res.status(200).json(responsePayload);
   } catch (err) {
-    console.error('[extension/events/comments]', err);
+    console.error('[extension/events/comments]', {
+      platform,
+      organizationId,
+      error: (err as Error)?.message || String(err),
+    });
     return res.status(isSyncValidationError(err) ? 400 : 500).json({
       success: false,
       error: (err as Error)?.message || 'comment sync failed',

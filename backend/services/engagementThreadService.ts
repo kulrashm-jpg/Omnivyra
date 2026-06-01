@@ -53,6 +53,9 @@ export type ThreadSummary = {
   assigned_to?: string | null;
   assigned_at?: string | null;
   assignee_name?: string | null;
+  people_reaction_eligible?: boolean;
+  post_reaction_count?: number | null;
+  post_comment_count?: number | null;
 };
 
 type EngagementThreadRow = {
@@ -81,6 +84,15 @@ function isMissingEngagementThreadCollaborationColumn(error: { message?: string;
     message.includes('assigned_to') && message.includes('does not exist') ||
     message.includes('assigned_at') && message.includes('does not exist')
   );
+}
+
+function coerceOptionalCount(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
@@ -423,6 +435,15 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       typeof threadRawPayload.last_message_preview === 'string'
         ? threadRawPayload.last_message_preview.trim()
         : '';
+    const postPreview =
+      typeof threadRawPayload.post_text_preview === 'string'
+        ? threadRawPayload.post_text_preview.trim()
+        : '';
+    const postReactionCount = coerceOptionalCount(threadRawPayload.reaction_count);
+    const postCommentCount = coerceOptionalCount(threadRawPayload.comment_count);
+    const isPostEngagementThread =
+      typeof threadRawPayload.ingested_via === 'string'
+      && threadRawPayload.ingested_via === 'extension_comments';
     const actionableThreadPreview = isActionableDmPreview(threadPreview);
     const threadPreviewTime =
       typeof threadRawPayload.last_message_at === 'string'
@@ -434,7 +455,7 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       actionableThreadPreview
       && threadPreviewMs !== null
       && (latestMessageMs === null || threadPreviewMs >= latestMessageMs);
-    const effectiveMessageCount = msgCount > 0 ? msgCount : actionableThreadPreview ? 1 : 0;
+    const effectiveMessageCount = msgCount > 0 ? msgCount : actionableThreadPreview ? 1 : postCommentCount ?? 0;
     const rawParticipantName =
       typeof threadRawPayload.participant_name === 'string'
         ? threadRawPayload.participant_name.trim()
@@ -507,10 +528,12 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       platform: t.platform,
       author_summary: authorSummary,
       message_count: effectiveMessageCount,
-      latest_message: threadPreviewWins ? threadPreview : latest?.content ?? (actionableThreadPreview ? threadPreview : null),
+      latest_message: threadPreviewWins
+        ? threadPreview
+        : latest?.content ?? (actionableThreadPreview ? threadPreview : postPreview || null),
       latest_message_time: threadPreviewWins
         ? threadPreviewTime
-        : (latest ? getEffectiveMessageTimestamp(latest) : null) ?? (actionableThreadPreview ? threadPreviewTime : null) ?? null,
+        : (latest ? getEffectiveMessageTimestamp(latest) : null) ?? (actionableThreadPreview ? threadPreviewTime : null) ?? t.updated_at ?? null,
       // If the thread-list preview is fresher than our detailed rows, do not
       // expose a stale message id. The inbox route will then use raw_payload
       // last_message_self/preview metadata to classify the true latest turn.
@@ -528,6 +551,9 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       assigned_to: t.assigned_to ?? null,
       assigned_at: t.assigned_at ?? null,
       assignee_name: t.assigned_to ? assigneeNameById.get(t.assigned_to) ?? null : null,
+      people_reaction_eligible: isPostEngagementThread || postReactionCount !== null || postCommentCount !== null,
+      post_reaction_count: postReactionCount,
+      post_comment_count: postCommentCount,
     });
     if (results.length >= limit) break;
   }

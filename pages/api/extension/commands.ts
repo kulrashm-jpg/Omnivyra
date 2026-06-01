@@ -43,6 +43,7 @@ const EXTENSION_ACTION_BY_PAIR: Record<string, string> = {
   search_user: 'search_user',
   start_new_dm: 'start_new_dm',
   sync_dm_inbox: 'sync_dm_inbox',
+  sync_comments_inbox: 'sync_comments_inbox',
 };
 
 function mapCapabilityActionToExtensionAction(capabilityAction: string): string | null {
