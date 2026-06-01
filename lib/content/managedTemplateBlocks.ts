@@ -3,7 +3,9 @@ import type {
   CalloutBlock,
   ColumnsBlock,
   ContentBlock,
+  ImageBlock,
   ListBlock,
+  MediaBlock,
   ReferencesBlock,
 } from '../blog/blockTypes';
 import type { ManagedContentType } from './contentTemplateRegistry';
@@ -50,6 +52,25 @@ function quote(hint: string): ContentBlock {
   if (block.type === 'quote') {
     block.hint = hint;
   }
+  return block;
+}
+
+function image(hint: string, alt = 'Story illustration placeholder'): ContentBlock {
+  const block = createBlock('image') as ImageBlock;
+  block.url = '';
+  block.alt = alt;
+  block.caption = '';
+  block.hint = hint;
+  return block;
+}
+
+function media(hint: string): ContentBlock {
+  const block = createBlock('media') as MediaBlock;
+  block.mediaType = 'external_link';
+  block.url = '';
+  block.title = '';
+  block.description = '';
+  block.hint = hint;
   return block;
 }
 
@@ -199,6 +220,7 @@ function buildGuideReference(): ContentBlock[] {
 
 function buildStoryShort(): ContentBlock[] {
   return [
+    image('Use one illustration or photo-style image that captures the scene, person, place, or emotional tension before the text begins.', 'Illustration of the central story moment'),
     keyInsights('Story Beat Map', ['', '', '']),
     paragraph('Hook the reader immediately with a moment, tension point, or vivid contrast.'),
     heading('Setup', 'Establish the protagonist, context, or starting condition.'),
@@ -210,8 +232,36 @@ function buildStoryShort(): ContentBlock[] {
   ];
 }
 
+function buildStoryDialogueTurn(): ContentBlock[] {
+  return [
+    paragraph('Open close to the moment where someone says, notices, or admits the line that changes the story.'),
+    quote('Capture the remembered line, customer comment, founder thought, or team remark that becomes the turning point.'),
+    heading('Before the Line', 'Show the situation, pressure, or mistaken assumption before the quote lands.'),
+    paragraph('Keep the setup grounded in a specific room, call, dashboard, draft, meeting, or customer moment.'),
+    heading('What Changed Afterward', 'Show how the line or realization changed behavior, confidence, or the next decision.'),
+    callout('The Turn', 'Make the practical lesson visible without converting the story into generic advice.', 'note'),
+    summary('Close with what the protagonist understood differently after that moment.'),
+  ];
+}
+
+function buildStoryVisualMicro(): ContentBlock[] {
+  return [
+    image('Create or select a strong visual opener: one character, one setting, one tension. The image should be usable as the story thumbnail.', 'Visual opener for a short story'),
+    paragraph('Write a short cinematic opening that makes the visual feel specific and active.'),
+    heading('The Small Conflict', 'Introduce the tension in one compact beat rather than a long explanation.'),
+    columns([
+      ['Visual cue: describe what the reader should picture.'],
+      ['Story cue: explain what the protagonist is trying to decide.'],
+    ]),
+    heading('The Realization', 'Deliver the turn in a brief, memorable moment.'),
+    callout('Visual Payoff', 'Name the final image, symbol, or contrast the reader should remember.', 'insight'),
+    summary('End with one complete takeaway that can survive as a caption or card description.'),
+  ];
+}
+
 function buildStoryLong(): ContentBlock[] {
   return [
+    image('Use a wide hero illustration or photo-style image that establishes setting, mood, and stakes for the long narrative.', 'Long story hero image'),
     keyInsights('Narrative Pillars', ['', '', '']),
     paragraph('Open with a scene, voice, or moment that invites the reader into a larger journey.'),
     heading('Act I: The World Before', 'Build context, motivation, and the starting stakes.'),
@@ -224,8 +274,38 @@ function buildStoryLong(): ContentBlock[] {
   ];
 }
 
+function buildStoryFounderReflection(): ContentBlock[] {
+  return [
+    quote('Open with a founder, leader, or operator reflection that sounds human and specific.'),
+    heading('The Memory That Started It', 'Begin with the remembered moment, early mistake, customer signal, or hard lesson.'),
+    paragraph('Use first-person or close-third-person texture where appropriate, with concrete details and stakes.'),
+    heading('The Belief That Changed', 'Show the old belief, the pressure that challenged it, and the new judgment that emerged.'),
+    callout('Hard-Won Lesson', 'State the lesson as a lived insight, not a motivational slogan.', 'insight'),
+    heading('How the Work Changed', 'Translate the reflection into visible choices, operating behavior, or communication changes.'),
+    paragraph('Let the consequence land through action and aftermath.'),
+    summary('Close with the meaning the reader should carry forward.'),
+  ];
+}
+
+function buildStoryCustomerJourney(): ContentBlock[] {
+  return [
+    image('Use an illustration or real asset that shows the customer/team context, not a generic abstract background.', 'Customer journey story image'),
+    heading('Where the Journey Began', 'Introduce the customer, team, or buyer situation without fabricating private details.'),
+    paragraph('Describe the starting constraint, frustration, or repeated obstacle.'),
+    heading('The Pressure Point', 'Show the moment where the old approach stopped working.'),
+    columns([
+      ['Before: summarize the visible friction, cost, or uncertainty.'],
+      ['After: summarize what changed once the team made a different choice.'],
+    ]),
+    heading('The Proof Moment', 'Include the behavior, signal, or result that made the change credible.'),
+    callout('Transferable Lesson', 'Explain what a similar reader can learn without turning the story into a case study.', 'note'),
+    summary('End with the human and practical consequence of the journey.'),
+  ];
+}
+
 function buildStoryEpisodic(): ContentBlock[] {
   return [
+    media('Link the prior episode, series hub, campaign page, or reference asset so this installment has continuity.'),
     keyInsights('Series Throughline', ['', '', '']),
     paragraph('Reintroduce the series premise and make this episode legible on its own.'),
     heading('Episode Setup', 'Anchor the reader in the current chapter and its immediate stakes.'),
@@ -234,6 +314,32 @@ function buildStoryEpisodic(): ContentBlock[] {
     heading('Cliffhanger or Reveal', 'End with a strong hook that creates momentum into the next entry.'),
     callout('Recurring Motif', 'Use one repeated image, phrase, or theme to strengthen continuity.', 'insight'),
     summary('Close with a short recap of what changed and what tension remains open.'),
+  ];
+}
+
+function buildStorySeriesRecap(): ContentBlock[] {
+  return [
+    keyInsights('Previously in the Series', ['', '', '']),
+    paragraph('Orient returning and new readers with the smallest possible recap before the story moves forward.'),
+    heading('Where We Left Off', 'Name the unresolved tension from the prior installment.'),
+    paragraph('Show the consequence of that unresolved moment in the current episode.'),
+    heading('The New Complication', 'Introduce the new pressure, reveal, or changed relationship dynamic.'),
+    callout('Continuity Thread', 'Track the recurring phrase, image, relationship, or open question that connects episodes.', 'insight'),
+    heading('Where This Leaves Us', 'Close with what changed and why the next episode matters.'),
+    summary('End with a complete recap of the episode outcome and remaining tension.'),
+  ];
+}
+
+function buildStoryVisualEpisodeBoard(): ContentBlock[] {
+  return [
+    image('Create a storyboard-style opener with 3-4 visual beats from this episode, suitable for carousel adaptation.', 'Storyboard opener for episodic story'),
+    heading('Panel 1: The Setup', 'Describe the opening visual beat and the immediate stakes.'),
+    paragraph('Make the first panel legible without requiring the prior episode.'),
+    heading('Panel 2: The Pressure', 'Show the visual or emotional escalation.'),
+    paragraph('Explain what becomes harder, riskier, or more revealing.'),
+    heading('Panel 3: The Reveal', 'Deliver the reveal, twist, or decision in visual terms.'),
+    callout('Next Episode Hook', 'End with the image, question, or line that pulls the reader into the next installment.', 'warning'),
+    summary('Close with what changed in this episode and what remains unresolved.'),
   ];
 }
 
@@ -363,6 +469,7 @@ function buildThreadTemplate(): ContentBlock[] {
 export function buildManagedTemplateBlocks(
   contentType: ManagedContentType,
   formatType?: string | null,
+  templateName?: string | null,
 ): ContentBlock[] {
   if (contentType === 'article') {
     if (formatType === 'investigative') return buildArticleInvestigative();
@@ -377,6 +484,13 @@ export function buildManagedTemplateBlocks(
   }
 
   if (contentType === 'story') {
+    const normalizedTemplate = String(templateName || '').trim().toLowerCase();
+    if (normalizedTemplate === 'dialogue turn') return buildStoryDialogueTurn();
+    if (normalizedTemplate === 'visual micro-story') return buildStoryVisualMicro();
+    if (normalizedTemplate === 'founder reflection') return buildStoryFounderReflection();
+    if (normalizedTemplate === 'customer journey') return buildStoryCustomerJourney();
+    if (normalizedTemplate === 'series recap') return buildStorySeriesRecap();
+    if (normalizedTemplate === 'visual episode board') return buildStoryVisualEpisodeBoard();
     if (formatType === 'long_story') return buildStoryLong();
     if (formatType === 'episodic_story') return buildStoryEpisodic();
     return buildStoryShort();

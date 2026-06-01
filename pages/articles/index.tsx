@@ -57,6 +57,24 @@ function stripHtml(s: string) {
   return s.replace(/<[^>]*>/g, '').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function buildArticleCompanyContext(profile: CompanyProfile | null): string {
+  if (!profile) return '';
+  return [
+    profile.industry ? `Industry: ${profile.industry}` : null,
+    profile.category ? `Category: ${profile.category}` : null,
+    profile.target_audience ? `Target audience: ${profile.target_audience}` : null,
+    profile.target_audience_list?.length ? `Target audience segments: ${profile.target_audience_list.join(', ')}` : null,
+    profile.ideal_customer_profile ? `Ideal customer profile: ${profile.ideal_customer_profile}` : null,
+    profile.brand_positioning ? `Brand positioning: ${profile.brand_positioning}` : null,
+    profile.unique_value ? `Unique value: ${profile.unique_value}` : null,
+    profile.products_services ? `Products and services: ${profile.products_services}` : null,
+    profile.key_messages ? `Key messages: ${profile.key_messages}` : null,
+    profile.content_strategy ? `Content strategy: ${profile.content_strategy}` : null,
+    profile.goals ? `Goals: ${profile.goals}` : null,
+    profile.brand_voice ? `Brand voice: ${profile.brand_voice}` : null,
+  ].filter(Boolean).join('\n');
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ArticlesPage() {
@@ -546,9 +564,11 @@ export default function ArticlesPage() {
         onCardCreated={handleAICardCreated}
         companyId={selectedCompanyId || ''}
         companyName={companyProfile?.name || 'Your Company'}
-        companyContext={companyProfile?.industry ? `Industry: ${companyProfile.industry}` : ''}
+        companyContext={buildArticleCompanyContext(companyProfile)}
         existingTopics={articles.map(a => a.title)}
         writingStyleGuide={companyProfile?.brand_voice || ''}
+        contentLabel="article"
+        contentType="article"
       />
     </>
   );

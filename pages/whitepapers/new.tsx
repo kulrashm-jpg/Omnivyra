@@ -402,6 +402,15 @@ export default function WhitepaperNewPage() {
           <div className="flex gap-6 items-start">
             {/* ── Editor ─────────────────────────────────────────────────── */}
             <div className="flex-1 min-w-0 rounded-lg border border-gray-200 bg-white p-6 shadow">
+              <div className="mb-5 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-950">
+                <p className="font-semibold">Whitepaper Direction</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  <p>Use a formal research or strategy structure: executive context, scope, findings, framework, risks, and recommendations.</p>
+                  <p>Headings should sound like whitepaper sections, not newsletter notes, blog H2s, or casual guide steps.</p>
+                  <p>Make claims evidence-aware and include assumptions, limitations, tradeoffs, and decision implications.</p>
+                  <p>Close with a complete executive synthesis and prioritized recommendations, never a truncated summary.</p>
+                </div>
+              </div>
               <BlogEditorForm
                 initial={{
                   content_blocks: DEFAULT_TEMPLATE,

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Copy, Download, Loader2, Share2 } from 'lucide-react';
+import { CheckCircle2, Copy, Download, FileText, Loader2, PenTool, Share2 } from 'lucide-react';
 
 type MarkUsedOption = {
   label: string;
@@ -11,9 +11,19 @@ type Props = {
   copyText: string;
   exportText: string;
   exportFileName: string;
+  downloads?: Array<{
+    label: string;
+    fileName: string;
+    content: string;
+    mimeType: string;
+  }>;
+  shareDisabledReason?: string | null;
+  publishDestinations?: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>;
+  repurposeDestinations?: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>;
+  assetDestinations?: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>;
   markUsedOptions: MarkUsedOption[];
   onMarkUsed: (platform?: string) => Promise<void>;
-  onPostToSocial: () => void;
+  onPostToSocial?: () => void;
 };
 
 export default function EditorShareActions({
@@ -21,6 +31,11 @@ export default function EditorShareActions({
   copyText,
   exportText,
   exportFileName,
+  downloads = [],
+  shareDisabledReason = null,
+  publishDestinations = [],
+  repurposeDestinations = [],
+  assetDestinations = [],
   markUsedOptions,
   onMarkUsed,
   onPostToSocial,
@@ -47,6 +62,17 @@ export default function EditorShareActions({
     URL.revokeObjectURL(url);
   };
 
+  const handleDownload = (content: string, fileName: string, mimeType: string) => {
+    if (!content.trim()) return;
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleMarkUsed = async (platform?: string) => {
     setMarkingUsed(true);
     try {
@@ -55,6 +81,39 @@ export default function EditorShareActions({
     } finally {
       setMarkingUsed(false);
     }
+  };
+
+  const actionDisabled = Boolean(shareDisabledReason);
+
+  const renderDestinationGroup = (
+    title: string,
+    icon: React.ReactNode,
+    destinations: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>,
+  ) => {
+    if (destinations.length === 0) return null;
+    return (
+      <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+        <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
+          {icon}
+          {title}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {destinations.map((destination) => (
+            <button
+              key={destination.key}
+              type="button"
+              disabled={actionDisabled}
+              title={actionDisabled ? shareDisabledReason || undefined : destination.detail}
+              onClick={() => void destination.onClick()}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className="block leading-tight">{destination.label}</span>
+              {destination.detail ? <span className="block text-[11px] font-normal text-gray-500">{destination.detail}</span> : null}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -82,14 +141,29 @@ export default function EditorShareActions({
           <Download className="h-3.5 w-3.5" />
           Export
         </button>
-        <button
-          type="button"
-          onClick={onPostToSocial}
-          className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
-        >
-          <Share2 className="h-3.5 w-3.5" />
-          Post to social
-        </button>
+        {downloads.map((item) => (
+          <button
+            key={item.fileName}
+            type="button"
+            onClick={() => handleDownload(item.content, item.fileName, item.mimeType)}
+            className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+          >
+            <Download className="h-3.5 w-3.5" />
+            {item.label}
+          </button>
+        ))}
+        {onPostToSocial ? (
+          <button
+            type="button"
+            onClick={onPostToSocial}
+            disabled={actionDisabled}
+            title={actionDisabled ? shareDisabledReason || undefined : undefined}
+            className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Share2 className="h-3.5 w-3.5" />
+            Repurpose
+          </button>
+        ) : null}
         <div className="relative">
           <button
             type="button"
@@ -116,6 +190,12 @@ export default function EditorShareActions({
           ) : null}
         </div>
       </div>
+      {shareDisabledReason ? (
+        <p className="mt-3 text-xs font-medium text-amber-700">{shareDisabledReason}</p>
+      ) : null}
+      {renderDestinationGroup('Publish Blog', <FileText className="h-3.5 w-3.5" />, publishDestinations)}
+      {renderDestinationGroup('Repurpose Blog To Social', <Share2 className="h-3.5 w-3.5" />, repurposeDestinations)}
+      {renderDestinationGroup('Create Social Assets', <PenTool className="h-3.5 w-3.5" />, assetDestinations)}
     </div>
   );
 }

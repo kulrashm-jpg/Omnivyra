@@ -59,6 +59,80 @@ const ACCENT_SURFACES = {
 } as const;
 
 function getVisuals(contentType: ManagedContentType, templateName: string) {
+  const normalizedTemplate = templateName.trim().toLowerCase();
+  const storyVisuals: Record<string, {
+    eyebrow: string;
+    accentClassName: string;
+    surfaceClassName: string;
+    badgeClassName: string;
+    stats: Array<{ label: string; value: string }>;
+  }> = {
+    'scene snapshot': {
+      eyebrow: 'Illustrated Moment',
+      accentClassName: 'from-pink-500 via-rose-500 to-orange-400',
+      surfaceClassName: 'bg-[radial-gradient(circle_at_top_left,_rgba(244,63,94,0.12),_rgba(255,255,255,0.97)_45%)]',
+      badgeClassName: 'bg-pink-100 text-pink-700',
+      stats: [{ label: 'Visual', value: 'Hero scene' }, { label: 'Media', value: 'Single image' }],
+    },
+    'dialogue turn': {
+      eyebrow: 'Quote-Led Turn',
+      accentClassName: 'from-violet-500 via-fuchsia-500 to-pink-500',
+      surfaceClassName: 'bg-[radial-gradient(circle_at_top_left,_rgba(168,85,247,0.12),_rgba(255,255,255,0.97)_45%)]',
+      badgeClassName: 'bg-violet-100 text-violet-700',
+      stats: [{ label: 'Format', value: 'Dialogue' }, { label: 'Media', value: 'Pull quote' }],
+    },
+    'visual micro-story': {
+      eyebrow: 'Media-First Story',
+      accentClassName: 'from-sky-500 via-blue-500 to-violet-500',
+      surfaceClassName: 'bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.12),_rgba(255,255,255,0.97)_45%)]',
+      badgeClassName: 'bg-sky-100 text-sky-700',
+      stats: [{ label: 'Visual', value: 'Thumbnail first' }, { label: 'Media', value: 'Image + payoff' }],
+    },
+    'cinematic journey': {
+      eyebrow: 'Cinematic Longform',
+      accentClassName: 'from-rose-600 via-orange-500 to-amber-400',
+      surfaceClassName: 'bg-[radial-gradient(circle_at_top_left,_rgba(251,146,60,0.13),_rgba(255,255,255,0.97)_45%)]',
+      badgeClassName: 'bg-orange-100 text-orange-700',
+      stats: [{ label: 'Visual', value: 'Wide hero' }, { label: 'Format', value: 'Three acts' }],
+    },
+    'founder reflection': {
+      eyebrow: 'Reflective Memoir',
+      accentClassName: 'from-slate-700 via-indigo-600 to-violet-500',
+      surfaceClassName: 'bg-[radial-gradient(circle_at_top_left,_rgba(79,70,229,0.12),_rgba(255,255,255,0.97)_45%)]',
+      badgeClassName: 'bg-indigo-100 text-indigo-700',
+      stats: [{ label: 'Format', value: 'Memory led' }, { label: 'Media', value: 'Quote led' }],
+    },
+    'customer journey': {
+      eyebrow: 'Transformation Story',
+      accentClassName: 'from-emerald-500 via-teal-500 to-sky-500',
+      surfaceClassName: 'bg-[radial-gradient(circle_at_top_left,_rgba(20,184,166,0.12),_rgba(255,255,255,0.97)_45%)]',
+      badgeClassName: 'bg-emerald-100 text-emerald-700',
+      stats: [{ label: 'Visual', value: 'Journey image' }, { label: 'Format', value: 'Before/after' }],
+    },
+    'cliffhanger episode': {
+      eyebrow: 'Serialized Episode',
+      accentClassName: 'from-pink-500 via-rose-500 to-orange-400',
+      surfaceClassName: 'bg-[radial-gradient(circle_at_top_left,_rgba(244,63,94,0.12),_rgba(255,255,255,0.97)_45%)]',
+      badgeClassName: 'bg-pink-100 text-pink-700',
+      stats: [{ label: 'Format', value: 'Cliffhanger' }, { label: 'Media', value: 'Series link' }],
+    },
+    'series recap': {
+      eyebrow: 'Continuity Episode',
+      accentClassName: 'from-amber-500 via-orange-500 to-rose-500',
+      surfaceClassName: 'bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.12),_rgba(255,255,255,0.97)_45%)]',
+      badgeClassName: 'bg-amber-100 text-amber-700',
+      stats: [{ label: 'Format', value: 'Recap + advance' }, { label: 'Media', value: 'Continuity thread' }],
+    },
+    'visual episode board': {
+      eyebrow: 'Storyboard Episode',
+      accentClassName: 'from-cyan-500 via-blue-500 to-violet-500',
+      surfaceClassName: 'bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.12),_rgba(255,255,255,0.97)_45%)]',
+      badgeClassName: 'bg-cyan-100 text-cyan-700',
+      stats: [{ label: 'Visual', value: 'Storyboard' }, { label: 'Media', value: 'Carousel-ready' }],
+    },
+  };
+  if (contentType === 'story' && storyVisuals[normalizedTemplate]) return storyVisuals[normalizedTemplate];
+
   const base = {
     article: {
       eyebrow: 'Editorial Structure',
@@ -173,7 +247,7 @@ export default function ManagedTemplateSelectionPage({
     setSelectedDescriptor(initialTemplate);
     setSelectedTemplateName(initialTemplate.name);
     setSelectedFormatType(initialTemplate.formatType ?? selectedFormat ?? null);
-    setCustomBlocks(buildManagedTemplateBlocks(contentType, initialTemplate.formatType));
+    setCustomBlocks(buildManagedTemplateBlocks(contentType, initialTemplate.formatType, initialTemplate.name));
   }, [allTemplates, contentType, recommendedTemplates, selectedFormat, selectedKey]);
 
   useEffect(() => {
@@ -203,7 +277,7 @@ export default function ManagedTemplateSelectionPage({
     setSelectedDescriptor(descriptor);
     setSelectedTemplateName(descriptor.name);
     setSelectedFormatType(descriptor.formatType ?? null);
-    setCustomBlocks(buildManagedTemplateBlocks(contentType, descriptor.formatType));
+    setCustomBlocks(buildManagedTemplateBlocks(contentType, descriptor.formatType, descriptor.name));
   }, [contentType]);
 
   const handleSelectSaved = useCallback((template: SavedTemplate) => {
@@ -245,7 +319,7 @@ export default function ManagedTemplateSelectionPage({
       setSelectedDescriptor(seedTemplate);
       setSelectedTemplateName(seedTemplate.name);
       setSelectedFormatType(seedTemplate.formatType ?? null);
-      setCustomBlocks(buildManagedTemplateBlocks(contentType, seedTemplate.formatType));
+      setCustomBlocks(buildManagedTemplateBlocks(contentType, seedTemplate.formatType, seedTemplate.name));
     }
     setMode('customize');
   };
@@ -367,7 +441,7 @@ export default function ManagedTemplateSelectionPage({
                           key={tpl.name}
                           name={tpl.name}
                           description={tpl.description}
-                          blocks={buildManagedTemplateBlocks(contentType, tpl.formatType)}
+                          blocks={buildManagedTemplateBlocks(contentType, tpl.formatType, tpl.name)}
                           isDefault
                           selected={selectedKey === `system:${tpl.name}`}
                           eyebrow={visuals.eyebrow}
@@ -397,7 +471,7 @@ export default function ManagedTemplateSelectionPage({
                           key={tpl.name}
                           name={tpl.name}
                           description={tpl.description}
-                          blocks={buildManagedTemplateBlocks(contentType, tpl.formatType)}
+                          blocks={buildManagedTemplateBlocks(contentType, tpl.formatType, tpl.name)}
                           isDefault
                           selected={selectedKey === `system:${tpl.name}`}
                           eyebrow={visuals.eyebrow}

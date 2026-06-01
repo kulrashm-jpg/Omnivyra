@@ -291,6 +291,58 @@ function buildFallbackPlan(
   const company = input.companyContext?.companyName || 'the brand';
   const targetWordCount = input.targetWordCount || Number(input.answers?.target_word_count) || 1200;
   const normalizedSubject = normalizeBlogSubject(input.topic);
+  if (input.contentType === 'story') {
+    const storySections = (templateSpec?.sections.filter((section) => section.id !== 'references' && section.id !== 'key_insights') || [])
+      .slice(0, input.formatType === 'short_story' ? 4 : 5);
+    const sectionsSource = storySections.length >= 3 ? storySections : [
+      { id: 'moment', label: 'The Moment Everything Shifted', section_goal: 'Open inside the moment where the tension becomes visible.', intent: 'Open inside a concrete moment instead of explaining the topic.', content_type: 'scene', depth_requirement: 'Use a specific person, team, or decision point.', wordWeight: 0.25, required: true, outputConstraints: [] },
+      { id: 'friction', label: 'The Friction Underneath', section_goal: 'Reveal the conflict that makes the story matter.', intent: 'Build tension through pressure and consequence.', content_type: 'conflict', depth_requirement: 'Show what is at stake.', wordWeight: 0.30, required: true, outputConstraints: [] },
+      { id: 'turn', label: 'The Turn', section_goal: 'Deliver the realization or decision that changes the direction.', intent: 'Make the insight emerge from action.', content_type: 'turning_point', depth_requirement: 'Show what changed.', wordWeight: 0.25, required: true, outputConstraints: [] },
+      { id: 'meaning', label: 'What Stayed With Them', section_goal: 'Close with reflection and meaning.', intent: 'Resolve the story without a generic summary.', content_type: 'reflection', depth_requirement: 'Leave the reader with the lesson.', wordWeight: 0.20, required: true, outputConstraints: [] },
+    ];
+    const sections = sectionsSource.map((section, index): ContentPlanSection => ({
+      section_title: section.label,
+      section_goal: section.section_goal || section.intent,
+      unique_angle: index === 0
+        ? `Start with a concrete moment where ${input.topic} becomes personal and visible.`
+        : index === 1
+        ? `Show the pressure, doubt, or constraint underneath ${input.topic}.`
+        : index === 2
+        ? `Reveal the turning point that changes how the protagonist sees ${input.topic}.`
+        : `End with the lesson ${company}'s audience should carry forward.`,
+      key_points: [
+        section.intent,
+        'Use scene, tension, decision, and reflection instead of article advice.',
+        'Include a believable protagonist, operator, founder, customer, or team experience.',
+        'Add one concrete anecdote, remembered detail, or observed moment that makes the story feel lived.',
+      ],
+      content_type: section.content_type,
+      depth_requirement: `${section.depth_requirement} Keep the writing narrative, sensory, and human. Include lived experience, anecdotal detail, personal/team stakes, and observable action. Do not use executive-summary, key-insight, framework, FAQ, or SEO explainer language.`,
+      word_target: Math.max(120, Math.round(targetWordCount * section.wordWeight)),
+      requires_direct_answer: false,
+      requires_opinionated_insight: section.content_type === 'reflection' || section.content_type === 'turning_point',
+      framework_role: 'none',
+      target_entities: pickSectionEntities(topicEntityMap, index),
+    }));
+    return {
+      title: buildStoryAlignedTitle(input.topic, input.formatType),
+      excerpt: buildStoryAlignedExcerpt(input.topic, company),
+      key_insights: [
+        `Open with a human moment, not a concept definition.`,
+        `Use anecdotes, observed details, and a believable protagonist or team experience.`,
+        `Let the lesson emerge from conflict, choice, and consequence.`,
+      ],
+      sections,
+      framework: {
+        name: `${normalizedSubject.subject} Story Arc`,
+        model_type: 'steps',
+        components: ['Moment', 'Friction', 'Turn', 'Meaning'],
+        section_title: 'The Turn',
+      },
+      faq: [],
+      evidence_plan: ['Use a realistic scene or customer/team moment.', 'Make the brand lesson implicit in the story resolution.'],
+    };
+  }
   const baseSections = templateSpec?.sections.filter((section) => (
     section.id !== 'key_insights'
     && section.id !== 'references'
@@ -384,8 +436,8 @@ function buildFallbackPlan(
   }));
 
   return {
-    title: buildBlogAlignedTitle(input.topic),
-    excerpt: buildBlogAlignedExcerpt(input.topic, company),
+    title: buildContentTypeAlignedTitle(input),
+    excerpt: buildContentTypeAlignedExcerpt(input, company),
     key_insights: [
       `${input.topic} needs a differentiated ${searchIntent} plan with ${contentPositioning.primary} positioning, not another generic overview.`,
       `The strongest content separates explanation, application, examples, and insight.`,
@@ -393,7 +445,7 @@ function buildFallbackPlan(
     ],
     sections: uniqueKeyPoints(sections),
     framework: {
-      name: `${normalizedSubject.subject} Decision Framework`,
+      name: frameworkNameForContentType(input),
       model_type: 'layers',
       components: ['Context', 'Criteria', 'Execution', 'Proof'],
       section_title: sections[1]?.section_title || 'The Operating Framework',
@@ -461,6 +513,40 @@ function normalizeBlogSubject(topic: string): { subject: string; audience: strin
   };
 }
 
+function normalizeStorySubject(topic: string): string {
+  const cleaned = String(topic || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^(short\s+story|long\s+story|episodic\s+story)\s*:\s*/i, '')
+    .replace(/^story\s*:\s*/i, '')
+    .replace(/\b(short\s+story|long\s+story|episodic\s+story)\s*:\s*/gi, '')
+    .replace(/\bthe\s+moment\s+short\s+story\s*:\s*/gi, 'the moment ')
+    .replace(/\bneeds\s+a\s+clearer\s+decision\s+framework\b/gi, 'became a turning point')
+    .replace(/\bdecision\s+criteria\b/gi, 'the choice')
+    .replace(/\barticle\b/gi, 'story')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([:,.])/g, '$1')
+    .replace(/:\s*$/g, '')
+    .trim();
+  return titleCase(cleaned || 'the turning point');
+}
+
+function buildMemorableStoryTitle(topic: string, formatType?: string): string {
+  const subject = normalizeStorySubject(topic)
+    .replace(/\bThe\s+Turning\s+Point\s+That\s+Changed\s+Everything\b/gi, 'The Turning Point')
+    .replace(/\bThat\s+Changed\s+Everything\b/gi, '')
+    .replace(/\bBecame\s+Real\b/gi, '')
+    .replace(/\bThe\s+Moment\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  const core = titleCase(subject || 'The Turn');
+  if (formatType === 'episodic_story') return `The Unanswered Turn`;
+  if (formatType === 'long_story') return `The Choice That Changed the Room`;
+  if (/turning point/i.test(core)) return 'The Turn in the Room';
+  if (/campaign|launch/i.test(core)) return 'The Launch That Paused';
+  if (/buyer|customer/i.test(core)) return 'The Question That Changed It';
+  return core.length <= 48 ? core : 'The Moment It Changed';
+}
+
 function buildBlogAlignedTitle(topic: string): string {
   const normalized = normalizeBlogSubject(topic);
   const cleanTopic = normalized.display || 'the topic';
@@ -482,9 +568,104 @@ function buildBlogAlignedTitle(topic: string): string {
   return `Why ${titleCase(cleanTopic)} Needs a Clearer Decision Framework`;
 }
 
+function buildStoryAlignedTitle(topic: string, formatType?: string): string {
+  return buildMemorableStoryTitle(topic, formatType);
+}
+
+function buildStoryAlignedExcerpt(topic: string, company: string): string {
+  const subject = normalizeStorySubject(topic).toLowerCase();
+  return `A story about ${subject} becoming real through a person, team, or customer moment. It follows the tension, the turn, and the lesson ${company}'s audience can carry into their own work.`;
+}
+
 function buildBlogAlignedExcerpt(topic: string, company: string): string {
   const cleanTitle = buildBlogAlignedTitle(topic).replace(/[.?!]+$/g, '');
   return `${cleanTitle} explains the decision criteria, tradeoffs, practical risks, and next steps leaders need before turning the idea into action. It uses ${company}'s point of view to move beyond generic advice and make the topic easier to evaluate.`;
+}
+
+function buildContentTypeAlignedTitle(input: PlannedLongFormGenerationInput): string {
+  if (input.contentType === 'story') return buildStoryAlignedTitle(input.topic, input.formatType);
+  if (input.contentType === 'blog' || input.contentType === 'case-study') return buildBlogAlignedTitle(input.topic);
+  const normalized = normalizeBlogSubject(input.topic);
+  const subject = normalized.display || titleCase(input.topic || 'the decision');
+  const audience = normalized.audience || 'Leaders';
+  if (input.contentType === 'article') {
+    if (input.formatType === 'investigative') return `Inside the Real Problem Behind ${subject}`;
+    if (input.formatType === 'opinion') return `The Case for Rethinking ${subject}`;
+    return `How ${subject} Became a Strategic Question`;
+  }
+  if (input.contentType === 'newsletter') {
+    if (input.formatType === 'digest' || input.formatType === 'curated') return `The ${subject} Brief: Signals Worth Watching`;
+    if (input.formatType === 'action-letter' || input.formatType === 'operator playbook') return `The ${subject} Operator Note`;
+    return `This Week in ${subject}: What Changed and What to Do`;
+  }
+  if (input.contentType === 'guide') {
+    if (input.formatType === 'quickstart') return `How to Start With ${subject} Without Overbuilding`;
+    if (input.formatType === 'reference') return `${subject} Reference Guide`;
+    return `The Practical Guide to ${subject}`;
+  }
+  if (input.contentType === 'whitepaper') {
+    if (input.formatType === 'technical') return `Technical Whitepaper: ${subject} Architecture and Risk Controls`;
+    if (input.formatType === 'strategic') return `Strategic Whitepaper: ${subject} for ${audience}`;
+    return `${subject}: Evidence, Tradeoffs, and Strategic Implications`;
+  }
+  return buildBlogAlignedTitle(input.topic);
+}
+
+function buildContentTypeAlignedExcerpt(input: PlannedLongFormGenerationInput, company: string): string {
+  if (input.contentType === 'story') return buildStoryAlignedExcerpt(input.topic, company);
+  if (input.contentType === 'blog' || input.contentType === 'case-study') return buildBlogAlignedExcerpt(input.topic, company);
+  const normalized = normalizeBlogSubject(input.topic);
+  const subject = (normalized.display || input.topic || 'the topic').toLowerCase();
+  if (input.contentType === 'article') {
+    return `An editorial article on ${subject} that develops a clear angle, weighs the available signals, and explains what the pattern changes for readers.`;
+  }
+  if (input.contentType === 'newsletter') {
+    return `A concise newsletter issue on ${subject} with the signal readers should notice, why it matters, and one useful move to carry forward.`;
+  }
+  if (input.contentType === 'guide') {
+    return `A practical guide to ${subject} with prerequisites, a working framework, examples, checks, and next steps the reader can apply.`;
+  }
+  if (input.contentType === 'whitepaper') {
+    return `A formal whitepaper on ${subject} that defines the strategic context, evidence basis, decision framework, risks, and recommendations.`;
+  }
+  return buildBlogAlignedExcerpt(input.topic, company);
+}
+
+function excerptLimitForContentType(contentType: LongFormContentType): number {
+  if (contentType === 'story' || contentType === 'whitepaper' || contentType === 'guide') return 420;
+  if (contentType === 'article' || contentType === 'newsletter') return 360;
+  return 280;
+}
+
+function fallbackSectionHeading(input: PlannedLongFormGenerationInput, index: number): string {
+  const article = ['The Editorial Lede', 'The Context Behind the Shift', 'What the Pattern Reveals', 'The Implication for Leaders', 'Closing Perspective'];
+  const newsletter = ['Opening Note', 'The Signal', 'Why It Matters', 'Operator Note', 'What to Watch'];
+  const guide = ['Before You Start', 'The Working Framework', 'How to Apply It', 'Examples and Decision Checks', 'Next Steps'];
+  const whitepaper = ['Executive Summary', 'Methodology and Scope', 'Key Findings', 'Decision Framework', 'Recommendations'];
+  if (input.contentType === 'article') return article[index] || `Article Section ${index + 1}`;
+  if (input.contentType === 'newsletter') return newsletter[index] || `Newsletter Section ${index + 1}`;
+  if (input.contentType === 'guide') return guide[index] || `Guide Section ${index + 1}`;
+  if (input.contentType === 'whitepaper') return whitepaper[index] || `Whitepaper Section ${index + 1}`;
+  return `Strategic Section ${index + 1}`;
+}
+
+function frameworkNameForContentType(input: PlannedLongFormGenerationInput): string {
+  const normalizedSubject = normalizeBlogSubject(input.topic);
+  if (input.contentType === 'guide') return `${normalizedSubject.subject} Application Framework`;
+  if (input.contentType === 'whitepaper') return `${normalizedSubject.subject} Decision Model`;
+  if (input.contentType === 'article') return `${normalizedSubject.subject} Editorial Lens`;
+  if (input.contentType === 'newsletter') return `${normalizedSubject.subject} Signal Model`;
+  return `${normalizedSubject.subject} Decision Framework`;
+}
+
+function truncateAtSentence(value: string, maxLength: number): string {
+  const clean = String(value || '').replace(/\s+/g, ' ').trim();
+  if (clean.length <= maxLength) return clean;
+  const sliced = clean.slice(0, maxLength);
+  const sentenceEnd = Math.max(sliced.lastIndexOf('.'), sliced.lastIndexOf('!'), sliced.lastIndexOf('?'));
+  if (sentenceEnd >= Math.floor(maxLength * 0.55)) return sliced.slice(0, sentenceEnd + 1).trim();
+  const wordEnd = sliced.lastIndexOf(' ');
+  return `${sliced.slice(0, wordEnd > 40 ? wordEnd : maxLength).trim()}...`;
 }
 
 function sanitizeEditorialScaffoldingText(value: string, fallback: string): string {
@@ -514,32 +695,93 @@ function sanitizeGeneratedArticleHtml(value: string): string {
     .replace(/\n{3,}/g, '\n\n');
 }
 
-function sanitizeContentPlan(plan: ContentPlan, topic: string): ContentPlan {
-  const fallbackTitle = buildBlogAlignedTitle(topic);
-  const normalizedSubject = normalizeBlogSubject(topic);
+function sanitizeStoryScaffoldingText(value: string, fallback: string): string {
+  const cleaned = sanitizeEditorialScaffoldingText(value, fallback)
+    .replace(/^(The\s+Moment\s+)?Short\s+Story\s*:\s*/i, '$1')
+    .replace(/^(The\s+Choice\s+That\s+Changed\s+)?Long\s+Story\s*:\s*/i, '$1')
+    .replace(/^(Episode\s+One:\s+The\s+Moment\s+)?Episodic\s+Story\s*:\s*/i, '$1')
+    .replace(/\bshort\s+story\s*:\s*/gi, '')
+    .replace(/\blong\s+story\s*:\s*/gi, '')
+    .replace(/\bepisodic\s+story\s*:\s*/gi, '')
+    .replace(/\barticle\s+asks\s+leaders\b/gi, 'story reveals what changed')
+    .replace(/\bexecutive\s+standard\b/gi, 'human standard')
+    .replace(/\bbuyer\s+urgency\b/gi, 'felt urgency')
+    .replace(/\boperational\s+ownership\b/gi, 'who had to carry the choice')
+    .replace(/\bproof\s+requirements\b/gi, 'what made the moment believable')
+    .replace(/\bdownstream\s+impact\b/gi, 'what changed afterward')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([:,.])/g, '$1')
+    .trim();
+  return cleaned || fallback;
+}
+
+function sanitizeContentPlan(plan: ContentPlan, input: PlannedLongFormGenerationInput): ContentPlan {
+  const fallbackTitle = buildContentTypeAlignedTitle(input);
   const sanitizedTitle = sanitizeEditorialScaffoldingText(plan.title, fallbackTitle)
     .replace(/:\s*An Executive Perspective$/i, '')
+    .replace(/^Category\s+entry\s+strategy\s+for\s+first-time\s+buyers\s*:\s*/i, '')
     .trim();
-  const title = sanitizedTitle === topic || sanitizedTitle.toLowerCase() === `${topic}: an executive perspective`.toLowerCase()
+  const title = sanitizedTitle === input.topic || sanitizedTitle.toLowerCase() === `${input.topic}: an executive perspective`.toLowerCase()
     ? fallbackTitle
     : sanitizedTitle;
+  const company = input.companyContext?.companyName || 'the brand';
   return {
     ...plan,
     title,
-    excerpt: sanitizeEditorialScaffoldingText(plan.excerpt, `A practical blog on ${topic} with strategic implications and next steps.`),
-    key_insights: plan.key_insights.map((insight) => sanitizeEditorialScaffoldingText(insight, `Make ${topic} specific, strategic, and action-oriented.`)),
+    excerpt: truncateAtSentence(
+      sanitizeEditorialScaffoldingText(plan.excerpt, buildContentTypeAlignedExcerpt(input, company)),
+      excerptLimitForContentType(input.contentType),
+    ),
+    key_insights: plan.key_insights.map((insight) => sanitizeEditorialScaffoldingText(insight, `Make ${input.topic} specific, strategic, and action-oriented.`)),
     sections: plan.sections.map((section, index) => ({
       ...section,
-      section_title: sanitizeEditorialScaffoldingText(section.section_title, `Strategic Section ${index + 1}`),
+      section_title: sanitizeEditorialScaffoldingText(section.section_title, fallbackSectionHeading(input, index)),
       section_goal: sanitizeEditorialScaffoldingText(section.section_goal, section.section_goal),
       unique_angle: sanitizeEditorialScaffoldingText(section.unique_angle, section.unique_angle),
       key_points: section.key_points.map((point) => sanitizeEditorialScaffoldingText(point, point)),
     })),
     framework: {
       ...plan.framework,
-      name: sanitizeEditorialScaffoldingText(plan.framework.name, `${normalizedSubject.subject} Decision Framework`),
-      section_title: sanitizeEditorialScaffoldingText(plan.framework.section_title, 'The Operating Framework'),
+      name: sanitizeEditorialScaffoldingText(plan.framework.name, frameworkNameForContentType(input)),
+      section_title: sanitizeEditorialScaffoldingText(plan.framework.section_title, fallbackSectionHeading(input, 1)),
     },
+  };
+}
+
+function sanitizeStoryContentPlan(plan: ContentPlan, topic: string, formatType: string, company: string): ContentPlan {
+  const fallbackTitle = buildStoryAlignedTitle(topic, formatType);
+  const sanitizedTitle = sanitizeStoryScaffoldingText(plan.title, fallbackTitle)
+    .replace(/^Why\s+Short\s+Story:\s*/i, '')
+    .replace(/^Short\s+Story:\s*/i, '')
+    .replace(/\bNeeds a Clearer Decision Framework\b/gi, 'Became a Turning Point')
+    .trim();
+  const title = /short story\s*:|long story\s*:|episodic story\s*:|article asks leaders|decision criteria/i.test(sanitizedTitle)
+    ? fallbackTitle
+    : sanitizedTitle || fallbackTitle;
+  const narrativeLabels = formatType === 'episodic_story'
+    ? ['Cold Open', 'How They Got There', 'The Complication', 'The Unanswered Question']
+    : formatType === 'long_story'
+    ? ['The Scene', 'The Pressure Builds', 'The Choice', 'After the Turn', 'The Lesson That Remained']
+    : ['The Moment Everything Shifted', 'The Friction Underneath', 'The Turn', 'What Stayed With Them'];
+  return {
+    ...plan,
+    title,
+    excerpt: truncateAtSentence(
+      sanitizeStoryScaffoldingText(plan.excerpt, buildStoryAlignedExcerpt(topic, company)),
+      420,
+    ),
+    key_insights: plan.key_insights.map((insight) => sanitizeStoryScaffoldingText(insight, `Keep ${normalizeStorySubject(topic)} grounded in story, tension, and consequence.`)),
+    sections: plan.sections.map((section, index) => ({
+      ...section,
+      section_title: narrativeLabels[index] || sanitizeStoryScaffoldingText(section.section_title, `Story Beat ${index + 1}`),
+      section_goal: sanitizeStoryScaffoldingText(section.section_goal, section.section_goal),
+      unique_angle: sanitizeStoryScaffoldingText(section.unique_angle, section.unique_angle),
+      key_points: section.key_points.map((point) => sanitizeStoryScaffoldingText(point, point)),
+      requires_direct_answer: false,
+      framework_role: 'none',
+    })),
+    faq: [],
+    evidence_plan: plan.evidence_plan.length ? plan.evidence_plan : ['Use concrete narrative detail rather than citations.'],
   };
 }
 
@@ -686,18 +928,37 @@ function buildSectionDepthExpansion(args: {
   return `<p>${title} should diagnose the specific tension behind ${topic}. ${observation} Keep this section focused on what is happening in the market or customer environment before the article moves into models, examples, or action.</p><p>The point of the diagnosis is ${uniqueAngle}. Use ${keyPoint} to show why the default response is insufficient, then hand the reader to the next section with a sharper problem definition.</p>`;
 }
 
+function buildStorySectionDepthExpansion(args: {
+  sectionTitle: string;
+  topic: string;
+  formatType: string;
+  index: number;
+}): string {
+  if (args.formatType === 'episodic_story') {
+    return `<p>The last note from the previous episode still hangs in the room. Someone has moved on in public, but the unfinished question keeps shaping small choices: the message left unsent, the dashboard reopened after hours, the careful pause before a customer call.</p><p>This beat needs one new turn. A detail changes the pressure: a reply arrives later than expected, a draft comes back marked up, or a familiar phrase suddenly means something different. The episode should advance by consequence, not by explaining the premise again.</p>`;
+  }
+  if (args.formatType === 'long_story') {
+    return `<p>The room does not change all at once. It changes in small signals: the question nobody answers quickly, the slide that stays open after the meeting, the quiet recognition that the old explanation no longer fits what people are seeing.</p><p>That is where the story earns its depth. A person or team has to choose what to carry forward and what to leave behind. The choice should feel visible in behavior, not announced as advice.</p>`;
+  }
+  return `<p>Someone notices the tension before they can explain it. It might be a customer question that lands too sharply, a team member rereading the same line, or a quiet moment after a meeting when the easy answer stops feeling true.</p><p>The turn comes through action: a pause, a revision, a different question, a decision made with less certainty but more honesty. The reader should remember the moment before they remember the lesson.</p>`;
+}
+
 function sanitizeSectionHtml(
   section: SectionGenerationResult,
   fallbackTitle: string,
   context: {
     topic: string;
+    contentType: LongFormContentType;
+    formatType: string;
     frameworkName: string;
     perspective: OrganizationPerspective;
     planSection?: ContentPlanSection;
     index: number;
   },
 ): SectionGenerationResult {
-  const safeTitle = sanitizeEditorialScaffoldingText(section.section_title, fallbackTitle);
+  const safeTitle = context.contentType === 'story'
+    ? sanitizeStoryScaffoldingText(section.section_title, fallbackTitle)
+    : sanitizeEditorialScaffoldingText(section.section_title, fallbackTitle);
   let html = section.html
     .replace(/<h2\b([^>]*)>[\s\S]*?<\/h2>/i, `<h2$1>${escapeHtml(safeTitle)}</h2>`)
     .replace(/<h[3-6]\b[^>]*>\s*(Opening\s+Thesis|Hook\s+Intro)\s*<\/h[3-6]>/gi, '')
@@ -705,9 +966,22 @@ function sanitizeSectionHtml(
     .replace(/\bHook\s+Intro\s*:?\s*/gi, '')
     .replace(/\bH2-led\s+editorial\s+body\s+with\s+key\s+insights?(?:,\s*summary,\s*and\s*references)?\b/gi, 'executive thought-leadership argument')
     .replace(/\bA\s+Practical\s+H2-led\s+editorial\s+body\s+with\s+key\s+insights?(?:,\s*summary,\s*and\s*references)?\b/gi, 'An executive perspective');
+  if (context.contentType === 'story') {
+    html = sanitizeStoryScaffoldingText(html, html)
+      .replace(/<p>[^<]*(?:Decision criteria|article asks leaders|executive standard|buyer urgency|operational ownership|proof requirements|downstream impact)[^<]*<\/p>/gi, '')
+      .replace(/\bexecutive\s+decision\s+frame\b/gi, 'story beat')
+      .replace(/\bleaders\s+to\s+act\b/gi, 'someone to choose');
+  }
   const paragraphCount = (html.match(/<p\b/gi) ?? []).length;
   if (paragraphCount < 3 || countWords(html) < 280) {
-    html += buildSectionDepthExpansion({ ...context, sectionTitle: safeTitle });
+    html += context.contentType === 'story'
+      ? buildStorySectionDepthExpansion({
+          sectionTitle: safeTitle,
+          topic: context.topic,
+          formatType: context.formatType,
+          index: context.index,
+        })
+      : buildSectionDepthExpansion({ ...context, sectionTitle: safeTitle });
   }
   return {
     ...section,
@@ -736,6 +1010,8 @@ function dedupeSectionsForPublication(
     )) ?? plan.sections[kept.length];
     const sanitized = sanitizeSectionHtml(section, `Section ${kept.length + 1}`, {
       topic: input.topic,
+      contentType: input.contentType,
+      formatType: input.formatType,
       frameworkName: plan.framework.name,
       perspective,
       planSection,
@@ -754,6 +1030,8 @@ function dedupeSectionsForPublication(
     ? kept
     : sections.map((section, index) => sanitizeSectionHtml(section, `Section ${index + 1}`, {
         topic: input.topic,
+        contentType: input.contentType,
+        formatType: input.formatType,
         frameworkName: plan.framework.name,
         perspective,
         planSection: plan.sections[index],
@@ -762,6 +1040,23 @@ function dedupeSectionsForPublication(
 }
 
 function buildSupplementalSection(input: PlannedLongFormGenerationInput, plan: ContentPlan, index: number): SectionGenerationResult {
+  if (input.contentType === 'story') {
+    const labels = input.formatType === 'episodic_story'
+      ? ['Where We Left Off', 'The New Complication', 'What Remains Unanswered']
+      : input.formatType === 'long_story'
+      ? ['The Scene That Made It Real', 'The Pressure That Changed the Choice', 'What Stayed Afterward']
+      : ['The Moment It Became Real', 'The Turn', 'What Stayed With Them'];
+    const title = labels[index] || `Story Beat ${index + 1}`;
+    const body = index === 0
+      ? `<p>The first sign is small enough to miss: a pause after a customer question, a draft left open, a team member checking the same number twice. Nothing dramatic has happened yet, but the room already knows the easy answer will not hold.</p><p>That moment gives the story its weight. The reader should be able to picture who is there, what object or sentence carries the tension, and why nobody moves quite as quickly as they did before.</p>`
+      : index === 1
+        ? `<p>The turn arrives through recognition rather than announcement. Someone sees the cost of pretending the old path still works, and the next choice becomes smaller, clearer, and harder to avoid.</p><p>What changes is not only the plan. It is the way people speak, the question they ask first, or the detail they refuse to overlook again.</p>`
+        : `<p>Afterward, the memory does not behave like a conclusion. It returns as a check on future choices: slower in the right places, sharper where the risk used to be hidden, and more honest about what the moment revealed.</p><p>The story closes best when the consequence is visible. A person acts differently because of what happened, and the reader understands why that difference matters.</p>`;
+    return {
+      section_title: title,
+      html: `<h2>${title}</h2>${body}`,
+    };
+  }
   const normalizedSubject = normalizeBlogSubject(input.topic);
   const subject = escapeHtml(normalizedSubject.display.toLowerCase());
   const audience = escapeHtml(normalizedSubject.audience || 'the buyer');
@@ -832,7 +1127,7 @@ function parsePlan(
 
     return {
       title: String(parsed.title || fallback.title).slice(0, 140),
-      excerpt: String(parsed.excerpt || fallback.excerpt).slice(0, 280),
+      excerpt: truncateAtSentence(String(parsed.excerpt || fallback.excerpt), excerptLimitForContentType(input.contentType)),
       key_insights: normalizeList(parsed.key_insights, fallback.key_insights).slice(0, 5),
       sections,
       framework,
@@ -894,6 +1189,58 @@ async function generateContentPlan(
     selectedAngle: input.selected_angle,
     answers: input.answers,
   });
+  const planningRules = (() => {
+    if (input.contentType === 'story') return `Story planning rules:
+- Plan a narrative, not an article.
+- Use story beat headings aligned to the selected format: scene, friction, turn, aftermath, reflection, or cliffhanger.
+- Do not plan Key Insights, FAQ, References, executive thesis, decision framework, or generic advice sections.
+- Every section must move the story forward through character/team, tension, choice, consequence, and meaning.
+- Every story needs a believable protagonist or team: founder, operator, customer, buyer, manager, or internal team.
+- Include anecdotal material: a small incident, observed detail, remembered line, mistake, hesitation, tradeoff, or moment after the meeting/call/campaign.
+- Make the subject feel experienced by someone, not explained by an article narrator.
+- The lesson should emerge from the narrative; do not make it sound like SEO content or a business guide.`;
+    const shared = `Thought-leadership planning rules:
+- The plan must cover explanation, application, examples, and insights.
+- SEO-driven content requires 4-6 FAQ questions with direct concise answers.
+- At least two sections must set requires_direct_answer=true.
+- At least two sections must set requires_opinionated_insight=true.
+- Include one named framework with model_type and components.
+- The named framework must be proprietary to the organization. It cannot be a generic SEO structure or common best-practice list.
+- Plan around the ORGANIZATIONAL POV LAYER. Every section must carry one of: company viewpoint, market observation, strategic recommendation, tradeoff analysis, proprietary insight.
+- The primary reader must be one executive audience: Founder, CEO, CMO, VP, Director, Department Head, or Strategic Buyer.
+- Reject generic educational explainers. The plan must read as company-authored thought leadership.
+- The article must have an executive thesis before the first major section, then sections that develop one argument rather than a list of loosely related headings.
+- Avoid duplicate section substance. Each section needs a distinct job: diagnosis, model, tradeoff, decision criteria, operating implication, or executive action.`;
+    if (input.contentType === 'article') return `${shared}
+Article-specific rules:
+- Plan an editorial article, not a guide, newsletter, or blog template.
+- Headings must sound like article sections: lede, context, analysis, counterpoint, implication, closing perspective.
+- The title must be article-native and complete; do not use "guide", "playbook", "newsletter", "whitepaper", "executive perspective", or template labels unless the topic itself requires it.
+- The excerpt must end on a complete sentence and preview the article angle, not truncate mid-thought.
+- Use evidence-aware analysis and competing viewpoints where relevant.`;
+    if (input.contentType === 'newsletter') return `${shared}
+Newsletter-specific rules:
+- Plan an inbox-native issue, not a blog article.
+- Headings must sound like a newsletter: Opening Note, The Signal, Why It Matters, Operator Note, What to Watch, Signoff.
+- Keep sections concise, forwardable, and useful on their own.
+- The title must sound like a newsletter issue or brief; do not use article, guide, or whitepaper labels.
+- The excerpt must be a complete issue preview, not a truncated SEO description.`;
+    if (input.contentType === 'guide') return `${shared}
+Guide-specific rules:
+- Plan an instructional guide with prerequisites, framework, implementation, examples/checks, mistakes, and next steps.
+- Headings must teach sequence, decisions, checks, and application. They cannot sound like opinion article headings.
+- The title must be guide-native and useful, not "An Executive Perspective".
+- The excerpt must explain what the guide helps the reader do and must end on a complete sentence.
+- Each section should answer what to do, why it matters, how to check it, and what to avoid.`;
+    if (input.contentType === 'whitepaper') return `${shared}
+Whitepaper-specific rules:
+- Plan a formal whitepaper with executive context, methodology/scope, evidence or findings, framework, risks, and recommendations.
+- Headings must sound like a whitepaper, not a blog, newsletter, or casual guide.
+- The title must be formal and complete; use "whitepaper" only when it clarifies the asset type.
+- The excerpt must summarize evidence basis, strategic stakes, and recommendations without truncation.
+- Include limitations, tradeoffs, and decision implications.`;
+    return shared;
+  })();
   const response = await runCompletionWithOperation({
     operation: 'blogGeneration',
     companyId: input.company_id,
@@ -911,17 +1258,7 @@ Rules:
 - Every section must have section_title, section_goal, unique_angle, key_points, content_type, depth_requirement, word_target.
 - No two sections can have the same section_goal.
 - Do not repeat key_points across sections.
-- The plan must cover explanation, application, examples, and insights.
-- SEO-driven content requires 4-6 FAQ questions with direct concise answers.
-- At least two sections must set requires_direct_answer=true.
-- At least two sections must set requires_opinionated_insight=true.
-- Include one named framework with model_type and components.
-- The named framework must be proprietary to the organization. It cannot be a generic SEO structure or common best-practice list.
-- Plan around the ORGANIZATIONAL POV LAYER. Every section must carry one of: company viewpoint, market observation, strategic recommendation, tradeoff analysis, proprietary insight.
-- The primary reader must be one executive audience: Founder, CEO, CMO, VP, Director, Department Head, or Strategic Buyer.
-- Reject generic educational explainers. The plan must read as company-authored thought leadership.
-- The article must have an executive thesis before the first major section, then sections that develop one argument rather than a list of loosely related headings.
-- Avoid duplicate section substance. Each section needs a distinct job: diagnosis, model, tradeoff, decision criteria, operating implication, or executive action.
+- ${planningRules}
 - Every major section must cover at least one target entity from topicEntityMap.
 - Avoid assigning the same target entity to adjacent sections.
 - Adapt structure to searchIntent and SERP structure hints.
@@ -1020,6 +1357,43 @@ async function generateSection(input: {
     answers: input.request.answers,
   });
   const editorialLane = inferEditorialSectionLane(input.section, input.plan.sections.indexOf(input.section));
+  const contentTypeSectionRules = (() => {
+    if (input.request.contentType === 'story') return `
+Story rules:
+- This is a story, not an article. Write in scenes, tension, choice, consequence, and reflection.
+- The H2 must be a narrative beat, not a business explainer or advice heading.
+- Do not use Key Insights, Direct answer, FAQ, framework, executive decision, SEO, or thought-leadership section language.
+- Do not write "this section" or explain what the story will do. Put the reader inside the moment.
+- Include a believable protagonist or team experience. Use a person, founder, customer, operator, buyer, or team rather than an abstract "leaders" voice.
+- Include at least one anecdotal detail in this section: a meeting moment, dashboard glance, customer question, draft revision, hallway comment, delayed launch, or similar lived moment.
+- Use concrete action and emotional texture. A little dialogue-like remembered line is allowed when natural, but do not fabricate named real people or real companies.
+- Let the brand lesson emerge through the scene and resolution, not through a recommendation paragraph.`;
+    if (input.request.contentType === 'article') return `
+Article rules:
+- Write this as an editorial article section, not a guide, newsletter, whitepaper, or SEO blog.
+- The H2 must sound like an article heading and must advance the article angle.
+- Use article craft: lede logic, evidence-aware analysis, competing interpretations, implication, and closing judgment.
+- Do not use step-by-step guide language unless the section explicitly evaluates an action.`;
+    if (input.request.contentType === 'newsletter') return `
+Newsletter rules:
+- Write this as an inbox-native newsletter section.
+- Keep the section concise, skimmable, and forwardable.
+- Use newsletter section logic: signal, why it matters, operator note, watch item, or signoff.
+- Do not build a long blog-style H2 body or generic SEO explanation.`;
+    if (input.request.contentType === 'guide') return `
+Guide rules:
+- Write this as an instructional guide section.
+- Teach sequence, decisions, checks, examples, and mistakes.
+- The H2 must help the reader act or assess progress.
+- Avoid opinion article framing unless it directly supports practical instruction.`;
+    if (input.request.contentType === 'whitepaper') return `
+Whitepaper rules:
+- Write this as a formal whitepaper section.
+- Use executive, evidence-aware, methodology-conscious language.
+- Name assumptions, limitations, tradeoffs, and decision implications where relevant.
+- Avoid casual blog, newsletter, or listicle phrasing.`;
+    return '';
+  })();
   const siblingLanes = input.plan.sections
     .filter((section) => section.section_title !== input.section.section_title)
     .map((section, index) => ({
@@ -1042,6 +1416,7 @@ async function generateSection(input: {
 Hard rules:
 - Start with <h2>${input.section.section_title}</h2>.
 - Use only this section's section_goal, unique_angle, and key_points.
+- ${contentTypeSectionRules}
 - ${laneDirective(editorialLane)}
 - ${laneForbiddenFrames(editorialLane)}
 - Treat sibling sections as protected territory. Do not perform their editorial jobs.
@@ -1492,7 +1867,23 @@ function buildTags(input: PlannedLongFormGenerationInput): string[] {
   return Array.from(new Set([input.contentType, input.formatType, ...fromTopic])).slice(0, 6);
 }
 
+function closingHeadingForContentType(input: PlannedLongFormGenerationInput): string {
+  if (input.contentType === 'article') return 'Closing Perspective';
+  if (input.contentType === 'newsletter') return input.formatType === 'digest' || input.formatType === 'curated' ? 'Reader Takeaway' : 'What to Watch';
+  if (input.contentType === 'guide') return 'Next Steps';
+  if (input.contentType === 'whitepaper') return 'Executive Synthesis';
+  return 'Summary';
+}
+
 function buildContentHtml(input: PlannedLongFormGenerationInput, plan: ContentPlan, sections: SectionGenerationResult[]): string {
+  if (input.contentType === 'story') {
+    const storyClose = input.formatType === 'episodic_story' ? 'Next' : 'Reflection';
+    return sanitizeGeneratedArticleHtml([
+      ...sections.map((section) => section.html),
+      `<h2>${storyClose}</h2>`,
+      `<p>${escapeHtml(truncateAtSentence(plan.excerpt, 420))}</p>`,
+    ].filter(Boolean).join('\n\n'));
+  }
   const perspective = input.organizationPerspective ?? buildOrganizationPerspective({
     topic: input.topic,
     companyContext: input.companyContext,
@@ -1507,7 +1898,7 @@ function buildContentHtml(input: PlannedLongFormGenerationInput, plan: ContentPl
     escapeHtml(`${perspective.strategicRecommendation} ${perspective.tradeoffAnalysis}`),
     '</p>',
     '<p>',
-    escapeHtml(`For ${perspective.primaryAudience}s, the executive decision is not whether the topic deserves more content; it is how to turn it into clearer priorities, sharper resource allocation, measurable pipeline impact, stronger governance, and fewer execution risks. The practical implication is to decide what to stop, what to sequence, what to measure, and which operating model will make the recommendation repeatable.`),
+    escapeHtml(`For ${perspective.primaryAudience}s, the decision is not whether the topic deserves more content; it is how to turn it into clearer priorities, sharper resource allocation, measurable impact, stronger governance, and fewer execution risks. The practical implication is to decide what to stop, what to sequence, what to measure, and which operating model will make the recommendation repeatable.`),
     '</p>',
   ].join('');
   return sanitizeGeneratedArticleHtml([
@@ -1515,7 +1906,7 @@ function buildContentHtml(input: PlannedLongFormGenerationInput, plan: ContentPl
     executiveThesis,
     ...sections.map((section) => section.html),
     isSeoDrivenContentType(input.contentType) ? buildFaqHtml(plan.faq) : '',
-    '<h2>Summary</h2>',
+    `<h2>${closingHeadingForContentType(input)}</h2>`,
     `<p>${escapeHtml(plan.excerpt)}</p>`,
     buildReferencesHtml(sections),
   ].filter(Boolean).join('\n\n'));
@@ -1855,11 +2246,14 @@ export async function runPlannedLongFormGeneration(
     });
 
     // Apply adaptive section sizing on each attempt.
-    plan = sanitizeContentPlan(applyAdaptiveSizingToPlan(rawPlan, {
+    const sizedPlan = applyAdaptiveSizingToPlan(rawPlan, {
       articleWordTarget,
       contentType: input.contentType,
       groundingFragmentCount,
-    }), input.topic);
+    });
+    plan = input.contentType === 'story'
+      ? sanitizeStoryContentPlan(sizedPlan, input.topic, input.formatType, input.companyContext?.companyName || 'the brand')
+      : sanitizeContentPlan(sizedPlan, input);
 
     // Stability check.
     stability = validatePlannerStability({

@@ -60,6 +60,13 @@ const INTENT_OPTIONS = [
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
+const STORY_DIRECTION_OPTIONS = [
+  { value: 'launch moment', label: 'Launch moment', icon: Zap },
+  { value: 'customer moment', label: 'Customer moment', icon: Target },
+  { value: 'founder lesson', label: 'Founder lesson', icon: Lightbulb },
+  { value: 'team turning point', label: 'Team turning point', icon: Sparkles },
+];
+
 export default function AIBlogCardModal({
   isOpen,
   onClose,
@@ -74,9 +81,19 @@ export default function AIBlogCardModal({
   contentModeLabel,
 }: Props) {
   const normalizedCompanyName = companyName?.trim() || 'your company';
-  const openingMessage = contentType === 'post'
-    ? `Tell me the post angle, launch, or insight you want to share. I'll use ${normalizedCompanyName} context and keep this quick.`
-    : `Hi! I'm here to help you create an amazing ${contentLabel} card for ${normalizedCompanyName}. What topic or problem would you like to write about?`;
+  const normalizedContentType = contentType.trim().toLowerCase();
+  const isStory = normalizedContentType === 'story';
+  const openingMessage = (() => {
+    if (normalizedContentType === 'post') {
+      return `Tell me the post angle, launch, or insight you want to share. I'll use ${normalizedCompanyName} context and keep this quick.`;
+    }
+
+    if (isStory) {
+      return `Tell me the story moment, launch, customer situation, or turning point you want to shape. I'll use ${normalizedCompanyName}'s company context for audience, positioning, and point of view.`;
+    }
+
+    return `Tell me the ${contentLabel} idea or topic you want to shape. I'll use ${normalizedCompanyName}'s company context for audience, positioning, and strategic fit.`;
+  })();
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 1,
@@ -108,6 +125,22 @@ export default function AIBlogCardModal({
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setMessages([
+      {
+        id: 1,
+        type: 'ai',
+        message: openingMessage,
+        timestamp: new Date().toLocaleTimeString(),
+      },
+    ]);
+    setInput('');
+    setConversationPhase('topic');
+    setCardPreview(null);
+    setCardAwaitingConfirmation(false);
+  }, [isOpen, openingMessage]);
 
   // Tick the elapsed-seconds counter while a request is in flight.
   // Resets to 0 the moment loading flips off so the next call starts fresh.
@@ -162,6 +195,8 @@ export default function AIBlogCardModal({
             currentPhase: conversationPhase,
             contentLabel,
             contentModeLabel,
+            useCompanyContextDefaults: true,
+            avoidRedundantQuestions: true,
           },
         }),
       });
@@ -282,7 +317,9 @@ export default function AIBlogCardModal({
   };
 
   const handleQuickIntent = (intent: string) => {
-    const intentText = `I want to write from a ${intent} perspective.`;
+    const intentText = isStory
+      ? `Shape this as a ${intent} using the company context for audience and point of view.`
+      : `I want to write from a ${intent} perspective.`;
     setInput(intentText);
   };
 
@@ -467,9 +504,9 @@ export default function AIBlogCardModal({
           ))}
 
           {/* Quick intent buttons (show during intent phase) */}
-          {conversationPhase === 'intent' && contentType !== 'post' && !isLoading && (
+          {conversationPhase === 'intent' && normalizedContentType !== 'post' && !isLoading && (
             <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-gray-100">
-              {INTENT_OPTIONS.map(({ value, label, icon: Icon }) => (
+              {(isStory ? STORY_DIRECTION_OPTIONS : INTENT_OPTIONS).map(({ value, label, icon: Icon }) => (
                 <button
                   key={value}
                   onClick={() => handleQuickIntent(value)}
@@ -628,7 +665,7 @@ export default function AIBlogCardModal({
                       sendMessage();
                     }
                   }}
-                  placeholder={`Describe your ${contentLabel} idea or ask for suggestions...`}
+                  placeholder={isStory ? 'Describe the moment, customer situation, launch, or turning point...' : `Describe your ${contentLabel} idea or ask for suggestions...`}
                   disabled={isLoading}
                   className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 />
@@ -669,8 +706,14 @@ export default function AIBlogCardModal({
             </div>
           )}
 
+          {conversationPhase === 'topic' && isStory && (
+            <p className="text-xs text-gray-500">
+              Tip: Give the story moment. Company context will supply audience, positioning, and strategic point of view.
+            </p>
+          )}
+
           {/* Tips */}
-          {conversationPhase === 'topic' && (
+          {conversationPhase === 'topic' && !isStory && (
             <p className="text-xs text-gray-500">
               💡 Tip: Describe a problem your audience faces or a topic they're asking about
             </p>

@@ -15,6 +15,12 @@ import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
+import {
+  createWriterSourceId,
+  launchCreatorFromWriter,
+  type CreatorAssetLaunchType,
+} from '../../lib/content/writerCreatorAssetLaunch';
+import { buildAssetCompositionIntent } from '../../lib/content/writerCreatorAttachmentContracts';
 import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 import type { CreatorFlowContext } from '../../lib/content/creatorFlowContext';
 
@@ -32,6 +38,42 @@ const CMS_INTEGRATION_TYPES = new Set([
   'squarespace',
 ]);
 
+const CMS_LABELS: Record<string, string> = {
+  wordpress: 'WordPress',
+  joomla: 'Joomla',
+  drupal: 'Drupal',
+  ghost: 'Ghost',
+  custom_blog_api: 'Other CMS',
+  webflow: 'Other CMS',
+  shopify: 'Other CMS',
+  hubspot: 'Other CMS',
+  wix: 'Other CMS',
+  squarespace: 'Other CMS',
+};
+
+const DIRECT_SOCIAL_PUBLISHERS: Record<string, string> = {
+  linkedin: 'LinkedIn',
+  facebook: 'Facebook Pages',
+  x: 'X / Twitter',
+  twitter: 'X / Twitter',
+  threads: 'Threads',
+  medium: 'Medium',
+};
+
+const DERIVATIVE_ASSET_DESTINATIONS: Array<{
+  key: string;
+  platform: string;
+  label: string;
+  detail: string;
+  assetType: CreatorAssetLaunchType;
+}> = [
+  { key: 'instagram-carousel', platform: 'instagram', label: 'Instagram Carousel', detail: 'Create a slide asset from this blog.', assetType: 'carousel' },
+  { key: 'instagram-caption', platform: 'instagram', label: 'Instagram Caption', detail: 'Adapt the blog into a caption.', assetType: 'supporting_image' },
+  { key: 'tiktok-script', platform: 'tiktok', label: 'TikTok Script', detail: 'Create a short video script.', assetType: 'supporting_image' },
+  { key: 'youtube-script', platform: 'youtube', label: 'YouTube Script', detail: 'Create a video outline/script.', assetType: 'supporting_image' },
+  { key: 'pinterest-content', platform: 'pinterest', label: 'Pinterest Content', detail: 'Create a Pinterest-ready visual.', assetType: 'infographic' },
+];
+
 type PrefillPayload = {
   output?: (BlogGenerationOutput & { content_blocks?: unknown[]; content_markdown?: string }) | null;
   source?: string;
@@ -39,6 +81,178 @@ type PrefillPayload = {
   format_type?: BlogFormatType;
   creator_context?: CreatorFlowContext;
 };
+
+type CmsIntegrationOption = {
+  id: string;
+  type: string;
+  name: string;
+};
+
+type ConnectedSocialAccount = {
+  platform_key: string;
+  platform_label: string;
+  connected: boolean;
+  category: string;
+};
+
+function safeFileStem(value: string): string {
+  return (value || 'blog-post').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'blog-post';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function stripHtml(value: string): string {
+  return value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function readUrlCandidates(value: unknown, depth = 0): string[] {
+  if (depth > 4 || value == null) return [];
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return /^https?:\/\//i.test(trimmed) ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) return value.flatMap((item) => readUrlCandidates(item, depth + 1));
+  if (!isRecord(value)) return [];
+
+  const directKeys = [
+    'url', 'src', 'href', 'file_url', 'fileUrl', 'storage_url', 'storageUrl',
+    'public_url', 'publicUrl', 'preview_url', 'previewUrl', 'thumbnail_url',
+    'thumbnailUrl', 'image_url', 'imageUrl', 'asset_url', 'assetUrl',
+  ];
+  const nestedKeys = [
+    'files', 'images', 'media', 'media_bundle', 'mediaBundle', 'asset_payload',
+    'assetPayload', 'creator_asset', 'creatorAsset', 'variants', 'selectedVariant',
+    'rendered_asset', 'renderedAsset', 'output',
+  ];
+
+  return [
+    ...directKeys.flatMap((key) => readUrlCandidates(value[key], depth + 1)),
+    ...nestedKeys.flatMap((key) => readUrlCandidates(value[key], depth + 1)),
+  ];
+}
+
+function uniqueUrls(urls: string[]): string[] {
+  return urls.map((url) => url.trim()).filter(Boolean).filter((url, index, all) => all.indexOf(url) === index);
+}
+
+function blockText(block: unknown): string {
+  if (!isRecord(block)) return '';
+  const type = readString(block, 'type');
+  if (type === 'heading') return `${readString(block, 'text')}\n`;
+  if (type === 'paragraph' || type === 'text') return stripHtml(readString(block, 'html') || readString(block, 'text'));
+  if (type === 'summary' || type === 'callout') return [readString(block, 'title'), readString(block, 'body')].filter(Boolean).join('\n');
+  if (type === 'quote') return readString(block, 'text') ? `"${readString(block, 'text')}"` : '';
+  if (type === 'key_insights') {
+    const items = Array.isArray(block.items) ? block.items.map(String).filter(Boolean) : [];
+    return items.map((item) => `- ${item}`).join('\n');
+  }
+  if (type === 'list') {
+    const items = Array.isArray(block.items) ? block.items : [];
+    return items
+      .filter(isRecord)
+      .map((item) => `- ${readString(item, 'text')}`)
+      .filter((line) => line !== '- ')
+      .join('\n');
+  }
+  if (type === 'image' || type === 'media' || type === 'creator_asset') {
+    const title = readString(block, 'title') || readString(block, 'alt') || 'Asset';
+    const urls = uniqueUrls(readUrlCandidates(block));
+    return urls.length ? [`${title}:`, ...urls.map((url) => `- ${url}`)].join('\n') : '';
+  }
+  return '';
+}
+
+function blockHtml(block: unknown): string {
+  if (!isRecord(block)) return '';
+  const type = readString(block, 'type');
+  if (type === 'heading') return `<h2>${escapeHtml(readString(block, 'text'))}</h2>`;
+  if (type === 'paragraph' || type === 'text') return readString(block, 'html') || `<p>${escapeHtml(readString(block, 'text'))}</p>`;
+  if (type === 'summary' || type === 'callout') {
+    return `<aside>${readString(block, 'title') ? `<h3>${escapeHtml(readString(block, 'title'))}</h3>` : ''}<p>${escapeHtml(readString(block, 'body'))}</p></aside>`;
+  }
+  if (type === 'key_insights') {
+    const items = Array.isArray(block.items) ? block.items.map(String).filter(Boolean) : [];
+    return items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '';
+  }
+  if (type === 'list') {
+    const items = Array.isArray(block.items) ? block.items.filter(isRecord) : [];
+    return items.length ? `<ul>${items.map((item) => `<li>${escapeHtml(readString(item, 'text'))}</li>`).join('')}</ul>` : '';
+  }
+  if (type === 'image' || type === 'media' || type === 'creator_asset') {
+    const title = readString(block, 'title') || readString(block, 'alt') || 'Asset';
+    const caption = readString(block, 'caption') || readString(block, 'description');
+    const figures = uniqueUrls(readUrlCandidates(block)).map((url) =>
+      `<figure><img src="${escapeHtml(url)}" alt="${escapeHtml(title)}" />${caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : ''}</figure>`,
+    );
+    return figures.join('\n');
+  }
+  return '';
+}
+
+function buildTextDownload(state: BlogFormState | null): string {
+  if (!state) return '';
+  const body = state.content_blocks.map(blockText).filter(Boolean).join('\n\n');
+  const assets = uniqueUrls(readUrlCandidates(state.content_blocks));
+  return [
+    state.title,
+    state.excerpt,
+    body,
+    assets.length ? `Assets\n${assets.map((url) => `- ${url}`).join('\n')}` : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+function buildHtmlDownload(state: BlogFormState | null): string {
+  if (!state) return '';
+  const body = state.content_blocks.map(blockHtml).filter(Boolean).join('\n');
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${escapeHtml(state.title)}</title>
+  <style>
+    body{font-family:Inter,Arial,sans-serif;color:#24384d;line-height:1.7;max-width:820px;margin:40px auto;padding:0 20px}
+    h1{color:#07182b;font-size:42px;line-height:1.15} h2{color:#07182b;margin-top:42px}
+    img{display:block;max-width:100%;height:auto;border-radius:14px;margin:16px auto}
+    figure{margin:30px 0;padding:12px;border:1px solid #e5e7eb;border-radius:16px;background:#fff}
+    figcaption{color:#64748b;text-align:center;font-size:14px}
+    aside{border-left:4px solid #0a66c2;background:#f5f9ff;padding:16px 20px;margin:26px 0}
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(state.title)}</h1>
+  ${state.excerpt ? `<p><strong>${escapeHtml(state.excerpt)}</strong></p>` : ''}
+  ${body}
+</body>
+</html>`;
+}
 
 export default function BlogNewPage() {
   const router = useRouter();
@@ -55,7 +269,8 @@ export default function BlogNewPage() {
   const [editorPatch, setEditorPatch] = useState<Partial<BlogFormState> | null>(null);
   const [improvingArea, setImprovingArea] = useState<ImproveArea | null>(null);
   const [improvingIssueKey, setImprovingIssueKey] = useState<string | null>(null);
-  const [cmsIntegration, setCmsIntegration] = useState<{ id: string; type: string; name: string } | null>(null);
+  const [cmsIntegrations, setCmsIntegrations] = useState<CmsIntegrationOption[]>([]);
+  const [socialAccounts, setSocialAccounts] = useState<ConnectedSocialAccount[]>([]);
   const [hasLeadCapture, setHasLeadCapture] = useState<boolean>(false);
   const [isPostingBlog, setIsPostingBlog] = useState<boolean>(false);
   const [postBlogStatus, setPostBlogStatus] = useState<PostBlogStatus | null>(null);
@@ -165,27 +380,38 @@ export default function BlogNewPage() {
 
   useEffect(() => {
     if (!selectedCompanyId) return;
-    fetch(`/api/integrations?company_id=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        const list = Array.isArray(data?.integrations) ? data.integrations : [];
-        const connectedCms = list.find((i: { type: string; status: string; id: string; name: string }) =>
-          CMS_INTEGRATION_TYPES.has(i.type) && i.status === 'connected',
-        );
-        const connectedLead = list.find((i: { type: string; status: string }) =>
-          i.type === 'lead_webhook' && i.status === 'connected',
-        );
-        if (connectedCms) {
-          setCmsIntegration({ id: connectedCms.id, type: connectedCms.type, name: connectedCms.name });
-        } else {
-          setCmsIntegration(null);
-        }
-        setHasLeadCapture(Boolean(connectedLead));
-      })
-      .catch(() => {
-        setCmsIntegration(null);
-        setHasLeadCapture(false);
-      });
+    let active = true;
+    Promise.all([
+      fetch(`/api/integrations?company_id=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+      fetch(`/api/social-accounts/status?companyId=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ]).then(([integrationData, socialData]) => {
+      if (!active) return;
+      const integrations = Array.isArray(integrationData?.integrations) ? integrationData.integrations : [];
+      setCmsIntegrations(
+        integrations
+          .filter((item: { type: string; status: string }) => CMS_INTEGRATION_TYPES.has(item.type) && item.status === 'connected')
+          .map((item: { id: string; type: string; name: string }) => ({ id: item.id, type: item.type, name: item.name })),
+      );
+      setHasLeadCapture(
+        integrations.some((item: { type: string; status: string }) => item.type === 'lead_webhook' && item.status === 'connected'),
+      );
+      setSocialAccounts(
+        (Array.isArray(socialData?.accounts) ? socialData.accounts : [])
+          .filter((account: ConnectedSocialAccount) => account.connected && (account.category === 'social' || account.platform_key === 'medium')),
+      );
+    }).catch(() => {
+      if (!active) return;
+      setCmsIntegrations([]);
+      setSocialAccounts([]);
+      setHasLeadCapture(false);
+    });
+    return () => {
+      active = false;
+    };
   }, [selectedCompanyId]);
 
   useEffect(() => {
@@ -376,12 +602,13 @@ export default function BlogNewPage() {
     }
   };
 
-  const handlePostBlogToWebsite = async () => {
+  const handlePostBlogToWebsite = async (targetIntegration?: CmsIntegrationOption) => {
     if (!selectedCompanyId) {
       setError('Company context required to post the blog.');
       return;
     }
-    if (!cmsIntegration) {
+    const integration = targetIntegration ?? cmsIntegrations[0] ?? null;
+    if (!integration) {
       setError('Connect a website CMS integration before posting.');
       return;
     }
@@ -395,14 +622,14 @@ export default function BlogNewPage() {
     try {
       const blogId = savedId || await saveBlogState({ ...liveState, status: 'draft' });
       if (!blogId) throw new Error('Could not save the blog before posting.');
-      setPostBlogStatus({ type: 'info', message: `Draft saved. Queuing publish to ${cmsIntegration.name}...` });
+      setPostBlogStatus({ type: 'info', message: `Draft saved. Queuing publish to ${integration.name}...` });
       const res = await fetch(`/api/blogs/${encodeURIComponent(blogId)}/publish`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: selectedCompanyId,
-          integration_id: cmsIntegration.id,
+          integration_id: integration.id,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -411,9 +638,9 @@ export default function BlogNewPage() {
       }
       const successMessage = data?.message
         ? String(data.message)
-        : `Publishing job queued for ${cmsIntegration.name}.`;
+        : `Publishing job queued for ${integration.name}.`;
       setPostBlogStatus({ type: 'success', message: successMessage });
-      setPrefillNotice(`Blog posted to website via ${cmsIntegration.name}.`);
+      setPrefillNotice(`Blog posted to website via ${integration.name}.`);
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Publish failed';
       setPostBlogStatus({ type: 'error', message });
@@ -423,16 +650,48 @@ export default function BlogNewPage() {
     }
   };
 
-  const handlePostToSocial = () => {
-    if (!liveState) return;
-    launchSocialPostingFromContent({
+  const launchRepurposeToSocial = (platform: string) => {
+    if (!liveState) {
+      setError('Generate and save a draft before sharing.');
+      return;
+    }
+    const launched = launchSocialPostingFromContent({
       router,
       contentType: 'blog',
       title: liveState.title,
-      content: liveState.content_markdown || '',
+      content: liveState.content_markdown || buildTextDownload(liveState),
       tags: liveState.tags,
       excerpt: liveState.excerpt,
       sourceId: savedId,
+      platform,
+    });
+    if (!launched) setError('Generate and save a draft before sharing.');
+  };
+
+  const launchDerivativeAsset = (assetType: CreatorAssetLaunchType, platform: string) => {
+    if (!liveState) {
+      setError('Generate and save a draft before sharing.');
+      return;
+    }
+    const sourceId = createWriterSourceId('post', savedId || liveState.slug || liveState.title);
+    launchCreatorFromWriter({
+      router,
+      assetType,
+      source: {
+        id: sourceId,
+        sourceType: 'post',
+        sourceId,
+        title: liveState.title,
+        body: liveState.content_markdown || buildTextDownload(liveState),
+        platform,
+        hashtags: liveState.tags,
+        compositionIntent: buildAssetCompositionIntent({
+          assetType,
+          attachmentMode: 'supporting_visual',
+          sourceTextTransform: 'summarize',
+        }),
+        createdAt: new Date().toISOString(),
+      },
     });
   };
 
@@ -460,6 +719,34 @@ export default function BlogNewPage() {
       setError(e instanceof Error ? e.message : 'Failed to mark as used');
     }
   };
+
+  const draftShareReady = Boolean(savedId && liveState?.title?.trim() && (liveState.content_markdown?.trim() || liveState.content_blocks.length > 0));
+  const shareDisabledReason = draftShareReady ? null : 'Generate and save a draft before sharing.';
+  const connectedSocialByPlatform = new Map(
+    socialAccounts.map((account) => [account.platform_key === 'twitter' ? 'x' : account.platform_key, account]),
+  );
+  const publishDestinations = cmsIntegrations.map((integration) => ({
+    key: integration.id,
+    label: CMS_LABELS[integration.type] || integration.name || 'Other CMS',
+    detail: integration.name,
+    onClick: () => handlePostBlogToWebsite(integration),
+  }));
+  const repurposeDestinations = Array.from(connectedSocialByPlatform.entries())
+    .filter(([platform]) => Boolean(DIRECT_SOCIAL_PUBLISHERS[platform]))
+    .map(([platform, account]) => ({
+      key: platform,
+      label: DIRECT_SOCIAL_PUBLISHERS[platform],
+      detail: account.platform_label,
+      onClick: () => launchRepurposeToSocial(platform),
+    }));
+  const assetDestinations = DERIVATIVE_ASSET_DESTINATIONS
+    .filter((destination) => connectedSocialByPlatform.has(destination.platform))
+    .map((destination) => ({
+      key: destination.key,
+      label: destination.label,
+      detail: destination.detail,
+      onClick: () => launchDerivativeAsset(destination.assetType, destination.platform),
+    }));
 
   if (!prefillChecked) return <div className="flex min-h-screen items-center justify-center bg-gray-50"><Loader2 className="h-10 w-10 animate-spin text-[#0B5ED7]" /></div>;
 
@@ -551,8 +838,25 @@ export default function BlogNewPage() {
                 copyText={liveState?.content_markdown || liveState?.title || ''}
                 exportText={`# ${liveState?.title || ''}\n\n${liveState?.content_markdown || ''}`}
                 exportFileName={`${(liveState?.title || 'blog-post').toLowerCase().replace(/\s+/g, '-')}.md`}
+                downloads={[
+                  {
+                    label: 'Download text + assets',
+                    fileName: `${safeFileStem(liveState?.title || 'blog-post')}-with-assets.txt`,
+                    content: buildTextDownload(liveState),
+                    mimeType: 'text/plain;charset=utf-8',
+                  },
+                  {
+                    label: 'Download HTML',
+                    fileName: `${safeFileStem(liveState?.title || 'blog-post')}.html`,
+                    content: buildHtmlDownload(liveState),
+                    mimeType: 'text/html;charset=utf-8',
+                  },
+                ]}
+                shareDisabledReason={shareDisabledReason}
+                publishDestinations={publishDestinations}
+                repurposeDestinations={repurposeDestinations}
+                assetDestinations={assetDestinations}
                 onMarkUsed={handleMarkUsed}
-                onPostToSocial={handlePostToSocial}
                 markUsedOptions={[
                   { label: 'General use' },
                   { label: 'Website', value: 'website' },
@@ -565,12 +869,13 @@ export default function BlogNewPage() {
             {/* ── Quality panel (sticky right sidebar) ────────────────────── */}
             <div className="hidden lg:block w-[280px] shrink-0 sticky top-6 self-start">
               {liveState && (() => {
-                const websiteIntegrationAvailable = Boolean(cmsIntegration);
+                const websiteIntegrationAvailable = cmsIntegrations.length > 0;
                 let websiteIntegrationReason: string | undefined;
-                if (!cmsIntegration) {
+                const primaryCmsIntegration = cmsIntegrations[0] ?? null;
+                if (!primaryCmsIntegration) {
                   websiteIntegrationReason = 'Connect a website CMS (WordPress, HubSpot, etc.) in Integrations to enable posting.';
                 } else if (!hasLeadCapture) {
-                  websiteIntegrationReason = `Connected to ${cmsIntegration.name}. Posting is available; add lead capture for full attribution.`;
+                  websiteIntegrationReason = `Connected to ${primaryCmsIntegration.name}. Posting is available; add lead capture for full attribution.`;
                 } else if (!savedId) {
                   websiteIntegrationReason = 'Posting is available. We will save this draft before publishing it.';
                 }
@@ -608,4 +913,3 @@ export default function BlogNewPage() {
     </>
   );
 }
-

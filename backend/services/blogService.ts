@@ -247,6 +247,87 @@ function readBlocks(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function looksLikeImageUrl(value: string): boolean {
+  return /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i.test(value)
+    || /\/storage\/v1\/object\//i.test(value)
+    || /\/wp-content\/uploads\//i.test(value);
+}
+
+function readUrlCandidates(value: unknown, depth = 0): string[] {
+  if (depth > 4 || value == null) return [];
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return /^https?:\/\//i.test(trimmed) ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => readUrlCandidates(item, depth + 1));
+  }
+  if (!isRecord(value)) return [];
+
+  const directKeys = [
+    'url',
+    'src',
+    'href',
+    'file_url',
+    'fileUrl',
+    'storage_url',
+    'storageUrl',
+    'public_url',
+    'publicUrl',
+    'preview_url',
+    'previewUrl',
+    'thumbnail_url',
+    'thumbnailUrl',
+    'image_url',
+    'imageUrl',
+    'asset_url',
+    'assetUrl',
+  ];
+  const nestedKeys = [
+    'files',
+    'images',
+    'media',
+    'media_bundle',
+    'mediaBundle',
+    'asset_payload',
+    'assetPayload',
+    'creator_asset',
+    'creatorAsset',
+    'variants',
+    'selectedVariant',
+    'rendered_asset',
+    'renderedAsset',
+    'output',
+  ];
+
+  return [
+    ...directKeys.flatMap((key) => readUrlCandidates(value[key], depth + 1)),
+    ...nestedKeys.flatMap((key) => readUrlCandidates(value[key], depth + 1)),
+  ];
+}
+
+function uniqueUrls(urls: string[]): string[] {
+  return urls
+    .map((url) => url.trim())
+    .filter(Boolean)
+    .filter((url, index, all) => all.indexOf(url) === index);
+}
+
+function renderImageFigures(urls: string[], title: string, caption?: string): string {
+  const cleanUrls = uniqueUrls(urls);
+  if (cleanUrls.length === 0) return '';
+  const images = cleanUrls.map((url, index) =>
+    `<div style="${escapeAttribute(wpStyles.assetFrame)}">${cleanUrls.length > 1 ? `<p style="${escapeAttribute(wpStyles.assetLabel)}">Asset ${index + 1} of ${cleanUrls.length}</p>` : ''}<img src="${escapeAttribute(url)}" alt="${escapeAttribute(cleanUrls.length > 1 ? `${title} ${index + 1}` : title)}" style="${escapeAttribute(wpStyles.image)}" /></div>`,
+  ).join('\n');
+  return caption
+    ? `<figure style="${escapeAttribute(wpStyles.figure)}">${images}<figcaption style="${escapeAttribute(wpStyles.caption)}">${escapeHtml(caption)}</figcaption></figure>`
+    : `<figure style="${escapeAttribute(wpStyles.figure)}">${images}</figure>`;
+}
+
 const wpStyles = {
   article: 'font-family:Inter,Arial,sans-serif;color:#3D4F61;line-height:1.75;font-size:17px;max-width:760px;margin:0 auto;',
   h2: 'font-size:30px;line-height:1.22;color:#0B1F33;font-weight:750;margin:48px 0 18px;border-bottom:1px solid #E5E7EB;padding-bottom:12px;',
@@ -291,10 +372,9 @@ function renderListItems(items: unknown[], ordered: boolean): string {
 function renderCreatorAsset(block: Record<string, unknown>): string {
   const title = readString(block, 'title') || 'Creator asset';
   const caption = readString(block, 'caption');
-  const files = readBlocks(block.files)
-    .map((file) => typeof file === 'string' ? file.trim() : '')
-    .filter(Boolean);
-  const primaryUrl = readString(block, 'url');
+  const files = readUrlCandidates(block.files);
+  const primaryUrl = readUrlCandidates(block.url);
+  const nestedUrls = readUrlCandidates(block);
   const variants = readBlocks(block.variants)
     .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object');
   const publishAll = block.publishAllVariants === true;
@@ -302,33 +382,18 @@ function renderCreatorAsset(block: Record<string, unknown>): string {
   const selectedVariantFiles = !publishAll && selectedVariantId
     ? variants.flatMap((variant) => {
         if (readString(variant, 'variant_id') !== selectedVariantId) return [];
-        const variantUrl = readString(variant, 'url');
-        const variantFileUrls = readBlocks(variant.files)
-          .map((file) => typeof file === 'string' ? file.trim() : '')
-          .filter(Boolean);
-        return variantFileUrls.length > 0 ? variantFileUrls : (variantUrl ? [variantUrl] : []);
+        const variantUrls = readUrlCandidates(variant);
+        return variantUrls.length > 0 ? variantUrls : [];
       })
     : [];
   const variantFiles = publishAll
     ? variants.flatMap((variant) => {
         const state = readString(variant, 'state') || 'generated';
         if (state !== 'generated') return [];
-        const variantUrl = readString(variant, 'url');
-        const variantFileUrls = readBlocks(variant.files)
-          .map((file) => typeof file === 'string' ? file.trim() : '')
-          .filter(Boolean);
-        return variantFileUrls.length > 0 ? variantFileUrls : (variantUrl ? [variantUrl] : []);
+        return readUrlCandidates(variant);
       })
     : [];
-  const urls = [...variantFiles, ...selectedVariantFiles, ...(files.length > 0 ? files : primaryUrl ? [primaryUrl] : [])]
-    .filter((url, index, all) => all.indexOf(url) === index);
-  if (urls.length === 0) return '';
-  const images = urls.map((url, index) =>
-    `<div style="${escapeAttribute(wpStyles.assetFrame)}">${urls.length > 1 ? `<p style="${escapeAttribute(wpStyles.assetLabel)}">Asset ${index + 1} of ${urls.length}</p>` : ''}<img src="${escapeAttribute(url)}" alt="${escapeAttribute(urls.length > 1 ? `${title} ${index + 1}` : title)}" style="${escapeAttribute(wpStyles.image)}" /></div>`,
-  ).join('\n');
-  return caption
-    ? `<figure style="${escapeAttribute(wpStyles.figure)}">${images}<figcaption style="${escapeAttribute(wpStyles.caption)}">${escapeHtml(caption)}</figcaption></figure>`
-    : `<figure style="${escapeAttribute(wpStyles.figure)}">${images}</figure>`;
+  return renderImageFigures([...variantFiles, ...selectedVariantFiles, ...files, ...primaryUrl, ...nestedUrls], title, caption);
 }
 
 function blockToHtml(block: unknown): string {
@@ -385,7 +450,7 @@ function blockToHtml(block: unknown): string {
     case 'list':
       return renderListItems(readBlocks(b.items), readString(b, 'listType') === 'numbered');
     case 'image': {
-      const url = readString(b, 'url') || readString(b, 'src');
+      const url = uniqueUrls(readUrlCandidates(b))[0] || '';
       const alt = readString(b, 'alt');
       const caption = readString(b, 'caption');
       if (!url) return '';
@@ -394,9 +459,15 @@ function blockToHtml(block: unknown): string {
         : `<figure style="${escapeAttribute(wpStyles.figure)}"><img src="${escapeAttribute(url)}" alt="${escapeAttribute(alt)}" style="${escapeAttribute(wpStyles.image)}" /></figure>`;
     }
     case 'media': {
-      const url = readString(b, 'url');
+      const urls = uniqueUrls(readUrlCandidates(b));
+      const url = urls[0] || '';
       const title = readString(b, 'title') || url;
       const description = readString(b, 'description');
+      const mediaType = readString(b, 'mediaType');
+      const imageUrls = urls.filter(looksLikeImageUrl);
+      if (imageUrls.length > 0 || /image|carousel|infographic/i.test(mediaType)) {
+        return renderImageFigures(imageUrls.length > 0 ? imageUrls : urls, title || 'Media asset', description || undefined);
+      }
       return url
         ? `<p style="${escapeAttribute(wpStyles.linkCard)}"><a href="${escapeAttribute(url)}" style="color:#0A66C2;font-weight:700;">${escapeHtml(title)}</a>${description ? `<br />${escapeHtml(description)}` : ''}</p>`
         : '';

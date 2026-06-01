@@ -404,6 +404,15 @@ export default function NewsletterNewPage() {
           <div className="flex gap-6 items-start">
             {/* ── Editor ─────────────────────────────────────────────────── */}
             <div className="flex-1 min-w-0 rounded-lg border border-gray-200 bg-white p-6 shadow">
+              <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-950">
+                <p className="font-semibold">Newsletter Direction</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  <p>Write like an issue or brief: concise, skimmable, forwardable, and useful in the inbox.</p>
+                  <p>Use newsletter headings such as Opening Note, The Signal, Why It Matters, Operator Note, and What to Watch.</p>
+                  <p>Make each section carry one distinct signal, implication, or action instead of a long blog-style body.</p>
+                  <p>Close with a complete watch item, signoff, or reader takeaway; do not truncate the issue summary.</p>
+                </div>
+              </div>
               <BlogEditorForm
                 initial={{
                   content_blocks: DEFAULT_TEMPLATE,

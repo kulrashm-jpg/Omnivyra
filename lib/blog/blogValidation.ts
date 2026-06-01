@@ -163,10 +163,11 @@ export function calculateQualityScore(
   });
 
   // ── Structure score (0–25) ────────────────────────────────────────────────
+  const isStoryContent = form.content_type === 'story';
   const minH2 = overrides?.min_h2 ?? 3;
-  const needsSummary    = overrides ? overrides.requires_summary     : true;
-  const needsReferences = overrides ? overrides.requires_references  : true;
-  const needsKeyInsights = overrides ? overrides.requires_key_insights : true;
+  const needsSummary    = isStoryContent ? false : overrides ? overrides.requires_summary     : true;
+  const needsReferences = isStoryContent ? false : overrides ? overrides.requires_references  : true;
+  const needsKeyInsights = isStoryContent ? false : overrides ? overrides.requires_key_insights : true;
 
   let structure = 0;
   if (h2Count >= minH2)       structure += 10;
@@ -245,11 +246,29 @@ export function calculateQualityScore(
   const isStory      = form.content_type === 'story';
   const isGuide      = form.content_type === 'guide';
 
-  const finalStructure = isStory ? Math.min(20, Math.round(structure * 0.8)) : structure;
-  const finalDepth     = (isWhitepaper || isGuide || isCaseStudy) ? Math.min(30, Math.round(depth * 1.2)) : isArticle ? Math.min(35, Math.round(depth * 1.4)) : isStory ? Math.min(30, Math.round(depth * 1.2)) : isNewsletter ? Math.min(20, Math.round(depth * 0.8)) : depth;
-  const finalSeo       = isStory ? Math.min(10, Math.round(seo * 0.4)) : (isArticle || isCaseStudy || isWhitepaper || isNewsletter || isGuide) ? Math.min(15, Math.round(seo * 0.6)) : seo;
-  const finalGeo       = (isNewsletter || isStory) ? Math.min(20, Math.round(geo * 1.33)) : geo;
+  const storyStructure = Math.min(25, (h2Count >= 3 ? 15 : h2Count >= 2 ? 12 : h2Count >= 1 ? 6 : 0) + (titleLen >= 20 ? 5 : 0) + (excerptLen >= 60 ? 5 : 0));
+  const storyDepth = totalWords >= targetWords * 0.6
+    ? 25
+    : totalWords >= targetWords * 0.45
+      ? 20
+      : totalWords >= targetWords * 0.3
+        ? 14
+        : totalWords >= 150
+          ? 8
+          : 0;
+  const storySeo = Math.min(20, (titleLen >= 20 ? 8 : titleLen >= 10 ? 4 : 0) + (excerptLen >= 80 ? 8 : excerptLen >= 40 ? 5 : 0) + (form.tags?.length ? 4 : 0));
+  const storyGeo = Math.min(30, (h2Count >= 3 ? 10 : h2Count >= 2 ? 8 : h2Count >= 1 ? 4 : 0) + (totalWords >= targetWords * 0.45 ? 8 : totalWords >= 250 ? 4 : 0) + (excerptLen >= 80 ? 6 : 0) + (shortParaCount <= 6 ? 6 : shortParaCount <= 10 ? 3 : 0));
+  const finalStructure = isStory ? storyStructure : structure;
+  const finalDepth     = isStory ? storyDepth : (isWhitepaper || isGuide || isCaseStudy) ? Math.min(30, Math.round(depth * 1.2)) : isArticle ? Math.min(35, Math.round(depth * 1.4)) : isNewsletter ? Math.min(20, Math.round(depth * 0.8)) : depth;
+  const finalSeo       = isStory ? storySeo : (isArticle || isCaseStudy || isWhitepaper || isNewsletter || isGuide) ? Math.min(15, Math.round(seo * 0.6)) : seo;
+  const finalGeo       = isStory ? storyGeo : isNewsletter ? Math.min(20, Math.round(geo * 1.33)) : geo;
   const finalLinking   = (isArticle || isCaseStudy || isWhitepaper || isStory || isGuide) ? 0 : linking;
+  const hasSubstantiveBody = totalWords >= 20 || hasKeyInsights || hasSummary || refsCount > 0;
+  const guardedStructure = hasSubstantiveBody ? finalStructure : Math.min(finalStructure, 4);
+  const guardedDepth = hasSubstantiveBody ? finalDepth : 0;
+  const guardedSeo = hasSubstantiveBody ? finalSeo : 0;
+  const guardedGeo = hasSubstantiveBody ? finalGeo : 0;
+  const guardedLinking = hasSubstantiveBody ? finalLinking : 0;
 
   // ── Issues ───────────────────────────────────────────────────────────────
   const issues: ValidationIssue[] = [];
@@ -277,17 +296,17 @@ export function calculateQualityScore(
     issues.push({ severity: 'warning', category: 'depth', message: `Content is short (${totalWords} words) — aim for ${targetWords}+` });
   if (shortParaCount > 2)
     issues.push({ severity: 'warning', category: 'depth', message: `${shortParaCount} sections under 50 words — add supporting detail` });
-  if (internalLinks === 0 && form.content_type !== 'article' && form.content_type !== 'case-study' && form.content_type !== 'whitepaper' && form.content_type !== 'guide')
+  if (internalLinks === 0 && form.content_type !== 'article' && form.content_type !== 'case-study' && form.content_type !== 'whitepaper' && form.content_type !== 'guide' && form.content_type !== 'story')
     issues.push({ severity: 'warning', category: 'linking', message: 'Add internal links to related Omnivyra articles' });
-  if (refsCount < 3)
+  if (refsCount < 3 && form.content_type !== 'story')
     issues.push({ severity: 'warning', category: 'geo', message: `Add ${3 - refsCount} more reference${3 - refsCount > 1 ? 's' : ''} for GEO authority (found ${refsCount})` });
 
-  const maxScore = (isWhitepaper || isGuide || isCaseStudy) ? 85 : isStory ? 80 : (isArticle || isNewsletter) ? 90 : 100;
-  const total = Math.min(maxScore, finalStructure + finalDepth + finalSeo + finalGeo + finalLinking);
+  const maxScore = (isWhitepaper || isGuide || isCaseStudy) ? 85 : (isArticle || isNewsletter) ? 90 : 100;
+  const total = Math.min(maxScore, guardedStructure + guardedDepth + guardedSeo + guardedGeo + guardedLinking);
 
   return {
     total,
-    breakdown: { structure: finalStructure, depth: finalDepth, seo: finalSeo, geo: finalGeo, linking: finalLinking },
+    breakdown: { structure: guardedStructure, depth: guardedDepth, seo: guardedSeo, geo: guardedGeo, linking: guardedLinking },
     issues,
     meta: {
       h2Count,

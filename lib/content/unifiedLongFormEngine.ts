@@ -888,7 +888,7 @@ export async function runUnifiedLongFormGeneration(
 
       // Enterprise quality gate. Failed thought-leadership output is
       // blocked before it can surface as a usable blog draft.
-      const thoughtLeadershipQuality = planned.generation.needs_clarification === false && planned.generation.mode === 'full'
+      const thoughtLeadershipQuality = input.contentType !== 'story' && planned.generation.needs_clarification === false && planned.generation.mode === 'full'
         ? evaluateThoughtLeadershipQuality({
             output: planned.generation.result,
             companyContext: input.companyContext,
