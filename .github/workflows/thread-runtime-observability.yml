@@ -63,6 +63,17 @@ jobs:
     name: Runtime observability gate (120 scenarios + production wiring + activation safety)
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    # This gate is HERMETIC: every jest test uses the in-memory mock supabase-js
+    # builder and the tsx stress harnesses touch no DB/network. These are
+    # deliberately FAKE placeholder values whose only job is to satisfy
+    # config/env.schema.ts validateEnv() (valid-URL + non-empty checks) at module
+    # import time. No real Supabase project is ever contacted. Do NOT replace
+    # these with real credentials — doing so adds prod-data risk for zero benefit.
+    env:
+      SUPABASE_URL: https://placeholder.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
     steps:
       - name: Checkout
         uses: actions/checkout@v4
