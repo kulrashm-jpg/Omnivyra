@@ -516,7 +516,14 @@ export function validateEnv(): EnvConfig {
         '\n\nPlease fix the following environment variables and retry.\n'
       );
       
-      if (typeof process !== 'undefined' && typeof process.exit === 'function') {
+      // In tests, a hard exit kills the Jest worker (uncatchable) and floods the
+      // log with repeated [CONFIG ERROR] blocks. Throw instead (handled below) so
+      // the framework and callers' try/catch can recover. Prod/dev keep fail-fast.
+      const isTestEnv =
+        process.env.NODE_ENV === 'test' ||
+        !!process.env.JEST_WORKER_ID ||
+        !!process.env.VITEST_WORKER_ID;
+      if (!isTestEnv && typeof process !== 'undefined' && typeof process.exit === 'function') {
         process.exit(1);
       }
     }

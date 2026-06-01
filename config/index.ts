@@ -29,6 +29,19 @@ import { protectConfig } from '@/lib/config/deepFreeze';
 import { initEnforcer, withSanctionedEnvAccess } from '@/lib/config/enforcer';
 
 /**
+ * Under a test runner, a hard process.exit(1) is catastrophic: it kills the
+ * Jest worker (uncatchable, even inside try/catch — see backend/tests/globalTeardown.ts)
+ * which surfaces as "child process exceptions, exceeding retry limit" and floods
+ * the log with repeated [CONFIG ERROR] blocks. In tests we THROW instead, so the
+ * existing throws below let Jest (and callers' try/catch) handle it gracefully.
+ * Production / dev startup keeps its fail-fast process.exit(1) behavior.
+ */
+const IS_TEST_ENV =
+  process.env.NODE_ENV === 'test' ||
+  !!process.env.JEST_WORKER_ID ||
+  !!process.env.VITEST_WORKER_ID;
+
+/**
  * Module-level singleton
  * Validated once at import time, never mutated
  */
@@ -85,8 +98,9 @@ function initConfig(): Readonly<EnvConfig> {
       error: errorMessage,
     });
     
-    // Exit process on server (fail-fast); throw in browser (process.exit unavailable)
-    if (typeof process !== 'undefined' && typeof process.exit === 'function') {
+    // Exit process on server (fail-fast); throw in browser/tests (process.exit
+    // unavailable in browser, catastrophic in Jest workers).
+    if (!IS_TEST_ENV && typeof process !== 'undefined' && typeof process.exit === 'function') {
       process.exit(1);
     }
     throw new Error(`[config] Configuration validation failed: ${errorMessage}`);
@@ -223,7 +237,7 @@ export function getConfigState() {
     console.error(`[config] Fatal: Configuration initialization failed after ${duration}ms`, {
       error: errorMessage,
     });
-    if (typeof process !== 'undefined' && typeof process.exit === 'function') {
+    if (!IS_TEST_ENV && typeof process !== 'undefined' && typeof process.exit === 'function') {
       process.exit(1);
     }
   }
