@@ -42,6 +42,7 @@ import {
   normalizeCreatorAsset,
   type RenderStrategy,
 } from './intelligence/canonical/creatorAssetRegistry';
+import { appendVariantTrackingCta } from './creatorVariantLinkBinding';
 import {
   applyTransition,
   LIFECYCLE_STATES,
@@ -494,6 +495,20 @@ export async function runCreatorOrchestration(
       readiness = { ready: false, failure_reason: error instanceof Error ? error.message : String(error) };
     }
   }
+
+  // 4b) Variant link binding — when a variant was applied, bind THIS asset's
+  //     own variant identity into a tracking link and append it to the CTA,
+  //     BEFORE persist so the persisted content (and downstream scheduling /
+  //     publishing) carry omn_variant_id directly. Best-effort: never blocks
+  //     generation. Skipped entirely when no variant was applied (legacy
+  //     parity). Writes only packaging.cta → BOLT asset-id hash unchanged.
+  renderResult.output = await appendVariantTrackingCta(
+    renderResult.output,
+    { companyId: input.companyId, campaignId: input.campaignId },
+    input.appliedVariant,
+    primaryPlatform,
+    effectiveContentType,
+  );
 
   // 5) lifecycle FSM (compute BEFORE persistence so the transition
   //    history lands on the creator_assets row metadata — making FSM

@@ -22,6 +22,16 @@ type TrackingPayload = {
   utm_campaign?: string;
   utm_content?: string;
   utm_term?: string;
+  // Creator identifiers as they arrive on the wire (omn_* link-param form),
+  // plus the canonical names the attribution services consume.
+  omn_asset_id?: string;
+  omn_variant_id?: string;
+  omn_strategy_id?: string;
+  asset_id?: string | null;
+  variant_id?: string | null;
+  creator_strategy_id?: string | null;
+  first_touch?: Record<string, unknown>;
+  last_touch?: Record<string, unknown>;
   properties?: Record<string, unknown>;
 };
 
@@ -68,6 +78,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   for (const event of events) {
     const payload = { ...body, ...event, website_id: websiteId, anonymous_id: event.anonymous_id || anonymousId };
+    // Normalize creator ids from the omn_* link-param form (current URL, else
+    // the first/last-touch snapshot the tracker persisted) into the canonical
+    // column names the attribution services write. Leaves utm_* + first/last
+    // touch passthrough untouched.
+    const ft = (payload.first_touch ?? {}) as Record<string, unknown>;
+    const lt = (payload.last_touch ?? {}) as Record<string, unknown>;
+    const pickCreatorId = (omnKey: string) =>
+      (payload as any)[omnKey] ?? (lt[omnKey] as string | undefined) ?? (ft[omnKey] as string | undefined) ?? null;
+    payload.asset_id = pickCreatorId('omn_asset_id');
+    payload.variant_id = pickCreatorId('omn_variant_id');
+    payload.creator_strategy_id = pickCreatorId('omn_strategy_id');
     const session = await resolveVisitorSession({
       companyId: website.company_id,
       websiteId: website.id,

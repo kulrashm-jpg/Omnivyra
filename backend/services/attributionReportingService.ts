@@ -219,6 +219,315 @@ function rankBlogs(attributions: any[], blogs: any[]) {
   return [...counts.entries()].map(([title, conversions]) => ({ title, conversions })).sort((a, b) => b.conversions - a.conversions).slice(0, 20);
 }
 
+// ─── Creator → Lead attribution rollups ──────────────────────────────────────
+// Read helpers for "which strategy / variant / asset generated leads?".
+// They read the same lead_attributions snapshot rows the rest of this service
+// consumes — the creator id columns are populated by recordLeadAttribution.
+// No dashboard/UI work; these are query helpers only.
+
+type CreatorAttributionRow = {
+  value: string;
+  conversions: number;
+  lead_ids: string[];
+  /** Distinct campaigns (utm_campaign = campaignId) the conversions came from. */
+  campaigns: string[];
+};
+
+async function fetchLeadAttributionsByColumn(
+  column: 'creator_strategy_id' | 'variant_id' | 'asset_id',
+  input: { companyId: string; websiteId?: string | null; from?: string | null; to?: string | null }
+): Promise<CreatorAttributionRow[]> {
+  const range = normalizeRange(input.from, input.to);
+  // utm_campaign is already on the snapshot row (it stores the campaignId) — we
+  // surface it here so callers get "associated campaigns" without a second
+  // query. Pure read of the existing reporting table; no new calculation.
+  let query = ownedDbTable('lead_attributions')
+    .select(`${column}, lead_id, utm_campaign`)
+    .eq('company_id', input.companyId)
+    .not(column, 'is', null)
+    .gte('created_at', range.from)
+    .lte('created_at', endOfDay(range.to));
+  if (input.websiteId) query = query.eq('website_id', input.websiteId);
+  const { data, error } = await query.limit(5000);
+  if (error) throw new Error(error.message);
+
+  const counts = new Map<string, CreatorAttributionRow & { _campaigns: Set<string> }>();
+  for (const row of (data ?? []) as any[]) {
+    const value = String(row[column] || '').trim();
+    if (!value) continue;
+    const current =
+      counts.get(value) ?? { value, conversions: 0, lead_ids: [], campaigns: [], _campaigns: new Set<string>() };
+    current.conversions += 1;
+    if (row.lead_id) current.lead_ids.push(String(row.lead_id));
+    const campaign = String(row.utm_campaign || '').trim();
+    if (campaign) current._campaigns.add(campaign);
+    counts.set(value, current);
+  }
+  return [...counts.values()]
+    .map((r) => ({ value: r.value, conversions: r.conversions, lead_ids: r.lead_ids, campaigns: [...r._campaigns] }))
+    .sort((a, b) => b.conversions - a.conversions);
+}
+
+export async function getLeadsByStrategy(input: {
+  companyId: string;
+  websiteId?: string | null;
+  from?: string | null;
+  to?: string | null;
+}): Promise<Array<{ creator_strategy_id: string; conversions: number; lead_ids: string[]; campaigns: string[] }>> {
+  const rows = await fetchLeadAttributionsByColumn('creator_strategy_id', input);
+  return rows.map((row) => ({ creator_strategy_id: row.value, conversions: row.conversions, lead_ids: row.lead_ids, campaigns: row.campaigns }));
+}
+
+export async function getLeadsByVariant(input: {
+  companyId: string;
+  websiteId?: string | null;
+  from?: string | null;
+  to?: string | null;
+}): Promise<Array<{ variant_id: string; conversions: number; lead_ids: string[]; campaigns: string[] }>> {
+  const rows = await fetchLeadAttributionsByColumn('variant_id', input);
+  return rows.map((row) => ({ variant_id: row.value, conversions: row.conversions, lead_ids: row.lead_ids, campaigns: row.campaigns }));
+}
+
+export async function getLeadsByAsset(input: {
+  companyId: string;
+  websiteId?: string | null;
+  from?: string | null;
+  to?: string | null;
+}): Promise<Array<{ asset_id: string; conversions: number; lead_ids: string[]; campaigns: string[] }>> {
+  const rows = await fetchLeadAttributionsByColumn('asset_id', input);
+  return rows.map((row) => ({ asset_id: row.value, conversions: row.conversions, lead_ids: row.lead_ids, campaigns: row.campaigns }));
+}
+
+// ─── Conversion-rate quality indicators (display-only) ────────────────────────
+// Leads ÷ distinct exposed sessions, per strategy / asset. The denominator is
+// the count of distinct visitor_session_id in campaign_touchpoints carrying the
+// same creator id (a page-view tagged with that strategy/asset). Read-only —
+// these helpers do NOT feed ranking, recommendation, governance, or learning.
+// No schema change: both columns already exist (migration 20260819).
+
+export type ConversionConfidence = 'insufficient' | 'low' | 'medium' | 'high';
+
+export type ConversionRateRow = {
+  id: string;
+  conversions: number;
+  exposed_sessions: number;
+  /** null when there are no exposed sessions to divide by (avoids /0). */
+  conversion_rate: number | null;
+  confidence: ConversionConfidence;
+  campaigns: string[];
+};
+
+/**
+ * Two-axis confidence (volume AND exposure), per the Conversion Signal Quality
+ * audit. Below the Low floor a row is 'insufficient' — callers must show
+ * "Insufficient Data" rather than a fabricated leader.
+ */
+export function classifyConversionConfidence(conversions: number, exposedSessions: number): ConversionConfidence {
+  if (conversions >= 50 && exposedSessions >= 1000) return 'high';
+  if (conversions >= 25 && exposedSessions >= 400) return 'medium';
+  if (conversions >= 10 && exposedSessions >= 100) return 'low';
+  return 'insufficient';
+}
+
+/** Distinct exposed sessions per creator id from campaign_touchpoints. */
+async function fetchExposedSessionsByColumn(
+  column: 'creator_strategy_id' | 'variant_id' | 'asset_id',
+  input: { companyId: string; websiteId?: string | null; from?: string | null; to?: string | null }
+): Promise<Map<string, number>> {
+  const range = normalizeRange(input.from, input.to);
+  let query = ownedDbTable('campaign_touchpoints')
+    .select(`${column}, visitor_session_id`)
+    .eq('company_id', input.companyId)
+    .not(column, 'is', null)
+    .gte('touched_at', range.from)
+    .lte('touched_at', endOfDay(range.to));
+  if (input.websiteId) query = query.eq('website_id', input.websiteId);
+  const { data, error } = await query.limit(20000);
+  if (error) throw new Error(error.message);
+
+  const sessionsByValue = new Map<string, Set<string>>();
+  for (const row of (data ?? []) as any[]) {
+    const value = String(row[column] || '').trim();
+    const sessionId = row.visitor_session_id ? String(row.visitor_session_id) : '';
+    if (!value || !sessionId) continue;
+    const set = sessionsByValue.get(value) ?? new Set<string>();
+    set.add(sessionId);
+    sessionsByValue.set(value, set);
+  }
+  return new Map([...sessionsByValue.entries()].map(([k, v]) => [k, v.size]));
+}
+
+async function conversionRateByColumn(
+  column: 'creator_strategy_id' | 'variant_id' | 'asset_id',
+  input: { companyId: string; websiteId?: string | null; from?: string | null; to?: string | null }
+): Promise<ConversionRateRow[]> {
+  const [leads, exposure] = await Promise.all([
+    fetchLeadAttributionsByColumn(column, input),
+    fetchExposedSessionsByColumn(column, input),
+  ]);
+  return leads.map((row) => {
+    const exposed = exposure.get(row.value) ?? 0;
+    const rate = exposed > 0 ? Number((row.conversions / exposed).toFixed(4)) : null;
+    return {
+      id: row.value,
+      conversions: row.conversions,
+      exposed_sessions: exposed,
+      conversion_rate: rate,
+      confidence: classifyConversionConfidence(row.conversions, exposed),
+      campaigns: row.campaigns,
+    };
+  });
+}
+
+export async function getStrategyConversionRate(input: {
+  companyId: string;
+  websiteId?: string | null;
+  from?: string | null;
+  to?: string | null;
+}): Promise<ConversionRateRow[]> {
+  return conversionRateByColumn('creator_strategy_id', input);
+}
+
+export async function getAssetConversionRate(input: {
+  companyId: string;
+  websiteId?: string | null;
+  from?: string | null;
+  to?: string | null;
+}): Promise<ConversionRateRow[]> {
+  return conversionRateByColumn('asset_id', input);
+}
+
+// Variant conversion rate. The denominator (campaign_touchpoints.variant_id) is
+// populated by the creator-asset link binding, so this is now meaningful. Same
+// formula + confidence thresholds as strategy/asset — no new thresholds.
+export async function getVariantConversionRate(input: {
+  companyId: string;
+  websiteId?: string | null;
+  from?: string | null;
+  to?: string | null;
+}): Promise<ConversionRateRow[]> {
+  return conversionRateByColumn('variant_id', input);
+}
+
+// ─── Marketing-effectiveness conversion rates (campaign / platform / content) ─
+// Same leads ÷ distinct-exposed-sessions formula and confidence model as the
+// creator dimensions, but over the utm_* columns that ALREADY exist. The
+// numerator (lead_attributions.utm_*) and denominator (campaign_touchpoints
+// .{campaign,source,content}) have different column names, so these use a value
+// pair. No new attribution / tracking / columns — pure read over existing data.
+
+type RateScope = { companyId: string; websiteId?: string | null; from?: string | null; to?: string | null };
+type LeadAgg = { conversions: number; lead_ids: string[]; campaigns: Set<string> };
+
+/** Content-type lives in utm_content as `${contentType}_wN_dN` (the tracking
+ *  link format). Parse the type prefix; fall back to the raw value if it does
+ *  not follow the pattern. */
+function parseContentType(raw: string): string | null {
+  const v = String(raw || '').trim();
+  if (!v) return null;
+  const idx = v.indexOf('_w');
+  return idx > 0 ? v.slice(0, idx) : v;
+}
+
+async function fetchLeadsByValueCol(
+  valueCol: 'utm_campaign' | 'utm_source' | 'utm_content',
+  input: RateScope,
+  transform?: (raw: string) => string | null,
+): Promise<Map<string, LeadAgg>> {
+  const range = normalizeRange(input.from, input.to);
+  const cols = [...new Set([valueCol, 'lead_id', 'utm_campaign'])].join(', ');
+  let query = ownedDbTable('lead_attributions')
+    .select(cols)
+    .eq('company_id', input.companyId)
+    .not(valueCol, 'is', null)
+    .gte('created_at', range.from)
+    .lte('created_at', endOfDay(range.to));
+  if (input.websiteId) query = query.eq('website_id', input.websiteId);
+  const { data, error } = await query.limit(5000);
+  if (error) throw new Error(error.message);
+
+  const map = new Map<string, LeadAgg>();
+  for (const row of (data ?? []) as any[]) {
+    const raw = String(row[valueCol] || '').trim();
+    const value = transform ? transform(raw) : raw;
+    if (!value) continue;
+    const cur = map.get(value) ?? { conversions: 0, lead_ids: [], campaigns: new Set<string>() };
+    cur.conversions += 1;
+    if (row.lead_id) cur.lead_ids.push(String(row.lead_id));
+    const campaign = String(row.utm_campaign || '').trim();
+    if (campaign) cur.campaigns.add(campaign);
+    map.set(value, cur);
+  }
+  return map;
+}
+
+async function fetchSessionsByValueCol(
+  valueCol: 'campaign' | 'source' | 'content',
+  input: RateScope,
+  transform?: (raw: string) => string | null,
+): Promise<Map<string, number>> {
+  const range = normalizeRange(input.from, input.to);
+  let query = ownedDbTable('campaign_touchpoints')
+    .select(`${valueCol}, visitor_session_id`)
+    .eq('company_id', input.companyId)
+    .not(valueCol, 'is', null)
+    .gte('touched_at', range.from)
+    .lte('touched_at', endOfDay(range.to));
+  if (input.websiteId) query = query.eq('website_id', input.websiteId);
+  const { data, error } = await query.limit(20000);
+  if (error) throw new Error(error.message);
+
+  const sessions = new Map<string, Set<string>>();
+  for (const row of (data ?? []) as any[]) {
+    const raw = String(row[valueCol] || '').trim();
+    const value = transform ? transform(raw) : raw;
+    const sessionId = row.visitor_session_id ? String(row.visitor_session_id) : '';
+    if (!value || !sessionId) continue;
+    const set = sessions.get(value) ?? new Set<string>();
+    set.add(sessionId);
+    sessions.set(value, set);
+  }
+  return new Map([...sessions.entries()].map(([k, v]) => [k, v.size]));
+}
+
+async function conversionRateByValuePair(
+  numeratorCol: 'utm_campaign' | 'utm_source' | 'utm_content',
+  denominatorCol: 'campaign' | 'source' | 'content',
+  input: RateScope,
+  transform?: (raw: string) => string | null,
+): Promise<ConversionRateRow[]> {
+  const [leads, exposure] = await Promise.all([
+    fetchLeadsByValueCol(numeratorCol, input, transform),
+    fetchSessionsByValueCol(denominatorCol, input, transform),
+  ]);
+  return [...leads.entries()]
+    .map(([value, agg]) => {
+      const exposed = exposure.get(value) ?? 0;
+      const rate = exposed > 0 ? Number((agg.conversions / exposed).toFixed(4)) : null;
+      return {
+        id: value,
+        conversions: agg.conversions,
+        exposed_sessions: exposed,
+        conversion_rate: rate,
+        confidence: classifyConversionConfidence(agg.conversions, exposed),
+        campaigns: [...agg.campaigns],
+      };
+    })
+    .sort((a, b) => b.conversions - a.conversions);
+}
+
+export async function getCampaignConversionRate(input: RateScope): Promise<ConversionRateRow[]> {
+  return conversionRateByValuePair('utm_campaign', 'campaign', input);
+}
+
+export async function getPlatformConversionRate(input: RateScope): Promise<ConversionRateRow[]> {
+  return conversionRateByValuePair('utm_source', 'source', input);
+}
+
+export async function getContentTypeConversionRate(input: RateScope): Promise<ConversionRateRow[]> {
+  return conversionRateByValuePair('utm_content', 'content', input, parseContentType);
+}
+
 function uniqueSessions(events: any[]): number {
   return new Set(events.map((event) => event.visitor_session_id || event.anonymous_id).filter(Boolean)).size;
 }

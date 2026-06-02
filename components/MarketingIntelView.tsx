@@ -61,6 +61,7 @@ import SystemDiagnosisSection from '@/features/marketing-intel/components/System
 import SystemMemorySection from '@/features/marketing-intel/components/SystemMemorySection';
 import SessionAwarenessSection from '@/features/marketing-intel/components/SessionAwarenessSection';
 import SupportingSignalsSection from '@/features/marketing-intel/components/SupportingSignalsSection';
+import CreatorConversionSummary from '@/components/engagement/CreatorConversionSummary';
 import EcosystemProgressSection from '@/features/marketing-intel/components/EcosystemProgressSection';
 import ObjectiveSetupNotice from '@/features/marketing-intel/components/ObjectiveSetupNotice';
 import ConfigurePanel from '@/features/marketing-intel/components/ConfigurePanel';
@@ -344,6 +345,12 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
             <ActionBucketsSection d={d} />
 
             <SupportingSignalsSection d={d} />
+
+            {/* Conversion discovery hook — surfaces top converting creator
+                strategy + attributed lead count within Supporting Signals and
+                links to /engagement/analytics#creator-conversion. Self-fetching;
+                reuses the existing conversion endpoint (no snapshot change). */}
+            <CreatorConversionSummary className="max-w-md" />
 
             <BottomLineSection d={d} />
 

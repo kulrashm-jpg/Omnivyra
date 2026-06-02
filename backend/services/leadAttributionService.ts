@@ -13,6 +13,11 @@ export type AttributionPayload = {
   referrer?: string | null;
   landing_page?: string | null;
   current_page?: string | null;
+  // Creator-side identifiers, carried from the omn_* link params. Optional;
+  // legacy/non-creator traffic leaves these null and every flow is unchanged.
+  asset_id?: string | null;
+  variant_id?: string | null;
+  creator_strategy_id?: string | null;
   first_touch?: Record<string, unknown> | null;
   last_touch?: Record<string, unknown> | null;
   consent_state?: string | null;
@@ -26,6 +31,10 @@ export function extractAttributionPayload(body: Record<string, unknown>): Attrib
       : {};
   const get = (key: string) =>
     body[key] != null ? String(body[key]) : attribution[key] != null ? String(attribution[key]) : null;
+  // Accept either the omn_* link-param form (as it arrives on the URL/tracker)
+  // or the canonical column name (asset_id / variant_id / creator_strategy_id).
+  const getEither = (omnKey: string, canonicalKey: string) =>
+    get(omnKey) ?? get(canonicalKey);
 
   return {
     website_id: get('website_id'),
@@ -40,6 +49,9 @@ export function extractAttributionPayload(body: Record<string, unknown>): Attrib
     referrer: get('referrer'),
     landing_page: get('landing_page'),
     current_page: get('current_page'),
+    asset_id: getEither('omn_asset_id', 'asset_id'),
+    variant_id: getEither('omn_variant_id', 'variant_id'),
+    creator_strategy_id: getEither('omn_strategy_id', 'creator_strategy_id'),
     first_touch: objectOrNull(attribution.first_touch),
     last_touch: objectOrNull(attribution.last_touch),
     consent_state: get('consent_state'),
@@ -63,6 +75,9 @@ export function buildTouchSnapshot(input: AttributionPayload): Record<string, un
     referrer: input.referrer ?? null,
     landing_page: input.landing_page ?? null,
     current_page: input.current_page ?? null,
+    asset_id: input.asset_id ?? null,
+    variant_id: input.variant_id ?? null,
+    creator_strategy_id: input.creator_strategy_id ?? null,
     anonymous_id: input.anonymous_id ?? null,
     session_id: input.session_id ?? input.visitor_session_id ?? null,
   };
@@ -135,6 +150,9 @@ export async function recordLeadAttribution(input: {
       referrer: input.attribution.referrer ?? null,
       landing_page: input.attribution.landing_page ?? null,
       current_page: input.attribution.current_page ?? null,
+      asset_id: input.attribution.asset_id ?? null,
+      variant_id: input.attribution.variant_id ?? null,
+      creator_strategy_id: input.attribution.creator_strategy_id ?? null,
       consent_state: input.attribution.consent_state ?? null,
     });
   } catch {

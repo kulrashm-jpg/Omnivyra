@@ -48,6 +48,9 @@
       utm_campaign: params.get('utm_campaign'),
       utm_content: params.get('utm_content'),
       utm_term: params.get('utm_term'),
+      omn_asset_id: params.get('omn_asset_id'),
+      omn_variant_id: params.get('omn_variant_id'),
+      omn_strategy_id: params.get('omn_strategy_id'),
       referrer: document.referrer || '',
       landing_page: landing(),
       current_page: location.href
@@ -73,6 +76,11 @@
       utm_campaign: params.get('utm_campaign') || t.last_touch.utm_campaign,
       utm_content: params.get('utm_content') || t.last_touch.utm_content,
       utm_term: params.get('utm_term') || t.last_touch.utm_term,
+      // Creator identifiers: prefer the current URL, else the first-touch
+      // value persisted in localStorage so they survive multi-page journeys.
+      omn_asset_id: params.get('omn_asset_id') || t.first_touch.omn_asset_id || t.last_touch.omn_asset_id,
+      omn_variant_id: params.get('omn_variant_id') || t.first_touch.omn_variant_id || t.last_touch.omn_variant_id,
+      omn_strategy_id: params.get('omn_strategy_id') || t.first_touch.omn_strategy_id || t.last_touch.omn_strategy_id,
       first_touch: t.first_touch,
       last_touch: t.last_touch
     };

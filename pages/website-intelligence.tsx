@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
+import ConversionFunnelStrip from '@/components/engagement/ConversionFunnelStrip';
 
 type Dashboard = {
   websites?: any[];
@@ -98,6 +99,12 @@ export default function WebsiteIntelligencePage() {
         </div>
         <Link href={`/website-setup${companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''}`}>Setup wizard</Link>
       </header>
+
+      {/* Funnel narrative continuity — same ConversionFunnelStrip as
+          /engagement/analytics so operators entering through Website
+          Intelligence see the full Creator → Conversion story. Uses the page's
+          own company when set, else the selected company in context. */}
+      <ConversionFunnelStrip organizationId={companyId || undefined} className="my-4" />
 
       <section className="wi-controls">
         <label>

@@ -107,6 +107,9 @@ export async function persistCampaignTouchpoint(input: {
       content: input.attribution.utm_content ?? null,
       term: input.attribution.utm_term ?? null,
       page_url: input.attribution.current_page ?? input.attribution.landing_page ?? null,
+      asset_id: input.attribution.asset_id ?? null,
+      variant_id: input.attribution.variant_id ?? null,
+      creator_strategy_id: input.attribution.creator_strategy_id ?? null,
       metadata: { attribution: buildTouchSnapshot(input.attribution) },
     });
   } catch {

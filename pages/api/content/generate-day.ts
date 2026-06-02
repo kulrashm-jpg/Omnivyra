@@ -13,8 +13,11 @@ import { getLatestPlatformExecutionPlan } from '../../../backend/db/platformExec
 import { generateContentForDay } from '../../../backend/services/contentGenerationService';
 import { getCampaignMemory } from '../../../backend/services/campaignMemoryService';
 import { createContentAsset } from '../../../backend/services/contentAssetService';
+import { getContentAssetByKey } from '../../../backend/db/contentAssetStore';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { generateTrackingLink } from '../../../backend/services/trackingLinkService';
+import { resolveCampaignVariant } from '../../../backend/services/creator/campaignVariantBridge';
+import { randomUUID } from 'crypto';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 
@@ -88,6 +91,61 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const derivedDayNumber = Number(
       dayPlan.day_number ?? dayPlan.dayNumber ?? dayPlan.dayIndex ?? dayPlan.day ?? 0
     );
+    // Creator identifiers, captured best-effort from whatever the resolved
+    // campaign / day plan already carries. These are optional: when absent
+    // the link is minted exactly as before (no omn_* params appended).
+    // NOTE: omn_asset_id is intentionally not sourced here — the asset row is
+    // created AFTER the link is embedded into its content (see createContentAsset
+    // below), so the asset id does not yet exist at mint time. The service
+    // supports omn_asset_id for callers that already hold one.
+    let strategyId =
+      resolved.campaign?.strategy_id ??
+      resolved.campaign?.creator_strategy_id ??
+      dayPlan.creator_strategy_id ??
+      dayPlan.creatorStrategyId ??
+      dayPlan.strategy_id ??
+      null;
+    let variantId = dayPlan.variant_id ?? dayPlan.variantId ?? null;
+
+    // ── Creator Variant Bridge ─────────────────────────────────────────────
+    // The plan lane is variant-agnostic, so when the day carries no variant we
+    // fall back to the creator lane's already-durable selection (read-only;
+    // selects nothing). On experiment ambiguity the bridge returns no variant
+    // and we SKIP attribution rather than guess. Best-effort — never blocks
+    // generation, and never overrides a variant the plan already carried.
+    if (!variantId) {
+      try {
+        const bridged = await resolveCampaignVariant(campaignId, dayPlan.platform);
+        if (bridged.status === 'resolved') {
+          variantId = bridged.variant_id;
+          strategyId = strategyId ?? bridged.strategy_id;
+        } else if (bridged.status === 'ambiguous') {
+          console.warn('CREATOR VARIANT BRIDGE ambiguous — skipping variant attribution', {
+            campaignId,
+            platform: dayPlan.platform,
+            distinct_variant_ids: bridged.distinct_variant_ids,
+          });
+        }
+      } catch {
+        // Bridge is best-effort; content generation must never depend on it.
+      }
+    }
+
+    // ── Asset-id timing fix ────────────────────────────────────────────────
+    // The link is embedded INTO the asset content, so historically the asset
+    // id did not exist yet at mint time. The (campaign, week, day, platform)
+    // key is deterministic, so we resolve the id up front: reuse the existing
+    // asset_id on a regeneration, else pre-generate a UUID and hand it to
+    // createContentAsset as the primary key. No reorder of version writes, no
+    // behaviour change — the link simply now carries the correct omn_asset_id.
+    const existingAsset = await getContentAssetByKey({
+      campaignId,
+      weekNumber: Number(weekNumber),
+      day,
+      platform: dayPlan.platform,
+    });
+    const assetId = existingAsset?.asset_id ?? randomUUID();
+
     const tracking = await generateTrackingLink({
       companyId,
       campaignId,
@@ -95,11 +153,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       contentType,
       weekNumber: Number(weekNumber),
       dayNumber: Number.isFinite(derivedDayNumber) ? derivedDayNumber : 0,
+      assetId,
+      strategyId,
+      variantId,
     });
     const enrichedContent = {
       ...content,
       primary_cta_url: tracking.url,
       tracking_link: tracking.url,
+      // Durable, in-content record of the creator identifiers carried by the
+      // link. Lives in content_asset_versions.content_json, so attribution can
+      // be recovered from the asset without relying on any in-memory tracker.
+      creator_attribution: {
+        asset_id: assetId,
+        variant_id: variantId,
+        creator_strategy_id: strategyId,
+      },
     };
 
     const asset = await createContentAsset({
@@ -108,6 +177,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       day,
       platform: dayPlan.platform,
       content: enrichedContent,
+      assetId,
     });
 
     return res.status(200).json(asset);

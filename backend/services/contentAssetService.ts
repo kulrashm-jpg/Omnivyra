@@ -16,6 +16,11 @@ export async function createContentAsset(input: {
   day: string;
   platform: string;
   content: any;
+  // Optional pre-resolved asset id. On a NEW asset this exact UUID is used as
+  // the primary key (so a tracking link minted with it matches the row). On a
+  // regeneration the existing asset wins and this is ignored — callers should
+  // pass the existing id anyway so the two never disagree.
+  assetId?: string | null;
 }): Promise<any> {
   const existing = await getContentAssetByKey({
     campaignId: input.campaignId,
@@ -23,7 +28,13 @@ export async function createContentAsset(input: {
     day: input.day,
     platform: input.platform,
   });
-  const asset = existing || (await createAsset(input));
+  const asset = existing || (await createAsset({
+    campaignId: input.campaignId,
+    weekNumber: input.weekNumber,
+    day: input.day,
+    platform: input.platform,
+    assetId: input.assetId ?? null,
+  }));
   const version = existing ? (existing.current_version ?? 1) + 1 : 1;
   const contentVersion = await createContentVersion({
     assetId: asset.asset_id,

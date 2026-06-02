@@ -1,6 +1,7 @@
 import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
+import CreatorConversionSummary from '@/components/engagement/CreatorConversionSummary';
 
 interface EngagementCard {
   id: string;
@@ -176,6 +177,13 @@ export default function EngagementSubPage() {
               <p className="mt-1 text-sm text-gray-700">Professional workspaces built for faster response, better visibility, and more structured marketing decisions.</p>
             </div>
           </div>
+        </div>
+
+        {/* Discovery hook — surfaces creator-driven conversion outcomes at the
+            engagement hub and links into the full card. Reuses the existing
+            /api/engagement/creator-conversion endpoint; self-fetches company. */}
+        <div className="mb-8">
+          <CreatorConversionSummary className="max-w-md" />
         </div>
 
         <div className="mb-5 flex items-center justify-between">

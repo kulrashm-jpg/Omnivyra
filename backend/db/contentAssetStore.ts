@@ -5,8 +5,14 @@ export async function createContentAsset(input: {
   weekNumber: number;
   day: string;
   platform: string;
+  // Optional caller-supplied primary key. When provided we insert this exact
+  // UUID instead of letting the DB default generate one — this lets a caller
+  // know the asset_id BEFORE the row exists (e.g. to mint a tracking link that
+  // carries omn_asset_id). When omitted, behaviour is identical to before
+  // (gen_random_uuid() default fills asset_id).
+  assetId?: string | null;
 }): Promise<any> {
-  const payload = {
+  const payload: Record<string, unknown> = {
     campaign_id: input.campaignId,
     week_number: input.weekNumber,
     day: input.day,
@@ -15,6 +21,7 @@ export async function createContentAsset(input: {
     current_version: 1,
     created_at: new Date().toISOString(),
   };
+  if (input.assetId) payload.asset_id = input.assetId;
   const { data, error } = await supabase
     .from('content_assets')
     .insert(payload)

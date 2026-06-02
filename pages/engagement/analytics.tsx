@@ -7,6 +7,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useCompanyContext } from '@/components/CompanyContext';
+import CreatorConversionIntelligence from '@/components/engagement/CreatorConversionIntelligence';
+import ConversionFunnelStrip from '@/components/engagement/ConversionFunnelStrip';
 import {
   BarChart3,
   TrendingUp,
@@ -313,14 +315,25 @@ export default function EngagementAnalyticsPage() {
           </div>
 
           <main className="overflow-auto">
+            {/* Creator Conversion Intelligence — promoted to the top: outcome
+                before activity. The id is the deep-link anchor used by the
+                engagement portal + intelligence discovery hooks
+                (/engagement/analytics#creator-conversion). */}
+            <div id="creator-conversion" className="scroll-mt-24 space-y-6">
+              {/* Unified funnel narrative above the deep card — one read of
+                  Creator → Website → Lead → Conversion, with per-stage bridges. */}
+              <ConversionFunnelStrip />
+              <CreatorConversionIntelligence organizationId={organizationId} days={days} />
+            </div>
+
             {loading && !payload ? (
-              <div className="space-y-4 animate-pulse">
+              <div className="mt-6 space-y-4 animate-pulse">
                 {[1, 2, 3, 4, 5, 6].map((i) => (
                   <div key={i} className="h-40 rounded-lg bg-slate-200" />
                 ))}
               </div>
             ) : (
-              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              <div className="mt-6 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
                 <section className="rounded-lg border border-slate-200 bg-white p-4">
                   <h2 className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-800"><BarChart3 className="h-4 w-4" />Conversation Categories</h2>
                   <ConversationCategoryChart data={payload?.categories ?? []} />

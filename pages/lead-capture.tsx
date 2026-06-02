@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
+import ConversionFunnelStrip from '@/components/engagement/ConversionFunnelStrip';
 
 /**
  * Lead Capture — business-facing universal capture console.
@@ -164,6 +165,10 @@ export default function LeadCapturePage() {
           <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">Capture leads from anywhere</h1>
           <p className="mt-1 text-sm text-gray-600">Same-site forms, external landing pages, embedded forms, web apps, or webhook providers — pick what matches your setup.</p>
         </header>
+
+        {/* Funnel narrative continuity — reuse the engagement ConversionFunnelStrip
+            (context-driven) so Lead Capture shows the same Creator → Conversion story. */}
+        <ConversionFunnelStrip />
 
         {!companyId && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Select a company.</div>}
 

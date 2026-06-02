@@ -10,6 +10,11 @@ export type PlatformExecutionDay = {
   suggestedTime: string;
   reasoning: string;
   trendUsed?: string | null;
+  // Creator variant identity, carried durably into plan_json when a variant
+  // was selected upstream. Omitted entirely when no variant applies (plain
+  // BOLT-text days), so the persisted plan stays byte-identical to before.
+  variantId?: string | null;
+  creatorStrategyId?: string | null;
 };
 
 export type PlatformExecutionPlan = {
@@ -103,8 +108,28 @@ export function buildPlatformExecutionPlan(input: {
   campaign: any;
   weekPlan: any;
   trends: string[];
+  // Optional creator variant/strategy selected upstream. When provided — or
+  // present on the campaign/week blueprint — it is stamped onto every day of
+  // the plan so it survives durably in platform_execution_plans.plan_json and
+  // reaches generate-day's link mint. Omitted → byte-identical legacy plan.
+  // This is a passthrough only: the build never SELECTS a variant, it just
+  // refuses to DROP one that was already chosen.
+  variantSelection?: { variantId?: string | null; creatorStrategyId?: string | null };
 }): PlatformExecutionPlan {
   const weekNumber = input.weekPlan.week_number;
+  // Resolve a durable variant from the most specific source available. All are
+  // optional; when none resolve the plan carries no variant fields at all.
+  const selectedVariantId =
+    input.variantSelection?.variantId ??
+    (input.weekPlan?.variant_id as string | null | undefined) ??
+    (input.campaign?.applied_variant?.variant_id as string | null | undefined) ??
+    null;
+  const selectedStrategyId =
+    input.variantSelection?.creatorStrategyId ??
+    (input.weekPlan?.creator_strategy_id as string | null | undefined) ??
+    (input.campaign?.strategy_id as string | null | undefined) ??
+    (input.campaign?.applied_variant?.strategy_id as string | null | undefined) ??
+    null;
   const platformsRaw = input.weekPlan.platforms || [];
   const platformSet = new Set(platformsRaw.map(normalizePlatform));
   if (platformSet.size < 3) {
@@ -147,7 +172,7 @@ export function buildPlatformExecutionPlan(input: {
       ? 'Trend aligned with campaign themes'
       : 'Aligned with weekly theme and platform mix';
 
-    days.push({
+    const day: PlatformExecutionDay = {
       date: `Week ${weekNumber} Day ${dayIndex + 1}`,
       platform: resolvedPlatform,
       contentType,
@@ -156,7 +181,12 @@ export function buildPlatformExecutionPlan(input: {
       suggestedTime: PLATFORM_TIMES[resolvedPlatform] || '10:00',
       reasoning,
       trendUsed: trend ?? null,
-    });
+    };
+    // Stamp the chosen variant durably onto the day. Conditional so days carry
+    // no variant keys when none was selected (legacy parity).
+    if (selectedVariantId) day.variantId = selectedVariantId;
+    if (selectedStrategyId) day.creatorStrategyId = selectedStrategyId;
+    days.push(day);
   }
 
   return {
