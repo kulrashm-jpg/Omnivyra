@@ -15,6 +15,7 @@ import { qualifyPredictiveLead } from './leadPredictiveQualifier';
 import { shouldRejectPost } from './leadNoiseFilter';
 import { generateIntentClusters } from './leadClusterService';
 import { writeLeadSignal } from './canonicalLeadSignalService';
+import { deductCreditsIfValueAwaited } from './creditExecutionService';
 
 const QUALIFIED_THRESHOLD = 0.6;
 const QUALITY_WEIGHT = 0.7;
@@ -366,6 +367,32 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
   } else {
     const row = Array.isArray(updatedRow) ? updatedRow[0] : updatedRow;
     console.info('✅ FINAL UPDATE SUCCESS', row?.status);
+  }
+
+  // Credit capture — charge per QUALIFIED lead (value-gated). Best-effort:
+  // never blocks or fails the scan. Idempotent on jobId (multiplier scales the
+  // catalog price by the qualified-lead count). The per-post LLM token cost is
+  // metered separately in usage_events via the process_type → action_key map.
+  if (
+    (finalStatus === 'COMPLETED' || finalStatus === 'COMPLETED_WITH_WARNINGS') &&
+    totalQualified > 0
+  ) {
+    const leadAction = mode === 'PREDICTIVE' ? 'lead_predictive_scoring' : 'lead_qualification';
+    try {
+      await deductCreditsIfValueAwaited(
+        companyId,
+        leadAction,
+        true,
+        {
+          referenceId: jobId,
+          multiplier: totalQualified,
+          note: `Lead ${mode.toLowerCase()} scan ${jobId}: ${totalQualified} qualified`,
+        },
+        false, // per-job idempotency via jobId; no smart-mode time-window dedup
+      );
+    } catch {
+      // billing is best-effort — must never affect job completion
+    }
   }
 
   if (finalStatus === 'COMPLETED' || finalStatus === 'COMPLETED_WITH_WARNINGS') {

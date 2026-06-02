@@ -123,16 +123,16 @@ export function filterBoltContentTypeMix(mix: string[] | undefined | null): stri
   for (const item of mix) {
     const s = String(item ?? '').trim();
     if (!s) continue;
-    const lower = s.toLowerCase();
-    // Sync with BOLT_EXCLUDED_CONTENT_TYPES at top of file. Adding
-    // long-form text formats (blog/whitepaper/newsletter) here so they
-    // get converted to `5 post` instead of passing through unchanged
-    // and then being rejected downstream by the blueprint validator.
-    const excluded = ['video', 'reel', 'carousel', 'slider', 'image', 'banner', 'short', 'blog', 'whitepaper', 'white_paper', 'newsletter'];
-    const isExcluded = excluded.some((x) => lower.includes(x));
-    if (isExcluded) {
-      const numMatch = s.match(/^(\d+)\s/);
-      if (numMatch) result.push(`${numMatch[1]} post`);
+    // Strip an optional leading count ("3 short_story" -> "short_story") so the
+    // exclusion test sees the bare content type, then classify via the canonical
+    // isBoltExcludedContentType (exact-token match). A hand-rolled substring list
+    // mis-classifies legitimate text formats whose name CONTAINS an excluded token
+    // (e.g. `short_story` includes `short`), which silently emptied valid plans.
+    const m = s.match(/^(\d+)\s+(.+)$/);
+    const count = m ? m[1] : null;
+    const typePart = m ? m[2] : s;
+    if (isBoltExcludedContentType(typePart)) {
+      if (count) result.push(`${count} post`);
       else continue;
     } else {
       result.push(s);
@@ -143,9 +143,6 @@ export function filterBoltContentTypeMix(mix: string[] | undefined | null): stri
 
 /** Excluded platforms for BOLT (video-first). */
 const BOLT_EXCLUDED_PLATFORMS_LIST = ['youtube', 'tiktok'];
-
-/** Content type strings that indicate non-text (excluded from BOLT). */
-const BOLT_EXCLUDED_CONTENT_SUBSTRINGS = ['video', 'reel', 'carousel', 'slider', 'image', 'banner', 'short', 'blog', 'whitepaper', 'white_paper', 'newsletter'];
 
 /**
  * Sanitize a BOLT plan to text-only: remove YouTube/TikTok from platform allocation,
@@ -172,14 +169,13 @@ export function sanitizeBoltPlanForTextOnly(weeks: unknown[]): unknown[] {
         const p = String(platform).toLowerCase();
         if (BOLT_EXCLUDED_PLATFORMS_LIST.includes(p)) continue;
         const arr = Array.isArray(items) ? items : [];
+        // Drop genuine media items via the canonical isBoltExcludedContentType
+        // (exact-token match). The previous inline substring list dropped
+        // legitimate text formats whose name contains an excluded token
+        // (`short_story` includes `short`), emptying valid text plans.
         const filtered = arr.filter((item: any) => {
-          const type = String(item?.type ?? item?.content_type ?? '').toLowerCase();
-          return !BOLT_EXCLUDED_CONTENT_SUBSTRINGS.some((s) => type.includes(s));
-        }).map((item: any) => {
-          const type = String(item?.type ?? item?.content_type ?? 'post').toLowerCase();
-          const isExcluded = BOLT_EXCLUDED_CONTENT_SUBSTRINGS.some((s) => type.includes(s));
-          if (isExcluded) return { ...item, type: 'post' };
-          return item;
+          const type = String(item?.type ?? item?.content_type ?? '');
+          return !isBoltExcludedContentType(type);
         });
         if (filtered.length > 0) pcb[platform] = filtered;
       }

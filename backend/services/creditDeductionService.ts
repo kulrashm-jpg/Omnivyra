@@ -72,7 +72,11 @@ export type CreditAction =
   | 'recommendations_generate'
   | 'recommendations_opportunities'
   | 'recommendations_preview_strategy'
-  | 'recommendations_group_preview';
+  | 'recommendations_group_preview'
+  // Lead-capture intelligence (catalog rows: migration 20260821). Value-gated,
+  // charged per qualified lead — see leadQualifier.ts / leadPredictiveQualifier.ts.
+  | 'lead_qualification'
+  | 'lead_predictive_scoring';
 export const CREDIT_ACTIONS: CreditAction[] = [
   'ai_reply',
   'auto_post',
@@ -119,6 +123,9 @@ export const CREDIT_ACTIONS: CreditAction[] = [
   'recommendations_opportunities',
   'recommendations_preview_strategy',
   'recommendations_group_preview',
+  // Lead-capture intelligence (migration 20260821)
+  'lead_qualification',
+  'lead_predictive_scoring',
 ];
 
 // ── DB-driven cost getter (overrides hardcoded map when config row exists) ─────
