@@ -48,7 +48,14 @@ export type ExecutionPlanRow = Record<string, unknown> & {
 export type ExecutionSource = 'blueprint' | 'AI' | 'board' | 'manual';
 
 function setWriteAllowed(): void {
-  process.env.ALLOW_EXECUTION_ENGINE_WRITE = '1';
+  // Vestigial: ALLOW_EXECUTION_ENGINE_WRITE was once read by a write-owner
+  // guard that gated execution-engine writes. That guard is now a passthrough
+  // (see backend/db/writeOwner.ts) and NOTHING reads this flag anywhere in the
+  // codebase. In production, config hardening wraps `process.env` in a readonly
+  // proxy, so the old assignment threw "'set' on proxy: trap returned falsish
+  // for property 'ALLOW_EXECUTION_ENGINE_WRITE'" and aborted every daily-plan
+  // write (generate-weekly-structure). Kept as a no-op so the 5 call sites stay
+  // as documented intent without mutating the frozen env proxy.
 }
 
 function log(source: ExecutionSource, msg: string, data?: Record<string, unknown>) {
