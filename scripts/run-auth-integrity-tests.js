@@ -15,7 +15,12 @@ const specs = [
 const env = {
   ...process.env,
   AUTH_E2E_TIMEOUT_MS: process.env.AUTH_E2E_TIMEOUT_MS || '120000',
-  PLAYWRIGHT_BROWSERS_PATH: path.join(root, '.playwright-browsers'),
+  // Default to Playwright's global browser cache (shared across all projects)
+  // instead of forcing a per-repo ~660MB .playwright-browsers download. Set
+  // AUTH_E2E_INREPO_BROWSERS=1 for a hermetic in-repo install if ever needed.
+  ...(process.env.AUTH_E2E_INREPO_BROWSERS === '1'
+    ? { PLAYWRIGHT_BROWSERS_PATH: path.join(root, '.playwright-browsers') }
+    : {}),
 };
 
 async function run() {

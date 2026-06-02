@@ -9,6 +9,8 @@ out
 .github
 .vercel
 .turbo
+.playwright-browsers
+.playwright-browsers/**
 
 # Secrets — Dockerfile also rm's these; keep them out of build context entirely
 .env
@@ -20,6 +22,19 @@ logs
 coverage
 *.log
 npm-debug.log*
+.worker-bootstrap.log
+/.worker-bootstrap.log
+*.tsbuildinfo
+
+# Generated architecture reports can be hundreds of MB locally.
+architecture-migration/reports
+architecture-migration/reports/**
+
+# Local screenshots/artifacts
+tmp-*.png
+tmp*.png
+artifacts
+artifacts/
 
 # Editor / OS
 .vscode

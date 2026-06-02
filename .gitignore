@@ -16,6 +16,8 @@ tsconfig.tsbuildinfo
 tsconfig.*.tsbuildinfo
 tmp/
 artifacts/
+tmp-*.png
+tmp*.png
 tmp_*.json
 build-*.txt
 validation-output.txt

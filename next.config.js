@@ -96,8 +96,15 @@ const nextConfig = {
     }
 
     if (dev && !isServer && config.cache && config.cache.type === 'filesystem') {
-      // Avoid intermittent Windows rename failures under .next/dev/cache/webpack.
-      config.cache = { type: 'memory' };
+      // Keep the filesystem cache by default — it persists compiled modules
+      // across dev restarts and is the single biggest win for warm-restart
+      // compile times (vs. recompiling every route cold). It previously caused
+      // intermittent Windows rename failures under the cache dir; if those
+      // resurface, set DEV_WEBPACK_MEMORY_CACHE=1 to fall back to the in-memory
+      // cache (loses cross-restart caching but sidesteps the rename races).
+      if (process.env.DEV_WEBPACK_MEMORY_CACHE === '1') {
+        config.cache = { type: 'memory' };
+      }
     }
 
     if (isServer) {

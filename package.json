@@ -11,6 +11,8 @@
     "dev:app": "node scripts/start-all.js --app-only",
     "prebuild": "node scripts/enforce-decision-intelligence.js",
     "clean": "node scripts/clean.js",
+    "clean:bloat": "node scripts/clean-local-bloat.js",
+    "clean:bloat:dry": "node scripts/clean-local-bloat.js --dry-run",
     "build": "node scripts/safe-build.js",
     "build:ci": "node scripts/safe-build.js",
     "build:webpack": "node scripts/safe-build.js",

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Clean build artifacts: .next, dist, .vercel.
+ * Clean build artifacts: .next, dist, .vercel, plus local-only bloat.
  *
  * Safety rule:
  *   Cleanup is blocked whenever a live Next.js dev/build runtime is detected.
@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { assertCleanupAllowed } = require('./dev-runtime-guard');
 
 const root = process.cwd();
@@ -30,6 +31,16 @@ async function cleanAll() {
       }
     }),
   );
+
+  const localBloat = path.join(root, 'scripts', 'clean-local-bloat.js');
+  const result = spawnSync(process.execPath, [localBloat], {
+    cwd: root,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+  if (result.status !== 0) {
+    throw new Error('Local bloat cleanup failed');
+  }
 }
 
 cleanAll()

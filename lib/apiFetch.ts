@@ -48,6 +48,21 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
       },
     });
   } catch (err) {
+    // A client-initiated abort is NOT a server failure — it means the caller
+    // gave up waiting (e.g. its own AbortController timeout fired). Re-throw it
+    // so the caller's abort/timeout handling runs, instead of masking it as a
+    // synthetic 503. Masking an abort as a 5xx is what surfaced the spurious
+    // PROFILE_LOAD_FAILED "couldn't load your workspace" banner on slow dev
+    // compiles: the 8s loader timeout aborted mid-compile, apiFetch turned that
+    // into a 503, and the workspace loader treated the 5xx as a hard error
+    // instead of taking its silent transient-retry path. This restores standard
+    // fetch() abort semantics; callers that never pass a `signal` never hit it.
+    const aborted =
+      (err instanceof Error && err.name === 'AbortError') ||
+      (init.signal instanceof AbortSignal && init.signal.aborted);
+    if (aborted) {
+      throw err;
+    }
     // Synthesize a non-ok Response so callers' `if (r.ok)` branches handle
     // network failures the same way they handle 5xx responses. Body shape
     // matches the JSON-error pattern most API routes use so callers that

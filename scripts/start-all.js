@@ -34,6 +34,11 @@ const args = process.argv.slice(2);
 const APP_ONLY = args.includes('--app-only') || process.env.DEV_APP_ONLY === '1';
 const SKIP_PRESTART_CLEAN = args.includes('--no-clean') || process.env.DEV_SKIP_PRESTART_CLEAN === '1';
 const FORCE_TURBOPACK = args.includes('--turbopack') || args.includes('--turbo');
+// Opt-IN .next wipe. Default is now to PRESERVE the build cache across restarts
+// so warm restarts reuse compiled routes instead of paying a full cold compile
+// (27-30s/route) every time. Pass --clean or set DEV_CLEAN_ON_START=1 to force
+// the old wipe-everything behavior when stale artifacts are suspected.
+const CLEAN_ON_START = args.includes('--clean') || process.env.DEV_CLEAN_ON_START === '1';
 
 function readPortArg(argv) {
   const explicitIndex = argv.findIndex((arg) => arg === '--port' || arg === '-p');
@@ -213,10 +218,13 @@ async function cleanupStaleNextLockArtifacts() {
     console.log('   ⚠️  Skipping stale .next/dev cleanup because another workspace dev server is active.\n');
     return;
   }
+  // Remove only the stale lock/trace artifacts that can block a fresh start.
+  // Intentionally NOT removing the webpack cache dir — preserving it across
+  // restarts is what makes warm restarts fast (see CLEAN_ON_START). Use --clean
+  // to do a full wipe when stale compiled output is suspected.
   const lockPaths = [
     path.join(process.cwd(), '.next', 'dev', 'lock'),
     path.join(process.cwd(), '.next', 'dev', 'trace'),
-    path.join(process.cwd(), '.next', 'dev', 'cache', 'webpack'),
   ];
 
   for (const target of lockPaths) {
@@ -256,6 +264,10 @@ async function cleanNextCacheSafelyForDevStart() {
     console.log('   Skipping .next cleanup because pre-start clean was disabled for this QA run.\n');
     return;
   }
+  if (!CLEAN_ON_START) {
+    console.log('   Preserving .next build cache for faster warm restarts (pass --clean or set DEV_CLEAN_ON_START=1 to wipe).\n');
+    return;
+  }
   assertCleanupAllowed({
     trigger: 'dev-start',
     excludePids: [process.pid],
@@ -272,6 +284,12 @@ async function cleanNextCacheSafelyForDevStart() {
       if (path.resolve(target) === path.resolve(lockPath)) continue;
       fs.rmSync(target, { recursive: true, force: true });
     }
+  }
+  try {
+    const localBloatScript = path.join(process.cwd(), 'scripts', 'clean-local-bloat.js');
+    execSync(`${process.execPath} "${localBloatScript}"`, { stdio: 'inherit' });
+  } catch {
+    console.log('   Local bloat cleanup encountered issues; continuing startup.\n');
   }
   console.log('   Cleaned build artifacts before startup while preserving dev-server.lock.\n');
 }
