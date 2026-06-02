@@ -1,33 +1,46 @@
 name: Auth Integrity
 
+# ⏸️ PARKED (2026-06-01): runs on workflow_dispatch ONLY.
+# This is a LIVE-Supabase E2E gate — tests/auth/authTestHarness.ts creates,
+# confirms and deletes real users via the Supabase admin API and exercises real
+# login/callback/logout flows. It therefore requires a NON-production Supabase
+# project's secrets in CI (NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+# SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SESSION_COOKIE_SECRET). Those are not
+# configured, so the gate failed every PR/push at "Validate auth test environment"
+# — never a code regression. Placeholders are impossible (admin.createUser needs a
+# real backend); prod must NOT be used (the suite deletes users).
+#
+# TODO(re-enable): once a dedicated test/staging Supabase project exists, add the 5
+# repo secrets and restore the `pull_request` / `push` / `release` triggers below.
+# Until then it can still be run manually from the Actions tab (workflow_dispatch).
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/auth-integrity.yml'
-      - 'backend/security/**'
-      - 'backend/services/authResolver.ts'
-      - 'backend/services/supabaseAuthService.ts'
-      - 'components/CompanyContext.tsx'
-      - 'hooks/useOnboarding.ts'
-      - 'lib/auth/**'
-      - 'lib/supabaseBrowser.ts'
-      - 'pages/_app.tsx'
-      - 'pages/auth/**'
-      - 'pages/create-account.tsx'
-      - 'pages/login.tsx'
-      - 'pages/onboarding/**'
-      - 'pages/api/auth/**'
-      - 'scripts/check-auth-integrity-invariants.js'
-      - 'scripts/run-auth-integrity-tests.js'
-      - 'tests/auth/**'
-      - 'utils/authIntegrityGuards.ts'
-      - 'utils/authStorage.ts'
-      - 'utils/clearSupabaseSession.ts'
-  push:
-    branches: [main]
-    tags: ['v*', 'release-*']
-  release:
-    types: [published, prereleased]
+  # pull_request:
+  #   paths:
+  #     - '.github/workflows/auth-integrity.yml'
+  #     - 'backend/security/**'
+  #     - 'backend/services/authResolver.ts'
+  #     - 'backend/services/supabaseAuthService.ts'
+  #     - 'components/CompanyContext.tsx'
+  #     - 'hooks/useOnboarding.ts'
+  #     - 'lib/auth/**'
+  #     - 'lib/supabaseBrowser.ts'
+  #     - 'pages/_app.tsx'
+  #     - 'pages/auth/**'
+  #     - 'pages/create-account.tsx'
+  #     - 'pages/login.tsx'
+  #     - 'pages/onboarding/**'
+  #     - 'pages/api/auth/**'
+  #     - 'scripts/check-auth-integrity-invariants.js'
+  #     - 'scripts/run-auth-integrity-tests.js'
+  #     - 'tests/auth/**'
+  #     - 'utils/authIntegrityGuards.ts'
+  #     - 'utils/authStorage.ts'
+  #     - 'utils/clearSupabaseSession.ts'
+  # push:
+  #   branches: [main]
+  #   tags: ['v*', 'release-*']
+  # release:
+  #   types: [published, prereleased]
   workflow_dispatch:
 
 concurrency:
