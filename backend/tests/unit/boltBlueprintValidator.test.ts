@@ -121,9 +121,13 @@ describe('assertValidBoltBlueprint', () => {
     expect(() => assertValidBoltBlueprint({
       weeks: [{
         week_number: 1,
-        platform_allocation: { linkedin: 3 },
-        // no activities → BLUEPRINT_INVALID_ACTIVITY_COUNT is the hard
-        // error; CTA missing is a co-warning. Hard error still throws.
+        // platform_allocation with a 0 count keeps the platform mapping
+        // (so no MISSING_PLATFORM_MAPPING) while declaring zero posts →
+        // BLUEPRINT_INVALID_ACTIVITY_COUNT is the hard error; CTA missing
+        // is a co-warning. Hard error still throws. NOTE: a POSITIVE
+        // platform_allocation count now counts as activities (it is the
+        // canonical commit-plan activity signal), so this case must use 0.
+        platform_allocation: { linkedin: 0 },
       }],
     })).toThrow(BoltError);
   });

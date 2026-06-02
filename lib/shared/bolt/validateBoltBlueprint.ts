@@ -61,22 +61,54 @@ function asArray(v: unknown): unknown[] {
 }
 
 function extractWeekActivityCount(week: Record<string, unknown>): number {
-  const activities = asArray(week.activities ?? week.posts ?? week.daily_posts ?? []);
-  if (activities.length > 0) return activities.length;
+  // The week's activity count is whichever signal is largest — different
+  // planner shapes carry it in different fields, and none is guaranteed to
+  // be present. We take the MAX rather than first-match so a plan that only
+  // declares counts in `platform_allocation` (the common shape at commit-plan
+  // time, before per-day rows are materialised in generate-weekly-structure)
+  // isn't mis-counted as zero.
+  let count = 0;
+
+  // 1. Explicit per-activity arrays. `daily` is the planner's canonical
+  //    per-day slot key; the older shapes use activities/posts/daily_posts.
+  const activities = asArray(week.activities ?? week.posts ?? week.daily_posts ?? week.daily ?? []);
+  count = Math.max(count, activities.length);
+
+  // 2. platform_content_breakdown — sum items across platforms.
   const breakdown = asObject(week.platform_content_breakdown);
   if (breakdown) {
     let total = 0;
     for (const items of Object.values(breakdown)) total += asArray(items).length;
-    if (total > 0) return total;
+    count = Math.max(count, total);
   }
+
+  // 3. content_type_mix — entries are either "5 post" (leading count) or a
+  //    bare type name like "poll". Sum the leading integers; count a bare
+  //    entry as one activity (a listed type implies ≥1 activity of it).
   const mix = asArray(week.content_type_mix);
-  // mix items can be "5 post" / "2 tweet" — sum the leading integers.
-  let total = 0;
-  for (const raw of mix) {
-    const m = String(raw ?? '').match(/^(\d+)/);
-    if (m) total += Number(m[1]);
+  if (mix.length > 0) {
+    let total = 0;
+    for (const raw of mix) {
+      const m = String(raw ?? '').match(/^(\d+)/);
+      total += m ? Number(m[1]) : 1;
+    }
+    count = Math.max(count, total);
   }
-  return total;
+
+  // 4. platform_allocation — per-platform post counts (e.g.
+  //    { facebook: 2, linkedin: 4 } → 6). This is the authoritative activity
+  //    signal once the AI plan is shaped but before daily rows exist.
+  const alloc = asObject(week.platform_allocation);
+  if (alloc) {
+    let total = 0;
+    for (const v of Object.values(alloc)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) total += n;
+    }
+    count = Math.max(count, total);
+  }
+
+  return count;
 }
 
 function extractWeekPlatforms(week: Record<string, unknown>): string[] {
