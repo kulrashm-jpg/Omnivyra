@@ -62,6 +62,8 @@ export type CreatorOrchestrationOrigin = 'direct' | 'bolt' | 'queue';
 export type CreatorOrchestrationInput = {
   /** Logical campaign / session identifier. Direct flow synthesizes one. */
   campaignId: string;
+  /** Activity-consumption correlation envelope (forwarded to LLM + media metering). */
+  correlation?: import('../../../lib/shared/observability/correlationRef').CorrelationRef;
   companyId: string;
   userId: string | null;
   topic: string;
@@ -432,6 +434,7 @@ export async function runCreatorOrchestration(
   // 1) generate
   const generationCtx: CreatorGenerationContext = {
     campaignId: input.campaignId,
+    correlation: input.correlation ?? { referenceType: 'creator_asset', referenceId: input.campaignId, parentActivityId: input.campaignId },
     companyId: input.companyId,
     userId: input.userId,
     topic: input.topic,
