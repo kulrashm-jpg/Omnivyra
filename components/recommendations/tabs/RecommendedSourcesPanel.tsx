@@ -49,6 +49,12 @@ type RecommendedSourceDiscoveryItem = {
   fit_reasons: string[];
   recommendation_reason: string;
   onboarding_suggestion: string;
+  curated?: boolean;
+  source_url?: string | null;
+  platform?: string | null;
+  integration_mode?: 'public' | 'public_login' | 'oauth' | 'api_key' | 'manual' | string | null;
+  industry_tags?: string[];
+  similar_industry_tags?: string[];
 };
 
 type ApiResponse = {
@@ -108,6 +114,14 @@ const YIELD_LABEL: Record<YieldRating, string> = {
   high: 'High',
   medium: 'Medium',
   low: 'Low',
+};
+
+const INTEGRATION_LABEL: Record<string, string> = {
+  public: 'Public',
+  public_login: 'Login-ready',
+  oauth: 'OAuth',
+  api_key: 'API key',
+  manual: 'Manual',
 };
 
 type Props = {
@@ -250,6 +264,16 @@ function SourceCard({ item }: { item: RecommendedSourceDiscoveryItem }) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-semibold text-gray-900">{item.source_name}</span>
+              {item.curated && (
+                <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">
+                  Curated
+                </span>
+              )}
+              {item.integration_mode && (
+                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                  {INTEGRATION_LABEL[item.integration_mode] || item.integration_mode}
+                </span>
+              )}
               <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600">
                 {item.source_type}
               </span>
@@ -277,7 +301,32 @@ function SourceCard({ item }: { item: RecommendedSourceDiscoveryItem }) {
       {expanded && (
         <div className="space-y-3 border-t border-gray-100 px-4 pb-4 pt-3">
           <p className="text-sm text-gray-600">{item.recommendation_reason}</p>
+          {item.source_url && (
+            <a
+              href={item.source_url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex text-xs font-medium text-indigo-600 hover:text-indigo-800"
+            >
+              Open source
+            </a>
+          )}
           <p className="text-xs italic text-gray-500">{item.onboarding_suggestion}</p>
+
+          {item.curated && (item.industry_tags?.length || item.similar_industry_tags?.length) && (
+            <div className="flex flex-wrap gap-1.5">
+              {(item.industry_tags ?? []).slice(0, 5).map((tag) => (
+                <span key={tag} className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-700">
+                  {tag}
+                </span>
+              ))}
+              {(item.similar_industry_tags ?? []).slice(0, 4).map((tag) => (
+                <span key={tag} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">
+                  Similar: {tag}
+                </span>
+              ))}
+            </div>
+          )}
 
           {item.fit_reasons.length > 0 && (
             <div className="rounded-lg bg-emerald-50/60 px-3 py-2">

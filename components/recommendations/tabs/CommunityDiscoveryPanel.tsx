@@ -58,6 +58,13 @@ const STATUS_TONE: Record<Status, string> = {
   activated: 'bg-emerald-100 text-emerald-800',
 };
 
+const DISCOVERY_INTERESTS = [
+  { id: 'buying_intent', label: 'Buying intent', keywords: ['pricing', 'recommendation', 'alternative', 'looking for'] },
+  { id: 'competitor_pain', label: 'Competitor pain', keywords: ['frustrated', 'switching', 'complaint', 'support'] },
+  { id: 'research', label: 'Product research', keywords: ['compare', 'review', 'stack', 'workflow'] },
+  { id: 'integration', label: 'Integration needs', keywords: ['integration', 'api', 'connect', 'sync'] },
+] as const;
+
 function fmtPct(value: number | null | undefined): string {
   if (typeof value !== 'number') return '—';
   return `${Math.round(value * 100)}%`;
@@ -77,6 +84,7 @@ export default function CommunityDiscoveryPanel({ companyId, fetchWithAuth, onSo
   const [keywordText, setKeywordText] = useState<string>('');
   const [competitorText, setCompetitorText] = useState<string>('');
   const [discovering, setDiscovering] = useState<boolean>(false);
+  const [selectedInterest, setSelectedInterest] = useState<(typeof DISCOVERY_INTERESTS)[number]['id']>('buying_intent');
 
   const load = useCallback(async () => {
     if (!companyId) return;
@@ -113,7 +121,10 @@ export default function CommunityDiscoveryPanel({ companyId, fetchWithAuth, onSo
           industryCategory: industry || null,
           description: description || null,
           icp: icp || null,
-          keywords: keywordText.split(',').map((k) => k.trim()).filter(Boolean),
+          keywords: [
+            ...(DISCOVERY_INTERESTS.find((interest) => interest.id === selectedInterest)?.keywords ?? []),
+            ...keywordText.split(',').map((k) => k.trim()).filter(Boolean),
+          ],
           competitors: competitorText.split(',').map((c) => c.trim()).filter(Boolean),
         }),
       });
@@ -127,7 +138,7 @@ export default function CommunityDiscoveryPanel({ companyId, fetchWithAuth, onSo
     } finally {
       setDiscovering(false);
     }
-  }, [companyId, fetchWithAuth, industry, description, icp, keywordText, competitorText, load]);
+  }, [companyId, fetchWithAuth, industry, description, icp, keywordText, competitorText, selectedInterest, load]);
 
   const act = useCallback(
     async (rec: Recommendation, action: 'approve' | 'reject' | 'dismiss' | 'activate') => {
@@ -173,6 +184,40 @@ export default function CommunityDiscoveryPanel({ companyId, fetchWithAuth, onSo
       </div>
 
       <div className="border-b border-slate-200 px-4 py-3">
+        <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-slate-800">What kind of lead signals do you want more of?</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {DISCOVERY_INTERESTS.map((interest) => (
+                <button
+                  key={interest.id}
+                  type="button"
+                  onClick={() => setSelectedInterest(interest.id)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${
+                    selectedInterest === interest.id
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {interest.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void runDiscovery()}
+            disabled={discovering}
+            className="rounded bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {discovering ? 'Finding sources...' : 'Find communities'}
+          </button>
+        </div>
+        <details className="rounded-lg border border-slate-200 bg-slate-50">
+          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
+            Add details to tune the search
+          </summary>
+          <div className="border-t border-slate-200 px-3 py-3">
         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
           <input
             value={industry}
@@ -205,18 +250,12 @@ export default function CommunityDiscoveryPanel({ companyId, fetchWithAuth, onSo
             className="rounded border border-slate-300 px-2 py-1 text-xs"
           />
         </div>
+          </div>
+        </details>
         <div className="mt-2 flex items-center justify-between">
           <p className="text-[11px] text-slate-500">
-            Discovery is deterministic and uses a curated seed dataset. No external search APIs.
+            Discovery uses your selected interest first. Add details only when you want a narrower search.
           </p>
-          <button
-            type="button"
-            onClick={() => void runDiscovery()}
-            disabled={discovering}
-            className="rounded bg-slate-900 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-          >
-            {discovering ? 'Discovering…' : 'Discover communities'}
-          </button>
         </div>
       </div>
 

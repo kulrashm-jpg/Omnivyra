@@ -34,6 +34,10 @@ import {
   type AbstractSource,
 } from '../../../../backend/services/sourceRecommendationEngine';
 import {
+  curatedDiscoveryMetadata,
+  loadCuratedIndustrySourceMatches,
+} from '../../../../backend/services/curatedIndustrySourceService';
+import {
   toDiscoveryItem,
   compositeSourceId,
 } from '../../../../backend/services/sourceRecommendationContract';
@@ -97,8 +101,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }),
     );
 
-    const scored = scoreSourcesForOpportunities(companyContext, abstractSources);
-
     const candidatesByKey = new Map<string, DiscoveryCandidate>();
     for (const candidate of discovery.candidates) {
       candidatesByKey.set(
@@ -107,10 +109,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
+    const curatedByKey = new Map<string, Awaited<ReturnType<typeof loadCuratedIndustrySourceMatches>>[number]>();
+    const curatedMatches = await loadCuratedIndustrySourceMatches(companyContext);
+    for (const match of curatedMatches) {
+      const sourceId = compositeSourceId(
+        match.abstractSource.source_type,
+        match.abstractSource.source_identifier,
+      );
+      curatedByKey.set(sourceId, match);
+      if (!candidatesByKey.has(sourceId)) {
+        abstractSources.push(match.abstractSource);
+      }
+    }
+
+    const scored = scoreSourcesForOpportunities(companyContext, abstractSources);
+
     const items = scored.map((source) => {
       const sourceId = compositeSourceId(source.source_type, source.source_identifier);
       const candidate = candidatesByKey.get(sourceId);
-      return toDiscoveryItem(source, companyContext, sourceId, candidate?.recommendation_reason);
+      const curated = curatedByKey.get(sourceId);
+      return {
+        ...toDiscoveryItem(
+          source,
+          companyContext,
+          sourceId,
+          candidate?.recommendation_reason ?? curated?.reason,
+        ),
+        ...(curated ? curatedDiscoveryMetadata(curated) : {}),
+      };
     });
 
     return res.status(200).json({

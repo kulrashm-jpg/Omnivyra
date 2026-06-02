@@ -99,6 +99,13 @@ export type RecommendedSource = {
 export type RecommendedSourceDiscoveryItem = RecommendedSource & {
   /** Verbatim from the underlying discovery candidate when available. */
   recommendation_reason: string;
+  /** Super-admin catalog metadata. Present for curated industry sources. */
+  curated?: boolean;
+  source_url?: string | null;
+  platform?: string | null;
+  integration_mode?: 'public' | 'public_login' | 'oauth' | 'api_key' | 'manual' | string | null;
+  industry_tags?: string[];
+  similar_industry_tags?: string[];
   /**
    * One-liner aimed at users new to the workspace. Surfaces
    * context-completeness gaps and the "where to start" hint.

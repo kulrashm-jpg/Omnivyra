@@ -177,9 +177,9 @@ export default function OpportunityFeedPanel({ companyId, fetchWithAuth }: Props
     <div className="rounded-lg border border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-900">Opportunity Intelligence Feed</h3>
+          <h3 className="text-sm font-semibold text-slate-900">Active Lead Queue</h3>
           <p className="text-xs text-slate-500">
-            Every opportunity carries an explanation — score breakdown, matched keywords, moderation outcome, and source trace.
+            Review who to act on first. Open details only when you need the score, keywords, moderation, or source trace.
           </p>
         </div>
         <button

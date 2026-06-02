@@ -18,6 +18,7 @@ import {
   Globe,
   FileText,
   Shield,
+  Compass,
 } from 'lucide-react';
 import {
   type DeletionAudit,
@@ -75,6 +76,10 @@ const MonetizationOpsTab = dynamic(() => import('../components/super-admin/tabs/
   loading: SuperAdminTabLoader,
 });
 const CreditsBillingTab = dynamic(() => import('../components/super-admin/tabs/CreditsBillingTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+const CuratedSourcesTab = dynamic(() => import('../components/super-admin/tabs/CuratedSourcesTab'), {
   ssr: false,
   loading: SuperAdminTabLoader,
 });
@@ -419,6 +424,7 @@ export default function SuperAdminPanel() {
             { id: 'credits-billing', label: 'Credits & Billing', icon: Coins      },
             { id: 'monetization-ops', label: 'Monetization Ops',  icon: Coins      },
             { id: 'community-ai',   label: 'Engagement',         icon: Activity   },
+            { id: 'source-catalog',  label: 'Source Catalog',     icon: Compass    },
             { id: 'cost-analysis',  label: 'Cost Analysis',      icon: DollarSign },
             { id: 'audit',          label: 'Audit Logs',         icon: Eye        },
             { id: 'social-platforms', label: 'APIs',             icon: Globe      },
@@ -498,6 +504,10 @@ export default function SuperAdminPanel() {
             isSavingPolicy={isSavingPolicy}
             openPolicyConfirm={openPolicyConfirm}
           />
+        )}
+
+        {activeTab === 'source-catalog' && (
+          <CuratedSourcesTab />
         )}
 
         {activeTab === 'credits-billing' && (

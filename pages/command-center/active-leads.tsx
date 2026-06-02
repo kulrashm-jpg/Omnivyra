@@ -21,10 +21,10 @@ export default function ActiveLeadsCommandCenterPage() {
               Active Leads
             </p>
             <h1 className="mt-2 text-2xl font-bold text-gray-900">
-              Opportunity discovery workspace
+              Lead review workspace
             </h1>
             <p className="mt-2 max-w-3xl text-sm text-gray-600">
-              See where to listen, what to monitor, and what opportunities exist — all in one workspace. Recommendations are advisory; you stay in control.
+              Start with the people and signals that need action. Source discovery, community setup, and monitoring controls stay available as support when you need them.
             </p>
           </section>
 

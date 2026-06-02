@@ -39,7 +39,7 @@ import EmptyState from '../../shared/EmptyState';
 import type { OpportunityTabProps } from './types';
 
 type FetchWithAuth = (input: RequestInfo, init?: RequestInit) => Promise<Response>;
-type TabKey = 'discover' | 'monitor' | 'opportunities';
+type TabKey = 'opportunities' | 'monitor' | 'discover';
 
 type SourceType = 'engagement' | 'listening';
 type SignalContact = { contact_id: string | null; platform: string | null; platform_user_id: string | null; display_name: string | null };
@@ -64,6 +64,36 @@ type LeadSignal = {
 };
 type SignalsResponse = { items: LeadSignal[]; total: number; page: number; page_size: number; has_more: boolean };
 type SignalGroup = { key: string; title: string; fallbackLabel: string; latestSignal: LeadSignal; signals: LeadSignal[]; maxTotalScore: number };
+type TabSummary = {
+  newLeadItems: number | null;
+  totalLeadItems: number | null;
+  connectedSources: number | null;
+  activeSources: number | null;
+  recommendedSources: number | null;
+};
+
+const EMPTY_TAB_SUMMARY: TabSummary = {
+  newLeadItems: null,
+  totalLeadItems: null,
+  connectedSources: null,
+  activeSources: null,
+  recommendedSources: null,
+};
+
+type SourceLite = {
+  source_identifier: string;
+  status: string;
+};
+
+type SourcesLite = { items?: SourceLite[] };
+
+type OpportunitiesLite = {
+  total?: number;
+  items?: Array<{ created_at?: string | null }>;
+};
+
+type DiscoveryItemLite = { source_identifier?: string; source_id?: string };
+type DiscoveryLite = { items?: DiscoveryItemLite[] };
 
 const PAGE_SIZE = 20;
 const FILTER_DEBOUNCE_MS = 250;
@@ -120,7 +150,8 @@ function groupSignals(signals: LeadSignal[]): SignalGroup[] {
 }
 
 export default function CanonicalActiveLeadsTab({ companyId, fetchWithAuth }: OpportunityTabProps) {
-  const [activeTab, setActiveTab] = useState<TabKey>('discover');
+  const [activeTab, setActiveTab] = useState<TabKey>('opportunities');
+  const tabSummary = useTabSummary(companyId, fetchWithAuth);
 
   if (!companyId) {
     return <div className="py-4 text-sm text-gray-500">Select a company to view the Active Leads workspace.</div>;
@@ -138,7 +169,7 @@ export default function CanonicalActiveLeadsTab({ companyId, fetchWithAuth }: Op
         fetchWithAuth={fetchWithAuth}
         onNavigate={setActiveTab}
       />
-      <StickyTabNav active={activeTab} onChange={setActiveTab} />
+      <StickyTabNav active={activeTab} onChange={setActiveTab} summary={tabSummary} />
 
       {activeTab === 'discover' && (
         <DiscoverTab companyId={companyId} fetchWithAuth={fetchWithAuth} />
@@ -158,12 +189,97 @@ export default function CanonicalActiveLeadsTab({ companyId, fetchWithAuth }: Op
 // ---------------------------------------------------------------------------
 
 const TABS: Array<{ key: TabKey; label: string; sub: string }> = [
-  { key: 'discover',      label: 'Discover',      sub: 'Where should I listen?' },
-  { key: 'monitor',       label: 'Monitor',       sub: 'What am I actively monitoring?' },
-  { key: 'opportunities', label: 'Opportunities', sub: 'What should I act on?' },
+  { key: 'opportunities', label: 'Active Leads', sub: 'Who needs action now?' },
+  { key: 'monitor',       label: 'Listening Setup', sub: 'What is monitoring?' },
+  { key: 'discover',      label: 'Find Sources', sub: 'Where else to listen?' },
 ];
 
-function StickyTabNav({ active, onChange }: { active: TabKey; onChange: (t: TabKey) => void }) {
+function useTabSummary(companyId: string | null, fetchWithAuth: FetchWithAuth): TabSummary {
+  const [summary, setSummary] = useState<TabSummary>(EMPTY_TAB_SUMMARY);
+
+  useEffect(() => {
+    if (!companyId) {
+      setSummary(EMPTY_TAB_SUMMARY);
+      return;
+    }
+    let cancelled = false;
+    const safeJson = async <T,>(p: Promise<Response>): Promise<T | null> => {
+      try {
+        const response = await p;
+        if (!response.ok) return null;
+        return (await response.json().catch(() => null)) as T | null;
+      } catch {
+        return null;
+      }
+    };
+
+    const load = async () => {
+      const [opportunities, sources, discovery] = await Promise.all([
+        safeJson<OpportunitiesLite>(
+          fetchWithAuth(`/api/active-leads/opportunities?companyId=${encodeURIComponent(companyId)}`),
+        ),
+        safeJson<SourcesLite>(
+          fetchWithAuth(`/api/active-leads/sources?companyId=${encodeURIComponent(companyId)}`),
+        ),
+        safeJson<DiscoveryLite>(
+          fetchWithAuth('/api/active-leads/source-recommendations/discovery', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ companyId }),
+          }),
+        ),
+      ]);
+      if (cancelled) return;
+
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const newLeadItems = opportunities?.items
+        ? opportunities.items.filter((item) => {
+            if (!item.created_at) return false;
+            const createdAt = new Date(item.created_at).getTime();
+            return Number.isFinite(createdAt) && createdAt >= sevenDaysAgo;
+          }).length
+        : null;
+      const sourceItems = sources?.items ?? null;
+      const connectedIds = new Set((sourceItems ?? []).map((source) => source.source_identifier.toLowerCase()));
+      const recommendedSources = discovery?.items
+        ? discovery.items.filter((item) => {
+            const id = (item.source_identifier ?? item.source_id ?? '').toString().toLowerCase();
+            const bare = id.includes(':') ? id.split(':').slice(1).join(':') : id;
+            return id && !connectedIds.has(id) && !connectedIds.has(bare);
+          }).length
+        : null;
+
+      setSummary({
+        newLeadItems,
+        totalLeadItems: opportunities?.total ?? null,
+        connectedSources: sourceItems ? sourceItems.length : null,
+        activeSources: sourceItems ? sourceItems.filter((source) => source.status === 'active').length : null,
+        recommendedSources,
+      });
+    };
+
+    void load();
+    return () => { cancelled = true; };
+  }, [companyId, fetchWithAuth]);
+
+  return summary;
+}
+
+function formatCount(value: number | null): string {
+  return value === null ? '-' : String(value);
+}
+
+function tabBadge(tab: TabKey, summary: TabSummary): string {
+  if (tab === 'opportunities') {
+    return `${formatCount(summary.newLeadItems)} new / ${formatCount(summary.totalLeadItems)} total`;
+  }
+  if (tab === 'monitor') {
+    return `${formatCount(summary.connectedSources)} connected / ${formatCount(summary.activeSources)} active`;
+  }
+  return `${formatCount(summary.recommendedSources)} recommended`;
+}
+
+function StickyTabNav({ active, onChange, summary }: { active: TabKey; onChange: (t: TabKey) => void; summary: TabSummary }) {
   return (
     <nav
       role="tablist"
@@ -188,6 +304,11 @@ function StickyTabNav({ active, onChange }: { active: TabKey; onChange: (t: TabK
             >
               <div className="text-sm font-semibold">{t.label}</div>
               <div className={`text-[11px] ${isActive ? 'text-gray-300' : 'text-gray-500'}`}>{t.sub}</div>
+              <div className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                isActive ? 'bg-white/15 text-white' : 'bg-gray-100 text-gray-600'
+              }`}>
+                {tabBadge(t.key, summary)}
+              </div>
             </button>
           );
         })}
@@ -220,8 +341,8 @@ function DiscoverTab({ companyId, fetchWithAuth }: { companyId: string; fetchWit
       <section className="space-y-3">
         <SectionHeader
           eyebrow="Community Discovery"
-          title="Find new communities to listen to"
-          subtitle="Discover candidate sources beyond what's already recommended."
+          title="Add more listening sources when coverage is thin"
+          subtitle="Choose an interest first. Details appear only when you want to tune the discovery."
           accent="text-emerald-700"
         />
         <CommunityDiscoveryPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
@@ -234,8 +355,8 @@ function DiscoverTab({ companyId, fetchWithAuth }: { companyId: string; fetchWit
       <section className="space-y-3">
         <SectionHeader
           eyebrow="Source Intelligence"
-          title="Source ROI, alerts, identity links"
-          subtitle="How your connected sources are performing across cost, quality, and identity resolution."
+          title="Source performance"
+          subtitle="Use this when you need to understand why certain sources are or are not producing useful leads."
           accent="text-indigo-700"
         />
         <IntelligencePanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
@@ -245,8 +366,8 @@ function DiscoverTab({ companyId, fetchWithAuth }: { companyId: string; fetchWit
       <section className="space-y-3">
         <SectionHeader
           eyebrow="Recommendation Scoring"
-          title="Decision insights and analyst workspace"
-          subtitle="Behind every recommendation: lifecycle state, decision insights, source health."
+          title="Recommendation detail"
+          subtitle="Support detail for analysts. Most users only need this when a recommendation looks surprising."
           accent="text-purple-700"
         />
         <AnalystWorkspacePanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
@@ -310,8 +431,8 @@ function MonitorTab({ companyId, fetchWithAuth }: { companyId: string; fetchWith
       <section className="space-y-3">
         <SectionHeader
           eyebrow="Active Listening Profiles · Integration Status · Platform Enablement"
-          title="Platforms you've connected and what's currently monitoring"
-          subtitle="OAuth/consent status, platforms available for listening, and which capabilities are enabled."
+          title="What is currently monitoring"
+          subtitle="Use this only when leads are missing, a platform is disconnected, or you need to change coverage."
           accent="text-sky-700"
         />
         <LeadsCapabilityStatusPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
@@ -321,8 +442,8 @@ function MonitorTab({ companyId, fetchWithAuth }: { companyId: string; fetchWith
       <section className="space-y-3">
         <SectionHeader
           eyebrow="Listening Configuration · Listening Executions"
-          title="Per-source configuration and on-demand scans"
-          subtitle="Run a scan now or inspect recent execution history per source."
+          title="Run or inspect source scans"
+          subtitle="Operational controls for refreshing signals. Not required for daily lead review."
           accent="text-orange-700"
         />
         <ListeningExecutionsPanel
@@ -486,9 +607,9 @@ function OpportunitiesTab({ companyId, fetchWithAuth }: { companyId: string; fet
           its own filter state — these chips are scroll/section labels.) */}
       <section>
         <SectionHeader
-          eyebrow="Opportunity Queue · Intelligence Feed"
-          title="Classified opportunities, filtered by intent type"
-          subtitle="Use the chips below as quick references for the typed opportunities your sources have surfaced. The feed's own filter row controls what's shown."
+          eyebrow="Active lead queue"
+          title="Leads and opportunities that need action"
+          subtitle="Review the strongest signals first, then open details only when you need proof or source context."
           accent="text-purple-700"
         />
         <div className="mt-3 flex flex-wrap gap-2 text-xs">
@@ -502,14 +623,17 @@ function OpportunitiesTab({ companyId, fetchWithAuth }: { companyId: string; fet
         </div>
       </section>
 
-      {/* Lead Signals workspace — preserved from prior layout */}
-      <section className="space-y-3">
-        <SectionHeader
-          eyebrow="Lead Signals"
-          title="Raw signals grouped by contact"
-          subtitle="The detected signals behind classified opportunities."
-          accent="text-violet-700"
-        />
+      {/* Lead Signals workspace — supporting detail, collapsed by default. */}
+      <details className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <summary className="cursor-pointer list-none px-6 py-4">
+          <SectionHeader
+            eyebrow="Supporting detail"
+            title="Raw signals grouped by contact"
+            subtitle="Open this when you need to inspect the evidence behind the lead queue."
+            accent="text-violet-700"
+          />
+        </summary>
+      <section className="space-y-3 border-t border-gray-100 px-6 pb-6 pt-4">
         <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
@@ -710,6 +834,7 @@ function OpportunitiesTab({ companyId, fetchWithAuth }: { companyId: string; fet
           )}
         </div>
       </section>
+      </details>
     </div>
   );
 }

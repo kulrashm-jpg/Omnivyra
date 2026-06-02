@@ -245,6 +245,14 @@ const SOURCE_TYPE_DEFAULT_PRIORS: Record<string, Required<OpportunityPriorsBySee
     growth_signal: 0.20,
     integration_need: 0.70,
   },
+  hackernews: {
+    buying_intent: 0.50,
+    competitor_dissatisfaction: 0.45,
+    migration_signal: 0.45,
+    hiring_signal: 0.35,
+    growth_signal: 0.55,
+    integration_need: 0.65,
+  },
   youtube_channel: {
     buying_intent: 0.25,
     competitor_dissatisfaction: 0.20,
@@ -308,6 +316,7 @@ const SOURCE_TYPE_DEFAULT_YIELD: Record<string, { signal_quality: number; volume
   linkedin_topic:    { signal_quality: 0.55, volume: 120 },
   x_list:            { signal_quality: 0.30, volume: 240 },
   github_repo:       { signal_quality: 0.65, volume: 50  },
+  hackernews:        { signal_quality: 0.70, volume: 180 },
   youtube_channel:   { signal_quality: 0.40, volume: 80  },
   rss_feed:          { signal_quality: 0.50, volume: 100 },
   telegram_group:    { signal_quality: 0.45, volume: 120 },

@@ -19,6 +19,7 @@ import { hasCommunityAiCapability } from '../../../backend/services/rbac/communi
 import { discoverCommunityCandidates } from '../../../backend/services/communityDiscoveryService';
 import { persistDiscoveryResult } from '../../../backend/services/communityRecommendationService';
 import { getCachedCapabilityAggregate } from '../../../backend/services/capabilityCacheService';
+import { loadCuratedDiscoveryCandidatesForProfile } from '../../../backend/services/curatedIndustrySourceService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -71,6 +72,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const discovery = discoverCommunityCandidates(profile);
+    const curatedCandidates = await loadCuratedDiscoveryCandidatesForProfile(profile);
+    const existingKeys = new Set(
+      discovery.candidates.map((candidate) => `${candidate.source_type}:${candidate.source_identifier}`),
+    );
+    for (const candidate of curatedCandidates) {
+      const key = `${candidate.source_type}:${candidate.source_identifier}`;
+      if (existingKeys.has(key)) continue;
+      existingKeys.add(key);
+      discovery.candidates.push(candidate);
+    }
     const persisted = await persistDiscoveryResult({
       organizationId: companyId,
       candidates: discovery.candidates,
