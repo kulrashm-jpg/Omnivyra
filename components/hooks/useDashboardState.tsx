@@ -240,13 +240,39 @@ export function useDashboardState() {
     if (raw.includes('draft') || raw.includes('plan') || raw.includes('pending')) return 'planned';
     return 'other';
   };
+  /** Overdue is a calendar-date fact: only past scheduled items should be red. */
+  const isCalendarEventOverdue = (ev: ActivityEvent): boolean => {
+    const status = String(ev.status || '').trim().toLowerCase();
+    if (status === 'published') return false;
+
+    const todayKey = formatDateKey(new Date());
+    const eventDateKey = String(ev.date || '').slice(0, 10);
+    if (eventDateKey) {
+      if (eventDateKey < todayKey) return true;
+      if (eventDateKey > todayKey) return false;
+    }
+
+    if (ev.scheduled_for) {
+      const scheduledAt = new Date(ev.scheduled_for);
+      if (Number.isFinite(scheduledAt.getTime())) {
+        return scheduledAt.getTime() < Date.now();
+      }
+    }
+
+    return Boolean(ev.is_overdue);
+  };
+
   /** Maps a scheduled_post's status + overdue flag to one of the legend stages. */
   const getEventStage = (ev: ActivityEvent): CalendarExecutionStage => {
-    if (ev.is_overdue) return 'overdue';
-    const s = ev.status || 'scheduled';
-    if (s === 'published') return 'content_shared';
-    if (s === 'publishing') return 'content_shared';
-    if (s === 'draft') return 'content_created';
+    if (isCalendarEventOverdue(ev)) return 'overdue';
+    const canonicalGroup = String(ev.canonical_group || '').trim().toLowerCase();
+    if (canonicalGroup === 'published') return 'content_shared';
+    if (canonicalGroup === 'scheduled') return 'content_scheduled';
+    if (canonicalGroup === 'ready' || canonicalGroup === 'draft' || canonicalGroup === 'pending') return 'content_created';
+
+    const s = String(ev.status || 'scheduled').trim().toLowerCase();
+    if (s === 'published' || s === 'publishing') return 'content_shared';
+    if (s === 'draft' || s === 'pending') return 'content_created';
     return 'content_scheduled'; // scheduled
   };
 
@@ -552,7 +578,7 @@ export function useDashboardState() {
 
   const handleActivityEventClick = (evt: ActivityEvent, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    setPostPreview(evt);
+    setPostPreview({ ...evt, is_overdue: isCalendarEventOverdue(evt) });
   };
 
   /**
@@ -645,7 +671,7 @@ export function useDashboardState() {
   }, [campaignIds]);
 
   useEffect(() => {
-    if (activeTab !== 'calendar' || !selectedCompanyId) return;
+    if ((activeTab !== 'calendar' && activeTab !== 'overview') || !selectedCompanyId) return;
     const year = calendarCurrentDate.getFullYear();
     const month = calendarCurrentDate.getMonth();
     const start = `${year}-${String(month + 1).padStart(2, '0')}-01`;
@@ -1064,7 +1090,7 @@ export function useDashboardState() {
     notice, pendingDeleteCampaignId, setPendingDeleteCampaignId, isDeletingCampaign,
     companyProfileReview, companyFactSnapshot, showCompanyFactReviewPrompt, setShowCompanyFactReviewPrompt,
     isCompanyAdmin, campaignIds, expandingCampaignId, formatDateKey, parseDateKey,
-    getEventStage, fetchStageEvents, getCalendarStageAppearance, getCampaignTotalWeeks,
+    getEventStage, isCalendarEventOverdue, fetchStageEvents, getCalendarStageAppearance, getCampaignTotalWeeks,
     getDaysInMonth, getWeekDays, getWeekLabel, calendarFilteredCampaigns,
     getPlatformColorForCalendar, getCalendarActivitiesForDate, getPlatformBorderColor,
     RepurposeDots, handleRescheduleDrop, getCalendarDayItems, handleActivityEventClick,
@@ -1076,4 +1102,3 @@ export function useDashboardState() {
     isActivityEvent,
   };
 }
-

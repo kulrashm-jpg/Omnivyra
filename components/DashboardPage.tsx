@@ -1,6 +1,6 @@
 import React from 'react';
 import ContentRenderer, { CarouselContent, PLATFORM_HIGHLIGHT } from './ContentRenderer';
-import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical, Send } from 'lucide-react';
+import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical, Send, ArrowRight, Clock, AlertTriangle, Wrench } from 'lucide-react';
 import PlatformIcon from './ui/PlatformIcon';
 import { getPlatformLabel } from '../utils/platformIcons';
 import FloatingChatPanel from './collaboration/FloatingChatPanel';
@@ -45,6 +45,17 @@ export default function DashboardPage() {
     selectedCalendarCampaign, buildPlanningWorkspaceUrl,
     isActivityEvent,
   } = d;
+
+  const overdueCount = Object.values(calendarActivityEvents)
+    .flat()
+    .filter((event) => getEventStage(event) === 'overdue').length;
+  const scheduledCount = Object.values(calendarActivityEvents)
+    .flat()
+    .filter((event) => getEventStage(event) === 'content_scheduled').length;
+  const planningCount = campaigns.filter((campaign) => {
+    const stage = String(campaign.current_stage || campaign.status || '').toLowerCase();
+    return stage.includes('plan') || stage.includes('draft') || stage.includes('pending');
+  }).length;
 
   if (showLoadingSpinner) {
     return <div className="p-6 text-gray-500">Loading company context...</div>;
@@ -137,8 +148,29 @@ export default function DashboardPage() {
       )}
       <div className="bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Content Manager</h1>
-          <p className="text-gray-600 mt-1">Plan, create, and execute your content campaigns</p>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Content Manager</h1>
+              <p className="text-gray-600 mt-1">Review today, keep campaigns moving, and handle setup only when needed.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setActiveTab('calendar')}
+                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700"
+              >
+                <Calendar className="h-4 w-4" />
+                Today's work
+              </button>
+              <button
+                onClick={() => window.location.href = '/campaign-planner?mode=direct'}
+                disabled={!canCreateCampaign}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4" />
+                New campaign
+              </button>
+            </div>
+          </div>
         </div>
       </div>
             
@@ -147,10 +179,10 @@ export default function DashboardPage() {
         <div className="flex flex-wrap gap-1 bg-white rounded-xl p-1 shadow-sm border border-gray-200">
           {[
             { id: 'overview', label: 'Overview', icon: BarChart3 },
+            { id: 'calendar', label: 'Calendar', icon: Calendar },
             { id: 'campaigns', label: 'Campaigns', icon: Target },
-            { id: 'team', label: 'Team', icon: Users },
             { id: 'analytics', label: 'Analytics', icon: TrendingUp },
-            { id: 'calendar', label: 'Calendar', icon: Calendar }
+            { id: 'team', label: 'Team', icon: Users }
           ].map((tab) => {
             const Icon = tab.icon;
             if (tab.id === 'team') {
@@ -229,6 +261,81 @@ export default function DashboardPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-8">
         {activeTab === 'overview' && (
           <div className="space-y-8">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.55fr)]">
+              <div className="rounded-2xl border border-indigo-100 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
+                      <Clock className="h-3.5 w-3.5" />
+                      Daily
+                    </div>
+                    <h2 className="mt-3 text-lg font-semibold text-gray-900">Start with work that needs attention now</h2>
+                    <p className="mt-1 max-w-2xl text-sm leading-6 text-gray-600">
+                      Calendar items, overdue posts, and campaigns waiting for the next planning step are the things users return to most often.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab('calendar')}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                  >
+                    Open calendar
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <button
+                    onClick={() => setActiveTab('calendar')}
+                    className="rounded-xl border border-red-100 bg-red-50 p-4 text-left hover:border-red-200"
+                  >
+                    <div className="flex items-center gap-2 text-sm font-semibold text-red-700">
+                      <AlertTriangle className="h-4 w-4" />
+                      Overdue
+                    </div>
+                    <p className="mt-2 text-2xl font-bold text-red-900">{overdueCount}</p>
+                    <p className="mt-1 text-xs text-red-700">Review or reschedule first.</p>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('calendar')}
+                    className="rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-left hover:border-emerald-200"
+                  >
+                    <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700">
+                      <CheckCircle className="h-4 w-4" />
+                      Scheduled
+                    </div>
+                    <p className="mt-2 text-2xl font-bold text-emerald-900">{scheduledCount}</p>
+                    <p className="mt-1 text-xs text-emerald-700">Ready to monitor or publish.</p>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('campaigns')}
+                    className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-left hover:border-amber-200"
+                  >
+                    <div className="flex items-center gap-2 text-sm font-semibold text-amber-700">
+                      <Target className="h-4 w-4" />
+                      In planning
+                    </div>
+                    <p className="mt-2 text-2xl font-bold text-amber-900">{planningCount}</p>
+                    <p className="mt-1 text-xs text-amber-700">Needs campaign movement.</p>
+                  </button>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">Access Priority</h2>
+                <div className="mt-4 space-y-3 text-sm">
+                  <button onClick={() => setActiveTab('calendar')} className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-left hover:bg-gray-50">
+                    <span><span className="font-semibold text-gray-900">Regular</span><span className="block text-xs text-gray-500">Today, overdue, upload, publish, reschedule</span></span>
+                    <Calendar className="h-4 w-4 text-indigo-600" />
+                  </button>
+                  <button onClick={() => setActiveTab('campaigns')} className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-left hover:bg-gray-50">
+                    <span><span className="font-semibold text-gray-900">Intermittent</span><span className="block text-xs text-gray-500">Create, expand, review campaign plans</span></span>
+                    <Target className="h-4 w-4 text-amber-600" />
+                  </button>
+                  <button onClick={() => window.location.href = '/social-platforms'} className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-left hover:bg-gray-50">
+                    <span><span className="font-semibold text-gray-900">Rare</span><span className="block text-xs text-gray-500">Connections, profile, data sources, team setup</span></span>
+                    <Wrench className="h-4 w-4 text-slate-600" />
+                  </button>
+                </div>
+              </div>
+            </div>
             {/* Stats Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
               {[

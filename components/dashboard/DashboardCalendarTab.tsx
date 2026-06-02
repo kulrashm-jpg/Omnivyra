@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight, MessageSquare, GripVertical } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MessageSquare, GripVertical, SlidersHorizontal } from 'lucide-react';
 import PlatformIcon from '../ui/PlatformIcon';
 import { getPlatformLabel } from '../../utils/platformIcons';
 import type { useDashboardState } from '../hooks/useDashboardState';
@@ -13,8 +13,8 @@ import { deriveCreatorStatusLabel, isCreatorProduced } from '../../lib/shared/cr
 
 /** Compact status dot color, keyed off the shared status group (reuse only). */
 const STATUS_DOT_CLASS: Record<string, string> = {
-  scheduled: 'bg-purple-500',
-  published: 'bg-emerald-500',
+  scheduled: 'bg-emerald-500',
+  published: 'bg-blue-600',
   pending: 'bg-amber-500',
   failed: 'bg-red-500',
   ready: 'bg-yellow-500',
@@ -26,8 +26,8 @@ function CalendarStatusChip({ event }: { event: ActivityEvent }) {
   const { label, group } = deriveCreatorStatusLabel(event);
   const creator = isCreatorProduced(event);
   const chip =
-    group === 'scheduled' ? 'bg-purple-100 text-purple-700'
-      : group === 'published' ? 'bg-emerald-100 text-emerald-700'
+    group === 'scheduled' ? 'bg-emerald-100 text-emerald-700'
+      : group === 'published' ? 'bg-blue-100 text-blue-700'
       : group === 'pending' ? 'bg-amber-100 text-amber-700'
       : group === 'failed' ? 'bg-red-100 text-red-700'
       : group === 'ready' ? 'bg-yellow-100 text-yellow-700'
@@ -51,6 +51,15 @@ function isActivityEvent(item: CalendarDayItem): item is ActivityEvent {
   return (item as ActivityEvent).type === 'activity';
 }
 
+const STAGE_BORDER_CLASS: Record<CalendarExecutionStage, string> = {
+  weekly_planning: 'border-l-gray-300',
+  daily_cards: 'border-l-green-300',
+  content_created: 'border-l-sky-400',
+  content_scheduled: 'border-l-emerald-600',
+  content_shared: 'border-l-blue-700',
+  overdue: 'border-l-red-600',
+};
+
 export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
   const {
     campaigns, calendarActivityMode, setCalendarActivityMode,
@@ -71,8 +80,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
     postPreview, setPostPreview,
     fetchStageEvents, getCalendarStageAppearance, getCampaignTotalWeeks,
     getDaysInMonth, getWeekDays, getWeekLabel,
-    getPlatformColorForCalendar, getCalendarActivitiesForDate, getPlatformBorderColor,
-    getCalendarDayItems, getEventStage, handleActivityEventClick, handleUploadCreatorAsset, handleRescheduleDrop,
+    getCalendarDayItems, getEventStage, isCalendarEventOverdue, handleActivityEventClick, handleUploadCreatorAsset, handleRescheduleDrop,
     RepurposeDots, formatDateKey, parseDateKey,
     getMsgTotal, getMsgUnread, selectedCalendarCampaign,
     campaignIds, handleViewCampaign,
@@ -81,12 +89,83 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
   return (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-200">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-                <div>
-                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Execution Calendar</h2>
-                  <p className="text-sm text-gray-600">Switch between daily and weekly campaign activity views.</p>
+              <div className="mb-4 space-y-3">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Execution Calendar</h2>
+                    <p className="text-sm text-gray-600">Review today, open posts, upload creator media, and reschedule without hunting.</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() =>
+                        setCalendarCurrentDate((prev) => {
+                          const next = new Date(prev);
+                          if (calendarView === 'week') {
+                            next.setDate(prev.getDate() - 7);
+                          } else {
+                            next.setMonth(prev.getMonth() - 1);
+                          }
+                          return next;
+                        })
+                      }
+                      className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                      aria-label="Previous period"
+                    >
+                      <ChevronLeft className="h-4 w-4 text-gray-600" />
+                    </button>
+                    <span className="text-sm font-semibold text-gray-800 min-w-[120px] sm:min-w-[170px] text-center">
+                      {calendarView === 'week'
+                        ? getWeekLabel(calendarCurrentDate)
+                        : calendarCurrentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setCalendarCurrentDate((prev) => {
+                          const next = new Date(prev);
+                          if (calendarView === 'week') {
+                            next.setDate(prev.getDate() + 7);
+                          } else {
+                            next.setMonth(prev.getMonth() + 1);
+                          }
+                          return next;
+                        })
+                      }
+                      className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
+                      aria-label="Next period"
+                    >
+                      <ChevronRight className="h-4 w-4 text-gray-600" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        const today = new Date();
+                        setCalendarCurrentDate(today);
+                        setCalendarSelectedDate(formatDateKey(today));
+                      }}
+                      className="px-3 py-2 text-sm rounded-lg border border-gray-200 hover:bg-gray-50"
+                    >
+                      Today
+                    </button>
+                    <div className="flex items-center rounded-lg border border-gray-200 p-1">
+                      <button
+                        onClick={() => setCalendarView('month')}
+                        className={`px-2 py-1 text-xs rounded ${
+                          calendarView === 'month' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        Month
+                      </button>
+                      <button
+                        onClick={() => setCalendarView('week')}
+                        className={`px-2 py-1 text-xs rounded ${
+                          calendarView === 'week' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        Week
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
                   <div className="flex items-center rounded-lg border border-gray-200 p-1 bg-white">
                     <button
                       onClick={() => setCalendarActivityMode('daily')}
@@ -105,19 +184,25 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                       Weekly Activities
                     </button>
                   </div>
-                  <select
-                    value={calendarCampaignFilter}
-                    onChange={(e) => setCalendarCampaignFilter(e.target.value)}
-                    className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-700"
-                  >
-                    <option value="all">All Campaigns</option>
-                    {campaigns.map((campaign) => (
-                      <option key={`calendar-campaign-${campaign.id}`} value={campaign.id}>
-                        {campaign.name}
-                      </option>
-                    ))}
-                  </select>
-                  {calendarActivityMode === 'weekly' && calendarCampaignFilter !== 'all' && (
+                  <details className="group">
+                    <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                      <SlidersHorizontal className="h-4 w-4 text-gray-500" />
+                      Filters
+                    </summary>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+                      <select
+                        value={calendarCampaignFilter}
+                        onChange={(e) => setCalendarCampaignFilter(e.target.value)}
+                        className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-700"
+                      >
+                        <option value="all">All Campaigns</option>
+                        {campaigns.map((campaign) => (
+                          <option key={`calendar-campaign-${campaign.id}`} value={campaign.id}>
+                            {campaign.name}
+                          </option>
+                        ))}
+                      </select>
+                      {calendarActivityMode === 'weekly' && calendarCampaignFilter !== 'all' && (
                     <select
                       value={calendarWeekFilter}
                       onChange={(e) => setCalendarWeekFilter(e.target.value)}
@@ -135,92 +220,21 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                         </option>
                       ))}
                     </select>
-                  )}
-                  <select
-                    value={calendarStatusFilter}
-                    onChange={(e) => setCalendarStatusFilter(e.target.value)}
-                    className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-700"
-                  >
-                    <option value="all">All Categories</option>
-                    <option value="active">Active</option>
-                    <option value="completed">Completed</option>
-                    <option value="on_hold">On Hold</option>
-                    <option value="planned">Planned</option>
-                    <option value="other">Other</option>
-                  </select>
-                  <button
-                    onClick={() =>
-                      setCalendarCurrentDate((prev) => {
-                        const next = new Date(prev);
-                        if (calendarView === 'week') {
-                          next.setDate(prev.getDate() - 7);
-                        } else {
-                          next.setMonth(prev.getMonth() - 1);
-                        }
-                        return next;
-                      })
-                    }
-                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
-                    aria-label="Previous month"
-                  >
-                    <ChevronLeft className="h-4 w-4 text-gray-600" />
-                  </button>
-                  <span className="text-sm font-semibold text-gray-800 min-w-[120px] sm:min-w-[170px] text-center">
-                    {calendarView === 'week'
-                      ? getWeekLabel(calendarCurrentDate)
-                      : calendarCurrentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                  </span>
-                  <button
-                    onClick={() =>
-                      setCalendarCurrentDate((prev) => {
-                        const next = new Date(prev);
-                        if (calendarView === 'week') {
-                          next.setDate(prev.getDate() + 7);
-                        } else {
-                          next.setMonth(prev.getMonth() + 1);
-                        }
-                        return next;
-                      })
-                    }
-                    className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50"
-                    aria-label="Next month"
-                  >
-                    <ChevronRight className="h-4 w-4 text-gray-600" />
-                  </button>
-                  <button
-                    onClick={() => {
-                      const today = new Date();
-                      setCalendarCurrentDate(today);
-                      setCalendarSelectedDate(formatDateKey(today));
-                    }}
-                    className="ml-2 px-3 py-2 text-sm rounded-lg border border-gray-200 hover:bg-gray-50"
-                  >
-                    Today
-                  </button>
-                  <button
-                    onClick={() => window.location.href = '/dashboard?tab=calendar'}
-                    className="ml-1 px-3 py-2 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
-                  >
-                    Open Full Calendar
-                  </button>
-                  <div className="ml-1 flex items-center rounded-lg border border-gray-200 p-1">
-                    <button
-                      onClick={() => setCalendarView('month')}
-                      className={`px-2 py-1 text-xs rounded ${
-                        calendarView === 'month' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
-                      }`}
-                    >
-                      Month
-                    </button>
-                    <button
-                      onClick={() => setCalendarView('week')}
-                      className={`px-2 py-1 text-xs rounded ${
-                        calendarView === 'week' ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-100'
-                      }`}
-                    >
-                      Week
-                    </button>
-                  </div>
+                      )}
+                      <select
+                        value={calendarStatusFilter}
+                        onChange={(e) => setCalendarStatusFilter(e.target.value)}
+                        className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white text-gray-700"
+                      >
+                        <option value="all">All Categories</option>
+                        <option value="active">Active</option>
+                        <option value="completed">Completed</option>
+                        <option value="on_hold">On Hold</option>
+                        <option value="planned">Planned</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+                  </details>
                 </div>
               </div>
 
@@ -306,7 +320,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                     ) : (
                       <div className="divide-y divide-gray-100 max-h-72 overflow-y-auto">
                         {calendarStageEvents.map((ev, i) => {
-                          const colorClass = getPlatformColorForCalendar(ev.platform);
+                          const appearance = getCalendarStageAppearance(getEventStage(ev));
                           return (
                             <div
                               key={`stage-ev-${i}`}
@@ -314,7 +328,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                               onClick={() => ev.execution_id && setChatPanel({ mode: 'activity', activityId: ev.execution_id, campaignId: ev.campaign_id, date: ev.date })}
                             >
                               <div className="flex items-center gap-3 min-w-0 flex-1">
-                                <div className={`p-1.5 rounded-lg shrink-0 ${colorClass}`}>
+                                <div className={`p-1.5 rounded-lg shrink-0 ${appearance.badge}`}>
                                   <PlatformIcon platform={ev.platform} size={16} />
                                 </div>
                                 <div className="min-w-0 flex-1">
@@ -391,9 +405,10 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                           {dayItems.slice(0, 3).map((item, index) => {
                             if (isActivityEvent(item)) {
                               const isDraggable = !!item.scheduled_post_id;
-                              const isOverdue = item.is_overdue && item.status !== 'published';
-                              const colorClass = isOverdue ? 'bg-red-100 text-red-800' : getPlatformColorForCalendar(item.platform);
-                              const borderColor = isOverdue ? 'border-red-500' : getPlatformBorderColor(item.platform);
+                              const stage = getEventStage(item);
+                              const isOverdue = isCalendarEventOverdue(item);
+                              const appearance = getCalendarStageAppearance(stage);
+                              const borderColor = STAGE_BORDER_CLASS[stage];
                               return (
                                 <div
                                   key={`${dateKey}-activity-${item.scheduled_post_id ?? index}`}
@@ -404,7 +419,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                                   role="button"
                                   tabIndex={0}
                                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleActivityEventClick(item); } }}
-                                  className={`w-full text-[11px] px-1.5 py-1 rounded flex items-center gap-0.5 cursor-pointer hover:opacity-90 active:scale-95 border-l-4 ${borderColor} ${colorClass}`}
+                                  className={`w-full text-[11px] px-1.5 py-1 rounded flex items-center gap-0.5 cursor-pointer hover:opacity-90 active:scale-95 border-l-4 ${borderColor} ${appearance.badge}`}
                                   title={`${getPlatformLabel(item.platform)} · ${resolveDisplayContentTypeLabel(item)} · ${deriveCreatorStatusLabel(item).label} · ${isCreatorProduced(item) ? 'Creator' : 'AI'} · ${item.title}${isOverdue ? ' (overdue)' : ''}`}
                                 >
                                   {isOverdue && <span className="text-red-500 font-bold shrink-0">!</span>}
@@ -495,7 +510,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                         <div className="mt-1 space-y-1">
                           {dayActivities.slice(0, 4).map((activity, index) => {
                             if (isActivityEvent(activity)) {
-                              const colorClass = getPlatformColorForCalendar(activity.platform);
+                              const appearance = getCalendarStageAppearance(getEventStage(activity));
                               return (
                                 <div
                                   key={`week-${dateKey}-act-${index}`}
@@ -503,7 +518,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                                   tabIndex={0}
                                   onClick={(e) => { e.stopPropagation(); handleActivityEventClick(activity); }}
                                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleActivityEventClick(activity); } }}
-                                  className={`text-[11px] px-1.5 py-0.5 rounded truncate inline-flex items-center gap-0.5 cursor-pointer hover:opacity-80 ${colorClass}`}
+                                  className={`text-[11px] px-1.5 py-0.5 rounded truncate inline-flex items-center gap-0.5 cursor-pointer hover:opacity-80 ${appearance.badge}`}
                                   title={`${getPlatformLabel(activity.platform)} · ${resolveDisplayContentTypeLabel(activity)} · ${deriveCreatorStatusLabel(activity).label} · ${isCreatorProduced(activity) ? 'Creator' : 'AI'} — click to preview`}
                                 >
                                   <PlatformIcon platform={activity.platform} size={10} />
@@ -554,7 +569,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                     <div className="space-y-3">
                       {dayActivities.map((activity, index) => {
                         if (isActivityEvent(activity)) {
-                          const colorClass = getPlatformColorForCalendar(activity.platform);
+                          const appearance = getCalendarStageAppearance(getEventStage(activity));
                           const msgCount = activity.execution_id ? activityMessageCounts[activity.execution_id] : undefined;
                           const msgTotal = getMsgTotal(msgCount);
                           const msgUnread = getMsgUnread(msgCount);
@@ -569,7 +584,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                               }}
                             >
                               <div className="flex items-center gap-3 flex-1 min-w-0">
-                                <div className={`p-2 rounded-lg shrink-0 ${colorClass}`}>
+                                <div className={`p-2 rounded-lg shrink-0 ${appearance.badge}`}>
                                   <PlatformIcon platform={activity.platform} size={20} />
                                 </div>
                                 <div className="min-w-0 flex-1">

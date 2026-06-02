@@ -342,11 +342,12 @@ export default function PostPreviewModal({
                 const derived = deriveCreatorStatusLabel(event);
                 const isPublished = currentStatus === 'published' || publishState === 'success' || derived.key === 'PUBLISHED';
                 const label = isPublished ? 'Published' : (event.is_overdue ? 'Overdue' : derived.label);
-                const cls = isPublished ? 'bg-emerald-100 text-emerald-700'
+                const cls = isPublished ? 'bg-blue-100 text-blue-700'
                   : event.is_overdue ? 'bg-red-100 text-red-700'
-                  : derived.group === 'scheduled' ? 'bg-purple-100 text-purple-700'
+                  : derived.group === 'scheduled' ? 'bg-emerald-100 text-emerald-700'
                   : derived.group === 'pending' ? 'bg-amber-100 text-amber-700'
                   : derived.group === 'failed' ? 'bg-red-100 text-red-700'
+                  : derived.group === 'published' ? 'bg-blue-100 text-blue-700'
                   : derived.group === 'ready' ? 'bg-yellow-100 text-yellow-700'
                   : 'bg-gray-100 text-gray-600';
                 return <span className={`px-2 py-0.5 rounded-full shrink-0 ${cls}`}>{label}</span>;
