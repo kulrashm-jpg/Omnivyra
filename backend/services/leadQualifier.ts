@@ -47,7 +47,8 @@ export async function qualifyLead(
   rawPost: RawPost,
   companyProfile: CompanyProfile | null,
   missionContext?: CompanyMissionContext | null,
-  prebuiltContextBlock?: string | null
+  prebuiltContextBlock?: string | null,
+  correlation?: import('../../lib/shared/observability/correlationRef').CorrelationRef
 ): Promise<QualificationResult> {
   const contextBlock = prebuiltContextBlock != null && prebuiltContextBlock.length > 0
     ? prebuiltContextBlock
@@ -106,6 +107,9 @@ export async function qualifyLead(
     }>(systemPrompt, userPrompt, {
       organizationId: companyProfile?.company_id ?? null,
       processType: 'qualifyLead',
+      referenceType: correlation?.referenceType ?? null,
+      referenceId: correlation?.referenceId ?? null,
+      parentActivityId: correlation?.parentActivityId ?? null,
     });
 
     const icp = clamp01(data?.icp_score ?? 0);

@@ -319,6 +319,7 @@ export const generateRecommendations = async (
           limit: 15,
           existingThemeKeys: [...excludedSet],
           rankingContext: rankingCtx,
+          correlation: { referenceType: 'recommendation_generation', referenceId: input.campaignId ?? input.companyId, parentActivityId: input.campaignId ?? null },
         });
         themes = aiThemes
           .filter((t) => !excludedSet.has(generateThemeKey(t.topic)))
@@ -483,6 +484,7 @@ export const generateRecommendations = async (
           limit: 10,
           existingThemeKeys: [...excludedSet],
           rankingContext: rankingCtx,
+          correlation: { referenceType: 'recommendation_generation', referenceId: input.campaignId ?? input.companyId, parentActivityId: input.campaignId ?? null },
         });
         const validThemes = aiThemes.filter((t) => !excludedSet.has(generateThemeKey(t.topic)));
         if (validThemes.length > 0) {

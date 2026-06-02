@@ -130,7 +130,7 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
     if (await isCancelled()) return;
     await ownedDbTable('market_pulse_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
     try {
-      const result = await generateMarketPulseForRegion(companyId, region, contextPayload);
+      const result = await generateMarketPulseForRegion(companyId, region, contextPayload, { referenceType: 'opportunity_discovery', referenceId: jobId, parentActivityId: companyId });
       regionResults[region] = { topics: result.topics };
 
       for (const t of result.topics) {

@@ -132,6 +132,18 @@ type GatewayResponse<T> = {
 type GatewayRequest = {
   companyId?: string | null;
   campaignId?: string | null;
+  /**
+   * Activity-consumption correlation envelope (correlation ONLY — never a
+   * billing/credit/action key). `referenceType` is the SEMANTIC activity type
+   * (e.g. 'bolt_run', 'campaign_plan', 'blog_generation'); `referenceId` is the
+   * activity identifier (run_id/campaign_id/job_id/…); `parentActivityId` is an
+   * optional run-grain parent for nested activities. Written through to
+   * unified_transactions.reference_type / reference_id (+ metadata.parent_activity_id)
+   * so all consumption for one activity is aggregatable by a single id.
+   */
+  referenceType?: string | null;
+  referenceId?: string | null;
+  parentActivityId?: string | null;
   model: string;
   temperature: number;
   response_format?: { type: 'json_object' };
@@ -1046,6 +1058,9 @@ async function getFallbackConfig(
 type RetryTrackingContext = {
   companyId:   string | null;
   campaignId:  string | null;
+  referenceType: string | null;
+  referenceId:   string | null;
+  parentActivityId: string | null;
   operation:   string;
   featureArea: string | null;
   startedAt:   number;
@@ -1068,6 +1083,9 @@ function logIntermediateAttempt(
     source_name:     `${provider}:${model}`,
     process_type:    ctx.operation,
     feature_area:    ctx.featureArea,
+    reference_type:  ctx.referenceType ?? null,
+    reference_id:    ctx.referenceId ?? null,
+    metadata:        ctx.parentActivityId ? { parent_activity_id: ctx.parentActivityId } : undefined,
     latency_ms:      Date.now() - ctx.startedAt,
     error_flag:      true,
     error_type:      asGatewayError(err).status?.toString() ?? asGatewayError(err).code ?? (err instanceof Error ? err.message.slice(0, 200) : 'unknown'),
@@ -1484,6 +1502,9 @@ const executeGatewayCompletion = async (
       source_name: `${activeProvider}:${activeModel}`,
       process_type: request.operation,
       feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
+      reference_type: request.referenceType ?? null,
+      reference_id:   request.referenceId ?? null,
+      metadata: request.parentActivityId ? { parent_activity_id: request.parentActivityId } : undefined,
       error_flag: true,
       error_type: 'PLAN_LIMIT_EXCEEDED',
       retry_attempt: 1,
@@ -1515,6 +1536,8 @@ const executeGatewayCompletion = async (
       source_name:     `${activeProvider}:${activeModel}`,
       process_type:    request.operation,
       feature_area:    FEATURE_AREA_MAP[request.operation] ?? 'Other',
+      reference_type:  request.referenceType ?? null,
+      reference_id:    request.referenceId ?? null,
       input_tokens:    0,
       output_tokens:   0,
       total_tokens:    0,
@@ -1522,7 +1545,7 @@ const executeGatewayCompletion = async (
       error_flag:      false,
       unit_cost:       0,
       total_cost:      0,
-      metadata:        { cache_hit: true },
+      metadata:        request.parentActivityId ? { cache_hit: true, parent_activity_id: request.parentActivityId } : { cache_hit: true },
     });
     return {
       output: cachedContent,
@@ -1555,6 +1578,9 @@ const executeGatewayCompletion = async (
   const trackingCtx: RetryTrackingContext = {
     companyId:   request.companyId ?? null,
     campaignId:  request.campaignId ?? null,
+    referenceType: request.referenceType ?? null,
+    referenceId:   request.referenceId ?? null,
+    parentActivityId: request.parentActivityId ?? null,
     operation:   request.operation,
     featureArea: FEATURE_AREA_MAP[request.operation] ?? 'Other',
     startedAt:   start,
@@ -1590,6 +1616,9 @@ const executeGatewayCompletion = async (
       source_name: `${activeProvider}:${activeModel}`,
       process_type: request.operation,
       feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
+      reference_type: request.referenceType ?? null,
+      reference_id:   request.referenceId ?? null,
+      metadata: request.parentActivityId ? { parent_activity_id: request.parentActivityId } : undefined,
       latency_ms: latency,
       error_flag: true,
       error_type: error?.status?.toString() ?? error?.response?.status?.toString() ?? error?.message ?? 'unknown',
@@ -1645,6 +1674,9 @@ const executeGatewayCompletion = async (
     source_name: `${effectiveProvider}:${effectiveModel}`,
     process_type: request.operation,
     feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
+    reference_type: request.referenceType ?? null,
+    reference_id:   request.referenceId ?? null,
+    metadata: request.parentActivityId ? { parent_activity_id: request.parentActivityId } : undefined,
     input_tokens: inputTokens || null,
     output_tokens: outputTokens || null,
     total_tokens: totalTokens || null,

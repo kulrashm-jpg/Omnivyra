@@ -135,6 +135,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         targetWordCount: generationRequest.answers?.target_word_count
           ? Number.parseInt(String(generationRequest.answers.target_word_count), 10) || undefined
           : generationRequest.target_words,
+        correlation: { referenceType: 'blog_generation', referenceId, parentActivityId: null },
       }),
     });
     return res.status(200).json(result);

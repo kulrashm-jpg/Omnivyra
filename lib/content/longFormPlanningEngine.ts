@@ -1244,6 +1244,9 @@ Whitepaper-specific rules:
   const response = await runCompletionWithOperation({
     operation: 'blogGeneration',
     companyId: input.company_id,
+    referenceType: input.correlation?.referenceType ?? null,
+    referenceId: input.correlation?.referenceId ?? null,
+    parentActivityId: input.correlation?.parentActivityId ?? null,
     cache_version: input.cache_version,
     model: 'gpt-4o-mini',
     temperature: 0.35,
@@ -1404,6 +1407,9 @@ Whitepaper rules:
   const result = await runCompletionWithOperation({
     operation: 'blogGeneration',
     companyId: input.request.company_id,
+    referenceType: input.request.correlation?.referenceType ?? null,
+    referenceId: input.request.correlation?.referenceId ?? null,
+    parentActivityId: input.request.correlation?.parentActivityId ?? null,
     cache_version: input.request.cache_version,
     model: 'gpt-4o-mini',
     temperature: input.repairReasons?.length ? 0.25 : 0.45,

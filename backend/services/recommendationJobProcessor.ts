@@ -73,7 +73,8 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
           companyId,
           strategicPayload,
           region,
-          pillarSummaries
+          pillarSummaries,
+          { referenceType: 'opportunity_discovery', referenceId: jobId, parentActivityId: companyId }
         );
         regionResults[region] = result;
         const duration_ms = Date.now() - start;

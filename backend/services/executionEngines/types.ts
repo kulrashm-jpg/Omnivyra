@@ -30,6 +30,8 @@ export type CanonicalCreatorOutput = {
 
 export type CreatorGenerationContext = {
   campaignId: string;
+  /** Activity-consumption correlation envelope (forwarded to LLM metering). */
+  correlation?: import('../../../lib/shared/observability/correlationRef').CorrelationRef;
   companyId?: string | null;
   userId?: string | null;
   topic: string;

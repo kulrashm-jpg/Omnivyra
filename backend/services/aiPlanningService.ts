@@ -21,6 +21,8 @@ export async function generateCampaignPlanAI(
     pool?: LlmPoolName;
     stream?: boolean;
     onChunk?: (delta: string, accumulated: string) => void;
+    /** Activity-consumption correlation: the campaign this plan belongs to. */
+    campaignId?: string | null;
   } = {},
 ): Promise<{ rawOutput: string }> {
   Object.freeze(input);
@@ -28,6 +30,9 @@ export async function generateCampaignPlanAI(
 
   const completion = await generateCampaignPlan({
     companyId: input.companyId,
+    campaignId: options.campaignId ?? null,
+    referenceType: options.campaignId ? 'campaign_plan' : null,
+    referenceId: options.campaignId ?? null,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     temperature: 0,
     messages,

@@ -420,6 +420,7 @@ async function runWithContext(
       () => generateCampaignPlanAI(planningInput, {
         signal: draftingController.signal,
         pool: 'drafting',
+        campaignId: input.campaignId ?? null,
         stream: streamingDraftEnabled,
         onChunk: streamingDraftEnabled
           ? (_delta, accumulated) => {

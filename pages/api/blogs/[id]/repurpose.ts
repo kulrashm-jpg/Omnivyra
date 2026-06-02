@@ -133,6 +133,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const runAi = () => runCompletionWithOperation({
     operation:       'blogRepurpose',
     companyId,
+    referenceType:   'blog_repurpose',
+    referenceId:     String(id),
     model:           'gpt-4o-mini',
     temperature:     0.5,
     response_format: { type: 'json_object' },

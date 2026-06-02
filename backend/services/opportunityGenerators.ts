@@ -84,7 +84,8 @@ export async function generateTrendRecommendationForRegion(
   companyId: string,
   strategicPayload: StrategicPayload | null,
   region: string,
-  pillarSummaries: PillarSummary[]
+  pillarSummaries: PillarSummary[],
+  correlation?: import('../../lib/shared/observability/correlationRef').CorrelationRef
 ): Promise<TrendRegionRecommendation> {
   const direction = strategicPayload?.strategic_text ?? '';
   const contextMode = (strategicPayload?.context_mode ?? 'FULL') as 'FULL' | 'FOCUSED' | 'NONE';
@@ -131,6 +132,9 @@ Consider cultural context, market sentiment, and seasonal timing for the region.
     }>(systemPrompt, userPrompt, {
       organizationId: companyId,
       processType: 'generateTrendRecommendationForRegion',
+      referenceType: correlation?.referenceType ?? null,
+      referenceId: correlation?.referenceId ?? null,
+      parentActivityId: correlation?.parentActivityId ?? null,
     });
 
     return {
@@ -219,7 +223,8 @@ export type MarketPulseContextPayload = {
 export async function generateMarketPulseForRegion(
   companyId: string,
   region: string,
-  contextPayload?: MarketPulseContextPayload | null
+  contextPayload?: MarketPulseContextPayload | null,
+  correlation?: import('../../lib/shared/observability/correlationRef').CorrelationRef
 ): Promise<MarketPulseRegionResult> {
   const mode = (contextPayload?.context_mode ?? 'FULL') as 'FULL' | 'FOCUSED' | 'NONE';
   const missionBlock = await buildUnifiedContext(companyId, {
@@ -314,7 +319,10 @@ ${executorBlock ? `COMPANY-AWARE PRIORITIZATION (REQUIRED — do not skip):
     const { data } = await runDiagnosticPrompt<{ topics: (MarketPulseTopic & { trend_velocity?: number })[] }>(
       systemPrompt,
       userPrompt,
-      { organizationId: companyId, processType: 'generateMarketPulseForRegion' }
+      { organizationId: companyId, processType: 'generateMarketPulseForRegion',
+        referenceType: correlation?.referenceType ?? null,
+        referenceId: correlation?.referenceId ?? null,
+        parentActivityId: correlation?.parentActivityId ?? null }
     );
     const topics = Array.isArray(data?.topics) ? data.topics : [];
     const sanitized = topics.slice(0, 8).map((t) => {

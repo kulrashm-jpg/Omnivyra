@@ -106,9 +106,13 @@ async function generatePlatformVariantsInOneCall(
   }));
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
   console.info('Prompt executed', { prompt: 'platform_variants', version: CONTENT_GENERATION_PROMPT_VERSION });
+  const __corr = ((context as { correlation?: import('../../../lib/shared/observability/correlationRef').CorrelationRef })?.correlation) ?? null;
   const result = await runCompletionWithOperation({
     companyId: context.company_id ?? null,
-    campaignId: null,
+    campaignId: (context as { campaign_id?: string | null })?.campaign_id ?? null,
+    referenceType: __corr?.referenceType ?? null,
+    referenceId: __corr?.referenceId ?? null,
+    parentActivityId: __corr?.parentActivityId ?? null,
     model,
     temperature: 0,
     response_format: { type: 'json_object' },

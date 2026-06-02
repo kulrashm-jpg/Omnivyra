@@ -511,6 +511,9 @@ export async function runBlogGeneration(
         const aiResult = await runCompletionWithOperation({
           operation:       'blogGeneration',
           companyId:       company_id,
+          referenceType:   req.correlation?.referenceType ?? null,
+          referenceId:     req.correlation?.referenceId ?? null,
+          parentActivityId: req.correlation?.parentActivityId ?? null,
           cache_version:   cache_version,
           model:           'gpt-4o-mini',
           temperature:     0.7,

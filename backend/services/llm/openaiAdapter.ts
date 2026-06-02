@@ -28,6 +28,16 @@ export interface DiagnosticPromptOptions {
   campaignId?: string | null;
   userId?: string | null;
   processType?: string;
+  /**
+   * Activity-consumption correlation envelope (correlation ONLY — not a
+   * billing/credit/action key). referenceType = semantic activity type
+   * (e.g. 'lead_job', 'opportunity_discovery'); referenceId = activity id
+   * (job_id/execution_id/…); parentActivityId = optional nested parent.
+   * Written through to unified_transactions.reference_type / reference_id.
+   */
+  referenceType?: string | null;
+  referenceId?: string | null;
+  parentActivityId?: string | null;
 }
 
 export async function runDiagnosticPrompt<T>(
@@ -63,6 +73,9 @@ export async function runDiagnosticPrompt<T>(
       model_version: null,
       source_name: `openai:${DEFAULT_MODEL}`,
       process_type: processType,
+      reference_type: options.referenceType ?? null,
+      reference_id: options.referenceId ?? null,
+      metadata: options.parentActivityId ? { parent_activity_id: options.parentActivityId } : undefined,
       latency_ms: latency,
       error_flag: true,
       error_type: error?.response?.status?.toString() ?? error?.message ?? 'unknown',
@@ -106,6 +119,9 @@ export async function runDiagnosticPrompt<T>(
     model_version: null,
     source_name: `openai:${DEFAULT_MODEL}`,
     process_type: processType,
+    reference_type: options.referenceType ?? null,
+    reference_id: options.referenceId ?? null,
+    metadata: options.parentActivityId ? { parent_activity_id: options.parentActivityId } : undefined,
     input_tokens: inputTokens || null,
     output_tokens: outputTokens || null,
     total_tokens: totalTokens || null,

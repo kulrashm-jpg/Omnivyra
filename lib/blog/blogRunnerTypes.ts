@@ -145,6 +145,8 @@ export interface CompanyContext {
 
 export interface BlogGenerationRequest {
   company_id:       string;
+  /** Activity-consumption correlation envelope (forwarded to LLM metering). */
+  correlation?:     import('../shared/observability/correlationRef').CorrelationRef;
   mode?:            'angles' | 'full';
   topic:            string;
   cluster?:         string;

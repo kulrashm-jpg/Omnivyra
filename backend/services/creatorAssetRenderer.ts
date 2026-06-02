@@ -1938,6 +1938,11 @@ async function generateProviderImage(input: {
             imageCount:     1,
             size:           AI_IMAGE_SIZE,
             activity:       'creator_image_generation',
+            // Activity-consumption correlation (Phase 1): tie creator media cost
+            // to the campaign activity so it aggregates with that activity's tokens.
+            referenceType:  'creator_asset',
+            referenceId:    input.attribution.campaignId ?? null,
+            parentActivityId: input.attribution.campaignId ?? null,
           });
         }
         if (first.b64_json) {

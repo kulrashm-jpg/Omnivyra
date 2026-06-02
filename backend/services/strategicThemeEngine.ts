@@ -398,6 +398,8 @@ export type GenerateAdditionalStrategicThemesParams = {
   existingThemeKeys: string[];
   /** Request-scoped cache for historical theme keys. Caller must initialize. */
   rankingContext: ThemeRankingContext;
+  /** Activity-consumption correlation envelope (forwarded to LLM metering). */
+  correlation?: import('../../lib/shared/observability/correlationRef').CorrelationRef;
 };
 
 type MarketSignal = {
@@ -764,7 +766,10 @@ export async function generateAdditionalStrategicThemes(
   try {
     const result = await runCompletionWithOperation({
       companyId,
-      campaignId: null,
+      campaignId: params.correlation?.parentActivityId ?? null,
+      referenceType: params.correlation?.referenceType ?? null,
+      referenceId: params.correlation?.referenceId ?? null,
+      parentActivityId: params.correlation?.parentActivityId ?? null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.7,
       operation: 'generateAdditionalStrategicThemes',

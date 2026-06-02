@@ -64,6 +64,9 @@ export interface BlackHoleCaptureInput {
   outputTokens?: number | null;
   userId?: string | null;
   referenceId?: string | null;
+  /** Semantic activity type for consumption correlation; defaults to 'black_hole_capture'. */
+  referenceType?: string | null;
+  parentActivityId?: string | null;
   /** True if the underlying provider call failed (row still useful for ops). */
   errorFlag?: boolean;
   /** The real activity label, kept in metadata for attribution/audit. */
@@ -96,7 +99,7 @@ export async function captureTokenProviderCost(input: BlackHoleCaptureInput): Pr
       total_cost_usd:  costUsd,
       error_flag:      !!input.errorFlag,
       reference_id:    input.referenceId ?? null,
-      reference_type:  'black_hole_capture',
+      reference_type:  input.referenceType ?? 'black_hole_capture',
       metadata: {
         capture:      'black_hole_v1',
         rate_source:  RATE_SOURCE,
@@ -125,6 +128,8 @@ export interface FlatProviderCaptureInput {
   units?: Record<string, unknown>;
   userId?: string | null;
   referenceId?: string | null;
+  referenceType?: string | null;
+  parentActivityId?: string | null;
   errorFlag?: boolean;
   activity: string;
 }
@@ -154,7 +159,7 @@ export async function captureFlatProviderCost(input: FlatProviderCaptureInput): 
       total_cost_usd:  Math.max(0, input.totalCostUsd),
       error_flag:      !!input.errorFlag,
       reference_id:    input.referenceId ?? null,
-      reference_type:  'black_hole_capture',
+      reference_type:  input.referenceType ?? 'black_hole_capture',
       metadata: {
         capture:     'black_hole_flat_v1',
         rate_source: RATE_SOURCE,
@@ -184,6 +189,8 @@ export interface ImageProviderCaptureInput {
   userId?: string | null;
   campaignId?: string | null;
   referenceId?: string | null;
+  referenceType?: string | null;
+  parentActivityId?: string | null;
   errorFlag?: boolean;
   activity: string;
 }
@@ -217,7 +224,7 @@ export async function captureImageProviderCost(input: ImageProviderCaptureInput)
       total_cost_usd:  costUsd,
       error_flag:      !!input.errorFlag,
       reference_id:    input.referenceId ?? null,
-      reference_type:  'black_hole_capture',
+      reference_type:  input.referenceType ?? 'black_hole_capture',
       metadata: {
         capture:     'black_hole_image_v1',
         rate_source: RATE_SOURCE,
@@ -225,6 +232,7 @@ export async function captureImageProviderCost(input: ImageProviderCaptureInput)
         cost_basis:  'static_estimate',
         image_count: count,
         image_size:  input.size ?? null,
+        ...(input.parentActivityId ? { parent_activity_id: input.parentActivityId } : {}),
       },
     });
   } catch (err) {

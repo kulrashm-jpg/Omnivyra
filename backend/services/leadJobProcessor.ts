@@ -16,6 +16,7 @@ import { shouldRejectPost } from './leadNoiseFilter';
 import { generateIntentClusters } from './leadClusterService';
 import { writeLeadSignal } from './canonicalLeadSignalService';
 import { deductCreditsIfValueAwaited } from './creditExecutionService';
+import { logUsageEvent } from './usageLedgerService';
 
 const QUALIFIED_THRESHOLD = 0.6;
 const QUALITY_WEIGHT = 0.7;
@@ -186,7 +187,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
           };
 
           if (mode === 'REACTIVE') {
-            const qual = await qualifyLead(post, profile, null, unifiedContextBlock);
+            const qual = await qualifyLead(post, profile, null, unifiedContextBlock, { referenceType: 'lead_job', referenceId: jobId, parentActivityId: companyId });
             const qualityScore = qual.total_score;
             const engagement = qual.engagement_potential ?? 0;
             const combined = qualityScore * QUALITY_WEIGHT + engagement * ENGAGEMENT_WEIGHT;
@@ -214,7 +215,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
               problem_domain: qual.problem_domain ?? null,
             };
           } else {
-            const qual = await qualifyPredictiveLead(post, profile, null, unifiedContextBlock);
+            const qual = await qualifyPredictiveLead(post, profile, null, unifiedContextBlock, { referenceType: 'lead_job', referenceId: jobId, parentActivityId: companyId });
             const total_score = qual.total_score;
             const qualified = total_score >= QUALIFIED_THRESHOLD && !qual.risk_flag;
             if (qual.risk_flag) riskCount++;
@@ -269,6 +270,22 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
             await supabase.rpc('lead_platform_increment_signals', {
               p_company_id: companyId,
               p_platform: (post.platform ?? platform).toString().toLowerCase(),
+            });
+            // Activity-consumption correlation (Phase 1B): attribute the platform
+            // signal/resource consumption to this lead job. source_type 'internal'
+            // → no billing, exempt from the action-key guard; correlation only.
+            void logUsageEvent({
+              organization_id: companyId,
+              source_type: 'internal',
+              source_name: 'lead_platform_increment_signals',
+              process_type: 'lead_platform_increment',
+              reference_type: 'lead_job',
+              reference_id: jobId,
+              input_tokens: 0,
+              output_tokens: 0,
+              total_tokens: 0,
+              total_cost_usd: 0,
+              error_flag: false,
             });
           } catch {
             // platform stats are non-critical

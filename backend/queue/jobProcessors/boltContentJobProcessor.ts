@@ -382,6 +382,10 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
         topic,
         title: topic,
         company_id: companyId,
+        campaign_id,
+        // Activity-consumption correlation (Phase 1): tie every child LLM/media
+        // row to this BOLT run so all consumption aggregates by reference_id.
+        correlation: { referenceType: 'bolt_run', referenceId: run_id ?? campaign_id, parentActivityId: campaign_id },
         intent: {
           objective:       enriched.dailyObjective     ?? intent.objective       ?? 'Educate and engage the audience',
           pain_point:      enriched.whatProblemAreWeAddressing ?? intent.pain_point ?? 'Audience challenge',
@@ -470,6 +474,8 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
     const itemForVariants = {
       execution_id: String(enriched.execution_id ?? `topic-${topic.slice(0, 30).replace(/\s/g, '-')}`),
       topic, title: topic, company_id: companyId,
+      campaign_id,
+      correlation: { referenceType: 'bolt_run', referenceId: run_id ?? campaign_id, parentActivityId: campaign_id },
       intent: {
         objective: enriched.dailyObjective ?? intent.objective ?? 'Educate and engage the audience',
         pain_point: enriched.whatProblemAreWeAddressing ?? intent.pain_point ?? 'Audience challenge',

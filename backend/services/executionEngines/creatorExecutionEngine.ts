@@ -478,6 +478,10 @@ Return JSON only.`;
 
   const result = await runCompletionWithOperation({
     companyId: context.companyId,
+    campaignId: context.campaignId ?? null,
+    referenceType: context.correlation?.referenceType ?? null,
+    referenceId: context.correlation?.referenceId ?? null,
+    parentActivityId: context.correlation?.parentActivityId ?? null,
     model: config.OPENAI_MODEL,
     operation: `creator_execution_blueprint_${assetType}`,
     temperature: 0,

@@ -168,6 +168,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           limit: 8,
           existingThemeKeys: [],
           rankingContext: rankingCtx,
+          correlation: { referenceType: 'recommendation_generation', referenceId: String(resolvedCampaignId ?? companyId), parentActivityId: resolvedCampaignId ?? null },
         });
         if (aiThemes.length > 0) {
           result.trends_used = aiThemes.map((t) => ({
@@ -248,6 +249,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             `Opportunity:\n${JSON.stringify(manualContext || {}, null, 2)}`;
           const completion = await generateRecommendation({
             companyId,
+            referenceType: 'recommendation_generation',
+            referenceId: String(resolvedCampaignId ?? companyId),
+            parentActivityId: resolvedCampaignId ?? null,
             model,
             temperature: 0.3,
             response_format: { type: 'json_object' },

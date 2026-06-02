@@ -46,7 +46,8 @@ export async function qualifyPredictiveLead(
   rawPost: RawPost,
   companyProfile: CompanyProfile | null,
   missionContext?: CompanyMissionContext | null,
-  prebuiltContextBlock?: string | null
+  prebuiltContextBlock?: string | null,
+  correlation?: import('../../lib/shared/observability/correlationRef').CorrelationRef
 ): Promise<PredictiveQualificationResult> {
   const contextBlock = prebuiltContextBlock != null && prebuiltContextBlock.length > 0
     ? prebuiltContextBlock
@@ -106,6 +107,9 @@ export async function qualifyPredictiveLead(
     }>(systemPrompt, userPrompt, {
       organizationId: companyProfile?.company_id ?? null,
       processType: 'qualifyPredictiveLead',
+      referenceType: correlation?.referenceType ?? null,
+      referenceId: correlation?.referenceId ?? null,
+      parentActivityId: correlation?.parentActivityId ?? null,
     });
 
     const icp = clamp01(data?.icp_score ?? 0);
