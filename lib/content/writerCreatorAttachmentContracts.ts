@@ -362,6 +362,27 @@ export function resolveAttachmentModeFromIntent(input: AttachmentIntentSignals):
     ? input.requestedMode
     : null;
 
+  // Hard taxonomy gate. `supporting_image` is the one writer asset type whose
+  // governance profile is zero-text (maxWordsPerSlide 0, maxTextAreaPercent 0,
+  // visualPriority 'visual', allowHeadline false — see ASSET_GOVERNANCE_PROFILES
+  // in backend/services/creatorAssetGovernance). It can NEVER carry embedded
+  // copy: coercing it to embedded_copy makes the renderer bake the post text
+  // onto the image, which the publish validator then HARD-rejects at schedule
+  // time with visual_priority_rejects_text_overlay / headline_overlay_forbidden
+  // / text_density|area_exceeds_profile (the asset profile, not the platform,
+  // drives this — so it fails on every destination). The asset-type default
+  // (supporting_visual ONLY for supporting_image) is the source of truth; for
+  // such assets we pin supporting_visual regardless of text signals or an
+  // explicit embedded_copy request, so Add Asset → Image always produces a
+  // schedulable, governance-clean visual.
+  if (defaultAttachmentModeForAsset(input.assetType) === 'supporting_visual') {
+    return {
+      mode: 'supporting_visual',
+      coerced: requested === 'embedded_copy' || signals.length > 0,
+      signals,
+    };
+  }
+
   // Any embedded-copy signal → embedded_copy (coerce supporting_visual
   // requests, preserve the audit signals for telemetry).
   if (signals.length > 0) {
