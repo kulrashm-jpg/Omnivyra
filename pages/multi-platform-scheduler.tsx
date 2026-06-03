@@ -51,10 +51,19 @@ export default function MultiPlatformSchedulerPage() {
   const [adaptingPlatform, setAdaptingPlatform] = useState<string | null>(null);
   const [assetMenuOpen, setAssetMenuOpen] = useState(false);
   const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
+  // Video attachment by URL — not a generated Creator asset; the user supplies
+  // a link that is published as a video alongside the post text. Kept separate
+  // from `attachedAssets` (generated visuals) so it never touches the
+  // generated-asset taxonomy/route system.
+  const [videoUrl, setVideoUrl] = useState('');
+  const [videoFormOpen, setVideoFormOpen] = useState(false);
+  const [videoInput, setVideoInput] = useState('');
   const adaptedPlatformKeysRef = useRef<Record<string, string>>({});
   const requestedPlatform = typeof router.query.platform === 'string'
     ? normalizePlatform(router.query.platform)
     : '';
+  const entryIntent = typeof router.query.intent === 'string' ? router.query.intent.trim().toLowerCase() : '';
+  const prefersImmediateShare = entryIntent === 'publish';
 
   const getSourceContentForPlatform = (targetPlatform: string, currentDraft: DraftPayload | null) => {
     if (!currentDraft) return '';
@@ -178,10 +187,15 @@ export default function MultiPlatformSchedulerPage() {
       allPlatformOptions.map((opt) => opt.key),
       {
         contentType:        schedulerSourceContentType,
-        attachedAssetTypes: attachedAssets.map((asset) => asset.creatorType),
+        // 'video' unlocks video-only destinations (YouTube/TikTok) via the
+        // capability map when a video URL is attached.
+        attachedAssetTypes: [
+          ...attachedAssets.map((asset) => asset.creatorType),
+          ...(videoUrl.trim() ? ['video'] : []),
+        ],
       },
     );
-  }, [allPlatformOptions, schedulerSourceContentType, attachedAssets]);
+  }, [allPlatformOptions, schedulerSourceContentType, attachedAssets, videoUrl]);
 
   const hiddenReasonByKey = useMemo(() => {
     const m = new Map<string, string>();
@@ -334,6 +348,17 @@ export default function MultiPlatformSchedulerPage() {
     };
   }, [selectedCompanyId, writerSourceId, writerSourceType]);
 
+  const isLikelyVideoUrl = (value: string) => /^https?:\/\/\S+$/i.test(value.trim());
+
+  const attachVideoUrl = () => {
+    const url = videoInput.trim();
+    if (!isLikelyVideoUrl(url)) return;
+    setVideoUrl(url);
+    setVideoInput('');
+    setVideoFormOpen(false);
+    setAssetMenuOpen(false);
+  };
+
   const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {
     if (!draft || !writerSourceType || !writerSourceId) return;
     const sourceContent = selectedState?.content || draft.content || '';
@@ -400,6 +425,45 @@ export default function MultiPlatformSchedulerPage() {
               {assetLabel(assetType)}
             </button>
           ))}
+          {/* Video — attach a URL (not generated); published with the post text. */}
+          <button
+            type="button"
+            onClick={() => setVideoFormOpen((open) => !open)}
+            className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            Video
+          </button>
+          {videoFormOpen ? (
+            <div className="border-t border-slate-100 px-4 py-3">
+              <label className="text-[11px] font-semibold text-slate-500">Video URL</label>
+              <input
+                type="url"
+                value={videoInput}
+                onChange={(e) => setVideoInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') attachVideoUrl(); }}
+                placeholder="https://… (YouTube, Vimeo, MP4)"
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-blue-300"
+              />
+              <p className="mt-1 text-[10px] text-slate-400">Posted as a video with your text on platforms that support it.</p>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={attachVideoUrl}
+                  disabled={!isLikelyVideoUrl(videoInput)}
+                  className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Attach video
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setVideoFormOpen(false); setVideoInput(''); }}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-slate-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -615,12 +679,29 @@ export default function MultiPlatformSchedulerPage() {
       // scheduled_post row carries the rendered images/files. Each attached
       // asset can contribute a primary `url` and/or a `files` array (e.g.
       // carousel slides), and we de-dupe across attachments.
-      const mediaUrlsFromAttachments = mediaUrlsFromCreatorAttachments(attachedAssets);
-      const mediaTypesFromAttachments = mediaTypesFromCreatorAttachments({
+      const draftMediaUrls = Array.isArray(draft?.mediaUrls)
+        ? draft.mediaUrls.map((url) => String(url || '').trim()).filter(Boolean)
+        : [];
+      const mediaUrlsFromAttachedAssets = mediaUrlsFromCreatorAttachments(attachedAssets);
+      // User-supplied video URL — carried as media and tagged as a video so the
+      // target platform shows the video alongside the post text.
+      const videoUrls = videoUrl.trim() ? [videoUrl.trim()] : [];
+      const mediaUrlsFromAttachments = Array.from(new Set([...draftMediaUrls, ...mediaUrlsFromAttachedAssets, ...videoUrls]));
+      const inferredMediaTypes = mediaTypesFromCreatorAttachments({
         mediaUrls: mediaUrlsFromAttachments,
         attachedAssets,
       });
-      const creatorAttachments = attachedAssets.map((asset) => ({
+      const draftMediaTypes = Array.isArray(draft?.mediaTypes)
+        ? draft.mediaTypes.map((type) => String(type || '').trim()).filter(Boolean)
+        : [];
+      const mediaTypesFromAttachments = mediaUrlsFromAttachments.map((url, index) =>
+        videoUrls.includes(url) ? 'video' : (draftMediaTypes[index] || inferredMediaTypes[index] || 'image'));
+      const draftCreatorAttachments = Array.isArray(draft?.creatorAttachments)
+        ? draft.creatorAttachments.filter((attachment) => attachment && typeof attachment === 'object')
+        : [];
+      const creatorAttachments = [
+        ...draftCreatorAttachments,
+        ...attachedAssets.map((asset) => ({
         id: asset.id,
         creatorType: asset.creatorType,
         attachmentMode: asset.attachmentMode ?? asset.compositionIntent?.attachmentMode ?? null,
@@ -631,7 +712,8 @@ export default function MultiPlatformSchedulerPage() {
         validationManifest: asset.metadata?.validation_manifest ?? null,
         url: asset.url ?? null,
         files: Array.isArray(asset.files) ? asset.files : [],
-      }));
+        })),
+      ];
 
       if (scheduledPostId) {
         const updateRes = await fetch(`/api/schedule/posts/${scheduledPostId}`, {
@@ -814,7 +896,9 @@ export default function MultiPlatformSchedulerPage() {
                   Share this {sourceContentLabel.toLowerCase()} for {selectedCompanyName || 'your company'}
                 </h1>
                 <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
-                  Select one connected platform, let the system repurpose the draft for that channel, then schedule it or share it live.
+                  {prefersImmediateShare
+                    ? 'The selected platform is ready for final review. Confirm the adapted copy, then share it live.'
+                    : 'Select one connected platform, let the system repurpose the draft for that channel, then schedule it or share it live.'}
                 </p>
                 {isManualThreadFlow ? (
                   <p className="mt-3 max-w-3xl text-sm leading-6 text-violet-700">
@@ -842,6 +926,26 @@ export default function MultiPlatformSchedulerPage() {
                       <span key={tag} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
                         {tag.startsWith('#') ? tag : `#${tag}`}
                       </span>
+                    ))}
+                  </div>
+                ) : null}
+                {draft?.mediaUrls?.length ? (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {draft.mediaUrls.slice(0, 4).map((url, index) => (
+                      <a
+                        key={`${url}-${index}`}
+                        href={url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
+                      >
+                        <img
+                          src={url}
+                          alt={`${draft.title || 'Generated media'} ${index + 1}`}
+                          className="h-44 w-full object-contain"
+                          loading="lazy"
+                        />
+                      </a>
                     ))}
                   </div>
                 ) : null}
@@ -918,7 +1022,7 @@ export default function MultiPlatformSchedulerPage() {
                       {writerSourceType ? (
                         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                           <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Attached Assets</p>
-                          {attachedAssets.length === 0 ? (
+                          {attachedAssets.length === 0 && !videoUrl.trim() ? (
                             <p className="mt-2 text-sm leading-6 text-slate-600">
                               No Creator assets attached yet. Use Add Asset to create a supported Creator asset from this {sourceContentLabel.toLowerCase()}.
                             </p>
@@ -939,6 +1043,22 @@ export default function MultiPlatformSchedulerPage() {
                                   </span>
                                 </a>
                               ))}
+                              {videoUrl.trim() ? (
+                                <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+                                  <div className="min-w-0">
+                                    <span className="font-semibold">Video</span>
+                                    <a href={videoUrl} target="_blank" rel="noreferrer" className="mt-1 block truncate text-xs text-blue-600 hover:underline">{videoUrl}</a>
+                                    <span className="mt-0.5 block text-[11px] text-slate-500">Published as a video with your post text.</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setVideoUrl('')}
+                                    className="ml-3 shrink-0 text-xs font-semibold text-slate-400 transition hover:text-rose-500"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              ) : null}
                             </div>
                           )}
                         </div>

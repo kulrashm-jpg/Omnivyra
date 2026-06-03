@@ -295,23 +295,45 @@ export function mergeClassicShortParagraphBlocks(
   return merged;
 }
 
+/** Plain text of a content block, for duplication comparison. */
+function blockPlainTextForSummary(block: ContentBlock | null | undefined): string {
+  if (!block) return '';
+  const b = block as unknown as Record<string, unknown>;
+  if (block.type === 'paragraph') return stripHtmlForWordCount(String(b.html ?? ''));
+  if (typeof b.body === 'string') return stripHtmlForWordCount(b.body);
+  if (typeof b.text === 'string') return stripHtmlForWordCount(b.text);
+  if (typeof b.html === 'string') return stripHtmlForWordCount(b.html);
+  return '';
+}
+
+function normalizeForSummaryCompare(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** True when `candidate` would merely echo text already present in a block. */
+function summaryEchoesExisting(candidate: string, blocks: ContentBlock[]): boolean {
+  const c = normalizeForSummaryCompare(candidate);
+  if (c.length < 12) return false;
+  for (const block of blocks) {
+    const t = normalizeForSummaryCompare(blockPlainTextForSummary(block));
+    if (!t) continue;
+    if (t === c || t.includes(c) || c.includes(t)) return true;
+  }
+  return false;
+}
+
 export function ensureClassicSummaryBlock(
   blocks: ContentBlock[],
   excerpt: string,
 ): ContentBlock[] {
   if (blocks.some((b) => b.type === 'summary' && (b as any).body.trim().length > 0)) return blocks;
 
-  const summarySource = [...blocks].reverse().find((b) =>
-    (b.type === 'paragraph' && stripHtmlForWordCount((b as any).html).trim().length > 0) ||
-    (b.type === 'callout' && String((b as any).body ?? '').trim().length > 0),
-  );
-
-  let summaryBody = excerpt.trim();
-  if (!summaryBody && summarySource?.type === 'paragraph') summaryBody = stripHtmlForWordCount((summarySource as any).html);
-  else if (!summaryBody && summarySource?.type === 'callout') summaryBody = String((summarySource as any).body ?? '').trim();
-
-  summaryBody = summaryBody.trim();
+  // Only the excerpt seeds the synthesized summary — never copy a body block
+  // verbatim (that produced the trailing duplication), and skip it entirely
+  // when it would echo existing body text.
+  const summaryBody = excerpt.trim();
   if (!summaryBody) return blocks;
+  if (summaryEchoesExisting(summaryBody, blocks)) return blocks;
 
   const summaryBlock: ContentBlock = { id: uuid(), type: 'summary', body: summaryBody } as any;
   const refsIdx = blocks.findIndex((b) => b.type === 'references');

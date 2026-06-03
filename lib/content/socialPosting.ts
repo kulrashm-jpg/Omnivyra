@@ -26,6 +26,10 @@ export type SocialPostingDraft = {
   sourceId?: string | null;
   excerpt?: string | null;
   masterContent?: Record<string, unknown> | null;
+  mediaUrls?: string[];
+  mediaTypes?: string[];
+  creatorAttachments?: Array<Record<string, unknown>>;
+  sourcePlatform?: string | null;
 };
 
 export type SocialPostingPrefillPayload = {
@@ -55,6 +59,10 @@ export function launchSocialPostingFromContent({
   excerpt,
   sourceId,
   platform,
+  mediaUrls,
+  mediaTypes,
+  creatorAttachments,
+  intent,
 }: {
   router: NextRouter;
   contentType: SocialPostingContentType;
@@ -64,6 +72,10 @@ export function launchSocialPostingFromContent({
   excerpt?: string | null;
   sourceId?: string | null;
   platform?: string | null;
+  mediaUrls?: string[] | null;
+  mediaTypes?: string[] | null;
+  creatorAttachments?: Array<Record<string, unknown>> | null;
+  intent?: 'schedule' | 'publish' | null;
 }): boolean {
   if (typeof window === 'undefined') return false;
 
@@ -82,6 +94,15 @@ export function launchSocialPostingFromContent({
         .filter(Boolean)
         .map((tag) => (tag.startsWith('#') ? tag : `#${tag.replace(/^#+/, '')}`))
     : [];
+  const normalizedMediaUrls = Array.isArray(mediaUrls)
+    ? Array.from(new Set(mediaUrls.map((url) => String(url || '').trim()).filter(Boolean)))
+    : [];
+  const normalizedMediaTypes = Array.isArray(mediaTypes)
+    ? mediaTypes.map((type) => String(type || '').trim()).filter(Boolean)
+    : [];
+  const normalizedCreatorAttachments = Array.isArray(creatorAttachments)
+    ? creatorAttachments.filter((attachment) => attachment && typeof attachment === 'object')
+    : [];
 
   const payload: SocialPostingPrefillPayload = {
     draft: {
@@ -92,11 +113,18 @@ export function launchSocialPostingFromContent({
       sourceContentType: contentType,
       sourceId: sourceId || null,
       excerpt: trimmedExcerpt || null,
+      mediaUrls: normalizedMediaUrls,
+      mediaTypes: normalizedMediaTypes,
+      creatorAttachments: normalizedCreatorAttachments,
+      sourcePlatform: platform || null,
       masterContent: {
         content: trimmedContent,
         source_content_type: contentType,
         excerpt: trimmedExcerpt || null,
         source_id: sourceId || null,
+        media_urls: normalizedMediaUrls,
+        media_types: normalizedMediaTypes,
+        creator_attachments: normalizedCreatorAttachments,
       },
     },
   };
@@ -111,6 +139,7 @@ export function launchSocialPostingFromContent({
       topic: trimmedTitle,
       ...(sourceId ? { sourceId } : {}),
       ...(platform ? { platform } : {}),
+      ...(intent ? { intent } : {}),
     },
   });
   return true;

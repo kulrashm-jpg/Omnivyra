@@ -29,6 +29,15 @@ export function resolveSchedulerDraft({
         };
 
         if (parsed?.draft?.content?.trim()) {
+          const mediaUrls = Array.isArray(parsed.draft.mediaUrls)
+            ? parsed.draft.mediaUrls.map((url) => String(url || '').trim()).filter(Boolean)
+            : [];
+          const mediaTypes = Array.isArray(parsed.draft.mediaTypes)
+            ? parsed.draft.mediaTypes.map((type) => String(type || '').trim()).filter(Boolean)
+            : [];
+          const creatorAttachments = Array.isArray(parsed.draft.creatorAttachments)
+            ? parsed.draft.creatorAttachments.filter((attachment) => attachment && typeof attachment === 'object')
+            : [];
           return {
             title: parsed.draft.title || topic || 'Content Draft',
             topic: parsed.draft.topic || parsed.draft.title || topic || 'Content Draft',
@@ -41,7 +50,10 @@ export function resolveSchedulerDraft({
             sourceContentType: parsed.draft.sourceContentType || sourceContentType,
             sourceId: parsed.draft.sourceId || sourceId,
             masterContent: parsed.draft.masterContent || null,
-            sourcePlatform: null,
+            sourcePlatform: parsed.draft.sourcePlatform || null,
+            mediaUrls,
+            mediaTypes,
+            creatorAttachments,
           };
         }
 

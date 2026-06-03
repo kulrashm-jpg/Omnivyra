@@ -522,7 +522,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const topic = deriveSubTopic(baseTopic, contentType, k, synthTargetAudience);
         globalTopicIdx++;
         const requiresMediaBrief =
-          ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'short', 'shorts', 'podcast', 'image'].includes(contentType) ||
+          ['video', 'reel', 'reels', 'carousel', 'infographic', 'story', 'stories', 'short', 'shorts', 'podcast', 'image'].includes(contentType) ||
           requiresCreatorCreativeGuidance(contentType);
         slots.push({
           topic,
@@ -1760,4 +1760,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 }
 
 // Removed legacy daily planning generator. Daily layer is execution-only.
-

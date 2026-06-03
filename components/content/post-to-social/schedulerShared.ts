@@ -23,6 +23,9 @@ export type DraftPayload = {
   sourceId?: string | null;
   masterContent?: Record<string, unknown> | null;
   sourcePlatform?: string | null;
+  mediaUrls?: string[];
+  mediaTypes?: string[];
+  creatorAttachments?: Array<Record<string, unknown>>;
 };
 
 export type PlatformState = {

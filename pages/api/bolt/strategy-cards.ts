@@ -45,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Campaign Brief — all optional. Older callers won't send these; the
       // generator falls back to topic + goals + audience-only flow.
       description, tone: toneRaw, audienceText: audienceTextRaw,
-      audience, strategicFocus, offerings, contentFormat, duration,
+      audience, strategicFocus, offerings, contentFormat, contentFormats: contentFormatsRaw, formatFrequency: formatFrequencyRaw, duration,
     } = req.body || {};
 
     // Resolve goals: accept array (new) or string (legacy), always produce string[]
@@ -65,6 +65,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const resolvedAudience = (typeof audienceTextRaw === 'string' && audienceTextRaw.trim())
       ? audienceTextRaw.trim()
       : (typeof audience === 'string' ? audience.trim() : '');
+    const selectedContentFormats: string[] = Array.isArray(contentFormatsRaw)
+      ? (contentFormatsRaw as unknown[])
+          .map((f) => String(f ?? '').trim().toLowerCase())
+          .filter(Boolean)
+      : typeof contentFormat === 'string' && contentFormat.trim()
+        ? [contentFormat.trim().toLowerCase()]
+        : [];
+    const formatFrequency: Record<string, number> =
+      formatFrequencyRaw && typeof formatFrequencyRaw === 'object' && !Array.isArray(formatFrequencyRaw)
+        ? Object.fromEntries(
+            Object.entries(formatFrequencyRaw as Record<string, unknown>)
+              .map(([key, value]) => [key.trim().toLowerCase(), Math.max(1, Math.round(Number(value) || 1))])
+              .filter(([key]) => Boolean(key))
+          )
+        : {};
+    const contentFormatLabel = selectedContentFormats.length > 0
+      ? selectedContentFormats
+          .map((fmt) => `${fmt}${formatFrequency[fmt] ? ` (${formatFrequency[fmt]}/wk)` : ''}`)
+          .join(' + ')
+      : (typeof contentFormat === 'string' ? contentFormat : 'post');
 
     if (!companyId || typeof companyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required' });
@@ -333,7 +353,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         contentFocus: themes.map((t) => t.title).join(' → '),
         phaseLabels: uniquePhases.slice(0, 4),
         weekThemes: themes,
-        contentFormat: typeof contentFormat === 'string' ? contentFormat : 'post',
+        contentFormat: contentFormatLabel,
         duration: weeks,
         // Prefer the new Brief audience field (free-form text) over the
         // legacy chip-joined string when both arrive — older callers send

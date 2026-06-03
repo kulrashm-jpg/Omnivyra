@@ -566,6 +566,15 @@ const SUB_TOPIC_ANGLES: Record<string, Array<(theme: string, audience: string) =
     (t, a) => `Swipe through: ${t.toLowerCase()} playbook for ${a}`,
     (t, a) => `Carousel: what ${a} get wrong about ${t.toLowerCase()}`,
   ],
+  infographic: [
+    (t, a) => `Infographic: ${t} in one clear visual`,
+    (t, a) => `${t} data map for ${a}`,
+    (t, a) => `Visual framework: ${t} at a glance`,
+    (t, a) => `${t} process infographic for ${a}`,
+    (t, a) => `The ${t.toLowerCase()} comparison chart`,
+    (t, a) => `${t}: stats and signals ${a} should track`,
+    (t, a) => `Infographic checklist for ${t.toLowerCase()}`,
+  ],
   story: [
     (t, a) => `Story: behind the scenes of ${t.toLowerCase()}`,
     (t, a) => `Quick story: ${t} tip for ${a}`,
@@ -763,7 +772,7 @@ export function buildCreatorCard(
   const topicStr = typeof item?.topicTitle === 'string' ? item.topicTitle.trim() : '';
   const contentType = String(item?.contentType || enrichedItem?.content_type || enrichedItem?.contentType || '').toLowerCase();
   const requiresMediaBrief =
-    ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'short', 'shorts', 'tiktok', 'podcast', 'image'].includes(contentType) ||
+    ['video', 'reel', 'reels', 'carousel', 'infographic', 'story', 'stories', 'short', 'shorts', 'tiktok', 'podcast', 'image'].includes(contentType) ||
     requiresCreatorCreativeGuidance(contentType);
 
   // Keywords: enrich from topic + objective

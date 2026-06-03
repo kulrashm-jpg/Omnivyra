@@ -573,6 +573,39 @@ export function mergeClassicShortParagraphBlocks(
   return merged;
 }
 
+/** Plain text of a content block, for duplication comparison. */
+function blockPlainText(block: ContentBlock | null | undefined): string {
+  if (!block) return '';
+  const b = block as unknown as Record<string, unknown>;
+  if (block.type === 'paragraph') return stripHtmlForWordCount(String(b.html ?? ''));
+  if (typeof b.body === 'string') return stripHtmlForWordCount(b.body);
+  if (typeof b.text === 'string') return stripHtmlForWordCount(b.text);
+  if (typeof b.html === 'string') return stripHtmlForWordCount(b.html);
+  return '';
+}
+
+/** Normalize text for a tolerant duplication comparison (case/punctuation-insensitive). */
+function normalizeForCompare(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * True when `candidate` would merely echo text already present in one of the
+ * existing blocks (exact match, or one fully contains the other). Used to keep
+ * a synthesized summary from duplicating the body — the source of the trailing
+ * duplication.
+ */
+function echoesExistingBlock(candidate: string, blocks: ContentBlock[]): boolean {
+  const c = normalizeForCompare(candidate);
+  if (c.length < 12) return false; // too short to compare meaningfully
+  for (const block of blocks) {
+    const t = normalizeForCompare(blockPlainText(block));
+    if (!t) continue;
+    if (t === c || t.includes(c) || c.includes(t)) return true;
+  }
+  return false;
+}
+
 export function ensureClassicSummaryBlock(
   blocks: ContentBlock[],
   excerpt: string,
@@ -581,22 +614,17 @@ export function ensureClassicSummaryBlock(
     return blocks;
   }
 
-  const summarySource = [...blocks]
-    .reverse()
-    .find((block) =>
-      (block.type === 'paragraph' && stripHtmlForWordCount(block.html).trim().length > 0) ||
-      (block.type === 'callout' && String(block.body ?? '').trim().length > 0),
-    );
-
-  let summaryBody = excerpt.trim();
-  if (!summaryBody && summarySource?.type === 'paragraph') {
-    summaryBody = stripHtmlForWordCount(summarySource.html);
-  } else if (!summaryBody && summarySource?.type === 'callout') {
-    summaryBody = String(summarySource.body ?? '').trim();
-  }
-
-  summaryBody = summaryBody.trim();
+  // Only the excerpt may seed the synthesized summary. The previous fallback
+  // copied the LAST paragraph/callout verbatim, which appended the blog's own
+  // conclusion a second time as a "summary" — the trailing duplication. We
+  // never copy a body block verbatim now.
+  const summaryBody = excerpt.trim();
   if (!summaryBody) return blocks;
+
+  // Even the excerpt must not echo existing body text — no duplication at the
+  // end. When it would, we simply omit the summary (a redundant summary is
+  // worse than none).
+  if (echoesExistingBlock(summaryBody, blocks)) return blocks;
 
   const summaryBlock: ContentBlock = {
     id: uuid(),

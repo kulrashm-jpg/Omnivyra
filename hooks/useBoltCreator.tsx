@@ -13,6 +13,7 @@ import { BoltCampaignChat } from '../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../pages/api/bolt/strategy-cards';
 import type { BOLTProgress } from '../components/BOLTProgressModal';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
+import { saveCampaignResume } from '../lib/campaignResumeStore';
 import { useBoltPlatformPicker } from './useBoltPlatformPicker';
 import { CREATOR_FORMAT_CAPABILITY, type CreatorContentFormat } from '../lib/shared/bolt/creatorFormatCapability';
 import { platformSupportsCapability } from '../lib/shared/social/platformCapabilities';
@@ -46,6 +47,10 @@ function clampStartDateToToday(value: string | null | undefined): string {
   const today = new Date().toISOString().split('T')[0];
   const v = String(value ?? '').slice(0, 10);
   return v && v >= today ? v : today;
+}
+
+function progSafeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 // Round-7 Phase 2: cross-platform-sharing eligibility moved to
@@ -434,6 +439,7 @@ export function useBoltCreator() {
   // Generation
   const [cards, setCards] = useState<BoltStrategyCard[]>([]);
   const [generating, setGenerating] = useState(false);
+  const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
   const [hasGenerated, setHasGenerated] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -639,6 +645,7 @@ export function useBoltCreator() {
         setFormatFrequency((fq) => { const next = { ...fq }; delete next[f]; return next; });
         return prev.filter((x) => x !== f);
       }
+      if (prev.length >= 2) return prev;
       setFormatFrequency((fq) => ({ ...fq, [f]: fq[f] ?? 3 }));
       return [...prev, f];
     });
@@ -751,6 +758,7 @@ export function useBoltCreator() {
       const DEADLINE = Date.now() + (outcomeView === 'schedule' ? 15 : 6) * 60 * 1000;
       let completedCampaignId: string | null = null;
       let done = false;
+      let lastProgress: BOLTProgress | null = null;
 
       while (!done) {
         if (Date.now() > DEADLINE) throw new Error('The request took too long. Please try again.');
@@ -768,13 +776,15 @@ export function useBoltCreator() {
 
         if (!mounted) return;
 
-        setExecProgress({
+        const nextProgress: BOLTProgress = {
           stage: prog.stage,
           status: prog.status,
           progress_percentage: prog.progress_percentage ?? 0,
           weeks_generated: prog.weeks_generated,
           daily_slots_created: prog.daily_slots_created,
-        });
+        };
+        lastProgress = nextProgress;
+        setExecProgress(nextProgress);
 
         if (prog.status === 'completed') { completedCampaignId = prog.result_campaign_id ?? null; done = true; }
         else if (prog.status === 'failed' || prog.status === 'aborted') {
@@ -784,6 +794,23 @@ export function useBoltCreator() {
 
       if (!mounted) return;
       try { sessionStorage.removeItem(BOLT_STATE_KEY); } catch {}
+
+      const completionStage =
+        outcomeView === 'schedule'
+          ? 'schedule'
+          : outcomeView === 'daily_plan'
+            ? 'creator-asset-generation'
+            : 'generate-weekly-structure';
+      setExecProgress({
+        stage: completionStage,
+        status: 'completed',
+        progress_percentage: 100,
+        weeks_generated: progSafeNumber(lastProgress?.weeks_generated),
+        daily_slots_created: progSafeNumber(lastProgress?.daily_slots_created),
+      });
+      await new Promise((r) => setTimeout(r, 1400));
+      if (!mounted) return;
+
       setExecuting(false);
       setExecProgress(null);
 
@@ -791,13 +818,16 @@ export function useBoltCreator() {
 
       const qs = new URLSearchParams({ companyId: companyId ?? '' });
       if (outcomeView === 'daily_plan') {
+        saveCampaignResume(completedCampaignId, 'campaign-daily-plan', { companyId: companyId ?? '' });
         router.push(`/campaign-daily-plan/${completedCampaignId}?${qs.toString()}`);
       } else if (outcomeView === 'schedule') {
         // Land on the dashboard's Calendar tab (the global calendar), not the
         // per-campaign "attached" /campaign-calendar/[id] view. The dashboard
         // deep-links to its calendar via ?tab=calendar (useDashboardState).
+        saveCampaignResume(completedCampaignId, 'campaign-calendar', { companyId: companyId ?? '' });
         router.push(`/dashboard?tab=calendar&${qs.toString()}`);
       } else {
+        saveCampaignResume(completedCampaignId, 'campaign-details', { companyId: companyId ?? '', mode: 'fast' });
         router.push(`/campaign-details/${completedCampaignId}?mode=fast&${qs.toString()}`);
       }
     } catch (err) {
@@ -819,6 +849,7 @@ export function useBoltCreator() {
   async function handleGenerate() {
     if (!topic.trim()) return;
     setGenerating(true);
+    setGenerationStartedAt(Date.now());
     setGenError(null);
     // Starting fresh — clear any stale BOLT launch/run error from a prior
     // attempt so regenerating/generating creator cards doesn't surface an
@@ -838,6 +869,8 @@ export function useBoltCreator() {
           strategicFocus,
           offerings,
           contentFormat: contentFormats[0] ?? 'video',
+          contentFormats,
+          formatFrequency: Object.fromEntries(contentFormats.map((f) => [f, formatFrequency[f] ?? 3])),
           duration,
           themeSource,
         }),
@@ -851,6 +884,7 @@ export function useBoltCreator() {
       setGenError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
       setGenerating(false);
+      setGenerationStartedAt(null);
     }
   }
 
@@ -879,6 +913,7 @@ export function useBoltCreator() {
     execStartedAt,
     executing,
     formatFrequency,
+    generationStartedAt,
     genError,
     generating,
     goals,

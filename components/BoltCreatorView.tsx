@@ -206,13 +206,15 @@ function CardBoltProgress({ progress, theme, startedAt, outcomeView }: {
         <div className="flex items-center gap-2">
           {isFailed ? (
             <span className="w-4 h-4 flex-shrink-0 text-red-500">✕</span>
+          ) : isCompleted ? (
+            <span className="w-4 h-4 flex-shrink-0 text-green-500 font-bold text-[13px]">✓</span>
           ) : (
             <svg className="animate-spin w-4 h-4 text-blue-500 flex-shrink-0" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
             </svg>
           )}
-          <span className="text-xs font-bold text-gray-800">{isFailed ? 'BOLT failed' : '⚡ BOLT running'}</span>
+          <span className="text-xs font-bold text-gray-800">{isFailed ? 'BOLT failed' : isCompleted ? 'BOLT complete' : 'BOLT running'}</span>
         </div>
         <span className="text-[11px] text-gray-400">{formatElapsed(elapsedMs)}</span>
       </div>
@@ -240,6 +242,11 @@ function CardBoltProgress({ progress, theme, startedAt, outcomeView }: {
       <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
         <div className={`h-full bg-gradient-to-r ${theme.gradient} rounded-full transition-all duration-500`} style={{ width: `${pct}%` }} />
       </div>
+      {isCompleted && (
+        <p className="mt-2 text-[11px] font-semibold text-green-600">
+          Done. Opening the next screen...
+        </p>
+      )}
       {isFailed && progress.error_message && (
         <p className="text-[11px] text-red-600 mt-2 leading-snug">{progress.error_message}</p>
       )}
@@ -356,6 +363,51 @@ function StrategyCard({
 }
 
 /* ─── Main page ──────────────────────────────────────────────────────────── */
+function DelayedStrategyGenerationProgress({ startedAt }: { startedAt: number | null }) {
+  const [elapsedMs, setElapsedMs] = useState(0);
+
+  useEffect(() => {
+    if (!startedAt) return;
+    const tick = () => setElapsedMs(Date.now() - startedAt);
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [startedAt]);
+
+  if (!startedAt || elapsedMs < 4000) return null;
+
+  const steps = [
+    { label: 'Reading campaign inputs', at: 0 },
+    { label: 'Building distinct strategy angles', at: 4000 },
+    { label: 'Drafting weekly arcs', at: 9000 },
+    { label: 'Checking format mix and frequency', at: 14000 },
+  ];
+  const currentIndex = steps.reduce((idx, step, i) => elapsedMs >= step.at ? i : idx, 0);
+  const pct = Math.min(90, 18 + Math.floor(elapsedMs / 1000) * 4);
+
+  return (
+    <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-bold text-blue-900">Still working on your strategy cards</p>
+        <span className="text-[11px] font-semibold text-blue-500">{formatElapsed(elapsedMs)}</span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
+        <div className="h-full rounded-full bg-blue-500 transition-all duration-700" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="mt-2 grid gap-1 sm:grid-cols-2">
+        {steps.map((step, i) => (
+          <div key={step.label} className={`flex items-center gap-1.5 text-[11px] ${i <= currentIndex ? 'text-blue-800' : 'text-blue-300'}`}>
+            <span className={`h-3.5 w-3.5 rounded-full border flex items-center justify-center text-[9px] ${i < currentIndex ? 'border-blue-500 bg-blue-500 text-white' : i === currentIndex ? 'border-blue-500 bg-white' : 'border-blue-200 bg-white'}`}>
+              {i < currentIndex ? '✓' : i + 1}
+            </span>
+            {step.label}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 import type { useBoltCreator } from '../hooks/useBoltCreator';
 type S = ReturnType<typeof useBoltCreator>;
 export default function BoltCreatorView({ d }: { d: S }) {
@@ -380,6 +432,7 @@ export default function BoltCreatorView({ d }: { d: S }) {
     execStartedAt,
     executing,
     formatFrequency,
+    generationStartedAt,
     genError,
     generating,
     goals,
@@ -868,6 +921,10 @@ export default function BoltCreatorView({ d }: { d: S }) {
               <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700 mb-4">
                 <strong>Error:</strong> {genError}
               </div>
+            )}
+
+            {generating && (
+              <DelayedStrategyGenerationProgress startedAt={generationStartedAt} />
             )}
 
             {generating && (
