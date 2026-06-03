@@ -570,9 +570,10 @@ function StrategyCard({
 /* ─── Main page ───────────────────────────────────────────────────────────── */
 import { useBoltStrategy } from '../../hooks/useBoltStrategy';
 import BoltStrategyView from '../../components/BoltStrategyView';
+import PageLoader from '../../components/PageLoader';
 export default function BoltTextStrategyPage() {
   const d = useBoltStrategy();
-  if (d._ef1) return null;
-  if (d._ef2) return null;
+  if (d._ef1) return <PageLoader message="Loading BOLT…" />;
+  if (d._ef2) return <PageLoader message="Loading BOLT…" />;
   return <BoltStrategyView d={d} />;
 }

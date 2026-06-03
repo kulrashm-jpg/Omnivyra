@@ -85,14 +85,11 @@ function isTabUnlocked(tabId: TabId, unlocked: TabId): boolean {
 
 import { useContentArchitect } from '../hooks/useContentArchitect';
 import ContentArchitectView from '../components/ContentArchitectView';
+import PageLoader from '../components/PageLoader';
 export default function ContentArchitectPage() {
   const d = useContentArchitect();
   if (d._ef1) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-600">Loading content architect access...</div>
-      </div>
-    );
+    return <PageLoader message="Loading Content Architect…" />;
   }
   if (d._ef2) {
     return (

@@ -1,6 +1,7 @@
 import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
+import PageLoader from '../../components/PageLoader';
 
 // Taxonomy consolidation — user-facing creator types reduced to 3.
 // Banner is now a Wide Banner layout under Image. Slider is now a
@@ -90,14 +91,10 @@ export default function CreatorContentPage() {
   }, [authChecked, user?.userId, router]);
 
   if (!authChecked || isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-slate-700" />
-      </div>
-    );
+    return <PageLoader message="Loading your workspace…" />;
   }
 
-  if (!user?.userId) return null;
+  if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">

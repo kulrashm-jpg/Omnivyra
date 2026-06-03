@@ -1058,8 +1058,9 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 
 import { useIntelControl } from '../../hooks/useIntelControl';
 import IntelControlView from '../../components/IntelControlView';
+import PageLoader from '../../components/PageLoader';
 export default function IntelControlPage() {
   const d = useIntelControl();
-  if (d._ef1) return null;
+  if (d._ef1) return <PageLoader message="Loading intelligence control…" />;
   return <IntelControlView d={d} />;
 }

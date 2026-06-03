@@ -209,9 +209,10 @@ interface CacheData {
 
 import { useSysHealth } from '../../hooks/useSysHealth';
 import SysHealthView from '../../components/SysHealthView';
+import PageLoader from '../../components/PageLoader';
 export default function SystemHealthPage() {
   const d = useSysHealth();
-  if (d._notReady) return null;
+  if (d._notReady) return <PageLoader message="Loading system health…" />;
   return (
     <>
       <div className="max-w-7xl mx-auto px-6 pt-6">

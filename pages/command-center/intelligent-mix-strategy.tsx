@@ -167,9 +167,10 @@ function FreqStepper({
 
 import { useIntelMix } from '../../hooks/useIntelMix';
 import IntelMixView from '../../components/IntelMixView';
+import PageLoader from '../../components/PageLoader';
 export default function IntelMixPage() {
   const d = useIntelMix();
-  if (d._ef1) return null;
-  if (d._ef2) return null;
+  if (d._ef1) return <PageLoader message="Loading Intelligent Mix…" />;
+  if (d._ef2) return <PageLoader message="Loading Intelligent Mix…" />;
   return <IntelMixView d={d} />;
 }

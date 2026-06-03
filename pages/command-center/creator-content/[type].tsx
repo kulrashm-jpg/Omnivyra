@@ -1,6 +1,8 @@
 import React from 'react';
 import { useRouter } from 'next/router';
+import { Calendar, Send } from 'lucide-react';
 import { useCompanyContext } from '../../../components/CompanyContext';
+import PageLoader from '../../../components/PageLoader';
 import { launchSocialPostingFromContent } from '../../../lib/content/socialPosting';
 import { buildCreatorContentBlocks, launchBlogFromCreator } from '../../../lib/content/creatorContentBridge';
 import { buildCreatorFlowContext, serializeCreatorFlowContext, type CreatorFlowContext } from '../../../lib/content/creatorFlowContext';
@@ -2981,14 +2983,33 @@ export default function CreatorTypeWorkflowPage() {
     }
   };
 
-  const handleOpenScheduler = () => {
+  const handleOpenScheduler = (intent: 'schedule' | 'publish' = 'schedule') => {
+    const socialActionLabel = config.contentType === 'thread' ? 'thread' : 'post';
     if (actionInProgress || !hasUsableCreatorOutput(result)) {
-      if (!hasUsableCreatorOutput(result)) setError('Generate a usable creator output before using it as a post.');
+      if (!hasUsableCreatorOutput(result)) setError(`Generate a usable creator output before using it as a ${socialActionLabel}.`);
       return;
     }
-    setActionInProgress('post');
+    setActionInProgress(intent === 'publish' ? `share-${socialActionLabel}` : `schedule-${socialActionLabel}`);
     try {
       const context = buildCurrentContext(result.primary_platform);
+      const generatedMediaUrls = summarizeMediaUrls(result);
+      const mediaBundle = result.output.asset_payload.media_bundle || {};
+      const mediaMetadata = getMediaPreviewMetadata(result);
+      const mediaTypes = generatedMediaUrls.map(() => (type === 'video' || type === 'reel' || type === 'short' ? 'video' : type === 'pdf' ? 'document' : 'image'));
+      const primaryPlatform = selectedPlatform || result.primary_platform || null;
+      const creatorAttachments = generatedMediaUrls.length > 0
+        ? [{
+            id: selectedAsset?.id || `creator-${type}-${Date.now()}`,
+            creatorType: config.contentType,
+            title: String(answers.topic || config.title),
+            url: typeof mediaBundle.url === 'string' ? mediaBundle.url : generatedMediaUrls[0],
+            files: Array.isArray(mediaBundle.files) ? mediaBundle.files.filter(Boolean) : generatedMediaUrls,
+            previewKind: typeof mediaMetadata.preview_kind === 'string' ? mediaMetadata.preview_kind : null,
+            platformContext: primaryPlatform,
+            metadata: mediaMetadata,
+            createdAt: new Date().toISOString(),
+          }]
+        : [];
       launchSocialPostingFromContent({
         router,
         contentType: config.contentType as any,
@@ -2997,9 +3018,14 @@ export default function CreatorTypeWorkflowPage() {
         tags: result.output.packaging.hashtags,
         excerpt: result.output.packaging.meta_description,
         sourceId: selectedAsset?.id || null,
+        platform: primaryPlatform,
+        mediaUrls: generatedMediaUrls,
+        mediaTypes,
+        creatorAttachments,
+        intent,
       });
     } catch (schedulerError) {
-      setError(schedulerError instanceof Error ? schedulerError.message : 'Could not open this output as a post.');
+      setError(schedulerError instanceof Error ? schedulerError.message : `Could not open this output as a ${socialActionLabel}.`);
       setActionInProgress(null);
     }
   };
@@ -3334,6 +3360,7 @@ export default function CreatorTypeWorkflowPage() {
     ? previewMetadata.visual_governance_warnings.map(String).filter(Boolean)
     : [];
   const slides = Array.isArray(result?.output.asset_payload.slides) ? result.output.asset_payload.slides : [];
+  const socialActionLabel = config.contentType === 'thread' ? 'thread' : 'post';
 
   // Relocated from the top of the component (post Rendering Forensic
   // Audit). These early returns must fire AFTER every hook in the
@@ -3342,13 +3369,9 @@ export default function CreatorTypeWorkflowPage() {
   // rendering decisions; they do not depend on state that hasn't been
   // computed by this point.
   if (!authChecked || isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-slate-700" />
-      </div>
-    );
+    return <PageLoader message="Loading creator studio…" />;
   }
-  if (!user?.userId) return null;
+  if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
   if (!config) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
@@ -4874,6 +4897,29 @@ export default function CreatorTypeWorkflowPage() {
                     </div>
                   ) : (
                     <>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenScheduler('schedule')}
+                          disabled={Boolean(actionInProgress)}
+                          className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Calendar className="mr-2 h-4 w-4" />
+                          {actionInProgress === `schedule-${socialActionLabel}` ? 'Opening...' : `Schedule ${socialActionLabel}`}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenScheduler('publish')}
+                          disabled={Boolean(actionInProgress)}
+                          className="inline-flex items-center justify-center rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Send className="mr-2 h-4 w-4" />
+                          {actionInProgress === `share-${socialActionLabel}` ? 'Opening...' : `Share ${socialActionLabel} now`}
+                        </button>
+                      </div>
+                      <p className="text-[11px] leading-5 text-gray-500">
+                        Opens the selected platform with this {socialActionLabel} copy and generated media attached for final review.
+                      </p>
                       <div className="grid gap-3 sm:grid-cols-2">
                         <button
                           type="button"

@@ -8,6 +8,7 @@
 import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
+import PageLoader from '../../components/PageLoader';
 
 interface ReportCard {
   id: string;
@@ -93,14 +94,10 @@ export default function ReadinessSubPage() {
   }, [authChecked, user?.userId, router]);
 
   if (!authChecked || isLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
-      </div>
-    );
+    return <PageLoader message="Loading your workspace…" />;
   }
 
-  if (!user?.userId) return null;
+  if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-3 sm:px-4 lg:px-6">

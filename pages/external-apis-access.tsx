@@ -274,9 +274,10 @@ const HealthBadgeLegend = () => (
 
 import { useExtApisAccess } from '../hooks/useExtApisAccess';
 import ExtApisAccessView from '../components/ExtApisAccessView';
+import PageLoader from '../components/PageLoader';
 export default function ExternalApisAccessPage() {
   const d = useExtApisAccess();
-  if (d._ef1) return <div className="p-6 text-gray-500">Loading...</div>;
-  if (d._ef2) return <div className="p-6 text-gray-500">Loading...</div>;
+  if (d._ef1) return <PageLoader message="Loading integrations…" />;
+  if (d._ef2) return <PageLoader message="Loading integrations…" />;
   return <ExtApisAccessView d={d} />;
 }

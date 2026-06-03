@@ -215,13 +215,14 @@ interface PerformanceSummary {
 
 import { useCampaignDetailsState } from '../../hooks/useCampaignDetailsState';
 import CampaignDetailsContent from '../../components/CampaignDetailsContent';
+import PageLoader from '../../components/PageLoader';
 export default function CampaignDetailsPage() {
   const d = useCampaignDetailsState();
-  if (d._ef1) return null;
-  if (d._ef2) return null;
-  if (d._ef3) return null;
-  if (d._ef4) return null;
-  if (d._ef5) return null;
+  if (d._ef1) return <PageLoader message="Loading campaign…" />;
+  if (d._ef2) return <PageLoader message="Loading campaign…" />;
+  if (d._ef3) return <PageLoader message="Loading campaign…" />;
+  if (d._ef4) return <PageLoader message="Loading campaign…" />;
+  if (d._ef5) return <PageLoader message="Loading campaign…" />;
   return <CampaignDetailsContent d={d} />;
 }
 

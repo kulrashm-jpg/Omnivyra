@@ -17,6 +17,7 @@ import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';
 import BoltPlatformPicker from '../../components/bolt/BoltPlatformPicker';
 import { useBoltPlatformPicker } from '../../hooks/useBoltPlatformPicker';
+import PageLoader from '../../components/PageLoader';
 
 type TextFormat    = 'post' | 'short_story' | 'article' | 'newsletter' | 'white_paper';
 type CreatorFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story';
@@ -368,12 +369,8 @@ export default function BoltCombinedStrategyPage() {
       .finally(() => setSuggestionsLoading(false));
   }, [companyId]);
 
-  if (!authChecked || isLoading) return (
-    <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-purple-50 flex items-center justify-center">
-      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-violet-500" />
-    </div>
-  );
-  if (!user?.userId) return null;
+  if (!authChecked || isLoading) return <PageLoader message="Loading BOLT…" />;
+  if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
 
   function toggleGoal(g: string) { setGoals((p) => p.includes(g) ? p.filter((x) => x !== g) : [...p, g]); }
   function toggleFocus(f: string) { setStrategicFocus((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f]); }

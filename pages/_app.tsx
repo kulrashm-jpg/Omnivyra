@@ -11,6 +11,7 @@ import { TourProvider } from '../components/tour/TourContext';
 import AppLayout from '../components/layout/AppLayout';
 import { AuthErrorBanner } from '../components/auth/AuthErrorBanner';
 import { AuthDevPanel } from '../components/auth/AuthDevPanel';
+import PageLoader from '../components/PageLoader';
 import {
   WEBSITE_GA_MEASUREMENT_ID,
   flushQueuedWebsiteEvents,
@@ -214,11 +215,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // This prevents a flash of protected content before we know the user's auth state,
   // and prevents a premature redirect to /login before we know the user is NOT authenticated.
   if (!isPublic && (!mounted || (!authChecked && !authWaitExpired))) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
-      </div>
-    );
+    return <PageLoader message="Loading your workspace…" />;
   }
 
   // While authChecked but unauthenticated, render nothing (useEffect above handles redirect).

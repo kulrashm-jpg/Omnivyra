@@ -1,6 +1,7 @@
 import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
+import PageLoader from '../../components/PageLoader';
 import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
 // Variant Experience Embedding (PHASE 5 + 8) — campaign creation
 // surfaces the variant mode picker + experiment dashboard so
@@ -137,14 +138,10 @@ export default function CampaignsSubPage() {
   }, [authChecked, user?.userId, router]);
 
   if (!authChecked || isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
-        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-violet-600" />
-      </div>
-    );
+    return <PageLoader message="Loading your campaigns…" />;
   }
 
-  if (!user?.userId) return null;
+  if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">

@@ -285,8 +285,9 @@ function downloadHtmlFile(form: CaptureForm, origin: string) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 import { useLeadsPage } from '../hooks/useLeadsPage';
 import LeadsView from '../components/LeadsView';
+import PageLoader from '../components/PageLoader';
 export default function LeadsPage() {
   const d = useLeadsPage();
-  if (d._ef1) return null;
+  if (d._ef1) return <PageLoader message="Loading leads…" />;
   return <LeadsView d={d} />;
 }

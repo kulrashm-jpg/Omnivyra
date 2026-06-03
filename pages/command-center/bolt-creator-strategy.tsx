@@ -317,9 +317,10 @@ function StrategyCard({
 /* ─── Main page ──────────────────────────────────────────────────────────── */
 import { useBoltCreator } from '../../hooks/useBoltCreator';
 import BoltCreatorView from '../../components/BoltCreatorView';
+import PageLoader from '../../components/PageLoader';
 export default function BoltCreatorPage() {
   const d = useBoltCreator();
-  if (d._ef1) return null;
-  if (d._ef2) return null;
+  if (d._ef1) return <PageLoader message="Loading BOLT Creator…" />;
+  if (d._ef2) return <PageLoader message="Loading BOLT Creator…" />;
   return <BoltCreatorView d={d} />;
 }
