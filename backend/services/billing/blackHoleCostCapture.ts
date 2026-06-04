@@ -178,6 +178,74 @@ export async function captureFlatProviderCost(input: FlatProviderCaptureInput): 
   }
 }
 
+export interface PlatformProviderCaptureInput {
+  provider: string;
+  model: string;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  /** Number of provider calls this capture represents (default 1). */
+  requestCount?: number;
+  errorFlag?: boolean;
+  /** Platform activity label — also the platform-accounting grouping key. */
+  activity: string;
+  /** process_type resolving to a known action_key (avoids ledger refusal). */
+  processType?: string;
+}
+
+/**
+ * Capture a PLATFORM (non-customer) provider call's cost — e.g. AI-visibility
+ * probes (Gemini/Claude/Perplexity/Copilot/OpenAI), system evaluations,
+ * internal model checks. Phase 8G-B.
+ *
+ * Reuses the EXISTING usage_events pipeline as source_type:'system' with
+ * organization_id = NULL → platform-global, NEVER attributed to a customer org,
+ * NEVER billed, NEVER a credit transaction. (logUsageEvent skips the org-scoped
+ * unified_transactions dual-write for null org, so these rows live in
+ * usage_events only — economicAccountingService reads them into platform
+ * accounting.) Best-effort; never throws.
+ */
+export async function capturePlatformProviderCost(input: PlatformProviderCaptureInput): Promise<void> {
+  try {
+    const inTok = Math.max(0, Math.round(input.inputTokens ?? 0));
+    const outTok = Math.max(0, Math.round(input.outputTokens ?? 0));
+    const requestCount = Math.max(1, Math.round(input.requestCount ?? 1));
+    const costUsd = tokenCostUsd(input.model, inTok, outTok);
+
+    await logUsageEvent({
+      organization_id: null, // platform-global — never a customer org
+      user_id:         null,
+      source_type:     'system',
+      provider:        input.provider,
+      provider_name:   input.provider,
+      model:           input.model,
+      model_name:      input.model,
+      source_name:     `${input.provider}:${input.model}`,
+      process_type:    input.processType ?? 'insight_generation',
+      input_tokens:    inTok,
+      output_tokens:   outTok,
+      total_tokens:    inTok + outTok,
+      total_cost_usd:  costUsd,
+      error_flag:      !!input.errorFlag,
+      reference_type:  input.activity, // platform-accounting activity key
+      metadata: {
+        capture:       'platform_probe_v1',
+        rate_source:   RATE_SOURCE,
+        activity:      input.activity,
+        cost_basis:    'static_estimate',
+        platform_cost: true,
+        request_count: requestCount,
+      },
+    });
+  } catch (err) {
+    incrCounter('black_hole_cost_capture_failed_total');
+    logger.warn('platform_cost_capture_failed', {
+      activity: input.activity,
+      provider: input.provider,
+      message:  err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 export interface ImageProviderCaptureInput {
   organizationId: string;
   processType: string;

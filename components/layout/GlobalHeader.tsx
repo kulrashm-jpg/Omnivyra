@@ -8,6 +8,7 @@ import {
   Camera,
   ChevronDown,
   ChevronRight,
+  Coins,
   CreditCard,
   FileText,
   HelpCircle,
@@ -794,6 +795,12 @@ function UserMenu({
               <Link href="/company/billing" className={itemClassName}>
                 <CreditCard className="h-4 w-4 text-slate-400" />
                 Billing
+              </Link>
+            ) : null}
+            {billingVisible ? (
+              <Link href="/company/credits" className={itemClassName}>
+                <Coins className="h-4 w-4 text-slate-400" />
+                Credits
               </Link>
             ) : null}
             {isCompanyAdmin ? (

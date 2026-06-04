@@ -48,6 +48,20 @@ export async function processCreatorContentJob(job: Job): Promise<any> {
     user_id,
   } = job.data;
 
+  // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
+  void import('../../services/billing/creditEconomyShadow')
+    .then((m) => m.emitCreditEconomyShadowEvaluation({ organizationId: String(company_id), activity: 'content_generation', surface: 'queue.creator-content', dedupeKey: `${job.id ?? content_type}` }))
+    .catch(() => {});
+
+  // Phase 11D — admission boundary (single call; dark by default → passthrough,
+  // no wallet read; shadow-observes / enforce-blocks once configured).
+  await (await import('../../services/billing/admissionControl')).evaluateActivityAdmission({
+    organizationId: String(company_id),
+    activity:       'content_generation',
+    surface:        'queue.creator-content',
+    referenceId:    `${job.id ?? content_type}`,
+  });
+
   // Phase 2 C-1 closure: same wrap-on-flag pattern as content generation.
   // The internal `deductCredits()` is a stub; turning the flag ON activates
   // real billing through the orchestrator with exactly-once semantics.
@@ -56,6 +70,37 @@ export async function processCreatorContentJob(job: Job): Promise<any> {
     organizationId: company_id,
     flag:           BILLING_FLAGS.RESERVATIONS_REQUIRED,
   });
+
+  // Phase 10C — token-actual entry-consumption when enabled (default OFF →
+  // existing path). Actual tokens collected via AsyncLocalStorage across
+  // runCreatorOrchestration; settled token-actual; entry kept + exposure
+  // released on abandonment. Replay-safe via deterministic idem key.
+  const { executeWithEntryConsumption, makeIdempotencyKey } =
+    await import('../../services/creditExecutionService');
+  const { getCreditEconomyExecutionMode } = await import('../../services/billing/creditEconomyActivation');
+  if ((await getCreditEconomyExecutionMode({ organizationId: String(company_id), surface: 'queue.creator-content' })) === 'enforce') {
+    const referenceId = `${job.id ?? content_type}`;
+    const { runWithUsageCollection } = await import('../../services/aiUsageCollector');
+    let collected = { inputTokens: 0, outputTokens: 0, assetCredits: 0 };
+    const r = await executeWithEntryConsumption<unknown>({
+      userId:             String(user_id ?? company_id),
+      orgId:              String(company_id),
+      action:             'content_generation',
+      referenceType:      'creator_content_job',
+      referenceId,
+      idempotencyKey:     makeIdempotencyKey(String(company_id), 'content_generation', referenceId),
+      validateMembership: false,
+      llmPricing:         { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: 'content_generation', maxInputTokens: 8000, maxOutputTokens: 4000 },
+      executor:           async () => {
+        const { result, usage } = await runWithUsageCollection(() => processCreatorContentJobInner(job));
+        collected = usage;
+        return result;
+      },
+      collectActualUsage: () => ({ inputTokens: collected.inputTokens, outputTokens: collected.outputTokens, additionalCredits: collected.assetCredits }),
+    });
+    return r.status === 'executed' ? (r.result as unknown) : { skipped: true, reason: r.status };
+  }
+
   if (flag.enabled) {
     const { withQueueBilling } = await import('../../services/billing/queueBillingMiddleware');
     const wrapped = await withQueueBilling(

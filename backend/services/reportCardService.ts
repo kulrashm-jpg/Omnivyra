@@ -47,9 +47,12 @@ import { extractDomain } from './companyMatchService';
 import { getUserRole, Role } from './rbacService';
 import {
   confirmCreditReservation,
+  confirmCreditReservationToActual,
   releaseCreditReservation,
   type CreditReservationHandle,
 } from './creditExecutionService';
+import { getCreditEconomyExecutionMode } from './billing/creditEconomyActivation';
+import { runWithUsageCollection, type CollectedUsage } from './aiUsageCollector';
 import {
   type ReportRequestPayload,
   type ResolvedReportCategory,
@@ -739,7 +742,7 @@ function getReportCreditReservation(report: ReportRecord): ReportCreditReservati
   return candidate as ReportCreditReservationMetadata;
 }
 
-async function confirmReportCreditReservation(report: ReportRecord, payload: ReportGenerationPayload): Promise<Awaited<ReturnType<typeof confirmCreditReservation>> | null> {
+async function confirmReportCreditReservation(report: ReportRecord, payload: ReportGenerationPayload, actualUsage?: CollectedUsage): Promise<Awaited<ReturnType<typeof confirmCreditReservation>> | null> {
   const reservation = getReportCreditReservation(report);
   if (!reservation) return null;
   const usageSummary = {
@@ -749,6 +752,34 @@ async function confirmReportCreditReservation(report: ReportRecord, payload: Rep
     engine_version: payload.engine_version,
     has_composed_report: !!payload.composed_report,
   };
+
+  // Phase 10F — token-actual settlement when enabled (PHASE2_ENTRY_CONSUMPTION,
+  // default OFF → flat confirm below, byte-identical). The report HOLD is settled
+  // against the ACTUAL tokens collected during generation via the shared
+  // partial-confirm primitive (releasing the unused remainder). Any pricing
+  // failure (e.g. unknown model) falls back to the flat confirm — never blocks.
+  const ecMode = await getCreditEconomyExecutionMode({ organizationId: reservation.orgId, surface: 'route.reports-generate' });
+  if (ecMode === 'enforce' && actualUsage && (actualUsage.inputTokens > 0 || actualUsage.outputTokens > 0)) {
+    try {
+      const { resolveLlmCost } = await import('./pricingService');
+      const cost = await resolveLlmCost({
+        provider:     'openai',
+        model:        process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        inputTokens:  actualUsage.inputTokens,
+        outputTokens: actualUsage.outputTokens,
+        actionKey:    reservation.action,
+        orgId:        reservation.orgId,
+      });
+      return await confirmCreditReservationToActual(
+        { ...reservation, referenceId: report.id, note: `${reservation.feature_key} report (token-actual)` },
+        Math.max(0, cost.credits),
+      );
+    } catch (err) {
+      console.warn('[reportCardService] token-actual settlement failed; flat-confirm fallback:', err instanceof Error ? err.message : err);
+      // fall through to the flat confirm below
+    }
+  }
+
   return confirmCreditReservation({
     ...reservation,
     referenceId: report.id,
@@ -1077,10 +1108,16 @@ export function startAsyncReportGeneration(report: ReportRecord): Promise<void> 
     const stopHeartbeat = startReportHeartbeat(report.id);
     try {
     let payload: ReportGenerationPayload;
+    // Phase 10F — actual token usage produced during report generation, collected
+    // via the shared AsyncLocalStorage collector so it reaches token-actual
+    // settlement. Default 0 (and ignored) when the entry-consumption flag is off.
+    let reportUsage: CollectedUsage = { inputTokens: 0, outputTokens: 0, assetCredits: 0 };
 
-    // Task 2: isolate generateReportPayload so its failure is always captured
+    // Task 2: isolate generateReportPayload so its failure is always captured.
     try {
-      payload = await generateReportPayload(report);
+      const collected = await runWithUsageCollection(() => generateReportPayload(report));
+      payload = collected.result;
+      reportUsage = collected.usage;
     } catch (error) {
       const error_reason =
         error instanceof Error ? error.message : 'Intelligence engine failed';
@@ -1132,7 +1169,7 @@ export function startAsyncReportGeneration(report: ReportRecord): Promise<void> 
       });
 
       if (requestedType === 'premium') {
-        const settlement = await confirmReportCreditReservation(report, payload);
+        const settlement = await confirmReportCreditReservation(report, payload, reportUsage);
         if (!settlement || settlement.status === 'already_released') {
           throw new Error(
             settlement?.status === 'already_released'

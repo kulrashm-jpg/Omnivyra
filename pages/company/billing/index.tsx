@@ -20,6 +20,7 @@ import { fetchWithAuth } from '../../../components/community-ai/fetchWithAuth';
 import CreditAdvisorDashboard from '../../../components/credit-advisor/CreditAdvisorDashboard';
 import OptimizationPanel from '../../../components/credit-advisor/OptimizationPanel';
 import TopUpPanel from '../../../components/billing/TopUpPanel';
+import ActivityCostRange from '../../../components/billing/ActivityCostRange';
 
 type BillingView = 'advisor' | 'billing' | 'buy';
 
@@ -28,6 +29,30 @@ const VIEW_OPTIONS: { key: BillingView; label: string; icon: React.ReactNode; bl
   { key: 'billing', label: 'Billing & Subscription', icon: <FileText className="h-4 w-4" />, blurb: 'Wallet, forecast, plan, ledger, and recent events.' },
   { key: 'buy', label: 'Buy Credits', icon: <ShoppingCart className="h-4 w-4" />, blurb: 'Add top-up credits for heavier periods.' },
 ];
+
+// Representative activities surfaced in the cost-reference card. Token-priced
+// ones (campaign/content/blog) render a min–max band with a "may rise"
+// provisional flag; fixed-fee ones render a flat number.
+const COST_REFERENCE_ACTIONS = [
+  'campaign_generation',
+  'campaign_creation',
+  'content_generation',
+  'content_basic',
+  'blog_generation',
+  'full_strategy',
+  'deep_analysis',
+  'trend_analysis',
+];
+const COST_REFERENCE_LABELS: Record<string, string> = {
+  campaign_generation: 'BOLT campaign (autonomous)',
+  campaign_creation: 'Campaign creation',
+  content_generation: 'Master content (token-priced)',
+  content_basic: 'Basic content / post',
+  blog_generation: 'Blog article',
+  full_strategy: 'Full campaign strategy',
+  deep_analysis: 'Deep analysis',
+  trend_analysis: 'Trend analysis',
+};
 
 interface SummaryPayload {
   organizationId: string;
@@ -276,9 +301,24 @@ export default function CompanyBillingPortal() {
             <Metric label="Promotional" value={fmt(w.incentiveBalance)} hint={`reserved ${w.reservedIncentive}`} />
             <Metric label="Lifetime purchased" value={fmt(w.lifetimePurchased)} />
             <Metric label="Lifetime consumed" value={fmt(w.lifetimeConsumed)} />
-            <Metric label="Reserved (in-flight)" value={fmt(summary?.reservations.totalReserved ?? 0)} hint={`${summary?.reservations.openHolds ?? 0} holds`} />
+            <Metric
+              label="Reserved (in-flight)"
+              value={fmt(summary?.reservations.totalReserved ?? 0)}
+              hint={
+                <span className="text-amber-700">
+                  {summary?.reservations.openHolds ?? 0} provisional hold(s) · settles on completion
+                </span>
+              }
+            />
             <Metric label="Last activity" value={dt(w.lastTransactionAt)} />
           </div>
+        )}
+        {w && (summary?.reservations.totalReserved ?? 0) > 0 && (
+          <p className="mt-3 text-xs text-amber-700">
+            Reserved credits are <span className="font-medium">provisional</span> — held when an
+            activity starts and not yet a firm charge. The final amount settles against actual usage
+            and may rise (e.g. when an asset/image is added) before it is confirmed.
+          </p>
         )}
       </Card>
 
@@ -332,6 +372,23 @@ export default function CompanyBillingPortal() {
         ) : <div className="text-sm text-slate-500">No consumption this period.</div>}
       </Card>
 
+      <Card title="What activities cost" icon={<Coins className="h-5 w-5 text-slate-500" />}>
+        <p className="text-xs text-slate-500 mb-3">
+          Estimated credits per activity. A band (e.g. <span className="font-medium">80–120</span>)
+          means the charge is token-priced: the lower number is reserved up front and the final
+          amount settles with actual usage — it <span className="font-medium">may rise</span>. A
+          single number is a fixed fee.
+        </p>
+        {selectedCompanyId && (
+          <ActivityCostRange
+            companyId={selectedCompanyId}
+            actions={COST_REFERENCE_ACTIONS}
+            labels={COST_REFERENCE_LABELS}
+            variant="list"
+          />
+        )}
+      </Card>
+
       <Card
         title="Ledger"
         icon={<FileText className="h-5 w-5 text-slate-600" />}
@@ -364,10 +421,15 @@ export default function CompanyBillingPortal() {
               {(expandLedger ? ledger : ledger.slice(0, 2)).map(r => (
                 <tr key={r.id}>
                   <td className="py-2 pr-3 text-slate-500 whitespace-nowrap">{dt(r.created_at)}</td>
-                  <td className="py-2 pr-3">
+                  <td className="py-2 pr-3 whitespace-nowrap">
                     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${phasePill(r.execution_phase)}`}>
                       {r.execution_phase}
                     </span>
+                    {r.execution_phase === 'hold' && (
+                      <span className="ml-1 text-[10px] text-amber-700" title="Provisional reservation — not a firm charge until confirmed.">
+                        provisional
+                      </span>
+                    )}
                   </td>
                   <td className={`py-2 pr-3 font-mono ${r.credits_delta < 0 ? 'text-red-700' : 'text-emerald-700'}`}>{r.credits_delta}</td>
                   <td className="py-2 pr-3 font-mono text-slate-700">{r.balance_after ?? '—'}</td>

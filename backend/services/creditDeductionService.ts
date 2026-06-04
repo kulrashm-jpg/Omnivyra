@@ -77,7 +77,13 @@ export type CreditAction =
   // Lead-capture intelligence (catalog rows: migration 20260821). Value-gated,
   // charged per qualified lead — see leadQualifier.ts / leadPredictiveQualifier.ts.
   | 'lead_qualification'
-  | 'lead_predictive_scoring';
+  | 'lead_predictive_scoring'
+  // Asset / image / video generation (Phase 10D — activity-economy catalog
+  // coverage). Settled via per-asset cost profiles (creator/costProfiles.ts),
+  // not a flat credit_cost_config row — like content_generation, getCreditCost
+  // is never called for these (callers pass amountOverride from the estimator).
+  | 'image_generation'
+  | 'video_generation';
 export const CREDIT_ACTIONS: CreditAction[] = [
   'ai_reply',
   'auto_post',
@@ -127,6 +133,9 @@ export const CREDIT_ACTIONS: CreditAction[] = [
   // Lead-capture intelligence (migration 20260821)
   'lead_qualification',
   'lead_predictive_scoring',
+  // Asset / image / video generation (Phase 10D)
+  'image_generation',
+  'video_generation',
 ];
 
 // ── DB-driven cost getter (overrides hardcoded map when config row exists) ─────

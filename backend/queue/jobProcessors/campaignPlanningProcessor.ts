@@ -275,6 +275,20 @@ export async function processCampaignPlanningJob(job: Job<CampaignPlanningJobPay
   const orgId = job.data?.companyId ? String(job.data.companyId) : null;
   if (!orgId) return processCampaignPlanningJobInner(job);
 
+  // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
+  void import('../../services/billing/creditEconomyShadow')
+    .then((m) => m.emitCreditEconomyShadowEvaluation({ organizationId: orgId, activity: 'async_campaign_planning', surface: 'queue.campaign-planning', dedupeKey: String(job.data?.jobId ?? job.id ?? job.data?.campaignId) }))
+    .catch(() => {});
+
+  // Phase 11D — admission boundary (single call; dark by default → passthrough,
+  // no wallet read; shadow-observes / enforce-blocks once configured).
+  await (await import('../../services/billing/admissionControl')).evaluateActivityAdmission({
+    organizationId: orgId,
+    activity:       'async_campaign_planning',
+    surface:        'queue.campaign-planning',
+    referenceId:    String(job.data?.jobId ?? job.id ?? job.data?.campaignId),
+  });
+
   const { resolveEnforcementMode } = await import('../../services/billing/phase2EnforcementGate');
   const { mode } = await resolveEnforcementMode(orgId, 'queue.campaign-planning');
 
@@ -284,6 +298,33 @@ export async function processCampaignPlanningJob(job: Job<CampaignPlanningJobPay
       incrCounter('phase2_gate_shadow_total');
     }
     return processCampaignPlanningJobInner(job);
+  }
+
+  const referenceId = String(job.data?.jobId ?? job.id ?? job.data?.campaignId);
+
+  // Phase 10A — entry-consumption lifecycle when enabled (PHASE2_ENTRY_CONSUMPTION,
+  // default OFF → withQueueBilling, byte-identical). async_campaign_planning has a
+  // flat catalog cost, so the Fixed engine settles correctly. Replay-safe via the
+  // deterministic idempotency key (ledger-level dedup); entry kept + exposure
+  // released on abandonment by the existing credit orphan reaper.
+  const { executeWithEntryConsumption, makeIdempotencyKey } =
+    await import('../../services/creditExecutionService');
+  const { getCreditEconomyExecutionMode } = await import('../../services/billing/creditEconomyActivation');
+  if ((await getCreditEconomyExecutionMode({ organizationId: orgId, surface: 'queue.campaign-planning' })) === 'enforce') {
+    const r = await executeWithEntryConsumption<void>({
+      userId:             orgId,
+      orgId,
+      action:             'async_campaign_planning',
+      referenceType:      'campaign_planning_job',
+      referenceId,
+      idempotencyKey:     makeIdempotencyKey(orgId, 'async_campaign_planning', referenceId),
+      validateMembership: false,
+      executor:           () => processCampaignPlanningJobInner(job),
+    });
+    if (r.status !== 'executed' && r.status !== 'already_settled') {
+      console.warn('[campaign-planning] entry-consumption non-executed', { orgId, status: r.status });
+    }
+    return;
   }
 
   const { withQueueBilling } = await import('../../services/billing/queueBillingMiddleware');
@@ -296,7 +337,7 @@ export async function processCampaignPlanningJob(job: Job<CampaignPlanningJobPay
       userId:         orgId,
       action:         'async_campaign_planning',
       referenceType:  'campaign_planning_job',
-      referenceId:    String(job.data?.jobId ?? job.id ?? job.data?.campaignId),
+      referenceId,
     },
     () => processCampaignPlanningJobInner(job),
   );

@@ -12,7 +12,8 @@ import { buildCompanyContext } from '../../../backend/services/companyContextSer
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
 import { processContent } from '../../../backend/services/unifiedContentProcessor';
 import { getCreditCost } from '../../../backend/services/creditDeductionService';
-import { executeWithCredits, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
+import { executeWithCredits, executeWithEntryConsumption, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
+import { getCreditEconomyExecutionMode } from '../../../backend/services/billing/creditEconomyActivation';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Platform specs: character limits, tone, optimal targets, hashtag counts
@@ -282,10 +283,17 @@ ${platformBlocks}
 
 Return JSON: { "${(platforms as string[]).map((p) => p.toLowerCase()).join('": "...", "')}" : "..." }`;
 
-    const charged = await executeWithCredits<Record<string, string>>({
+    // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
+    void import('../../../backend/services/billing/creditEconomyShadow')
+      .then((m) => m.emitCreditEconomyShadowEvaluation({ organizationId: companyId.trim(), activity: 'content_basic', surface: 'route.generate-workspace-content', dedupeKey: `${companyId.trim()}:${topic.trim()}:${(platforms as string[]).join(',')}` }))
+      .catch(() => {});
+
+    // Phase 10A — entry-consumption when enabled (PHASE2_ENTRY_CONSUMPTION,
+    // default OFF → executeWithCredits, byte-identical). Same options + idem key.
+    const workspaceBilling = {
       userId: access.userId,
       orgId: companyId.trim(),
-      action: 'content_basic',
+      action: 'content_basic' as const,
       referenceType: 'workspace_content_variants',
       referenceId: `${companyId.trim()}:${topic.trim()}:${(platforms as string[]).join(',')}`,
       idempotencyKey: makeIdempotencyKey(access.userId, 'content_basic', `${companyId.trim()}:${topic.trim()}:${(platforms as string[]).join(',')}`, 'workspace-content'),
@@ -326,7 +334,26 @@ Return JSON: { "${(platforms as string[]).map((p) => p.toLowerCase()).join('": "
         );
         return variants;
       },
-    });
+    };
+    // Phase 11D — admission boundary before billing. Dark by default
+    // (passthrough; no wallet read). On a future enforce-block, surface 402.
+    try {
+      await (await import('../../../backend/services/billing/admissionControl')).evaluateActivityAdmission({
+        organizationId: companyId.trim(),
+        activity:       'content_basic',
+        surface:        'route.generate-workspace-content',
+        referenceId:    `${companyId.trim()}:${topic.trim()}`,
+      });
+    } catch (admErr: any) {
+      if (admErr?.name === 'AdmissionBlockedError') {
+        return res.status(402).json({ error: 'Insufficient credits to generate content', required: admErr.decision?.requiredCredits, balance: admErr.decision?.effectiveCredits, code: 'ADMISSION_BLOCKED' });
+      }
+      throw admErr;
+    }
+    const ecMode = await getCreditEconomyExecutionMode({ organizationId: companyId.trim(), surface: 'route.generate-workspace-content' });
+    const charged = ecMode === 'enforce'
+      ? await executeWithEntryConsumption<Record<string, string>>(workspaceBilling)
+      : await executeWithCredits<Record<string, string>>(workspaceBilling);
 
     if (charged.status === 'insufficient_credits') {
       return res.status(402).json({ error: 'Insufficient credits to generate content', required: charged.required, balance: charged.available });

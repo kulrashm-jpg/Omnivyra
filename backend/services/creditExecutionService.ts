@@ -46,6 +46,7 @@ import {
   loadCreditHoldSplit,
 } from '../repositories/creditExecutionRepository';
 import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
+import { resolveActivityEconomics } from './activityEconomyCatalog';
 import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
 import { evaluateCreditSafetyGate } from './billing/creditSafetyGate';
 import { resolveBillingPolicy } from './billing/billingPolicyResolver';
@@ -610,6 +611,68 @@ export async function releaseCreditReservation(handle: CreditReservationHandle &
   return { status: 'released', releaseTransactionId: transactionId };
 }
 
+/**
+ * Phase 10F — settle an existing HOLD reservation to its ACTUAL cost instead of
+ * confirming the full held amount. Reuses the SAME settlement primitive as the
+ * entry-consumption engine (scaleSplitToActual + apply_credit_partial_confirm):
+ * the actual is consumed from reserved and the unused remainder is released, in
+ * one atomic, idempotent RPC. For the async report pipeline, whose reserve and
+ * settle are split across the HTTP response (it cannot use the single-call
+ * executeWithEntryConsumption) — token usage collected during generation prices
+ * `actualCredits`, and this settles the report's HOLD against it.
+ *
+ * Idempotent + replay-safe via the SAME confirm key as confirmCreditReservation,
+ * so a flat-confirmed or partial-confirmed reservation is never double-settled.
+ * No new ledger/settlement primitive; lineage (parent HOLD) is preserved by the
+ * RPC.
+ */
+export async function confirmCreditReservationToActual(
+  handle: CreditReservationHandle & { note?: string },
+  actualCredits: number,
+): Promise<CreditReservationSettlement> {
+  const { confirmKey, releaseKey } = getReservationKeys(handle.idempotencyKey);
+  const [existingConfirm, existingRelease] = await Promise.all([
+    findCreditTransaction(confirmKey),
+    findCreditTransaction(releaseKey),
+  ]);
+  if (existingConfirm) return { status: 'already_confirmed' };
+  if (existingRelease) return { status: 'already_released' };
+
+  const actual = Math.max(0, Math.floor(actualCredits));
+  const actualSplit = scaleSplitToActual(handle.split, actual);
+  const { error, data } = await callCreditPartialConfirm({
+    orgId:          handle.orgId,
+    holdTxnId:      handle.holdTransactionId,
+    actualSplit,
+    idempotencyKey: confirmKey,
+    referenceType:  handle.referenceType,
+    referenceId:    handle.referenceId,
+    note:           handle.note ?? handle.action.replace(/_/g, ' '),
+    performedBy:    handle.userId,
+  });
+  if (error) {
+    const msg = (error as any).message ?? '';
+    logger.error('credit_reservation_partial_confirm_failed', { orgId: handle.orgId, action: handle.action, message: msg });
+    throw new Error(`[creditReservation] partial confirm failed: ${msg}`);
+  }
+
+  const confirmId = (data as any)?.id ?? null;
+  const consumed = Number((data as any)?.total_consumed ?? actual);
+  if (confirmId) {
+    await trackUsage({
+      orgId:                handle.orgId,
+      userId:               handle.userId,
+      action:               handle.action,
+      credits:              consumed,
+      split:                actualSplit,
+      referenceType:        handle.referenceType,
+      referenceId:          handle.referenceId,
+      confirmTransactionId: confirmId,
+    });
+  }
+  return { status: 'confirmed', confirmTransactionId: confirmId, creditsCharged: consumed };
+}
+
 export async function executeWithCredits<T>(
   opts: ExecuteWithCreditsOptions<T>,
 ): Promise<ExecuteResult<T>> {
@@ -1170,6 +1233,396 @@ export async function executeWithCredits<T>(
   }
 
   return { status: 'executed', result: executorResult, settlement };
+}
+
+// ── Phase 8B: entry-consumption orchestration ───────────────────────────────────
+//
+// Converts a single activity from HOLD(MAX) → CONSUME(ENTRY) + RESERVE(MAX−ENTRY),
+// composing ONLY the existing certified primitives (reserveCreditsForWork /
+// confirmCreditReservation / releaseCreditReservation / callCreditPartialConfirm).
+// The ledger, RPCs, idempotency, immutability, and orphan reaper are unchanged
+// and remain authoritative.
+//
+// DARK BY DEFAULT: nothing in any route calls executeWithEntryConsumption — it is
+// built, tested, and unwired, so production behavior is byte-identical until a
+// later, separately-approved phase routes traffic to it. executeWithCredits (the
+// path the live routes use) is NOT modified.
+//
+// Lifecycle (mirrors the Phase-8 target flow):
+//   CONFIRM(entry)          — reserveCreditsForWork(entryKey) → confirmCreditReservation
+//                             → non-refundable, visible as consumed
+//   HOLD(max − entry)       — reserveCreditsForWork(exposureKey) → exposure reservation
+//   EXECUTE
+//   CONFIRM(actual − entry) — callCreditPartialConfirm on the exposure hold
+//   RELEASE(unused)         — the same partial_confirm releases the remainder
+//   abandon → RELEASE exposure (entry kept). If the process dies, the EXISTING
+//             orphan reaper releases the orphaned exposure hold (the entry hold
+//             has a :confirm sibling, so the reaper leaves it consumed).
+
+export interface EntryConsumptionSettlement {
+  /** Non-refundable credits consumed up front at the first billable resource. */
+  entryConsumed: number;
+  /** Exposure held after the entry charge (catalog max − entry). */
+  exposureReserved: number;
+  /** Credits drawn from the exposure during settlement (actual − entry, clamped). */
+  additionalConsumed: number;
+  /** Exposure returned to the wallet (exposure − additional). */
+  exposureReleased: number;
+  /** entryConsumed + additionalConsumed. */
+  totalConsumed: number;
+  /** True if actual exceeded entry + exposure (i.e. > catalog max). */
+  underfunded: boolean;
+  pricing?: ResolvedLlmCost;
+}
+
+export type ExecuteWithEntryConsumptionResult<T> =
+  | { status: 'executed'; result: T; settlement: EntryConsumptionSettlement }
+  | { status: 'already_settled' }
+  | { status: 'already_released' }
+  | { status: 'insufficient_credits'; available: number; required: number }
+  | { status: 'no_credit_account' }
+  | { status: 'not_a_member'; userId: string; orgId: string }
+  | { status: 'org_control_blocked'; code: 'ORG_BLOCKED' | 'HIGH_RISK_ACTION_GATED' | 'DAILY_LIMIT_EXCEEDED'; reason: string };
+
+export interface ExecuteWithEntryConsumptionOptionsFixed<T> extends ExecuteBase {
+  llmPricing?: undefined;
+  executor:   () => Promise<T>;
+}
+export interface ExecuteWithEntryConsumptionOptionsLlm<T> extends ExecuteBase {
+  llmPricing: LlmPricingSpec;
+  executor:   () => Promise<LlmExecutorResult<T>>;
+}
+/**
+ * Phase 10B — token-metered variant. The executor returns the result directly
+ * (its natural type), and ACTUAL token usage is supplied separately by
+ * collectActualUsage(), called after execution. Settlement is token-actual
+ * (resolveLlmCost on the collected tokens) — the same pricing + partial-confirm
+ * primitives as the LLM variant, without coupling usage to the return value.
+ * For paths (e.g. queue processors) that aggregate tokens across several AI
+ * calls and don't want to reshape their executor's return as LlmExecutorResult.
+ */
+export interface ExecuteWithEntryConsumptionOptionsTokenMetered<T> extends ExecuteBase {
+  llmPricing: LlmPricingSpec;
+  executor:   () => Promise<T>;
+  /**
+   * Actual usage after execution. `additionalCredits` (Phase 10E) is added to
+   * the token-priced credits at settlement — e.g. rendered-image credits folded
+   * into a creator-content job's settlement. It is NOT token-priced (already in
+   * credits) and uses no new settlement primitive.
+   */
+  collectActualUsage: () => Promise<{ inputTokens: number; outputTokens: number; additionalCredits?: number }>
+    | { inputTokens: number; outputTokens: number; additionalCredits?: number };
+}
+export type ExecuteWithEntryConsumptionOptions<T> =
+  | ExecuteWithEntryConsumptionOptionsTokenMetered<T>
+  | ExecuteWithEntryConsumptionOptionsFixed<T>
+  | ExecuteWithEntryConsumptionOptionsLlm<T>;
+
+/**
+ * PURE settlement planner — the arithmetic core of TASK 4. Given the entry
+ * already consumed, the exposure reserved, and the actual cost, compute how much
+ * additional to draw from exposure and how much to release.
+ *
+ *   additionalConsumption = clamp(actual − entry, 0, reservation)
+ *   exposureReleased      = reservation − additionalConsumption
+ *   underfunded           = (actual − entry) > reservation   // actual > catalog max
+ *
+ * Exported so it can be unit-tested without any DB.
+ */
+export function planEntryConsumptionSettlement(input: {
+  entry: number;
+  reservation: number;
+  actualCredits: number;
+}): { additionalConsumption: number; exposureReleased: number; underfunded: boolean } {
+  const entry       = Math.max(0, Math.floor(input.entry));
+  const reservation = Math.max(0, Math.floor(input.reservation));
+  const actual      = Math.max(0, Math.floor(input.actualCredits));
+  const rawAdditional       = Math.max(0, actual - entry);
+  const additionalConsumption = Math.min(rawAdditional, reservation);
+  const exposureReleased      = reservation - additionalConsumption;
+  const underfunded           = rawAdditional > reservation;
+  return { additionalConsumption, exposureReleased, underfunded };
+}
+
+/** Map a non-reserved reservation outcome onto the orchestrator's result type. */
+function mapReservationFailure(
+  r: CreditReservationResult,
+): Extract<ExecuteWithEntryConsumptionResult<never>,
+  { status: 'insufficient_credits' | 'no_credit_account' | 'not_a_member' | 'org_control_blocked' | 'already_settled' | 'already_released' }> {
+  switch (r.status) {
+    case 'insufficient_credits': return { status: 'insufficient_credits', available: r.available, required: r.required };
+    case 'no_credit_account':    return { status: 'no_credit_account' };
+    case 'not_a_member':         return { status: 'not_a_member', userId: r.userId, orgId: r.orgId };
+    case 'org_control_blocked':  return { status: 'org_control_blocked', code: r.code, reason: r.reason };
+    case 'already_confirmed':    return { status: 'already_settled' };
+    case 'already_released':     return { status: 'already_released' };
+    default:
+      // 'reserved' | 'already_reserved' never reach here (handled by callers).
+      throw new Error(`[entryConsumption] unexpected reservation status: ${r.status}`);
+  }
+}
+
+/**
+ * Phase 10A — shared selector for adopting the entry-consumption engine on a
+ * customer-activity path. Default OFF (PHASE2_ENTRY_CONSUMPTION unset) → the
+ * path keeps its existing executeWithCredits / orchestrator behavior, byte-
+ * identical. Doubly dark: a path also needs its own enforcement gate ON. This
+ * is the single source of truth for the flag (phase2RouteWiring re-uses it).
+ */
+export function isEntryConsumptionEnabled(): boolean {
+  return String(process.env.PHASE2_ENTRY_CONSUMPTION ?? '').toLowerCase() === 'true';
+}
+
+/**
+ * Execute work under the entry-consumption economy. See the block comment above.
+ * Replay-safe (deterministic per-stage idempotency keys), immutability- and
+ * lineage-preserving (parent_transaction_id flows through the primitives), and
+ * abandonment-safe (entry kept, exposure released — by the existing reaper if
+ * the process dies).
+ */
+export async function executeWithEntryConsumption<T>(
+  opts: ExecuteWithEntryConsumptionOptions<T>,
+): Promise<ExecuteWithEntryConsumptionResult<T>> {
+  const { action, referenceType } = opts;
+
+  if (!opts.idempotencyKey || opts.idempotencyKey.trim() === '') {
+    throw new Error(`[entryConsumption] MISSING idempotencyKey for action "${action}"`);
+  }
+
+  // TASK 1 — economics from the Phase 8A catalog.
+  const econ        = resolveActivityEconomics(action);
+  const entry       = econ.entryConsumption;          // TASK 2
+  const reservation = econ.reservationCredits;        // TASK 3 (= max − entry)
+  const maxExposure = econ.maximumCredits;            // admission ceiling
+
+  // Distinct, deterministic per-stage idempotency roots (TASK 6 replay safety).
+  const entryKey    = `${opts.idempotencyKey}:entry`;
+  const exposureKey = `${opts.idempotencyKey}:exposure`;
+  const { confirmKey: exposureConfirmKey, releaseKey: exposureReleaseKey } = getReservationKeys(exposureKey);
+
+  // Idempotency gate: if the exposure was already settled/released on a prior
+  // attempt, do NOT re-execute the work.
+  const [settledTxn, releasedTxn] = await Promise.all([
+    findCreditTransaction(exposureConfirmKey),
+    findCreditTransaction(exposureReleaseKey),
+  ]);
+  if (settledTxn)  return { status: 'already_settled' };
+  if (releasedTxn) return { status: 'already_released' };
+
+  // Admission control (Phase 8 TASK 2): require effective balance ≥ MAX exposure
+  // BEFORE consuming the non-refundable entry, so we never charge entry on an
+  // activity that cannot reserve its full exposure.
+  const availableTotal = await getTotalAvailable(opts.orgId);
+  if ((availableTotal ?? 0) < maxExposure) {
+    fireAlerts(opts.orgId);
+    return { status: 'insufficient_credits', available: availableTotal ?? 0, required: maxExposure };
+  }
+
+  const reserveCommon = {
+    userId:             opts.userId,
+    orgId:              opts.orgId,
+    action,
+    referenceType,
+    referenceId:        opts.referenceId,
+    validateMembership: opts.validateMembership,
+  };
+
+  // ── STAGE 1 — ENTRY CONSUMPTION (immediate, non-refundable, visible) ─────────
+  let entryConsumed = 0;
+  if (entry > 0) {
+    const entryRes = await reserveCreditsForWork({
+      ...reserveCommon,
+      idempotencyKey: entryKey,
+      amountOverride: entry,
+      note: `[ENTRY] ${opts.note ?? action}`,
+    });
+    if (entryRes.status === 'reserved' || entryRes.status === 'already_reserved') {
+      const entryConfirm = await confirmCreditReservation({ ...entryRes, note: `[ENTRY] ${opts.note ?? action}` });
+      if (entryConfirm.status === 'already_released') return { status: 'already_released' };
+      entryConsumed = entry;
+    } else if (entryRes.status === 'already_confirmed') {
+      entryConsumed = entry; // resume: entry already consumed on a prior attempt
+    } else {
+      return mapReservationFailure(entryRes);
+    }
+  }
+
+  // ── STAGE 2 — EXPOSURE RESERVATION — HOLD(max − entry) ───────────────────────
+  let exposureHandle: CreditReservationHandle | null = null;
+  if (reservation > 0) {
+    const expRes = await reserveCreditsForWork({
+      ...reserveCommon,
+      idempotencyKey: exposureKey,
+      amountOverride: reservation,
+      note: `[EXPOSURE] ${opts.note ?? action}`,
+    });
+    if (expRes.status === 'reserved' || expRes.status === 'already_reserved') {
+      exposureHandle = expRes;
+    } else {
+      // Entry is already consumed (kept, by design). Exposure could not be
+      // reserved — surface the failure; the entry charge stands.
+      logger.error('entry_consumption_exposure_reservation_failed', {
+        orgId: opts.orgId, action, status: expRes.status, entryConsumed,
+      });
+      return mapReservationFailure(expRes);
+    }
+  }
+
+  // ── STAGE 3 — EXECUTE ────────────────────────────────────────────────────────
+  let executorResult: T;
+  let actualCredits: number;
+  let pricing: ResolvedLlmCost | undefined;
+  try {
+    if ('collectActualUsage' in opts && opts.collectActualUsage) {
+      // Phase 10B — token-metered: executor returns the result; actual tokens
+      // are collected separately and settled token-actual.
+      executorResult = await (opts.executor as () => Promise<T>)();
+      const usage = await opts.collectActualUsage();
+      pricing = await resolveExecutionLlmCost({
+        provider:     opts.llmPricing.provider,
+        model:        opts.llmPricing.model,
+        inputTokens:  Math.max(0, usage.inputTokens ?? 0),
+        outputTokens: Math.max(0, usage.outputTokens ?? 0),
+        actionKey:    opts.llmPricing.actionKey,
+        orgId:        opts.orgId,
+        timestamp:    opts.llmPricing.timestamp,
+      });
+      // Phase 10E — token credits + non-token artifact credits (e.g. images).
+      actualCredits = Math.max(0, pricing.credits) + Math.max(0, usage.additionalCredits ?? 0);
+    } else if (opts.llmPricing) {
+      const wrapped = await (opts.executor as () => Promise<LlmExecutorResult<T>>)();
+      executorResult = wrapped.result;
+      pricing = await resolveExecutionLlmCost({
+        provider:     opts.llmPricing.provider,
+        model:        opts.llmPricing.model,
+        inputTokens:  wrapped.usage.inputTokens,
+        outputTokens: wrapped.usage.outputTokens,
+        actionKey:    opts.llmPricing.actionKey,
+        orgId:        opts.orgId,
+        timestamp:    opts.llmPricing.timestamp,
+      });
+      actualCredits = Math.max(0, pricing.credits);
+    } else {
+      executorResult = await (opts.executor as () => Promise<T>)();
+      actualCredits  = opts.amountOverride ?? await getCreditCost(action);
+    }
+  } catch (execErr: any) {
+    // ── ABANDONMENT (TASK 5): keep entry, release exposure. ────────────────────
+    if (exposureHandle) {
+      await releaseCreditReservation({ ...exposureHandle, note: `[EXPOSURE][RELEASE] ${action} — executor error` });
+    }
+    // Phase 11C — durable observation of abandonment (entry kept, exposure
+    // released). Fire-and-forget; never affects the throw below.
+    void import('./billing/creditEconomyObservability')
+      .then((m) => m.recordSettlementObservation({
+        activity:         action,
+        entryConsumed,
+        exposureReleased: reservation,
+        abandoned:        true,
+        dedupeKey:        `${opts.idempotencyKey}:abandon`,
+      }))
+      .catch(() => {});
+    throw execErr;
+  }
+
+  // ── STAGE 4 — SETTLEMENT (TASK 4): consume actual−entry from exposure ────────
+  const plan = planEntryConsumptionSettlement({ entry: entryConsumed, reservation, actualCredits });
+  let additionalConsumed = 0;
+  let exposureReleased   = reservation;
+
+  if (exposureHandle) {
+    const actualSplit = scaleSplitToActual(exposureHandle.split, plan.additionalConsumption);
+    const { error: settleErr, data: settleData } = await callCreditPartialConfirm({
+      orgId:          exposureHandle.orgId,
+      holdTxnId:      exposureHandle.holdTransactionId,
+      actualSplit,
+      idempotencyKey: exposureConfirmKey,
+      referenceType:  exposureHandle.referenceType,
+      referenceId:    exposureHandle.referenceId,
+      note:           `[SETTLE] ${opts.note ?? action}`,
+      performedBy:    exposureHandle.userId,
+    });
+    if (settleErr) {
+      const msg = (settleErr as any).message ?? '';
+      logger.error('entry_consumption_settle_failed', { orgId: opts.orgId, action, message: msg });
+      await releaseCreditReservation({ ...exposureHandle, note: `[EXPOSURE][RELEASE] ${action} — settle failed` });
+      throw new Error(`[entryConsumption] exposure settle failed: ${msg}`);
+    }
+    additionalConsumed = Number((settleData as any)?.total_consumed ?? plan.additionalConsumption);
+    exposureReleased   = Number((settleData as any)?.total_released ?? plan.exposureReleased);
+
+    const settleConfirmId = (settleData as any)?.id ?? null;
+    if (settleConfirmId) {
+      await trackUsage({
+        orgId:                exposureHandle.orgId,
+        userId:               exposureHandle.userId,
+        action,
+        credits:              additionalConsumed,
+        split:                actualSplit,
+        referenceType:        exposureHandle.referenceType,
+        referenceId:          exposureHandle.referenceId,
+        confirmTransactionId: settleConfirmId,
+      });
+    }
+  } else {
+    exposureReleased = 0; // no exposure was held (entry == max)
+  }
+
+  // Underfunded = actual exceeded the catalog max. Mirror executeWithCredits:
+  // record a critical anomaly (the entry/exposure flow caps draw at the
+  // reserved exposure, so no negative balance is carried).
+  if (plan.underfunded) {
+    logger.error('entry_consumption_underfunded', {
+      orgId: opts.orgId, action,
+      entryConsumed, exposureReserved: reservation, actualCredits, maxExposure,
+    });
+    void recordCostAnomaly({
+      organizationId: opts.orgId,
+      type:           'cost_credit_mismatch',
+      severity:       'critical',
+      actionKey:      opts.llmPricing?.actionKey ?? action,
+      modelName:      opts.llmPricing?.model,
+      metadata: {
+        violation:        'entry_consumption_exceeds_max',
+        entry_credits:    entryConsumed,
+        exposure_credits: reservation,
+        actual_credits:   actualCredits,
+        max_credits:      maxExposure,
+      },
+    });
+  }
+
+  // Phase 11C — durable observation of the completed settlement (fire-and-forget;
+  // the recorder swallows all errors, never blocks, never mutates billing). The
+  // financial settlement above is already committed and is NOT affected. Keyed by
+  // the settlement idempotency key so a replay (already_settled, returned far
+  // above) can never double-count.
+  void import('./billing/creditEconomyObservability')
+    .then((m) => m.recordSettlementObservation({
+      activity:           action,
+      entryConsumed,
+      exposureReserved:   reservation,
+      exposureReleased,
+      actualConsumed:     actualCredits,
+      underfunded:        plan.underfunded,
+      settlementVariance: maxExposure - actualCredits,
+      dedupeKey:          opts.idempotencyKey,
+    }))
+    .catch(() => {});
+
+  return {
+    status: 'executed',
+    result: executorResult,
+    settlement: {
+      entryConsumed,
+      exposureReserved: reservation,
+      additionalConsumed,
+      exposureReleased,
+      totalConsumed: entryConsumed + additionalConsumed,
+      underfunded: plan.underfunded,
+      pricing,
+    },
+  };
 }
 
 // ── Admin grants ───────────────────────────────────────────────────────────────

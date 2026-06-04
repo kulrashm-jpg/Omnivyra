@@ -19,10 +19,16 @@
  * any time.
  */
 
-import { runWithPhase2Enforcement, type BillingSurface } from './phase2EnforcementGate';
-import { executeWithCredits, makeIdempotencyKey } from '../creditExecutionService';
+import { runWithPhase2Enforcement, PaymentRequiredError, type BillingSurface } from './phase2EnforcementGate';
+import {
+  executeWithCredits,
+  executeWithEntryConsumption,
+  makeIdempotencyKey,
+} from '../creditExecutionService';
+import { getCreditEconomyExecutionMode } from './creditEconomyActivation';
 import { hasEnoughCredits, type CreditAction } from '../creditDeductionService';
 import { incrCounter } from './billingMetrics';
+import { emitCreditEconomyShadowEvaluation } from './creditEconomyShadow';
 import { logger } from '../logger';
 
 export interface WirePhase2RouteArgs<T> {
@@ -49,6 +55,35 @@ export async function wirePhase2Route<T>(args: WirePhase2RouteArgs<T>): Promise<
   const hasActor = !!args.userId && args.userId !== args.organizationId;
   const effectiveUserId = hasActor ? (args.userId as string) : args.organizationId;
 
+  // Phase 8E — shadow adoption. Fire-and-forget, dark by default
+  // (PHASE2_CREDIT_ECONOMY_SHADOW). Evaluates the credit economy for telemetry
+  // BEFORE execution; never awaited, never blocks/throws, never mutates.
+  void emitCreditEconomyShadowEvaluation({
+    organizationId: args.organizationId,
+    activity: args.action,
+    surface: String(args.surface),
+    dedupeKey: args.referenceId,
+  });
+
+  // Phase 11D — admission boundary BEFORE execution, for ALL gate modes. Dark by
+  // default (passthrough; no wallet read). On a future enforce-block it raises the
+  // SAME PaymentRequiredError the gate uses, so the wired routes' existing 402
+  // mapping applies unchanged — enforce becomes a config decision, not a code one.
+  try {
+    const { evaluateActivityAdmission } = await import('./admissionControl');
+    await evaluateActivityAdmission({
+      organizationId: args.organizationId,
+      activity:       String(args.action),
+      surface:        String(args.surface),
+      referenceId:    args.referenceId,
+    });
+  } catch (admErr: any) {
+    if (admErr?.name === 'AdmissionBlockedError') {
+      throw new PaymentRequiredError(args.surface, 'admission: insufficient credits for this action');
+    }
+    // Non-enforcement errors must never break the route.
+  }
+
   return runWithPhase2Enforcement<T>({
     organizationId: args.organizationId,
     surface: args.surface,
@@ -67,7 +102,7 @@ export async function wirePhase2Route<T>(args: WirePhase2RouteArgs<T>): Promise<
         args.action,
         args.referenceId,
       );
-      const result = await executeWithCredits<T>({
+      const baseArgs = {
         userId: effectiveUserId,
         orgId: args.organizationId,
         action: args.action,
@@ -75,14 +110,18 @@ export async function wirePhase2Route<T>(args: WirePhase2RouteArgs<T>): Promise<
         referenceId: args.referenceId,
         idempotencyKey,
         validateMembership: hasActor, // system/admin context skips membership
-        executor: args.run,
-      });
+      };
+      const ecMode = await getCreditEconomyExecutionMode({ organizationId: args.organizationId, surface: args.surface });
+      const result = ecMode === 'enforce'
+        ? await executeWithEntryConsumption<T>({ ...baseArgs, executor: args.run })
+        : await executeWithCredits<T>({ ...baseArgs, executor: args.run });
 
       switch (result.status) {
         case 'executed':
           incrCounter('billing_operations_confirmed');
           return { ok: true, result: result.result };
-        case 'already_confirmed':
+        case 'already_confirmed':   // executeWithCredits replay
+        case 'already_settled':     // entry-consumption replay
         case 'already_released':
           // Same idempotency key already settled (client retry). Do NOT
           // re-charge; re-run the work so the caller still gets a response.

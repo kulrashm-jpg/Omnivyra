@@ -134,6 +134,8 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
           ),
         );
         const json = (await envelope.json()) as OpenAIChatResponse;
+        // Phase 8G-B — platform cost capture (no customer org; fire-and-forget).
+        void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
         const answer = json.choices?.[0]?.message?.content ?? '';
         const observedAt = new Date().toISOString();
         const mention = extractCitation({

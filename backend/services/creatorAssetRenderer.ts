@@ -10,6 +10,8 @@ import {
 import { resolveBrand } from './brand/brandRuntime';
 import { brandRuntimeToCreatorBrandKit } from './brand/brandRuntimeAdapter';
 import { captureImageProviderCost } from './billing/blackHoleCostCapture';
+import { recordAssetCredits } from './aiUsageCollector';
+import { resolveCostProfile } from './creator/costProfiles';
 import { creatorEvent } from './creatorObservation';
 import { recordCreatorDuration } from './creatorRuntimeMetrics';
 import { validateProviderImageTextSafety } from './creatorImageTextValidation';
@@ -2000,6 +2002,11 @@ async function generateProviderImage(input: {
             parentActivityId: input.attribution.campaignId ?? null,
           });
         }
+        // Phase 10E — fold this rendered image's credits into the active
+        // creator-content settlement scope (no-op outside one). Per-image actual
+        // cost from the existing cost profile; the engine settles text + assets
+        // together via the entry-consumption lifecycle (no new primitive).
+        recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
         if (first.b64_json) {
           return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model } };
         }

@@ -9,7 +9,8 @@ import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { processContent } from '@/backend/services/unifiedContentProcessor';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getCreditCost, type CreditAction } from '@/backend/services/creditDeductionService';
-import { executeWithCredits, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
+import { executeWithCredits, executeWithEntryConsumption, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
+import { getCreditEconomyExecutionMode } from '@/backend/services/billing/creditEconomyActivation';
 import { assertOrgMembership } from '@/backend/services/requestAccessService';
 import { generateMasterContentStrict } from '@/backend/services/contentGeneration/blueprintGenerator';
 import { getContentTypeCategory } from '@/backend/services/contentGeneration/contentTypeHelpers';
@@ -662,10 +663,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const MAX_INPUT_TOKENS  = 4000;
       const MAX_OUTPUT_TOKENS = 1500;
 
-      const result = await executeWithCredits<MasterContentPayload>({
+      // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
+      void import('../../../backend/services/billing/creditEconomyShadow')
+        .then((m) => m.emitCreditEconomyShadowEvaluation({ organizationId: resolvedOrgId, activity: 'content_generation', surface: 'route.activity-workspace-content', dedupeKey: activityDbId }))
+        .catch(() => {});
+
+      // Phase 10A — adopt the entry-consumption lifecycle when enabled
+      // (PHASE2_ENTRY_CONSUMPTION, default OFF → executeWithCredits, byte-
+      // identical). Same options + idempotency key; the LLM variant preserves
+      // token-actual settlement and adds entry-charge + abandon-keeps-entry.
+      const masterContentBilling = {
         userId:         user.id,
         orgId:          resolvedOrgId,
-        action:         'content_generation',
+        action:         'content_generation' as const,
         referenceType:  'master_content',
         referenceId:    activityDbId,
         idempotencyKey: makeIdempotencyKey(user.id, 'content_generation', activityDbId),
@@ -693,7 +703,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             model:    strict.model,
           };
         },
-      });
+      };
+      // Phase 11D — admission boundary before billing. Dark by default
+      // (passthrough; no wallet read). On a future enforce-block, surface 402.
+      try {
+        await (await import('@/backend/services/billing/admissionControl')).evaluateActivityAdmission({
+          organizationId: resolvedOrgId,
+          activity:       'content_generation',
+          surface:        'route.activity-workspace-content',
+          referenceId:    activityDbId,
+        });
+      } catch (admErr: any) {
+        if (admErr?.name === 'AdmissionBlockedError') {
+          return res.status(402).json({ error: 'Insufficient credits to generate content', required: admErr.decision?.requiredCredits, balance: admErr.decision?.effectiveCredits, code: 'ADMISSION_BLOCKED' });
+        }
+        throw admErr;
+      }
+      const ecMode = await getCreditEconomyExecutionMode({ organizationId: resolvedOrgId, surface: 'route.activity-workspace-content' });
+      const result = ecMode === 'enforce'
+        ? await executeWithEntryConsumption<MasterContentPayload>(masterContentBilling)
+        : await executeWithCredits<MasterContentPayload>(masterContentBilling);
 
       if (result.status === 'insufficient_credits') {
         return res.status(402).json({

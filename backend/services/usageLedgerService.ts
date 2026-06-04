@@ -163,7 +163,10 @@ export async function resolveEmbeddingCost(params: {
 }
 
 export async function logUsageEvent(params: {
-  organization_id: string;
+  // Nullable: a NULL org marks platform-global / non-customer activity
+  // (e.g. AI-visibility probes — Phase 8G-B). Such rows live in usage_events
+  // only (the unified_transactions dual-write is org-scoped and is skipped).
+  organization_id: string | null;
   campaign_id?: string | null;
   user_id?: string | null;
 
@@ -370,12 +373,16 @@ export async function logUsageEvent(params: {
       // Phase 7: reactive enforcement. We can't block the call that already
       // completed, but we can flag the org so its NEXT high-cost action is
       // pre-flight-rejected. Dynamic import avoids circular dependency.
-      void import('./orgControlService').then(({ autoFlagHighRisk }) =>
-        autoFlagHighRisk(
-          params.organization_id,
-          `Single request exceeded $${REQUEST_COST_ANOMALY_THRESHOLD_USD} (action=${params.process_type})`,
-        ),
-      );
+      // (Platform-global null-org rows have no org to flag — skipped.)
+      const orgForFlag = params.organization_id;
+      if (orgForFlag) {
+        void import('./orgControlService').then(({ autoFlagHighRisk }) =>
+          autoFlagHighRisk(
+            orgForFlag,
+            `Single request exceeded $${REQUEST_COST_ANOMALY_THRESHOLD_USD} (action=${params.process_type})`,
+          ),
+        );
+      }
     }
 
     // Phase 4 guardrail: pricing_missing surfaces when an LLM/embedding call
@@ -402,7 +409,7 @@ export async function logUsageEvent(params: {
       });
     }
 
-    const betaTag = params.beta_cohort != null || params.monetization_beta_enabled != null
+    const betaTag = params.beta_cohort != null || params.monetization_beta_enabled != null || params.organization_id == null
       ? {
           beta_cohort: params.beta_cohort ?? null,
           monetization_beta_enabled: params.monetization_beta_enabled === true,
@@ -465,7 +472,9 @@ export async function logUsageEvent(params: {
     // Analytics and reporting read only from this table going forward.
     // recordUnifiedTransaction never throws; CHECK violations turn into
     // cost_anomalies rows so we don't break the caller's flow.
-    void recordUnifiedTransaction({
+    // Org-scoped only: platform-global (null-org) rows live in usage_events
+    // alone (unified_transactions.organization_id is NOT NULL) — Phase 8G-B.
+    if (params.organization_id != null) void recordUnifiedTransaction({
       organization_id:  params.organization_id,
       user_id:          params.user_id ?? null,
       action_key:       actionKey,

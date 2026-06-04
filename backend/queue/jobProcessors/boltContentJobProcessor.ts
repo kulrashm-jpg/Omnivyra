@@ -304,6 +304,20 @@ export async function processBoltContentJob(job: Job): Promise<void> {
   const orgId = d?.campaign?.company_id ? String(d.campaign.company_id) : null;
   if (!orgId) return processBoltContentJobInner(job);
 
+  // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
+  void import('../../services/billing/creditEconomyShadow')
+    .then((m) => m.emitCreditEconomyShadowEvaluation({ organizationId: orgId, activity: 'content_generation', surface: 'queue.bolt-content', dedupeKey: String(d.bolt_job_id ?? job.id ?? d.run_id) }))
+    .catch(() => {});
+
+  // Phase 11D — admission boundary (single call; dark by default → passthrough,
+  // no wallet read; shadow-observes / enforce-blocks once configured).
+  await (await import('../../services/billing/admissionControl')).evaluateActivityAdmission({
+    organizationId: orgId,
+    activity:       'content_generation',
+    surface:        'queue.bolt-content',
+    referenceId:    String(d.bolt_job_id ?? job.id ?? d.run_id),
+  });
+
   const { resolveEnforcementMode } = await import('../../services/billing/phase2EnforcementGate');
   const { mode } = await resolveEnforcementMode(orgId, 'queue.bolt-content');
 
@@ -313,6 +327,36 @@ export async function processBoltContentJob(job: Job): Promise<void> {
       incrCounter('phase2_gate_shadow_total');
     }
     return processBoltContentJobInner(job);
+  }
+
+  // Phase 10C — token-actual entry-consumption when enabled (default OFF →
+  // existing path). Actual tokens collected via AsyncLocalStorage across the
+  // master+variant generation; settled token-actual; entry kept + exposure
+  // released on abandonment. Replay-safe via deterministic idem key.
+  const { executeWithEntryConsumption, makeIdempotencyKey } =
+    await import('../../services/creditExecutionService');
+  const { getCreditEconomyExecutionMode } = await import('../../services/billing/creditEconomyActivation');
+  if ((await getCreditEconomyExecutionMode({ organizationId: orgId, surface: 'queue.bolt-content' })) === 'enforce') {
+    const referenceId = String(d.bolt_job_id ?? job.id ?? d.run_id);
+    const { runWithUsageCollection } = await import('../../services/aiUsageCollector');
+    let collected = { inputTokens: 0, outputTokens: 0 };
+    await executeWithEntryConsumption<void>({
+      userId:             String(d.campaign?.user_id ?? orgId),
+      orgId,
+      action:             'content_generation',
+      referenceType:      'bolt_content_job',
+      referenceId,
+      idempotencyKey:     makeIdempotencyKey(orgId, 'content_generation', referenceId),
+      validateMembership: false,
+      llmPricing:         { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: 'content_generation', maxInputTokens: 8000, maxOutputTokens: 4000 },
+      executor:           async () => {
+        const { result, usage } = await runWithUsageCollection(() => processBoltContentJobInner(job));
+        collected = usage;
+        return result;
+      },
+      collectActualUsage: () => collected,
+    });
+    return;
   }
 
   const { withQueueBilling } = await import('../../services/billing/queueBillingMiddleware');

@@ -214,6 +214,28 @@ export default async function handler(
         initialContext.requestId,
         'report-generation',
       );
+      // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
+      void import('../../../backend/services/billing/creditEconomyShadow')
+        .then((m) => m.emitCreditEconomyShadowEvaluation({ organizationId: companyId, activity: chargingIdentity.action_key, surface: 'route.reports-generate', dedupeKey: initialContext.requestId }))
+        .catch(() => {});
+
+      // Phase 11D — admission boundary before the reservation HOLD. Dark by default
+      // (passthrough; report actions are uncatalogued → self-skip, never a false
+      // block). On a future enforce-block, surface a clean 402.
+      try {
+        await (await import('../../../backend/services/billing/admissionControl')).evaluateActivityAdmission({
+          organizationId: companyId,
+          activity:       chargingIdentity.action_key,
+          surface:        'route.reports-generate',
+          referenceId:    initialContext.requestId,
+        });
+      } catch (admErr: any) {
+        if (admErr?.name === 'AdmissionBlockedError') {
+          return res.status(402).json({ error: 'Insufficient credits for this report', code: 'ADMISSION_BLOCKED', requestId: initialContext.requestId });
+        }
+        throw admErr;
+      }
+
       const reservation = await reserveCreditsForWork({
         userId: user.id,
         orgId: companyId,

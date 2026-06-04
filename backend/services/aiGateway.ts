@@ -26,6 +26,7 @@ import {
 } from './distributedProviderTokenBucket';
 
 import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
+import { recordProviderUsage } from './aiUsageCollector';
 import { getCompanyLlmConfig, resolveCompanyApiKey, getActiveProviders, getModelsByProvider } from './llmProviderService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
@@ -1397,18 +1398,23 @@ const buildMetadata = (
   provider: 'openai' | 'anthropic',
   model: string,
   usage: NormalizedCompletion['usage'],
-): GatewayMetadata => ({
-  provider: provider === 'anthropic' ? 'direct-anthropic' : 'direct-openai',
-  model,
-  token_usage: usage
-    ? {
-        prompt_tokens:    usage.prompt_tokens,
-        completion_tokens: usage.completion_tokens,
-        total_tokens:     usage.total_tokens,
-      }
-    : null,
-  reasoning_trace_id: randomUUID(),
-});
+): GatewayMetadata => {
+  // Phase 10C — propagate actual provider tokens to any active usage-collection
+  // scope (no-op when none). Read-only; touches no billing/ledger/settlement.
+  if (usage) recordProviderUsage(usage.prompt_tokens, usage.completion_tokens);
+  return {
+    provider: provider === 'anthropic' ? 'direct-anthropic' : 'direct-openai',
+    model,
+    token_usage: usage
+      ? {
+          prompt_tokens:    usage.prompt_tokens,
+          completion_tokens: usage.completion_tokens,
+          total_tokens:     usage.total_tokens,
+        }
+      : null,
+    reasoning_trace_id: randomUUID(),
+  };
+};
 
 const executeGatewayCompletion = async (
   request: GatewayRequest & { operation: string }

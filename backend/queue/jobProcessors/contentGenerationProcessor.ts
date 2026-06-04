@@ -67,6 +67,20 @@ export async function processContentGenerationJob(job: Job): Promise<any> {
   // Pre-flight checks
   void job.updateProgress(5);
 
+  // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
+  void import('../../services/billing/creditEconomyShadow')
+    .then((m) => m.emitCreditEconomyShadowEvaluation({ organizationId: String(company_id), activity: bulk_mode ? 'content_basic' : 'content_generation', surface: 'queue.content-generation', dedupeKey: `${job.id ?? content_type}` }))
+    .catch(() => {});
+
+  // Phase 11D — admission boundary (single call; dark by default → passthrough,
+  // no wallet read; shadow-observes / enforce-blocks once configured).
+  await (await import('../../services/billing/admissionControl')).evaluateActivityAdmission({
+    organizationId: String(company_id),
+    activity:       bulk_mode ? 'content_basic' : 'content_generation',
+    surface:        'queue.content-generation',
+    referenceId:    `${job.id ?? content_type}`,
+  });
+
   // Phase 2 C-1 closure: when `billing.reservations_required` is enabled for
   // the org, route the job through the enterprise billing middleware so the
   // credit reservation lifecycle is exactly-once across Bull MQ retries.
@@ -77,6 +91,39 @@ export async function processContentGenerationJob(job: Job): Promise<any> {
     organizationId: company_id,
     flag:           BILLING_FLAGS.RESERVATIONS_REQUIRED,
   });
+
+  // Phase 10C — token-actual entry-consumption when enabled
+  // (PHASE2_ENTRY_CONSUMPTION, default OFF → existing path, byte-identical).
+  // Actual provider tokens are collected via AsyncLocalStorage across the
+  // generation pipeline and settled token-actual; entry kept + exposure released
+  // on abandonment (orphan reaper). Replay-safe via deterministic idem key.
+  const { executeWithEntryConsumption, makeIdempotencyKey } =
+    await import('../../services/creditExecutionService');
+  const { getCreditEconomyExecutionMode } = await import('../../services/billing/creditEconomyActivation');
+  if ((await getCreditEconomyExecutionMode({ organizationId: String(company_id), surface: 'queue.content-generation' })) === 'enforce') {
+    const ecAction: 'content_generation' | 'content_basic' = bulk_mode ? 'content_basic' : 'content_generation';
+    const referenceId = `${job.id ?? content_type}`;
+    const { runWithUsageCollection } = await import('../../services/aiUsageCollector');
+    let collected = { inputTokens: 0, outputTokens: 0 };
+    const r = await executeWithEntryConsumption<unknown>({
+      userId:             String(user_id ?? company_id),
+      orgId:              String(company_id),
+      action:             ecAction,
+      referenceType:      'content_job',
+      referenceId,
+      idempotencyKey:     makeIdempotencyKey(String(company_id), ecAction, referenceId),
+      validateMembership: false,
+      llmPricing:         { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: ecAction, maxInputTokens: 8000, maxOutputTokens: 4000 },
+      executor:           async () => {
+        const { result, usage } = await runWithUsageCollection(() => processContentGenerationJobInner(job));
+        collected = usage;
+        return result;
+      },
+      collectActualUsage: () => collected,
+    });
+    return r.status === 'executed' ? (r.result as unknown) : { skipped: true, reason: r.status };
+  }
+
   if (flag.enabled) {
     const { withQueueBilling } = await import('../../services/billing/queueBillingMiddleware');
     const action: 'content_generation' | 'content_basic' = bulk_mode

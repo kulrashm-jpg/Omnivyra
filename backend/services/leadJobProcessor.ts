@@ -395,6 +395,10 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
     totalQualified > 0
   ) {
     const leadAction = mode === 'PREDICTIVE' ? 'lead_predictive_scoring' : 'lead_qualification';
+    // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
+    void import('./billing/creditEconomyShadow')
+      .then((m) => m.emitCreditEconomyShadowEvaluation({ organizationId: companyId, activity: leadAction, surface: 'queue.lead-job', dedupeKey: jobId }))
+      .catch(() => {});
     try {
       await deductCreditsIfValueAwaited(
         companyId,

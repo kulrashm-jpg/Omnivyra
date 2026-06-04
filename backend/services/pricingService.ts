@@ -1,6 +1,22 @@
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 import { ownedDbTable } from '../db/writeOwner';
+import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
+
+// Phase 8A — activity economy catalog. Re-exported here so callers resolve
+// activity economics through the same pricing-resolution surface as
+// resolveActivityCreditRange. The catalog is pure/inert (no DB, no charging).
+export {
+  resolveActivityEconomics,
+  getActivityClass,
+  ACTIVITY_CLASS_ECONOMICS,
+  ACTIVITY_CLASS_MAP,
+} from './activityEconomyCatalog';
+export type {
+  ActivityClass,
+  ActivityClassEconomics,
+  ResolvedActivityEconomics,
+} from './activityEconomyCatalog';
 
 export type PricingKind = 'completion' | 'embedding';
 
@@ -287,6 +303,103 @@ export async function estimateHoldCeilingCredits(
   const ceilingUsd = actionRow.ceiling_usd ?? (actionRow.minimum_charge_usd * 5);
   const effectiveCeilingUsd = Math.max(ceilingUsd, actionRow.minimum_charge_usd);
   return Math.max(1, Math.ceil(effectiveCeilingUsd / creditRateUsd));
+}
+
+export interface ActivityCreditRange {
+  actionKey: string;
+  /** Floor charge — the "starting estimate" the user is anchored on at HOLD. */
+  minCredits: number;
+  /** Ceiling — the most this activity can settle at (what HOLD actually reserves). */
+  maxCredits: number;
+  /** Number surfaced to the user up front (== min for token-priced; flat fee for fixed). */
+  expectedCredits: number;
+  /** true → actual settles against usage and MAY RISE from min toward max. */
+  tokenPriced: boolean;
+  source: 'action_pricing_config' | 'credit_cost_config';
+}
+
+/**
+ * Flat credit_cost_config fee for an action, or null if the action has no fixed
+ * row. Mirrors getCreditCost()'s feature-registry key remap but read-only and
+ * non-throwing on absence (so resolveActivityCreditRange can fall through).
+ */
+async function fetchFlatCreditCost(actionKey: string): Promise<number | null> {
+  const feature = resolveMonetizationFeature({ action_key: actionKey });
+  const costConfigKey = feature?.feature.pricing_keys.credit_cost_config ?? actionKey;
+  const { data, error } = await supabase
+    .from('credit_cost_config')
+    .select('credits')
+    .eq('action_type', costConfigKey)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`[pricingService] credit_cost_config lookup failed for ${costConfigKey}: ${error.message}`);
+  }
+  return data && typeof (data as any).credits === 'number' ? Number((data as any).credits) : null;
+}
+
+/**
+ * Catalog-derived credit RANGE for an activity — read-only, never mutates
+ * credits. Powers pre-activity cost preview and the provisional ("may rise")
+ * UI notation.
+ *
+ * Token-priced actions (action_pricing_config): a true min–max band. floor =
+ * minimum_charge_usd, ceiling = ceiling_usd (or 5× floor fallback), both
+ * converted at the org's credit_rate_usd — deliberately the SAME math as
+ * estimateHoldCeilingCredits so the displayed max equals what executeWithCredits
+ * actually HOLDs. expected = floor (the starting estimate; actual may rise).
+ *
+ * Fixed-fee actions (credit_cost_config): a flat charge — min = max = expected,
+ * tokenPriced=false (no upward reconciliation).
+ *
+ * Throws only when the action exists in NEITHER catalog (unknown activity).
+ */
+export async function resolveActivityCreditRange(
+  actionKey: string,
+  orgId: string,
+  timestamp?: string | Date,
+): Promise<ActivityCreditRange> {
+  const key = requireNonEmpty(actionKey, 'actionKey');
+  const org = requireNonEmpty(orgId, 'orgId');
+  const effectiveAt = normalizeTimestamp(timestamp);
+
+  // Token-priced path first: a genuine min–max band.
+  const [actionRow, creditRateUsd] = await Promise.all([
+    fetchActionPricingRow(key, effectiveAt).catch(() => null),
+    fetchCreditRateUsd(org),
+  ]);
+
+  if (actionRow) {
+    const floorUsd = actionRow.minimum_charge_usd;
+    const ceilingUsd = Math.max(
+      actionRow.ceiling_usd ?? (actionRow.minimum_charge_usd * 5),
+      floorUsd,
+    );
+    const minCredits = Math.max(1, Math.ceil(floorUsd / creditRateUsd));
+    const maxCredits = Math.max(minCredits, Math.ceil(ceilingUsd / creditRateUsd));
+    return {
+      actionKey: key,
+      minCredits,
+      maxCredits,
+      expectedCredits: minCredits,
+      tokenPriced: true,
+      source: 'action_pricing_config',
+    };
+  }
+
+  // Fixed-fee fallback: flat credit_cost_config row.
+  const flat = await fetchFlatCreditCost(key);
+  if (flat != null) {
+    return {
+      actionKey: key,
+      minCredits: flat,
+      maxCredits: flat,
+      expectedCredits: flat,
+      tokenPriced: false,
+      source: 'credit_cost_config',
+    };
+  }
+
+  throw new Error(`[pricingService] No credit catalog entry for activity '${key}'`);
 }
 
 /**

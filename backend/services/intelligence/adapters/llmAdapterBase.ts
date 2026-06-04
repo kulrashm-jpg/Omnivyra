@@ -134,6 +134,8 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
           fetchProduction(this.id, request.url, request.init, this.config.timeoutMs),
         );
         const json = await envelope.json();
+        // Phase 8G-B — platform cost capture (no customer org; fire-and-forget).
+        void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
         const answer = this.extractAnswer(json);
         const observedAt = new Date().toISOString();
         const mention = extractCitation({

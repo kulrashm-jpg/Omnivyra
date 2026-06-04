@@ -64,6 +64,13 @@ const counters: Record<string, number> = {
   black_hole_cost_capture_failed_total: 0,
   // Task 5H — pre-HOLD 80% executable-balance safety gate blocked an execution.
   credit_safety_gate_blocked_total:     0,
+  // Phase 8D — launch-time admission control (read-only; dark by default).
+  admission_allowed:                    0,
+  admission_blocked:                    0,
+  admission_shortfall:                  0,
+  // Phase 8E — credit-economy shadow adoption (telemetry only; dark by default).
+  credit_economy_shadow_would_allow:    0,
+  credit_economy_shadow_would_block:    0,
 };
 
 export type BillingCounter = keyof typeof counters;
