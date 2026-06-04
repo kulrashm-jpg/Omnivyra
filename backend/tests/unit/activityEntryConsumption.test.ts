@@ -77,6 +77,7 @@ import {
   confirmCreditReservationToActual,
 } from '../../services/creditExecutionService';
 import { resolveActivityEconomics } from '../../services/activityEconomyCatalog';
+import { recordProviderUsage, recordAssetCredits } from '../../services/aiUsageCollector';
 
 const USER = '00000000-0000-4000-8000-000000000001';
 const ORG = '00000000-0000-4000-8000-000000000002';
@@ -202,23 +203,22 @@ describe('executeWithEntryConsumption — happy path (fixed action)', () => {
   });
 });
 
-describe('executeWithEntryConsumption — token-metered settlement (Phase 10B / M2)', () => {
-  it('settles token-ACTUAL from collectActualUsage, releasing unused exposure', async () => {
+describe('executeWithEntryConsumption — token-metered settlement (Phase 10B / M2, engine-collected)', () => {
+  it('settles token-ACTUAL from the engine-collected scope usage, releasing unused exposure', async () => {
     pricing.resolveLlmCost.mockResolvedValue({ credits: 9 }); // actual token cost = 9
-    const executor = jest.fn(async () => 'OUTPUT');
-    const collectActualUsage = jest.fn(() => ({ inputTokens: 1000, outputTokens: 500 }));
+    // Phase 12E — the executor records provider usage into the engine's scope.
+    const executor = jest.fn(async () => { recordProviderUsage(1000, 500); return 'OUTPUT'; });
 
     const res = await executeWithEntryConsumption({
       userId: USER, orgId: ORG, action: ACTION as any,
       referenceType: 'content', referenceId: REF,
       idempotencyKey: IDEM, validateMembership: false,
       llmPricing: { provider: 'openai', model: 'gpt-4o-mini', actionKey: 'content_basic', maxInputTokens: 1000, maxOutputTokens: 500 },
+      collectViaCollector: true,
       executor,
-      collectActualUsage,
     });
 
     expect(executor).toHaveBeenCalledTimes(1);
-    expect(collectActualUsage).toHaveBeenCalledTimes(1);
     // cost resolved from the ACTUAL collected tokens (not max/estimate)
     expect(pricing.resolveLlmCost).toHaveBeenCalledWith(
       expect.objectContaining({ inputTokens: 1000, outputTokens: 500, actionKey: 'content_basic' }),
@@ -227,7 +227,6 @@ describe('executeWithEntryConsumption — token-metered settlement (Phase 10B / 
     if (res.status !== 'executed') throw new Error('unreachable');
     // SHORT_GENERATION entry 2; actual 9 → additional 7 (from partial_confirm mock), release 6
     expect(res.settlement).toMatchObject({ entryConsumed: 2, additionalConsumed: 7, exposureReleased: 6, underfunded: false });
-    // settled via the SAME partial-confirm primitive (token path, not fixed)
     expect(repo.callCreditPartialConfirm).toHaveBeenCalledTimes(1);
   });
 });
@@ -266,15 +265,16 @@ describe('executeWithEntryConsumption — text + asset settlement (Phase 10E)', 
   it('adds asset credits (additionalCredits) to token-priced settlement', async () => {
     pricing.resolveLlmCost.mockResolvedValue({ credits: 4 });      // text cost = 4
     repo.callCreditPartialConfirm.mockResolvedValue({ error: null, data: { id: 's', total_consumed: 7, total_released: 6 } });
-    const executor = jest.fn(async () => 'CREATOR');
+    // Phase 12E — text tokens + asset credits both recorded into the engine scope.
+    const executor = jest.fn(async () => { recordProviderUsage(1000, 500); recordAssetCredits(5); return 'CREATOR'; });
 
     const res = await executeWithEntryConsumption({
       userId: USER, orgId: ORG, action: ACTION as any,
       referenceType: 'creator_content_job', referenceId: REF,
       idempotencyKey: IDEM, validateMembership: false,
       llmPricing: { provider: 'openai', model: 'gpt-4o-mini', actionKey: 'content_basic', maxInputTokens: 1000, maxOutputTokens: 500 },
+      collectViaCollector: true,
       executor,
-      collectActualUsage: () => ({ inputTokens: 1000, outputTokens: 500, additionalCredits: 5 }), // 5 image credits
     });
 
     expect(res.status).toBe('executed');
@@ -310,10 +310,9 @@ describe('executeWithEntryConsumption — asset activity (Phase 10D / M3)', () =
   });
 });
 
-describe('executeWithEntryConsumption — abandonment (TASK 5)', () => {
-  it('keeps entry consumption, releases exposure, no settlement', async () => {
-    const boom = new Error('executor exploded');
-    const executor = jest.fn(async () => { throw boom; });
+describe('executeWithEntryConsumption — abandonment before any consumable event (Phase 12E)', () => {
+  it('fixed activity throws BEFORE a provider call → entry NOT consumed, exposure released, charge 0', async () => {
+    const executor = jest.fn(async () => { throw new Error('executor exploded'); }); // no recordProviderUsage
 
     await expect(executeWithEntryConsumption({
       userId: USER, orgId: ORG, action: ACTION as any,
@@ -324,16 +323,82 @@ describe('executeWithEntryConsumption — abandonment (TASK 5)', () => {
     })).rejects.toThrow('executor exploded');
 
     const reservations = repo.callCreditReservation.mock.calls.map((c) => c[0]);
-    // entry was consumed (hold + confirm present) and NOT released
-    expect(reservations.some((r) => r.idempotencyKey === `${IDEM}:entry:confirm` && r.phase === 'confirm')).toBe(true);
-    expect(reservations.some((r) => r.idempotencyKey === `${IDEM}:entry:release`)).toBe(false);
-    // exposure was RELEASED
+    // entry was NEVER consumed (no consumable event occurred)
+    expect(reservations.some((r) => r.idempotencyKey === `${IDEM}:entry:hold`)).toBe(false);
+    expect(reservations.some((r) => r.idempotencyKey === `${IDEM}:entry:confirm`)).toBe(false);
+    // exposure was held then RELEASED
     const exposureRelease = reservations.find((r) => r.idempotencyKey === `${IDEM}:exposure:release`);
     expect(exposureRelease).toBeTruthy();
     expect(exposureRelease.phase).toBe('release');
-    expect(exposureRelease.parentId).toBe('hold:' + `${IDEM}:exposure:hold`);
     // never settled
     expect(repo.callCreditPartialConfirm).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeWithEntryConsumption — Phase 12E first-consumable entry trigger', () => {
+  const LLM = { provider: 'openai', model: 'gpt-4o-mini', actionKey: 'content_basic', maxInputTokens: 1000, maxOutputTokens: 500 } as const;
+
+  it('A. provider call occurs → entry consumed exactly once (even across multiple calls)', async () => {
+    pricing.resolveLlmCost.mockResolvedValue({ credits: 9 });
+    const executor = jest.fn(async () => { recordProviderUsage(500, 200); recordProviderUsage(300, 100); return 'OK'; });
+    const res = await executeWithEntryConsumption({
+      userId: USER, orgId: ORG, action: ACTION as any, referenceType: 'content', referenceId: REF,
+      idempotencyKey: IDEM, validateMembership: false, llmPricing: LLM, collectViaCollector: true, executor,
+    });
+    expect(res.status).toBe('executed');
+    if (res.status === 'executed') expect(res.settlement.entryConsumed).toBe(2);
+    const entryConfirms = repo.callCreditReservation.mock.calls.map((c) => c[0]).filter((r) => r.idempotencyKey === `${IDEM}:entry:confirm`);
+    expect(entryConfirms.length).toBe(1); // consumed ONCE despite two provider calls
+  });
+
+  it('B. validation failure BEFORE provider call → NO entry consumed, exposure released, no settlement', async () => {
+    const executor = jest.fn(async () => { throw new Error('validation failed'); }); // never reaches a provider
+    await expect(executeWithEntryConsumption({
+      userId: USER, orgId: ORG, action: ACTION as any, referenceType: 'content', referenceId: REF,
+      idempotencyKey: IDEM, validateMembership: false, llmPricing: LLM, collectViaCollector: true, executor,
+    })).rejects.toThrow('validation failed');
+    const calls = repo.callCreditReservation.mock.calls.map((c) => c[0]);
+    expect(calls.some((r) => r.idempotencyKey === `${IDEM}:entry:confirm`)).toBe(false);
+    expect(calls.some((r) => r.idempotencyKey === `${IDEM}:entry:hold`)).toBe(false);
+    expect(calls.some((r) => r.idempotencyKey === `${IDEM}:exposure:release` && r.phase === 'release')).toBe(true);
+    expect(repo.callCreditPartialConfirm).not.toHaveBeenCalled();
+  });
+
+  it('C. abandonment AFTER a provider call → entry KEPT, exposure released', async () => {
+    const executor = jest.fn(async () => { recordProviderUsage(300, 100); throw new Error('boom after provider'); });
+    await expect(executeWithEntryConsumption({
+      userId: USER, orgId: ORG, action: ACTION as any, referenceType: 'content', referenceId: REF,
+      idempotencyKey: IDEM, validateMembership: false, llmPricing: LLM, collectViaCollector: true, executor,
+    })).rejects.toThrow('boom after provider');
+    const calls = repo.callCreditReservation.mock.calls.map((c) => c[0]);
+    expect(calls.some((r) => r.idempotencyKey === `${IDEM}:entry:confirm` && r.phase === 'confirm')).toBe(true); // entry kept
+    expect(calls.some((r) => r.idempotencyKey === `${IDEM}:entry:release`)).toBe(false);
+    expect(calls.some((r) => r.idempotencyKey === `${IDEM}:exposure:release`)).toBe(true);
+    expect(repo.callCreditPartialConfirm).not.toHaveBeenCalled();
+  });
+
+  it('D. replay (exposure already settled) → no re-execution, no duplicate charge', async () => {
+    repo.findCreditTransaction.mockImplementation(async (key: string) => (key === `${IDEM}:exposure:confirm` ? { id: 'prior' } : null));
+    const executor = jest.fn(async () => { recordProviderUsage(100, 50); return 'X'; });
+    const res = await executeWithEntryConsumption({
+      userId: USER, orgId: ORG, action: ACTION as any, referenceType: 'content', referenceId: REF,
+      idempotencyKey: IDEM, validateMembership: false, llmPricing: LLM, collectViaCollector: true, executor,
+    });
+    expect(res.status).toBe('already_settled');
+    expect(executor).not.toHaveBeenCalled();
+    expect(repo.callCreditReservation).not.toHaveBeenCalled();
+  });
+
+  it('E. settlement math unchanged — token-actual = entry + (actual−entry), release remainder', async () => {
+    pricing.resolveLlmCost.mockResolvedValue({ credits: 9 });
+    repo.callCreditPartialConfirm.mockResolvedValue({ error: null, data: { id: 's', total_consumed: 7, total_released: 6 } });
+    const executor = jest.fn(async () => { recordProviderUsage(1000, 500); return 'OK'; });
+    const res = await executeWithEntryConsumption({
+      userId: USER, orgId: ORG, action: ACTION as any, referenceType: 'content', referenceId: REF,
+      idempotencyKey: IDEM, validateMembership: false, llmPricing: LLM, collectViaCollector: true, executor,
+    });
+    if (res.status !== 'executed') throw new Error('unreachable');
+    expect(res.settlement).toMatchObject({ entryConsumed: 2, additionalConsumed: 7, exposureReleased: 6, totalConsumed: 9, underfunded: false });
   });
 });
 

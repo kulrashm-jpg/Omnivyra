@@ -338,23 +338,19 @@ export async function processBoltContentJob(job: Job): Promise<void> {
   const { getCreditEconomyExecutionMode } = await import('../../services/billing/creditEconomyActivation');
   if ((await getCreditEconomyExecutionMode({ organizationId: orgId, surface: 'queue.bolt-content' })) === 'enforce') {
     const referenceId = String(d.bolt_job_id ?? job.id ?? d.run_id);
-    const { runWithUsageCollection } = await import('../../services/aiUsageCollector');
-    let collected = { inputTokens: 0, outputTokens: 0 };
+    // Phase 12E — engine-owned usage scope; entry consumed at the first provider
+    // call across the master+variant generation.
     await executeWithEntryConsumption<void>({
-      userId:             String(d.campaign?.user_id ?? orgId),
+      userId:              String(d.campaign?.user_id ?? orgId),
       orgId,
-      action:             'content_generation',
-      referenceType:      'bolt_content_job',
+      action:              'content_generation',
+      referenceType:       'bolt_content_job',
       referenceId,
-      idempotencyKey:     makeIdempotencyKey(orgId, 'content_generation', referenceId),
-      validateMembership: false,
-      llmPricing:         { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: 'content_generation', maxInputTokens: 8000, maxOutputTokens: 4000 },
-      executor:           async () => {
-        const { result, usage } = await runWithUsageCollection(() => processBoltContentJobInner(job));
-        collected = usage;
-        return result;
-      },
-      collectActualUsage: () => collected,
+      idempotencyKey:      makeIdempotencyKey(orgId, 'content_generation', referenceId),
+      validateMembership:  false,
+      llmPricing:          { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: 'content_generation', maxInputTokens: 8000, maxOutputTokens: 4000 },
+      collectViaCollector: true,
+      executor:            () => processBoltContentJobInner(job),
     });
     return;
   }

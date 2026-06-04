@@ -20,6 +20,7 @@
  */
 
 import { createHash } from 'crypto';
+import { createUsageScope } from './aiUsageCollector';
 import {
   type CreditAction,
   type DeductOptions,
@@ -1293,25 +1294,27 @@ export interface ExecuteWithEntryConsumptionOptionsLlm<T> extends ExecuteBase {
   executor:   () => Promise<LlmExecutorResult<T>>;
 }
 /**
- * Phase 10B — token-metered variant. The executor returns the result directly
- * (its natural type), and ACTUAL token usage is supplied separately by
- * collectActualUsage(), called after execution. Settlement is token-actual
- * (resolveLlmCost on the collected tokens) — the same pricing + partial-confirm
- * primitives as the LLM variant, without coupling usage to the return value.
- * For paths (e.g. queue processors) that aggregate tokens across several AI
- * calls and don't want to reshape their executor's return as LlmExecutorResult.
+ * Phase 10B/12E — token-metered variant. The executor returns the result
+ * directly (its natural type) and runs inside the ENGINE's usage scope, so
+ * ACTUAL token usage is collected by the engine (no caller threading) and the
+ * first provider completion fires the deferred entry consumer. Settlement is
+ * token-actual (resolveLlmCost on the collected tokens) — the same pricing +
+ * partial-confirm primitives as the LLM variant. For paths (e.g. queue
+ * processors) that aggregate tokens across several AI calls and don't want to
+ * reshape their executor's return as LlmExecutorResult.
  */
 export interface ExecuteWithEntryConsumptionOptionsTokenMetered<T> extends ExecuteBase {
   llmPricing: LlmPricingSpec;
   executor:   () => Promise<T>;
   /**
-   * Actual usage after execution. `additionalCredits` (Phase 10E) is added to
-   * the token-priced credits at settlement — e.g. rendered-image credits folded
-   * into a creator-content job's settlement. It is NOT token-priced (already in
-   * credits) and uses no new settlement primitive.
+   * Phase 12E — the engine runs the executor inside its OWN usage scope and
+   * collects ACTUAL provider usage from it (so the caller no longer threads
+   * usage). The first provider/asset event in that scope fires the deferred
+   * entry consumer. Non-token artifact credits recorded via recordAssetCredits
+   * in scope (Phase 10E) are folded into the settled amount. This flag
+   * discriminates the token-metered variant from the LLM variant.
    */
-  collectActualUsage: () => Promise<{ inputTokens: number; outputTokens: number; additionalCredits?: number }>
-    | { inputTokens: number; outputTokens: number; additionalCredits?: number };
+  collectViaCollector: true;
 }
 export type ExecuteWithEntryConsumptionOptions<T> =
   | ExecuteWithEntryConsumptionOptionsTokenMetered<T>
@@ -1427,9 +1430,14 @@ export async function executeWithEntryConsumption<T>(
     validateMembership: opts.validateMembership,
   };
 
-  // ── STAGE 1 — ENTRY CONSUMPTION (immediate, non-refundable, visible) ─────────
+  // ── STAGE 1 — ENTRY CONSUMER (Phase 12E: DEFERRED to the first consumable
+  // event). The non-refundable entry is NOT charged at launch. Instead we define
+  // a consumer that the first provider/asset event fires (STAGE 3), composing the
+  // SAME reserve→confirm primitives + the SAME deterministic entryKey, so it is
+  // idempotent/replay-safe and consumed at most once even across retries.
   let entryConsumed = 0;
-  if (entry > 0) {
+  const consumeEntry = async (): Promise<number> => {
+    if (entry <= 0) return 0;
     const entryRes = await reserveCreditsForWork({
       ...reserveCommon,
       idempotencyKey: entryKey,
@@ -1438,14 +1446,16 @@ export async function executeWithEntryConsumption<T>(
     });
     if (entryRes.status === 'reserved' || entryRes.status === 'already_reserved') {
       const entryConfirm = await confirmCreditReservation({ ...entryRes, note: `[ENTRY] ${opts.note ?? action}` });
-      if (entryConfirm.status === 'already_released') return { status: 'already_released' };
-      entryConsumed = entry;
-    } else if (entryRes.status === 'already_confirmed') {
-      entryConsumed = entry; // resume: entry already consumed on a prior attempt
-    } else {
-      return mapReservationFailure(entryRes);
+      if (entryConfirm.status === 'already_released') return 0;
+      return entry;
     }
-  }
+    if (entryRes.status === 'already_confirmed') return entry; // resume: already consumed
+    // Admission already guaranteed effective balance >= MAX exposure, so entry
+    // (<= max, and affordable after the exposure HOLD) should reserve; treat an
+    // unexpected failure as cost-from-exposure rather than blocking post-work.
+    logger.error('entry_consumption_first_event_reserve_failed', { orgId: opts.orgId, action, status: entryRes.status });
+    return 0;
+  };
 
   // ── STAGE 2 — EXPOSURE RESERVATION — HOLD(max − entry) ───────────────────────
   let exposureHandle: CreditReservationHandle | null = null;
@@ -1468,29 +1478,36 @@ export async function executeWithEntryConsumption<T>(
     }
   }
 
-  // ── STAGE 3 — EXECUTE ────────────────────────────────────────────────────────
+  // ── STAGE 3 — EXECUTE (entry is consumed lazily at the FIRST consumable event) ─
+  // The executor runs inside an engine-owned usage scope. The first provider
+  // completion / billable artifact fires the armed consumer, which charges the
+  // non-refundable entry exactly once — never at launch, validation, or setup.
+  const scope = createUsageScope();
+  let entryPromise: Promise<number> | null = null;
+  if (entry > 0) scope.armFirstConsumable(() => { entryPromise = consumeEntry(); });
+
   let executorResult: T;
   let actualCredits: number;
   let pricing: ResolvedLlmCost | undefined;
   try {
-    if ('collectActualUsage' in opts && opts.collectActualUsage) {
-      // Phase 10B — token-metered: executor returns the result; actual tokens
-      // are collected separately and settled token-actual.
-      executorResult = await (opts.executor as () => Promise<T>)();
-      const usage = await opts.collectActualUsage();
+    if ('collectViaCollector' in opts && opts.collectViaCollector) {
+      // Phase 10B/12E — token-metered: engine collects ACTUAL usage from its own
+      // scope; the first provider completion fires the entry consumer.
+      executorResult = await scope.run(() => (opts.executor as () => Promise<T>)());
+      const u = scope.usage;
       pricing = await resolveExecutionLlmCost({
         provider:     opts.llmPricing.provider,
         model:        opts.llmPricing.model,
-        inputTokens:  Math.max(0, usage.inputTokens ?? 0),
-        outputTokens: Math.max(0, usage.outputTokens ?? 0),
+        inputTokens:  Math.max(0, u.inputTokens),
+        outputTokens: Math.max(0, u.outputTokens),
         actionKey:    opts.llmPricing.actionKey,
         orgId:        opts.orgId,
         timestamp:    opts.llmPricing.timestamp,
       });
       // Phase 10E — token credits + non-token artifact credits (e.g. images).
-      actualCredits = Math.max(0, pricing.credits) + Math.max(0, usage.additionalCredits ?? 0);
+      actualCredits = Math.max(0, pricing.credits) + Math.max(0, u.assetCredits);
     } else if (opts.llmPricing) {
-      const wrapped = await (opts.executor as () => Promise<LlmExecutorResult<T>>)();
+      const wrapped = await scope.run(() => (opts.executor as () => Promise<LlmExecutorResult<T>>)());
       executorResult = wrapped.result;
       pricing = await resolveExecutionLlmCost({
         provider:     opts.llmPricing.provider,
@@ -1503,20 +1520,22 @@ export async function executeWithEntryConsumption<T>(
       });
       actualCredits = Math.max(0, pricing.credits);
     } else {
-      executorResult = await (opts.executor as () => Promise<T>)();
+      executorResult = await scope.run(() => (opts.executor as () => Promise<T>)());
       actualCredits  = opts.amountOverride ?? await getCreditCost(action);
     }
   } catch (execErr: any) {
-    // ── ABANDONMENT (TASK 5): keep entry, release exposure. ────────────────────
+    // ── ABANDONMENT (Phase 12E): entry kept ONLY if a consumable event fired;
+    // exposure released. A failure BEFORE the first provider call consumes
+    // NOTHING (entry not charged) — the requirement's core guarantee.
+    let abandonEntry = 0;
+    if (entryPromise) { try { abandonEntry = await entryPromise; } catch { /* ignore */ } }
     if (exposureHandle) {
       await releaseCreditReservation({ ...exposureHandle, note: `[EXPOSURE][RELEASE] ${action} — executor error` });
     }
-    // Phase 11C — durable observation of abandonment (entry kept, exposure
-    // released). Fire-and-forget; never affects the throw below.
     void import('./billing/creditEconomyObservability')
       .then((m) => m.recordSettlementObservation({
         activity:         action,
-        entryConsumed,
+        entryConsumed:    abandonEntry,
         exposureReleased: reservation,
         abandoned:        true,
         dedupeKey:        `${opts.idempotencyKey}:abandon`,
@@ -1524,6 +1543,15 @@ export async function executeWithEntryConsumption<T>(
       .catch(() => {});
     throw execErr;
   }
+
+  // Resolve the entry actually consumed. FIXED-price activities owe their price
+  // on SUCCESS even if no provider call occurred (deterministic completion), so
+  // consume entry now if the trigger never fired. Token-priced activities with
+  // NO consumable event consume NOTHING (final charge resolves to ~0).
+  if (entry > 0 && !entryPromise && !opts.llmPricing) {
+    entryPromise = consumeEntry();
+  }
+  if (entryPromise) entryConsumed = await entryPromise;
 
   // ── STAGE 4 — SETTLEMENT (TASK 4): consume actual−entry from exposure ────────
   const plan = planEntryConsumptionSettlement({ entry: entryConsumed, reservation, actualCredits });

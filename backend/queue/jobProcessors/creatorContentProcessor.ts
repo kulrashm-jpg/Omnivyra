@@ -80,23 +80,20 @@ export async function processCreatorContentJob(job: Job): Promise<any> {
   const { getCreditEconomyExecutionMode } = await import('../../services/billing/creditEconomyActivation');
   if ((await getCreditEconomyExecutionMode({ organizationId: String(company_id), surface: 'queue.creator-content' })) === 'enforce') {
     const referenceId = `${job.id ?? content_type}`;
-    const { runWithUsageCollection } = await import('../../services/aiUsageCollector');
-    let collected = { inputTokens: 0, outputTokens: 0, assetCredits: 0 };
+    // Phase 12E — engine-owned usage scope: entry consumed at the first provider
+    // call / first rendered asset; text tokens + asset credits both collected
+    // from that scope and folded into settlement.
     const r = await executeWithEntryConsumption<unknown>({
-      userId:             String(user_id ?? company_id),
-      orgId:              String(company_id),
-      action:             'content_generation',
-      referenceType:      'creator_content_job',
+      userId:              String(user_id ?? company_id),
+      orgId:               String(company_id),
+      action:              'content_generation',
+      referenceType:       'creator_content_job',
       referenceId,
-      idempotencyKey:     makeIdempotencyKey(String(company_id), 'content_generation', referenceId),
-      validateMembership: false,
-      llmPricing:         { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: 'content_generation', maxInputTokens: 8000, maxOutputTokens: 4000 },
-      executor:           async () => {
-        const { result, usage } = await runWithUsageCollection(() => processCreatorContentJobInner(job));
-        collected = usage;
-        return result;
-      },
-      collectActualUsage: () => ({ inputTokens: collected.inputTokens, outputTokens: collected.outputTokens, additionalCredits: collected.assetCredits }),
+      idempotencyKey:      makeIdempotencyKey(String(company_id), 'content_generation', referenceId),
+      validateMembership:  false,
+      llmPricing:          { provider: 'openai', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', actionKey: 'content_generation', maxInputTokens: 8000, maxOutputTokens: 4000 },
+      collectViaCollector: true,
+      executor:            () => processCreatorContentJobInner(job),
     });
     return r.status === 'executed' ? (r.result as unknown) : { skipped: true, reason: r.status };
   }
