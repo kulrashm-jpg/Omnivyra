@@ -11,8 +11,7 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
+import { resolveUserContext } from '@/backend/services/userContextService';
 import { getOAuthCredentialsForPlatform } from '@/backend/auth/oauthCredentialResolver';
 import { refreshTwitterTokenIfNeeded } from '@/backend/auth/tokenRefresh';
 import { getToken } from '@/backend/auth/tokenStore';
@@ -200,52 +199,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let account_name: string | null = null;
   let live_check_supported = supportsLiveTokenCheck(platform);
 
-  // Canonical SUPER_ADMIN super-power: pick up ANY active account across
-  // tenants when the caller is a real platform SUPER_ADMIN. Previously this
-  // pivoted on the bridge cookie (`super_admin_session=1`), which produced
-  // false "Awaiting account" badges for canonical operators (mrawat) because
-  // the cookie never gets set by the canonical login flow — the fallback then
-  // filtered `social_accounts.user_id = <super_admin user>` which finds
-  // nothing, since the SUPER_ADMIN themselves rarely owns a tenant's account.
-  //
-  // Note we still also honour the bridge cookie for any env-credential
-  // operator path that is in-flight (`legacy_super_admin_session === '1'`).
-  // The bridge module hard-expires on 2026-08-05, so this is transitional.
-  const { user } = await getSupabaseUserFromRequest(req).catch(() => ({ user: null, error: '' }));
-  const isSuperAdmin = await (async () => {
-    if (req.cookies?.super_admin_session === '1') return true;
-    if (!user?.id) return false;
-    try { return await isPlatformSuperAdmin(user.id); } catch { return false; }
-  })();
+  // Token live-check is scoped to the CALLER'S OWN COMPANY (the canonical
+  // tenant boundary). company_id — NOT user_id — is the owning-tenant field
+  // for social_accounts (publishProcessor: "social_accounts.company_id IS the
+  // canonical owning tenant"). A connection is connected by ONE Company Admin
+  // (user_id) but BELONGS to the company; a Super Admin shares the company yet
+  // is rarely the connector, so a user_id filter found nothing for them while
+  // hiding valid company connections. Scoping by the caller's active
+  // companyIds:
+  //   • Super Admin sees their own company's connections (X/YT/FB/IG) and a
+  //     valid live-check, without owning the row themselves.
+  //   • Company Admin sees the same rows as before (they ARE the connector),
+  //     so no behaviour change.
+  //   • Another tenant's account (different company_id — e.g. a LinkedIn row
+  //     in Company B) is never selected, never named, never token-tested.
+  // This is strict same-tenant scoping: there is NO cross-tenant fallback and
+  // NO "borrow any active account" path.
+  const userContext = await resolveUserContext(req).catch(() => null);
+  const companyIds = userContext?.companyIds ?? [];
   const platformAliases = getPlatformAliases(platform);
 
   let accountId: string | null = null;
 
-  if (isSuperAdmin) {
-    const { data: account } = await supabase
-      .from('social_accounts')
-      .select('id, account_name, username')
-      .in('platform', platformAliases)
-      .eq('is_active', true)
-      .not('platform_user_id', 'like', 'planning_%')
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (account?.id) {
-      accountId = account.id;
-      account_name = account.account_name || account.username || null;
-    }
-  } else if (user?.id) {
+  if (companyIds.length > 0) {
     // Order by updated_at desc so a fresh reconnect (which bumps updated_at)
     // wins over any legacy duplicate row — e.g. an old platform='twitter' row
     // alongside the new platform='x' row. Without this, the unordered query
     // could pick the stale row and test its expired token, making the badge
-    // read "Token invalid" indefinitely after a successful reconnect.
+    // read "Token invalid" indefinitely after a successful reconnect. This is
+    // an intra-company tiebreak only — the .in('company_id', …) filter keeps
+    // selection strictly within the caller's own tenant(s).
     const { data: account } = await supabase
       .from('social_accounts')
       .select('id, account_name, username')
-      .eq('user_id', user.id)
+      .in('company_id', companyIds)
       .in('platform', platformAliases)
       .eq('is_active', true)
       .not('platform_user_id', 'like', 'planning_%')
