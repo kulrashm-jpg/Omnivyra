@@ -22,7 +22,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveCompanyAccess, getContentArchitectCompanyId, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
-import { extractDomain } from '../../../backend/services/companyMatchService';
+import { extractDomain, validatePublicWebsite } from '../../../backend/services/companyMatchService';
 import { filterCompatibleCompanyRoleRows } from '../../../backend/services/companyMembershipIntegrityService';
 import { buildUnifiedCompetitorIntelligence } from '../../../backend/services/unifiedCompetitorIntelligenceService';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
@@ -347,8 +347,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (body.report_settings as CompanyProfile['report_settings'] | undefined) ?? undefined;
       const incomingWebsite = typeof body.website_url === 'string' ? body.website_url.trim() : body.website_url;
       const existingWebsite = existingProfile?.website_url ?? null;
-      if (!canEditCanonicalWebsite && incomingWebsite !== undefined && String(incomingWebsite || '').trim() !== String(existingWebsite || '').trim()) {
-        body.website_url = existingWebsite;
+      // Soft fallback: a normal user may set the canonical website ONCE when none has
+      // been derived (e.g. their work-email domain hosts no resolvable site), so they
+      // are not stuck on a read-only field. After it exists, only SUPER_ADMIN /
+      // CONTENT_ARCHITECT may change it.
+      const hasExistingCanonical = String(existingWebsite || '').trim().length > 0;
+      const mayProvideCanonical = canEditCanonicalWebsite || !hasExistingCanonical;
+      if (incomingWebsite !== undefined && String(incomingWebsite || '').trim() !== String(existingWebsite || '').trim()) {
+        const trimmedIncoming = String(incomingWebsite || '').trim();
+        if (!mayProvideCanonical) {
+          // Locked — only privileged roles change an existing canonical website.
+          body.website_url = existingWebsite;
+        } else if (!canEditCanonicalWebsite && trimmedIncoming) {
+          // First-time, user-provided canonical website (onboarding soft fallback).
+          // (1) Valid public URL — ANY TLD (.ai/.io/.org/.in/.au/…), not a private/
+          //     local address or a personal-email-provider domain.
+          const websiteErr = validatePublicWebsite(trimmedIncoming);
+          if (websiteErr) return res.status(400).json({ error: websiteErr });
+          // (2) Per-tenant uniqueness — the domain must not already belong to ANOTHER
+          //     company. This reserves omnivyra.com to omnivyra's own account and keeps
+          //     every tenant on its own unique domain. (Hosted/forwarding verification
+          //     stays at setup-company's resolveDomain by design — no probe here.)
+          const candidateDomain = extractDomain(trimmedIncoming);
+          if (candidateDomain) {
+            const { data: domainOwners } = await supabase
+              .from('companies')
+              .select('id')
+              .or(`website_domain.eq.${candidateDomain},admin_email_domain.eq.${candidateDomain}`)
+              .neq('id', resolvedCompanyId)
+              .limit(1);
+            if (domainOwners && domainOwners.length > 0) {
+              return res.status(400).json({
+                error: `${candidateDomain} is already registered to another account. Please use your own company's website domain.`,
+                code: 'DOMAIN_ALREADY_REGISTERED',
+              });
+            }
+          }
+        }
       }
       const payload = {
         ...body,

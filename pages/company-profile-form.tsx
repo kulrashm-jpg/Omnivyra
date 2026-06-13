@@ -1236,7 +1236,12 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   const intelligenceSettings = activeProfile.report_settings?.intelligence ?? {};
   const userGuidance = activeProfile.report_settings?.user_guidance ?? null;
   const industryReview = activeProfile.report_settings?.industry_review ?? null;
-  const canEditWebsiteUrl = ['SUPER_ADMIN', 'CONTENT_ARCHITECT'].includes(String(userRole || '').toUpperCase());
+  const isPrivilegedWebsiteEditor = ['SUPER_ADMIN', 'CONTENT_ARCHITECT'].includes(String(userRole || '').toUpperCase());
+  // Soft fallback: in onboarding, if no canonical website was auto-derived from the
+  // verified work-email domain (e.g. the domain hosts no resolvable website), let the
+  // user provide their own instead of being stuck on a read-only field. The server
+  // (/api/company-profile) validates it and locks it once set — mirrored here.
+  const canEditWebsiteUrl = isPrivilegedWebsiteEditor || (isOnboardingMode && !activeProfile.website_url);
   const guidedCompetitors = userGuidance?.competitors ?? [];
   const pinnedGuidedCompetitors = guidedCompetitors.filter((competitor) =>
     ['pinned', 'user_added', 'restored'].includes(competitor.state)
@@ -1744,7 +1749,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     onBlur={(e) => {
                       if (canEditWebsiteUrl) normalizeUrlField('website_url', e.target.value);
                     }}
-                    placeholder="www.omnivyra.com"
+                    placeholder="https://yourcompany.com"
                     className={`mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm ${
                       canEditWebsiteUrl
                         ? 'bg-white text-slate-900'
@@ -1752,8 +1757,10 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     }`}
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    {canEditWebsiteUrl
+                    {isPrivilegedWebsiteEditor
                       ? 'Super admin and ContentArchi can update the canonical website. Other users can add social URLs but cannot edit this website.'
+                      : canEditWebsiteUrl
+                      ? "Enter your company website (e.g. https://yourcompany.com). We'll verify it and use it as the canonical AI refinement source. It locks once saved."
                       : activeProfile.website_url
                       ? 'Locked from company setup. For work emails, this is derived from the verified email domain and used as the canonical AI refinement source.'
                       : 'No canonical website is available. This should only happen for a super-admin approved exception; ask a super admin to add or approve the website before AI refinement.'}
