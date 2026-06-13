@@ -381,14 +381,33 @@ export function calculateNewsletterQualityScore(
     linking,
   };
 
+  // ── Phase 1 false-positive prevention gates ───────────────────────────────
+  // The shared `evaluatePhase1QualityGates` ALREADY ran inside
+  // `calculateContentQualityScore` above (`base`). The newsletter scorer
+  // recomputes its own total/issues, so it must PROPAGATE — not re-run — the
+  // gate cap and the gate failures here. This keeps a single source of truth:
+  // a placeholder / leaked planner artifact / undelivered framework / broken
+  // title promise caps the newsletter score and blocks newsletter publish,
+  // exactly as on the blog/article path. Category scoring is unchanged.
+  const gateIssues = base.issues.filter((i) => i.category === 'publishing');
+  for (const gateIssue of gateIssues) issues.push(gateIssue);
+
+  const newsletterTotal = clamp(breakdown.structure + breakdown.depth + breakdown.seo + breakdown.geo + breakdown.linking, 0, 90);
+
   return {
-    total: clamp(breakdown.structure + breakdown.depth + breakdown.seo + breakdown.geo + breakdown.linking, 0, 90),
+    total: base.scoreCap != null ? Math.min(newsletterTotal, base.scoreCap) : newsletterTotal,
     breakdown,
     issues,
+    gates: base.gates,
+    scoreCap: base.scoreCap,
     meta: base.meta,
   };
 }
 
+// Newsletter publish blockers inherit the Phase 1 gate failures automatically:
+// they were added to `score.issues` as `severity:'error'` (category 'publishing')
+// by `calculateNewsletterQualityScore`, and this delegates to the shared
+// `getContentPublishBlockers` which returns all error-severity issues.
 export function getNewsletterPublishBlockers(score: ContentQualityScore): ContentValidationIssue[] {
   return getContentPublishBlockers(score);
 }

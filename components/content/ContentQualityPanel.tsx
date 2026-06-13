@@ -240,16 +240,19 @@ export function ContentQualityPanel({
           {errorIssues.map((issue, index) => {
             const key = `error-${issue.category}-${index}`;
             const fixing = improvingIssueKey === key;
+            // Phase 1 gate issues (category 'publishing') are not fixable by the
+            // area-based auto-improver, so the Apply button is hidden for them.
+            const improvable = issue.category === 'publishing' ? null : issue.category;
             return (
               <div key={key} className="flex items-start gap-1.5 text-xs text-red-700">
                 <span className="mt-px shrink-0">x</span>
                 <span className="flex-1">{issue.message}</span>
-                {onAutoImproveIssue && (
+                {onAutoImproveIssue && improvable && (
                   <button
                     type="button"
                     title={`Apply fix: ${issue.message}`}
                     disabled={!!improvingArea || !!improvingIssueKey}
-                    onClick={() => onAutoImproveIssue(issue.category, issue.message, key)}
+                    onClick={() => onAutoImproveIssue(improvable, issue.message, key)}
                     className="flex h-5 items-center gap-0.5 rounded px-1 text-[10px] font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-40"
                   >
                     {fixing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
@@ -262,16 +265,17 @@ export function ContentQualityPanel({
           {warnIssues.slice(0, 3).map((issue, index) => {
             const key = `warn-${issue.category}-${index}`;
             const fixing = improvingIssueKey === key;
+            const improvable = issue.category === 'publishing' ? null : issue.category;
             return (
               <div key={key} className="flex items-start gap-1.5 text-xs text-amber-700">
                 <span className="mt-px shrink-0">!</span>
                 <span className="flex-1">{issue.message}</span>
-                {onAutoImproveIssue && (
+                {onAutoImproveIssue && improvable && (
                   <button
                     type="button"
                     title={`Apply fix: ${issue.message}`}
                     disabled={!!improvingArea || !!improvingIssueKey}
-                    onClick={() => onAutoImproveIssue(issue.category, issue.message, key)}
+                    onClick={() => onAutoImproveIssue(improvable, issue.message, key)}
                     className="flex h-5 items-center gap-0.5 rounded px-1 text-[10px] font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-40"
                   >
                     {fixing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
@@ -366,16 +370,17 @@ export function ContentQualityPanel({
             {publishBlockers.slice(0, 3).map((issue, index) => {
               const key = `blocker-${issue.category}-${index}`;
               const fixing = improvingIssueKey === key;
+              const improvable = issue.category === 'publishing' ? null : issue.category;
               return (
                 <div key={key} className="flex items-start gap-1.5 text-xs text-red-700">
                   <span className="mt-px shrink-0">x</span>
                   <span className="flex-1">{issue.message}</span>
-                  {onAutoImproveIssue && (
+                  {onAutoImproveIssue && improvable && (
                     <button
                       type="button"
                       title={`Apply fix: ${issue.message}`}
                       disabled={!!improvingArea || !!improvingIssueKey}
-                      onClick={() => onAutoImproveIssue(issue.category, issue.message, key)}
+                      onClick={() => onAutoImproveIssue(improvable, issue.message, key)}
                       className="flex h-5 items-center gap-0.5 rounded px-1 text-[10px] font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-40"
                     >
                       {fixing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}

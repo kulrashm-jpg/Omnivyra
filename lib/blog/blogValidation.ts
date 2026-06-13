@@ -9,6 +9,7 @@ import type { ContentBlock } from './blockTypes';
 import { flattenBlocks } from './blockUtils';
 import type { BlogFormatType, FormatValidationOverrides } from './blogStructureTemplates';
 import { getStructureRules } from './blogStructureTemplates';
+import { evaluatePhase1QualityGates, type Phase1GateTrigger } from '../../backend/services/longForm/phase1QualityGates';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -16,7 +17,9 @@ export type Severity = 'error' | 'warning';
 
 export interface ValidationIssue {
   severity: Severity;
-  category: 'structure' | 'seo' | 'geo' | 'depth' | 'linking';
+  // 'publishing' carries Phase 1 false-positive gate failures (leaked planner
+  // artifacts, placeholders, undelivered frameworks, broken title promises).
+  category: 'structure' | 'seo' | 'geo' | 'depth' | 'linking' | 'publishing';
   message: string;
 }
 
@@ -45,6 +48,16 @@ export interface QualityScore {
     shortParaCount:   number; // paragraphs < 50 words
     targetWordCount:  number; // user-selected target (800/1200/1600/2000)
   };
+  /**
+   * Phase 1 false-positive prevention gates that fired (publishing artifacts,
+   * placeholders, undelivered frameworks, unfulfilled title promises). Optional
+   * + empty for a clean article and for scorers that do not run the gates.
+   * Each fired gate is ALSO an `error` issue (category 'publishing') so the
+   * editor and publish validation surface it without extra wiring.
+   */
+  gates?: Phase1GateTrigger[];
+  /** The cap applied to `total` by the gates (min of fired caps), or null. */
+  scoreCap?: number | null;
 }
 
 export type FormMeta = {
@@ -69,6 +82,34 @@ function stripHtml(html: string): string {
 
 function wordCount(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Reconstruct a representative HTML string from content blocks so the shared
+ * Phase 1 gate (which operates on title + HTML) can run against the SAME content
+ * the user is scoring. Lists / key-insights / references become <li> so the
+ * framework-delivery detector sees enumerated structure; all text-bearing blocks
+ * are included so placeholder / planner-artifact scans cover the whole draft.
+ */
+function buildGateContentHtml(flat: ContentBlock[]): string {
+  const parts: string[] = [];
+  for (const b of flat) {
+    switch (b.type) {
+      case 'heading':      parts.push(`<h${b.level}>${b.text}</h${b.level}>`); break;
+      case 'paragraph':    parts.push(b.html); break;
+      case 'callout':      parts.push(`<p>${b.body}</p>`); break;
+      case 'quote':        parts.push(`<blockquote>${b.text}</blockquote>`); break;
+      case 'summary':      parts.push(`<p>${b.body}</p>`); break;
+      // key_insights / references are structural boilerplate blocks — they must
+      // NOT count as framework delivery or promise fulfillment. Mark them so the
+      // shared gate excludes them (same outcome as a "References"/"Key Insights"
+      // heading in raw generated HTML). `list` stays unmarked = real content.
+      case 'key_insights': parts.push(`<ul data-omni-boilerplate="key_insights">${b.items.map((i) => `<li>${i}</li>`).join('')}</ul>`); break;
+      case 'list':         parts.push(`<ul>${b.items.map((i) => `<li>${i.text}</li>`).join('')}</ul>`); break;
+      case 'references':   parts.push(`<ul data-omni-boilerplate="references">${b.items.map((r) => `<li>${r.title} ${r.url}</li>`).join('')}</ul>`); break;
+    }
+  }
+  return parts.join('\n');
 }
 
 // ── Core scoring ──────────────────────────────────────────────────────────────
@@ -302,12 +343,28 @@ export function calculateQualityScore(
     issues.push({ severity: 'warning', category: 'geo', message: `Add ${3 - refsCount} more reference${3 - refsCount > 1 ? 's' : ''} for GEO authority (found ${refsCount})` });
 
   const maxScore = (isWhitepaper || isGuide || isCaseStudy) ? 85 : (isArticle || isNewsletter) ? 90 : 100;
-  const total = Math.min(maxScore, guardedStructure + guardedDepth + guardedSeo + guardedGeo + guardedLinking);
+  const baseTotal = Math.min(maxScore, guardedStructure + guardedDepth + guardedSeo + guardedGeo + guardedLinking);
+
+  // ── Phase 1 false-positive prevention gates ───────────────────────────────
+  // Same shared implementation used by the generation validator (System #1).
+  // Category scoring above is UNCHANGED; gates only (a) cap the final `total`
+  // after it is computed and (b) add explanatory `error` issues so the editor
+  // and publish validation surface the defect. A clean draft is unaffected.
+  const gateReport = evaluatePhase1QualityGates({
+    title: form.title,
+    contentHtml: buildGateContentHtml(flat),
+  });
+  for (const gate of gateReport.triggered) {
+    issues.push({ severity: 'error', category: 'publishing', message: gate.issue });
+  }
+  const total = gateReport.scoreCap !== null ? Math.min(baseTotal, gateReport.scoreCap) : baseTotal;
 
   return {
     total,
     breakdown: { structure: guardedStructure, depth: guardedDepth, seo: guardedSeo, geo: guardedGeo, linking: guardedLinking },
     issues,
+    gates: gateReport.triggered,
+    scoreCap: gateReport.scoreCap,
     meta: {
       h2Count,
       h3Count,
@@ -324,7 +381,15 @@ export function calculateQualityScore(
   };
 }
 
-/** Hard errors that prevent publishing. */
+/**
+ * Hard errors that prevent publishing. This includes Phase 1 gate failures
+ * (category 'publishing') because `calculateQualityScore` records each fired
+ * gate as an `error` issue — so a placeholder, leaked planner artifact,
+ * undelivered framework, or broken title promise blocks publication through the
+ * exact same path as structural errors. No separate gate call is needed here:
+ * the single source of truth is `evaluatePhase1QualityGates`, run once during
+ * scoring.
+ */
 export function getPublishBlockers(score: QualityScore): ValidationIssue[] {
   return score.issues.filter((i) => i.severity === 'error');
 }

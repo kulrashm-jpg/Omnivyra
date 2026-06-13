@@ -10,6 +10,12 @@ import {
   type OrganizationPerspective,
 } from './organizationPerspectiveEngine';
 import { validateRebrandResistance, type RebrandResistanceValidationResult } from './rebrandResistanceValidator';
+import {
+  getQualityProfile,
+  duplicationFailsProfile,
+  type SeverityMode,
+} from './qualityProfiles';
+import type { Phase1GateTrigger } from './phase1QualityGates';
 
 export interface FrameworkPresenceResult {
   passed: boolean;
@@ -28,6 +34,12 @@ export interface ThoughtLeadershipQualityReport {
   duplicationScore: number;
   finalOutcomeScore: number;
   passed: boolean;
+  /**
+   * How the CALLER should treat a failure: 'hard' → throw / block (default,
+   * article / blog / guide / whitepaper); 'soft' → warn and ship, routing
+   * residual issues through the content type's own quality layer (newsletter).
+   */
+  severityMode: SeverityMode;
   failures: string[];
   organizationPerspective: OrganizationPerspective;
   rebrandResistance: RebrandResistanceValidationResult;
@@ -36,6 +48,8 @@ export interface ThoughtLeadershipQualityReport {
   editorialBody: EditorialBodyStructureValidationResult;
   contentDuplication: ContentDuplicationValidationResult;
   finalOutcome: FinalBlogOutcomeValidationResult;
+  /** Phase 1 false-positive prevention gates that fired (empty for clean articles). */
+  phase1Gates: Phase1GateTrigger[];
 }
 
 export class ThoughtLeadershipQualityGateError extends Error {
@@ -132,20 +146,38 @@ export function evaluateThoughtLeadershipQuality(input: {
   output: BlogGenerationOutput;
   companyContext?: CompanyContext;
   organizationPerspective?: OrganizationPerspective;
+  /**
+   * Content type used to resolve the quality profile. Omitted / unknown →
+   * default profile, which reproduces the original gate behavior verbatim
+   * (article / blog / guide are byte-identical to before profiles existed).
+   */
+  contentType?: string;
 }): ThoughtLeadershipQualityReport {
+  const profile = getQualityProfile(input.contentType);
   const perspective = input.organizationPerspective ?? buildOrganizationPerspective({
     topic: input.output.title,
     companyContext: input.companyContext,
   });
   const text = stripHtml(input.output.content_html).toLowerCase();
-  const frameworkPresence = validateFrameworkPresence(input.output.content_html);
+  let frameworkPresence = validateFrameworkPresence(input.output.content_html);
   const genericContent = detectGenericContent(input.output.content_html);
   const editorialBody = validateEditorialBodyStructure(input.output.content_html);
   const contentDuplication = validateContentDuplication(input.output.content_html);
   const finalOutcome = validateFinalBlogOutcome({
     output: input.output,
     organizationPerspective: perspective,
+    profile,
   });
+  // Framework Delivery Gate (Phase 1): a framework claimed but not delivered
+  // caps the framework subscore and fails the framework subcheck. The overall
+  // score cap is already applied inside validateFinalBlogOutcome.
+  if (finalOutcome.frameworkScoreCap !== null) {
+    frameworkPresence = {
+      ...frameworkPresence,
+      passed: false,
+      score: Math.min(frameworkPresence.score, finalOutcome.frameworkScoreCap),
+    };
+  }
   const executiveAudience = validateExecutiveAudience({
     contentHtml: input.output.content_html,
     primaryAudience: perspective.primaryAudience,
@@ -160,24 +192,49 @@ export function evaluateThoughtLeadershipQuality(input: {
   });
   const companyPovScore = scorePerspectiveCoverage(text, perspective);
   const strategicValueScore = scoreStrategicValue(text);
+  const enabledSubchecks = profile.enabledSubchecks;
+  const thresholds = profile.thresholds;
+  const finalOutcomeAggregateThreshold = profile.thresholds.finalOutcomeAggregate;
   const failures: string[] = [];
-  if (companyPovScore < 80) failures.push(`POV ${companyPovScore} < 80`);
-  if (strategicValueScore < 80) failures.push(`Strategic ${strategicValueScore} < 80`);
-  if (!executiveAudience.passed) failures.push(`Executive ${executiveAudience.score} < 75`);
-  if (!rebrandResistance.passed) failures.push(`Rebrand ${rebrandResistance.score} < 70`);
-  if (!frameworkPresence.passed) failures.push('Framework presence FAIL');
-  if (!genericContent.passed) failures.push(`Genericity ${genericContent.score} > 30`);
-  if (!editorialBody.passed) failures.push(`Editorial body ${editorialBody.score} < 75`);
-  if (!contentDuplication.passed) failures.push(`Duplication ${contentDuplication.score} > 25`);
-  if (!finalOutcome.passed) {
+  // Each subcheck is gated by the profile. The default profile enables ALL of
+  // them at the original thresholds, so article / blog / guide are unchanged.
+  if (enabledSubchecks.has('companyPov') && companyPovScore < thresholds.companyPov) failures.push(`POV ${companyPovScore} < ${thresholds.companyPov}`);
+  if (enabledSubchecks.has('strategicValue') && strategicValueScore < thresholds.strategicValue) failures.push(`Strategic ${strategicValueScore} < ${thresholds.strategicValue}`);
+  if (enabledSubchecks.has('executiveAudience') && !executiveAudience.passed) failures.push(`Executive ${executiveAudience.score} < 75`);
+  if (enabledSubchecks.has('rebrandResistance') && !rebrandResistance.passed) failures.push(`Rebrand ${rebrandResistance.score} < 70`);
+  if (enabledSubchecks.has('frameworkPresence') && !frameworkPresence.passed) failures.push('Framework presence FAIL');
+  if (enabledSubchecks.has('genericContent') && !genericContent.passed) failures.push(`Genericity ${genericContent.score} > 30`);
+  if (enabledSubchecks.has('editorialBody') && !editorialBody.passed) failures.push(`Editorial body ${editorialBody.score} < 75`);
+  if (enabledSubchecks.has('contentDuplication') && duplicationFailsProfile(contentDuplication, profile)) failures.push(`Duplication ${contentDuplication.score} > ${thresholds.duplicationMaxScore}`);
+  if (enabledSubchecks.has('finalOutcome') && !finalOutcome.passed) {
     failures.push(
-      finalOutcome.score < 82
-        ? `Final outcome ${finalOutcome.score} < 82: ${finalOutcome.issues.join(', ')}`
+      finalOutcome.score < finalOutcomeAggregateThreshold
+        ? `Final outcome ${finalOutcome.score} < ${finalOutcomeAggregateThreshold}: ${finalOutcome.issues.join(', ')}`
         : `Final outcome subchecks failed at aggregate ${finalOutcome.score}: ${finalOutcome.issues.join(', ')}`,
     );
   }
 
+  // Phase 1 gate telemetry — explains exactly which gate fired, the triggering
+  // text, and the resulting score cap. Emitted once per evaluation when any
+  // gate is active so editors/observability can see WHY a score was capped.
+  if (finalOutcome.gates.length > 0) {
+    console.warn('[phase1-quality-gate]', JSON.stringify({
+      event: 'PHASE1_GATE_TRIGGERED',
+      title: input.output.title,
+      score_cap: Math.min(...finalOutcome.gates.map((g) => g.scoreCap)),
+      capped_score: finalOutcome.score,
+      gates: finalOutcome.gates.map((g) => ({
+        gate: g.gate,
+        detector: g.detector,
+        severity: g.severity,
+        score_cap: g.scoreCap,
+        triggering_text: g.triggeringText,
+      })),
+    }));
+  }
+
   return {
+    severityMode: profile.severityMode,
     companyPovScore,
     strategicValueScore,
     executiveRelevanceScore: executiveAudience.score,
@@ -196,6 +253,7 @@ export function evaluateThoughtLeadershipQuality(input: {
     editorialBody,
     contentDuplication,
     finalOutcome,
+    phase1Gates: finalOutcome.gates,
   };
 }
 
