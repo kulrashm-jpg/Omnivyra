@@ -20,10 +20,19 @@ const BLOCKED_DOMAINS = new Set([
   'mail.ru', 'tutanota.com', 'protonmail.ch', 'mailbox.org',
 ]);
 
+/**
+ * True if the domain is a known personal/consumer email provider. Shared with
+ * the domain-eligibility engine (classified as PUBLIC_EMAIL there) so the personal
+ * blocklist has a single definition.
+ */
+export function isPersonalEmailDomain(domain: string): boolean {
+  return BLOCKED_DOMAINS.has(domain.trim().toLowerCase());
+}
+
 export function validateWorkEmail(email: string): void {
   const domain = email.trim().toLowerCase().split('@')[1] ?? '';
   if (!domain) throw new Error('Invalid email address.');
-  if (BLOCKED_DOMAINS.has(domain)) {
+  if (isPersonalEmailDomain(domain)) {
     throw new Error(`${domain} is a personal email domain. Please use your work email address.`);
   }
 }

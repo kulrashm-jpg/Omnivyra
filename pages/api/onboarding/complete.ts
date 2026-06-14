@@ -26,6 +26,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '../../../backend/db/supabaseClient';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
+import { reviewableResults } from '../../../lib/auth/domainEligibilityModel';
 import {
   grantInitialFreeCredit,
   INITIAL_FREE_CREDIT_CATEGORY,
@@ -133,12 +134,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ── 2. Domain eligibility ───────────────────────────────────────────────
     if (authEmail) {
       const eligibility = await checkDomainEligibility(authEmail, userId);
-      if (eligibility.status === 'blocked') {
+      if (!eligibility.eligible && !reviewableResults.has(eligibility.result)) {
         return res.status(403).json({ error: 'Your email domain is not eligible for free credits.' });
       }
 
       // Public email (Gmail etc.) — only allowed via invite or approved access request
-      if (eligibility.reason === 'public_provider') {
+      if (eligibility.result === 'PUBLIC_EMAIL') {
         const { data: invite } = await supabase
           .from('user_company_roles')
           .select('id, company_id, role')

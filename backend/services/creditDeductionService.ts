@@ -17,6 +17,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import { checkDomainEligibility } from './domainEligibilityService';
+import { reviewableResults } from '../../lib/auth/domainEligibilityModel';
 import { getTotalAvailable } from './creditPriorityService';
 import { getFeatureDisplayGroup, resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
 
@@ -300,8 +301,8 @@ export async function hasFreeCreditAccess(userId: string): Promise<{
   const result = await checkDomainEligibility((userRow as any).email, userId);
 
   return {
-    allowed: result.status === 'eligible',
-    status: result.status,
-    reason: result.reason,
+    allowed: result.eligible,
+    status: result.eligible ? 'eligible' : (reviewableResults.has(result.result) ? 'pending_review' : 'blocked'),
+    reason: result.result,
   };
 }

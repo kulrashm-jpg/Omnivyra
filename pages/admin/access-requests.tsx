@@ -36,7 +36,16 @@ const STATUS_COLORS: Record<string, string> = {
   deleted:  'bg-gray-100 text-gray-500',
 };
 
+// Canonical DomainEligibilityResult codes (current) + legacy reason strings
+// (rows written before the eligibility consolidation) → display labels.
 const DOMAIN_REASON_LABELS: Record<string, string> = {
+  PUBLIC_EMAIL:         'Public email',
+  FORWARDING_DOMAIN:    'Forwarding domain',
+  NO_EMAIL_CAPABILITY:  'No MX record',
+  DISPOSABLE_EMAIL:     'Disposable',
+  DOMAIN_NOT_CANONICAL: 'Non-canonical domain',
+  BLOCKED:              'Blocked',
+  // legacy values (pre-consolidation rows)
   public_provider:   'Public email',
   forwarding_domain: 'Forwarding domain',
   no_mx:             'No MX record',

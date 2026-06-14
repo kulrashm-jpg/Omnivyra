@@ -13,6 +13,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import crypto from 'crypto';
 import { checkDomainEligibility } from '@/backend/services/domainEligibilityService';
+import { reviewableResults } from '@/lib/auth/domainEligibilityModel';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 const RATE_LIMIT_MAX = 3;
@@ -62,10 +63,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!user.email) return res.status(400).json({ error: 'No email on account' });
 
   const eligibility = await checkDomainEligibility(user.email, user.id);
-  if (eligibility.status === 'eligible') {
+  if (eligibility.eligible) {
     return res.status(400).json({ error: 'Your domain is already eligible. No access request needed.' });
   }
-  if (eligibility.status === 'blocked' && eligibility.reason !== 'public_provider') {
+  // Hard-ineligible domains cannot submit an access request; review-path results
+  // (public/forwarding/non-canonical) may.
+  if (!reviewableResults.has(eligibility.result)) {
     return res.status(403).json({ error: 'This domain is not eligible for free credits.' });
   }
 
@@ -120,7 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       job_title: jobTitle ?? null,
       use_case: useCase,
       website_url: websiteUrl ?? null,
-      domain_status: eligibility.reason,
+      domain_status: eligibility.result,
       status: 'pending',
     })
     .select('id')

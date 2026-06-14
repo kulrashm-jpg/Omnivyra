@@ -115,7 +115,7 @@ export default function CreateAccountPage() {
           router.replace(`/login?email=${encodeURIComponent(trimmed)}&reason=account_exists`);
           return;
         }
-        if (json.code === 'COMPANY_CLAIMED') {
+        if (json.code === 'CLAIMED_DOMAIN') {
           setClaimed({
             alreadyReferred: !!json.alreadyReferred,
             adminEmailMasked: json.adminEmailMasked ?? null,

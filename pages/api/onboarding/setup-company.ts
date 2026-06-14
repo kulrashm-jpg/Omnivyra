@@ -33,6 +33,7 @@ import {
   selectCompatibleCompanyRole,
 } from '../../../backend/services/companyMembershipIntegrityService';
 import { resolveDomain } from '../../../backend/services/domainCanonicalService';
+import { httpStatusFor, ELIGIBILITY_MESSAGES, reviewableResults } from '../../../lib/auth/domainEligibilityModel';
 import { checkRateLimit, DOMAIN_RESOLUTION_LIMIT } from '../../../lib/auth/rateLimit';
 import { logDomainEvent } from '../../../backend/services/domainEventLogger';
 import { notifyAdminAndProspectOfClaimedDomain } from '../../../backend/services/claimedDomainNotifyService';
@@ -184,13 +185,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   // ── Domain eligibility gate ───────────────────────────────────────────────
   if (user.email) {
     const eligibility = await checkDomainEligibility(user.email, user.id);
-    if (eligibility.status === 'blocked') {
+    if (!eligibility.eligible && !reviewableResults.has(eligibility.result)) {
       return res.status(403).json({ error: 'Your email domain is not eligible for free credits.' });
     }
 
     // Public email domain — allowed only via invite or approved access request.
     // Cannot create a company or receive free credits.
-    if (eligibility.reason === 'public_provider') {
+    if (eligibility.result === 'PUBLIC_EMAIL') {
       // ── Path A: team invite ──────────────────────────────────────────────
       const { data: invite } = await supabase
         .from('user_company_roles')
@@ -495,9 +496,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           user_id:      user.id,
           metadata:     { reason: resolution.resolution_blocked ? 'ssrf_or_rebind' : 'fail_closed' },
         });
-        return res.status(503).json({
-          code:  'DOMAIN_RESOLUTION_FAILED',
-          error: `We could not reach a live website at ${adminEmailDomain}. An account can only be created for a domain that hosts its own website. Please try again, or contact ${'support@omnivyra.com'} if your company website is live.`,
+        return res.status(httpStatusFor('DOMAIN_NOT_CANONICAL')).json({
+          code:  'DOMAIN_NOT_CANONICAL',
+          error: ELIGIBILITY_MESSAGES.DOMAIN_NOT_CANONICAL,
         });
       }
 
@@ -509,9 +510,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           user_id:      user.id,
           metadata:     { input_domain: resolution.input_domain, is_forwarding: resolution.is_forwarding },
         });
-        return res.status(400).json({
+        return res.status(httpStatusFor('DOMAIN_NOT_CANONICAL')).json({
           code:  'DOMAIN_NOT_CANONICAL',
-          error: `${adminEmailDomain} forwards to ${resolution.final_domain} and does not host its own website. Please register using your primary corporate domain.`,
+          error: ELIGIBILITY_MESSAGES.DOMAIN_NOT_CANONICAL,
         });
       }
 
@@ -523,9 +524,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           user_id:      user.id,
           metadata:     { input_domain: resolution.input_domain },
         });
-        return res.status(400).json({
-          code:  'DOMAIN_FORWARDING_NOT_ALLOWED',
-          error: 'Forwarding-only domains cannot be used to create an account. Please use the primary corporate domain that hosts your company website.',
+        return res.status(httpStatusFor('FORWARDING_DOMAIN')).json({
+          code:  'FORWARDING_DOMAIN',
+          error: ELIGIBILITY_MESSAGES.FORWARDING_DOMAIN,
         });
       }
     }

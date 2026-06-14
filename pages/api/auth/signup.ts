@@ -24,8 +24,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { validateWorkEmail } from '../../../lib/auth/serverValidation';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
+import { httpStatusFor, ELIGIBILITY_MESSAGES } from '../../../lib/auth/domainEligibilityModel';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
@@ -35,9 +35,9 @@ type SuccessResponse = { proceed: true };
 type ErrorResponse = {
   error: string;
   code?: string;
-  /** COMPANY_CLAIMED only: the prospect was already emailed on a prior attempt. */
+  /** CLAIMED_DOMAIN only: the prospect was already emailed on a prior attempt. */
   alreadyReferred?: boolean;
-  /** COMPANY_CLAIMED only: masked admin email shown on the contact-admin screen. */
+  /** CLAIMED_DOMAIN only: masked admin email shown on the contact-admin screen. */
   adminEmailMasked?: string | null;
 };
 
@@ -77,26 +77,22 @@ export default async function handler(
   const domain = normalizedEmail.split('@')[1] ?? '';
   if (!domain) return res.status(400).json({ error: 'Invalid email address' });
 
-  // ── 1. Work email (block personal providers) ─────────────────────────────
-  try {
-    validateWorkEmail(normalizedEmail);
-  } catch (err: any) {
-    return res.status(400).json({ error: err.message, code: 'PERSONAL_EMAIL' });
-  }
-
-  // ── 1a. Domain/MX check ───────────────────────────────────────────────────
+  // ── 1. Domain eligibility (single source of truth) ───────────────────────
+  // Personal/public, disposable, no-email-capability, forwarding, and blocked
+  // domains are all classified by the one engine and messaged from
+  // ELIGIBILITY_MESSAGES. CLAIMED_DOMAIN is decided later (section 4); the
+  // canonical/forwarding website probe stays staged in setup-company. On a
+  // transient lookup error we log and proceed rather than block a real signup.
   try {
     const eligibility = await checkDomainEligibility(normalizedEmail);
-    if (eligibility.status === 'blocked') {
-      return res.status(400).json({
-        error: eligibility.reason === 'no_mx'
-          ? 'That domain cannot receive email. Please use a valid work email.'
-          : 'This email domain is not eligible. Please use a valid work email.',
-        code: 'INVALID_DOMAIN',
+    if (!eligibility.eligible) {
+      return res.status(httpStatusFor(eligibility.result)).json({
+        error: ELIGIBILITY_MESSAGES[eligibility.result],
+        code: eligibility.result,
       });
     }
   } catch (err: any) {
-    logger.warn('auth_signup_mx_check_failed', { email: normalizedEmail, message: err?.message });
+    logger.warn('auth_signup_eligibility_check_failed', { email: normalizedEmail, message: err?.message });
   }
 
   // ── 2. Same email already a completed user? ──────────────────────────────
@@ -233,10 +229,9 @@ export default async function handler(
         alreadyReferred,
       });
 
-      return res.status(409).json({
-        error:
-          'Your company is already on Omnivyra. Please ask your company admin to invite you.',
-        code:             'COMPANY_CLAIMED',
+      return res.status(httpStatusFor('CLAIMED_DOMAIN')).json({
+        error:            ELIGIBILITY_MESSAGES.CLAIMED_DOMAIN,
+        code:             'CLAIMED_DOMAIN',
         alreadyReferred,
         adminEmailMasked: maskEmail(adminEmail),
       });

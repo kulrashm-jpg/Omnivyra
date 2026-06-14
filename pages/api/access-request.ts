@@ -62,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       website_url:   website_url?.trim() ?? null,
       job_title:     job_title?.trim() ?? null,
       domain,
-      domain_status: 'public_provider',
+      domain_status: 'PUBLIC_EMAIL',
       status:        'pending',
       created_at:    new Date().toISOString(),
     })

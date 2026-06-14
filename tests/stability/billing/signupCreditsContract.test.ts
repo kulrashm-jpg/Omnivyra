@@ -28,17 +28,24 @@ import { expectContainsAll, expectMatchesAll, readRepoFile } from '../contracts/
  *      that case.
  */
 describe('stability/billing signup -> credits contract', () => {
-  test('signup.ts keeps work-email + domain gates, signup_intents upsert, and resume/exists codes', () => {
+  test('signup.ts uses the unified eligibility gate, signup_intents upsert, and resume/exists codes', () => {
     const signup = readRepoFile('pages/api/auth/signup.ts');
 
+    // Work-email + domain gates are now the single eligibility engine + model.
     expectContainsAll(signup, [
-      'validateWorkEmail',
       'checkDomainEligibility',
+      'eligibility.eligible',
+      'ELIGIBILITY_MESSAGES',
       "from('signup_intents')",
       ".from('signup_intents').insert({",
       "code:  'ACCOUNT_EXISTS'",
       "code:  'RESUME_SIGNUP'",
     ]);
+
+    // The work-email (personal-domain) gate moved into the engine, classified as
+    // PUBLIC_EMAIL — the single source of truth for eligibility decisions.
+    const engine = readRepoFile('backend/services/domainEligibilityService.ts');
+    expectContainsAll(engine, ['isPersonalEmailDomain', "'PUBLIC_EMAIL'"]);
   });
 
   test('setup-company.ts keeps the domain-first "already in system" lookup returning companyExists', () => {

@@ -2,15 +2,24 @@ import { ownedDbTable } from '../db/writeOwner';
 /**
  * domainEligibilityService.ts
  *
- * Validates whether an email domain qualifies for free credit access.
- * Checks (in order): blocklist → public provider → disposable → MX → forwarding → eligible
- * Results are cached in domain_eligibility_cache (TTL 24h).
+ * Email-stage domain eligibility detection. Classifies an email domain into a
+ * canonical DomainEligibilityResult (defined in lib/auth/domainEligibilityModel.ts —
+ * the single source of result codes + messages).
+ *
+ * Detection order (UNCHANGED): override → whitelist → blocklist → pattern →
+ * public provider → disposable → MX → forwarding → eligible.
+ * Results cached in domain_eligibility_cache (TTL 24h).
  */
 
 import dns from 'dns/promises';
-import { supabase } from '../db/supabaseClient';
+import {
+  type DomainEligibilityResult,
+  eligibleResults,
+  reviewableResults,
+} from '../../lib/auth/domainEligibilityModel';
+import { isPersonalEmailDomain } from '../../lib/auth/serverValidation';
 
-// Known forwarding MX hostname fragments
+// Known forwarding MX hostname fragments.
 const FORWARDING_MX_PATTERNS = [
   'improvmx',
   'forwardemail',
@@ -25,21 +34,9 @@ const FORWARDING_MX_PATTERNS = [
   'anonaddy',
 ];
 
-export type EligibilityStatus = 'eligible' | 'blocked' | 'pending_review';
-export type EligibilityReason =
-  | 'valid_company'
-  | 'whitelisted'
-  | 'user_override'
-  | 'blocked_domain'
-  | 'blocked_pattern'
-  | 'public_provider'
-  | 'disposable'
-  | 'no_mx'
-  | 'forwarding_domain';
-
 export interface EligibilityResult {
-  status: EligibilityStatus;
-  reason: EligibilityReason;
+  result: DomainEligibilityResult;
+  eligible: boolean;
   domain: string;
   has_mx: boolean;
   mx_hosts: string[];
@@ -67,92 +64,110 @@ async function checkMxRecords(domain: string): Promise<{ has_mx: boolean; mx_hos
   }
 }
 
+// ─── Cache compatibility ──────────────────────────────────────────────────────
+// The cache's `reason` column now stores the canonical DomainEligibilityResult and
+// `status` is derived from it. Rows written before this refactor stored legacy
+// reason strings; normalizeStoredResult maps those on read (they expire within 24h).
+const ALL_RESULTS = new Set<DomainEligibilityResult>([
+  'DOMAIN_ELIGIBLE', 'PUBLIC_EMAIL', 'DISPOSABLE_EMAIL', 'NO_EMAIL_CAPABILITY',
+  'FORWARDING_DOMAIN', 'DOMAIN_NOT_CANONICAL', 'CLAIMED_DOMAIN', 'BLOCKED',
+]);
+const LEGACY_REASON_TO_RESULT: Record<string, DomainEligibilityResult> = {
+  valid_company: 'DOMAIN_ELIGIBLE',
+  whitelisted: 'DOMAIN_ELIGIBLE',
+  user_override: 'DOMAIN_ELIGIBLE',
+  blocked_domain: 'BLOCKED',
+  blocked_pattern: 'BLOCKED',
+  public_provider: 'PUBLIC_EMAIL',
+  disposable: 'DISPOSABLE_EMAIL',
+  no_mx: 'NO_EMAIL_CAPABILITY',
+  forwarding_domain: 'FORWARDING_DOMAIN',
+};
+function normalizeStoredResult(stored: string | null | undefined): DomainEligibilityResult {
+  if (stored && ALL_RESULTS.has(stored as DomainEligibilityResult)) return stored as DomainEligibilityResult;
+  if (stored && LEGACY_REASON_TO_RESULT[stored]) return LEGACY_REASON_TO_RESULT[stored];
+  return 'BLOCKED';
+}
+function statusForCache(result: DomainEligibilityResult): 'eligible' | 'blocked' | 'pending_review' {
+  if (eligibleResults.has(result)) return 'eligible';
+  if (reviewableResults.has(result)) return 'pending_review';
+  return 'blocked';
+}
+function asResult(
+  result: DomainEligibilityResult,
+  domain: string,
+  extra?: { has_mx?: boolean; mx_hosts?: string[]; is_forwarding?: boolean; cached?: boolean },
+): EligibilityResult {
+  return {
+    result,
+    eligible: eligibleResults.has(result),
+    domain,
+    has_mx: extra?.has_mx ?? false,
+    mx_hosts: extra?.mx_hosts ?? [],
+    is_forwarding: extra?.is_forwarding ?? false,
+    cached: extra?.cached ?? false,
+  };
+}
+
 async function getCachedResult(domain: string): Promise<EligibilityResult | null> {
   const { data } = await ownedDbTable('domain_eligibility_cache')
     .select('*')
     .eq('domain', domain)
     .gt('expires_at', new Date().toISOString())
     .maybeSingle();
-
   if (!data) return null;
-
-  return {
-    status: data.status as EligibilityStatus,
-    reason: data.reason as EligibilityReason,
-    domain: data.domain,
+  return asResult(normalizeStoredResult(data.reason), data.domain, {
     has_mx: data.has_mx,
     mx_hosts: data.mx_hosts ?? [],
     is_forwarding: data.is_forwarding,
     cached: true,
-  };
+  });
 }
 
-async function setCachedResult(result: Omit<EligibilityResult, 'cached'>): Promise<void> {
+async function setCachedResult(r: EligibilityResult): Promise<void> {
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   await ownedDbTable('domain_eligibility_cache').upsert({
-    domain: result.domain,
-    status: result.status,
-    reason: result.reason,
-    has_mx: result.has_mx,
-    mx_hosts: result.mx_hosts,
-    is_forwarding: result.is_forwarding,
+    domain: r.domain,
+    status: statusForCache(r.result),
+    reason: r.result,
+    has_mx: r.has_mx,
+    mx_hosts: r.mx_hosts,
+    is_forwarding: r.is_forwarding,
     expires_at: expiresAt,
     checked_at: new Date().toISOString(),
   }, { onConflict: 'domain' });
 }
 
 /**
- * Core eligibility check. Order of operations:
- * 1. User-level override (always eligible if set)
- * 2. Domain whitelist
- * 3. Blocked domains (exact)
- * 4. Blocked domain patterns (LIKE)
- * 5. Public email providers
- * 6. Disposable domains
- * 7. MX record check (no MX → blocked)
- * 8. Forwarding detection (forwarding → pending_review)
- * 9. Passes all → eligible
+ * Core email-stage eligibility check. Detection order is unchanged; each branch
+ * emits a canonical DomainEligibilityResult.
  */
 export async function checkDomainEligibility(
   email: string,
   userId?: string,
 ): Promise<EligibilityResult> {
   const domain = extractDomain(email);
-  if (!domain) {
-    return { status: 'blocked', reason: 'blocked_domain', domain: '', has_mx: false, mx_hosts: [], is_forwarding: false, cached: false };
-  }
+  if (!domain) return asResult('BLOCKED', '');
 
-  // 1. User override
+  // 1. User override (not cached)
   if (userId) {
     const { data: override } = await ownedDbTable('user_override')
       .select('is_eligible')
       .eq('user_id', userId)
       .maybeSingle();
-
     if (override) {
-      return {
-        status: override.is_eligible ? 'eligible' : 'blocked',
-        reason: override.is_eligible ? 'user_override' : 'blocked_domain',
-        domain,
-        has_mx: true,
-        mx_hosts: [],
-        is_forwarding: false,
-        cached: false,
-      };
+      return asResult(override.is_eligible ? 'DOMAIN_ELIGIBLE' : 'BLOCKED', domain, { has_mx: true });
     }
   }
 
-  // 2. Domain whitelist
+  // 2. Domain whitelist (not cached)
   const { data: whitelisted } = await ownedDbTable('domain_whitelist')
     .select('domain')
     .eq('domain', domain)
     .maybeSingle();
+  if (whitelisted) return asResult('DOMAIN_ELIGIBLE', domain, { has_mx: true });
 
-  if (whitelisted) {
-    return { status: 'eligible', reason: 'whitelisted', domain, has_mx: true, mx_hosts: [], is_forwarding: false, cached: false };
-  }
-
-  // 3–6: Check cache before DB lookups + DNS
+  // 3–6: cache before DB lookups + DNS
   const cached = await getCachedResult(domain);
   if (cached) return cached;
 
@@ -161,40 +176,39 @@ export async function checkDomainEligibility(
     .select('domain')
     .eq('domain', domain)
     .maybeSingle();
-
   if (blocked) {
-    const result: Omit<EligibilityResult, 'cached'> = { status: 'blocked', reason: 'blocked_domain', domain, has_mx: false, mx_hosts: [], is_forwarding: false };
-    await setCachedResult(result);
-    return { ...result, cached: false };
+    const r = asResult('BLOCKED', domain);
+    await setCachedResult(r);
+    return r;
   }
 
   // 4. Blocked domain patterns
-  const { data: patterns } = await ownedDbTable('blocked_domain_patterns')
-    .select('pattern');
-
+  const { data: patterns } = await ownedDbTable('blocked_domain_patterns').select('pattern');
   if (patterns?.length) {
     const matchesPattern = patterns.some(({ pattern }) => {
-      // Convert SQL LIKE pattern to regex
       const regex = new RegExp('^' + pattern.replace(/%/g, '.*').replace(/_/g, '.') + '$');
       return regex.test(domain);
     });
     if (matchesPattern) {
-      const result: Omit<EligibilityResult, 'cached'> = { status: 'blocked', reason: 'blocked_pattern', domain, has_mx: false, mx_hosts: [], is_forwarding: false };
-      await setCachedResult(result);
-      return { ...result, cached: false };
+      const r = asResult('BLOCKED', domain);
+      await setCachedResult(r);
+      return r;
     }
   }
 
-  // 5. Public email providers
-  const { data: publicProvider } = await ownedDbTable('public_email_providers')
-    .select('domain')
-    .eq('domain', domain)
-    .maybeSingle();
-
-  if (publicProvider) {
-    const result: Omit<EligibilityResult, 'cached'> = { status: 'pending_review', reason: 'public_provider', domain, has_mx: true, mx_hosts: [], is_forwarding: false };
-    await setCachedResult(result);
-    return { ...result, cached: false };
+  // 5. Public / personal email providers (hardcoded personal blocklist + table)
+  let isPublicProvider = isPersonalEmailDomain(domain);
+  if (!isPublicProvider) {
+    const { data: publicProvider } = await ownedDbTable('public_email_providers')
+      .select('domain')
+      .eq('domain', domain)
+      .maybeSingle();
+    isPublicProvider = !!publicProvider;
+  }
+  if (isPublicProvider) {
+    const r = asResult('PUBLIC_EMAIL', domain, { has_mx: true });
+    await setCachedResult(r);
+    return r;
   }
 
   // 6. Disposable domains
@@ -202,37 +216,32 @@ export async function checkDomainEligibility(
     .select('domain')
     .eq('domain', domain)
     .maybeSingle();
-
   if (disposable) {
-    const result: Omit<EligibilityResult, 'cached'> = { status: 'blocked', reason: 'disposable', domain, has_mx: false, mx_hosts: [], is_forwarding: false };
-    await setCachedResult(result);
-    return { ...result, cached: false };
+    const r = asResult('DISPOSABLE_EMAIL', domain);
+    await setCachedResult(r);
+    return r;
   }
 
   // 7–8. DNS MX check
   const { has_mx, mx_hosts, is_forwarding } = await checkMxRecords(domain);
-
   if (!has_mx) {
-    const result: Omit<EligibilityResult, 'cached'> = { status: 'blocked', reason: 'no_mx', domain, has_mx: false, mx_hosts: [], is_forwarding: false };
-    await setCachedResult(result);
-    return { ...result, cached: false };
+    const r = asResult('NO_EMAIL_CAPABILITY', domain);
+    await setCachedResult(r);
+    return r;
   }
-
   if (is_forwarding) {
-    const result: Omit<EligibilityResult, 'cached'> = { status: 'pending_review', reason: 'forwarding_domain', domain, has_mx: true, mx_hosts, is_forwarding: true };
-    await setCachedResult(result);
-    return { ...result, cached: false };
+    const r = asResult('FORWARDING_DOMAIN', domain, { has_mx: true, mx_hosts, is_forwarding: true });
+    await setCachedResult(r);
+    return r;
   }
 
   // 9. All checks passed → eligible
-  const result: Omit<EligibilityResult, 'cached'> = { status: 'eligible', reason: 'valid_company', domain, has_mx: true, mx_hosts, is_forwarding: false };
-  await setCachedResult(result);
-  return { ...result, cached: false };
+  const r = asResult('DOMAIN_ELIGIBLE', domain, { has_mx: true, mx_hosts });
+  await setCachedResult(r);
+  return r;
 }
 
-/**
- * Invalidate cache for a domain (call after admin approves/rejects/whitelists).
- */
+/** Invalidate cache for a domain (call after admin approves/rejects/whitelists). */
 export async function invalidateDomainCache(domain: string): Promise<void> {
   await ownedDbTable('domain_eligibility_cache').delete().eq('domain', domain);
 }

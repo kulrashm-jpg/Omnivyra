@@ -20,6 +20,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as serviceSb } from '@/backend/db/supabaseClient';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
+import { reviewableResults } from '../../../lib/auth/domainEligibilityModel';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
@@ -43,7 +44,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── Domain eligibility gate ───────────────────────────────────────────────
   if (user.email) {
     const eligibility = await checkDomainEligibility(user.email, user.id);
-    if (eligibility.status === 'blocked') {
+    // Deny only hard-ineligible domains; eligible + review-path (public/forwarding)
+    // retain their prior credit behavior.
+    if (!eligibility.eligible && !reviewableResults.has(eligibility.result)) {
       return res.status(403).json({ error: 'Your email domain is not eligible for free credits.' });
     }
   }
