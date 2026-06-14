@@ -10,7 +10,7 @@
  *   3. ACCOUNT_EXISTS  — email is already confirmed in auth.users from a
  *                        prior flow (orphaned). Blocks the silent
  *                        user_repeated_signup failure mode.
- *   4. COMPANY_CLAIMED — another user from this email's domain is already
+ *   4. CLAIMED_DOMAIN — another user from this email's domain is already
  *                        the COMPANY_ADMIN. First time we see this email,
  *                        we send them a referral email with the admin's
  *                        contact details and write a signup_referrals row.
@@ -134,7 +134,7 @@ export default async function handler(
     });
   }
 
-  // The COMPANY_CLAIMED gate runs in section 4 below (after the orphaned
+  // The CLAIMED_DOMAIN gate runs in section 4 below (after the orphaned
   // auth.users check) so a returning user with their OWN email resumes via
   // ACCOUNT_EXISTS / RESUME_SIGNUP instead of being told to contact an admin.
 
