@@ -613,7 +613,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
     }
 
-    await supabase.from('company_profiles').insert({
+    // PART A — upsert (not insert) so a profile row that was auto-created by a
+    // concurrent path (e.g. a profile read during the social crawl) gets the
+    // validated canonical website instead of silently conflicting and leaving
+    // website_url NULL. onConflict keeps a single source of truth at creation.
+    await supabase.from('company_profiles').upsert({
       company_id:  companyId,
       name:        companyName.trim(),
       website_url: canonicalWebsite || null,
@@ -655,7 +659,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       },
       created_at:  now,
       updated_at:  now,
-    });
+    }, { onConflict: 'company_id' });
     // Non-fatal if profile insert fails — company + role are sufficient
 
     // ── 6. Update free_credit_profiles with org_id (if exists) ───────────────

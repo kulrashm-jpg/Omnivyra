@@ -216,6 +216,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         includeStoredCompetitors: true,
       });
       const resolvedProfile = profile || await saveProfile({ company_id: companyId });
+      // PART B — defensive canonical-website fallback. The validated canonical
+      // website always lives on companies.website; if the profile copy is missing
+      // (a propagation gap that previously trapped onboarding on a read-only,
+      // "No canonical website" field), surface it here so display / validation /
+      // gating use the real website. Read-only fallback — stored data is corrected
+      // at the source (PART A) and via backfill. The companyId placeholder that
+      // setup-company writes when no real website exists is excluded (no http).
+      if (resolvedProfile && !String(resolvedProfile.website_url || '').trim()) {
+        const { data: companyRow } = await supabase
+          .from('companies')
+          .select('website')
+          .eq('id', companyId)
+          .single();
+        const companyWebsite = String((companyRow as { website?: string } | null)?.website || '').trim();
+        if (/^https?:\/\//i.test(companyWebsite)) {
+          resolvedProfile.website_url = companyWebsite;
+        }
+      }
       const isCompanyAdminOnly = access.role === 'COMPANY_ADMIN';
       const responseProfile = isCompanyAdminOnly
         ? (toLimitedCompanyProfile(resolvedProfile) ?? resolvedProfile)
