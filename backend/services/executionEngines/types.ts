@@ -42,6 +42,13 @@ export type CreatorGenerationContext = {
   summary?: string;
   creatorCard?: Record<string, unknown> | null;
   enrichedIntent?: Record<string, unknown> | null;
+  /**
+   * Carousel Phase A — Commit 1 (arc wiring). Optional PurposeStrategy
+   * selector key (e.g. 'story-carousel'). When absent it is resolved from
+   * creatorCard (purpose_key / subtype / infographic_layout) at generation
+   * time. Threaded so later commits can drive archetype-aware generation.
+   */
+  purposeKey?: string | null;
   template?: CreatorTemplateRecord;
   templateId?: string | null;
   existingContent?: Record<string, unknown> | null;

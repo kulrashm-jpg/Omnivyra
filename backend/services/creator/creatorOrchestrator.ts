@@ -446,6 +446,20 @@ export async function runCreatorOrchestration(
     summary: input.summary,
     creatorCard: input.creatorCard,
     enrichedIntent: input.enrichedIntent ?? undefined,
+    // Carousel Phase A — Commit 1 (arc wiring). Thread the PurposeStrategy
+    // selector key from the canonical creatorCard chain so the engine can
+    // resolve the arc for all surfaces (direct + BOLT + queue). Optional and
+    // null-safe: legacy rows without a key fall back to existing behavior.
+    purposeKey: (() => {
+      const card = safeObject(input.creatorCard);
+      const key = String(
+        card.purpose_key
+        || card.infographic_layout
+        || card.subtype
+        || ''
+      ).trim();
+      return key || null;
+    })(),
     templateId: input.templateId ?? null,
     existingContent: input.existingContent ?? null,
   };

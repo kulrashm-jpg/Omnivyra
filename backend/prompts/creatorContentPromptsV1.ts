@@ -60,12 +60,56 @@ export const CREATOR_CONTENT_SYSTEM_PROMPTS: Record<CreatorContentType, (context
   }
 }`,
 
-  carousel: (creatorContext: any) => `You are a carousel design strategist. You create multi-slide content that tells a compelling story visually, with strategic progression to maximize saves and shares.
+  carousel: (creatorContext: any) => {
+  // Carousel Phase A — Commit 2 (arc-aware prompt). When a resolved slideArc is
+  // present we drive per-slide role + intent + specificity + CTA from it.
+  // When absent, every interpolation below collapses to the legacy generic
+  // prompt (arcBlock/ctaBlock are empty strings), preserving prior behavior.
+  const arc: Array<{ role: string; intent: string }> | null =
+    Array.isArray(creatorContext?.slide_arc) && creatorContext.slide_arc.length > 0
+      ? creatorContext.slide_arc
+      : null;
+  const ctaIntensity: string | null = creatorContext?.cta_intensity || null;
+  const ctaSuggestions: string[] = Array.isArray(creatorContext?.cta_suggestions)
+    ? creatorContext.cta_suggestions
+    : [];
+  const arcBlock = arc
+    ? `
+## SLIDE ARC (MANDATORY — ${creatorContext?.archetype_label || 'archetype'})
+
+Generate EXACTLY ${arc.length} slides, one per row, in this exact order and using these exact role tokens. Each slide must perform its role's job, be clearly distinct from the slides before and after it, and advance the progression toward the final CTA:
+
+${arc.map((s, i) => `Slide ${i + 1} — role "${s.role}": ${s.intent}`).join('\n')}
+
+### Slide-craft requirements
+- One idea per slide. Never restate a point already made on an earlier slide.
+- Where a slide's role calls for an example, give a concrete, specific example (not a paraphrase of the concept).
+- Where a slide's role calls for evidence or proof, cite a concrete fact, mechanism, or result.
+- Where a slide's role calls for a result, metric, or number, include a specific figure.
+- Avoid generic filler ("provide value", "be consistent", "leverage", "unlock", "game-changer", "delve into", "seamlessly"). Write with specificity and a clear point of view.
+`
+    : '';
+  const ctaBlock = arc
+    ? `
+## CTA STRATEGY
+- CTA intensity: ${ctaIntensity || 'moderate'} — ${
+        ctaIntensity === 'strong'
+          ? 'make a direct, confident ask (sign up / try / buy / book).'
+          : ctaIntensity === 'subtle'
+            ? 'use a soft, reflective close (a question or a save/share nudge), not a hard sell.'
+            : ctaIntensity === 'absent'
+              ? 'no overt CTA; close with a memorable takeaway.'
+              : 'a clear but unforced next step.'
+      }
+${ctaSuggestions.length > 0 ? `- Suggested CTA phrasings (adapt to the topic; do not copy verbatim): ${ctaSuggestions.join(' | ')}` : ''}
+`
+    : '';
+  return `You are a carousel design strategist. You create multi-slide content that tells a compelling story visually, with strategic progression to maximize saves and shares.
 
 ## CAROUSEL RULES
 
 1. **Visual Hierarchy**: Each slide builds understanding. No standalone slides.
-2. **Slide Count**: ${creatorContext?.slide_count || 5}-7 slides optimal (tests show peak saves at 5-7)
+2. **Slide Count**: ${arc ? `EXACTLY ${arc.length} slides (arc-defined — do not add or drop slides)` : `${creatorContext?.slide_count || 5}-7 slides optimal (tests show peak saves at 5-7)`}
 3. **Brand Integration**: ${creatorContext?.brand_visual_tone ? `Style: ${creatorContext.brand_visual_tone}` : 'Consistent brand visual language'}
 4. **Text Hierarchy**:
    - Slide 1: Bold hook (3-5 words max)
@@ -73,7 +117,7 @@ export const CREATOR_CONTENT_SYSTEM_PROMPTS: Record<CreatorContentType, (context
    - Final slide: Strong CTA
 5. **Platform Variants**: ${creatorContext?.target_platforms?.join(', ') || 'Instagram, Pinterest, LinkedIn'} have different optimal text lengths
 6. **Visual Direction**: Describe color palette, layout, iconography needed
-
+${arcBlock}${ctaBlock}
 ## CAROUSEL OUTPUT FORMAT - JSON
 
 {
@@ -82,7 +126,7 @@ export const CREATOR_CONTENT_SYSTEM_PROMPTS: Record<CreatorContentType, (context
   "slides": [
     {
       "slide_number": 1,
-      "role": "hook",
+      "role": "${arc ? arc[0].role : 'hook'}",
       "headline": "attention-grabbing headline (3-7 words)",
       "body_text": "supporting text describing visual or expanding on headline",
       "visual_description": "detailed description of what appears visually on this slide",
@@ -102,7 +146,8 @@ export const CREATOR_CONTENT_SYSTEM_PROMPTS: Record<CreatorContentType, (context
     "visual_style": "${creatorContext?.visual_style || 'Modern professional'}",
     "typography_tone": "sophisticated / casual / punchy / corporate"
   }
-}`,
+}`;
+  },
 
   story: (creatorContext: any) => `You are a storyteller specializing in short-form narrative content (Instagram Stories, TikTok Stories, YouTube Community). You create emotional arcs that drive engagement in 30-60 seconds.
 

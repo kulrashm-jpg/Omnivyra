@@ -16,6 +16,16 @@ import { validateAssetReadiness } from '../creatorAssetValidationService';
 import { checkCapability, normalizeCreatorPlatform } from '../creatorCapabilityMap';
 import { renderAsset } from '../creatorAssetRenderer';
 import { supportsAutonomousExecution, normalizeCreatorFormat } from '../../../lib/shared/creatorGovernanceRegistry';
+import { resolvePurposeStrategy, type PurposeStrategy } from '../creator/purposeStrategyRegistry';
+import { evaluateCarouselQuality } from '../creator/carouselQualityEvaluator';
+import { recordCarouselQualitySample } from '../creator/carouselQualityTelemetry';
+import {
+  resolveCarouselQualityMode,
+  assessCarouselQuality,
+  decideCarouselQualityAction,
+  buildQualityRetryDirective,
+  type CarouselEnforcementMode,
+} from '../creator/carouselQualityGate';
 import type {
 
   CanonicalCreatorOutput,
@@ -163,36 +173,40 @@ function alignCarouselBlueprintToTemplate(
     return blueprint;
   }
 
-  const fallbackSlide = sourceSlides[sourceSlides.length - 1] ?? {};
+  // Carousel Phase A — Commit 3 (filler elimination). REAL content only. Any
+  // field the model did not supply is left EMPTY — never fabricated. Missing
+  // slides are NOT padded by duplicating the last slide. Completeness is judged
+  // afterward by carouselBlueprintIsComplete(), which drives retry/fallback/
+  // failure. First/last may inherit real blueprint-level hook/cta copy; middle
+  // slides get only their own real content.
   const hookScene = safeObject(blueprint.hook_scene);
   const ctaSlide = safeObject(blueprint.cta_slide);
   const hookHeadline = String(blueprint.headline ?? blueprint.title ?? hookScene.text ?? '').trim();
   const hookBody = String(blueprint.summary ?? blueprint.narrative_intent ?? '').trim();
-  const ctaHeadline = String(ctaSlide.headline ?? blueprint.cta ?? 'Next Step').trim();
-  const ctaBody = String(ctaSlide.cta_text ?? safeObject(blueprint.cta_scene).text ?? 'Learn more').trim();
-  const defaultVisual = String(blueprint.visual_description ?? fallbackSlide.visual_description ?? fallbackSlide.visual ?? '').trim();
+  const ctaHeadline = String(ctaSlide.headline ?? blueprint.cta ?? '').trim();
+  const ctaBody = String(ctaSlide.cta_text ?? safeObject(blueprint.cta_scene).text ?? '').trim();
 
   const slides = Array.from({ length: expectedFrameCount }, (_, index) => {
-    const existing = sourceSlides[index] ?? fallbackSlide;
-    const role = expectedRoles[index] ?? String(existing.role ?? (index === 0 ? 'hook' : index === expectedFrameCount - 1 ? 'cta' : 'insight'));
+    const e = safeObject(sourceSlides[index]);
+    const role = expectedRoles[index] ?? String(e.role ?? (index === 0 ? 'hook' : index === expectedFrameCount - 1 ? 'cta' : 'insight'));
     const isFirst = index === 0;
     const isLast = index === expectedFrameCount - 1;
 
     return {
-      ...existing,
+      ...e,
       slide_number: index + 1,
       role,
       headline: String(
-        existing.headline ??
-        (isFirst ? hookHeadline : isLast ? ctaHeadline : blueprint.topic ?? blueprint.carousel_theme ?? hookHeadline)
+        e.headline ??
+        (isFirst ? hookHeadline : isLast ? ctaHeadline : '')
       ).trim(),
       body_text: String(
-        existing.body_text ??
-        (isFirst ? hookBody : isLast ? ctaBody : (hookBody || `Key ${role} point for slide ${index + 1}.`))
+        e.body_text ??
+        (isFirst ? hookBody : isLast ? ctaBody : '')
       ).trim(),
-      visual_description: String((existing.visual_description ?? existing.visual ?? defaultVisual) || `Visual direction for ${role} slide ${index + 1}.`).trim(),
-      design_note: String(existing.design_note ?? blueprint.design_note ?? `Match the ${role} role with clear visual hierarchy.`).trim(),
-      icon_suggestion: String(existing.icon_suggestion ?? '').trim(),
+      visual_description: String(e.visual_description ?? e.visual ?? '').trim(),
+      design_note: String(e.design_note ?? blueprint.design_note ?? '').trim(),
+      icon_suggestion: String(e.icon_suggestion ?? '').trim(),
     };
   });
 
@@ -410,12 +424,364 @@ function adaptPackagingForPlatform(
   };
 }
 
-async function generateBlueprint(context: CreatorGenerationContext): Promise<Record<string, unknown>> {
+/**
+ * Carousel Phase A — Commit 1 (arc wiring).
+ * Resolve the PurposeStrategy selector key for a generation context. Uses the
+ * explicit context.purposeKey when threaded, else falls back to the canonical
+ * creatorCard chain (purpose_key / infographic_layout / subtype) — the SAME
+ * source the renderer + prompt composer already read from. Returns null when
+ * no key is present (preserves legacy behavior).
+ */
+function resolveContextPurposeKey(context: CreatorGenerationContext): string | null {
+  if (typeof context.purposeKey === 'string' && context.purposeKey.trim()) {
+    return context.purposeKey.trim();
+  }
+  const card = safeObject(context.creatorCard);
+  const fromCard = String(
+    card.purpose_key
+    || card.infographic_layout
+    || card.subtype
+    || ''
+  ).trim();
+  return fromCard || null;
+}
+
+/**
+ * Carousel Phase A — Commit 1 (arc wiring).
+ * Arc-derived structure_schema capability. Builds a template-compatible
+ * structure_schema ({ frame_count, frame_roles }) from a resolved
+ * PurposeStrategy's slideArc. This is a CAPABILITY ONLY in Commit 1 — it is
+ * computed and surfaced in metadata for inspection/future commits, but is NOT
+ * fed into template selection, the prompt, validation, or alignment yet (that
+ * is Commit 2). Returns null when no slideArc is present (e.g. image/video).
+ */
+function deriveArcStructureSchema(
+  purposeStrategy: PurposeStrategy | null,
+): { frame_count: number; frame_roles: string[]; output_shape: 'slide_series' } | null {
+  const arc = purposeStrategy?.slideArc;
+  if (!Array.isArray(arc) || arc.length === 0) return null;
+  const roles = arc.map((slide) => String(slide.role)).filter(Boolean);
+  if (roles.length === 0) return null;
+  return { frame_count: roles.length, frame_roles: roles, output_shape: 'slide_series' };
+}
+
+/**
+ * Carousel Phase A — Commit 2 (arc activation).
+ * Produce an arc-effective template: when the asset is a carousel AND a
+ * PurposeStrategy with a slideArc resolves, override the template's
+ * structure_schema with the arc-derived { frame_count, frame_roles }. All
+ * other template fields (id, style_schema, mapping_rules) are preserved, so
+ * every downstream contract (alignment, validateBlueprintAgainstTemplate,
+ * deriveStructureFromTemplate) keeps working unchanged — it simply receives
+ * the arc roles instead of the fixed hook/insight×3/proof/cta set. Returns the
+ * template untouched for non-carousel assets or when no arc resolves (legacy
+ * fallback — byte-identical behavior).
+ */
+function applyArcStructureToTemplate<T extends { structure_schema?: Record<string, unknown> }>(
+  assetType: string,
+  context: CreatorGenerationContext,
+  template: T,
+): T {
+  if (assetType !== 'carousel') return template;
+  const purposeStrategy = resolvePurposeStrategy(context.contentType, resolveContextPurposeKey(context));
+  const arc = deriveArcStructureSchema(purposeStrategy);
+  if (!arc) return template;
+  return {
+    ...template,
+    structure_schema: {
+      ...safeObject(template.structure_schema),
+      frame_count: arc.frame_count,
+      frame_roles: arc.frame_roles,
+      output_shape: arc.output_shape,
+    },
+  };
+}
+
+/* ── Carousel Phase A — Commit 3: completeness, retry, fallback, failure ── */
+
+const MIN_VIABLE_CAROUSEL_SLIDES = 3;
+const MAX_CAROUSEL_COMPLETION_RETRIES = 2;
+
+/** Thrown when a complete, minimum-viable carousel cannot be produced from real
+ *  content. Propagates through runCreatorOrchestration's try/finally to the job
+ *  processor as a clean generation failure — nothing fabricated is published. */
+class CarouselContentIncompleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CarouselContentIncompleteError';
+  }
+}
+
+/** Carousel Phase B — Commit B2. Thrown only in STRICT mode when an editor-grade
+ *  quality failure cannot be repaired within budget. Propagates through
+ *  runCreatorOrchestration's try/finally as a clean generation failure (same
+ *  path as CarouselContentIncompleteError) — nothing sub-grade is published. */
+class CarouselQualityRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CarouselQualityRejectedError';
+  }
+}
+
+/** A carousel slide may ship only if it carries real headline + body + visual. */
+function isCarouselSlideComplete(slide: unknown): boolean {
+  const s = safeObject(slide);
+  const headline = String(s.headline ?? '').trim();
+  const body = String(s.body_text ?? '').trim();
+  const visual = String(s.visual_description ?? s.visual ?? '').trim();
+  return Boolean(headline) && Boolean(body) && Boolean(visual);
+}
+
+/** Complete when slide count matches the template AND every slide is complete. */
+function carouselBlueprintIsComplete(
+  blueprint: Record<string, unknown>,
+  template: { structure_schema?: Record<string, unknown> },
+): boolean {
+  const structure = safeObject(template.structure_schema);
+  const expected = structure.frame_count == null ? null : Number(structure.frame_count);
+  const slides = toArrayOfObjects(blueprint.slides);
+  if (!expected || expected <= 0) {
+    return slides.length > 0 && slides.every(isCarouselSlideComplete);
+  }
+  if (slides.length !== expected) return false;
+  return slides.every(isCarouselSlideComplete);
+}
+
+/** Corrective directive appended to the generation prompt on retry. A
+ *  completion instruction (Commit 3), NOT a quality gate. */
+function buildCompletionRetryDirective(attempt: number, expectedRoles: string[], expectedCount: number): string {
+  const roleLine = expectedRoles.length > 0 ? ` in this exact role order: ${expectedRoles.join(', ')}` : '';
+  return [
+    `STRICT COMPLETION REQUIREMENT (retry ${attempt}):`,
+    `Your previous response did not return ${expectedCount} fully-populated slides.`,
+    `Return EXACTLY ${expectedCount} slides${roleLine}.`,
+    'Every slide MUST have a non-empty, specific headline, body_text, and visual_description grounded in the topic.',
+    'Do not return empty fields. Do not duplicate slides. Do not use placeholder text.',
+  ].join(' ');
+}
+
+/** Fallback: rebuild a smaller but fully-real carousel from the complete slides
+ *  ONLY. Real content is preserved; nothing is invented. Returns null when a
+ *  coherent minimum-viable deck cannot be formed (→ clean failure). */
+function buildReducedCarouselFromCompleteSlides(
+  blueprint: Record<string, unknown>,
+  template: { structure_schema?: Record<string, unknown>; [k: string]: unknown },
+): { blueprint: Record<string, unknown>; template: typeof template } | null {
+  const sourceSlides = toArrayOfObjects(blueprint.slides);
+  if (sourceSlides.length === 0) return null;
+  // Require real hook + cta bookends so the reduced deck stays coherent.
+  if (!isCarouselSlideComplete(sourceSlides[0])) return null;
+  if (!isCarouselSlideComplete(sourceSlides[sourceSlides.length - 1])) return null;
+  const complete = sourceSlides.filter(isCarouselSlideComplete);
+  if (complete.length < MIN_VIABLE_CAROUSEL_SLIDES) return null;
+
+  const reducedRoles = complete.map((s, i) =>
+    String(safeObject(s).role || (i === 0 ? 'hook' : i === complete.length - 1 ? 'cta' : 'insight')),
+  );
+  const reducedTemplate = {
+    ...template,
+    structure_schema: {
+      ...safeObject(template.structure_schema),
+      frame_count: complete.length,
+      frame_roles: reducedRoles,
+    },
+  };
+  const reduced = alignCarouselBlueprintToTemplate({ ...blueprint, slides: complete }, reducedTemplate);
+  // Defensive: the reduced deck must itself be fully complete (real content in).
+  if (!carouselBlueprintIsComplete(reduced, reducedTemplate)) return null;
+  return { blueprint: reduced, template: reducedTemplate };
+}
+
+/** Carousel Phase B — record a quality + completeness telemetry sample. Fully
+ *  isolated and best-effort: any failure here is swallowed so generation
+ *  behavior is never affected. */
+function recordCarouselQualityOutcome(
+  context: CreatorGenerationContext,
+  blueprint: Record<string, unknown>,
+  stats: {
+    attempts: number;
+    fallbackUsed: boolean;
+    failed: boolean;
+    mode: CarouselEnforcementMode;
+    qualityRetries: number;
+    qualityRejected: boolean;
+    failingDimensions: string[];
+  },
+): void {
+  try {
+    const purposeStrategy = resolvePurposeStrategy(context.contentType, resolveContextPurposeKey(context));
+    const result = evaluateCarouselQuality({
+      slides: toArrayOfObjects(blueprint.slides),
+      archetype: purposeStrategy?.purposeKey ?? null,
+      ctaIntensity: purposeStrategy?.ctaIntensity ?? null,
+      topic: context.topic ?? null,
+    });
+    const dimensionScores: Record<string, number | null> = {};
+    for (const check of result.checks) {
+      dimensionScores[check.id] = typeof check.score === 'number' ? check.score : null;
+    }
+    recordCarouselQualitySample({
+      archetype: purposeStrategy?.purposeKey ?? 'unknown',
+      generation_attempts: stats.attempts,
+      retry_count: Math.max(0, stats.attempts - 1),
+      fallback_used: stats.fallbackUsed,
+      failed: stats.failed,
+      overall_score: result.score,
+      dimension_scores: dimensionScores,
+      quality_mode: stats.mode,
+      quality_retry_count: stats.qualityRetries,
+      quality_rejected: stats.qualityRejected,
+      quality_failing_dimensions: stats.failingDimensions,
+    });
+  } catch {
+    // Telemetry must never affect generation.
+  }
+}
+
+/** Completeness sub-routine (Phase A): generate → bounded completeness retry →
+ *  real-content fallback → clean fail. Optionally threads a B2 quality-revision
+ *  directive into EVERY attempt of this pass. Returns the produced deck + the
+ *  attempts it consumed; records completeness-FAILURE telemetry on its throw. */
+async function generateCompleteCarouselDeck(
+  context: CreatorGenerationContext,
+  effectiveTemplate: { structure_schema?: Record<string, unknown>; [k: string]: unknown },
+  qualityRetryHint: string | undefined,
+  mode: CarouselEnforcementMode,
+): Promise<{ blueprint: Record<string, unknown>; template: typeof effectiveTemplate; attempts: number; fallbackUsed: boolean }> {
+  const structure = safeObject(effectiveTemplate.structure_schema);
+  const expectedCount = structure.frame_count == null ? 0 : Number(structure.frame_count);
+  const expectedRoles = Array.isArray(structure.frame_roles) ? structure.frame_roles.map(String) : [];
+
+  let last: Record<string, unknown> = {};
+  for (let attempt = 0; attempt <= MAX_CAROUSEL_COMPLETION_RETRIES; attempt += 1) {
+    const completionRetryHint = attempt === 0
+      ? undefined
+      : buildCompletionRetryDirective(attempt, expectedRoles, expectedCount);
+    last = await generateBlueprint(
+      { ...context, template: effectiveTemplate as CreatorGenerationContext['template'] },
+      { completionRetryHint, qualityRetryHint },
+    );
+    if (carouselBlueprintIsComplete(last, effectiveTemplate)) {
+      return { blueprint: last, template: effectiveTemplate, attempts: attempt + 1, fallbackUsed: false };
+    }
+  }
+
+  // Completeness retries exhausted → real-content-only fallback (reduced deck).
+  const reduced = buildReducedCarouselFromCompleteSlides(last, effectiveTemplate);
+  if (reduced) {
+    return { blueprint: reduced.blueprint, template: reduced.template, attempts: MAX_CAROUSEL_COMPLETION_RETRIES + 1, fallbackUsed: true };
+  }
+
+  // Fallback impossible → fail cleanly. No fabricated content ships.
+  recordCarouselQualityOutcome(context, last, {
+    attempts: MAX_CAROUSEL_COMPLETION_RETRIES + 1,
+    fallbackUsed: false,
+    failed: true,
+    mode,
+    qualityRetries: 0,
+    qualityRejected: false,
+    failingDimensions: [],
+  });
+  throw new CarouselContentIncompleteError(
+    'creator carousel generation could not produce a complete, minimum-viable carousel from real content',
+  );
+}
+
+/** Carousel Phase B — Commit B2 (acceptance gate + targeted regeneration).
+ *  Wraps the completeness sub-routine with the editor-grade quality gate under
+ *  the active enforcement mode (shadow | warn | strict). SHADOW/WARN add ZERO
+ *  LLM calls (measure/annotate only); STRICT may regenerate within a bounded
+ *  quality budget, then rejects cleanly. Returns the final blueprint + template
+ *  (Phase A contract preserved). */
+async function produceCompleteCarouselBlueprint(
+  context: CreatorGenerationContext,
+  effectiveTemplate: { structure_schema?: Record<string, unknown>; [k: string]: unknown },
+): Promise<{ blueprint: Record<string, unknown>; template: typeof effectiveTemplate }> {
+  const mode = resolveCarouselQualityMode();
+  const purposeStrategy = resolvePurposeStrategy(context.contentType, resolveContextPurposeKey(context));
+  const ctaIntensity = purposeStrategy?.ctaIntensity ?? null;
+  const archetype = purposeStrategy?.purposeKey ?? null;
+
+  let qualityRetries = 0;
+  let totalAttempts = 0;
+  let qualityRetryHint: string | undefined;
+
+  for (;;) {
+    const produced = await generateCompleteCarouselDeck(context, effectiveTemplate, qualityRetryHint, mode);
+    totalAttempts += produced.attempts;
+
+    const assessment = assessCarouselQuality({
+      slides: toArrayOfObjects(produced.blueprint.slides),
+      archetype,
+      ctaIntensity,
+      topic: context.topic ?? null,
+    });
+    const action = decideCarouselQualityAction({
+      mode,
+      status: assessment.status,
+      qualityRetries,
+      totalAttempts,
+    });
+
+    if (action === 'regenerate') {
+      qualityRetryHint = buildQualityRetryDirective(assessment.failingChecks, ctaIntensity);
+      qualityRetries += 1;
+      continue;
+    }
+
+    // Terminal action → record once, then return / reject.
+    recordCarouselQualityOutcome(context, produced.blueprint, {
+      attempts: totalAttempts,
+      fallbackUsed: produced.fallbackUsed,
+      failed: false,
+      mode,
+      qualityRetries,
+      qualityRejected: action === 'reject',
+      failingDimensions: assessment.status === 'approved' ? [] : assessment.failingChecks,
+    });
+
+    if (action === 'reject') {
+      throw new CarouselQualityRejectedError(
+        `carousel rejected by editor-grade gate (score ${assessment.score}): ${assessment.failingChecks.join(', ') || 'below threshold'}`,
+      );
+    }
+
+    let finalBlueprint = produced.blueprint;
+    if (action === 'accept_with_warnings') {
+      finalBlueprint = {
+        ...produced.blueprint,
+        metadata: {
+          ...safeObject(produced.blueprint.metadata),
+          quality_warnings: assessment.failingChecks,
+          quality_recommended_actions: assessment.recommendedActions,
+          quality_score: assessment.score,
+        },
+      };
+    }
+    return { blueprint: finalBlueprint, template: produced.template };
+  }
+}
+
+async function generateBlueprint(
+  context: CreatorGenerationContext,
+  opts?: { completionRetryHint?: string; qualityRetryHint?: string },
+): Promise<Record<string, unknown>> {
   const assetType = deriveCreatorAssetTypeFromIntent({
     contentType: context.contentType,
     targetPlatforms: context.targetPlatforms,
   });
   const blueprintType = inferBlueprintType(assetType, context.contentType);
+  // Carousel Phase A — Commit 1 (wiring) + Commit 2 (activation). Resolve the
+  // PurposeStrategy + arc schema. The arc-effective structure already reaches
+  // this function via context.template (applied upstream in generateFromIntent);
+  // here we additionally surface the arc roles+intents and CTA strategy to the
+  // prompt (see creatorContext below). No-op when no PurposeStrategy resolves.
+  const purposeKey = resolveContextPurposeKey(context);
+  const purposeStrategy = resolvePurposeStrategy(context.contentType, purposeKey);
+  const arcStructureSchema = deriveArcStructureSchema(purposeStrategy);
+  const carouselArc = (assetType === 'carousel' && Array.isArray(purposeStrategy?.slideArc) && purposeStrategy!.slideArc!.length > 0)
+    ? purposeStrategy!.slideArc!.map((s) => ({ role: s.role, intent: s.intent }))
+    : null;
   const template = await resolveTemplateForIntent({
     assetType,
     templateId: context.templateId,
@@ -439,6 +805,13 @@ async function generateBlueprint(context: CreatorGenerationContext): Promise<Rec
     supporting_asset_type: String(context.creatorCard?.supporting_asset_type || context.contentType || assetType),
     slide_count: Number((template.structure_schema.frame_count as number | undefined) || 5),
     narrative_arc: String(context.creatorCard?.narrative_arc || 'problem -> insight -> action'),
+    // Carousel Phase A — Commit 2 (arc-aware prompt + CTA wiring). Present only
+    // when a carousel PurposeStrategy resolves a slideArc; otherwise undefined
+    // so the carousel prompt renders its legacy generic path (back-compatible).
+    slide_arc: carouselArc ?? undefined,
+    cta_intensity: carouselArc ? (purposeStrategy?.ctaIntensity ?? undefined) : undefined,
+    cta_suggestions: carouselArc ? (purposeStrategy?.ctaSuggestions ?? undefined) : undefined,
+    archetype_label: carouselArc ? (purposeStrategy?.displayLabel ?? undefined) : undefined,
     platform_specs: context.creatorCard?.platform_specs && typeof context.creatorCard.platform_specs === 'object'
       ? context.creatorCard.platform_specs
       : undefined,
@@ -473,7 +846,7 @@ Template alignment rule:
 ${buildTemplateAlignmentInstruction({ assetType, template })}
 
 ${assetType === 'image' ? 'Single-image output rule: include top-level "headline" and "visual_description" fields. The visual_description must describe the actual preview composition, focal object, layout, palette, hierarchy, and intended viewer reaction. Do not return only generic placeholder language.' : ''}
-
+${opts?.completionRetryHint ? `\n${opts.completionRetryHint}\n` : ''}${opts?.qualityRetryHint ? `\n${opts.qualityRetryHint}\n` : ''}
 Return JSON only.`;
 
   const result = await runCompletionWithOperation({
@@ -507,6 +880,16 @@ Return JSON only.`;
         analytics_intelligence_applied: Boolean(analyticsIntelligence.promptBlock),
         analytics_intelligence_readiness: analyticsIntelligence.readiness,
         analytics_intelligence_primitive_count: analyticsIntelligence.primitiveCount,
+        // Carousel Phase A — Commit 1 (arc wiring). Inert capability surface:
+        // resolved PurposeStrategy + arc-derived structure_schema, available to
+        // later commits. Does not affect copy, rendering, or publishing.
+        carousel_arc_wiring: {
+          purpose_key: purposeKey,
+          purpose_strategy_id: purposeStrategy?.id ?? null,
+          purpose_strategy_resolved: Boolean(purposeStrategy),
+          slide_arc_roles: arcStructureSchema?.frame_roles ?? null,
+          arc_structure_schema: arcStructureSchema,
+        },
       },
   };
 }
@@ -665,13 +1048,27 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
         targetPlatforms: intent.targetPlatforms,
       });
       assertCapability({ platforms: intent.targetPlatforms, assetType });
-      const template = await resolveTemplateForIntent({
+      const baseTemplate = await resolveTemplateForIntent({
         assetType,
         templateId: intent.templateId,
         companyId: intent.companyId,
         providedTemplate: intent.template,
       });
-      const blueprint = await generateBlueprint({ ...intent, template });
+      // Carousel Phase A — Commit 2 (arc activation). Resolve the arc-effective
+      // template ONCE and thread it to generation, validation, and structure
+      // derivation so all three stay in lockstep. Non-carousel / no-arc →
+      // identical to baseTemplate (legacy behavior preserved).
+      const effectiveTemplate = applyArcStructureToTemplate(assetType, intent, baseTemplate);
+      // Carousel Phase A — Commit 3 (filler elimination + retry/fallback/fail).
+      // Carousels run through the completeness orchestrator, which retries on
+      // incomplete output, falls back to a smaller real-content-only deck, or
+      // fails cleanly — never shipping fabricated slides. The orchestrator
+      // returns the (possibly reduced) template so validation + structure
+      // derivation stay in lockstep. Non-carousel assets are unchanged.
+      const { blueprint, template } = (assetType === 'carousel'
+        ? await produceCompleteCarouselBlueprint(intent, effectiveTemplate)
+        : { blueprint: await generateBlueprint({ ...intent, template: effectiveTemplate }), template: effectiveTemplate }
+      ) as { blueprint: Record<string, unknown>; template: typeof effectiveTemplate };
       validateBlueprintAgainstTemplate({ assetType, blueprint, template });
       const validation = await validateCreatorContentQuality(blueprint, inferBlueprintType(assetType, intent.contentType));
       const existing = safeObject(intent.existingContent);
