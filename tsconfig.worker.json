@@ -18,6 +18,8 @@
   "exclude": [
     "node_modules",
     "backend/tests",
+    "backend/**/__tests__/**",
+    "**/*.test.ts",
     "dist"
   ]
 }
