@@ -32,6 +32,8 @@ import type {
   InheritanceOverridePolicy,
   PlatformOverrideKind,
 } from '@/backend/services/creator/media';
+// Phase 3B — drive URL-attached videos through the SAME lifecycle as uploads.
+import { finalizeCreatorRowMediaLifecycle } from '@/backend/services/creator/finalizeCreatorRowMedia';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'PATCH') {
@@ -176,7 +178,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from('daily_content_plans')
         .select('id, content, content_type, platform, intent_type')
         .eq('campaign_id', (row as any).campaign_id).eq('intent_type', 'creator').limit(200);
-      const finalizedV: any[] = []; const eventsV: string[] = [];
+      const finalizedV: any[] = []; const eventsV: string[] = []; const scheduleResultsV: any[] = [];
       for (const s of (sibsV as any[]) ?? []) {
         let sc: any = {};
         try { sc = typeof s.content === 'string' ? JSON.parse(s.content) : (s.content || {}); } catch { continue; }
@@ -194,12 +196,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         for (const e of fin.events) if (!eventsV.includes(e)) eventsV.push(e);
         if (fin.applied && fin.content_patch) {
           const nextC = { ...sc, ...fin.content_patch };
-          await ownedDbTable('daily_content_plans')
-            .update({ content: JSON.stringify(nextC), updated_at: nowIso })
-            .eq('id', s.id).eq('intent_type', 'creator');
+          const resolvedUrl = typeof fin.content_patch.uploaded_media_url === 'string'
+            ? fin.content_patch.uploaded_media_url
+            : '';
+          if (resolvedUrl) {
+            // Phase 3B: URL-attached video now follows the SAME lifecycle as an
+            // uploaded video — validate → media_uploaded → ready_for_schedule →
+            // autoScheduleReadyCreatorRowById — via the shared primitive
+            // orchestrator (the helper persists `nextC` with lifecycle state, so
+            // we do NOT also do a separate content-only write here).
+            const lc = await finalizeCreatorRowMediaLifecycle({
+              rowId: s.id,
+              content: nextC,
+              contentType: String(s.content_type || 'video'),
+              mediaUrl: resolvedUrl,
+              source: 'external_link',
+            });
+            scheduleResultsV.push({ row_id: s.id, ...lc });
+          } else {
+            // No resolved URL for this platform (e.g. incompatible) → preserve
+            // the prior content-only write; do NOT advance lifecycle.
+            await ownedDbTable('daily_content_plans')
+              .update({ content: JSON.stringify(nextC), updated_at: nowIso })
+              .eq('id', s.id).eq('intent_type', 'creator');
+          }
         }
       }
-      return res.status(200).json({ finalized_video: finalizedV, events: eventsV, content_core_id: contentCoreId, persisted: true });
+      return res.status(200).json({ finalized_video: finalizedV, events: eventsV, schedule_results: scheduleResultsV, content_core_id: contentCoreId, persisted: true });
     } else if (action === 'finalize-publishing') {
       // Step-15: stamp finalized inherited media into the EXISTING
       // content.uploaded_media_url the scheduler already reads. Iterates

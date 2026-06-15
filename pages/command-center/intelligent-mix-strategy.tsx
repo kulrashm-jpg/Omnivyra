@@ -165,12 +165,22 @@ function FreqStepper({
   );
 }
 
-import { useIntelMix } from '../../hooks/useIntelMix';
-import IntelMixView from '../../components/IntelMixView';
-import PageLoader from '../../components/PageLoader';
-export default function IntelMixPage() {
-  const d = useIntelMix();
-  if (d._ef1) return <PageLoader message="Loading Intelligent Mix…" />;
-  if (d._ef2) return <PageLoader message="Loading Intelligent Mix…" />;
-  return <IntelMixView d={d} />;
+import BoltCombinedStrategyPage from './bolt-combined-strategy';
+
+/**
+ * Phase 4 — Intelligent Mix is the BOLT `combined` campaign mode.
+ *
+ * This canonical Intelligent Mix route now renders the existing combined
+ * Strategy Builder, which emits `campaign_mode: 'combined'` and runs the BOLT
+ * execution path (POST /api/bolt/execute). It reuses the existing combined
+ * infrastructure verbatim — NO new campaign engine.
+ *
+ * Previously this route rendered IntelMixView, whose "Continue" handed off to
+ * /recommendations and resolved to `text`/`creator` (never `combined`), so the
+ * Intelligent Mix brand never reached the combined pipeline. Routing here to
+ * the combined builder closes that gap. (IntelMixView/useIntelMix remain in
+ * the codebase, now unused by this route — cleanup is a separate concern.)
+ */
+export default function IntelligentMixStrategyPage() {
+  return <BoltCombinedStrategyPage />;
 }

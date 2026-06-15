@@ -578,7 +578,7 @@ export default function BoltCombinedStrategyPage() {
           <div className="flex items-center gap-3 mb-1">
             <span className="text-3xl">🔀</span>
             <div>
-              <h1 className="text-xl font-bold text-gray-900">BOLT (Combined) Strategy Builder</h1>
+              <h1 className="text-xl font-bold text-gray-900">Intelligent Mix Campaign Builder</h1>
               <p className="text-sm font-medium text-gray-600">Text + Creator Campaign</p>
             </div>
             <span className="ml-auto rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">AI + Creator</span>
@@ -807,7 +807,7 @@ export default function BoltCombinedStrategyPage() {
                 className={`w-full py-3 text-sm font-bold rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 ${canGenerate && !generating ? 'bg-violet-500 hover:bg-violet-600 text-white' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}>
                 {generating ? (
                   <><svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>Generating Strategy Cards…</>
-                ) : hasGenerated ? '🔀 Regenerate BOLT Combined Cards' : '🔀 Generate BOLT Combined Cards'}
+                ) : hasGenerated ? '🔀 Regenerate Intelligent Mix Cards' : '🔀 Generate Intelligent Mix Cards'}
               </button>
               {!canGenerate && !generating && <p className="text-xs text-gray-400 text-center mt-2">Enter a campaign topic to get started</p>}
             </div>

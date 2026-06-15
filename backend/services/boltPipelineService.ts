@@ -809,9 +809,12 @@ async function runCommitPlan(
   campaignId: string,
   plan: { weeks: unknown[] },
   executionConfig?: Record<string, unknown>,
-  requiresMediaFlow?: boolean
+  preserveCreatorFormats?: boolean
 ): Promise<void> {
-  const sanitizedWeeks = requiresMediaFlow ? plan.weeks : sanitizeBoltPlanForTextOnly(plan.weeks);
+  // When the campaign carries creator/media formats (creator, legacy media,
+  // or combined/Intelligent-Mix), the blueprint is committed verbatim.
+  // Text-only campaigns are sanitised down to BOLT text formats.
+  const sanitizedWeeks = preserveCreatorFormats ? plan.weeks : sanitizeBoltPlanForTextOnly(plan.weeks);
   const blueprint = fromStructuredPlan({ weeks: sanitizedWeeks, campaign_id: campaignId });
   // Align with strategic theme card → create campaign flow: saveStructuredCampaignPlan + commitDraftBlueprint
   const snapshotHash = `bolt-${campaignId}-${Date.now()}`;
@@ -1193,7 +1196,20 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   const requiresMediaFlow = usesUnifiedMediaFlow || usesLegacyMediaFlow;
   // Combined mode: text + creator formats together. Scheduling applies to the text portion only.
   const isCombined = executionProfile === 'combined';
-  const creatorFormats = usesUnifiedMediaFlow
+  // ── Phase 1 — Intelligent Mix (combined) mixed-lane activation (G1/G2) ───
+  // Intelligent Mix reuses the existing first-class `combined` mode. A
+  // combined campaign carries BOTH text and creator formats, so it must:
+  //   G1 — retain creator/image/carousel/video formats through blueprint
+  //        commit (NOT be sanitised down to text-only), and
+  //   G2 — run the creator asset-generation stage.
+  // These flags are intentionally SEPARATE from usesUnifiedMediaFlow, which
+  // stays `=== 'creator'`. The scheduler keys its lane routing off
+  // campaign_mode === 'creator' and `shouldSchedule` keys off requiresMediaFlow,
+  // so BOTH remain unchanged — a combined campaign is still scheduled through
+  // the text lane in Phase 1. Per-row scheduler routing is Phase 2.
+  const runsCreatorGeneration = usesUnifiedMediaFlow || isCombined;
+  const preserveCreatorBlueprint = requiresMediaFlow || isCombined;
+  const creatorFormats = runsCreatorGeneration
     ? getCreatorFormatsFromExecutionConfig(payload.executionConfig)
     : [];
   // ── Per-row eligibility (replaces the old campaign-wide veto) ─────────────
@@ -1211,7 +1227,7 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   }));
   const hasAutonomousCreatorFormats = rowEligibility.some((row) => row.is_autonomous);
   const hasAttachmentRequiredCreatorFormats = rowEligibility.some((row) => row.is_attachment_required);
-  const creatorCampaignAggregate: CreatorCampaignAggregate = usesUnifiedMediaFlow
+  const creatorCampaignAggregate: CreatorCampaignAggregate = runsCreatorGeneration
     ? getCreatorCampaignAggregate(creatorFormats)
     : 'empty';
   const wantsSchedule = outcomeView === 'schedule' || outcomeView === 'campaign_schedule';
@@ -1219,7 +1235,7 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   // The generation runtime mode is purely a HINT to the runtime about what
   // mix to expect; it no longer gates anything. The runtime evaluates each
   // row independently and decides render vs. theme-treatment per row.
-  const creatorExecutionMode: CreatorAssetGenerationMode | null = usesUnifiedMediaFlow
+  const creatorExecutionMode: CreatorAssetGenerationMode | null = runsCreatorGeneration
     ? (hasAutonomousCreatorFormats && hasAttachmentRequiredCreatorFormats)
       ? 'MIXED'
       : hasAutonomousCreatorFormats
@@ -1233,7 +1249,7 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   // creator format and the user wanted more than a week plan. The stage
   // itself decides per row whether to render or emit awaiting_media_upload.
   const shouldRunCreatorAssetGeneration =
-    usesUnifiedMediaFlow &&
+    runsCreatorGeneration &&
     outcomeView !== 'week_plan' &&
     creatorFormats.length > 0;
 
@@ -1479,11 +1495,11 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
           // → BLUEPRINT_INVALID_CONTENT_TYPE → BLUEPRINT_SAVE_FAILED
           // friendly message). Pre-sanitise here, then hand the original
           // plan to runCommitPlan (which sanitises again — idempotent).
-          const planForValidation = requiresMediaFlow
+          const planForValidation = preserveCreatorBlueprint
             ? plan
             : { weeks: sanitizeBoltPlanForTextOnly(plan.weeks) };
           assertValidBoltBlueprint(planForValidation);
-          await runCommitPlan(campaignId, plan, payload.executionConfig as Record<string, unknown>, requiresMediaFlow);
+          await runCommitPlan(campaignId, plan, payload.executionConfig as Record<string, unknown>, preserveCreatorBlueprint);
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
             duration_ms: Date.now() - stageStart,

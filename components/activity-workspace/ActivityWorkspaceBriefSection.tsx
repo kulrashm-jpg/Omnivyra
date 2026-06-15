@@ -5,6 +5,18 @@ import CreatorContentPanel from '@/components/activity-workspace/CreatorContentP
 import AISuggestionPanel from '@/components/activity-workspace/AISuggestionPanel';
 import type { useActivityWorkspace } from '../../hooks/useActivityWorkspace';
 import WorkspaceContentPanels from '../WorkspaceContentPanels';
+// Phase 3A — reuse the existing attachment upload handlers (single source of
+// truth) to wire the video upload journey into the live workspace.
+import {
+  extractAttachmentRowState,
+  postUploadMedia,
+  postUploadFileResumable,
+  postReschedule,
+  postUnschedule,
+  detectResumableUploadHandle,
+  resumePersistedUpload,
+  discardPersistedUploadSession,
+} from '@/components/activity-workspace/creatorMediaUploadHandlers';
 
 type S = ReturnType<typeof useActivityWorkspace>;
 
@@ -125,36 +137,61 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
         </div>
       )}
 
-      {isCreatorActivity && (
-        <CreatorContentPanel
-          theme={topicText || String(payload?.title ?? '')}
-          productionBrief={String(writerBrief?.writingIntent ?? payload?.description ?? '')}
-          talkingPoints={
-            Array.isArray((writerBrief as any)?.key_points) ? (writerBrief as any).key_points
-              : Array.isArray((writerBrief as any)?.keyPoints) ? (writerBrief as any).keyPoints
+      {isCreatorActivity && (() => {
+        // Phase 3A — wire the existing attachment upload journey for
+        // attachment-required creator rows (video/reel/short/podcast).
+        // `extractAttachmentRowState` returns null for text/image/carousel/
+        // autonomous rows, so the upload UI (gated in CreatorContentPanel on
+        // `attachmentRowState && onUploadMedia`) appears ONLY for video-type
+        // rows — every other row renders exactly as before. No scheduling or
+        // lifecycle logic here: handlers POST to existing endpoints and the
+        // backend auto-schedules (autoScheduleReadyCreatorRowById).
+        const attachmentRowState = extractAttachmentRowState({
+          dailyRaw: (dailyRaw ?? {}) as Record<string, unknown>,
+          contentType,
+        });
+        const resumableUploadHandle = attachmentRowState
+          ? detectResumableUploadHandle(attachmentRowState.dailyPlanId)
+          : null;
+        return (
+          <CreatorContentPanel
+            theme={topicText || String(payload?.title ?? '')}
+            productionBrief={String(writerBrief?.writingIntent ?? payload?.description ?? '')}
+            talkingPoints={
+              Array.isArray((writerBrief as any)?.key_points) ? (writerBrief as any).key_points
+                : Array.isArray((writerBrief as any)?.keyPoints) ? (writerBrief as any).keyPoints
+                : []
+            }
+            contentType={contentType}
+            platforms={suggestedPlatforms}
+            creatorInstructions={dailyRaw?.creator_instruction as Record<string, unknown> | undefined}
+            creatorAsset={creatorAsset as { type: 'video' | 'image' | 'carousel'; url?: string; files?: string[]; platformUploads?: Record<string, { url?: string; externalLink?: string; caption?: string; slides?: string[] }>; description?: string; transcript?: string; theme?: string } | undefined}
+            onAssetSaved={handleCreatorAssetSaved}
+            onGeneratePromotion={handleGenerateCreatorPromotion}
+            isGeneratingPromotion={isGeneratingVariants}
+            campaignId={String(payload?.campaignId ?? '')}
+            executionId={String(payload?.activityId ?? (dailyRaw?.execution_id ?? ''))}
+            weekNumber={Number(payload?.weekNumber) || 1}
+            day={String(payload?.day ?? 'Monday')}
+            objective={String(intent?.objective || writerBrief?.topicGoal || '')}
+            targetAudience={String(creatorCard?.target_audience || writerBrief?.whoAreWeWritingFor || intent?.target_audience || '')}
+            existingHashtags={
+              Array.isArray(creatorCard?.hashtags) ? (creatorCard.hashtags as string[])
+              : Array.isArray((dailyRaw as any)?.hashtags) ? (dailyRaw as any).hashtags as string[]
               : []
-          }
-          contentType={contentType}
-          platforms={suggestedPlatforms}
-          creatorInstructions={dailyRaw?.creator_instruction as Record<string, unknown> | undefined}
-          creatorAsset={creatorAsset as { type: 'video' | 'image' | 'carousel'; url?: string; files?: string[]; platformUploads?: Record<string, { url?: string; externalLink?: string; caption?: string; slides?: string[] }>; description?: string; transcript?: string; theme?: string } | undefined}
-          onAssetSaved={handleCreatorAssetSaved}
-          onGeneratePromotion={handleGenerateCreatorPromotion}
-          isGeneratingPromotion={isGeneratingVariants}
-          campaignId={String(payload?.campaignId ?? '')}
-          executionId={String(payload?.activityId ?? (dailyRaw?.execution_id ?? ''))}
-          weekNumber={Number(payload?.weekNumber) || 1}
-          day={String(payload?.day ?? 'Monday')}
-          objective={String(intent?.objective || writerBrief?.topicGoal || '')}
-          targetAudience={String(creatorCard?.target_audience || writerBrief?.whoAreWeWritingFor || intent?.target_audience || '')}
-          existingHashtags={
-            Array.isArray(creatorCard?.hashtags) ? (creatorCard.hashtags as string[])
-            : Array.isArray((dailyRaw as any)?.hashtags) ? (dailyRaw as any).hashtags as string[]
-            : []
-          }
-          onNotice={notify}
-        />
-      )}
+            }
+            onNotice={notify}
+            attachmentRowState={attachmentRowState}
+            onUploadMedia={attachmentRowState ? (input) => postUploadMedia({ ...input, dailyPlanId: attachmentRowState.dailyPlanId }) : undefined}
+            onUploadFile={attachmentRowState ? (input) => postUploadFileResumable({ ...input, dailyPlanId: attachmentRowState.dailyPlanId }) : undefined}
+            onReschedule={attachmentRowState ? (input) => postReschedule({ ...input, dailyPlanId: attachmentRowState.dailyPlanId }) : undefined}
+            onUnschedule={attachmentRowState ? (input) => postUnschedule({ ...input, dailyPlanId: attachmentRowState.dailyPlanId }) : undefined}
+            resumableUploadHandle={resumableUploadHandle}
+            onResumeUpload={attachmentRowState ? (handle) => resumePersistedUpload({ dailyPlanId: attachmentRowState.dailyPlanId, handle, expectedRevision: attachmentRowState.revision }) : undefined}
+            onDiscardResumableUpload={attachmentRowState ? (handle) => discardPersistedUploadSession({ dailyPlanId: attachmentRowState.dailyPlanId, handle }) : undefined}
+          />
+        );
+      })()}
 
       {VIEW_RULES[viewMode].showCreatorBrief && dailyRaw?.creator_instruction && typeof dailyRaw.creator_instruction === 'object' && (
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">

@@ -40,6 +40,9 @@ import {
 } from '../../lib/shared/creatorGovernanceRegistry';
 import { applyTransition } from '../../lib/shared/creatorLifecycleStateMachine';
 import { scheduleCreatorAttachmentPost } from './creator/creatorRowScheduler';
+// Phase 2B — Intelligent Mix per-row routing (ACTIVE for combined ONLY).
+import { partitionRowsByLane } from '../../lib/shared/bolt/rowSchedulingLane';
+import { buildRoutingDiagnostics, emitRoutingDiagnostics } from '../../lib/shared/bolt/boltRoutingPreview';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -1798,6 +1801,10 @@ async function scheduleStructuredPlanRuntime(
   const executionConfig = (((versionRow as any)?.campaign_snapshot ?? {})?.execution_config ?? {}) as Record<string, unknown>;
   const executionProfile = String(options?.executionProfile || executionConfig[['campaign', 'mode'].join('_')] || 'text');
   const usesUnifiedMediaFlow = executionProfile === 'creator';
+  // Phase 2B — Intelligent Mix. Row-level routing is activated for `combined`
+  // ONLY. `usesUnifiedMediaFlow` is deliberately left unchanged so text /
+  // creator / creator_dependent keep their exact existing dispatch.
+  const isCombined = executionProfile === 'combined';
   const currentPlanVersion = Math.max(1, toNumericValue((versionRow as any)?.version, 1));
 
   // Resolve user_id: campaign.user_id may be null if auth fell back to dev context.
@@ -2078,6 +2085,106 @@ async function scheduleStructuredPlanRuntime(
   });
 
   if (hasDailyPlans && options?.generateContent && dailyPlans) {
+    // ── INTELLIGENT MIX (combined) — PER-ROW LANE DISPATCH (Phase 2B) ───────
+    // Combined is the ONLY mode that uses row-level routing. This branch is
+    // gated on `isCombined`, so for text / creator / creator_dependent the
+    // code below runs byte-identically to before. No second scheduler — we
+    // reuse the EXISTING primitives:
+    //   • creator-intent rows (autonomous / attachment / video-waiting) →
+    //     processCreatorStructuredSchedule, whose EXISTING per-row eligibility
+    //     renders autonomous rows and HOLDS attachment/video rows that lack a
+    //     validated upload (video can never auto-schedule here).
+    //   • text rows → processBlockSchedule (the same inline path combined uses
+    //     today; the BOLT pipeline omits run_id, so this is the established
+    //     combined path — the async queue path for combined is out of scope).
+    //   • ineligible rows → skipped (counted), matching existing skip behavior.
+    if (isCombined) {
+      options?.onProgress?.('schedule-routing-rows');
+      const combinedRows = dailyPlans as DailyPlanRow[];
+      // Pure, unit-tested partition (single source of truth in rowSchedulingLane).
+      const { creatorLane: creatorLaneRows, textLane: textLaneRows, ineligible } =
+        partitionRowsByLane(combinedRows);
+      const ineligibleCount = ineligible.length;
+
+      // Telemetry (diagnostics only — no business logic). Pre-dispatch.
+      const diagnostics = buildRoutingDiagnostics(executionProfile, combinedRows);
+      emitRoutingDiagnostics(diagnostics, (event, payload) =>
+        console.log(`[schedule] intelligent-mix ${event}`,
+          { campaign_id: campaignId, run_id: options?.run_id ?? null, ...payload })
+      );
+
+      let creatorScheduled = 0;
+      let creatorSkipped = 0;
+      const mergedSkippedPlatforms: string[] = [];
+      if (creatorLaneRows.length > 0) {
+        options?.onProgress?.('schedule-creating-assets');
+        const creatorResult = await processCreatorStructuredSchedule({
+          campaignId,
+          companyId,
+          userId: effectiveUserId,
+          dailyPlans: creatorLaneRows,
+          accountMap,
+          normalize,
+          typeMapByPlatform,
+          currentPlanVersion,
+          onProgress: options?.onProgress,
+        });
+        creatorScheduled = creatorResult.scheduled_count;
+        creatorSkipped = creatorResult.skipped_count;
+        mergedSkippedPlatforms.push(...creatorResult.skipped_platforms);
+      }
+
+      let textScheduled = 0;
+      let textSkipped = 0;
+      if (textLaneRows.length > 0) {
+        options?.onProgress?.('schedule-creating-content');
+        const blockResult = await processBlockSchedule(
+          campaignId,
+          textLaneRows,
+          { ...campaign, user_id: effectiveUserId, company_id: companyId },
+          accountMap,
+          normalize,
+          typeMapByPlatform,
+          {
+            onProgress: (event) => {
+              if (event.phase === 'block-start') {
+                options?.onProgress?.(`schedule-block-${event.contentType}`);
+              } else if (event.phase === 'topic-master') {
+                options?.onProgress?.('schedule-creating-content');
+              } else if (event.phase === 'platform-done') {
+                options?.onProgress?.('schedule-repurposing-content');
+              } else if (event.phase === 'block-complete') {
+                options?.onProgress?.('schedule-writing-posts');
+              }
+            },
+          }
+        );
+        textScheduled = blockResult.scheduled_count;
+        textSkipped = blockResult.skipped_count;
+        mergedSkippedPlatforms.push(...blockResult.skipped_platforms);
+      }
+
+      // Post-dispatch actuals (diagnostics only).
+      console.log('[schedule] intelligent-mix routing result', {
+        campaign_id: campaignId,
+        run_id: options?.run_id ?? null,
+        execution_profile: executionProfile,
+        rows_total: combinedRows.length,
+        rows_creator_lane: creatorLaneRows.length,
+        rows_text_lane: textLaneRows.length,
+        rows_ineligible: ineligibleCount,
+        rows_rerouted: diagnostics.rows_that_would_reroute,
+        rows_held: diagnostics.video_waiting_rows + diagnostics.ineligible_rows,
+        scheduled_count: creatorScheduled + textScheduled,
+      });
+
+      return {
+        scheduled_count: creatorScheduled + textScheduled,
+        skipped_count: creatorSkipped + textSkipped + ineligibleCount,
+        skipped_platforms: mergedSkippedPlatforms,
+        already_scheduled_count: 0,
+      };
+    }
     if (usesUnifiedMediaFlow) {
       options?.onProgress?.('schedule-creating-assets');
       const creatorResult = await processCreatorStructuredSchedule({
