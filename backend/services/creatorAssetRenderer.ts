@@ -185,6 +185,47 @@ function balanceTextLines(value: string, maxChars: number, maxLines: number): st
   });
 }
 
+/**
+ * Infographic P0 — render body text as NATIVE SVG <text> (word-wrapped), not
+ * <foreignObject>. librsvg/resvg (via sharp) does not render foreignObject HTML
+ * reliably, so per-section bodies came out blank in the PNG. This helper mirrors
+ * the proven concept-card / header pattern: wrap with balanceTextLines, escape
+ * with escapeXml, emit one <text> per line. Height-derived line cap prevents
+ * overflow (native text does not auto-clip like a foreignObject <div>).
+ *
+ * Geometry/typography are caller-supplied so each engine preserves its exact
+ * zone, font size, weight, and color. `align:'center'` emits text-anchor=middle
+ * (caller passes the center x); default is left-aligned at x.
+ */
+function renderWrappedBodyText(opts: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  fontPx: number;
+  color: string;
+  weight?: string;
+  lineHeightMul?: number;
+  align?: 'left' | 'center';
+  maxLines?: number;
+}): string {
+  const text = compactText(opts.text || '');
+  if (!text) return '';
+  const weight = opts.weight ?? '500';
+  const lineH = Math.round(opts.fontPx * (opts.lineHeightMul ?? 1.45));
+  const zoneMaxLines = Math.max(1, Math.floor(opts.height / lineH));
+  const maxLines = Math.max(1, Math.min(opts.maxLines ?? zoneMaxLines, zoneMaxLines));
+  const charsPerLine = Math.max(8, Math.floor(opts.width / (opts.fontPx * 0.58)));
+  const lines = balanceTextLines(text, charsPerLine, maxLines);
+  if (lines.length === 0) return '';
+  const anchor = opts.align === 'center' ? ' text-anchor="middle"' : '';
+  const startY = opts.y + opts.fontPx;
+  return lines
+    .map((line, i) => `<text x="${opts.x}" y="${startY + i * lineH}"${anchor} font-size="${opts.fontPx}" font-family="Inter, Arial" font-weight="${weight}" fill="${opts.color}">${escapeXml(line)}</text>`)
+    .join('');
+}
+
 function createFallbackUrl(label: string, width: number, height: number): string {
   const text = encodeURIComponent(label.trim() || 'Creator Asset');
   return `${FALLBACK_BASE}/${width}x${height}/111827/ffffff.png?text=${text}`;
@@ -4571,9 +4612,18 @@ async function renderInfographicAsset(
         ${renderCardBase(x, y, cardAccent)}
         <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="44" rx="14" fill="${cardAccent}" opacity="0.10" />
         <text x="${x + 28}" y="${y + 30}" font-size="${Math.round(14 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cardAccent}" letter-spacing="2.4">${escapeXml(String(section.title).toUpperCase())}</text>
-        <foreignObject x="${x + 28}" y="${y + 62}" width="${cardWidth - 56}" height="${cardHeight - 84}">
-          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(cardBodyFontSize * 1.05)}px;line-height:1.45;color:${bodyTextColor};">${escapeXml(section.body)}</div>
-        </foreignObject>
+        ${renderWrappedBodyText({
+          x: x + 28,
+          y: y + 62,
+          width: cardWidth - 56,
+          height: cardHeight - 84,
+          text: String(section.body),
+          fontPx: Math.round(cardBodyFontSize * 1.05),
+          color: bodyTextColor,
+          weight: '500',
+          lineHeightMul: 1.45,
+          align: 'left',
+        })}
       `;
     }
 
