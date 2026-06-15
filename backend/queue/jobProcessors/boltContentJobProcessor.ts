@@ -32,6 +32,18 @@ import {
   generateMasterContentFromIntent,
   buildPlatformVariantsFromMaster,
 } from '../../services/contentGenerationPipeline';
+import {
+  emitTypeIntegrityTelemetry,
+  resolveLogicalContentType,
+} from '../../../lib/shared/contentTypeIntegrity';
+import { validatePollStructure } from '../../../lib/shared/pollStructureValidator';
+import { validateArticleStructure } from '../../../lib/shared/articleStructureValidator';
+import { validateThreadStructure } from '../../../lib/shared/threadStructureValidator';
+import { validatePostBodyQuality } from '../../../lib/shared/postBodyQualityValidator';
+import { validateStoryStructure } from '../../../lib/shared/storyStructureValidator';
+import { evaluateGenerationAcceptance } from '../../../lib/shared/generationAcceptanceEvaluator';
+import { updateExecutionContentByActivity } from '../../services/orchestration';
+import { selectPlannerGenerationInput } from '../../../lib/shared/plannerGenerationInputSelector';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +52,7 @@ import {
 export type PlatformTarget = {
   platform: string;
   content_type: string;
+  logical_content_type?: string;
 };
 
 export type BoltContentJobData = {
@@ -340,6 +353,26 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
 
   const companyId = campaign.company_id ?? null;
   const userId    = campaign.user_id;
+  const logicalContentType = resolveLogicalContentType({
+    logical: enriched.logical_content_type,
+    contentType: content_type,
+  });
+  emitTypeIntegrityTelemetry({
+    logicalType: logicalContentType,
+    publishType: content_type,
+    phase: 'generation',
+    source: 'boltContentJobProcessor',
+  });
+  const generationInputSelection = selectPlannerGenerationInput({
+    originalTitle: String(enriched.original_title ?? enriched.title ?? topic),
+    originalTopic: String(enriched.original_topic ?? enriched.topic ?? topic),
+    contentType: logicalContentType,
+    platform: platform_targets[0]?.platform,
+    metadata: enriched,
+    source: 'boltContentJobProcessor',
+  });
+  const generationTopic = generationInputSelection.generation_input_topic || generationInputSelection.generation_input_title || topic;
+  const generationTitle = generationInputSelection.generation_input_title || generationTopic;
 
   console.log('[bolt-job] START', { bolt_job_id, topic, content_type, platforms: platform_targets.map((t) => t.platform) });
 
@@ -379,8 +412,12 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
       const brief  = tryParseJson<Record<string, unknown>>(enriched.writer_content_brief ?? enriched.writerBrief) ?? {};
       const item = {
         execution_id: String(enriched.execution_id ?? enriched.id ?? `topic-${topic.slice(0, 30).replace(/\s/g, '-')}`),
-        topic,
-        title: topic,
+        topic: generationTopic,
+        title: generationTitle,
+        original_topic: generationInputSelection.original_topic,
+        original_title: generationInputSelection.original_title,
+        generation_input_topic: generationTopic,
+        generation_input_title: generationTitle,
         company_id: companyId,
         campaign_id,
         // Activity-consumption correlation (Phase 1): tie every child LLM/media
@@ -394,7 +431,7 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
           target_audience: enriched.whoAreWeWritingFor  ?? intent.target_audience ?? 'Professional audience',
         },
         writer_content_brief: {
-          topicTitle:                 topic,
+          topicTitle:                 generationTitle,
           writingIntent:              (enriched.writingIntent             ?? brief.writingIntent             ?? enriched.dailyObjective ?? '') as string,
           whatShouldReaderLearn:      (enriched.whatShouldReaderLearn     ?? brief.whatShouldReaderLearn     ?? '') as string,
           whatProblemAreWeAddressing: (enriched.whatProblemAreWeAddressing ?? brief.whatProblemAreWeAddressing ?? '') as string,
@@ -402,7 +439,14 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
           narrativeStyle:             (enriched.narrativeStyle            ?? brief.narrativeStyle            ?? '') as string,
           topicGoal:                  (enriched.dailyObjective            ?? brief.topicGoal                 ?? '') as string,
         },
-        content_type: content_type as any,
+        content_type: logicalContentType as any,
+        logical_content_type: logicalContentType,
+        editor_grade_results: {
+          ...(enriched.editor_grade_results && typeof enriched.editor_grade_results === 'object'
+            ? enriched.editor_grade_results as Record<string, unknown>
+            : {}),
+          generation_input_selection: generationInputSelection,
+        },
         active_platform_targets: platform_targets,
       } as Parameters<typeof generateMasterContentFromIntent>[0];
 
@@ -473,7 +517,13 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
     const brief  = tryParseJson<Record<string, unknown>>(enriched.writer_content_brief ?? enriched.writerBrief) ?? {};
     const itemForVariants = {
       execution_id: String(enriched.execution_id ?? `topic-${topic.slice(0, 30).replace(/\s/g, '-')}`),
-      topic, title: topic, company_id: companyId,
+      topic: generationTopic,
+      title: generationTitle,
+      original_topic: generationInputSelection.original_topic,
+      original_title: generationInputSelection.original_title,
+      generation_input_topic: generationTopic,
+      generation_input_title: generationTitle,
+      company_id: companyId,
       campaign_id,
       correlation: { referenceType: 'bolt_run', referenceId: run_id ?? campaign_id, parentActivityId: campaign_id },
       intent: {
@@ -484,7 +534,7 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
         target_audience: enriched.whoAreWeWritingFor ?? intent.target_audience ?? 'Professional audience',
       },
       writer_content_brief: {
-        topicTitle: topic,
+        topicTitle: generationTitle,
         writingIntent: (enriched.writingIntent ?? brief.writingIntent ?? '') as string,
         whatShouldReaderLearn: (enriched.whatShouldReaderLearn ?? brief.whatShouldReaderLearn ?? '') as string,
         whatProblemAreWeAddressing: (enriched.whatProblemAreWeAddressing ?? brief.whatProblemAreWeAddressing ?? '') as string,
@@ -492,9 +542,23 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
         narrativeStyle: (enriched.narrativeStyle ?? brief.narrativeStyle ?? '') as string,
         topicGoal: (enriched.dailyObjective ?? brief.topicGoal ?? '') as string,
       },
-      content_type: content_type as any,
+      content_type: logicalContentType as any,
+      logical_content_type: logicalContentType,
+      editor_grade_results: {
+        ...(enriched.editor_grade_results && typeof enriched.editor_grade_results === 'object'
+          ? enriched.editor_grade_results as Record<string, unknown>
+          : {}),
+        generation_input_selection: generationInputSelection,
+      },
       active_platform_targets: platform_targets,
-      master_content: { id: masterId, content: masterContent, generation_status: 'generated' },
+      master_content: {
+        id: masterId,
+        content: masterContent,
+        generation_status: 'generated',
+        logical_content_type: logicalContentType,
+        generation_input_selection: generationInputSelection,
+        decision_trace: { source_topic: generationTopic },
+      },
     } as unknown as Parameters<typeof generateMasterContentFromIntent>[0];
 
     variantByKey = new Map<string, string>();
@@ -598,7 +662,17 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
     const scheduledFor = buildScheduledFor(dateStr, timeStr);
     // For DB content_type, use canonical platform (not 'x' alias)
     const dbPlatform    = toDbPlatform(canonicalPlatform);
+    const targetLogicalContentType = resolveLogicalContentType({
+      logical: target.logical_content_type,
+      contentType: target.content_type,
+    });
     const dbContentType = toDbContentType(dbPlatform, target.content_type, type_map_by_platform);
+    emitTypeIntegrityTelemetry({
+      logicalType: targetLogicalContentType,
+      publishType: dbContentType,
+      phase: 'scheduling',
+      source: 'boltContentJobProcessor.scheduleInsert',
+    });
 
     const { data: inserted, error: insertError } = await ownedDbTable('scheduled_posts')
       .insert({
@@ -647,21 +721,105 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
       // Update daily_content_plans.content with finalized JSON
       try {
         const rowParsed = tryParseJson<Record<string, unknown>>((planRow as any)?.content) ?? {};
-        const finalizedJson = {
-          ...rowParsed,
-          generated_content:    content,
-          master_content:       { id: masterId, content: masterContent },
-          content_status:       'finalized',
-          finalized_at:         new Date().toISOString(),
-          refinement_status:    'finalized',
-          refinement_finalized: true,
-          distribution_mode:    totalDistributions > 1 ? 'shared' : 'unique',
-          sequence_index:       i + 1,
-          total_distributions:  totalDistributions,
-        };
-        await ownedDbTable('daily_content_plans')
-          .update({ content: JSON.stringify(finalizedJson), updated_at: new Date().toISOString() })
-          .eq('id', dailyPlanId);
+        const rowLogicalContentType = resolveLogicalContentType({
+          logical: rowParsed.logical_content_type,
+          contentType: logicalContentType,
+        });
+        const schedulingPollStructure = validatePollStructure({
+          title: String(rowParsed.title || rowParsed.topic || topic || ''),
+          content,
+          logicalContentType: rowLogicalContentType,
+          platform: canonicalPlatform,
+          phase: 'scheduling',
+          source: 'boltContentJobProcessor.finalizedJson',
+        });
+        const schedulingArticleStructure = validateArticleStructure({
+          title: String(rowParsed.title || rowParsed.topic || topic || ''),
+          content,
+          logicalContentType: rowLogicalContentType,
+          platform: canonicalPlatform,
+          phase: 'scheduling',
+          source: 'boltContentJobProcessor.finalizedJson',
+        });
+        const schedulingThreadStructure = validateThreadStructure({
+          title: String(rowParsed.title || rowParsed.topic || topic || ''),
+          content,
+          logicalContentType: rowLogicalContentType,
+          platform: canonicalPlatform,
+          phase: 'scheduling',
+          source: 'boltContentJobProcessor.finalizedJson',
+        });
+        const schedulingPostBodyQuality = validatePostBodyQuality({
+          title: String(rowParsed.title || rowParsed.topic || topic || ''),
+          content,
+          logicalContentType: rowLogicalContentType,
+          platform: canonicalPlatform,
+          phase: 'scheduling',
+          source: 'boltContentJobProcessor.finalizedJson',
+        });
+        const schedulingStoryStructure = validateStoryStructure({
+          title: String(rowParsed.title || rowParsed.topic || topic || ''),
+          content,
+          logicalContentType: rowLogicalContentType,
+          platform: canonicalPlatform,
+          phase: 'scheduling',
+          source: 'boltContentJobProcessor.finalizedJson',
+        });
+        const generationAcceptance = evaluateGenerationAcceptance({
+          title: String(rowParsed.title || rowParsed.topic || topic || ''),
+          content,
+          logicalContentType: rowLogicalContentType,
+          publishContentType: dbContentType,
+          platform: canonicalPlatform,
+          phase: 'scheduling',
+          source: 'boltContentJobProcessor.finalizedJson',
+          editorGradeResults: [schedulingPollStructure, schedulingArticleStructure, schedulingThreadStructure, schedulingPostBodyQuality, schedulingStoryStructure],
+          metadata: rowParsed.editor_grade_results,
+        });
+        // D1: route finalization through the reconciled write path (same merge
+        // used by approval persistence) so a concurrent reviewer decision cannot
+        // be clobbered. The transform receives the FRESH persisted blob; we carry
+        // it forward (...existing) and reconcileContentWrite + PROTECTED_ENRICHMENTS
+        // preserve editor_grade_approval / review_history / governance.
+        const finalizedAt = new Date().toISOString();
+        await updateExecutionContentByActivity(
+          String(dailyPlanId),
+          (existing) => {
+            const existingEgr =
+              existing.editor_grade_results && typeof existing.editor_grade_results === 'object'
+                ? existing.editor_grade_results as Record<string, unknown>
+                : {};
+            return {
+              ...existing,
+              logical_content_type: rowLogicalContentType,
+              editor_grade_results: {
+                ...existingEgr,
+                ...(schedulingPollStructure ? { scheduling_poll_structure: schedulingPollStructure } : {}),
+                ...(schedulingArticleStructure ? { scheduling_article_structure: schedulingArticleStructure } : {}),
+                ...(schedulingThreadStructure ? { scheduling_thread_structure: schedulingThreadStructure } : {}),
+                ...(schedulingPostBodyQuality ? { scheduling_post_body_quality: schedulingPostBodyQuality } : {}),
+                ...(schedulingStoryStructure ? { scheduling_story_structure: schedulingStoryStructure } : {}),
+                generation_acceptance: generationAcceptance,
+              },
+              generation_acceptance: generationAcceptance,
+              generated_content:    content,
+              master_content:       {
+                id: masterId,
+                content: masterContent,
+                logical_content_type: logicalContentType,
+                generation_input_selection: generationInputSelection,
+              },
+              content_status:       'finalized',
+              finalized_at:         finalizedAt,
+              refinement_status:    'finalized',
+              refinement_finalized: true,
+              distribution_mode:    totalDistributions > 1 ? 'shared' : 'unique',
+              sequence_index:       i + 1,
+              total_distributions:  totalDistributions,
+            };
+          },
+          'boltContentJobProcessor.finalizedJson',
+        );
       } catch { /* non-fatal */ }
     }
 

@@ -1,3 +1,7 @@
+import type { EditorGradeResult } from '../../../lib/shared/editorGradeReadiness';
+import type { GenerationAcceptanceResult } from '../../../lib/shared/generationAcceptanceEvaluator';
+import type { PlannerGenerationInputSelection } from '../../../lib/shared/plannerGenerationInputSelector';
+
 export type GenerationStatus = 'pending' | 'generated' | 'failed';
 
 export type MasterContentPayload = {
@@ -7,6 +11,7 @@ export type MasterContentPayload = {
   generation_status: GenerationStatus;
   generation_source: 'ai';
   content_type_mode?: 'text' | 'media_blueprint';
+  logical_content_type?: string;
   required_media?: boolean;
   media_status?: 'missing' | 'ready';
   decision_trace?: {
@@ -19,11 +24,15 @@ export type MasterContentPayload = {
     narrative_role: string;
     progression_step: number | null;
   };
+  editor_grade_result?: EditorGradeResult;
+  generation_acceptance?: GenerationAcceptanceResult;
+  generation_input_selection?: PlannerGenerationInputSelection;
 };
 
 export type PlatformVariantPayload = {
   platform: string;
   content_type: string;
+  logical_content_type?: string;
   generated_content: string;
   generation_status: GenerationStatus;
   locked_variant: boolean;
@@ -84,6 +93,9 @@ export type PlatformVariantPayload = {
       platform_reason: string;
     }>;
   };
+  editor_grade_result?: EditorGradeResult;
+  generation_acceptance?: GenerationAcceptanceResult;
+  generation_input_selection?: PlannerGenerationInputSelection;
 };
 
 export type MediaAssetPayload = {
@@ -106,6 +118,10 @@ export type DailyExecutionItemLike = {
   content_type?: string;
   topic?: string;
   title?: string;
+  original_topic?: string;
+  original_title?: string;
+  generation_input_topic?: string;
+  generation_input_title?: string;
   intent?: Record<string, unknown>;
   writer_content_brief?: Record<string, unknown>;
   active_platform_targets?: unknown;
