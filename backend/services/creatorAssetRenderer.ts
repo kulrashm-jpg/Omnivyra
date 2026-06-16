@@ -4960,14 +4960,23 @@ async function renderBrandCardAsset(
   const metadata = safeObject(safeObject(assetPayload.media_bundle).metadata);
   const platform = compactText(metadata.platform || metadata.primary_platform, 'linkedin');
   const { width, height } = resolveRenderSize(platform, 'image');
-  const brandKit = resolveCreatorBrandKit({
-    assetPayload,
-    metadata,
-    companyId: options.companyId,
-    tenantId: options.companyId,
-    platform,
-    assetType: 'brand_card',
-  });
+  // Phase 4B — brand card adopts the BrandRuntime via the 1C adapter when a
+  // published brand_identity row exists; otherwise the exact legacy resolver
+  // path (defaults-only byte-identical). Same source guard as Phase 4A.
+  const brandRuntime = options.companyId
+    ? await resolveBrand(options.companyId).catch(() => null)
+    : null;
+  const isBrandedRuntime = !!(brandRuntime && brandRuntime.meta.source === 'brand_identity');
+  const brandKit = isBrandedRuntime
+    ? brandRuntimeToCreatorBrandKit(brandRuntime, { assetPayload, metadata, platform, assetType: 'brand_card' })
+    : resolveCreatorBrandKit({
+        assetPayload,
+        metadata,
+        companyId: options.companyId,
+        tenantId: options.companyId,
+        platform,
+        assetType: 'brand_card',
+      });
   const overlay = normalizeOverlayText({
     assetPayload,
     metadata,
@@ -5045,17 +5054,29 @@ async function renderBrandCardAsset(
   });
   const palette = brandKit.normalizedPalette;
   const bg = palette[0] || '#111827';
-  const accent = palette[1] || '#38bdf8';
+  // Phase 4B — canonical (WCAG) accent instead of positional palette[1].
+  // Byte-identical for a defaults-only tenant (accentColor === palette[1]).
+  const accent = brandKit.accentColor || palette[1] || '#38bdf8';
+  // Phase 4B — adopt the brand font for a branded tenant; preserve the EXACT
+  // per-spot default literals otherwise (the <text> spots used 'Inter, Arial'
+  // and the body CSS used 'Inter,Arial,sans-serif'). Weights are bespoke
+  // card-design constants and are intentionally preserved (no weight-driven
+  // regression; no geometry change).
+  const brandFont = isBrandedRuntime && typeof brandKit.typography?.fontFamily === 'string' && brandKit.typography.fontFamily.trim()
+    ? brandKit.typography.fontFamily.trim().replace(/"/g, "'")
+    : null;
+  const fontAttr = brandFont ?? 'Inter, Arial';
+  const fontCss = brandFont ?? 'Inter,Arial,sans-serif';
   const svg = `
     <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
       <rect width="${width}" height="${height}" fill="${bg}"/>
       <rect x="${Math.round(width * 0.07)}" y="${Math.round(height * 0.12)}" width="${Math.round(width * 0.86)}" height="${Math.round(height * 0.76)}" rx="8" fill="#ffffff" opacity="0.96"/>
       <rect x="${Math.round(width * 0.07)}" y="${Math.round(height * 0.12)}" width="10" height="${Math.round(height * 0.76)}" fill="${accent}"/>
-      <text x="${Math.round(width * 0.14)}" y="${Math.round(height * 0.28)}" font-size="${Math.round(width * 0.045)}" font-family="Inter, Arial" font-weight="900" fill="#0f172a">“</text>
+      <text x="${Math.round(width * 0.14)}" y="${Math.round(height * 0.28)}" font-size="${Math.round(width * 0.045)}" font-family="${fontAttr}" font-weight="900" fill="#0f172a">“</text>
       <foreignObject x="${Math.round(width * 0.14)}" y="${Math.round(height * 0.32)}" width="${Math.round(width * 0.68)}" height="${Math.round(height * 0.34)}">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(width * 0.038)}px;line-height:1.12;font-weight:850;color:#111827;">${escapeXml(quote)}</div>
+        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:${fontCss};font-size:${Math.round(width * 0.038)}px;line-height:1.12;font-weight:850;color:#111827;">${escapeXml(quote)}</div>
       </foreignObject>
-      <text x="${Math.round(width * 0.14)}" y="${Math.round(height * 0.77)}" font-size="${Math.round(width * 0.022)}" font-family="Inter, Arial" font-weight="800" fill="${accent}">${escapeXml(compactText(metadata.company_name || metadata.companyName || 'Brand perspective', 'Brand perspective'))}</text>
+      <text x="${Math.round(width * 0.14)}" y="${Math.round(height * 0.77)}" font-size="${Math.round(width * 0.022)}" font-family="${fontAttr}" font-weight="800" fill="${accent}">${escapeXml(compactText(metadata.company_name || metadata.companyName || 'Brand perspective', 'Brand perspective'))}</text>
     </svg>
   `;
   const fileBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
