@@ -16,7 +16,7 @@
  * context but NOT persisted — it stays owned by CompanyIdentity (compose, not
  * absorb), so there is a single source of truth for messaging.
  */
-import { invalidateBrandRuntime, resolveBrand, type BrandRuntime, type BrandIdentityRow } from './brandRuntime';
+import { invalidateBrandCaches, resolveBrand, type BrandRuntime, type BrandIdentityRow } from './brandRuntime';
 
 export class BrandWriteError extends Error {
   constructor(public code: string) {
@@ -62,7 +62,9 @@ const sanitizeDescriptors = (v: unknown): string[] | undefined => {
   return arr.length ? arr : undefined;
 };
 const now = (deps: BrandWriteDeps) => (deps.nowIso ?? (() => new Date().toISOString()))();
-const invalidate = (deps: BrandWriteDeps, companyId: string) => (deps.invalidate ?? invalidateBrandRuntime)(companyId);
+// Phase 3C — default to the full fan-out (runtime cache + registered downstream
+// voice caches) so publish/rollback leave no layer serving pre-publish voice.
+const invalidate = (deps: BrandWriteDeps, companyId: string) => (deps.invalidate ?? invalidateBrandCaches)(companyId);
 
 export interface CreateDraftResult {
   draft: BrandIdentityRow;

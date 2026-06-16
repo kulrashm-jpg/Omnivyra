@@ -11,6 +11,7 @@ import { isMediaDependentContentType } from './executionHelpers';
 import type { MasterContentPayload, DailyExecutionItemLike } from './types';
 import { getProfile } from '../companyProfileService';
 import { resolveBrandVoice } from '../brand/resolveBrandVoice';
+import { registerBrandCacheInvalidator } from '../brand/brandRuntime';
 import {
   extractCompanyIdentity,
   buildCompanyContextBlockShort,
@@ -39,6 +40,22 @@ function applyGovernanceToSystemPrompt(
 // ── Company identity cache (5-min TTL, matches aiModelRouter pattern) ────────
 const _identityCache = new Map<string, { identity: CompanyIdentity; at: number }>();
 const IDENTITY_CACHE_TTL = 5 * 60 * 1000;
+
+/** Phase 3C — this cache bakes the resolved brand voice (line 52), so a brand
+ *  publish must clear it in-process or stale voice is served for ≤5 min.
+ *  Registered with the brand-cache registry; fired by invalidateBrandCaches. */
+export function clearIdentityCacheForCompany(companyId: string): void {
+  _identityCache.delete(companyId);
+}
+registerBrandCacheInvalidator(clearIdentityCacheForCompany);
+
+/** @internal test-only seams for cache-coherence tests. */
+export function __identityCacheHasForTest(companyId: string): boolean {
+  return _identityCache.has(companyId);
+}
+export function __identityCacheSeedForTest(companyId: string): void {
+  _identityCache.set(companyId, { identity: {}, at: Date.now() });
+}
 
 async function resolveCompanyIdentity(companyId: string | null | undefined): Promise<CompanyIdentity> {
   if (!companyId) return {};

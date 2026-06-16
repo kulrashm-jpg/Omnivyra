@@ -10,6 +10,7 @@ import { optimizeDiscoverabilityForPlatform, buildMediaSearchIntent, normalizeLe
 import { getProfile } from '../companyProfileService';
 import { extractCompanyIdentity, buildCompanyContextBlockShort, buildIdentityLock, buildAntiGenericRules, type CompanyIdentity } from '../../../lib/content/companyContextBlock';
 import { resolveBrandVoice } from '../brand/resolveBrandVoice';
+import { registerBrandCacheInvalidator } from '../brand/brandRuntime';
 // Creator System-Prompt Governance Integration. Final Closure Pass —
 // Phase 3 (rewriter consistency). Both the batch variant generator
 // and the per-platform rewriter delegate to the SAME canonical
@@ -21,6 +22,22 @@ import {
 
 // ── Company context cache for variant generation ─────────────────────────────
 const _variantContextCache = new Map<string, { block: string; identity: CompanyIdentity; at: number }>();
+
+/** Phase 3C — this cache bakes the resolved brand voice (line 34) into the
+ *  context block, so a brand publish must clear it in-process. Registered with
+ *  the brand-cache registry; fired by invalidateBrandCaches. */
+export function clearVariantContextCacheForCompany(companyId: string): void {
+  _variantContextCache.delete(companyId);
+}
+registerBrandCacheInvalidator(clearVariantContextCacheForCompany);
+
+/** @internal test-only seams for cache-coherence tests. */
+export function __variantCacheHasForTest(companyId: string): boolean {
+  return _variantContextCache.has(companyId);
+}
+export function __variantCacheSeedForTest(companyId: string): void {
+  _variantContextCache.set(companyId, { block: '', identity: {}, at: Date.now() });
+}
 
 async function resolveCompanyContextBlock(companyId: string | null | undefined): Promise<{ block: string; identity: CompanyIdentity }> {
   if (!companyId) return { block: '', identity: {} };
