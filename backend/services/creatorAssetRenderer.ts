@@ -209,6 +209,7 @@ function renderWrappedBodyText(opts: {
   lineHeightMul?: number;
   align?: 'left' | 'center';
   maxLines?: number;
+  fontFamily?: string;
 }): string {
   const text = compactText(opts.text || '');
   if (!text) return '';
@@ -222,7 +223,7 @@ function renderWrappedBodyText(opts: {
   const anchor = opts.align === 'center' ? ' text-anchor="middle"' : '';
   const startY = opts.y + opts.fontPx;
   return lines
-    .map((line, i) => `<text x="${opts.x}" y="${startY + i * lineH}"${anchor} font-size="${opts.fontPx}" font-family="Inter, Arial" font-weight="${weight}" fill="${opts.color}">${escapeXml(line)}</text>`)
+    .map((line, i) => `<text x="${opts.x}" y="${startY + i * lineH}"${anchor} font-size="${opts.fontPx}" font-family="${opts.fontFamily ?? 'Inter, Arial'}" font-weight="${weight}" fill="${opts.color}">${escapeXml(line)}</text>`)
     .join('');
 }
 
@@ -4092,6 +4093,17 @@ async function renderInfographicAsset(
   const accent = palette[1] || '#22c55e';
   const panel = '#ffffff';
   const text = '#111827';
+  // Brand typography activation (Phase A.1) — consume the brand font (same
+  // source the image/overlay path uses) with the prior 'Inter, Arial' literal
+  // as the safe fallback, so output is byte-identical when no brand font is set.
+  // Colors/neutrals are intentionally NOT changed in this commit.
+  // Sanitize double-quotes → single so a quoted brand font (e.g. "Times New
+  // Roman") can't break the double-quoted SVG font-family attribute.
+  const fontFamily = (typeof brandKit.typography?.fontFamily === 'string' && brandKit.typography.fontFamily.trim())
+    ? brandKit.typography.fontFamily.trim().replace(/"/g, "'")
+    : 'Inter, Arial';
+  const renderBrandBody = (o: Parameters<typeof renderWrappedBodyText>[0]): string =>
+    renderWrappedBodyText({ ...o, fontFamily });
   const cardWidth = engine.cardWidth;
   const cardHeight = engine.cardHeight;
 
@@ -4351,7 +4363,7 @@ async function renderInfographicAsset(
         const titleLineH = Math.round(titleSize * 1.2);
         const titleStartY = iconCy - iconR + titleSize;
         const titleBlockH = titleLines.length * titleLineH;
-        const titleSvg = titleLines.map((line, i) => `<text x="${titleX}" y="${titleStartY + i * titleLineH}" font-size="${titleSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(line)}</text>`).join('');
+        const titleSvg = titleLines.map((line, i) => `<text x="${titleX}" y="${titleStartY + i * titleLineH}" font-size="${titleSize}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(line)}</text>`).join('');
 
         // Footer-up layout: compute footer geometry first so we know
         // how much vertical space the lead + bullets have.
@@ -4368,7 +4380,7 @@ async function renderInfographicAsset(
         // Lead — up to 3 lines.
         const leadLines = balanceTextLines(lead, leadCharsPerLine, 3);
         const leadLineH = Math.round(leadSize * 1.45);
-        const leadSvg = leadLines.map((line, i) => `<text x="${contentLeftX}" y="${leadY + i * leadLineH}" font-size="${leadSize}" font-family="Inter, Arial" font-weight="500" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('');
+        const leadSvg = leadLines.map((line, i) => `<text x="${contentLeftX}" y="${leadY + i * leadLineH}" font-size="${leadSize}" font-family="${fontFamily}" font-weight="500" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('');
         const leadBlockH = leadLines.length * leadLineH;
 
         // Bullets — each up to 2 lines, indented under a dot. Max 4
@@ -4386,7 +4398,7 @@ async function renderInfographicAsset(
           if (bulletYCursor + lines.length * bulletLineH > impactRowY - 14) break;
           bulletsSvgParts.push(`<circle cx="${contentLeftX + 4}" cy="${bulletYCursor - Math.round(bulletSize * 0.3)}" r="3" fill="${cycleAccent}" />`);
           for (let li = 0; li < lines.length; li += 1) {
-            bulletsSvgParts.push(`<text x="${contentLeftX + 16}" y="${bulletYCursor + li * bulletLineH}" font-size="${bulletSize}" font-family="Inter, Arial" font-weight="500" fill="${bodyTextColor}">${escapeXml(lines[li])}</text>`);
+            bulletsSvgParts.push(`<text x="${contentLeftX + 16}" y="${bulletYCursor + li * bulletLineH}" font-size="${bulletSize}" font-family="${fontFamily}" font-weight="500" fill="${bodyTextColor}">${escapeXml(lines[li])}</text>`);
           }
           bulletYCursor += lines.length * bulletLineH + 4;
         }
@@ -4405,8 +4417,8 @@ async function renderInfographicAsset(
           const statLabelStartY = statBoxY + 110;
           statRail = `
             <rect x="${statBoxX}" y="${statBoxY}" width="${railW}" height="${statBoxH}" rx="12" fill="${cycleAccent}" opacity="0.10" />
-            <text x="${statBoxX + railW / 2}" y="${statBoxY + 70}" text-anchor="middle" font-size="${statValueSize}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${escapeXml(stat.value)}</text>
-            ${statLabelLines.map((line, i) => `<text x="${statBoxX + railW / 2}" y="${statLabelStartY + i * statLabelLineH}" text-anchor="middle" font-size="${statLabelSize}" font-family="Inter, Arial" font-weight="500" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('')}
+            <text x="${statBoxX + railW / 2}" y="${statBoxY + 70}" text-anchor="middle" font-size="${statValueSize}" font-family="${fontFamily}" font-weight="900" fill="${cycleAccent}">${escapeXml(stat.value)}</text>
+            ${statLabelLines.map((line, i) => `<text x="${statBoxX + railW / 2}" y="${statLabelStartY + i * statLabelLineH}" text-anchor="middle" font-size="${statLabelSize}" font-family="${fontFamily}" font-weight="500" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('')}
           `;
         }
 
@@ -4440,8 +4452,8 @@ async function renderInfographicAsset(
             return `
               <rect x="${px}" y="${impactRowY}" width="${panelW}" height="${renderedImpactRowH}" rx="10" fill="${color}" opacity="0.13" />
               <rect x="${px}" y="${impactRowY}" width="4" height="${renderedImpactRowH}" rx="2" fill="${color}" />
-              <text x="${px + 18}" y="${labelY}" font-size="${panelLabelSize}" font-family="Inter, Arial" font-weight="800" fill="${color}" letter-spacing="2.4">${escapeXml(label)}</text>
-              ${lines.map((line, i) => `<text x="${px + 18}" y="${valueStartY + i * panelValueLineH}" font-size="${panelTextSize}" font-family="Inter, Arial" font-weight="600" fill="${text}">${escapeXml(line)}</text>`).join('')}
+              <text x="${px + 18}" y="${labelY}" font-size="${panelLabelSize}" font-family="${fontFamily}" font-weight="800" fill="${color}" letter-spacing="2.4">${escapeXml(label)}</text>
+              ${lines.map((line, i) => `<text x="${px + 18}" y="${valueStartY + i * panelValueLineH}" font-size="${panelTextSize}" font-family="${fontFamily}" font-weight="600" fill="${text}">${escapeXml(line)}</text>`).join('')}
             `;
           };
           const impactPanelX = x + 16;
@@ -4470,8 +4482,8 @@ async function renderInfographicAsset(
           const valueWeight = example ? '500' : '700';
           footerBlock = `
             <rect x="${x + 16}" y="${footerBandY}" width="${cardWidth - 32}" height="${renderedFooterBandH}" rx="10" fill="${cycleAccent}" opacity="0.08" />
-            <text x="${x + 32}" y="${footerBandY + 20}" font-size="${footerLabelSize}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">${label}</text>
-            ${valueLines.map((line, i) => `<text x="${x + 32}" y="${valueStartY + i * valueLineH}" font-size="${footerTextSize}" font-family="Inter, Arial" font-weight="${valueWeight}" fill="${valueColor}">${escapeXml(line)}</text>`).join('')}
+            <text x="${x + 32}" y="${footerBandY + 20}" font-size="${footerLabelSize}" font-family="${fontFamily}" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">${label}</text>
+            ${valueLines.map((line, i) => `<text x="${x + 32}" y="${valueStartY + i * valueLineH}" font-size="${footerTextSize}" font-family="${fontFamily}" font-weight="${valueWeight}" fill="${valueColor}">${escapeXml(line)}</text>`).join('')}
           `;
         }
 
@@ -4504,9 +4516,9 @@ async function renderInfographicAsset(
           ${renderCardBase(x, y, cycleAccent)}
           <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-opacity="0.14" stroke-width="${donutStroke}" />
           <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-width="${donutStroke}" stroke-linecap="round" stroke-dasharray="${filledArc} ${circumference - filledArc}" transform="rotate(-90 ${donutCx} ${donutCy})" />
-          <text x="${donutCx}" y="${donutCy + Math.round(donutR * 0.22)}" text-anchor="middle" font-size="${Math.max(36, Math.round(donutR * 0.72))}" font-family="Inter, Arial" font-weight="900" fill="${text}">${escapeXml(displayStat)}</text>
-          <text x="${cardCx}" y="${donutCy + donutR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-          ${renderWrappedBodyText({
+          <text x="${donutCx}" y="${donutCy + Math.round(donutR * 0.22)}" text-anchor="middle" font-size="${Math.max(36, Math.round(donutR * 0.72))}" font-family="${fontFamily}" font-weight="900" fill="${text}">${escapeXml(displayStat)}</text>
+          <text x="${cardCx}" y="${donutCy + donutR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+          ${renderBrandBody({
             x: cardCx,
             y: donutCy + donutR + 66,
             width: cardWidth - 56,
@@ -4537,11 +4549,11 @@ async function renderInfographicAsset(
           : Math.min(1, 0.35 + (index * 0.18));
         return `
           ${renderCardBase(x, y, cycleAccent)}
-          <text x="${cardCx}" y="${y + Math.round(cardHeight * 0.36)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * 0.38, cardWidth * 0.36))}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${escapeXml(numeralStr)}</text>
+          <text x="${cardCx}" y="${y + Math.round(cardHeight * 0.36)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * 0.38, cardWidth * 0.36))}" font-family="${fontFamily}" font-weight="900" fill="${cycleAccent}">${escapeXml(numeralStr)}</text>
           <rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" opacity="0.16" />
           <rect x="${barX}" y="${barY}" width="${Math.round(barW * barFillRatio)}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" />
-          <text x="${cardCx}" y="${barY + barH + 38}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-          ${renderWrappedBodyText({
+          <text x="${cardCx}" y="${barY + barH + 38}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+          ${renderBrandBody({
             x: cardCx,
             y: barY + barH + 56,
             width: cardWidth - 56,
@@ -4574,10 +4586,10 @@ async function renderInfographicAsset(
       const ratioLabel = `${filledDots}/10`;
       return `
         ${renderCardBase(x, y, cycleAccent)}
-        <text x="${cardCx}" y="${y + Math.round(cardHeight * 0.22)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * 0.20, cardWidth * 0.22))}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${escapeXml(ratioLabel)}</text>
+        <text x="${cardCx}" y="${y + Math.round(cardHeight * 0.22)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * 0.20, cardWidth * 0.22))}" font-family="${fontFamily}" font-weight="900" fill="${cycleAccent}">${escapeXml(ratioLabel)}</text>
         ${dots}
-        <text x="${cardCx}" y="${dotY + dotR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        ${renderWrappedBodyText({
+        <text x="${cardCx}" y="${dotY + dotR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+        ${renderBrandBody({
           x: cardCx,
           y: dotY + dotR + 66,
           width: cardWidth - 56,
@@ -4618,11 +4630,11 @@ async function renderInfographicAsset(
         <rect x="${x + 6}" y="${y}" width="${badgePanelW}" height="${cardHeight}" rx="14" fill="${cycleAccent}" opacity="0.10" />
         <!-- Step badge -->
         <circle cx="${badgeCx}" cy="${badgeCy}" r="${badgeR}" fill="${cycleAccent}" />
-        <text x="${badgeCx}" y="${badgeCy + Math.round(badgeR * 0.35)}" text-anchor="middle" font-size="${Math.round(badgeR * 0.85)}" font-family="Inter, Arial" font-weight="900" fill="#ffffff">${stepNum}</text>
+        <text x="${badgeCx}" y="${badgeCy + Math.round(badgeR * 0.35)}" text-anchor="middle" font-size="${Math.round(badgeR * 0.85)}" font-family="${fontFamily}" font-weight="900" fill="#ffffff">${stepNum}</text>
         <!-- Step label above the title -->
-        <text x="${x + badgePanelW + 34}" y="${y + 44}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">STEP ${stepNum}</text>
-        <text x="${x + badgePanelW + 34}" y="${y + 80}" font-size="${Math.round(cardTitleFontSize * 1.15)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        ${renderWrappedBodyText({
+        <text x="${x + badgePanelW + 34}" y="${y + 44}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">STEP ${stepNum}</text>
+        <text x="${x + badgePanelW + 34}" y="${y + 80}" font-size="${Math.round(cardTitleFontSize * 1.15)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+        ${renderBrandBody({
           x: x + badgePanelW + 34,
           y: y + 96,
           width: cardWidth - badgePanelW - 70,
@@ -4647,8 +4659,8 @@ async function renderInfographicAsset(
       return `
         ${renderCardBase(x, y, cardAccent)}
         <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="44" rx="14" fill="${cardAccent}" opacity="0.10" />
-        <text x="${x + 28}" y="${y + 30}" font-size="${Math.round(14 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cardAccent}" letter-spacing="2.4">${escapeXml(String(section.title).toUpperCase())}</text>
-        ${renderWrappedBodyText({
+        <text x="${x + 28}" y="${y + 30}" font-size="${Math.round(14 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${cardAccent}" letter-spacing="2.4">${escapeXml(String(section.title).toUpperCase())}</text>
+        ${renderBrandBody({
           x: x + 28,
           y: y + 62,
           width: cardWidth - 56,
@@ -4671,9 +4683,9 @@ async function renderInfographicAsset(
       return `
         ${renderCardBase(x, y, cycleAccent)}
         <circle cx="${dotCx}" cy="${dotCy}" r="11" fill="${cycleAccent}" stroke="#ffffff" stroke-width="3" />
-        <text x="${x + 28}" y="${y + 32}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PHASE ${index + 1}</text>
-        <text x="${x + 28}" y="${y + 62}" font-size="${cardTitleFontSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        ${renderWrappedBodyText({
+        <text x="${x + 28}" y="${y + 32}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PHASE ${index + 1}</text>
+        <text x="${x + 28}" y="${y + 62}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+        ${renderBrandBody({
           x: x + 28,
           y: y + 78,
           width: cardWidth - 56,
@@ -4694,9 +4706,9 @@ async function renderInfographicAsset(
       const numBadge = String(index + 1).padStart(2, '0');
       return `
         ${renderCardBase(x, y, cycleAccent)}
-        <text x="${x + 28}" y="${y + 56}" font-size="${Math.round(34 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${numBadge}</text>
-        <text x="${x + 96}" y="${y + 48}" font-size="${cardTitleFontSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        ${renderWrappedBodyText({
+        <text x="${x + 28}" y="${y + 56}" font-size="${Math.round(34 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="900" fill="${cycleAccent}">${numBadge}</text>
+        <text x="${x + 96}" y="${y + 48}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+        ${renderBrandBody({
           x: x + 96,
           y: y + 64,
           width: cardWidth - 120,
@@ -4716,9 +4728,9 @@ async function renderInfographicAsset(
     return `
       ${renderCardBase(x, y, cycleAccent)}
       <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="48" rx="14" fill="${cycleAccent}" opacity="0.14" />
-      <text x="${x + 28}" y="${y + 22}" font-size="${Math.round(12 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PILLAR ${index + 1}</text>
-      <text x="${x + 28}" y="${y + 78}" font-size="${cardTitleFontSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-      ${renderWrappedBodyText({
+      <text x="${x + 28}" y="${y + 22}" font-size="${Math.round(12 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PILLAR ${index + 1}</text>
+      <text x="${x + 28}" y="${y + 78}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+      ${renderBrandBody({
         x: x + 28,
         y: y + 94,
         width: cardWidth - 56,
@@ -4802,7 +4814,7 @@ async function renderInfographicAsset(
         // Vertically center the multi-line title block in the header.
         const titleBlockH = titleLines.length * titleLineH;
         const titleStartY = Math.round((headerH - titleBlockH) / 2) + titleFontSize;
-        return titleLines.map((line, i) => `<text x="${titleLeftX}" y="${titleStartY + i * titleLineH}" font-size="${titleFontSize}" font-family="Inter, Arial" font-weight="900" fill="#ffffff" letter-spacing="0.5">${escapeXml(line)}</text>`).join('');
+        return titleLines.map((line, i) => `<text x="${titleLeftX}" y="${titleStartY + i * titleLineH}" font-size="${titleFontSize}" font-family="${fontFamily}" font-weight="900" fill="#ffffff" letter-spacing="0.5">${escapeXml(line)}</text>`).join('');
       })()}
       ${headerSubtitle ? (() => {
         // Native SVG text — librsvg doesn't render foreignObject HTML
@@ -4815,7 +4827,7 @@ async function renderInfographicAsset(
         const subLines = balanceTextLines(headerSubtitle, subCharsPerLine, 2);
         const subLineH = Math.round(subSize * 1.4);
         const subStartY = Math.round(headerH * 0.78);
-        return subLines.map((line, i) => `<text x="${subLeftX}" y="${subStartY + i * subLineH}" font-size="${subSize}" font-family="Inter, Arial" font-weight="500" fill="rgba(255,255,255,0.92)">${escapeXml(line)}</text>`).join('');
+        return subLines.map((line, i) => `<text x="${subLeftX}" y="${subStartY + i * subLineH}" font-size="${subSize}" font-family="${fontFamily}" font-weight="500" fill="rgba(255,255,255,0.92)">${escapeXml(line)}</text>`).join('');
       })() : ''}
       <!-- Inner safe panel — soft white with rounded corners, floats
            inside the gradient frame. Cards live on top of this. -->
@@ -4828,7 +4840,7 @@ async function renderInfographicAsset(
              single next-step. Pill on a tinted accent strip at the
              very bottom of the canvas. -->
         <rect x="32" y="${height - 88}" width="${width - 64}" height="56" rx="18" fill="${accent}" opacity="0.16" />
-        <text x="${width / 2}" y="${height - 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(resolvedCta)}</text>
+        <text x="${width / 2}" y="${height - 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(resolvedCta)}</text>
       ` : ''}
     </svg>
   `;
