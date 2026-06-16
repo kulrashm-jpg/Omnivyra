@@ -4595,9 +4595,18 @@ async function renderInfographicAsset(
         <!-- Step label above the title -->
         <text x="${x + badgePanelW + 34}" y="${y + 44}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">STEP ${stepNum}</text>
         <text x="${x + badgePanelW + 34}" y="${y + 80}" font-size="${Math.round(cardTitleFontSize * 1.15)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        <foreignObject x="${x + badgePanelW + 34}" y="${y + 96}" width="${cardWidth - badgePanelW - 70}" height="${cardHeight - 116}">
-          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(cardBodyFontSize * 1.05)}px;line-height:1.5;color:${bodyTextColor};">${escapeXml(section.body)}</div>
-        </foreignObject>
+        ${renderWrappedBodyText({
+          x: x + badgePanelW + 34,
+          y: y + 96,
+          width: cardWidth - badgePanelW - 70,
+          height: cardHeight - 116,
+          text: String(section.body),
+          fontPx: Math.round(cardBodyFontSize * 1.05),
+          color: bodyTextColor,
+          weight: '500',
+          lineHeightMul: 1.5,
+          align: 'left',
+        })}
         ${connector}
       `;
     }
@@ -4637,9 +4646,18 @@ async function renderInfographicAsset(
         <circle cx="${dotCx}" cy="${dotCy}" r="11" fill="${cycleAccent}" stroke="#ffffff" stroke-width="3" />
         <text x="${x + 28}" y="${y + 32}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PHASE ${index + 1}</text>
         <text x="${x + 28}" y="${y + 62}" font-size="${cardTitleFontSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        <foreignObject x="${x + 28}" y="${y + 78}" width="${cardWidth - 56}" height="${cardHeight - 96}">
-          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${cardBodyFontSize}px;line-height:1.45;color:${bodyTextColor};">${escapeXml(section.body)}</div>
-        </foreignObject>
+        ${renderWrappedBodyText({
+          x: x + 28,
+          y: y + 78,
+          width: cardWidth - 56,
+          height: cardHeight - 96,
+          text: String(section.body),
+          fontPx: cardBodyFontSize,
+          color: bodyTextColor,
+          weight: '500',
+          lineHeightMul: 1.45,
+          align: 'left',
+        })}
       `;
     }
 
@@ -4651,9 +4669,18 @@ async function renderInfographicAsset(
         ${renderCardBase(x, y, cycleAccent)}
         <text x="${x + 28}" y="${y + 56}" font-size="${Math.round(34 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${numBadge}</text>
         <text x="${x + 96}" y="${y + 48}" font-size="${cardTitleFontSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        <foreignObject x="${x + 96}" y="${y + 64}" width="${cardWidth - 120}" height="${cardHeight - 84}">
-          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${cardBodyFontSize}px;line-height:1.4;color:${bodyTextColor};">${escapeXml(section.body)}</div>
-        </foreignObject>
+        ${renderWrappedBodyText({
+          x: x + 96,
+          y: y + 64,
+          width: cardWidth - 120,
+          height: cardHeight - 84,
+          text: String(section.body),
+          fontPx: cardBodyFontSize,
+          color: bodyTextColor,
+          weight: '500',
+          lineHeightMul: 1.4,
+          align: 'left',
+        })}
       `;
     }
 
@@ -4664,9 +4691,18 @@ async function renderInfographicAsset(
       <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="48" rx="14" fill="${cycleAccent}" opacity="0.14" />
       <text x="${x + 28}" y="${y + 22}" font-size="${Math.round(12 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PILLAR ${index + 1}</text>
       <text x="${x + 28}" y="${y + 78}" font-size="${cardTitleFontSize}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-      <foreignObject x="${x + 28}" y="${y + 94}" width="${cardWidth - 56}" height="${cardHeight - 114}">
-        <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${cardBodyFontSize}px;line-height:1.4;color:${bodyTextColor};">${escapeXml(section.body)}</div>
-      </foreignObject>
+      ${renderWrappedBodyText({
+        x: x + 28,
+        y: y + 94,
+        width: cardWidth - 56,
+        height: cardHeight - 114,
+        text: String(section.body),
+        fontPx: cardBodyFontSize,
+        color: bodyTextColor,
+        weight: '500',
+        lineHeightMul: 1.4,
+        align: 'left',
+      })}
     `;
   }).join('');
 
