@@ -9,6 +9,7 @@ import { isMediaDependentContentType, resolvePlatformTargets, resolveMediaStatus
 import { optimizeDiscoverabilityForPlatform, buildMediaSearchIntent, normalizeLegacyMediaSearchIntent } from './discoverabilityHelpers';
 import { getProfile } from '../companyProfileService';
 import { extractCompanyIdentity, buildCompanyContextBlockShort, buildIdentityLock, buildAntiGenericRules, type CompanyIdentity } from '../../../lib/content/companyContextBlock';
+import { resolveBrandVoice } from '../brand/resolveBrandVoice';
 // Creator System-Prompt Governance Integration. Final Closure Pass —
 // Phase 3 (rewriter consistency). Both the batch variant generator
 // and the per-platform rewriter delegate to the SAME canonical
@@ -28,6 +29,9 @@ async function resolveCompanyContextBlock(companyId: string | null | undefined):
   try {
     const profile = await getProfile(companyId, { autoRefine: false });
     const identity = extractCompanyIdentity(profile);
+    // Phase 2A — BrandRuntime is the authoritative brand-voice source; falls back
+    // to the legacy company_profiles.brand_voice when no brand_identity row.
+    identity.brandVoice = await resolveBrandVoice(companyId, identity.brandVoice);
     const block = buildCompanyContextBlockShort(identity);
     _variantContextCache.set(companyId, { block, identity, at: Date.now() });
     return { block, identity };

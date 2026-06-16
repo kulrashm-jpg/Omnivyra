@@ -10,6 +10,7 @@ import { nonEmpty, asObject, sanitizeIdPart, getContentTypeSystemPrompt, getCont
 import { isMediaDependentContentType } from './executionHelpers';
 import type { MasterContentPayload, DailyExecutionItemLike } from './types';
 import { getProfile } from '../companyProfileService';
+import { resolveBrandVoice } from '../brand/resolveBrandVoice';
 import {
   extractCompanyIdentity,
   buildCompanyContextBlockShort,
@@ -46,6 +47,9 @@ async function resolveCompanyIdentity(companyId: string | null | undefined): Pro
   try {
     const profile = await getProfile(companyId, { autoRefine: false });
     const identity = extractCompanyIdentity(profile);
+    // Phase 2A — BrandRuntime is the authoritative brand-voice source; falls back
+    // to the legacy company_profiles.brand_voice when no brand_identity row.
+    identity.brandVoice = await resolveBrandVoice(companyId, identity.brandVoice);
     _identityCache.set(companyId, { identity, at: Date.now() });
     return identity;
   } catch {
