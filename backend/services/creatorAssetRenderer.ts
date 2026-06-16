@@ -3435,14 +3435,25 @@ async function composeStructuredDeckAsset(
 ): Promise<RenderedMediaBundle> {
   const metadata = safeObject(safeObject(assetPayload.media_bundle).metadata);
   const platform = compactText(metadata.platform || metadata.primary_platform, 'linkedin');
-  const brandKit = resolveCreatorBrandKit({
-    assetPayload,
-    metadata,
-    companyId: options.companyId,
-    tenantId: options.companyId,
-    platform,
-    assetType: fileNamePrefix,
-  });
+  // Phase 4D-B — final visual consumer. The deck composer (carousel / slider /
+  // deck-PDF — NOT the separate report system in backend/services/export) adopts
+  // the BrandRuntime via the 1C adapter when a published brand_identity row
+  // exists; otherwise the exact legacy resolver path (defaults byte-identical).
+  // Same source guard as 4A/4B/4D-A. Accent already flows canonically through
+  // overlayStrategy.ctaFill (no palette[1] assumption in this path).
+  const brandRuntime = options.companyId
+    ? await resolveBrand(options.companyId).catch(() => null)
+    : null;
+  const brandKit = brandRuntime && brandRuntime.meta.source === 'brand_identity'
+    ? brandRuntimeToCreatorBrandKit(brandRuntime, { assetPayload, metadata, platform, assetType: fileNamePrefix })
+    : resolveCreatorBrandKit({
+        assetPayload,
+        metadata,
+        companyId: options.companyId,
+        tenantId: options.companyId,
+        platform,
+        assetType: fileNamePrefix,
+      });
   const renderItems = normalizeStructuredItems(items, fallbackLabel, fileNamePrefix, metadata);
   const width = fileNamePrefix === 'slider' ? 1600 : 1200;
   const height = fileNamePrefix === 'slider' ? 900 : fileNamePrefix === 'pdf' ? 1500 : 1200;
