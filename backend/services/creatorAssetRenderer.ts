@@ -4506,9 +4506,18 @@ async function renderInfographicAsset(
           <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-width="${donutStroke}" stroke-linecap="round" stroke-dasharray="${filledArc} ${circumference - filledArc}" transform="rotate(-90 ${donutCx} ${donutCy})" />
           <text x="${donutCx}" y="${donutCy + Math.round(donutR * 0.22)}" text-anchor="middle" font-size="${Math.max(36, Math.round(donutR * 0.72))}" font-family="Inter, Arial" font-weight="900" fill="${text}">${escapeXml(displayStat)}</text>
           <text x="${cardCx}" y="${donutCy + donutR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-          <foreignObject x="${x + 28}" y="${donutCy + donutR + 66}" width="${cardWidth - 56}" height="${y + cardHeight - 28 - (donutCy + donutR + 66)}">
-            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(15 * infographicFontMultiplier)}px;line-height:1.5;color:${bodyTextColor};text-align:center;">${escapeXml(subBody)}</div>
-          </foreignObject>
+          ${renderWrappedBodyText({
+            x: cardCx,
+            y: donutCy + donutR + 66,
+            width: cardWidth - 56,
+            height: y + cardHeight - 28 - (donutCy + donutR + 66),
+            text: String(subBody),
+            fontPx: Math.round(15 * infographicFontMultiplier),
+            color: bodyTextColor,
+            weight: '500',
+            lineHeightMul: 1.5,
+            align: 'center',
+          })}
         `;
       }
 
@@ -4532,9 +4541,18 @@ async function renderInfographicAsset(
           <rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" opacity="0.16" />
           <rect x="${barX}" y="${barY}" width="${Math.round(barW * barFillRatio)}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" />
           <text x="${cardCx}" y="${barY + barH + 38}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-          <foreignObject x="${x + 28}" y="${barY + barH + 56}" width="${cardWidth - 56}" height="${y + cardHeight - 28 - (barY + barH + 56)}">
-            <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(15 * infographicFontMultiplier)}px;line-height:1.5;color:${bodyTextColor};text-align:center;">${escapeXml(subBody)}</div>
-          </foreignObject>
+          ${renderWrappedBodyText({
+            x: cardCx,
+            y: barY + barH + 56,
+            width: cardWidth - 56,
+            height: y + cardHeight - 28 - (barY + barH + 56),
+            text: String(subBody),
+            fontPx: Math.round(15 * infographicFontMultiplier),
+            color: bodyTextColor,
+            weight: '500',
+            lineHeightMul: 1.5,
+            align: 'center',
+          })}
         `;
       }
 
@@ -4559,9 +4577,18 @@ async function renderInfographicAsset(
         <text x="${cardCx}" y="${y + Math.round(cardHeight * 0.22)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * 0.20, cardWidth * 0.22))}" font-family="Inter, Arial" font-weight="900" fill="${cycleAccent}">${escapeXml(ratioLabel)}</text>
         ${dots}
         <text x="${cardCx}" y="${dotY + dotR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="Inter, Arial" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        <foreignObject x="${x + 28}" y="${dotY + dotR + 66}" width="${cardWidth - 56}" height="${y + cardHeight - 28 - (dotY + dotR + 66)}">
-          <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Inter,Arial,sans-serif;font-size:${Math.round(15 * infographicFontMultiplier)}px;line-height:1.5;color:${bodyTextColor};text-align:center;">${escapeXml(subBody)}</div>
-        </foreignObject>
+        ${renderWrappedBodyText({
+          x: cardCx,
+          y: dotY + dotR + 66,
+          width: cardWidth - 56,
+          height: y + cardHeight - 28 - (dotY + dotR + 66),
+          text: String(subBody),
+          fontPx: Math.round(15 * infographicFontMultiplier),
+          color: bodyTextColor,
+          weight: '500',
+          lineHeightMul: 1.5,
+          align: 'center',
+        })}
       `;
     }
 
