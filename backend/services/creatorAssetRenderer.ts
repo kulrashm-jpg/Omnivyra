@@ -2208,14 +2208,24 @@ async function composeSingleVisualAsset(
   const body = compactText(descriptor.visual_description ?? captionBlueprint.body ?? metadata.summary, 'Generated creative asset');
   const eyebrow = compactText(metadata.content_type ?? assetPayload.asset_kind, 'creator');
   const platform = compactText(metadata.platform || metadata.primary_platform || safeObject(assetPayload.platform_payload).platform, 'social');
-  const brandKit = resolveCreatorBrandKit({
-    assetPayload,
-    metadata,
-    companyId: options.companyId,
-    tenantId: options.companyId,
-    platform,
-    assetType: fileNamePrefix,
-  });
+  // Phase 4D-A — image + banner (both route through this composer) adopt the
+  // BrandRuntime via the 1C adapter when a published brand_identity row exists;
+  // otherwise the exact legacy resolver path runs (defaults-only byte-identical).
+  // Same source guard as Phase 4A/4B. Accent already flows canonically through
+  // overlayStrategy.ctaFill (no palette[1] assumption in this path).
+  const brandRuntime = options.companyId
+    ? await resolveBrand(options.companyId).catch(() => null)
+    : null;
+  const brandKit = brandRuntime && brandRuntime.meta.source === 'brand_identity'
+    ? brandRuntimeToCreatorBrandKit(brandRuntime, { assetPayload, metadata, platform, assetType: fileNamePrefix })
+    : resolveCreatorBrandKit({
+        assetPayload,
+        metadata,
+        companyId: options.companyId,
+        tenantId: options.companyId,
+        platform,
+        assetType: fileNamePrefix,
+      });
   const brandColors = brandKit.normalizedPalette;
   // supporting_image asset normally suppresses overlay text (post text
   // stays separate from the image). HOWEVER when the writer / direct
