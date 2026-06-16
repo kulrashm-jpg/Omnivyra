@@ -173,6 +173,9 @@ export type WeeklyWritingContextInput = {
   psychologicalGoal?: string | null;
   momentum?: string | null;
   alignment?: AlignmentEvaluation | null;
+  /** Phase 2B — authoritative brand voice (BrandRuntime) when a brand_identity
+   *  row exists; undefined otherwise so the legacy tone chain is unchanged. */
+  brandVoiceOverride?: string;
 };
 
 export type CampaignAiRuntimeContext = {

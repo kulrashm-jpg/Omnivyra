@@ -37,6 +37,9 @@ export function enrichWeeklyWritingContext(input: WeeklyWritingContextInput): { 
     readContextText(prefilled, ['theme_or_description']) ||
     'Campaign theme';
   const toneGuidanceBase =
+    // Phase 2B — BrandRuntime voice is authoritative when a brand_identity row
+    // exists (resolved upstream); undefined otherwise → legacy chain unchanged.
+    input.brandVoiceOverride ||
     communicationStyleToTone(readContextText(prefilled, ['communication_style'])) ||
     readContextText(recommendationPayload, ['tone', 'tone_guidance']) ||
     readContextText(prefilled, ['brand_voice']) ||

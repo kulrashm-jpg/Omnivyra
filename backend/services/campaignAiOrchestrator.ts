@@ -76,6 +76,7 @@ import {
 } from './campaignAiOrchestrator/lightweightContext';
 import { sumSkeletonDeliverables, deliverablesToArray } from './campaignAiOrchestrator/planSkeletonHelpers';
 import { enrichWeeklyWritingContext, normalizeStructuredPlanForOutput } from './campaignAiOrchestrator/structuredPlanTransforms';
+import { resolveBrandVoice } from './brand/resolveBrandVoice';
 import { resolveBaselineContext, type BaselineContextResult } from './campaignAiOrchestrator/baselineContext';
 import { deriveTopicWeights, weightedAssignment } from './campaignAiOrchestrator/topicAssignmentHelpers';
 import {
@@ -970,6 +971,9 @@ async function runWithContext(
   }
 
   if (input.mode === 'generate_plan') {
+    // Phase 2B — resolve the authoritative brand voice (runtime when a brand
+    // row exists, undefined otherwise). Fail-safe: never blocks planning.
+    const brandVoiceOverride = await resolveBrandVoice(ctx.companyId ?? undefined, undefined);
     structured = enrichWeeklyWritingContext({
       structured,
       recommendationContext: input.recommendationContext ?? null,
@@ -978,6 +982,7 @@ async function runWithContext(
       psychologicalGoal: ctx.psychologicalGoal ?? null,
       momentum: ctx.momentum ?? null,
       alignment: alignmentResult,
+      brandVoiceOverride,
     });
     if (platformContentTypePrefs) {
       structured = {
