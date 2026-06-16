@@ -11,7 +11,7 @@ import { isMediaDependentContentType } from './executionHelpers';
 import type { MasterContentPayload, DailyExecutionItemLike } from './types';
 import { getProfile } from '../companyProfileService';
 import { resolveBrandVoice } from '../brand/resolveBrandVoice';
-import { registerBrandCacheInvalidator } from '../brand/brandRuntime';
+import { registerBrandCacheInvalidator } from '../brand/brandCacheRegistry';
 import {
   extractCompanyIdentity,
   buildCompanyContextBlockShort,

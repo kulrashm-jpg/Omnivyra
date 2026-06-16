@@ -10,7 +10,7 @@ import { optimizeDiscoverabilityForPlatform, buildMediaSearchIntent, normalizeLe
 import { getProfile } from '../companyProfileService';
 import { extractCompanyIdentity, buildCompanyContextBlockShort, buildIdentityLock, buildAntiGenericRules, type CompanyIdentity } from '../../../lib/content/companyContextBlock';
 import { resolveBrandVoice } from '../brand/resolveBrandVoice';
-import { registerBrandCacheInvalidator } from '../brand/brandRuntime';
+import { registerBrandCacheInvalidator } from '../brand/brandCacheRegistry';
 // Creator System-Prompt Governance Integration. Final Closure Pass —
 // Phase 3 (rewriter consistency). Both the batch variant generator
 // and the per-platform rewriter delegate to the SAME canonical

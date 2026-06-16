@@ -7,6 +7,8 @@ import {
   resolveCreatorBrandKit,
   type CreatorBrandKit,
 } from './creatorBrandKit';
+import { resolveBrand } from './brand/brandRuntime';
+import { brandRuntimeToCreatorBrandKit } from './brand/brandRuntimeAdapter';
 import { captureImageProviderCost } from './billing/blackHoleCostCapture';
 import { creatorEvent } from './creatorObservation';
 import { recordCreatorDuration } from './creatorRuntimeMetrics';
@@ -3935,14 +3937,25 @@ async function renderInfographicAsset(
   const metadata = safeObject(safeObject(assetPayload.media_bundle).metadata);
   const platform = compactText(metadata.platform || metadata.primary_platform, 'social');
   const { width, height } = resolveRenderSize(platform, 'infographic');
-  const brandKit = resolveCreatorBrandKit({
-    assetPayload,
-    metadata,
-    companyId: options.companyId,
-    tenantId: options.companyId,
-    platform,
-    assetType: 'infographic',
-  });
+  // Phase 4A — first visual consumer adoption. When a tenant has a PUBLISHED
+  // brand_identity row, the kit is sourced from the BrandRuntime via the 1C
+  // adapter (typography + canonical accent + palette). Otherwise the exact
+  // legacy resolver path runs → byte-identical output for a defaults-only
+  // tenant. Only the SOURCE of the kit changes; geometry/asset context is
+  // threaded through unchanged.
+  const brandRuntime = options.companyId
+    ? await resolveBrand(options.companyId).catch(() => null)
+    : null;
+  const brandKit = brandRuntime && brandRuntime.meta.source === 'brand_identity'
+    ? brandRuntimeToCreatorBrandKit(brandRuntime, { assetPayload, metadata, platform, assetType: 'infographic' })
+    : resolveCreatorBrandKit({
+        assetPayload,
+        metadata,
+        companyId: options.companyId,
+        tenantId: options.companyId,
+        platform,
+        assetType: 'infographic',
+      });
   const rawSectionsPreFilter = resolveInfographicSections(assetPayload, metadata);
   // Operator parity with carousel: strip leaked LLM design directives
   // (e.g., "Use a modern font for the headline with a clean...") from
@@ -4090,7 +4103,11 @@ async function renderInfographicAsset(
   });
   const palette = brandKit.normalizedPalette;
   const bg = palette[0] || '#0f172a';
-  const accent = palette[1] || '#22c55e';
+  // Phase 4A — use the kit's canonical (WCAG-validated) accent instead of the
+  // positional palette[1] assumption. Byte-identical for a defaults-only tenant
+  // (chooseAccent(DEFAULT_PALETTE) === palette[1]); branded tenants get the
+  // runtime's accent; custom-palette tenants get the contrast-correct accent.
+  const accent = brandKit.accentColor || palette[1] || '#22c55e';
   const panel = '#ffffff';
   const text = '#111827';
   // Brand typography activation (Phase A.1) — consume the brand font (same

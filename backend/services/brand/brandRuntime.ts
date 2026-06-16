@@ -19,6 +19,7 @@
  * without the (not-yet-applied) tables.
  */
 import { contrastRatio } from '../creatorBrandKit';
+import { runBrandCacheInvalidators } from './brandCacheRegistry';
 
 /* ── Contract ───────────────────────────────────────────────────────── */
 
@@ -344,37 +345,21 @@ export function invalidateBrandRuntime(companyId: string): void {
   for (const k of Array.from(cache.keys())) if (k.startsWith(prefix)) cache.delete(k);
 }
 
-/* ── Cross-module cache invalidation registry (Phase 3C) ─────────────────
- * Downstream caches that bake the resolved brand voice (e.g. the content
- * generators' CompanyIdentity caches) register a company-scoped clear here.
- * `invalidateBrandCaches` (called on publish/rollback) fans out to all of
- * them PLUS the runtime cache, so no layer serves pre-publish voice in this
- * process. Decoupled via registration so brand-domain code never imports
- * content-domain caches (no dependency cycle). In-process only — cross-process
- * caches (e.g. the worker) converge by TTL.
+/* ── Cross-module cache invalidation (Phase 3C) ──────────────────────────
+ * The registry primitive lives in the dependency-free ./brandCacheRegistry
+ * module (so caches in other modules can register without an import cycle).
+ * Re-exported here for back-compat. `invalidateBrandCaches` (publish/rollback)
+ * fans out to the runtime cache PLUS every registered downstream cache, so no
+ * layer serves pre-publish brand state in this process. Cross-process caches
+ * converge by TTL.
  */
-type BrandCacheInvalidator = (companyId: string) => void;
-const _brandCacheInvalidators = new Set<BrandCacheInvalidator>();
-
-export function registerBrandCacheInvalidator(fn: BrandCacheInvalidator): void {
-  _brandCacheInvalidators.add(fn);
-}
-
-export function unregisterBrandCacheInvalidator(fn: BrandCacheInvalidator): void {
-  _brandCacheInvalidators.delete(fn);
-}
+export { registerBrandCacheInvalidator, unregisterBrandCacheInvalidator } from './brandCacheRegistry';
 
 /** Full company-scoped invalidation: runtime cache + every registered
- *  downstream voice cache. Use on brand publish/rollback. */
+ *  downstream cache. Use on brand publish/rollback. */
 export function invalidateBrandCaches(companyId: string): void {
   invalidateBrandRuntime(companyId);
-  for (const fn of _brandCacheInvalidators) {
-    try {
-      fn(companyId);
-    } catch {
-      /* one misbehaving invalidator must never break a publish */
-    }
-  }
+  runBrandCacheInvalidators(companyId);
 }
 
 /* ── Resolver ───────────────────────────────────────────────────────── */

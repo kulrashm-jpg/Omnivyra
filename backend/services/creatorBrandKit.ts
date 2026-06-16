@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { registerBrandCacheInvalidator } from './brand/brandCacheRegistry';
 
 export type CreatorBrandMarkType = 'logo' | 'favicon' | 'initials';
 
@@ -70,11 +71,33 @@ const BRANDKIT_CACHE_MAX = 250;
 type BrandKitCacheEntry = {
   value: CreatorBrandKit;
   expiresAt: number;
+  companyId: string | null;
 };
 
 const brandKitCache = new Map<string, BrandKitCacheEntry>();
 let brandKitCacheHits = 0;
 let brandKitCacheMisses = 0;
+
+/* Phase 4A — register with the Phase-3C brand-cache invalidation registry so a
+ * brand publish clears this visual cache in-process (same-process infographic
+ * regeneration then uses the fresh brand). Company-scoped; cross-process caches
+ * converge by TTL. The cache key is a hash, so we match on the entry's stored
+ * companyId rather than a key prefix. */
+export function clearBrandKitCacheForCompany(companyId: string): void {
+  for (const [k, entry] of Array.from(brandKitCache.entries())) {
+    if (entry.companyId === companyId) brandKitCache.delete(k);
+  }
+}
+registerBrandCacheInvalidator(clearBrandKitCacheForCompany);
+
+/** @internal test-only seams for cache-coherence tests. */
+export function __brandKitCacheHasForCompanyTest(companyId: string): boolean {
+  for (const entry of brandKitCache.values()) if (entry.companyId === companyId) return true;
+  return false;
+}
+export function __brandKitCacheSeedForTest(companyId: string): void {
+  brandKitCache.set(`__seed:${companyId}`, { value: { companyId } as CreatorBrandKit, expiresAt: Date.now() + 60_000, companyId });
+}
 
 function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -233,7 +256,7 @@ function setBrandKitCache(key: string, value: CreatorBrandKit): void {
     const oldestKey = brandKitCache.keys().next().value;
     if (oldestKey) brandKitCache.delete(oldestKey);
   }
-  brandKitCache.set(key, { value, expiresAt: Date.now() + BRANDKIT_CACHE_TTL_MS });
+  brandKitCache.set(key, { value, expiresAt: Date.now() + BRANDKIT_CACHE_TTL_MS, companyId: value.companyId ?? null });
 }
 
 function resolveBrandFields(input: ResolveBrandKitInput) {

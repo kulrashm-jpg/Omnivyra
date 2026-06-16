@@ -28,8 +28,23 @@ const DEFAULT_FONTS = new Set(['Inter, Arial', 'Arial, Helvetica, sans-serif']);
 // its own default ('OMNIVYRA') → zero drift for a defaults-only runtime.
 const RUNTIME_DEFAULT_NAME = 'Brand';
 
+/** Per-asset render context the renderer already had (platform/assetType drive
+ *  geometry + identity hashing; the asset's own metadata may carry operator
+ *  overrides). Passing it keeps a branded render geometrically identical to the
+ *  legacy path — only the brand SOURCE changes. Defaults to {} so the original
+ *  no-arg call (and its zero-drift test) is unchanged. */
+export interface BrandKitAssetContext {
+  assetPayload?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  platform?: string | null;
+  assetType?: string | null;
+}
+
+const asObject = (v: unknown): Record<string, unknown> =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+
 /** Map a BrandRuntime to the exact CreatorBrandKit shape renderers consume. */
-export function brandRuntimeToCreatorBrandKit(rt: BrandRuntime): CreatorBrandKit {
+export function brandRuntimeToCreatorBrandKit(rt: BrandRuntime, asset: BrandKitAssetContext = {}): CreatorBrandKit {
   // Only inject brand fields that are genuinely present, through the same
   // metadata channels resolveCreatorBrandKit reads. Absent fields (undefined)
   // fall through to the resolver's existing defaults.
@@ -42,11 +57,20 @@ export function brandRuntimeToCreatorBrandKit(rt: BrandRuntime): CreatorBrandKit
   if (rt.domain) profile.domain = rt.domain;
   if (rt.tagline) profile.tagline = rt.tagline;
 
+  // Merge the runtime brand over the asset's own context: keep the asset's
+  // metadata + brand_context.overrides (geometry/operator overrides) but layer
+  // the runtime profile + authoritative palette on top.
+  const assetMeta = asObject(asset.metadata);
+  const assetBrandContext = asObject(assetMeta.brand_context);
+  const assetProfile = asObject(assetBrandContext.profile);
+
   const kit = resolveCreatorBrandKit({
     companyId: rt.companyId,
     tenantId: rt.companyId,
-    assetPayload: { color_palette: rt.colors.palette },
-    metadata: { brand_context: { profile } },
+    assetPayload: { ...asObject(asset.assetPayload), color_palette: rt.colors.palette },
+    metadata: { ...assetMeta, brand_context: { ...assetBrandContext, profile: { ...assetProfile, ...profile } } },
+    platform: asset.platform ?? undefined,
+    assetType: asset.assetType ?? undefined,
   });
 
   const brandFont = DEFAULT_FONTS.has(rt.typography.bodyFont)
