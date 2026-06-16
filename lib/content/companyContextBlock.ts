@@ -136,6 +136,7 @@ export function buildCompanyContextBlock(identity: CompanyIdentity): string {
     identity.competitiveAdvantages ? `DIFFERENTIATORS: ${identity.competitiveAdvantages}` : null,
     identity.authorityDomains?.length ? `AUTHORITY DOMAINS: ${identity.authorityDomains.slice(0, 5).join(', ')}` : null,
     identity.keyMessages ? `KEY MESSAGES: ${identity.keyMessages}` : null,
+    identity.brandVoice ? `BRAND VOICE: ${identity.brandVoice} — write every sentence in this voice.` : null,
     identity.strategyProfile ? buildStrategyInstructions(identity.strategyProfile) : null,
   ].filter(Boolean);
 
@@ -156,6 +157,7 @@ export function buildCompanyContextBlockShort(identity: CompanyIdentity): string
       : identity.industry ? `INDUSTRY: ${identity.industry}` : null,
     identity.coreProblem ? `PROBLEM: ${identity.coreProblem}` : null,
     identity.uniqueValue ? `VALUE: ${identity.uniqueValue}` : null,
+    identity.brandVoice ? `VOICE: ${identity.brandVoice}` : null,
     identity.strategyProfile?.worldview ? `PERSPECTIVE: ${identity.strategyProfile.worldview}` : null,
   ].filter(Boolean);
 
@@ -184,6 +186,7 @@ export function buildIdentityLock(identity: CompanyIdentity, contentType: string
     (identity.industry ? `YOUR INDUSTRY: ${identity.industry}\n` : '') +
     (identity.coreProblem ? `THE PROBLEM YOU SOLVE: ${identity.coreProblem}\n` : '') +
     (identity.uniqueValue ? `YOUR UNIQUE VALUE: ${identity.uniqueValue}\n` : '') +
+    (identity.brandVoice ? `YOUR BRAND VOICE: ${identity.brandVoice} — every sentence must sound like this.\n` : '') +
     (competitorIdentityContext ? `PEER-AWARE IDENTITY CUES: ${competitorIdentityContext}\n` : '') +
     (userGuidanceContext ? `USER-APPROVED IDENTITY GUIDANCE: ${userGuidanceContext}\n` : '') +
     (identity.strategyProfile ? `${buildStrategyInstructions(identity.strategyProfile)}\n` : '') +
