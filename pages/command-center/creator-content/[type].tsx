@@ -3360,7 +3360,10 @@ export default function CreatorTypeWorkflowPage() {
     ? previewMetadata.visual_governance_warnings.map(String).filter(Boolean)
     : [];
   const slides = Array.isArray(result?.output.asset_payload.slides) ? result.output.asset_payload.slides : [];
-  const socialActionLabel = config.contentType === 'thread' ? 'thread' : 'post';
+  // config can be null here (router query not yet ready / unknown type) — this
+  // const sits ABOVE the `if (!config)` guard below, so it must be null-safe.
+  // The value is only consumed in the post-guard render where config is non-null.
+  const socialActionLabel = config?.contentType === 'thread' ? 'thread' : 'post';
 
   // Relocated from the top of the component (post Rendering Forensic
   // Audit). These early returns must fire AFTER every hook in the

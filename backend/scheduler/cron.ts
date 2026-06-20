@@ -127,6 +127,7 @@ import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecompu
 import {
   getLeadThreadRecomputeQueue,
   getConversationMemoryRebuildQueue,
+  verifyRedisReadyForBackgroundRuntime,
 } from '../queue/bullmqClient';
 import { runResponsePerformanceEvaluationWorker } from '../workers/responsePerformanceEvaluationWorker';
 import { runReplyIntelligenceAggregationWorker } from '../workers/replyIntelligenceAggregationWorker';
@@ -396,6 +397,8 @@ async function startCron() {
   console.log('[cron] starting scheduler loop');
   console.log(`[cron] base tick: ${BASE_TICK_MS / 1000}s | default working-hours interval: ${CRON_INTERVAL_MS / 1000}s`);
 
+  const redisReadyForQueues = await verifyRedisReadyForBackgroundRuntime('cron');
+
   // ── Restore last-run timestamps from Redis (survives restarts) ─────────────
   const saved = await cronGuard.load();
   if (Object.keys(saved).length > 0) {
@@ -432,7 +435,7 @@ async function startCron() {
   }
 
   // First execution: run intelligence polling immediately (don't wait 2 hours)
-  if (!lastIntelligencePollingEnqueue) {
+  if (redisReadyForQueues && !lastIntelligencePollingEnqueue) {
     lastIntelligencePollingEnqueue = Date.now();
     try {
       const result = await enqueueIntelligencePolling();
@@ -440,6 +443,8 @@ async function startCron() {
     } catch (error: unknown) {
       console.error('❌ Intelligence polling enqueue error (startup):', formatCaughtError(error));
     }
+  } else if (!redisReadyForQueues) {
+    console.warn('[cron] Redis-backed startup queue enqueues skipped because Redis is unavailable.');
   }
 
   // Run full scheduler cycle immediately on startup
@@ -459,22 +464,26 @@ async function startCron() {
   // Safety-net: enqueue a BullMQ drain job every 5 min in case the event-driven
   // path missed any rows (e.g. transient Redis error). The worker process in
   // main.ts does the actual work — cron only fires the trigger.
-  scheduleWorker(
-    async () => {
-      await getLeadThreadRecomputeQueue().add('recompute', {}, { jobId: 'drain', delay: 200 });
-      return {};
-    },
-    LEAD_THREAD_RECOMPUTE_SAFETYNET_MS, 'leadThreadRecompute-safetynet',
-    []
-  );
-  scheduleWorker(
-    async () => {
-      await getConversationMemoryRebuildQueue().add('rebuild', {}, { jobId: 'drain', delay: 200 });
-      return {};
-    },
-    CONVERSATION_MEMORY_SAFETYNET_MS, 'conversationMemory-safetynet',
-    []
-  );
+  if (redisReadyForQueues) {
+    scheduleWorker(
+      async () => {
+        await getLeadThreadRecomputeQueue().add('recompute', {}, { jobId: 'drain', delay: 200 });
+        return {};
+      },
+      LEAD_THREAD_RECOMPUTE_SAFETYNET_MS, 'leadThreadRecompute-safetynet',
+      []
+    );
+    scheduleWorker(
+      async () => {
+        await getConversationMemoryRebuildQueue().add('rebuild', {}, { jobId: 'drain', delay: 200 });
+        return {};
+      },
+      CONVERSATION_MEMORY_SAFETYNET_MS, 'conversationMemory-safetynet',
+      []
+    );
+  } else {
+    console.warn('[cron] Redis-backed lead/memory safety-net enqueues skipped because Redis is unavailable.');
+  }
   scheduleWorker(
     () => runResponsePerformanceEvaluationWorker() as any,
     RESPONSE_PERFORMANCE_EVAL_INTERVAL_MS, 'responsePerformanceEval',

@@ -9,9 +9,10 @@ import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { PlatformContentMatrix } from './PlatformContentMatrix';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
+import { PLANNER_DURATIONS } from '../../lib/shared/campaignDuration';
 
 const DEFAULT_DURATION_WEEKS = 4;
-const DURATION_OPTIONS = [1, 2, 4, 6, 8, 10, 12] as const;
+const DURATION_OPTIONS = PLANNER_DURATIONS;
 
 function defaultStartDate(): string {
   const d = new Date();

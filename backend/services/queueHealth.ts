@@ -118,7 +118,12 @@ export async function sweepStaleExecutions(
     };
 
     // Primary attempt: include lock_expires_at + abandonment columns.
+    // Select `payload` too so we can stamp attribution (campaign_type /
+    // pipeline_mode) on the swept rows — abandoned runs never threw, so
+    // persistPipelineFailure never tagged them and analytics couldn't
+    // slice them by surface (Phase 6I-3).
     let reclaimed = 0;
+    let sweptRows: Array<{ id: string; payload?: Record<string, unknown> | null }> = [];
     try {
       const { data, error } = await ownedDbTable('bolt_execution_runs')
         .update({ ...patch, lock_expires_at: null })
@@ -126,9 +131,10 @@ export async function sweepStaleExecutions(
         .lt('heartbeat_at', cutoffIso)
         .or(`lock_expires_at.is.null,lock_expires_at.lt.${nowIso}`)
         .is('abandonment_detected_at', null)
-        .select('id');
+        .select('id, payload');
       if (error) throw error;
-      reclaimed = Array.isArray(data) ? data.length : 0;
+      sweptRows = Array.isArray(data) ? (data as typeof sweptRows) : [];
+      reclaimed = sweptRows.length;
     } catch (primaryErr) {
       // Schema desync fallback: drop abandonment columns AND
       // lock_expires_at if the migration hasn't been applied yet.
@@ -146,7 +152,7 @@ export async function sweepStaleExecutions(
         .update(fallbackPatch)
         .in('status', ['started', 'running'])
         .lt('heartbeat_at', cutoffIso)
-        .select('id');
+        .select('id, payload');
       if (error) {
         logPipelineEvent('queue.stale_sweep', 'warn', {
           ok: false,
@@ -156,7 +162,26 @@ export async function sweepStaleExecutions(
         });
         return { reclaimed: 0, ok: false, detail: 'sweep_failed' };
       }
-      reclaimed = Array.isArray(data) ? data.length : 0;
+      sweptRows = Array.isArray(data) ? (data as typeof sweptRows) : [];
+      reclaimed = sweptRows.length;
+    }
+
+    // ── Phase 6I-3 — attribution stamping ───────────────────────────────────
+    // Stamp campaign_type + pipeline_mode on each swept run using the same
+    // authority persistPipelineFailure uses (deriveAbandonmentAttribution).
+    // Best-effort: per-row, never throws, only touches these two columns.
+    if (sweptRows.length > 0) {
+      const { deriveAbandonmentAttribution } = await import('../../lib/shared/bolt/abandonmentAttribution');
+      for (const r of sweptRows) {
+        try {
+          const attribution = deriveAbandonmentAttribution(r.payload ?? null);
+          await ownedDbTable('bolt_execution_runs')
+            .update({ campaign_type: attribution.campaign_type, pipeline_mode: attribution.pipeline_mode })
+            .eq('id', r.id);
+        } catch {
+          // Best-effort — attribution is additive; the sweep itself already succeeded.
+        }
+      }
     }
 
     if (reclaimed > 0) {

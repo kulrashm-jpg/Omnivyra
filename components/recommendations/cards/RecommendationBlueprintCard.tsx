@@ -18,13 +18,9 @@ export type BoltContentFormat =
   | 'post' | 'blog' | 'short_story' | 'article' | 'newsletter'
   | 'video' | 'carousel' | 'reel' | 'podcast' | 'infographic';
 
-/** BOLT creates campaigns of 4 weeks or less. */
-const BOLT_DURATION_OPTIONS = [
-  { value: 1, label: '1 week' },
-  { value: 2, label: '2 weeks' },
-  { value: 3, label: '3 weeks' },
-  { value: 4, label: '4 weeks' },
-] as const;
+// BOLT creates campaigns of 4 weeks or less. (A previously-dead local
+// BOLT_DURATION_OPTIONS list was removed in 6C-2; duration options now live in
+// lib/shared/campaignDuration — SHORT_CAMPAIGN_DURATIONS.)
 
 const BOLT_CONTENT_FORMATS: Record<BoltCampaignMode, { value: BoltContentFormat; label: string }[]> = {
   text_based: [

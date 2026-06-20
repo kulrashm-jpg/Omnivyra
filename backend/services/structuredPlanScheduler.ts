@@ -1953,7 +1953,17 @@ async function scheduleStructuredPlanRuntime(
     }
     // execution_mode and creator_asset are optional columns not always selected —
     // pass them as undefined so eligibility check treats all rows as text-schedulable.
-    if (!usesUnifiedMediaFlow) {
+    //
+    // Combined (Intelligent Mix) is EXEMPT from this whole-campaign eligibility
+    // veto — same as pure-creator (usesUnifiedMediaFlow). A combined campaign
+    // carries BOTH text and creator rows; its attachment-required creator rows
+    // (video/reel) infer to CREATOR_REQUIRED and would make this gate reject the
+    // ENTIRE run, even though the autonomous/text rows are schedulable now. The
+    // per-row lane dispatch below (isCombined branch) is the authority for
+    // combined: it schedules text + autonomous rows and HOLDS not-ready
+    // attachment/video rows in awaiting_media_upload — the per-row eligibility
+    // model that already replaced the campaign-wide veto everywhere else.
+    if (!usesUnifiedMediaFlow && !isCombined) {
       const eligibility = evaluateScheduleEligibility(dailyPlans.map((r: any) => ({
         id: r.id ?? null,
         title: r.title ?? null,

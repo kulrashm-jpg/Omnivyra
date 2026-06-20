@@ -52,6 +52,11 @@ export type BOLTProgress = {
   // Optional + advisory — UI must keep working when the backend doesn't emit it.
   ai_plan_substage?: string;
   ai_plan_substage_label?: string;
+  // Phase 6H-D — failure explainability (failure-only). Populated from the
+  // already-persisted failed_stage + failure-event error_code; friendly only.
+  failed_stage?: string;
+  failed_stage_label?: string;
+  error_code?: string;
 };
 
 export type BOLTProgressModalProps = {

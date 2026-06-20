@@ -24,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { data: run, error } = await supabase
       .from('bolt_execution_runs')
-      .select('id, company_id, current_stage, status, progress_percentage, result_campaign_id, error_message, abandonment_reason, weeks_generated, daily_slots_created, scheduled_posts_created')
+      .select('id, company_id, current_stage, status, progress_percentage, result_campaign_id, error_message, abandonment_reason, weeks_generated, daily_slots_created, scheduled_posts_created, failed_stage')
       .eq('id', runId)
       .maybeSingle();
 
@@ -53,6 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       weeks_generated?: number | null;
       daily_slots_created?: number | null;
       scheduled_posts_created?: number | null;
+      failed_stage?: string | null;
     };
 
     // User-facing error resolution. Priority:
@@ -140,6 +141,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stageLabel = row.status === 'completed' ? 'Complete' : stage ? stage.replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) : 'Initializing…';
     }
 
+    // ── Phase 6H-D — failure explainability ─────────────────────────────────
+    // Surface WHERE it failed (failed_stage, already persisted on
+    // bolt_execution_runs by persistPipelineFailure) and, when available, the
+    // BOLT error_code (from the failure event metadata). Failure-only; reuses
+    // the same stageLabels authority; never exposes raw_error_message/stacks.
+    let failedStageLabel: string | undefined;
+    let errorCode: string | undefined;
+    if (row.status === 'failed') {
+      const fs = row.failed_stage ?? undefined;
+      if (fs) {
+        failedStageLabel =
+          stageLabels[fs] ??
+          (fs.startsWith('ai/plan') ? stageLabels['ai/plan'] : undefined) ??
+          (fs.startsWith('generate-weekly-structure') ? stageLabels['generate-weekly-structure'] : undefined) ??
+          fs.replace(/-/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+      }
+      // Optional: read the BOLT error_code from the latest failure event
+      // metadata (already persisted). Read-only, guarded — never blocks polling.
+      try {
+        const { data: failEvt } = await supabase
+          .from('bolt_execution_events')
+          .select('metadata')
+          .eq('run_id', runId)
+          .eq('status', 'failed')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const code = (failEvt?.metadata as { error_code?: unknown } | null)?.error_code;
+        if (typeof code === 'string' && code.trim()) errorCode = code.trim();
+      } catch {
+        // optional enrichment — ignore
+      }
+    }
+
     // ── PROGRESSIVE / STREAMING STATE (Part 8) ──────────────────────────────
     // Surface recent planner events for THIS campaign so the UI can render
     // optimization badges + progressive hydration without polling additional
@@ -217,6 +252,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       progress_percentage: row.progress_percentage,
       result_campaign_id: row.result_campaign_id ?? undefined,
       error_message: userFacingError,
+      // Phase 6H-D — failure explainability (failure-only, friendly only).
+      failed_stage: row.status === 'failed' ? (row.failed_stage ?? undefined) : undefined,
+      failed_stage_label: failedStageLabel,
+      error_code: errorCode,
       abandonment_reason: row.abandonment_reason ?? undefined,
       weeks_generated: row.weeks_generated ?? undefined,
       daily_slots_created: row.daily_slots_created ?? undefined,

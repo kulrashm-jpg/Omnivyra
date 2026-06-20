@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { usePlannerSession, type IdeaSpine, type StrategyContext } from './plannerSessionStore';
 import { MultiSelectDropdown } from '../ui/dropdown';
+import { PLANNER_DURATIONS } from '../../lib/shared/campaignDuration';
 
 function toGoalArray(val: string | string[] | undefined | null): string[] {
   if (!val) return [];
@@ -18,7 +19,7 @@ function toGoalArray(val: string | string[] | undefined | null): string[] {
   return s.split(/[,;]/).map((x) => x.trim()).filter(Boolean);
 }
 
-const DURATION_OPTIONS = [1, 2, 4, 6, 8, 10, 12] as const;
+const DURATION_OPTIONS = PLANNER_DURATIONS;
 
 const CAMPAIGN_GOAL_OPTIONS = [
   'Brand Awareness',

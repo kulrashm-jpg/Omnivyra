@@ -16,6 +16,8 @@ import type { BOLTProgress } from '../components/BOLTProgressModal';
 import { saveCampaignResume } from '../lib/campaignResumeStore';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
 import { useBoltPlatformPicker } from './useBoltPlatformPicker';
+import { FORMAT_REQUIRED_PLATFORMS } from '../lib/shared/bolt/formatPlatformBinding';
+import { BOLT_DURATION_OPTIONS } from '../lib/shared/campaignDuration';
 
 type ContentFormat = 'post' | 'tweet' | 'short_story' | 'article' | 'poll';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
@@ -30,14 +32,9 @@ const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: str
 
 const BOLT_STATE_KEY = 'bolt-text-strategy-state';
 
-// Format→required-platform binding. Mirrors BoltStrategyView.tsx so the
-// strategy hook can prune stale selections (e.g. `tweet` restored from
-// sessionStorage after X was disconnected) before they reach the planner.
-// Lists both 'x' and 'twitter' because the codebase has two competing
-// canonicalizations — see BoltStrategyView.tsx for the full rationale.
-const FORMAT_REQUIRED_PLATFORMS: Partial<Record<ContentFormat, string[]>> = {
-  tweet: ['x', 'twitter'],
-};
+// Format→required-platform binding is imported from the shared authority
+// (lib/shared/bolt/formatPlatformBinding) — used to prune stale selections
+// (e.g. `tweet` restored from sessionStorage after X was disconnected).
 
 const CONTENT_FORMATS: { value: ContentFormat; label: string; icon: string }[] = [
   { value: 'post',        label: 'Post',        icon: '📝' },
@@ -47,12 +44,7 @@ const CONTENT_FORMATS: { value: ContentFormat; label: string; icon: string }[] =
   { value: 'poll',        label: 'Poll Post',   icon: '📊' },
 ];
 
-const DURATION_OPTIONS = [
-  { value: 1, label: '1 Week' },
-  { value: 2, label: '2 Weeks' },
-  { value: 3, label: '3 Weeks' },
-  { value: 4, label: '4 Weeks' },
-];
+const DURATION_OPTIONS = BOLT_DURATION_OPTIONS;
 
 // Campaign Brief — canonical intent vocabulary for the BOLT Text planner.
 // These shape the AI plan, weekly structure, and platform variant prompts,
@@ -1106,6 +1098,9 @@ export function useBoltStrategy() {
           scheduled_posts_created?: number;
           ai_plan_substage?: string;
           ai_plan_substage_label?: string;
+          failed_stage?: string;
+          failed_stage_label?: string;
+          error_code?: string;
         };
 
         if (!mounted) return;
@@ -1119,6 +1114,11 @@ export function useBoltStrategy() {
           scheduled_posts_created: prog.scheduled_posts_created,
           ai_plan_substage: prog.ai_plan_substage,
           ai_plan_substage_label: prog.ai_plan_substage_label,
+          // 6H-D failure explainability — carried so a failed status keeps WHERE + WHY.
+          error_message: prog.error_message,
+          failed_stage: prog.failed_stage,
+          failed_stage_label: prog.failed_stage_label,
+          error_code: prog.error_code,
         });
 
         if (prog.status === 'completed') {
@@ -1168,7 +1168,9 @@ export function useBoltStrategy() {
     } catch (err) {
       if (!mounted) return;
       const msg = err instanceof Error ? err.message : 'Something went wrong';
-      setExecProgress({ status: 'failed', progress_percentage: 0, error_message: msg });
+      // Preserve the rich failed state (stage/code) already set by the poll loop;
+      // only synthesize a minimal failure for exception paths (network/timeout).
+      setExecProgress((prev) => (prev && prev.status === 'failed') ? prev : { status: 'failed', progress_percentage: 0, error_message: msg });
       setExecuting(false);
       setTimeout(() => {
         if (!mounted) return;

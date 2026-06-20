@@ -11,8 +11,9 @@ import { CampaignTypeSelector } from '../CampaignTypeSelector';
 import { PlatformContentMatrix } from '../PlatformContentMatrix';
 import { CAMPAIGN_PRESETS } from '../platformContentPresets';
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { PLANNER_DURATIONS } from '../../../lib/shared/campaignDuration';
 
-const DURATION_OPTIONS = [1, 2, 4, 6, 8, 10, 12] as const;
+const DURATION_OPTIONS = PLANNER_DURATIONS;
 const DEFAULT_DURATION_WEEKS = 6;
 
 function deriveStrategyFromMatrix(

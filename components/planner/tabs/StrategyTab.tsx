@@ -10,6 +10,7 @@ import { usePlannerSession, type StrategicThemeEntry } from '../plannerSessionSt
 import { OpportunityInsightsTab } from '../OpportunityInsightsTab';
 import { MultiSelectDropdown } from '../../ui/dropdown';
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { getSelectableAudienceLabels } from '../../../lib/shared/audience/audienceRegistry';
 import { Sparkles, Loader2, Palette, RotateCcw, Trash2, Target, Layers } from 'lucide-react';
 
 const CAMPAIGN_GOAL_OPTIONS = [
@@ -23,15 +24,8 @@ const CAMPAIGN_GOAL_OPTIONS = [
   'Event Promotion',
 ] as const;
 
-const TARGET_AUDIENCE_OPTIONS = [
-  'B2B Marketers',
-  'Founders / Entrepreneurs',
-  'Marketing Leaders',
-  'Sales Teams',
-  'Product Managers',
-  'Developers',
-  'General Consumers',
-] as const;
+// Planner exposes CORE + PROFESSIONAL + INDUSTRY (core stays first).
+const TARGET_AUDIENCE_OPTIONS = getSelectableAudienceLabels({ includeGroups: ['professional', 'industry'] });
 
 /** Normalize a string | string[] field to string[] */
 function toStringArray(val: string | string[] | undefined | null): string[] {

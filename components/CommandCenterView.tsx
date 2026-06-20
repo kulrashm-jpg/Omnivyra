@@ -224,7 +224,20 @@ function ActionCard({
         : 'bg-slate-100 text-slate-700 border-slate-200';
 
   return (
-    <article className="flex h-full min-h-[560px] flex-col rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+    // Whole-card click mirrors the CTA — reuses the SAME onOpen handler
+    // (analytics → preflight → handleCardClick); no duplicate navigation path.
+    <article
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(card.route, card.state)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen(card.route, card.state);
+        }
+      }}
+      className="flex h-full min-h-[560px] cursor-pointer flex-col rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
           <Icon className="h-5 w-5" />
@@ -253,7 +266,11 @@ function ActionCard({
         ) : null}
         <button
           type="button"
-          onClick={() => onOpen(card.route, card.state)}
+          onClick={(e) => {
+            // Stop bubbling so the card-level onClick doesn't fire onOpen twice.
+            e.stopPropagation();
+            onOpen(card.route, card.state);
+          }}
           className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
         >
           {actionLabel}

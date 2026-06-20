@@ -10,6 +10,7 @@ import { ChevronDown, ChevronUp, ChevronRight, Loader2, Target, Layers } from 'l
 import { usePlannerSession, type IdeaSpine } from './plannerSessionStore';
 import { OpportunityInsightsTab } from './OpportunityInsightsTab';
 import { MultiSelectDropdown } from '../ui/dropdown';
+import { getSelectableAudienceLabels } from '../../lib/shared/audience/audienceRegistry';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import { buildPlannerStrategicCard } from '../../lib/plannerStrategicCard';
 
@@ -33,10 +34,8 @@ const GOAL_INCOMPATIBLE_PAIRS: [string, string][] = [
   ['Customer Retention', 'Community Growth'],
 ];
 
-const TARGET_AUDIENCE_OPTIONS = [
-  'B2B Marketers', 'Founders / Entrepreneurs', 'Marketing Leaders',
-  'Sales Teams', 'Product Managers', 'Developers', 'General Consumers',
-] as const;
+// Planner exposes CORE + PROFESSIONAL + INDUSTRY (core stays first).
+const TARGET_AUDIENCE_OPTIONS = getSelectableAudienceLabels({ includeGroups: ['professional', 'industry'] });
 
 const CONTENT_FORMAT_OPTIONS = [
   'Short-form Video (Reels / TikTok)',

@@ -14,6 +14,8 @@ import type { CalendarActivity, CalendarExecutionStage } from './DashboardPage.t
 import DashboardCalendarTab from './dashboard/DashboardCalendarTab';
 import DashboardCampaignsTab from './dashboard/DashboardCampaignsTab';
 import DashboardOverviewSection from './dashboard/DashboardOverviewSection';
+import CreditAdvisorBanner from './credit-advisor/CreditAdvisorBanner';
+import CreditAdvisorExecutivePopup from './credit-advisor/CreditAdvisorExecutivePopup';
 
 export default function DashboardPage() {
   const d = useDashboardState();
@@ -73,6 +75,11 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Phase 3 — proactive Credit Advisor executive popup + banner (read-only) */}
+      <CreditAdvisorExecutivePopup orgId={selectedCompanyId} />
+      <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6 lg:px-8">
+        <CreditAdvisorBanner orgId={selectedCompanyId} />
+      </div>
       {showCompanyFactReviewPrompt && isCompanyAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4">
           <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-amber-200 p-6">

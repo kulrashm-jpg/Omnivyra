@@ -117,4 +117,35 @@ describe('validateExecutionConfigFormats', () => {
     expect(r.ok).toBe(false);
     expect(r.noFormatsSelected).toBe(true);
   });
+
+  test('combined mode does NOT flag BOLT-text formats (poll/article/tweet) as unsupported creator', () => {
+    const r = validateExecutionConfigFormats(
+      {
+        campaign_mode: 'combined',
+        text_formats: ['post', 'poll', 'article', 'tweet', 'short_story'],
+        creator_formats: ['carousel', 'video'],
+        content_formats: ['post', 'poll', 'article', 'tweet', 'short_story', 'carousel', 'video'],
+        format_frequency: { post: 3, poll: 2, article: 1, tweet: 2, short_story: 1, carousel: 2, video: 1 },
+      },
+      'combined',
+    );
+    expect(r.unsupportedCreator).toEqual([]); // poll & friends are text, not unsupported creator
+    expect(r.unsupportedText).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
+
+  test('combined mode still flags a genuinely unknown format', () => {
+    const r = validateExecutionConfigFormats(
+      {
+        campaign_mode: 'combined',
+        text_formats: ['post'],
+        creator_formats: ['carousel'],
+        content_formats: ['post', 'carousel', 'hologram'],
+        format_frequency: { post: 3, carousel: 2, hologram: 1 },
+      },
+      'combined',
+    );
+    expect(r.unsupportedCreator).toContain('hologram'); // not text, not a creator format
+    expect(r.ok).toBe(false);
+  });
 });

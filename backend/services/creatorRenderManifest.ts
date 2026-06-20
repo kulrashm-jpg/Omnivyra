@@ -161,6 +161,12 @@ export function assertRenderManifestExportable(manifest: RenderManifest): void {
   const ocrErrors = manifest.ocrResult.flags.filter((flag) => {
     if (flag === 'provider_image_unavailable_for_ocr') return false;
     if (isLightweight && ocrRelaxed && OCR_OPERATIONAL_FLAGS.has(flag)) return false;
+    // Local/dev has no OCR provider (CREATOR_OCR_ENDPOINT unset): operational-tier
+    // OCR flags (provider unconfigured / unavailable) must not fail the render
+    // closed OUTSIDE production. Content-validation OCR flags only appear when a
+    // provider actually ran, so they are unaffected. Production stays fail-closed
+    // (forces proper OCR configuration).
+    if (process.env.NODE_ENV !== 'production' && OCR_OPERATIONAL_FLAGS.has(flag)) return false;
     return true;
   });
 

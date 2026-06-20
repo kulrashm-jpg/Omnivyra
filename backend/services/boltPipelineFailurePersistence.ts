@@ -30,11 +30,22 @@ import { normalizePipelineError, type NormalizedPipelineError } from '../../lib/
 import { classifyBoltFailure, type ClassifiedBoltFailure } from '../../lib/shared/bolt/classifyBoltFailure';
 import type { StrategySnapshot } from '../../lib/shared/bolt/captureStrategySnapshot';
 import { getUserFriendlyMessage } from '../utils/userFriendlyErrors';
+// Attribution authority lives in the lean, dependency-free module so the
+// abandonment sweepers can reuse the exact same derivation. Re-exported
+// here for back-compat — there is ONE derivation system (Phase 6I-3).
+import type {
+  BoltPipelineMode,
+  BoltCampaignType,
+} from '../../lib/shared/bolt/abandonmentAttribution';
+
+export {
+  deriveBoltCampaignType,
+  deriveBoltPipelineMode,
+  deriveAbandonmentAttribution,
+} from '../../lib/shared/bolt/abandonmentAttribution';
+export type { BoltPipelineMode, BoltCampaignType } from '../../lib/shared/bolt/abandonmentAttribution';
 
 const STACK_EXCERPT_BYTES = 2_000;
-
-export type BoltPipelineMode = 'week_plan' | 'daily_plan' | 'schedule' | 'campaign_schedule' | 'repurpose' | string;
-export type BoltCampaignType = 'bolt-text' | 'bolt-creator' | 'bolt-combined' | string;
 
 export interface PersistPipelineFailureInput {
   /** The run currently failing. Required — without it nothing persists. */
@@ -295,15 +306,4 @@ export async function persistPipelineFailure(
   });
 
   return { userMessage, normalized, classification };
-}
-
-/**
- * Derive the campaign-type tag from the execution payload. Pure helper —
- * exported so the pipeline can stamp the tag once at run start.
- */
-export function deriveBoltCampaignType(executionConfig: Record<string, unknown> | undefined | null): BoltCampaignType {
-  const mode = String(executionConfig?.campaign_mode ?? '').toLowerCase().trim();
-  if (mode === 'creator') return 'bolt-creator';
-  if (mode === 'combined') return 'bolt-combined';
-  return 'bolt-text';
 }

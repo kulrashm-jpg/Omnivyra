@@ -13,6 +13,7 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { getBoltQueue } from '../../../backend/queue/boltQueue';
 import { getUserFriendlyMessage } from '../../../backend/utils/userFriendlyErrors';
 import { executeBoltPipeline } from '../../../backend/services/boltPipelineService';
+import { deriveAbandonmentAttribution } from '../../../lib/shared/bolt/abandonmentAttribution';
 import { config } from '@/config';
 
 /**
@@ -64,12 +65,28 @@ async function recoverAbandonedCompanyRuns(companyId: string): Promise<void> {
       .lt('heartbeat_at', cutoffIso)
       .or(`lock_expires_at.is.null,lock_expires_at.lt.${nowIso}`)
       .is('abandonment_detected_at', null)
-      .select('id, error_message');
+      .select('id, error_message, payload');
     if (error) {
       console.warn('[bolt/execute] inline sweep failed (non-fatal):', error.message);
       return;
     }
     if (Array.isArray(data) && data.length > 0) {
+      // ── Phase 6I-3 — attribution stamping ─────────────────────────────────
+      // Abandoned runs never threw, so persistPipelineFailure never tagged
+      // them. Stamp campaign_type + pipeline_mode using the SAME authority so
+      // failure analytics can slice abandoned runs by surface (bolt-text /
+      // bolt-creator / bolt-combined). Best-effort, per-row, two columns only.
+      for (const r of data) {
+        try {
+          const row = r as { id: string; payload?: Record<string, unknown> | null };
+          const attribution = deriveAbandonmentAttribution(row.payload ?? null);
+          await ownedDbTable('bolt_execution_runs')
+            .update({ campaign_type: attribution.campaign_type, pipeline_mode: attribution.pipeline_mode })
+            .eq('id', row.id);
+        } catch {
+          // Best-effort — attribution is additive; the sweep already succeeded.
+        }
+      }
       // Structured event under the canonical telemetry envelope.
       // Splits "swept rows that ALSO had a real error" (a worker died
       // after persisting its cause) from "swept rows that had no

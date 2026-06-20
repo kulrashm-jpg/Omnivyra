@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { usePlannerSession, type StrategyContext } from './plannerSessionStore';
 import { CANONICAL_PLATFORMS, PLATFORM_OPTIONS, type CanonicalPlatform } from '../../lib/shared/platforms';
+import { PLANNER_DURATIONS } from '../../lib/shared/campaignDuration';
 
 const CANONICAL_VALUES = new Set<string>(CANONICAL_PLATFORMS);
 
@@ -15,7 +16,7 @@ function toCanonicalPlatform(p: string): CanonicalPlatform | null {
   return CANONICAL_VALUES.has(v) ? (v as CanonicalPlatform) : null;
 }
 const CONTENT_MIX_OPTIONS = ['post', 'video', 'carousel', 'story', 'thread', 'short'];
-const DURATION_OPTIONS = [1, 2, 4, 6, 8, 10, 12];
+const DURATION_OPTIONS = PLANNER_DURATIONS;
 
 export interface StrategyBuilderStepProps {
   onComplete?: (output: StrategyContext) => void;

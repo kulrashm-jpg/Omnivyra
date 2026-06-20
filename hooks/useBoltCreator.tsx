@@ -7,6 +7,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { CORE_AUDIENCE_LABELS } from '../lib/shared/audience/audienceRegistry';
+import { BOLT_DURATION_OPTIONS } from '../lib/shared/campaignDuration';
 import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import { BoltCampaignChat } from '../components/bolt/BoltCampaignChat';
@@ -70,22 +72,14 @@ const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: strin
 ];
 const ALLOWED_CREATOR_FORMATS = new Set<CreatorContentFormat>(CONTENT_FORMATS.map((f) => f.value));
 
-const DURATION_OPTIONS = [
-  { value: 1, label: '1 Week' },
-  { value: 2, label: '2 Weeks' },
-  { value: 3, label: '3 Weeks' },
-  { value: 4, label: '4 Weeks' },
-];
+const DURATION_OPTIONS = BOLT_DURATION_OPTIONS;
 
 const GOAL_OPTIONS = [
   'Brand Awareness', 'Lead Generation', 'Thought Leadership',
   'Product Launch', 'Community Growth', 'Engagement',
 ];
 
-const AUDIENCE_OPTIONS = [
-  'B2B Marketers', 'Founders / Entrepreneurs', 'Marketing Leaders',
-  'Sales Teams', 'Product Managers', 'Developers', 'General Consumers',
-];
+const AUDIENCE_OPTIONS = CORE_AUDIENCE_LABELS;
 
 const STRATEGIC_FOCUS_OPTIONS = [
   'Content Marketing', 'SEO / Organic', 'Social Media', 'Email Marketing',

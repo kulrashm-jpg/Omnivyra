@@ -8,6 +8,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/router';
+import { CORE_AUDIENCE_LABELS } from '../lib/shared/audience/audienceRegistry';
 import { useCompanyContext } from './CompanyContext';
 import { fetchWithAuth } from './community-ai/fetchWithAuth';
 import UnifiedContextModeSelector, {
@@ -70,10 +71,7 @@ type Suggestion = {
   suggested_duration: number;
 };
 
-const AUDIENCE_OPTIONS = [
-  'B2B Marketers', 'Founders / Entrepreneurs', 'Marketing Leaders',
-  'Sales Teams', 'Product Managers', 'Developers', 'General Consumers',
-];
+const AUDIENCE_OPTIONS = CORE_AUDIENCE_LABELS;
 
 const TEXT_FORMATS: { value: TextFormat; label: string; icon: string }[] = [
   { value: 'post',        label: 'Post',        icon: '📝' },

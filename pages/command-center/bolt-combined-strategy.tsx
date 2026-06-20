@@ -8,8 +8,14 @@
  * View options: Week Plan, Daily Plan, Schedule (same as BOLT Text).
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/router';
+import { getSelectableAudienceLabels } from '../../lib/shared/audience/audienceRegistry';
+import { COMBINED_DURATION_OPTIONS, MAX_CAMPAIGN_DURATION_WEEKS } from '../../lib/shared/campaignDuration';
+import { getSupportedPlatformsForFormat } from '../../lib/shared/bolt/contentPlatformAssignment';
+import { buildAssignmentExplanation, buildAssignmentDecisions } from '../../lib/shared/intelligence/assignmentExplanation';
+import { AssignmentSummary } from '../../components/bolt/AssignmentSummary';
+import { ProgressCard } from '../../components/bolt/ProgressCard';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
@@ -19,8 +25,12 @@ import BoltPlatformPicker from '../../components/bolt/BoltPlatformPicker';
 import { useBoltPlatformPicker } from '../../hooks/useBoltPlatformPicker';
 import PageLoader from '../../components/PageLoader';
 
-type TextFormat    = 'post' | 'short_story' | 'article' | 'newsletter' | 'white_paper';
-type CreatorFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story';
+// BOLT Text set. Newsletter / white paper (true long-form) are excluded — they
+// route through the long-form engine, not BOLT.
+type TextFormat    = 'post' | 'tweet' | 'article' | 'poll' | 'short_story';
+// BOLT Creator set (bolt_creator_eligible). 'story' is standalone-only (not a
+// first-class BOLT Creator format) and is excluded here.
+type CreatorFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'infographic';
 type AnyFormat     = TextFormat | CreatorFormat;
 type ThemeSource   = 'hybrid' | 'api' | 'ai';
 type OutcomeView   = 'week_plan' | 'daily_plan' | 'schedule';
@@ -35,11 +45,11 @@ const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: str
 ];
 
 const TEXT_FORMATS: { value: TextFormat; label: string; icon: string; hint: string }[] = [
-  { value: 'post',        label: 'Post',         icon: '✍️', hint: 'Short-form social post' },
-  { value: 'article',     label: 'Article',      icon: '📄', hint: 'Thought leadership piece' },
-  { value: 'newsletter',  label: 'Newsletter',   icon: '📧', hint: 'Email-first distribution' },
-  { value: 'short_story', label: 'Short Story',  icon: '📖', hint: 'Narrative-driven content' },
-  { value: 'white_paper', label: 'White Paper',  icon: '📑', hint: 'In-depth authoritative report' },
+  { value: 'post',        label: 'Post',        icon: '✍️', hint: 'Short-form social post' },
+  { value: 'tweet',       label: 'Tweet',       icon: '🐦', hint: 'X / Twitter post' },
+  { value: 'article',     label: 'Article',     icon: '📄', hint: 'Thought leadership piece' },
+  { value: 'poll',        label: 'Poll',        icon: '📊', hint: 'Engagement poll' },
+  { value: 'short_story', label: 'Short Story', icon: '📖', hint: 'Narrative-driven content' },
 ];
 
 const CREATOR_FORMATS: { value: CreatorFormat; label: string; icon: string; hint: string }[] = [
@@ -47,16 +57,19 @@ const CREATOR_FORMATS: { value: CreatorFormat; label: string; icon: string; hint
   { value: 'reel',     label: 'Reel',     icon: '🎥', hint: 'Short vertical video (15–90s)' },
   { value: 'carousel', label: 'Carousel', icon: '🖼️', hint: 'Multi-slide visual story' },
   { value: 'image',    label: 'Image',    icon: '📸', hint: 'Static photo or graphic' },
-  { value: 'podcast',  label: 'Podcast',  icon: '🎙️', hint: 'Audio episode or clip' },
-  { value: 'short',    label: 'Short',    icon: '⚡', hint: 'YouTube / TikTok short' },
-  { value: 'story',    label: 'Story',    icon: '📱', hint: '24hr ephemeral story format' },
+  { value: 'podcast',     label: 'Podcast',     icon: '🎙️', hint: 'Audio episode or clip' },
+  { value: 'short',       label: 'Short',       icon: '⚡', hint: 'YouTube / TikTok short' },
+  { value: 'infographic', label: 'Infographic', icon: '📊', hint: 'Data-driven visual graphic' },
 ];
 
-const DURATION_OPTIONS = [
-  { value: 1, label: '1 Week' },
-  { value: 2, label: '2 Weeks' },
-  { value: 3, label: '3 Weeks' },
-  { value: 4, label: '4 Weeks' },
+// Phase 6C-4A: Intelligent Mix is the extended-planning surface → full 1–12 range.
+const DURATION_OPTIONS = COMBINED_DURATION_OPTIONS;
+
+// Tone vocabulary — kept in sync with the AI Architect's suggested_tone list
+// (campaign-chat.ts) so applied suggestions map onto these chips.
+const TONE_OPTIONS = [
+  'Professional', 'Conversational', 'Educational', 'Analytical',
+  'Bold', 'Inspirational', 'Authoritative', 'Friendly',
 ];
 
 const GOAL_OPTIONS = [
@@ -64,10 +77,10 @@ const GOAL_OPTIONS = [
   'Product Launch', 'Community Growth', 'Engagement',
 ];
 
-const AUDIENCE_OPTIONS = [
-  'B2B Marketers', 'Founders / Entrepreneurs', 'Marketing Leaders',
-  'Sales Teams', 'Product Managers', 'Developers', 'General Consumers',
-];
+// Intelligent Mix (combined) is the advanced audience-planning surface — it
+// exposes CORE + PROFESSIONAL + INDUSTRY groups from the canonical authority.
+// Legacy core stays first (display order stable); new groups append.
+const AUDIENCE_OPTIONS = getSelectableAudienceLabels({ includeGroups: ['professional', 'industry'] });
 
 const STRATEGIC_FOCUS_OPTIONS = [
   'Content Marketing', 'SEO / Organic', 'Social Media', 'Email Marketing',
@@ -129,68 +142,10 @@ const BOLT_PIPELINE: { stage: string; label: string }[] = [
   { stage: 'schedule-structured-plan',  label: 'Scheduling content' },
 ];
 
-function stageIndex(stage: string | undefined): number {
-  if (!stage) return -1;
-  const exact = BOLT_PIPELINE.findIndex((s) => s.stage === stage);
-  if (exact !== -1) return exact;
-  if (stage.startsWith('generate-weekly-structure')) return 3;
-  return -1;
-}
-
-function formatElapsed(ms: number): string {
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const s = sec % 60;
-  return s > 0 ? `${min}m ${s}s` : `${min}m`;
-}
-
-/* ─── Inline BOLT progress ──────────────────────────────────────────────────── */
-function CardBoltProgress({ progress, theme, startedAt }: { progress: BOLTProgress; theme: typeof CARD_THEMES[0]; startedAt: number }) {
-  const [elapsedMs, setElapsedMs] = useState(Date.now() - startedAt);
-  useEffect(() => {
-    const id = setInterval(() => setElapsedMs(Date.now() - startedAt), 1000);
-    return () => clearInterval(id);
-  }, [startedAt]);
-
-  const currentIdx = stageIndex(progress.stage);
-  const pct = Math.min(100, Math.max(0, progress.progress_percentage ?? 0));
-  const isFailed = progress.status === 'failed';
-
+/* ─── Inline BOLT progress — shared ProgressCard renderer (6H-B) ───────────── */
+function CardBoltProgress({ progress, startedAt }: { progress: BOLTProgress; theme: typeof CARD_THEMES[0]; startedAt: number }) {
   return (
-    <div className="px-4 pb-4 pt-3 bg-white border-t border-gray-100">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          {isFailed ? <span className="w-4 h-4 text-red-500">✕</span> : (
-            <svg className="animate-spin w-4 h-4 text-violet-500 flex-shrink-0" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-            </svg>
-          )}
-          <span className="text-xs font-bold text-gray-800">{isFailed ? 'BOLT failed' : '⚡ BOLT running'}</span>
-        </div>
-        <span className="text-[11px] text-gray-400">{formatElapsed(elapsedMs)}</span>
-      </div>
-      <div className="space-y-1.5 mb-3">
-        {BOLT_PIPELINE.map((step, i) => {
-          const isDone = currentIdx > i;
-          const isCurrent = currentIdx === i;
-          return (
-            <div key={step.stage} className="flex items-center gap-2">
-              <div className={`flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold
-                ${isFailed && isCurrent ? 'bg-red-500 text-white' : isDone ? 'bg-violet-500 text-white' : isCurrent ? `bg-gradient-to-br ${theme.gradient} text-white animate-pulse` : 'bg-gray-100 text-gray-400'}`}>
-                {isDone ? '✓' : isCurrent && !isFailed ? '…' : i + 1}
-              </div>
-              <span className={`text-[11px] font-medium ${isDone ? 'text-gray-400 line-through' : isCurrent ? 'text-gray-800' : 'text-gray-300'}`}>{step.label}</span>
-            </div>
-          );
-        })}
-      </div>
-      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div className={`h-full bg-gradient-to-r ${theme.gradient} rounded-full transition-all duration-500`} style={{ width: `${pct}%` }} />
-      </div>
-      {isFailed && progress.error_message && <p className="text-[11px] text-red-600 mt-2 leading-snug">{progress.error_message}</p>}
-    </div>
+    <ProgressCard progress={progress} pipeline={BOLT_PIPELINE} startedAt={startedAt} dotClass="bg-violet-500" />
   );
 }
 
@@ -269,7 +224,9 @@ export default function BoltCombinedStrategyPage() {
   const { selectedCompanyId: companyId, isLoading, authChecked, isAuthenticated, user } = useCompanyContext();
 
   const [topic, setTopic] = useState('');
+  const [description, setDescription] = useState('');
   const [goals, setGoals] = useState<string[]>([]);
+  const [tone, setTone] = useState<string[]>([]);
   const [audience, setAudience] = useState<string[]>([]);
   const [strategicFocus, setStrategicFocus] = useState<string[]>([]);
   const [offerings, setOfferings] = useState<string[]>([]);
@@ -292,13 +249,76 @@ export default function BoltCombinedStrategyPage() {
   const platformPicker = useBoltPlatformPicker(companyId, 'strategy-mix');
   const togglePlatform = (p: string) =>
     setSelectedPlatforms((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+  // Auto-select the platforms that are CONNECTED (platformPicker.supported =
+  // registry-union of connected accounts) AND can run the selected content
+  // formats (capability authority). When no format is chosen yet, all connected
+  // platforms are eligible. Manual selections are preserved; selection only
+  // resets to the full eligible set when every prior pick became ineligible.
+  const contentFormatsKey = [...textFormats, ...creatorFormats].slice().sort().join(',');
   useEffect(() => {
     if (platformPicker.loading || platformPicker.supported.length === 0) return;
+    const formats = [...textFormats, ...creatorFormats];
+    const eligibleSet = new Set<string>();
+    if (formats.length === 0) {
+      platformPicker.supported.forEach((p) => eligibleSet.add(p.toLowerCase()));
+    } else {
+      for (const fmt of formats) {
+        for (const p of getSupportedPlatformsForFormat(fmt)) eligibleSet.add(p.toLowerCase());
+      }
+    }
+    const eligible = platformPicker.supported.filter((p) => eligibleSet.has(p.toLowerCase()));
     setSelectedPlatforms((prev) => {
-      const filtered = prev.filter((p) => platformPicker.supported.includes(p));
-      return filtered.length > 0 ? filtered : platformPicker.supported;
+      const filtered = prev.filter((p) => eligible.includes(p));
+      return filtered.length > 0 ? filtered : eligible;
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [platformPicker.loading, platformPicker.supported, contentFormatsKey]);
+
+  // Content formats aligned to CONNECTED platforms (per the API-integration
+  // capability registry). A format is selectable only when at least one
+  // connected platform can actually publish it — reuses the canonical
+  // getSupportedPlatformsForFormat authority (capability + format exclusivity,
+  // e.g. tweet → X-only, reel/short → creator platforms, youtube → video).
+  // While the picker is still loading (or nothing is connected yet) we don't
+  // over-disable — the platform picker shows its own empty/connect state.
+  const formatCapable = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    const connected = platformPicker.supported;
+    const gating = !platformPicker.loading && connected.length > 0;
+    for (const f of [...TEXT_FORMATS, ...CREATOR_FORMATS]) {
+      map[f.value] = gating ? getSupportedPlatformsForFormat(f.value, connected).length > 0 : true;
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [platformPicker.loading, platformPicker.supported]);
+
+  // Phase 6G-2 — read-only assignment explainability (Intelligent Mix only).
+  const [showDecisions, setShowDecisions] = useState(false);
+  const assignmentExplanation = useMemo(
+    () => buildAssignmentExplanation({
+      selectedPlatforms,
+      selectedFormats: [...textFormats, ...creatorFormats],
+      isCombined: true,
+    }),
+    [selectedPlatforms, textFormats, creatorFormats],
+  );
+  useEffect(() => {
+    const d = assignmentExplanation.diagnostics;
+    if (d.assignment_explanations_generated > 0) {
+      console.info('[bolt/assignment-explanation]', JSON.stringify(d)); // counts only
+    }
+  }, [assignmentExplanation]);
+
+  // Flat per-pair decisions (6G-2 refined) — same authority, drives the panel.
+  const assignmentDecisions = useMemo(
+    () => buildAssignmentDecisions({
+      selectedPlatforms,
+      selectedFormats: [...textFormats, ...creatorFormats],
+      isCombined: true,
+    }),
+    [selectedPlatforms, textFormats, creatorFormats],
+  );
+
   const [outcomeView, setOutcomeView] = useState<OutcomeView>('week_plan');
 
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -326,7 +346,9 @@ export default function BoltCombinedStrategyPage() {
       if (!raw) return;
       const s = JSON.parse(raw);
       if (s.topic)           setTopic(s.topic);
+      if (s.description)     setDescription(s.description);
       if (s.goals)           setGoals(s.goals);
+      if (s.tone)            setTone(s.tone);
       if (s.audience)        setAudience(s.audience);
       if (s.strategicFocus)  setStrategicFocus(s.strategicFocus);
       if (s.offerings)       setOfferings(s.offerings);
@@ -349,13 +371,13 @@ export default function BoltCombinedStrategyPage() {
   useEffect(() => {
     try {
       sessionStorage.setItem(BOLT_STATE_KEY, JSON.stringify({
-        topic, goals, audience, strategicFocus, offerings,
+        topic, description, goals, tone, audience, strategicFocus, offerings,
         textFormats, textFrequency, creatorFormats, creatorFrequency,
         duration, themeSource, sharingMode, outcomeView, campaignStartDate,
         cards, hasGenerated,
       }));
     } catch {}
-  }, [topic, goals, audience, strategicFocus, offerings, textFormats, textFrequency, creatorFormats, creatorFrequency, duration, themeSource, sharingMode, outcomeView, campaignStartDate, cards, hasGenerated]);
+  }, [topic, description, goals, tone, audience, strategicFocus, offerings, textFormats, textFrequency, creatorFormats, creatorFrequency, duration, themeSource, sharingMode, outcomeView, campaignStartDate, cards, hasGenerated]);
 
   useEffect(() => { if (authChecked && !user?.userId) router.replace('/login'); }, [authChecked, user?.userId, router]);
 
@@ -373,6 +395,7 @@ export default function BoltCombinedStrategyPage() {
   if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
 
   function toggleGoal(g: string) { setGoals((p) => p.includes(g) ? p.filter((x) => x !== g) : [...p, g]); }
+  function toggleTone(t: string) { setTone((p) => p.includes(t) ? p.filter((x) => x !== t) : [...p, t]); }
   function toggleFocus(f: string) { setStrategicFocus((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f]); }
   function toggleAudience(a: string) { setAudience((p) => p.includes(a) ? p.filter((x) => x !== a) : [...p, a]); }
 
@@ -421,7 +444,7 @@ export default function BoltCombinedStrategyPage() {
     const allFormats: AnyFormat[] = [...textFormats, ...creatorFormats];
     const allFrequency: Partial<Record<AnyFormat, number>> = { ...textFrequency, ...creatorFrequency };
     const totalFrequency = allFormats.reduce((sum, f) => sum + (allFrequency[f] ?? 3), 0);
-    const campaignDuration = Math.min(4, Math.max(1, Math.round(duration)));
+    const campaignDuration = Math.min(MAX_CAMPAIGN_DURATION_WEEKS, Math.max(1, Math.round(duration)));
 
     const sourceStrategicTheme = {
       schema_type: 'recommendation_strategic_card',
@@ -450,8 +473,9 @@ export default function BoltCombinedStrategyPage() {
       tentative_start: campaignStartDate || new Date().toISOString().split('T')[0],
       campaign_goal: combinedGoal,
       campaign_goals: goals,
+      campaign_description: description.trim() || card.summary,
       campaign_mode: 'combined',
-      communication_style: ['professional', 'visual'],
+      communication_style: tone.length > 0 ? tone.map((t) => t.toLowerCase()) : ['professional', 'visual'],
       content_formats: allFormats,
       text_formats: textFormats,
       creator_formats: creatorFormats,
@@ -491,10 +515,18 @@ export default function BoltCombinedStrategyPage() {
           stage?: string; progress_percentage?: number; status?: string;
           result_campaign_id?: string; error_message?: string;
           weeks_generated?: number; daily_slots_created?: number;
+          failed_stage?: string; failed_stage_label?: string; error_code?: string;
         };
 
         if (!mounted) return;
-        setExecProgress({ stage: prog.stage, status: prog.status, progress_percentage: prog.progress_percentage ?? 0, weeks_generated: prog.weeks_generated, daily_slots_created: prog.daily_slots_created });
+        setExecProgress({
+          stage: prog.stage, status: prog.status,
+          progress_percentage: prog.progress_percentage ?? 0,
+          weeks_generated: prog.weeks_generated, daily_slots_created: prog.daily_slots_created,
+          // 6H-D failure explainability — carried through so a failed status keeps WHERE + WHY.
+          error_message: prog.error_message,
+          failed_stage: prog.failed_stage, failed_stage_label: prog.failed_stage_label, error_code: prog.error_code,
+        });
 
         if (prog.status === 'completed') { completedCampaignId = prog.result_campaign_id ?? null; done = true; }
         else if (prog.status === 'failed' || prog.status === 'aborted') throw new Error(prog.error_message || 'BOLT execution failed');
@@ -518,7 +550,9 @@ export default function BoltCombinedStrategyPage() {
     } catch (err) {
       if (!mounted) return;
       const msg = err instanceof Error ? err.message : 'Something went wrong';
-      setExecProgress({ status: 'failed', progress_percentage: 0, error_message: msg });
+      // Preserve the rich failed state (stage/code) already set by the poll loop;
+      // only synthesize a minimal failure for exception paths (network/timeout).
+      setExecProgress((prev) => (prev && prev.status === 'failed') ? prev : { status: 'failed', progress_percentage: 0, error_message: msg });
       setExecuting(false);
       setTimeout(() => { if (!mounted) return; setExecProgress(null); setSelectedIds([]); setExecError(msg); }, 4000);
     }
@@ -537,7 +571,8 @@ export default function BoltCombinedStrategyPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          companyId, topic: topic.trim(), goals,
+          companyId, topic: topic.trim(), goals, tone,
+          description: description.trim() || undefined,
           goal: goals.length > 0 ? goals.join(', ') : undefined,
           audience: audience.join(', '), strategicFocus, offerings,
           contentFormat: allFormats[0] ?? 'post', duration, themeSource,
@@ -558,6 +593,65 @@ export default function BoltCombinedStrategyPage() {
   const canGenerate = topic.trim().length > 2;
   const allFormats = [...textFormats, ...creatorFormats];
   const allFrequency: Partial<Record<AnyFormat, number>> = { ...textFrequency, ...creatorFrequency };
+
+  // Phase 6 — apply a full AI Campaign Blueprint into the form using existing
+  // setters only. Only fields the AI returned are written (existing input for
+  // omitted fields is preserved); formats are filtered to this page's
+  // supported values so nothing unschedulable lands in the form.
+  const applyCampaignBlueprint = (s: {
+    topic: string;
+    description?: string;
+    goals?: string[];
+    tone?: string[];
+    audience?: string;
+    strategicFocus?: string[];
+    platforms?: string[];
+    textFormats?: string[];
+    creatorFormats?: string[];
+    duration?: number;
+    outcomeView?: string;
+  }) => {
+    if (s.topic) setTopic(s.topic);
+    if (s.description) setDescription(s.description);
+    // Map suggested goals/audience onto the form's chip vocabularies so they
+    // VISIBLY select (the chips render `goals.includes(label)` against the fixed
+    // GOAL_OPTIONS / AUDIENCE_OPTIONS). Case-insensitive; for the free-text
+    // audience, a chip is selected when its label appears in the suggestion.
+    // Unmatched suggestions are skipped (no chip exists) rather than stored as
+    // invisible phantom state that would skew the "N selected" counter.
+    const normLabel = (x: string) => x.trim().toLowerCase();
+    if (s.goals && s.goals.length > 0) {
+      const matchedGoals = GOAL_OPTIONS.filter((opt) => s.goals!.some((g) => normLabel(g) === normLabel(opt)));
+      if (matchedGoals.length > 0) setGoals(matchedGoals);
+    }
+    if (s.tone && s.tone.length > 0) {
+      const matchedTone = TONE_OPTIONS.filter((opt) => s.tone!.some((t) => normLabel(t) === normLabel(opt)));
+      if (matchedTone.length > 0) setTone(matchedTone);
+    }
+    if (s.audience) {
+      const free = normLabel(s.audience);
+      const matchedAudience = AUDIENCE_OPTIONS.filter(
+        (opt) => free === normLabel(opt) || free.includes(normLabel(opt)),
+      );
+      if (matchedAudience.length > 0) setAudience(matchedAudience);
+    }
+    if (s.strategicFocus && s.strategicFocus.length > 0) setStrategicFocus(s.strategicFocus);
+    if (s.platforms && s.platforms.length > 0) setSelectedPlatforms(s.platforms);
+    const validText = new Set(TEXT_FORMATS.map((f) => f.value));
+    const validCreator = new Set(CREATOR_FORMATS.map((f) => f.value));
+    if (s.textFormats && s.textFormats.length > 0) {
+      const tf = s.textFormats.filter((f): f is TextFormat => validText.has(f as TextFormat));
+      if (tf.length > 0) setTextFormats(tf);
+    }
+    if (s.creatorFormats && s.creatorFormats.length > 0) {
+      const cf = s.creatorFormats.filter((f): f is CreatorFormat => validCreator.has(f as CreatorFormat));
+      if (cf.length > 0) setCreatorFormats(cf);
+    }
+    if (typeof s.duration === 'number' && s.duration >= 1) setDuration(s.duration);
+    if (s.outcomeView && (['week_plan', 'daily_plan', 'schedule'] as string[]).includes(s.outcomeView)) {
+      setOutcomeView(s.outcomeView as OutcomeView);
+    }
+  };
 
   return (
     <>
@@ -599,6 +693,11 @@ export default function BoltCombinedStrategyPage() {
               <textarea value={topic} onChange={(e) => setTopic(e.target.value)} rows={3}
                 placeholder="e.g. Q3 product launch combining thought leadership posts and behind-the-scenes videos…"
                 className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-violet-300 focus:border-violet-400 placeholder:text-gray-300" />
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mt-4 mb-1">Description</label>
+              <p className="text-xs text-gray-400 mb-2">A 1–2 sentence campaign blurb (optional).</p>
+              <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2}
+                placeholder="e.g. A focused push delivering actionable insights to help marketing teams execute with clarity…"
+                className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-violet-300 focus:border-violet-400 placeholder:text-gray-300" />
             </div>
 
             {/* Goal + Audience */}
@@ -628,6 +727,22 @@ export default function BoltCombinedStrategyPage() {
                     </button>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            {/* Tone */}
+            <div className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide">Tone</label>
+                {tone.length > 0 && <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">{tone.length} selected</span>}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {TONE_OPTIONS.map((t) => (
+                  <button key={t} type="button" onClick={() => toggleTone(t)}
+                    className={`text-xs px-2.5 py-1.5 rounded-full border-2 font-medium transition-all ${tone.includes(t) ? 'border-violet-400 bg-violet-100 text-violet-900' : 'border-gray-200 text-gray-600 hover:border-violet-300 hover:bg-violet-50'}`}>
+                    {tone.includes(t) && '✓ '}{t}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -661,10 +776,12 @@ export default function BoltCombinedStrategyPage() {
                   <div className="flex flex-col gap-1.5">
                     {TEXT_FORMATS.map((fmt) => {
                       const sel = textFormats.includes(fmt.value);
+                      const capable = formatCapable[fmt.value] !== false;
                       return (
                         <div key={fmt.value} className="flex flex-col gap-0.5">
                           <button type="button" onClick={() => toggleTextFormat(fmt.value)}
-                            disabled={!sel && textFormats.length >= 3} title={fmt.hint}
+                            disabled={!sel && (textFormats.length >= 3 || !capable)}
+                            title={!capable ? `No connected platform supports ${fmt.label}. Connect a compatible platform to enable it.` : fmt.hint}
                             className={`flex items-center gap-2 text-xs px-2.5 py-2 rounded-xl border-2 font-medium transition-all text-left disabled:opacity-40 ${sel ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-gray-200 text-gray-600 hover:border-amber-300 hover:bg-amber-50/40'}`}>
                             <span>{fmt.icon}</span>{fmt.label}
                           </button>
@@ -687,10 +804,12 @@ export default function BoltCombinedStrategyPage() {
                   <div className="flex flex-col gap-1.5">
                     {CREATOR_FORMATS.map((fmt) => {
                       const sel = creatorFormats.includes(fmt.value);
+                      const capable = formatCapable[fmt.value] !== false;
                       return (
                         <div key={fmt.value} className="flex flex-col gap-0.5">
                           <button type="button" onClick={() => toggleCreatorFormat(fmt.value)}
-                            disabled={!sel && creatorFormats.length >= 2} title={fmt.hint}
+                            disabled={!sel && (creatorFormats.length >= 2 || !capable)}
+                            title={!capable ? `No connected platform supports ${fmt.label}. Connect a compatible platform to enable it.` : fmt.hint}
                             className={`flex items-center gap-2 text-xs px-2.5 py-2 rounded-xl border-2 font-medium transition-all text-left disabled:opacity-40 ${sel ? 'border-blue-400 bg-blue-50 text-blue-900' : 'border-gray-200 text-gray-600 hover:border-blue-300 hover:bg-blue-50/40'}`}>
                             <span>{fmt.icon}</span>{fmt.label}
                           </button>
@@ -713,15 +832,16 @@ export default function BoltCombinedStrategyPage() {
             {/* Duration + Intelligence Source */}
             <div className="grid grid-cols-2 divide-x divide-gray-100">
               <div className="p-5">
-                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Duration</label>
-                <div className="flex flex-col gap-1.5">
+                <label htmlFor="combined-duration" className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Duration</label>
+                <select
+                  id="combined-duration"
+                  value={duration}
+                  onChange={(e) => setDuration(Number(e.target.value))}
+                  className="w-full py-2 px-3 text-sm font-semibold rounded-xl border-2 border-gray-200 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-violet-300 focus:border-violet-400">
                   {DURATION_OPTIONS.map((opt) => (
-                    <button key={opt.value} type="button" onClick={() => setDuration(opt.value)}
-                      className={`py-2 text-xs font-semibold rounded-xl border-2 transition-all ${duration === opt.value ? 'border-violet-400 bg-violet-500 text-white' : 'border-gray-200 bg-white text-gray-600 hover:border-violet-300'}`}>
-                      {opt.label}
-                    </button>
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
-                </div>
+                </select>
               </div>
               <div className="p-5">
                 <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Intelligence Source</label>
@@ -773,6 +893,23 @@ export default function BoltCombinedStrategyPage() {
                 emptyMessage="No registered platforms connected yet. Connect your social accounts to enable Strategy Mix."
               />
             </div>
+
+            {/* Assignment Summary — read-only explainability (6G-2). What was
+                supported / restricted / removed, and why (canonical authority). */}
+            {assignmentDecisions.length > 0 && (
+              <div className="px-5 pt-4 pb-4 border-t border-gray-100">
+                <button type="button" onClick={() => setShowDecisions((v) => !v)}
+                  className="w-full flex items-center justify-between text-left">
+                  <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Assignment Summary</span>
+                  <span className="text-gray-400 text-xs">{showDecisions ? '▲' : '▼'}</span>
+                </button>
+                {showDecisions && (
+                  <div className="mt-3">
+                    <AssignmentSummary decisions={assignmentDecisions} />
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Campaign Start Date */}
             <div className="px-5 pt-4 pb-4 border-t border-gray-100">
@@ -846,7 +983,28 @@ export default function BoltCombinedStrategyPage() {
               </button>
               {showChat && companyId && (
                 <div className="border-t border-gray-100">
-                  <BoltCampaignChat companyId={companyId} context={{ topic, goal: goals.join(', '), audience: audience.join(', ') }} />
+                  <BoltCampaignChat
+                    companyId={companyId}
+                    // Parity context with BOLT Text / Creator — the shared
+                    // /api/bolt/campaign-chat endpoint folds these into the
+                    // grounding prompt so suggestions are company-, strategy-,
+                    // and execution-aware (not generic clarification questions).
+                    context={{
+                      topic,
+                      description,
+                      goals,
+                      tone,
+                      audience: audience.join(', '),
+                      strategicFocus,
+                      selectedPlatforms,
+                      selectedFormats: [...textFormats, ...creatorFormats],
+                      formatFrequency: { ...textFrequency, ...creatorFrequency },
+                      duration,
+                      outcomeView,
+                    }}
+                    requestBlueprint
+                    onApplySuggestion={applyCampaignBlueprint}
+                  />
                 </div>
               )}
             </div>

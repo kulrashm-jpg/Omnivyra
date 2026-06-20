@@ -209,6 +209,10 @@ const CONTENT_CARDS: ContentCard[] = [
   },
 ];
 
+// Formats intentionally hidden from the writer-content entry grid.
+const HIDDEN_CARD_IDS = new Set(['whitepaper', 'case-study', 'guide', 'newsletter']);
+const VISIBLE_CONTENT_CARDS = CONTENT_CARDS.filter((card) => !HIDDEN_CARD_IDS.has(card.id));
+
 export default function WriterContentPage() {
   const router = useRouter();
   const { user, authChecked, isLoading } = useCompanyContext();
@@ -256,7 +260,7 @@ export default function WriterContentPage() {
             <div className="grid grid-cols-2 gap-3 lg:w-[240px]">
               <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Formats</p>
-                <p className="mt-1 text-base font-semibold text-gray-900">9</p>
+                <p className="mt-1 text-base font-semibold text-gray-900">{VISIBLE_CONTENT_CARDS.length}</p>
               </div>
               <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Workflow</p>
@@ -286,11 +290,11 @@ export default function WriterContentPage() {
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Select A Writer Format</p>
             <p className="mt-1 text-sm text-gray-600">Every card below leads into the existing writer content workflow.</p>
           </div>
-          <p className="hidden text-sm text-gray-500 md:block">9 writer paths</p>
+          <p className="hidden text-sm text-gray-500 md:block">{VISIBLE_CONTENT_CARDS.length} writer paths</p>
         </div>
 
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {CONTENT_CARDS.map((card) => (
+          {VISIBLE_CONTENT_CARDS.map((card) => (
             <div
               key={card.id}
               onClick={() => router.push(card.route)}

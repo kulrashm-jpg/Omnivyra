@@ -61,6 +61,40 @@ import {
 import { captureStrategySnapshot } from '../../lib/shared/bolt/captureStrategySnapshot';
 import { assertValidBoltBlueprint } from '../../lib/shared/bolt/validateBoltBlueprint';
 import { BoltError, BOLT_ERROR_CODES } from '../../lib/shared/bolt/boltErrorCodes';
+import { FORMAT_EXCLUSIVE_PLATFORMS } from '../../lib/shared/bolt/formatPlatformBinding';
+// Phase 6G-1 — canonical content↔platform assignment authority (derive, don't duplicate).
+import { filterPlatformsForFormat, getSupportedPlatformsForFormat } from '../../lib/shared/bolt/contentPlatformAssignment';
+import {
+  MAX_CAMPAIGN_DURATION_WEEKS,
+  MAX_SHORT_CAMPAIGN_DURATION_WEEKS,
+} from '../../lib/shared/campaignDuration';
+// Phase 6D-B — Intelligent Mix plan-generation reuses the 6D-A intelligence resolver.
+import {
+  resolveIntelligenceContext,
+  formatIntelligenceForPlanning,
+  normalizePlanningIntelligenceMode,
+  shouldResolvePlanningIntelligence,
+  shouldEnrichPlanning,
+} from '../../lib/shared/intelligence/resolveIntelligenceContext';
+// Phase 6D-C / 6E-2 — adaptive platform prioritization (ordering only; eligibility untouched).
+// Re-pointed to the company-scoped aggregator so new campaigns have data.
+import {
+  rankPlatformsByCompanyPerformance,
+  rankContentTypesByCompanyPerformance,
+} from './companyPerformanceAggregator';
+import {
+  orderPlatformsForIntelligentMix,
+  normalizePlatformPriorityMode,
+  shouldPrioritizePlatforms,
+} from '../../lib/shared/intelligence/platformOrdering';
+// Phase 6D-D1 — format preference intelligence (ordering only; counts untouched).
+import { getMarketingMemoriesByType } from './marketingMemoryService';
+import {
+  orderFormatsForIntelligentMix,
+  extractFormatSignalsFromMemory,
+  normalizeFormatPriorityMode,
+  shouldPrioritizeFormats,
+} from '../../lib/shared/intelligence/formatOrdering';
 import { withBlueprintSaveGuard } from './boltPersistenceGuards';
 import {
   acquireRunLock,
@@ -458,9 +492,39 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
   // Build default platform requests from the company's configured platforms (eligiblePlatforms).
   // eligiblePlatforms is already narrowed by execConfig.selected_platforms upstream
   // (see executeBoltPipeline), so we just fall back to LinkedIn if nothing is configured.
-  const configuredPlatforms = eligiblePlatforms && eligiblePlatforms.length > 0
+  const baseConfiguredPlatforms = eligiblePlatforms && eligiblePlatforms.length > 0
     ? eligiblePlatforms
     : ['linkedin'];
+
+  // Phase 6D-C — adaptive platform prioritization. ORDERING ONLY: reorders the
+  // already-eligible set by historical engagement; never adds/removes platforms.
+  // Combined-only + mode-gated; ranker is campaign-scoped (empty → order preserved).
+  let configuredPlatforms = baseConfiguredPlatforms;
+  const platformPriorityMode = normalizePlatformPriorityMode(process.env.INTELLIGENT_MIX_PLATFORM_PRIORITY_MODE);
+  if (shouldPrioritizePlatforms(platformPriorityMode, isCombined === true)) {
+    let perfRanks: Array<{ platform: string; score: number }> = [];
+    try {
+      const ranks = await rankPlatformsByCompanyPerformance(companyId);
+      perfRanks = ranks.map((r) => ({ platform: r.platform, score: r.avg_engagement_rate }));
+    } catch {
+      perfRanks = [];
+    }
+    const ordering = orderPlatformsForIntelligentMix(baseConfiguredPlatforms, perfRanks, platformPriorityMode);
+    configuredPlatforms = ordering.order;
+    console.log('[bolt/platform-prioritization]', JSON.stringify({
+      campaign_id: campaignId,
+      intelligence_mode: platformPriorityMode,
+      source_used: 'campaign_performance_signals',
+      eligible_platform_count: baseConfiguredPlatforms.length,
+      ranking_platform_count: ordering.rankingCount,
+      records_considered: perfRanks.length,
+      records_kept: ordering.rankingCount,
+      records_discarded: Math.max(0, perfRanks.length - ordering.rankingCount),
+      platform_order_changed: ordering.changed,
+      old_order: baseConfiguredPlatforms,
+      new_order: ordering.proposedOrder,
+    }));
+  }
 
   let platformContentPrefs: Record<string, string[]> = {};
   try {
@@ -524,12 +588,64 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
   // When format_frequency is provided (multi-format BOLT: e.g. 3 posts + 3 articles),
   // expand into one entry per (platform × content_type) so all selected formats appear
   // as separate execution items instead of collapsing to the primary type only.
-  const formatFreqMap =
+  let formatFreqMap =
     execConfig.format_frequency &&
     typeof execConfig.format_frequency === 'object' &&
     !Array.isArray(execConfig.format_frequency)
       ? (execConfig.format_frequency as Record<string, number>)
       : null;
+
+  // Phase 6D-D1 — format preference intelligence. RANKING ONLY: reorders the
+  // KEYS of formatFreqMap (the format-ordering authority consumed by
+  // formatDerivedRequests below) by historical performance from marketing_memory.
+  // Counts/frequencies (the values) and membership are preserved exactly.
+  // Combined-only + mode-gated; reader failures degrade to the original order.
+  const formatPriorityMode = normalizeFormatPriorityMode(process.env.INTELLIGENT_MIX_FORMAT_PRIORITY_MODE);
+  if (
+    formatFreqMap &&
+    Object.keys(formatFreqMap).length > 1 &&
+    shouldPrioritizeFormats(formatPriorityMode, isCombined === true)
+  ) {
+    const baseFormatMap = formatFreqMap;
+    const selectedFormats = Object.keys(baseFormatMap);
+    let signals: Array<{ format: string; score: number }> = [];
+    let recordsConsidered = 0;
+    try {
+      const [contentPerf, narrativePerf, ctRanks] = await Promise.all([
+        getMarketingMemoriesByType(companyId, 'content_performance', 50),
+        getMarketingMemoriesByType(companyId, 'narrative_performance', 50),
+        rankContentTypesByCompanyPerformance(companyId),
+      ]);
+      // marketing_memory (distilled, higher confidence) first; the helper keeps
+      // the first score per format, so campaign_performance_signals only fills gaps.
+      const memorySignals = extractFormatSignalsFromMemory([...contentPerf, ...narrativePerf]);
+      const aggSignals = ctRanks.map((c) => ({ format: c.content_type, score: c.avg_engagement_rate }));
+      signals = [...memorySignals, ...aggSignals];
+      recordsConsidered = contentPerf.length + narrativePerf.length + ctRanks.length;
+    } catch {
+      signals = [];
+    }
+    const ordering = orderFormatsForIntelligentMix(selectedFormats, signals, formatPriorityMode);
+    // Rebuild only when the APPLIED order actually differs (advisory/active with a
+    // real reorder). Shadow keeps the original order → no rebuild → counts/keys intact.
+    const orderChanged = ordering.order.some((f, i) => f !== selectedFormats[i]);
+    if (orderChanged) {
+      formatFreqMap = Object.fromEntries(ordering.order.map((f) => [f, baseFormatMap[f]]));
+    }
+    console.log('[bolt/format-prioritization]', JSON.stringify({
+      campaign_id: campaignId,
+      mode: formatPriorityMode,
+      source_used: 'marketing_memory+campaign_performance_signals',
+      format_count: selectedFormats.length,
+      ranked_format_count: ordering.rankingCount,
+      records_considered: recordsConsidered,
+      records_kept: ordering.rankingCount,
+      records_discarded: Math.max(0, recordsConsidered - ordering.rankingCount),
+      format_order_changed: ordering.changed,
+      old_order: selectedFormats,
+      new_order: ordering.proposedOrder,
+    }));
+  }
   // Under sharing OFF the remainder (`total % P`) becomes an EXTRA post on the
   // first platforms in the list. To land the remainder on the platform most
   // natural for each content type (e.g. an `article` remainder should prefer
@@ -554,14 +670,23 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
   // Mirrors the UI binding in components/BoltStrategyView.tsx
   // (FORMAT_REQUIRED_PLATFORMS) so the planner enforces the same rule.
   //
-  // Both 'x' and 'twitter' are listed because the codebase has two competing
-  // canonicalizations: backend/utils/platformEligibility.ts normalizes to
-  // 'x', while lib/shared/platforms.ts normalizes to 'twitter'. Matching
-  // either avoids a false-negative regardless of which side produced the row.
-  const FORMAT_EXCLUSIVE_PLATFORMS: Record<string, string[]> = {
-    tweet: ['x', 'twitter'],
-  };
+  // FORMAT_EXCLUSIVE_PLATFORMS is imported from the shared authority
+  // (lib/shared/bolt/formatPlatformBinding) so the planner enforces the exact
+  // same binding the UI uses — the rationale above still applies.
   const restrictPlatformsForFormat = (platforms: string[], contentType: string): string[] => {
+    // Phase 6G-1: Intelligent Mix enforces the FULL canonical assignment
+    // authority at planning time — a format is kept only on platforms that can
+    // actually run it (e.g. carousel→youtube dropped here, not at publish). This
+    // SUBSUMES FORMAT_EXCLUSIVE_PLATFORMS (which is derived into the authority).
+    // Order is preserved so 6D-C/6D-D prioritization upstream still holds.
+    if (isCombined === true) {
+      const capabilityFiltered = filterPlatformsForFormat(platforms, contentType);
+      // Formats with no resolvable capability (e.g. podcast/audio → fail-closed
+      // empty) fall through to the legacy FORMAT_EXCLUSIVE-only behavior so
+      // attachment-required media keeps its existing routing (not newly dropped).
+      if (capabilityFiltered.length > 0) return capabilityFiltered;
+    }
+    // BOLT Text / Creator: unchanged (byte-identical legacy behavior).
     const exclusive = FORMAT_EXCLUSIVE_PLATFORMS[String(contentType).toLowerCase()];
     if (!exclusive) return platforms;
     return platforms.filter((p) => exclusive.includes(String(p).toLowerCase()));
@@ -585,14 +710,25 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
           })
       : null;
   const rawPlatformRequests = (execConfig.platform_content_requests ?? formatDerivedRequests ?? defaultPlatformRequests) as Array<{ platform?: string; content_type?: string; count_per_week?: number }>;
+  let assignmentPairsRemoved = 0;
   const boltPlatformRequests = rawPlatformRequests
     // Text BOLT excludes video-first platforms; creator and combined campaigns keep them all
     .filter((r) => r && r.platform && (requiresMediaFlow || isCombined || !['youtube', 'tiktok'].includes(String(r.platform).toLowerCase())))
-    // Defensive exclusivity gate. Even when platform_content_requests is
-    // supplied directly by the caller (bypassing formatDerivedRequests), any
-    // {platform: 'facebook', content_type: 'tweet'} pairing is invalid and
-    // gets dropped here so it never reaches the planner.
+    // Defensive assignment gate. Even when platform_content_requests is supplied
+    // directly by the caller (bypassing formatDerivedRequests), an invalid
+    // {platform, content_type} pairing is dropped here so it never reaches the
+    // planner. Phase 6G-1: Intelligent Mix uses the full capability authority
+    // (subsumes FORMAT_EXCLUSIVE); Text/Creator keep the legacy exclusive gate.
     .filter((r) => {
+      if (isCombined === true) {
+        const supported = getSupportedPlatformsForFormat(r.content_type);
+        if (supported.length > 0) {
+          const ok = supported.some((p) => p.toLowerCase() === String(r.platform).toLowerCase());
+          if (!ok) assignmentPairsRemoved += 1;
+          return ok;
+        }
+        // no resolvable capability (podcast/audio) → fall through to legacy gate
+      }
       const exclusive = FORMAT_EXCLUSIVE_PLATFORMS[String(r.content_type ?? '').toLowerCase()];
       if (!exclusive) return true;
       return exclusive.includes(String(r.platform).toLowerCase());
@@ -605,8 +741,25 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
       count_per_week: r.count_per_week ?? Math.max(1, Math.floor(parsedFreq / 2)),
     }));
 
+  if (isCombined === true) {
+    // Phase 6G-1 observability — counts only, no business content.
+    const formatsRequested = [...new Set(rawPlatformRequests.map((r) => String(r.content_type ?? '').toLowerCase()).filter(Boolean))];
+    console.log('[bolt/assignment-enforcement]', JSON.stringify({
+      campaign_id: campaignId,
+      surface: 'planner',
+      assignment_rules_checked: rawPlatformRequests.length,
+      invalid_platform_format_pairs_removed: assignmentPairsRemoved,
+      supported_platform_count: configuredPlatforms.length,
+      supported_format_count: formatsRequested.length,
+    }));
+  }
+
+  // Phase 6C-4A: Intelligent Mix (combined) is the extended-planning surface and
+  // accepts the full 1–12 range; BOLT Text/Creator stay short-form (1–4). The max
+  // is derived from the shared duration authority — no hardcoded 4/12 here.
+  const maxDurationWeeks = isCombined ? MAX_CAMPAIGN_DURATION_WEEKS : MAX_SHORT_CAMPAIGN_DURATION_WEEKS;
   const durationWeeks = Math.min(
-    4,
+    maxDurationWeeks,
     Math.max(1, typeof execConfig.campaign_duration === 'number' ? execConfig.campaign_duration : 4)
   );
   const collectedPlanningContext: Record<string, unknown> = {
@@ -744,6 +897,39 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     }).catch(() => { /* advisory only */ });
   };
 
+  // Phase 6D-B — Intelligent Mix intelligence-driven planning. Reuses the SAME
+  // 6D-A resolver and populates the EXISTING `previous_performance_insights`
+  // field (PerformanceInsight: issues/opportunities/recommendations) — no schema
+  // expansion. Combined-only + mode-gated; resolver never throws, so planning is
+  // never broken by intelligence. Observability logs counts only (no content).
+  let planningIntelligence:
+    | { issues: string[]; opportunities: string[]; recommendations: string[]; plannerFeedback: string }
+    | null = null;
+  const planningIntelMode = normalizePlanningIntelligenceMode(process.env.INTELLIGENT_MIX_PLANNING_INTELLIGENCE_MODE);
+  if (shouldResolvePlanningIntelligence(planningIntelMode, isCombined === true)) {
+    const intelStartedAt = Date.now();
+    const intel = await resolveIntelligenceContext({ companyId });
+    const formatted = formatIntelligenceForPlanning(intel);
+    const enrich = shouldEnrichPlanning(planningIntelMode) && !!formatted;
+    if (enrich && formatted) {
+      planningIntelligence = {
+        issues: formatted.issues,
+        opportunities: formatted.opportunities,
+        recommendations: formatted.recommendations,
+        plannerFeedback: formatted.plannerFeedback,
+      };
+    }
+    console.log('[bolt/plan-intelligence]', JSON.stringify({
+      run_id: runId,
+      campaign_id: campaignId,
+      intelligence_mode: planningIntelMode,
+      resolver_duration_ms: Date.now() - intelStartedAt,
+      // Count the resolver produced (logged in shadow too); enrichment flag says if injected.
+      intelligence_lines_added: formatted?.linesAdded ?? 0,
+      planning_prompt_enriched: enrich,
+    }));
+  }
+
   // Single retry on ai/plan. Each attempt is bounded by AI_PLAN_TIMEOUT_MS (120s); 3 retries
   // turned a slow OpenAI call into ~8 min of wall time, blowing past the UI polling deadline
   // without measurably improving success rate.
@@ -761,6 +947,8 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
           collectedPlanningContext,
           variantMetadata: withBoltMetadata({}, { runId }).variantMetadata,
           onSubStage: onAiPlanSubStage,
+          // 6D-B: combined-only, advisory/active-only; omitted entirely otherwise.
+          ...(planningIntelligence ? { previous_performance_insights: planningIntelligence } : {}),
         }),
         AI_PLAN_TIMEOUT_MS,
         'ai/plan'
@@ -1060,7 +1248,13 @@ const STAGES: BoltStage[] = [
   'schedule-structured-plan',
 ];
 
-function validateExecutionConfig(execConfig: Record<string, unknown> | undefined): string[] {
+function validateExecutionConfig(
+  execConfig: Record<string, unknown> | undefined,
+  // Phase 6C-4A: max allowed weeks, derived from the shared authority by the
+  // caller per campaign_mode. Defaults to the short (BOLT Text/Creator) range so
+  // any non-combined caller stays 1–4.
+  maxDurationWeeks: number = MAX_SHORT_CAMPAIGN_DURATION_WEEKS,
+): string[] {
   const required = [
     'target_audience',
     'content_depth',
@@ -1080,8 +1274,8 @@ function validateExecutionConfig(execConfig: Record<string, unknown> | undefined
 
   if (!missing.includes('campaign_duration') && execConfig?.campaign_duration != null) {
     const d = Number(execConfig.campaign_duration);
-    if (!Number.isInteger(d) || d < 1 || d > 4) {
-      missing.push('campaign_duration_invalid'); // BOLT allows 1–4 weeks only
+    if (!Number.isInteger(d) || d < 1 || d > maxDurationWeeks) {
+      missing.push('campaign_duration_invalid'); // 1–4 (Text/Creator) or 1–12 (combined)
     }
   }
 
@@ -1263,7 +1457,10 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   );
   const isWeekPlanOnly = outcomeView === 'week_plan';
 
-  const missing = validateExecutionConfig(payload.executionConfig);
+  const missing = validateExecutionConfig(
+    payload.executionConfig,
+    isCombined ? MAX_CAMPAIGN_DURATION_WEEKS : MAX_SHORT_CAMPAIGN_DURATION_WEEKS,
+  );
   if (missing.length > 0) {
     const invalidDuration = missing.includes('campaign_duration_invalid');
     const filtered = missing.filter((m) => m !== 'campaign_duration_invalid');

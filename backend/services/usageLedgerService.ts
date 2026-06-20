@@ -415,20 +415,26 @@ export async function logUsageEvent(params: {
         }))
         .catch(() => ({ beta_cohort: null, monetization_beta_enabled: false }));
 
+    // ── Schema-drift repair (Phase 2 telemetry recovery) ─────────────────────
+    // The production `usage_events` table does NOT have the legacy `provider` /
+    // `model` columns (only `provider_name` / `model_name`) nor `feature_area`.
+    // Writing them made EVERY insert throw `column ... does not exist`, caught
+    // silently by the catch below — which is why usage_events stopped receiving
+    // rows on 2026-03-14 (the deploy that added them) while unified_transactions
+    // kept flowing via its own first-class columns. We now write ONLY columns
+    // that exist; provider/model values fall back into provider_name/model_name,
+    // and feature_area is preserved inside `metadata`. No billing/behavior change.
     await ownedDbTable('usage_events').insert({
       organization_id: params.organization_id,
       campaign_id: params.campaign_id ?? null,
       user_id: params.user_id ?? null,
       source_type: params.source_type,
-      provider: params.provider ?? params.provider_name ?? null,
-      provider_name: params.provider_name ?? null,
-      model: params.model ?? params.model_name ?? null,
-      model_name: params.model_name ?? null,
+      provider_name: params.provider_name ?? params.provider ?? null,
+      model_name: params.model_name ?? params.model ?? null,
       model_version: params.model_version ?? null,
       source_name: params.source_name,
       process_type: params.process_type,
       action_key: actionKey,
-      feature_area: params.feature_area ?? null,
       input_tokens: params.input_tokens ?? null,
       output_tokens: params.output_tokens ?? null,
       total_tokens: params.total_tokens ?? null,
@@ -451,7 +457,8 @@ export async function logUsageEvent(params: {
       ...(ledgerLinkColumnEnabled() && params.ledger_hold_transaction_id
         ? { ledger_hold_transaction_id: params.ledger_hold_transaction_id }
         : {}),
-      metadata: mergedMetadata,
+      // feature_area preserved here (its dedicated column doesn't exist in prod).
+      metadata: { ...(mergedMetadata ?? {}), feature_area: params.feature_area ?? null },
     });
 
     // ── Phase 5: dual-write to unified_transactions ───────────────────────

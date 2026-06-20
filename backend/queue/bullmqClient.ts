@@ -145,6 +145,7 @@ const redisConfig = parseRedisUrl(REDIS_URL);
 const IS_OPTIONAL_LOCAL_REDIS =
   redisConfig.host === 'localhost' || redisConfig.host === '127.0.0.1';
 const REDIS_ERROR_LOG_COOLDOWN_MS = 30_000;
+const REDIS_PREFLIGHT_TIMEOUT_MS = 2_000;
 
 export function getRedisConfig() {
   return redisConfig;
@@ -200,6 +201,50 @@ export function getConnectionConfig() {
     retryStrategy: boundedRetryStrategy,
     reconnectOnError,
   };
+}
+
+/**
+ * Quiet readiness probe for process bootstraps.
+ *
+ * Local Redis is optional for app-only/dev flows. If workers or cron are
+ * started while localhost Redis is absent, creating BullMQ Queue/Worker
+ * instances causes an endless ECONNREFUSED loop. Probe first and let callers
+ * skip Redis-backed background runtimes locally. Managed Redis remains a hard
+ * dependency: a failed probe throws so production supervisors restart loudly.
+ */
+export async function verifyRedisReadyForBackgroundRuntime(context: string): Promise<boolean> {
+  const probe = new IORedis({
+    ...getConnectionConfig(),
+    maxRetriesPerRequest: 1,
+    retryStrategy: () => null,
+    reconnectOnError: () => false,
+  });
+
+  probe.on('error', () => {
+    // Suppress expected localhost ECONNREFUSED noise during the readiness probe.
+  });
+
+  try {
+    await Promise.race([
+      probe.connect().then(() => probe.ping()),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`Redis preflight timed out after ${REDIS_PREFLIGHT_TIMEOUT_MS}ms`)),
+          REDIS_PREFLIGHT_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (IS_OPTIONAL_LOCAL_REDIS) {
+      console.warn(`[${context}] Redis unavailable at ${redisConfig.host}:${redisConfig.port}; skipping Redis-backed background runtime.`);
+      return false;
+    }
+    throw new Error(`[${context}] Redis preflight failed for ${redisConfig.host}:${redisConfig.port}: ${message}`);
+  } finally {
+    probe.disconnect(false);
+  }
 }
 
 // Redis connection instance (shared across Queue/Worker)

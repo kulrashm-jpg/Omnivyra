@@ -7,11 +7,14 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { CORE_AUDIENCE_LABELS } from '../../lib/shared/audience/audienceRegistry';
+import { BOLT_DURATION_OPTIONS } from '../../lib/shared/campaignDuration';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';
+import { ProgressCard } from '../../components/bolt/ProgressCard';
 import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
 import { FORMATS_SUPPORTING_CROSS_PLATFORM } from '../../lib/shared/bolt/crossPlatformSharing';
 
@@ -40,22 +43,14 @@ const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: strin
   { value: 'story',    label: 'Story',    icon: '📱', hint: '24hr ephemeral story format' },
 ];
 
-const DURATION_OPTIONS = [
-  { value: 1, label: '1 Week' },
-  { value: 2, label: '2 Weeks' },
-  { value: 3, label: '3 Weeks' },
-  { value: 4, label: '4 Weeks' },
-];
+const DURATION_OPTIONS = BOLT_DURATION_OPTIONS;
 
 const GOAL_OPTIONS = [
   'Brand Awareness', 'Lead Generation', 'Thought Leadership',
   'Product Launch', 'Community Growth', 'Engagement',
 ];
 
-const AUDIENCE_OPTIONS = [
-  'B2B Marketers', 'Founders / Entrepreneurs', 'Marketing Leaders',
-  'Sales Teams', 'Product Managers', 'Developers', 'General Consumers',
-];
+const AUDIENCE_OPTIONS = CORE_AUDIENCE_LABELS;
 
 const STRATEGIC_FOCUS_OPTIONS = [
   'Content Marketing', 'SEO / Organic', 'Social Media', 'Email Marketing',
@@ -127,82 +122,14 @@ const BOLT_PIPELINE: { stage: string; label: string }[] = [
   { stage: 'generate-weekly-structure', label: 'Creating daily activity plan' },
 ];
 
-function stageIndex(stage: string | undefined): number {
-  if (!stage) return -1;
-  const exact = BOLT_PIPELINE.findIndex((s) => s.stage === stage);
-  if (exact !== -1) return exact;
-  if (stage.startsWith('generate-weekly-structure')) return 3;
-  return -1;
-}
-
-function formatElapsed(ms: number): string {
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const s = sec % 60;
-  return s > 0 ? `${min}m ${s}s` : `${min}m`;
-}
-
-/* ─── Inline BOLT progress tracker ──────────────────────────────────────── */
-function CardBoltProgress({ progress, theme, startedAt }: {
+/* ─── Inline BOLT progress tracker — shared ProgressCard renderer (6H-B) ──── */
+function CardBoltProgress({ progress, startedAt }: {
   progress: BOLTProgress;
   theme: typeof CARD_THEMES[0];
   startedAt: number;
 }) {
-  const [elapsedMs, setElapsedMs] = useState(Date.now() - startedAt);
-  useEffect(() => {
-    const id = setInterval(() => setElapsedMs(Date.now() - startedAt), 1000);
-    return () => clearInterval(id);
-  }, [startedAt]);
-
-  const currentIdx = stageIndex(progress.stage);
-  const pct = Math.min(100, Math.max(0, progress.progress_percentage ?? 0));
-  const isFailed = progress.status === 'failed';
-
   return (
-    <div className="px-4 pb-4 pt-3 bg-white border-t border-gray-100">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          {isFailed ? (
-            <span className="w-4 h-4 flex-shrink-0 text-red-500">✕</span>
-          ) : (
-            <svg className="animate-spin w-4 h-4 text-blue-500 flex-shrink-0" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-            </svg>
-          )}
-          <span className="text-xs font-bold text-gray-800">{isFailed ? 'BOLT failed' : '⚡ BOLT running'}</span>
-        </div>
-        <span className="text-[11px] text-gray-400">{formatElapsed(elapsedMs)}</span>
-      </div>
-      <div className="space-y-1.5 mb-3">
-        {BOLT_PIPELINE.map((step, i) => {
-          const isDone    = currentIdx > i;
-          const isCurrent = currentIdx === i;
-          const isPending = currentIdx < i;
-          return (
-            <div key={step.stage} className="flex items-center gap-2">
-              <div className={`flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold
-                ${isFailed && isCurrent ? 'bg-red-500 text-white'
-                  : isDone    ? 'bg-blue-500 text-white'
-                  : isCurrent ? `bg-gradient-to-br ${theme.gradient} text-white animate-pulse`
-                  : 'bg-gray-100 text-gray-400'}`}>
-                {isDone ? '✓' : isCurrent && !isFailed ? '…' : i + 1}
-              </div>
-              <span className={`text-[11px] font-medium ${isDone ? 'text-gray-400 line-through' : isCurrent ? 'text-gray-800' : 'text-gray-300'}`}>
-                {step.label}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div className={`h-full bg-gradient-to-r ${theme.gradient} rounded-full transition-all duration-500`} style={{ width: `${pct}%` }} />
-      </div>
-      {isFailed && progress.error_message && (
-        <p className="text-[11px] text-red-600 mt-2 leading-snug">{progress.error_message}</p>
-      )}
-    </div>
+    <ProgressCard progress={progress} pipeline={BOLT_PIPELINE} startedAt={startedAt} dotClass="bg-blue-500" />
   );
 }
 

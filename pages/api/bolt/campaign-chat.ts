@@ -11,6 +11,27 @@ import { getProfile } from '../../../backend/services/companyProfileService';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
+// Phase 6A — blueprint validation derives from the CANONICAL capability layer
+// (no second list): platform capability registry, creator governance, BOLT
+// text config, and connected-account eligibility.
+import {
+  PLATFORM_CAPABILITY_REGISTRY,
+  getPlatformCapability,
+  normalizePlatformKey,
+} from '../../../lib/shared/social/platformCapabilities';
+import {
+  CREATOR_GOVERNANCE_REGISTRY,
+  getCreatorGovernance,
+  normalizeCreatorFormat,
+} from '../../../lib/shared/creatorGovernanceRegistry';
+import { BOLT_TEXT_CONTENT_TYPES, isBoltTextContentType } from '../../../backend/utils/boltTextContentConfig';
+import { getConnectedPlatformsForCompany } from '../../../backend/utils/platformEligibility';
+// Phase 6C-4C — Architect duration aligns with Intelligent Mix execution (1–12).
+import { MAX_CAMPAIGN_DURATION_WEEKS } from '../../../lib/shared/campaignDuration';
+// Phase 6D-A — read-only intelligence enrichment for the Intelligent Mix Architect.
+import { resolveIntelligenceContext, formatIntelligenceContextBlock } from '../../../lib/shared/intelligence/resolveIntelligenceContext';
+// Phase 6G-1 — canonical content↔platform assignment authority.
+import { getSupportedPlatformsForFormat } from '../../../lib/shared/bolt/contentPlatformAssignment';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -100,7 +121,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // earlier in this session but not accepted (a soft "no" signal).
       accepted_suggestions: acceptedRaw,
       passed_over_suggestions: passedOverRaw,
+      // Phase 5 — Intelligent Mix "Campaign Architect" opt-in. ONLY the
+      // combined page sends this; BOLT Text/Creator never do, so their prompt
+      // and response stay byte-identical (no new fields, no prompt change).
+      blueprint: blueprintFlag,
     } = req.body || {};
+    const wantBlueprint = blueprintFlag === true;
 
     if (!companyId || typeof companyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required' });
@@ -260,9 +286,10 @@ of the Campaign Brief whenever you have confidence:
   "This campaign…". 220 characters max.
 
 - suggested_goals: zero or more values from this fixed list, chosen ONLY when
-  they obviously fit the topic. Empty array if uncertain — never invent.
-    [Brand Awareness, Lead Generation, Engagement, Thought Leadership,
-     Product Education, Conversion, Community Building, Traffic Growth]
+  they obviously fit the topic. Empty array if uncertain — never invent. Use
+  ONLY these exact labels (they map to the campaign builder's goal chips):
+    [Brand Awareness, Lead Generation, Thought Leadership,
+     Product Launch, Community Growth, Engagement]
 
 - suggested_tone: zero or more values from this fixed list, chosen ONLY when
   the topic clearly implies a tone. Empty array if uncertain.
@@ -292,8 +319,76 @@ Return a JSON object with:
 
 Return only JSON.`;
 
+    // Phase 6A — derive the blueprint vocabularies from the canonical layer so
+    // validation can never drift from the planner/publisher. Only computed in
+    // blueprint mode.
+    const blueprintConnected: string[] = wantBlueprint
+      ? await getConnectedPlatformsForCompany(companyId.trim(), null as never).catch(() => [] as string[])
+      : [];
+    // Platform vocab: the company's CONNECTED platforms (priority-ordered) when
+    // known, else the canonical registry's social platforms (exclude 'blog').
+    const blueprintPlatformVocab = blueprintConnected.length > 0
+      ? blueprintConnected.map((p) => normalizePlatformKey(p))
+      : Object.keys(PLATFORM_CAPABILITY_REGISTRY).filter((p) => p !== 'blog');
+    // Text vocab = canonical BOLT text registry; Creator vocab = governed
+    // non-text creator formats. No hardcoded second list.
+    const blueprintTextVocab = [...BOLT_TEXT_CONTENT_TYPES];
+    const blueprintCreatorVocab = Object.keys(CREATOR_GOVERNANCE_REGISTRY).filter(
+      (k) => getCreatorGovernance(k)?.canonical_asset_family !== 'text',
+    );
+
+    // Phase 5/6A — Campaign Architect addendum. Appended ONLY when the caller
+    // opted in (`blueprint: true`). For every existing caller this is '', so
+    // the system prompt is unchanged.
+    const blueprintInstruction = wantBlueprint ? `
+
+────────────────────────────────────────
+CAMPAIGN BLUEPRINT MODE (Intelligent Mix):
+In ADDITION to the fields above, when you suggest a campaign topic, ALSO
+produce a complete, executable campaign blueprint. Choose values that are
+company-aware, goal-aware, audience-aware, and execution-aware. Add these
+OPTIONAL fields to the SAME JSON object:
+- "suggested_strategic_focus": array of 1–3 short strategic angles (free text, e.g. "Thought leadership", "Product education"). Omit if unsure.
+- "suggested_platforms": array chosen ONLY from [${blueprintPlatformVocab.join(', ')}].${blueprintConnected.length > 0 ? ' These are the company’s CONNECTED platforms — recommend in this order and DO NOT suggest any platform outside this list.' : ''}
+- "suggested_text_formats": array chosen ONLY from [${blueprintTextVocab.join(', ')}].
+- "suggested_creator_formats": array chosen ONLY from [${blueprintCreatorVocab.join(', ')}].
+- "suggested_duration": integer number of weeks, between 1 and ${MAX_CAMPAIGN_DURATION_WEEKS}. Pick the SHORTEST duration that fully delivers the objective — do NOT default to the maximum. Weigh goal complexity, audience size, platform mix, content frequency, and the campaign objective: a focused single-goal push often needs only 2–4 weeks, while a multi-phase, multi-platform program may warrant 8–12. The length must be justified by the plan's scope.
+- "suggested_outcome_view": one of [week_plan, daily_plan, schedule].
+
+EXECUTION AWARENESS — favor mixes the system can actually run:
+- carousel / image / infographic are autonomous (rendered automatically).
+- video / reel / short / podcast require a human upload before scheduling — recommend them only when the campaign genuinely needs produced media, and keep the autonomous-to-upload ratio realistic for the duration.
+- Match formats to platforms (carousel/article → LinkedIn; reel/short → Instagram/TikTok).
+- NEVER invent platforms or formats outside the lists above.
+
+Example A (focused thought leadership, one platform): platforms [linkedin]; text [article, post]; creator [carousel]; duration 3; outcome week_plan.
+Example B (multi-phase launch, several platforms, high frequency): platforms [linkedin, instagram]; text [post, article]; creator [carousel, video]; duration 10; outcome week_plan.
+Blueprint fields are OPTIONAL — omit any you can't choose confidently.` : '';
+
+    // Phase 6D-A — Intelligent Mix intelligence enrichment. Combined-only by
+    // contract (gated on wantBlueprint — only the combined page sends it, so
+    // BOLT Text/Creator are never affected). Mode flag controls behavior:
+    //   off      → resolver not called
+    //   shadow   → resolver called + block logged, prompt UNCHANGED (default)
+    //   advisory → resolver called + block injected before blueprintInstruction
+    // Read-only consumption of existing intelligence signals; never throws.
+    let intelligenceContextBlock = '';
+    const intelMode = String(process.env.INTELLIGENT_MIX_INTELLIGENCE_MODE || 'shadow').toLowerCase();
+    if (wantBlueprint && (intelMode === 'shadow' || intelMode === 'advisory')) {
+      const intel = await resolveIntelligenceContext({ companyId: companyId.trim() });
+      const block = formatIntelligenceContextBlock(intel);
+      if (block) {
+        if (intelMode === 'advisory') {
+          intelligenceContextBlock = `\n\n${block}`;
+        } else {
+          // shadow: observe only — prompt stays byte-identical to off/advisory-empty.
+          console.info('[6D-A][shadow] intelligence_context_block', { companyId: companyId.trim(), block });
+        }
+      }
+    }
+
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: systemPrompt + intelligenceContextBlock + blueprintInstruction },
     ];
 
     for (const turn of chatHistory.slice(-8)) {
@@ -330,6 +425,13 @@ Return only JSON.`;
       suggested_goals?: unknown;
       suggested_tone?: unknown;
       suggested_audience?: string;
+      // Phase 5 — blueprint fields (only populated in blueprint mode).
+      suggested_strategic_focus?: unknown;
+      suggested_platforms?: unknown;
+      suggested_text_formats?: unknown;
+      suggested_creator_formats?: unknown;
+      suggested_duration?: unknown;
+      suggested_outcome_view?: unknown;
     } = {};
     try {
       const raw = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? {});
@@ -340,9 +442,11 @@ Return only JSON.`;
 
     // Fixed vocabularies — anything outside these gets dropped. Keeps the
     // multi-select chips on the client side from rendering arbitrary AI text.
+    // Kept in sync with the campaign builder's GOAL_OPTIONS chips so suggested
+    // goals always map onto a selectable chip (Phase: goal-vocabulary alignment).
     const VALID_GOALS = new Set([
-      'Brand Awareness', 'Lead Generation', 'Engagement', 'Thought Leadership',
-      'Product Education', 'Conversion', 'Community Building', 'Traffic Growth',
+      'Brand Awareness', 'Lead Generation', 'Thought Leadership',
+      'Product Launch', 'Community Growth', 'Engagement',
     ]);
     const VALID_TONES = new Set([
       'Professional', 'Conversational', 'Educational', 'Analytical',
@@ -371,7 +475,7 @@ Return only JSON.`;
     const suggestedTone = suggestedTopic ? sanitizeList(parsed.suggested_tone, VALID_TONES) : [];
     const suggestedAudience = suggestedTopic ? (typeof parsed.suggested_audience === 'string' ? parsed.suggested_audience.trim() : '') || null : null;
 
-    return res.status(200).json({
+    const responsePayload: Record<string, unknown> = {
       reply: parsed.reply?.trim() || 'Let me help you refine that.',
       suggested_topic: suggestedTopic,
       suggested_description: suggestedDescription,
@@ -380,7 +484,109 @@ Return only JSON.`;
       suggested_goals: suggestedGoals,
       suggested_tone: suggestedTone,
       suggested_audience: suggestedAudience,
-    });
+    };
+
+    // Phase 6A — blueprint validation derived from the CANONICAL capability
+    // layer (no second list). A suggestion the planner/DB/publisher would
+    // reject can never survive validation. Discard invalid, never throw. Only
+    // attached when the caller opted in AND a topic was suggested.
+    if (wantBlueprint && suggestedTopic) {
+      // outcome_view is a UI view mode (not a platform/format capability) — kept local.
+      const VALID_OUTCOME_VIEWS = new Set(['week_plan', 'daily_plan', 'schedule']);
+      // Connected-platform restriction (Section C): when the company's connected
+      // set is known, the AI may not recommend anything outside it.
+      const allowedConnected = blueprintConnected.length > 0
+        ? new Set(blueprintConnected.map((p) => normalizePlatformKey(p)))
+        : null;
+      // Strategic focus is free-form (company-specific angles), not a registry.
+      const freeFocus = Array.isArray(parsed.suggested_strategic_focus)
+        ? (parsed.suggested_strategic_focus as unknown[])
+            .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+            .map((v) => v.trim().slice(0, 60))
+            .slice(0, 5)
+        : [];
+      // Platforms: canonical PLATFORM_CAPABILITY_REGISTRY membership + connected.
+      const normPlatforms = (raw: unknown): string[] => {
+        if (!Array.isArray(raw)) return [];
+        const out: string[] = [];
+        for (const item of raw) {
+          if (typeof item !== 'string') continue;
+          const key = normalizePlatformKey(item);
+          if (!key || !getPlatformCapability(key)) continue;                 // must be a registered platform
+          if (allowedConnected && !allowedConnected.has(key)) continue;      // must be connected (when known)
+          if (!out.includes(key)) out.push(key);
+        }
+        return out;
+      };
+      // Text formats: canonical BOLT text registry predicate.
+      const normTextFormats = (raw: unknown): string[] => {
+        if (!Array.isArray(raw)) return [];
+        const out: string[] = [];
+        for (const item of raw) {
+          if (typeof item !== 'string') continue;
+          const norm = item.trim().toLowerCase().replace(/[\s-]+/g, '_');
+          if (isBoltTextContentType(norm) && !out.includes(norm)) out.push(norm);
+        }
+        return out;
+      };
+      // Creator formats: governed AND a non-text asset family (creator governance).
+      const normCreatorFormats = (raw: unknown): string[] => {
+        if (!Array.isArray(raw)) return [];
+        const out: string[] = [];
+        for (const item of raw) {
+          if (typeof item !== 'string') continue;
+          const norm = normalizeCreatorFormat(item);
+          const gov = getCreatorGovernance(norm);
+          if (gov && gov.canonical_asset_family !== 'text' && !out.includes(norm)) out.push(norm);
+        }
+        return out;
+      };
+      // Phase 6C-4C: this block runs ONLY in blueprint mode, which is the
+      // Intelligent Mix (combined) Architect by contract (blueprint:true is sent
+      // exclusively by the combined page — BOLT Text/Creator never reach here).
+      // The accepted range therefore derives from the shared authority's combined
+      // ceiling (1–MAX_CAMPAIGN_DURATION_WEEKS). Non-numeric → null; out-of-range
+      // is clamped into the valid window. No free-form / duplicated limits.
+      const durationNum = Number(parsed.suggested_duration);
+      const suggestedDuration = Number.isFinite(durationNum)
+        ? Math.min(Math.max(Math.round(durationNum), 1), MAX_CAMPAIGN_DURATION_WEEKS)
+        : null;
+      const outcomeRaw = typeof parsed.suggested_outcome_view === 'string' ? parsed.suggested_outcome_view.trim() : '';
+      const suggestedOutcomeView = VALID_OUTCOME_VIEWS.has(outcomeRaw) ? outcomeRaw : null;
+
+      // Phase 6G-1: drop suggested formats that NO suggested platform can run
+      // (e.g. carousel suggested alongside only YouTube). Discard, never
+      // auto-correct; log counts only. When the platform set is unknown/empty
+      // we keep formats (nothing to validate against).
+      const blueprintPlatforms = normPlatforms(parsed.suggested_platforms);
+      const rawTextFormats = normTextFormats(parsed.suggested_text_formats);
+      const rawCreatorFormats = normCreatorFormats(parsed.suggested_creator_formats);
+      const formatRunsOnSuggested = (fmt: string): boolean => {
+        if (blueprintPlatforms.length === 0) return true;
+        const supported = getSupportedPlatformsForFormat(fmt);
+        return supported.length > 0 && supported.some((p) => blueprintPlatforms.includes(p));
+      };
+      const validTextFormats = rawTextFormats.filter(formatRunsOnSuggested);
+      const validCreatorFormats = rawCreatorFormats.filter(formatRunsOnSuggested);
+      const assignmentPairsRemoved =
+        (rawTextFormats.length - validTextFormats.length) + (rawCreatorFormats.length - validCreatorFormats.length);
+      console.info('[bolt/assignment-enforcement]', JSON.stringify({
+        surface: 'architect',
+        assignment_rules_checked: rawTextFormats.length + rawCreatorFormats.length,
+        invalid_platform_format_pairs_removed: assignmentPairsRemoved,
+        supported_platform_count: blueprintPlatforms.length,
+        supported_format_count: validTextFormats.length + validCreatorFormats.length,
+      }));
+
+      responsePayload.suggested_strategic_focus = freeFocus;
+      responsePayload.suggested_platforms = blueprintPlatforms;
+      responsePayload.suggested_text_formats = validTextFormats;
+      responsePayload.suggested_creator_formats = validCreatorFormats;
+      responsePayload.suggested_duration = suggestedDuration;
+      responsePayload.suggested_outcome_view = suggestedOutcomeView;
+    }
+
+    return res.status(200).json(responsePayload);
   } catch (err: unknown) {
     if (err instanceof PaymentRequiredError) {
       return res.status(402).json({ error: err.message, code: err.code });

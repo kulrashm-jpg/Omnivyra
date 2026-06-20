@@ -44,6 +44,9 @@ const { Client } = require('pg');
 process.env.TS_NODE_COMPILER_OPTIONS = '{"module":"commonjs"}';
 require('ts-node/register/transpile-only');
 const { enforceOperatorSafety } = require('../../_core/operatorSafety');
+// Phase 6I-3 — reuse the single attribution authority (no second derivation
+// system). Lean, dependency-free module; safe to require from this script.
+const { deriveAbandonmentAttribution } = require('../../../lib/shared/bolt/abandonmentAttribution');
 
 require('dotenv').config({ path: path.join(__dirname, '../../../.env.local') });
 
@@ -111,7 +114,7 @@ async function main() {
         FROM stuck s
        WHERE r.id = s.id
          AND r.abandonment_detected_at IS NULL
-       RETURNING r.id, r.current_stage, r.campaign_id, r.error_message IS NOT NULL AS had_diagnostic;
+       RETURNING r.id, r.current_stage, r.campaign_id, r.payload, r.error_message IS NOT NULL AS had_diagnostic;
     `, [STUCK_THRESHOLD_SECONDS]);
 
     recovered = sweptRuns.length;
@@ -150,6 +153,24 @@ async function main() {
           `INSERT INTO bolt_execution_events (run_id, stage, status, metadata) VALUES ($1, $2, $3, $4)`,
           [ev.run_id, ev.stage, ev.status, ev.metadata],
         );
+      }
+
+      // ── Phase 6I-3 — attribution stamping ─────────────────────────────────
+      // Stamp campaign_type + pipeline_mode on each swept run using the same
+      // authority persistPipelineFailure uses (deriveAbandonmentAttribution),
+      // so failure analytics can slice abandoned runs by surface. Best-effort
+      // per row; the atomic core sweep above already succeeded. Two columns
+      // only — never touches error_message / raw_error_message / failed_stage.
+      for (const r of sweptRuns) {
+        try {
+          const attribution = deriveAbandonmentAttribution(r.payload || null);
+          await client.query(
+            `UPDATE bolt_execution_runs SET campaign_type = $2, pipeline_mode = $3 WHERE id = $1`,
+            [r.id, attribution.campaign_type, attribution.pipeline_mode],
+          );
+        } catch (attrErr) {
+          console.warn('[sweeper] attribution stamp failed (non-fatal):', r.id, attrErr.message);
+        }
       }
     }
 

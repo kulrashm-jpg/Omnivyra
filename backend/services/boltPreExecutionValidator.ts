@@ -26,6 +26,10 @@
 
 import { validateStrategicTheme } from '../../lib/shared/bolt/strategicThemeValidator';
 import {
+  MAX_CAMPAIGN_DURATION_WEEKS,
+  MAX_SHORT_CAMPAIGN_DURATION_WEEKS,
+} from '../../lib/shared/campaignDuration';
+import {
   validateExecutionConfigFormats,
   resolveCampaignMode,
   type BoltCampaignMode,
@@ -157,17 +161,20 @@ export async function validateBoltPreExecution(
       field: 'frequency_per_week',
     });
   }
-  // campaign_duration — must be 1–4 weeks.
+  // campaign_duration — Phase 6C-4A: Intelligent Mix (combined) accepts 1–12;
+  // BOLT Text/Creator stay 1–4. Max derived from the shared duration authority.
+  const maxDurationWeeks =
+    campaignMode === 'combined' ? MAX_CAMPAIGN_DURATION_WEEKS : MAX_SHORT_CAMPAIGN_DURATION_WEEKS;
   if (ec.campaign_duration == null || ec.campaign_duration === '') {
     errors.push({
       code: BOLT_ERROR_CODES.STRATEGY_INVALID_DURATION,
       message: 'campaign_duration is required.',
       field: 'campaign_duration',
     });
-  } else if (!isPositiveIntegerInRange(ec.campaign_duration, 1, 4)) {
+  } else if (!isPositiveIntegerInRange(ec.campaign_duration, 1, maxDurationWeeks)) {
     errors.push({
       code: BOLT_ERROR_CODES.STRATEGY_INVALID_DURATION,
-      message: `campaign_duration must be an integer between 1 and 4 (received ${ec.campaign_duration}).`,
+      message: `campaign_duration must be an integer between 1 and ${maxDurationWeeks} (received ${ec.campaign_duration}).`,
       field: 'campaign_duration',
     });
   }

@@ -18,7 +18,12 @@ function _diag(stage: string, extra?: Record<string, unknown>): void {
   } catch { /* never throw from diagnostics */ }
 }
 _diag('startWorkers.ts:module-loaded');
-import { getWorker, getUsageProtectionReady, withHeavyJobSlot } from './bullmqClient';
+import {
+  getWorker,
+  getUsageProtectionReady,
+  verifyRedisReadyForBackgroundRuntime,
+  withHeavyJobSlot,
+} from './bullmqClient';
 import { createCreatorRenderWorker } from '../services/creatorRenderDurableQueue';
 import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcessor';
 import { processPublishJob } from './jobProcessors/publishProcessor';
@@ -121,6 +126,13 @@ export async function startWorkers(): Promise<void> {
       throw err;
     }
     console.error('[distributed-runtime] worker wire error:', (err as Error)?.message ?? err);
+  }
+
+  const redisReady = await verifyRedisReadyForBackgroundRuntime('workers');
+  if (!redisReady) {
+    _diag('startWorkers:redis-unavailable-skipping-bullmq-workers');
+    console.warn('[workers] Redis-backed workers skipped because Redis is unavailable.');
+    return;
   }
 
   // ── Enterprise governance — boot wiring ──

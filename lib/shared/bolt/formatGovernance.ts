@@ -147,8 +147,13 @@ export function validateExecutionConfigFormats(
     }
   }
 
+  // In combined mode `getCreatorFormatsFromExecutionConfig` reads the MERGED
+  // content_formats/format_frequency, so BOLT-text formats (post, tweet,
+  // article, poll, short_story) appear in the creator set. A format that is a
+  // valid BOLT text format is NOT an "unsupported creator format" — it belongs
+  // to the text lane — so it must never be flagged here.
   const unsupportedCreator = creatorFormats.length > 0
-    ? getUnsupportedCreatorFormats(creatorFormats)
+    ? getUnsupportedCreatorFormats(creatorFormats).filter((f) => !isSupportedTextFormat(f))
     : [];
   const unsupportedText = [
     ...getUnsupportedTextFormats(textFormats),

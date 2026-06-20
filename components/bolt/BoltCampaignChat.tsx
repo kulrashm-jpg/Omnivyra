@@ -17,6 +17,13 @@ interface ChatTurn {
   suggestedGoals?: string[];
   suggestedTone?: string[];
   suggestedAudience?: string;
+  // Phase 5 — full Campaign Blueprint fields (only present in blueprint mode).
+  strategicFocus?: string[];
+  platforms?: string[];
+  textFormats?: string[];
+  creatorFormats?: string[];
+  duration?: number;
+  outcomeView?: string;
 }
 
 interface BoltChatContext {
@@ -61,11 +68,25 @@ interface Props {
     goals?: string[];
     tone?: string[];
     audience?: string;
+    // Phase 5 — optional blueprint fields. Existing callers ignore them, so
+    // BOLT Text/Creator behavior is unchanged.
+    strategicFocus?: string[];
+    platforms?: string[];
+    textFormats?: string[];
+    creatorFormats?: string[];
+    duration?: number;
+    outcomeView?: string;
   }) => void;
   /** Persisted memory of suggestions the user accepted in this campaign draft. */
   acceptedSuggestions?: AcceptedSuggestionPayload[];
   /** Clears acceptedSuggestions in the parent and the local chat history. */
   onResetMemory?: () => void;
+  /**
+   * Phase 5 — opt into "Campaign Architect" mode. When true, the request asks
+   * the endpoint for a full blueprint and an "Apply Campaign Blueprint" action
+   * is offered. Only the Intelligent Mix (combined) page sets this.
+   */
+  requestBlueprint?: boolean;
 }
 
 const STARTER_HINTS = [
@@ -81,6 +102,7 @@ export function BoltCampaignChat({
   onApplySuggestion,
   acceptedSuggestions,
   onResetMemory,
+  requestBlueprint,
 }: Props) {
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [message, setMessage] = useState('');
@@ -134,6 +156,8 @@ export function BoltCampaignChat({
           // these get folded into the system prompt with token budgeting.
           accepted_suggestions: (acceptedSuggestions ?? []).slice(-5),
           passed_over_suggestions: passedOver,
+          // Phase 5 — request the full blueprint only in Architect mode.
+          ...(requestBlueprint ? { blueprint: true } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -145,6 +169,16 @@ export function BoltCampaignChat({
       const suggestedGoals: string[] = Array.isArray(data.suggested_goals) ? data.suggested_goals : [];
       const suggestedTone: string[] = Array.isArray(data.suggested_tone) ? data.suggested_tone : [];
       const suggestedAudience: string | null = data.suggested_audience ?? null;
+
+      // Phase 5 — blueprint fields (present only when the endpoint was asked
+      // for them and a topic was suggested). All optional; absent for BOLT
+      // Text/Creator responses.
+      const bpStrategicFocus: string[] = Array.isArray(data.suggested_strategic_focus) ? data.suggested_strategic_focus : [];
+      const bpPlatforms: string[] = Array.isArray(data.suggested_platforms) ? data.suggested_platforms : [];
+      const bpTextFormats: string[] = Array.isArray(data.suggested_text_formats) ? data.suggested_text_formats : [];
+      const bpCreatorFormats: string[] = Array.isArray(data.suggested_creator_formats) ? data.suggested_creator_formats : [];
+      const bpDuration: number | null = typeof data.suggested_duration === 'number' ? data.suggested_duration : null;
+      const bpOutcomeView: string | null = typeof data.suggested_outcome_view === 'string' ? data.suggested_outcome_view : null;
 
       setHistory((h) => [
         ...h,
@@ -158,6 +192,12 @@ export function BoltCampaignChat({
           ...(suggestedTopic && suggestedGoals.length > 0 ? { suggestedGoals } : {}),
           ...(suggestedTopic && suggestedTone.length > 0 ? { suggestedTone } : {}),
           ...(suggestedTopic && suggestedAudience ? { suggestedAudience } : {}),
+          ...(suggestedTopic && bpStrategicFocus.length > 0 ? { strategicFocus: bpStrategicFocus } : {}),
+          ...(suggestedTopic && bpPlatforms.length > 0 ? { platforms: bpPlatforms } : {}),
+          ...(suggestedTopic && bpTextFormats.length > 0 ? { textFormats: bpTextFormats } : {}),
+          ...(suggestedTopic && bpCreatorFormats.length > 0 ? { creatorFormats: bpCreatorFormats } : {}),
+          ...(suggestedTopic && bpDuration ? { duration: bpDuration } : {}),
+          ...(suggestedTopic && bpOutcomeView ? { outcomeView: bpOutcomeView } : {}),
         },
       ]);
     } catch (e) {
@@ -310,6 +350,36 @@ export function BoltCampaignChat({
                     >
                       Use this →
                     </button>
+                    {/* Phase 5 — full Campaign Blueprint apply. Renders only when
+                        the turn carries blueprint fields (blueprint mode). */}
+                    {(((turn.platforms?.length ?? 0) > 0) ||
+                      ((turn.textFormats?.length ?? 0) > 0) ||
+                      ((turn.creatorFormats?.length ?? 0) > 0) ||
+                      ((turn.strategicFocus?.length ?? 0) > 0) ||
+                      !!turn.duration ||
+                      !!turn.outcomeView) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onApplySuggestion({
+                            topic: turn.suggestedTopic!,
+                            ...(turn.suggestedDescription ? { description: turn.suggestedDescription } : {}),
+                            ...(turn.suggestedGoals && turn.suggestedGoals.length > 0 ? { goals: turn.suggestedGoals } : {}),
+                            ...(turn.suggestedTone && turn.suggestedTone.length > 0 ? { tone: turn.suggestedTone } : {}),
+                            ...(turn.suggestedAudience ? { audience: turn.suggestedAudience } : {}),
+                            ...(turn.strategicFocus && turn.strategicFocus.length > 0 ? { strategicFocus: turn.strategicFocus } : {}),
+                            ...(turn.platforms && turn.platforms.length > 0 ? { platforms: turn.platforms } : {}),
+                            ...(turn.textFormats && turn.textFormats.length > 0 ? { textFormats: turn.textFormats } : {}),
+                            ...(turn.creatorFormats && turn.creatorFormats.length > 0 ? { creatorFormats: turn.creatorFormats } : {}),
+                            ...(turn.duration ? { duration: turn.duration } : {}),
+                            ...(turn.outcomeView ? { outcomeView: turn.outcomeView } : {}),
+                          })
+                        }
+                        className="mt-1.5 ml-1.5 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700 transition-colors"
+                      >
+                        ✨ Apply Campaign Blueprint
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

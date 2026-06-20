@@ -37,6 +37,17 @@ import { persistCreatorValidationManifest } from './creatorRenderPersistence';
 import { resolvePlatformGeometryProfile, platformTextBoxY } from './creatorPlatformGeometry';
 import { getCreatorRendererRegistration } from './creatorRendererRegistry';
 import { composeInfographicCopy } from './creator/infographicCopyComposer';
+import {
+  infographicChartsEnabled,
+  infographicTablesEnabled,
+  infographicBackgroundImagesEnabled,
+  resolveStructuredCards,
+  resolveBackgroundConfig,
+  buildBackgroundLayerSvg,
+  buildChartCardSvg,
+  buildTableCardSvg,
+  type InfographicCardBrand,
+} from './creator/infographicDataCards';
 
 const sharp = require('sharp') as typeof import('sharp');
 // Loaded only in the server renderer for deterministic downloadable PDF assets.
@@ -3846,6 +3857,7 @@ function resolveInfographicEngine(input: {
   width: number;
   height: number;
   sectionCount: number;
+  headerH?: number;
 }): {
   engineId: string;
   cardWidth: number;
@@ -3853,7 +3865,7 @@ function resolveInfographicEngine(input: {
   position: (index: number) => { x: number; y: number; iconZone: 'left' | 'top' | 'center' };
 } {
   const count = Math.max(1, input.sectionCount);
-  const headerH = 150;
+  const headerH = input.headerH ?? 150;
   const bottomMargin = 90;
   const sideMargin = 80;
   const availableH = input.height - headerH - bottomMargin;
@@ -4104,7 +4116,15 @@ async function renderInfographicAsset(
     validation: visualGovernance,
     quality,
   });
-  const engine = resolveInfographicEngine({ layout, width, height, sectionCount: sections.length });
+  // Header band height adapts to whether a subtitle line is present. A
+  // subtitle needs room for up to 2 wrapped lines beneath the title;
+  // with the legacy fixed 150px band the second subtitle line rendered at
+  // y≈headerH-12 and got covered by the card panel (operator report:
+  // "text is overlapping / hidden"). No subtitle → 150 (byte-identical).
+  // The cards are pushed down by the same value via the engine below.
+  const headerSubtitle = composerNarrative || String(metadata.summary || '').trim();
+  const headerH = headerSubtitle ? 212 : 150;
+  const engine = resolveInfographicEngine({ layout, width, height, sectionCount: sections.length, headerH });
   const geometry = validateLayoutGeometry({
     width,
     height,
@@ -4199,10 +4219,45 @@ async function renderInfographicAsset(
   };
   const brandMark = await loadBrandMark({ brandKit, placement: brandPlacement });
 
+  // ── Background image mode (Phase 4) — opt-in + flag-gated. Resolves to
+  //    gradient unless image mode is requested WITH a usable URL AND the
+  //    flag is on. The fetched image becomes the sharp BASE layer; the
+  //    SVG (which carries a MANDATORY overlay scrim, header, panel, and
+  //    cards) composites on top, so the image is never rendered raw and
+  //    card/header text contrast is preserved. Any fetch/decode failure
+  //    falls back to gradient → byte-identical with default.
+  const backgroundConfig = resolveBackgroundConfig(metadata);
+  let backgroundImageBuffer: Buffer | null = null;
+  if (
+    infographicBackgroundImagesEnabled()
+    && backgroundConfig.mode === 'image'
+    && backgroundConfig.imageUrl
+  ) {
+    try {
+      const cacheKey = `infographic-bg:${backgroundConfig.imageUrl}:${width}x${height}`;
+      backgroundImageBuffer = await getCachedRenderBuffer(cacheKey, async () => {
+        const raw = await bufferFromRemoteImage(backgroundConfig.imageUrl as string);
+        return sharp(raw, { failOn: 'none' })
+          .resize(width, height, { fit: 'cover' })
+          .png()
+          .toBuffer();
+      });
+    } catch {
+      backgroundImageBuffer = null; // fail-open to gradient
+    }
+  }
+  const backgroundMode = backgroundImageBuffer ? 'image' : 'gradient';
+  const backgroundLayerSvg = buildBackgroundLayerSvg({
+    mode: backgroundMode,
+    width,
+    height,
+    imageOpacity: backgroundConfig.imageOpacity,
+  });
+
   // Visual continuity wave. Single accent stroke from left to right
   // with a gentle sway. Lives inside the inner safe area so it
   // doesn't crowd the title or section cards.
-  const waveTopY = 130;
+  const waveTopY = headerH - 20;
   const waveEntryY = waveTopY;
   const waveExitY = waveTopY + Math.round(height * 0.02);
   const waveCpAY = waveTopY - Math.round(height * 0.025);
@@ -4305,9 +4360,43 @@ async function renderInfographicAsset(
     `;
   };
 
+  // Opt-in data cards (charts / tables). Operator/planner-supplied
+  // structured specs in metadata.infographic_cards are resolved into a
+  // slot→spec map and short-circuit the legacy layout dispatch ONLY when
+  // the matching feature flag is on AND the spec is valid. Absent specs
+  // or flags-off → the map is unused and every card renders exactly as
+  // before (byte-identical default). A chart/table card occupies one
+  // engine slot (cardWidth × cardHeight) — the engine is untouched.
+  const structuredCards = resolveStructuredCards(metadata);
+  const cardBrand: InfographicCardBrand = {
+    palette,
+    accent,
+    fontFamily,
+    text,
+    bodyTextColor,
+    panel,
+    fontMultiplier: infographicFontMultiplier,
+  };
+
   const cards = sections.map((section, index) => {
     const { x, y } = engine.position(index);
     const cycleAccent = [accent, accentSecondary, accentTertiary][index % 3];
+
+    // ── Data-card short-circuit (Phases 2–3). Falls through to the
+    //    legacy layout card when the flag is off, no spec exists, or the
+    //    builder returns null (invalid/oversized data → graceful fallback).
+    const structured = structuredCards.get(index);
+    if (structured) {
+      const geom = { x, y, width: cardWidth, height: cardHeight };
+      if (structured.type === 'chart' && infographicChartsEnabled()) {
+        const chartSvg = buildChartCardSvg(structured, geom, cardBrand);
+        if (chartSvg) return chartSvg;
+      }
+      if (structured.type === 'table' && infographicTablesEnabled()) {
+        const tableSvg = buildTableCardSvg(structured, geom, cardBrand);
+        if (tableSvg) return tableSvg;
+      }
+    }
 
     if (layout === 'stats') {
       // Operator feedback: stop fabricating percentages. If the
@@ -4803,11 +4892,47 @@ async function renderInfographicAsset(
   // back to operator-supplied `metadata.summary` when the LLM call
   // failed open. Both end up as the same UX role: a tagline that
   // sits between the title and the cards.
-  const headerSubtitle = composerNarrative || String(metadata.summary || '').trim();
-  // Header height is computed inside resolveInfographicEngine for the
-  // safe-area math; redeclare it here so the SVG header band lines up
-  // with the cards' top edge below it. Keep these two values in sync.
-  const headerH = 150;
+  // headerH and headerSubtitle are computed above (before the engine) so
+  // the card safe-area math and the SVG header band share one value.
+  //
+  // --- Header text geometry (title + optional subtitle), computed once
+  // so the title block and the subtitle block agree on vertical layout. ---
+  const headerTitleText = compactText(metadata.topic, 'Infographic');
+  const headerLeftX = 80;
+  const headerZoneW = brandPlacement.left - headerLeftX - 24;
+  const headerTitleCharsPerLine = Math.max(10, Math.floor(headerZoneW / (titleFontSize * 0.55)));
+  const headerTitleLines = balanceTextLines(headerTitleText, headerTitleCharsPerLine, 2);
+  const headerTitleLineH = Math.round(titleFontSize * 1.1);
+  const headerTitleBlockH = headerTitleLines.length * headerTitleLineH;
+  // With a subtitle, anchor the title near the top so the subtitle has
+  // room beneath it inside the band; without one, keep the legacy
+  // vertically-centered placement (byte-identical for no-subtitle cards).
+  const headerTitleStartY = headerSubtitle
+    ? 44 + titleFontSize
+    : Math.round((headerH - headerTitleBlockH) / 2) + titleFontSize;
+  const headerTitleSvg = headerTitleLines
+    .map((line, i) => `<text x="${headerLeftX}" y="${headerTitleStartY + i * headerTitleLineH}" font-size="${titleFontSize}" font-family="${fontFamily}" font-weight="900" fill="#ffffff" letter-spacing="0.5">${escapeXml(line)}</text>`)
+    .join('');
+  // Subtitle — native SVG <text> (librsvg won't render foreignObject HTML
+  // reliably), wrapped to ≤2 lines and CLAMPED so the last line's baseline
+  // stays clear of the card-panel top (headerH - 12). This clamp is the
+  // guard the old fixed-Y placement lacked, which let the 2nd line render
+  // under the panel.
+  let headerSubtitleSvg = '';
+  if (headerSubtitle) {
+    const subSize = Math.round(15 * infographicFontMultiplier);
+    const subCharsPerLine = Math.max(20, Math.floor(headerZoneW / (subSize * 0.55)));
+    const subLines = balanceTextLines(headerSubtitle, subCharsPerLine, 2);
+    const subLineH = Math.round(subSize * 1.45);
+    const lastTitleBaseline = headerTitleStartY + (headerTitleLines.length - 1) * headerTitleLineH;
+    let subStartY = lastTitleBaseline + subSize + 16;
+    const lastSubBaseline = subStartY + (subLines.length - 1) * subLineH;
+    const maxLastBaseline = (headerH - 12) - 8;
+    if (lastSubBaseline > maxLastBaseline) subStartY -= (lastSubBaseline - maxLastBaseline);
+    headerSubtitleSvg = subLines
+      .map((line, i) => `<text x="${headerLeftX}" y="${subStartY + i * subLineH}" font-size="${subSize}" font-family="${fontFamily}" font-weight="500" fill="rgba(255,255,255,0.92)">${escapeXml(line)}</text>`)
+      .join('');
+  }
   // True gradient header band — replaces the flat dark background +
   // flat white inner panel. The full canvas now reads as one designed
   // composition with vertical color flow (accent → background) like
@@ -4829,10 +4954,11 @@ async function renderInfographicAsset(
           <stop offset="100%" stop-color="${accent}" stop-opacity="0.9" />
         </linearGradient>
       </defs>
-      <!-- Full-bleed gradient background (replaces the dark flat fill +
-           inset white panel). Cards float on top so the gradient stays
-           visible at the canvas edges as a frame. -->
-      <rect width="${width}" height="${height}" fill="url(#infographicBgGradient)" />
+      <!-- Full-bleed background. Gradient mode → opaque brand gradient
+           (byte-identical default). Image mode → a mandatory translucent
+           scrim painted over the image that the renderer composites
+           underneath; cards float on top so text stays readable. -->
+      ${backgroundLayerSvg}
       <!-- Header band — gradient strip with the title in white at
            large-poster scale. Subtitle (intro line) under the title
            when metadata.summary is set. The title is LEFT-aligned
@@ -4840,33 +4966,8 @@ async function renderInfographicAsset(
            the right; long titles wrap to 2 lines instead of running
            through the logo. -->
       <rect x="0" y="0" width="${width}" height="${headerH}" fill="url(#infographicHeaderGradient)" />
-      ${(() => {
-        const titleText = compactText(metadata.topic, 'Infographic');
-        const titleLeftX = 80;
-        // Reserve right margin for the brand mark area (logo width +
-        // ~24px breathing room).
-        const titleZoneW = brandPlacement.left - titleLeftX - 24;
-        const titleCharsPerLine = Math.max(10, Math.floor(titleZoneW / (titleFontSize * 0.55)));
-        const titleLines = balanceTextLines(titleText, titleCharsPerLine, 2);
-        const titleLineH = Math.round(titleFontSize * 1.1);
-        // Vertically center the multi-line title block in the header.
-        const titleBlockH = titleLines.length * titleLineH;
-        const titleStartY = Math.round((headerH - titleBlockH) / 2) + titleFontSize;
-        return titleLines.map((line, i) => `<text x="${titleLeftX}" y="${titleStartY + i * titleLineH}" font-size="${titleFontSize}" font-family="${fontFamily}" font-weight="900" fill="#ffffff" letter-spacing="0.5">${escapeXml(line)}</text>`).join('');
-      })()}
-      ${headerSubtitle ? (() => {
-        // Native SVG text — librsvg doesn't render foreignObject HTML
-        // reliably. Word-wrap the subtitle below the title; render
-        // each line as its own <text> element.
-        const subSize = Math.round(15 * infographicFontMultiplier);
-        const subLeftX = 80;
-        const subZoneW = brandPlacement.left - subLeftX - 24;
-        const subCharsPerLine = Math.max(20, Math.floor(subZoneW / (subSize * 0.55)));
-        const subLines = balanceTextLines(headerSubtitle, subCharsPerLine, 2);
-        const subLineH = Math.round(subSize * 1.4);
-        const subStartY = Math.round(headerH * 0.78);
-        return subLines.map((line, i) => `<text x="${subLeftX}" y="${subStartY + i * subLineH}" font-size="${subSize}" font-family="${fontFamily}" font-weight="500" fill="rgba(255,255,255,0.92)">${escapeXml(line)}</text>`).join('');
-      })() : ''}
+      ${headerTitleSvg}
+      ${headerSubtitleSvg}
       <!-- Inner safe panel — soft white with rounded corners, floats
            inside the gradient frame. Cards live on top of this. -->
       <rect x="32" y="${headerH - 12}" width="${width - 64}" height="${height - headerH - 12}" rx="18" fill="#f8fafc" opacity="0.95" />
@@ -4883,14 +4984,22 @@ async function renderInfographicAsset(
     </svg>
   `;
   const composites: Array<{ input: Buffer; top: number; left: number }> = [];
-  // Brand mark composited on top of the SVG so its alpha channel
-  // stays intact (matches the carousel-renderer pattern at line 2887).
+  // Background-image mode: the image is the BASE layer and the rasterized
+  // SVG (scrim + header + cards) composites on top of it, then the brand
+  // mark on top of that. Gradient mode keeps the SVG as the base — exactly
+  // as before — so default output is byte-identical.
+  if (backgroundImageBuffer) {
+    composites.push({ input: await sharp(Buffer.from(svg)).png().toBuffer(), top: 0, left: 0 });
+  }
+  // Brand mark composited on top so its alpha channel stays intact
+  // (matches the carousel-renderer pattern at line 2887).
   if (brandMark) {
     composites.push({ input: brandMark, top: brandPlacement.top, left: brandPlacement.left });
   }
+  const baseLayer = backgroundImageBuffer ?? Buffer.from(svg);
   const fileBuffer = composites.length > 0
-    ? await sharp(Buffer.from(svg)).composite(composites).png().toBuffer()
-    : await sharp(Buffer.from(svg)).png().toBuffer();
+    ? await sharp(baseLayer).composite(composites).png().toBuffer()
+    : await sharp(baseLayer).png().toBuffer();
   const finalOcr = await runCreatorOcr({
     image: fileBuffer,
     assetType: 'infographic',

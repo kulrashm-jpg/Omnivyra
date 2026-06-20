@@ -264,6 +264,14 @@ const LONG_FORM_OPERATIONS = new Set<string>([
   'blogGeneration',
   'blogOptimization',
   'newsletterGeneration',
+  // Phase 6C-4B: the campaign-plan call (aiPlanningService → generateCampaignPlan)
+  // passes NO max_tokens, so the token heuristic alone never widened its budget —
+  // it was getting the 30s short-form cap and timing out on large (8–12 week)
+  // plans, then silently falling back to the deterministic placeholder plan.
+  // Recognising it by operation name gives it the 240s long-form window (same
+  // pattern as generateMasterContent). Token budget = provider default (uncapped),
+  // sufficient for 12-week plans just as it is for full blogs/newsletters.
+  'generateCampaignPlan',
 ]);
 
 /**
@@ -278,7 +286,7 @@ const LONG_FORM_OPERATIONS = new Set<string>([
  *   3. max_tokens > 4096                → 120s
  *   4. otherwise                        → 30s (unchanged short-form default)
  */
-function resolveProviderTimeoutMs(maxTokens?: number, operation?: string): number {
+export function resolveProviderTimeoutMs(maxTokens?: number, operation?: string): number {
   if (operation && LONG_FORM_OPERATIONS.has(operation)) return 240_000;
   if (maxTokens && maxTokens > 8192) return 240_000;
   if (maxTokens && maxTokens > 4096) return 120_000;

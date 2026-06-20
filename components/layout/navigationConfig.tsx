@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 import {
+  CreditCard,
   FileText,
   Home,
   LayoutDashboard,
@@ -7,10 +8,12 @@ import {
   Megaphone,
   MessageSquare,
   PenTool,
+  Receipt,
   Rocket,
   Sparkles,
   TestTube2,
   Users,
+  Wallet,
 } from 'lucide-react';
 
 export type SecondaryNavItem = {
@@ -147,6 +150,33 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
         description: 'Review and manage the leads that need action.',
         href: '/command-center/active-leads',
         icon: Users,
+      },
+    ],
+  },
+  {
+    label: 'Credits & Billing',
+    href: '/command-center/credit-advisor',
+    icon: Wallet,
+    description: 'Track credit burn, manage your plan, billing, and top-ups.',
+    matchers: ['/command-center/credit-advisor', '/command-center/billing', '/command-center/topup'],
+    children: [
+      {
+        label: 'Credit Advisor',
+        description: 'Track credit burn rate, forecast runway, and find savings.',
+        href: '/command-center/credit-advisor',
+        icon: Wallet,
+      },
+      {
+        label: 'Billing & Subscription',
+        description: 'View your plan, credits, purchases, and invoices.',
+        href: '/command-center/billing',
+        icon: Receipt,
+      },
+      {
+        label: 'Buy Credits',
+        description: 'Purchase top-up credits that never expire.',
+        href: '/command-center/topup',
+        icon: CreditCard,
       },
     ],
   },

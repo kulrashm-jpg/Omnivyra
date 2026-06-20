@@ -10,6 +10,7 @@ import { parseAndValidateCampaignPlan } from './campaignPlanCore';
 import { buildDeterministicWeeklySkeleton, DeterministicWeeklySkeletonError } from './deterministicWeeklySkeleton';
 import { inferExecutionMode } from './executionModeInference';
 import type { PlanningGenerationInput } from '../types/campaignPlanning';
+import { isKnownAudience } from '../../lib/shared/audience/audienceRegistry';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -97,10 +98,7 @@ const CAMPAIGN_GOAL_OPTIONS = [
   'Community Growth', 'Customer Retention', 'Thought Leadership', 'Event Promotion',
 ];
 
-const TARGET_AUDIENCE_OPTIONS = [
-  'B2B Marketers', 'Founders / Entrepreneurs', 'Marketing Leaders', 'Sales Teams',
-  'Product Managers', 'Developers', 'General Consumers',
-];
+// Audience validation derives from the canonical authority (isKnownAudience).
 
 /** Best-effort extract recommended_goal and recommended_audience from AI rawOutput. */
 function extractRecommendedFromRawOutput(rawOutput: string): { goal?: string; audience?: string[] } | null {
@@ -114,7 +112,7 @@ function extractRecommendedFromRawOutput(rawOutput: string): { goal?: string; au
         ? parsed.recommended_audience
             .filter((s): s is string => typeof s === 'string' && s.trim() !== '')
             .map((s) => s.trim())
-            .filter((s) => TARGET_AUDIENCE_OPTIONS.includes(s))
+            .filter((s) => isKnownAudience(s))
         : [];
       if (!goal && audience.length === 0) return null;
       return { goal: goal ?? undefined, audience: audience.length > 0 ? audience : undefined };
