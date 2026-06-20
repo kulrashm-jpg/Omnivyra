@@ -8,6 +8,8 @@ import {
   recordMonetizationOperationalEvent,
 } from '../monetizationOpsService';
 import { assertMonetizationBetaAccess, getMonetizationBetaRuntimeMode, getOrganizationBetaTag } from '../monetizationBetaAccessService';
+import { getFxConfig } from '../pricingConfigService';
+import { resolvePrice } from '@/lib/billing/currency';
 
 const PROVIDER = 'razorpay';
 const PROVIDER_MODE = 'test';
@@ -184,15 +186,22 @@ export async function createRazorpayStagingCreditOrder(input: {
   });
 
   const { data: pkg, error: pkgErr } = await ownedDbTable('credit_packages')
-    .select('id, credits, price, is_active')
+    .select('id, credits, price, is_active, sku, canonical_usd_price')
     .eq('id', input.packageId)
     .maybeSingle();
   if (pkgErr) throw new Error(`credit_package_lookup_failed:${pkgErr.message}`);
   if (!pkg || (pkg as any).is_active !== true) throw new Error('credit_package_not_available');
 
   const credits = Number((pkg as any).credits);
-  const amount = Number((pkg as any).price);
   const currency = 'INR';
+  // INR charge resolves from the canonical USD price via Super-Admin FX (+ market
+  // override). Falls back to the legacy `price` column when canonical is absent.
+  const canonicalUsd = (pkg as any).canonical_usd_price;
+  let amount = Number((pkg as any).price);
+  if (canonicalUsd != null && Number.isFinite(Number(canonicalUsd))) {
+    const fx = await getFxConfig();
+    amount = resolvePrice(Number(canonicalUsd), 'INR', fx, (pkg as any).sku ?? undefined);
+  }
   const amountSubunits = toSubunits(amount, currency);
   if (!Number.isFinite(credits) || credits <= 0) throw new Error('credit_package_invalid_credits');
   if (!Number.isFinite(amountSubunits) || amountSubunits <= 0) throw new Error('credit_package_invalid_amount');
