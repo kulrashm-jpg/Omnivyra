@@ -1,15 +1,16 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
-import { Loader2, RefreshCw, Save, Calendar, Send, X, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Loader2, RefreshCw, Save, Calendar, Send, X, AlertTriangle, CheckCircle2, Trash2 } from 'lucide-react';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import {
   PROMOTION_URL_REQUIRED_MESSAGE,
   promotionCharLimitFor,
   composePromotionPayloadText,
-  upsertPromotionDraft,
+  savePromotionDraft,
+  loadPromotionDrafts,
+  deletePromotionDraft,
   type PromotionContentType,
-  type PromotionDraft,
   type PromotionDraftStatus,
 } from '../../lib/content/promotionDraft';
 
@@ -26,7 +27,7 @@ type PlatformState = {
   promotionalText: string;
   status: PromotionDraftStatus;
   statusDetail: string | null;
-  busy: null | 'regenerate' | 'save' | 'schedule' | 'post';
+  busy: null | 'regenerate' | 'save' | 'schedule' | 'post' | 'delete';
   scheduledFor: string; // datetime-local value
 };
 
@@ -94,22 +95,47 @@ export default function PromotionWorkspace({
   const patch = (platform: string, next: Partial<PlatformState>) =>
     setStates((prev) => ({ ...prev, [platform]: { ...prev[platform], ...next } }));
 
-  const persist = (platform: string, status: PromotionDraftStatus, statusDetail: string | null) => {
+  // Load any saved (DB-backed) drafts when the workspace opens, preferring them
+  // over the freshly generated seeds so edits survive refresh / logout / device.
+  useEffect(() => {
+    if (!open || !companyId) return;
+    let active = true;
+    loadPromotionDrafts(companyId, contentType, contentId)
+      .then((saved) => {
+        if (!active || saved.length === 0) return;
+        setStates((prev) => {
+          const next = { ...prev };
+          for (const d of saved) {
+            if (next[d.platform]) {
+              next[d.platform] = {
+                ...next[d.platform],
+                promotionalText: d.promotionalText,
+                status: d.status,
+                statusDetail: 'Loaded saved draft.',
+              };
+            }
+          }
+          return next;
+        });
+      })
+      .catch(() => { /* non-fatal: fall back to generated seeds */ });
+    return () => { active = false; };
+  }, [open, companyId, contentId, contentType]);
+
+  // Persist a platform's draft to the DB (Save / status reflection). Best-effort
+  // for status updates so a transient save failure never masks a real publish.
+  const saveDraftRow = async (platform: string, status: PromotionDraftStatus): Promise<void> => {
     const s = states[platform];
-    if (!s) return;
-    const now = new Date().toISOString();
-    const draft: PromotionDraft = {
+    if (!s || !companyId) return;
+    await savePromotionDraft({
+      companyId,
       contentId,
       contentType,
       platform,
       promotionalText: s.promotionalText,
-      blogUrl,
+      canonicalUrl: blogUrl,
       status,
-      statusDetail,
-      createdAt: now,
-      updatedAt: now,
-    };
-    upsertPromotionDraft(draft);
+    });
   };
 
   const handleRegenerate = async (platform: string) => {
@@ -138,10 +164,29 @@ export default function PromotionWorkspace({
     }
   };
 
-  const handleSaveDraft = (platform: string) => {
-    patch(platform, { busy: 'save', status: 'draft', statusDetail: 'Draft saved.' });
-    persist(platform, 'draft', 'Draft saved.');
-    patch(platform, { busy: null });
+  const handleSaveDraft = async (platform: string) => {
+    patch(platform, { busy: 'save', statusDetail: null });
+    try {
+      await saveDraftRow(platform, 'draft');
+      patch(platform, { status: 'draft', statusDetail: 'Draft saved.' });
+    } catch (e) {
+      patch(platform, { statusDetail: e instanceof Error ? e.message : 'Failed to save draft.' });
+    } finally {
+      patch(platform, { busy: null });
+    }
+  };
+
+  const handleDiscard = async (platform: string) => {
+    if (!companyId) return;
+    patch(platform, { busy: 'delete', statusDetail: null });
+    try {
+      await deletePromotionDraft(companyId, contentType, contentId, platform);
+      patch(platform, { status: 'draft', statusDetail: 'Saved draft discarded.' });
+    } catch (e) {
+      patch(platform, { statusDetail: e instanceof Error ? e.message : 'Failed to discard draft.' });
+    } finally {
+      patch(platform, { busy: null });
+    }
   };
 
   const handleSchedule = async (platform: string) => {
@@ -175,10 +220,10 @@ export default function PromotionWorkspace({
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(data?.error || `Scheduling failed (status ${resp.status}).`);
       patch(platform, { status: 'scheduled', statusDetail: `Scheduled for ${scheduledFor.toLocaleString()}.` });
-      persist(platform, 'scheduled', 'Scheduled.');
+      await saveDraftRow(platform, 'scheduled').catch(() => {});
     } catch (e) {
       patch(platform, { status: 'failed', statusDetail: e instanceof Error ? e.message : 'Scheduling failed.' });
-      persist(platform, 'failed', e instanceof Error ? e.message : 'Scheduling failed.');
+      await saveDraftRow(platform, 'failed').catch(() => {});
     } finally {
       patch(platform, { busy: null });
     }
@@ -197,25 +242,49 @@ export default function PromotionWorkspace({
     }
     patch(platform, { busy: 'post', statusDetail: null });
     try {
-      const resp = await fetchWithAuth('/api/social/post', {
+      const content = composePromotionPayloadText(s.promotionalText, blogUrl);
+      // Canonical publish path = schedule-then-publish (same as the
+      // multi-platform scheduler). publishNow operates on a scheduled_posts
+      // row, so we stage one (near-future to satisfy the future-time check)
+      // then publish it immediately via the canonical validator/adapter
+      // pipeline. No legacy /api/social/post.
+      const scheduledFor = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+      const stageRes = await fetchWithAuth('/api/scheduler/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          platform,
-          content: composePromotionPayloadText(s.promotionalText, blogUrl),
+          companyId,
           title,
+          content,
+          hashtags: '',
+          scheduledFor,
+          platform,
           accountId: s.accountId,
+          contentType: 'post',
         }),
       });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || data?.success === false) {
-        throw new Error(data?.error || data?.message || `Post failed (status ${resp.status}).`);
+      const stageData = await stageRes.json().catch(() => ({}));
+      if (!stageRes.ok) throw new Error(stageData?.error || `Could not stage the post (status ${stageRes.status}).`);
+      const postId = stageData?.id;
+      if (!postId) throw new Error('Scheduler did not return a post id.');
+
+      const pubRes = await fetchWithAuth('/api/social/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post_id: postId }),
+      });
+      const pubData = await pubRes.json().catch(() => ({}));
+      if (!pubRes.ok) throw new Error(pubData?.error || `Publish failed (status ${pubRes.status}).`);
+      // The publish endpoint returns 200 even when the adapter reports FAILED —
+      // the truth is in `status`; only PUBLISHED counts.
+      if (pubData?.status && pubData.status !== 'PUBLISHED') {
+        throw new Error(pubData?.message || 'The platform rejected the post.');
       }
       patch(platform, { status: 'posted', statusDetail: 'Posted.' });
-      persist(platform, 'posted', 'Posted.');
+      await saveDraftRow(platform, 'posted').catch(() => {});
     } catch (e) {
       patch(platform, { status: 'failed', statusDetail: e instanceof Error ? e.message : 'Post failed.' });
-      persist(platform, 'failed', e instanceof Error ? e.message : 'Post failed.');
+      await saveDraftRow(platform, 'failed').catch(() => {});
     } finally {
       patch(platform, { busy: null });
     }
@@ -335,7 +404,16 @@ export default function PromotionWorkspace({
                 disabled={Boolean(cur.busy)}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
-                <Save className="h-4 w-4" />Save Draft
+                {cur.busy === 'save' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}Save Draft
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDiscard(active)}
+                disabled={Boolean(cur.busy)}
+                title="Delete the saved draft for this platform"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {cur.busy === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}Discard
               </button>
               <button
                 type="button"

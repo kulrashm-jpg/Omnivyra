@@ -11,10 +11,10 @@
  * send time (`composePromotionPayloadText`), which guarantees the canonical URL
  * survives every adaptation/regeneration layer — no step can strip it.
  *
- * Persistence here is the lightweight client store (localStorage), mirroring the
- * existing writer-attached-assets pattern. Scheduling and posting go through the
- * canonical backend engines (scheduler / social publishing); this store only
- * holds the editable draft state + status reflection.
+ * Persistence is DB-backed via the dedicated /api/promotion-drafts route
+ * (table: promotion_drafts), so drafts survive refresh, logout/login, browser
+ * crash, and are available cross-device. Scheduling and posting go through the
+ * canonical backend engines (scheduler / social publishing).
  */
 
 export type PromotionDraftStatus = 'draft' | 'scheduled' | 'posted' | 'failed';
@@ -118,32 +118,56 @@ export function composePromotionPayloadText(promotionalText: string, blogUrl: st
   return `${text}\n\n${url}`;
 }
 
-// ── Client store (localStorage) ──────────────────────────────────────────────
+// ── DB-backed store (via /api/promotion-drafts) ──────────────────────────────
 
-function storeKey(contentType: string, contentId: string): string {
-  return `promotion_drafts_${contentType}_${contentId || 'unsaved'}`;
+/** Load all saved promotion drafts for a piece of content (org-scoped server-side). */
+export async function loadPromotionDrafts(
+  companyId: string,
+  contentType: string,
+  contentId: string,
+): Promise<PromotionDraft[]> {
+  const params = new URLSearchParams({ companyId, contentType, contentId });
+  const resp = await fetch(`/api/promotion-drafts?${params.toString()}`, { credentials: 'include' });
+  if (!resp.ok) throw new Error(`Failed to load promotion drafts (status ${resp.status}).`);
+  const data = await resp.json().catch(() => ({}));
+  const rows = Array.isArray(data?.drafts) ? data.drafts : [];
+  return rows as PromotionDraft[];
 }
 
-export function readPromotionDrafts(contentType: string, contentId: string): PromotionDraft[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(storeKey(contentType, contentId));
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? (parsed as PromotionDraft[]) : [];
-  } catch {
-    return [];
-  }
+/** Save or update (upsert) a single platform's promotion draft. */
+export async function savePromotionDraft(input: {
+  companyId: string;
+  contentId: string;
+  contentType: PromotionContentType;
+  platform: string;
+  promotionalText: string;
+  canonicalUrl: string;
+  status: PromotionDraftStatus;
+}): Promise<PromotionDraft | null> {
+  const resp = await fetch('/api/promotion-drafts', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!resp.ok) throw new Error(`Failed to save promotion draft (status ${resp.status}).`);
+  const data = await resp.json().catch(() => ({}));
+  return (data?.draft ?? null) as PromotionDraft | null;
 }
 
-export function upsertPromotionDraft(draft: PromotionDraft): PromotionDraft {
-  if (typeof window === 'undefined') return draft;
-  const current = readPromotionDrafts(draft.contentType, draft.contentId);
-  const next = current.filter((d) => d.platform !== draft.platform);
-  next.push(draft);
-  try {
-    window.localStorage.setItem(storeKey(draft.contentType, draft.contentId), JSON.stringify(next.slice(0, 24)));
-  } catch {
-    // Non-fatal: the in-memory workspace state remains the working source.
-  }
-  return draft;
+/** Delete a saved draft — a single platform's, or all for the content when platform is omitted. */
+export async function deletePromotionDraft(
+  companyId: string,
+  contentType: string,
+  contentId: string,
+  platform?: string,
+): Promise<boolean> {
+  const resp = await fetch('/api/promotion-drafts', {
+    method: 'DELETE',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ companyId, contentType, contentId, ...(platform ? { platform } : {}) }),
+  });
+  if (!resp.ok) throw new Error(`Failed to delete promotion draft (status ${resp.status}).`);
+  return true;
 }
