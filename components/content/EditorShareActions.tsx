@@ -89,14 +89,18 @@ export default function EditorShareActions({
     title: string,
     icon: React.ReactNode,
     destinations: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>,
+    description?: string,
   ) => {
     if (destinations.length === 0) return null;
     return (
       <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-        <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
+        <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
           {icon}
           {title}
         </div>
+        {description ? (
+          <p className="mb-2 text-[11px] font-normal leading-snug text-gray-500">{description}</p>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           {destinations.map((destination) => (
             <button
@@ -161,7 +165,7 @@ export default function EditorShareActions({
             className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Share2 className="h-3.5 w-3.5" />
-            Repurpose
+            Promote on social
           </button>
         ) : null}
         <div className="relative">
@@ -194,8 +198,18 @@ export default function EditorShareActions({
         <p className="mt-3 text-xs font-medium text-amber-700">{shareDisabledReason}</p>
       ) : null}
       {renderDestinationGroup('Publish Blog', <FileText className="h-3.5 w-3.5" />, publishDestinations)}
-      {renderDestinationGroup('Repurpose Blog To Social', <Share2 className="h-3.5 w-3.5" />, repurposeDestinations)}
-      {renderDestinationGroup('Create Social Assets', <PenTool className="h-3.5 w-3.5" />, assetDestinations)}
+      {renderDestinationGroup(
+        'Promote on social',
+        <Share2 className="h-3.5 w-3.5" />,
+        repurposeDestinations,
+        'Auto-adapt this content into a short, platform-native post that links back — one per connected platform. (Not a re-published article; LinkedIn Articles are manual.)',
+      )}
+      {renderDestinationGroup(
+        'Promote with social assets',
+        <PenTool className="h-3.5 w-3.5" />,
+        assetDestinations,
+        'Turn this content into a standalone visual asset for your connected Instagram / TikTok / Pinterest / YouTube.',
+      )}
     </div>
   );
 }
