@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Copy, Download, FileText, Loader2, PenTool, Share2 } from 'lucide-react';
+import { CheckCircle2, Copy, Download, FileText, Loader2, Share2 } from 'lucide-react';
 
 type MarkUsedOption = {
   label: string;
@@ -20,7 +20,6 @@ type Props = {
   shareDisabledReason?: string | null;
   publishDestinations?: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>;
   repurposeDestinations?: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>;
-  assetDestinations?: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>;
   markUsedOptions: MarkUsedOption[];
   onMarkUsed: (platform?: string) => Promise<void>;
   onPostToSocial?: () => void;
@@ -35,7 +34,6 @@ export default function EditorShareActions({
   shareDisabledReason = null,
   publishDestinations = [],
   repurposeDestinations = [],
-  assetDestinations = [],
   markUsedOptions,
   onMarkUsed,
   onPostToSocial,
@@ -202,13 +200,7 @@ export default function EditorShareActions({
         'Promote on social',
         <Share2 className="h-3.5 w-3.5" />,
         repurposeDestinations,
-        'Auto-adapt this content into a short, platform-native post that links back — one per connected platform. (Not a re-published article; LinkedIn Articles are manual.)',
-      )}
-      {renderDestinationGroup(
-        'Promote with social assets',
-        <PenTool className="h-3.5 w-3.5" />,
-        assetDestinations,
-        'Turn this content into a standalone visual asset for your connected Instagram / TikTok / Pinterest / YouTube.',
+        'Generate platform-native promotional posts for your connected social platforms — each adapted to the platform’s format.',
       )}
     </div>
   );

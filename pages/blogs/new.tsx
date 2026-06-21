@@ -15,12 +15,6 @@ import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
-import {
-  createWriterSourceId,
-  launchCreatorFromWriter,
-  type CreatorAssetLaunchType,
-} from '../../lib/content/writerCreatorAssetLaunch';
-import { buildAssetCompositionIntent } from '../../lib/content/writerCreatorAttachmentContracts';
 import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 import type { CreatorFlowContext } from '../../lib/content/creatorFlowContext';
 
@@ -59,20 +53,6 @@ const DIRECT_SOCIAL_PUBLISHERS: Record<string, string> = {
   threads: 'Threads',
   medium: 'Medium',
 };
-
-const DERIVATIVE_ASSET_DESTINATIONS: Array<{
-  key: string;
-  platform: string;
-  label: string;
-  detail: string;
-  assetType: CreatorAssetLaunchType;
-}> = [
-  { key: 'instagram-carousel', platform: 'instagram', label: 'Instagram Carousel', detail: 'Create a slide asset from this blog.', assetType: 'carousel' },
-  { key: 'instagram-caption', platform: 'instagram', label: 'Instagram Caption', detail: 'Adapt the blog into a caption.', assetType: 'supporting_image' },
-  { key: 'tiktok-script', platform: 'tiktok', label: 'TikTok Script', detail: 'Create a short video script.', assetType: 'supporting_image' },
-  { key: 'youtube-script', platform: 'youtube', label: 'YouTube Script', detail: 'Create a video outline/script.', assetType: 'supporting_image' },
-  { key: 'pinterest-content', platform: 'pinterest', label: 'Pinterest Content', detail: 'Create a Pinterest-ready visual.', assetType: 'infographic' },
-];
 
 type PrefillPayload = {
   output?: (BlogGenerationOutput & { content_blocks?: unknown[]; content_markdown?: string }) | null;
@@ -668,33 +648,6 @@ export default function BlogNewPage() {
     if (!launched) setError('Generate and save a draft before sharing.');
   };
 
-  const launchDerivativeAsset = (assetType: CreatorAssetLaunchType, platform: string) => {
-    if (!liveState) {
-      setError('Generate and save a draft before sharing.');
-      return;
-    }
-    const sourceId = createWriterSourceId('post', savedId || liveState.slug || liveState.title);
-    launchCreatorFromWriter({
-      router,
-      assetType,
-      source: {
-        id: sourceId,
-        sourceType: 'post',
-        sourceId,
-        title: liveState.title,
-        body: liveState.content_markdown || buildTextDownload(liveState),
-        platform,
-        hashtags: liveState.tags,
-        compositionIntent: buildAssetCompositionIntent({
-          assetType,
-          attachmentMode: 'supporting_visual',
-          sourceTextTransform: 'summarize',
-        }),
-        createdAt: new Date().toISOString(),
-      },
-    });
-  };
-
   const handleMarkUsed = async (platform?: string) => {
     if (!savedId || !selectedCompanyId) {
       setError('Save the post first before marking it as used.');
@@ -738,14 +691,6 @@ export default function BlogNewPage() {
       label: DIRECT_SOCIAL_PUBLISHERS[platform],
       detail: account.platform_label,
       onClick: () => launchRepurposeToSocial(platform),
-    }));
-  const assetDestinations = DERIVATIVE_ASSET_DESTINATIONS
-    .filter((destination) => connectedSocialByPlatform.has(destination.platform))
-    .map((destination) => ({
-      key: destination.key,
-      label: destination.label,
-      detail: destination.detail,
-      onClick: () => launchDerivativeAsset(destination.assetType, destination.platform),
     }));
 
   if (!prefillChecked) return <div className="flex min-h-screen items-center justify-center bg-gray-50"><Loader2 className="h-10 w-10 animate-spin text-[#0B5ED7]" /></div>;
@@ -855,7 +800,6 @@ export default function BlogNewPage() {
                 shareDisabledReason={shareDisabledReason}
                 publishDestinations={publishDestinations}
                 repurposeDestinations={repurposeDestinations}
-                assetDestinations={assetDestinations}
                 onMarkUsed={handleMarkUsed}
                 markUsedOptions={[
                   { label: 'General use' },
