@@ -90,3 +90,7 @@ architecture-migration/reports/**/semantic-resolution-completion/*.json
 
 # Runtime redis-usage monitor state (rewritten continuously; not source)
 .redis-usage-alert.json
+
+# Local Memurai / Redis runtime artifacts (snapshot + log; not source)
+dump.rdb
+memurai-log.txt
