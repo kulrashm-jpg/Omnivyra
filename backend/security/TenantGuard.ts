@@ -52,7 +52,8 @@ export type TenantAccessFailureReason =
   | 'STALE_MEMBERSHIP'    // Member row exists but status != 'active'
   | 'ORG_NOT_FOUND'       // companies row missing
   | 'ORG_INACTIVE'        // companies.status != 'active' (suspended / soft-deleted)
-  | 'INSUFFICIENT_ROLE';  // Membership exists but role is below required
+  | 'INSUFFICIENT_ROLE'   // Membership exists but role is below required
+  | 'TENANT_LOOKUP_ERROR'; // Transient DB error reading membership/org — retryable, NOT a denial
 
 export interface TenantAccessGranted {
   userId: string;
@@ -95,6 +96,28 @@ export interface TenantAccessOptions {
  * caller is responsible for translating the result into the right
  * domain-level error.
  */
+/**
+ * Read a single Supabase row with a bounded retry on TRANSIENT errors.
+ * A genuine "no row" result is NOT an error and returns immediately — only
+ * actual query/transport errors are retried. This prevents a momentary
+ * Supabase/network blip on the membership or org lookup from being
+ * misclassified as NOT_A_MEMBER / ORG_NOT_FOUND and locking out a legitimate
+ * member with a hard "Access denied" 403.
+ */
+async function readSingleWithRetry<T>(
+  label: string,
+  run: () => PromiseLike<{ data: T | null; error: { message?: string } | null }>,
+): Promise<{ data: T | null; error: { message?: string } | null }> {
+  let last: { data: T | null; error: { message?: string } | null } = { data: null, error: null };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    last = await run();
+    if (!last.error) return last;
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 60 * (attempt + 1)));
+  }
+  logger.error('tenant_guard_read_retry_exhausted', { label, message: last.error?.message });
+  return last;
+}
+
 export async function assertTenantAccess(input: {
   userId: string | null;
   supabaseUid?: string | null;
@@ -131,21 +154,27 @@ export async function assertTenantAccess(input: {
   }
 
   // Membership: row must exist, status must be 'active'.
-  const { data: roleRow, error: roleErr } = await supabase
-    .from('user_company_roles')
-    .select('role, status')
-    .eq('user_id', userId)
-    .eq('company_id', organizationId)
-    .limit(1)
-    .maybeSingle();
+  const { data: roleRow, error: roleErr } = await readSingleWithRetry<{ role?: string | null; status?: string | null }>(
+    'user_company_roles',
+    () => supabase
+      .from('user_company_roles')
+      .select('role, status')
+      .eq('user_id', userId)
+      .eq('company_id', organizationId)
+      .limit(1)
+      .maybeSingle(),
+  );
 
   if (roleErr) {
+    // A persistent query error is NOT proof of non-membership — surface it as
+    // a transient, retryable failure so a real member is never locked out by a
+    // DB/network blip (which previously became a hard NOT_A_MEMBER → 403).
     logger.error('tenant_guard_db_error', {
       userId,
       organizationId,
       message: roleErr.message,
     });
-    return { ok: false, reason: 'NOT_A_MEMBER', userId };
+    return { ok: false, reason: 'TENANT_LOOKUP_ERROR', userId };
   }
 
   if (!roleRow) return { ok: false, reason: 'NOT_A_MEMBER', userId };
@@ -165,13 +194,20 @@ export async function assertTenantAccess(input: {
   // Organization existence + state. We require status='active' AND
   // deleted_at IS NULL. If the schema doesn't yet have deleted_at, the
   // status check still rejects suspended orgs.
-  const { data: orgRow, error: orgErr } = await supabase
-    .from('companies')
-    .select('id, status')
-    .eq('id', organizationId)
-    .maybeSingle();
+  const { data: orgRow, error: orgErr } = await readSingleWithRetry<{ id?: string; status?: string | null }>(
+    'companies',
+    () => supabase
+      .from('companies')
+      .select('id, status')
+      .eq('id', organizationId)
+      .maybeSingle(),
+  );
 
-  if (orgErr || !orgRow) {
+  if (orgErr) {
+    // Transient read failure — retryable, not a "missing org" verdict.
+    return { ok: false, reason: 'TENANT_LOOKUP_ERROR', userId };
+  }
+  if (!orgRow) {
     return { ok: false, reason: 'ORG_NOT_FOUND', userId };
   }
   if ((orgRow as { status?: string | null }).status !== 'active') {
@@ -286,6 +322,7 @@ function httpStatusForReason(reason: TenantAccessFailureReason): number {
     case 'INSUFFICIENT_ROLE':  return 403;
     case 'ORG_NOT_FOUND':      return 404;
     case 'ORG_INACTIVE':       return 403;
+    case 'TENANT_LOOKUP_ERROR': return 503; // transient — client should retry, not a denial
   }
 }
 

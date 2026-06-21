@@ -132,6 +132,24 @@ export const enforceCompanyAccess = async (input: {
     return user;
   }
 
+  // Transient membership/org read failure (DB/network blip): do NOT report as
+  // a denial. A legitimate member must never be locked out by a temporary
+  // lookup error — return a retryable 503 so the client retries instead of
+  // surfacing a misleading "Access denied to company".
+  if (canonical.reason === 'TENANT_LOOKUP_ERROR') {
+    console.warn('TENANT_LOOKUP_ERROR', {
+      path: input.req.url,
+      companyId: input.companyId,
+      userId: user.userId,
+    });
+    input.res.status(503).json({
+      error: 'Membership check is temporarily unavailable. Please try again.',
+      code: 'TENANT_LOOKUP_ERROR',
+      retryable: true,
+    });
+    return null;
+  }
+
   // Soft-deleted / missing companies: deny. Don't apply legacy fallbacks
   // — a deleted org must remain locked, and an unknown id has no fallback
   // to apply.
