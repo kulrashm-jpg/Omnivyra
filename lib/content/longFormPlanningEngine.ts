@@ -421,8 +421,13 @@ function buildFallbackPlan(
       : index === 3
       ? `Use concrete examples to prove the argument.`
       : `Challenge the default assumption around ${input.topic}.`,
+    // key_points feed both the LLM prompt AND the depth-expansion fallback
+    // (which renders key_points[0] verbatim into the body). They must read as
+    // reader-facing substance, never as authoring/meta directives — a phrase
+    // like "<section> must serve a separate reader job" leaks into the article
+    // and trips the Publishing Readiness Gate (reader-job detector). Lead with
+    // the section's actual intent instead.
     key_points: [
-      `${section.label} must serve a separate reader job.`,
       section.intent,
       ...(section.outputConstraints || []).slice(0, 2),
     ].filter(Boolean),
@@ -911,7 +916,11 @@ function buildSectionDepthExpansion(args: {
     return `<p>The risk lens in ${title.toLowerCase()} should stay focused on the failure pattern, not repeat the article's action plan. ${tradeoff} Tie that warning to ${uniqueAngle}, then explain which constraint makes the risk visible before it becomes expensive.</p><p>Use one concrete containment move: what leaders pause, what they inspect, and what boundary prevents the same mistake from scaling. ${keyPoint} This gives the section a distinct cautionary role rather than another version of the implementation guidance.</p>`;
   }
   if (lane === 'framework') {
-    return `<p>${framework} should earn its place by explaining how ${audience}s interpret ${topic} differently. Define the model components, the sequence between them, and the boundary where the model stops being useful. ${viewpoint}</p><p>The section's unique contribution is ${uniqueAngle}. Use that angle to show why the framework changes judgment, then connect one component to ${keyPoint}. Keep this as model logic, not another execution checklist.</p>`;
+    // Deliver the framework as a co-located enumerated structure (components →
+    // sequence → boundary) rather than only *describing* one — a bare claim of
+    // a model/framework with no adjacent steps/components fails the Framework
+    // Delivery Gate. Reader-facing prose only; no authoring/meta directives.
+    return `<p>${framework} changes how ${audience}s interpret ${topic}: instead of generic advice, it names the moving parts and the order they apply in. ${viewpoint}</p><ol><li><strong>Core components</strong> — the few elements that make ${framework} work, and what each one decides.</li><li><strong>Sequence</strong> — the order the components apply in, and why moving out of order breaks the model.</li><li><strong>Boundary</strong> — the conditions where ${framework} stops being useful and judgment takes over.</li></ol><p>${uniqueAngle} ${insight}</p>`;
   }
   if (lane === 'application') {
     return `<p>${title} should translate ${topic} into a visible operating change. ${recommendation} Keep the focus on the first workflow shift, the cadence that keeps it alive, and the handoff that prevents the recommendation from becoming a one-time content exercise.</p><p>Application depth comes from the review loop, not another restatement of why the topic matters. Use ${uniqueAngle} to define what changes next week, then use ${keyPoint} as the practical check that proves the work is moving.</p>`;
