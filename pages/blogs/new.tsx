@@ -14,7 +14,9 @@ import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
-import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
+import PromotePlatformModal, { type PromotablePlatform } from '../../components/content/PromotePlatformModal';
+import PromotionWorkspace, { type WorkspacePlatformSeed } from '../../components/content/PromotionWorkspace';
+import { resolveCanonicalContentUrl } from '../../lib/content/promotionDraft';
 import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 import type { CreatorFlowContext } from '../../lib/content/creatorFlowContext';
 
@@ -45,15 +47,6 @@ const CMS_LABELS: Record<string, string> = {
   squarespace: 'Other CMS',
 };
 
-const DIRECT_SOCIAL_PUBLISHERS: Record<string, string> = {
-  linkedin: 'LinkedIn',
-  facebook: 'Facebook Pages',
-  x: 'X / Twitter',
-  twitter: 'X / Twitter',
-  threads: 'Threads',
-  medium: 'Medium',
-};
-
 type PrefillPayload = {
   output?: (BlogGenerationOutput & { content_blocks?: unknown[]; content_markdown?: string }) | null;
   source?: string;
@@ -73,6 +66,7 @@ type ConnectedSocialAccount = {
   platform_label: string;
   connected: boolean;
   category: string;
+  social_account_id?: string | null;
 };
 
 function safeFileStem(value: string): string {
@@ -247,6 +241,12 @@ export default function BlogNewPage() {
   const [prefillInitial, setPrefillInitial] = useState<Partial<BlogFormState> | null>(null);
   const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
   const [editorPatch, setEditorPatch] = useState<Partial<BlogFormState> | null>(null);
+  // Promotion workflow (PHASE BLOG-PROMOTION-2) — text-only platform drafts.
+  const [promoteModalOpen, setPromoteModalOpen] = useState(false);
+  const [promoteGenerating, setPromoteGenerating] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [workspaceSeeds, setWorkspaceSeeds] = useState<WorkspacePlatformSeed[]>([]);
+  const [workspaceBlogUrl, setWorkspaceBlogUrl] = useState('');
   const [improvingArea, setImprovingArea] = useState<ImproveArea | null>(null);
   const [improvingIssueKey, setImprovingIssueKey] = useState<string | null>(null);
   const [cmsIntegrations, setCmsIntegrations] = useState<CmsIntegrationOption[]>([]);
@@ -630,22 +630,66 @@ export default function BlogNewPage() {
     }
   };
 
-  const launchRepurposeToSocial = (platform: string) => {
+  // PHASE BLOG-PROMOTION-2 — "Promote on social" opens a platform-selection
+  // modal (no immediate launch). On generate, each selected platform is run
+  // through the existing adaptation flow to produce a text-only promotional
+  // draft, then the in-app Promotion Workspace opens. No creator/asset path.
+  const openPromoteModal = () => {
     if (!liveState) {
       setError('Generate and save a draft before sharing.');
       return;
     }
-    const launched = launchSocialPostingFromContent({
-      router,
-      contentType: 'blog',
-      title: liveState.title,
-      content: liveState.content_markdown || buildTextDownload(liveState),
-      tags: liveState.tags,
-      excerpt: liveState.excerpt,
-      sourceId: savedId,
-      platform,
+    setPromoteModalOpen(true);
+  };
+
+  const handleGeneratePromotionDrafts = async (selectedKeys: string[]) => {
+    if (!liveState) return;
+    setPromoteGenerating(true);
+    const source = liveState.content_markdown || buildTextDownload(liveState);
+    const topic = liveState.title;
+    const canonicalUrl = resolveCanonicalContentUrl({
+      status: liveState.status,
+      slug: liveState.slug,
+      origin: typeof window !== 'undefined' ? window.location.origin : null,
     });
-    if (!launched) setError('Generate and save a draft before sharing.');
+    try {
+      const seeds: WorkspacePlatformSeed[] = await Promise.all(
+        selectedKeys.map(async (key): Promise<WorkspacePlatformSeed> => {
+          const account = connectedSocialByPlatform.get(key);
+          let promotionalText = '';
+          try {
+            const resp = await fetch('/api/content/quick-platform-adapt', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                platform: key,
+                content: source,
+                contentType: 'post',
+                companyId: selectedCompanyId || undefined,
+                topic,
+              }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (resp.ok) promotionalText = String(data?.variant?.generated_content || '').trim();
+          } catch {
+            // Leave empty; the workspace lets the user Regenerate per platform.
+          }
+          return {
+            platform: key,
+            label: account?.platform_label || key,
+            accountId: account?.social_account_id ?? null,
+            promotionalText,
+          };
+        }),
+      );
+      setWorkspaceSeeds(seeds);
+      setWorkspaceBlogUrl(canonicalUrl);
+      setPromoteModalOpen(false);
+      setWorkspaceOpen(true);
+    } finally {
+      setPromoteGenerating(false);
+    }
   };
 
   const handleMarkUsed = async (platform?: string) => {
@@ -684,14 +728,24 @@ export default function BlogNewPage() {
     detail: integration.name,
     onClick: () => handlePostBlogToWebsite(integration),
   }));
-  const repurposeDestinations = Array.from(connectedSocialByPlatform.entries())
-    .filter(([platform]) => Boolean(DIRECT_SOCIAL_PUBLISHERS[platform]))
-    .map(([platform, account]) => ({
+  // Connected social platforms offered in the promotion modal — sourced from
+  // the connected-account registry (no hardcoded list).
+  const promotePlatforms: PromotablePlatform[] = Array.from(connectedSocialByPlatform.entries()).map(
+    ([platform, account]) => ({
       key: platform,
-      label: DIRECT_SOCIAL_PUBLISHERS[platform],
-      detail: account.platform_label,
-      onClick: () => launchRepurposeToSocial(platform),
-    }));
+      label: account.platform_label || platform,
+      accountId: account.social_account_id ?? null,
+    }),
+  );
+  // A single "Promote on social" action that opens the platform-selection modal.
+  const repurposeDestinations = promotePlatforms.length > 0
+    ? [{
+        key: 'promote-on-social',
+        label: 'Promote on social',
+        detail: `${promotePlatforms.length} connected platform${promotePlatforms.length === 1 ? '' : 's'}`,
+        onClick: openPromoteModal,
+      }]
+    : [];
 
   if (!prefillChecked) return <div className="flex min-h-screen items-center justify-center bg-gray-50"><Loader2 className="h-10 w-10 animate-spin text-[#0B5ED7]" /></div>;
 
@@ -807,6 +861,26 @@ export default function BlogNewPage() {
                   { label: 'LinkedIn', value: 'linkedin' },
                   { label: 'Email', value: 'email' },
                 ]}
+              />
+
+              <PromotePlatformModal
+                open={promoteModalOpen}
+                platforms={promotePlatforms}
+                generating={promoteGenerating}
+                onCancel={() => setPromoteModalOpen(false)}
+                onGenerate={handleGeneratePromotionDrafts}
+              />
+              <PromotionWorkspace
+                open={workspaceOpen}
+                contentId={savedId || liveState?.slug || liveState?.title || 'unsaved'}
+                contentType="blog"
+                title={liveState?.title || ''}
+                topic={liveState?.title || ''}
+                sourceContent={liveState?.content_markdown || buildTextDownload(liveState)}
+                companyId={selectedCompanyId}
+                blogUrl={workspaceBlogUrl}
+                seeds={workspaceSeeds}
+                onClose={() => setWorkspaceOpen(false)}
               />
             </div>
 
