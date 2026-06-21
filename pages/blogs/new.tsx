@@ -16,7 +16,7 @@ import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
 import PromotePlatformModal, { type PromotablePlatform } from '../../components/content/PromotePlatformModal';
 import PromotionWorkspace, { type WorkspacePlatformSeed } from '../../components/content/PromotionWorkspace';
-import { resolveCanonicalContentUrl } from '../../lib/content/promotionDraft';
+import { resolveCanonicalContentUrl, loadPromotionDrafts, deletePromotionDraft } from '../../lib/content/promotionDraft';
 import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 import type { CreatorFlowContext } from '../../lib/content/creatorFlowContext';
 
@@ -247,6 +247,10 @@ export default function BlogNewPage() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceSeeds, setWorkspaceSeeds] = useState<WorkspacePlatformSeed[]>([]);
   const [workspaceBlogUrl, setWorkspaceBlogUrl] = useState('');
+  // PHASE BLOG-PROMOTION (resume path) — if saved drafts already exist, resume
+  // them instead of regenerating.
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const [resumeSeeds, setResumeSeeds] = useState<WorkspacePlatformSeed[]>([]);
   const [improvingArea, setImprovingArea] = useState<ImproveArea | null>(null);
   const [improvingIssueKey, setImprovingIssueKey] = useState<string | null>(null);
   const [cmsIntegrations, setCmsIntegrations] = useState<CmsIntegrationOption[]>([]);
@@ -630,15 +634,69 @@ export default function BlogNewPage() {
     }
   };
 
-  // PHASE BLOG-PROMOTION-2 — "Promote on social" opens a platform-selection
-  // modal (no immediate launch). On generate, each selected platform is run
-  // through the existing adaptation flow to produce a text-only promotional
-  // draft, then the in-app Promotion Workspace opens. No creator/asset path.
-  const openPromoteModal = () => {
+  // Stable id used for promotion-draft persistence (must match the workspace).
+  const promotionContentId = savedId || liveState?.slug || liveState?.title || 'unsaved';
+
+  // PHASE BLOG-PROMOTION (resume path) — "Promote on social" first checks for
+  // existing saved drafts. If found, resume them directly (no regeneration, no
+  // adapt call, no credit usage). Otherwise fall back to the platform-selection
+  // modal + generate flow. No creator/asset path.
+  const handlePromoteClick = async () => {
     if (!liveState) {
       setError('Generate and save a draft before sharing.');
       return;
     }
+    if (!selectedCompanyId) {
+      setPromoteModalOpen(true);
+      return;
+    }
+    try {
+      const saved = await loadPromotionDrafts(selectedCompanyId, 'blog', promotionContentId);
+      if (saved.length > 0) {
+        const seeds: WorkspacePlatformSeed[] = saved.map((d) => {
+          const account = connectedSocialByPlatform.get(d.platform);
+          return {
+            platform: d.platform,
+            label: account?.platform_label || d.platform,
+            accountId: account?.social_account_id ?? null,
+            promotionalText: d.promotionalText,
+          };
+        });
+        setResumeSeeds(seeds);
+        setResumeOpen(true);
+      } else {
+        setPromoteModalOpen(true);
+      }
+    } catch {
+      // Detection failed — fall open to the normal generate flow.
+      setPromoteModalOpen(true);
+    }
+  };
+
+  // Resume saved drafts directly into the workspace — no adapt/regeneration.
+  const handleResumeDrafts = () => {
+    if (!liveState) return;
+    const canonicalUrl = resolveCanonicalContentUrl({
+      status: liveState.status,
+      slug: liveState.slug,
+      origin: typeof window !== 'undefined' ? window.location.origin : null,
+    });
+    setWorkspaceSeeds(resumeSeeds);
+    setWorkspaceBlogUrl(canonicalUrl);
+    setResumeOpen(false);
+    setWorkspaceOpen(true);
+  };
+
+  // Start fresh — explicitly clear saved drafts, then run the generate flow.
+  const handleStartFresh = async () => {
+    if (selectedCompanyId) {
+      try {
+        await deletePromotionDraft(selectedCompanyId, 'blog', promotionContentId);
+      } catch {
+        // Non-fatal: proceeding to regenerate either way.
+      }
+    }
+    setResumeOpen(false);
     setPromoteModalOpen(true);
   };
 
@@ -743,7 +801,7 @@ export default function BlogNewPage() {
         key: 'promote-on-social',
         label: 'Promote on social',
         detail: `${promotePlatforms.length} connected platform${promotePlatforms.length === 1 ? '' : 's'}`,
-        onClick: openPromoteModal,
+        onClick: () => { void handlePromoteClick(); },
       }]
     : [];
 
@@ -863,6 +921,33 @@ export default function BlogNewPage() {
                 ]}
               />
 
+              {resumeOpen ? (
+                <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm">
+                  <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                    <div className="border-b border-slate-100 px-5 py-4">
+                      <h2 className="text-base font-semibold text-slate-900">Resume promotion drafts?</h2>
+                      <p className="mt-1 text-xs text-slate-500">
+                        You have {resumeSeeds.length} saved promotion draft{resumeSeeds.length === 1 ? '' : 's'} for this content.
+                        Resume them without regenerating, or start fresh.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-2 px-5 py-4">
+                      <button type="button" onClick={() => setResumeOpen(false)}
+                        className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                        Cancel
+                      </button>
+                      <button type="button" onClick={() => { void handleStartFresh(); }}
+                        className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
+                        Start Fresh
+                      </button>
+                      <button type="button" onClick={handleResumeDrafts}
+                        className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+                        Resume Promotion Drafts
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               <PromotePlatformModal
                 open={promoteModalOpen}
                 platforms={promotePlatforms}
@@ -872,7 +957,7 @@ export default function BlogNewPage() {
               />
               <PromotionWorkspace
                 open={workspaceOpen}
-                contentId={savedId || liveState?.slug || liveState?.title || 'unsaved'}
+                contentId={promotionContentId}
                 contentType="blog"
                 title={liveState?.title || ''}
                 topic={liveState?.title || ''}
