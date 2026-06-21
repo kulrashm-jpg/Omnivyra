@@ -2,6 +2,7 @@ import React from 'react';
 import { AlertCircle, CheckCircle2, Loader2, MessageSquare, Sparkles, X } from 'lucide-react';
 import { executeVariantImprovementAll } from '@/lib/planning/executeMasterContentPipeline';
 import { computeVariantIntelligence } from '@/lib/intelligence/executionIntelligence';
+import { isActivityDetailMode } from '@/lib/shared/activityWorkspaceMode';
 import ContentRenderer from '@/components/ContentRenderer';
 import PlatformIcon from '@/components/ui/PlatformIcon';
 import RichTextEditor from '@/components/RichTextEditor';
@@ -40,8 +41,17 @@ export default function WorkspacePlatformCard({ d, item, idx }: { d: S; item: Sc
   const repurposeLabel = idx === 0 ? 'Repurpose' : `Repurpose ${idx + 1}`;
   const isRepurposing = !!d.repurposingByScheduleId[item.id];
   const isBusy = isRepurposing || d.isGeneratingMaster;
+  // PHASE ACTIVITY-AI-ISOLATION — in ACTIVITY_DETAIL_MODE the per-card AI
+  // suggestions must NOT depend on campaign-level context. strategicMemoryProfile
+  // is campaign-scoped (campaign_id + campaign acceptance rates / platform
+  // confidence) and is only used to RANK suggestions; passing undefined makes
+  // suggestions derive solely from the variant + platform (rankSuggestionsByMemory
+  // returns them unranked when no profile). CAMPAIGN_WORKSPACE keeps the profile.
+  const memoryForIntelligence = isActivityDetailMode((d as any).workspaceMode)
+    ? undefined
+    : d.strategicMemoryProfile;
   const intelligence = matchedVariant
-    ? computeVariantIntelligence(matchedVariant as Record<string, unknown>, item.platform, d.strategicMemoryProfile)
+    ? computeVariantIntelligence(matchedVariant as Record<string, unknown>, item.platform, memoryForIntelligence)
     : null;
 
   return (

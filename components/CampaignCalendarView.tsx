@@ -596,7 +596,7 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                             SCHEDULED (post-upload auto-schedule). Same single calendar. */}
                                         {String((rawItem as any)?.canonical_group) === 'pending' && (rawItem as any)?.execution_id && (
                                           <a
-                                            href={`/activity-workspace?campaignId=${encodeURIComponent(String((rawItem as any)?.campaign_id || campaignId))}&executionId=${encodeURIComponent(String((rawItem as any)?.execution_id))}`}
+                                            href={`/activity-workspace?campaignId=${encodeURIComponent(String((rawItem as any)?.campaign_id || campaignId))}&executionId=${encodeURIComponent(String((rawItem as any)?.execution_id))}&mode=activity`}
                                             className="inline-flex items-center gap-1 border border-amber-200 bg-amber-500 text-white rounded px-3 py-1.5 text-xs font-semibold hover:bg-amber-600"
                                             title="Upload the creator asset to schedule this post"
                                           >

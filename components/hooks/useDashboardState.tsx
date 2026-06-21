@@ -596,7 +596,7 @@ export function useDashboardState() {
       if (evt.campaign_id) router.push(`/campaign-calendar/${encodeURIComponent(evt.campaign_id)}`);
       return;
     }
-    router.push(`/activity-workspace?campaignId=${encodeURIComponent(evt.campaign_id)}&executionId=${encodeURIComponent(evt.execution_id)}`);
+    router.push(`/activity-workspace?campaignId=${encodeURIComponent(evt.campaign_id)}&executionId=${encodeURIComponent(evt.execution_id)}&mode=activity`);
   };
 
   const handleRescheduleFromModal = async (postId: string, newDate: string): Promise<{ success: boolean; error?: string }> => {

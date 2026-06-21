@@ -46,6 +46,7 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
     variantStatusLabel,
     selectedScheduleId,
     confidenceByPlatform,
+    workspaceVisibility,
   } = d;
 
   return (
@@ -75,12 +76,14 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
               <div className="text-gray-500">Desired action (CTA)</div>
               <div className="text-gray-900">{String((creatorCard?.intent as any)?.cta_type || writerBrief?.desiredAction || intent?.cta_type || '-')}</div>
             </div>
-            <div className="md:col-span-2">
-              <div className="text-gray-500">Platforms</div>
-              <div className="text-gray-900">
-                {suggestedPlatforms.length > 0 ? suggestedPlatforms.map((platform) => labelize(platform)).join(', ') : '-'}
+            {workspaceVisibility.platformSuggestions && (
+              <div className="md:col-span-2">
+                <div className="text-gray-500">Platforms</div>
+                <div className="text-gray-900">
+                  {suggestedPlatforms.length > 0 ? suggestedPlatforms.map((platform) => labelize(platform)).join(', ') : '-'}
+                </div>
               </div>
-            </div>
+            )}
           </div>
           {creatorCard?.instructions_for_creator && (
             <div className="border-t border-gray-100 pt-3">
@@ -123,10 +126,12 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
               <div className="text-gray-500">Narrative style</div>
               <div className="text-gray-900">{String(writerBrief?.narrativeStyle || '-')}</div>
             </div>
-            <div className="md:col-span-2">
-              <div className="text-gray-500">Suggested social media platforms</div>
-              <div className="text-gray-900">{suggestedPlatforms.length > 0 ? suggestedPlatforms.map((platform) => labelize(platform)).join(', ') : '-'}</div>
-            </div>
+            {workspaceVisibility.platformSuggestions && (
+              <div className="md:col-span-2">
+                <div className="text-gray-500">Suggested social media platforms</div>
+                <div className="text-gray-900">{suggestedPlatforms.length > 0 ? suggestedPlatforms.map((platform) => labelize(platform)).join(', ') : '-'}</div>
+              </div>
+            )}
           </div>
           {payload.description && (
             <div>

@@ -6,6 +6,7 @@ import { getViewMode } from '@/utils/getViewMode';
 import { VIEW_RULES } from '@/utils/viewVisibilityMatrix';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { apiFetch } from '@/lib/apiFetch';
+import { resolveWorkspaceMode, activityWorkspaceVisibility } from '@/lib/shared/activityWorkspaceMode';
 import { useActivityWorkspaceContentOps } from './useActivityWorkspaceContentOps';
 import { useActivityWorkspaceRefinementOps } from './useActivityWorkspaceRefinementOps';
 import { useActivityWorkspacePersistence } from './useActivityWorkspacePersistence';
@@ -20,6 +21,11 @@ export function useActivityWorkspace() {
   const queryWorkspaceKey = useMemo(() => String((Array.isArray(router.query.workspaceKey) ? router.query.workspaceKey[0] : router.query.workspaceKey) || '').trim(), [router.query.workspaceKey]);
   const queryCampaignId = useMemo(() => String((Array.isArray(router.query.campaignId) ? router.query.campaignId[0] : router.query.campaignId) || '').trim(), [router.query.campaignId]);
   const queryExecutionId = useMemo(() => String((Array.isArray(router.query.executionId) ? router.query.executionId[0] : router.query.executionId) || '').trim(), [router.query.executionId]);
+  // PHASE ACTIVITY-WORKSPACE-ISOLATION — explicit mode from the URL. Entry points
+  // (calendar / engagement / scheduled / failed / pending cards) append
+  // `&mode=activity` to force ACTIVITY_DETAIL_MODE (scoped to one activity).
+  const workspaceMode = useMemo(() => resolveWorkspaceMode(router.query.mode), [router.query.mode]);
+  const workspaceVisibility = useMemo(() => activityWorkspaceVisibility(workspaceMode), [workspaceMode]);
   const workspaceKey = useMemo(() => (queryWorkspaceKey ? queryWorkspaceKey : queryCampaignId && queryExecutionId ? `activity-workspace-${queryCampaignId}-${queryExecutionId}` : ''), [queryWorkspaceKey, queryCampaignId, queryExecutionId]);
 
   const [payload, setPayload] = useState<WorkspacePayload | null>(null);
@@ -341,6 +347,8 @@ export function useActivityWorkspace() {
   const _ef1 = !payload;
 
   return {
+    workspaceMode,
+    workspaceVisibility,
     _didInitialLoad,
     _ef1,
     _ef2,

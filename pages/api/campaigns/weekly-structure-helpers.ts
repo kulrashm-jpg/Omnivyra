@@ -775,6 +775,24 @@ export function buildCreatorCard(
     ['video', 'reel', 'reels', 'carousel', 'infographic', 'story', 'stories', 'short', 'shorts', 'tiktok', 'podcast', 'image'].includes(contentType) ||
     requiresCreatorCreativeGuidance(contentType);
 
+  // PHASE CREATOR-BRIEF-ENRICHMENT-PARITY — creator rows must carry the same
+  // non-empty strategic brief writer rows already get. Backfill ONLY missing
+  // fields, ONLY for creator (requiresMediaBrief) rows, from the SAME existing
+  // enrichment helpers (deriveSynthPainPoint / deriveSynthOutcomePromise) — no
+  // new engine, no AI call. Writer/text rows keep their exact prior values
+  // (eff* === original when !requiresMediaBrief); image/carousel already
+  // populate these so the fallbacks are no-ops for them.
+  const ne = (v: unknown): string => (typeof v === 'string' && v.trim() ? v.trim() : '');
+  const effObjective = requiresMediaBrief
+    ? (objective || (topicStr ? `Build awareness and engagement around ${topicStr}.` : 'Execute weekly objective.'))
+    : objective;
+  const effTargetAudience = requiresMediaBrief
+    ? (target_audience || (theme ? `Audience engaged with ${theme}` : 'Target audience from campaign context'))
+    : target_audience;
+  const effSummary = requiresMediaBrief
+    ? (summary || (topicStr ? `Address "${topicStr}"${theme ? ` within the "${theme}" narrative` : ''} for the target audience.` : ''))
+    : summary;
+
   // Keywords: enrich from topic + objective
   const keywords: string[] = Array.isArray(enrichedItem?.keywords)
     ? (enrichedItem.keywords as unknown[]).filter((k): k is string => typeof k === 'string').slice(0, 10)
@@ -787,7 +805,7 @@ export function buildCreatorCard(
       ? ((week.week_extras as any).hashtag_suggestions as string[]).filter(Boolean).slice(0, 10)
       : deriveHashtags(topicStr, contentType, objective);
 
-  const intentShape: Record<string, unknown> = intent && typeof intent === 'object'
+  const baseIntentShape: Record<string, unknown> = intent && typeof intent === 'object'
     ? {
         objective: intent.objective ?? '',
         target_audience: intent.target_audience ?? '',
@@ -799,6 +817,23 @@ export function buildCreatorCard(
         narrative_style: item?.narrativeStyle ?? intent.writing_angle ?? '',
       }
     : {};
+  // Creator rows: guarantee a fully-populated intent (the renderer's Video
+  // Production Guide reads pain_point / outcome_promise / narrative_style /
+  // brief_summary). Backfill ONLY empty fields from item context + existing
+  // synth helpers. Writer/text rows pass baseIntentShape through untouched.
+  const intentShape: Record<string, unknown> = requiresMediaBrief
+    ? {
+        ...baseIntentShape,
+        objective: ne(baseIntentShape.objective) || effObjective || '',
+        target_audience: ne(baseIntentShape.target_audience) || effTargetAudience || '',
+        brief_summary: ne(baseIntentShape.brief_summary) || effSummary || '',
+        cta_type: ne(baseIntentShape.cta_type) || ne(item?.ctaType) || 'Soft CTA',
+        strategic_role: baseIntentShape.strategic_role ?? '',
+        pain_point: ne(baseIntentShape.pain_point) || ne(item?.whatProblemAreWeAddressing) || deriveSynthPainPoint(topicStr),
+        outcome_promise: ne(baseIntentShape.outcome_promise) || ne(item?.whatShouldReaderLearn) || deriveSynthOutcomePromise(topicStr, contentType),
+        narrative_style: ne(baseIntentShape.narrative_style) || 'clear, practical, outcome-driven',
+      }
+    : baseIntentShape;
 
   const platform_notes: string[] = Array.isArray(enrichedItem?.validation_notes)
     ? [...enrichedItem.validation_notes]
@@ -835,9 +870,9 @@ export function buildCreatorCard(
 
   // ── Creator instructions block (rich) ──────────────────────────────────
   const instructionsParts: string[] = [];
-  if (objective) instructionsParts.push(`Objective: ${objective}`);
-  if (summary) instructionsParts.push(`Brief: ${summary}`);
-  if (target_audience) instructionsParts.push(`Audience: ${target_audience}`);
+  if (effObjective) instructionsParts.push(`Objective: ${effObjective}`);
+  if (effSummary) instructionsParts.push(`Brief: ${effSummary}`);
+  if (effTargetAudience) instructionsParts.push(`Audience: ${effTargetAudience}`);
   if (item?.desiredAction || intent?.cta_type) {
     instructionsParts.push(`CTA: ${String(item?.desiredAction || intent?.cta_type || '').trim() || '—'}`);
   }
@@ -861,9 +896,9 @@ export function buildCreatorCard(
 
   return {
     theme: theme || undefined,
-    objective: objective || undefined,
-    target_audience: target_audience || undefined,
-    summary: summary || undefined,
+    objective: effObjective || undefined,
+    target_audience: effTargetAudience || undefined,
+    summary: effSummary || undefined,
     keywords: keywords.length > 0 ? keywords : undefined,
     hashtags: hashtags.length > 0 ? hashtags : undefined,
     intent: Object.keys(intentShape).length > 0 ? intentShape : undefined,

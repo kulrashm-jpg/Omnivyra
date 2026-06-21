@@ -72,23 +72,42 @@ function isRealUrl(value: unknown): value is string {
 }
 
 /**
- * Resolve the authoritative canonical URL for a piece of content.
- * Priority (spec #2): A. CMS published URL → B. Omnivyra hosted URL →
- * C. explicit canonical_url field. Fails CLOSED (returns '') when none exists —
- * never fabricates or returns a placeholder.
+ * Resolve the authoritative URL for a promotional post (PHASE
+ * BLOG-PROMOTION-URL-AUTHORITY). Single authority order:
+ *
+ *   1. CMS publish-response URL    (`cmsPublishedUrl` — the live destination)
+ *   2. stored published URL        (`storedPublishedUrl` — persisted external_url)
+ *   3. Omnivyra-hosted /blog/<slug>  (ONLY when the content was NOT published
+ *      through a CMS — i.e. it genuinely lives on Omnivyra)
+ *   4. fail CLOSED ('')
+ *
+ * No slug GUESSING for CMS content: when `isCmsPublished === true`, the hosted
+ * and explicit-canonical reconstructions are skipped entirely, so a CMS post
+ * with no real URL fails closed rather than fabricating an Omnivyra path. Never
+ * returns a placeholder or relative path.
  */
 export function resolveCanonicalContentUrl(input: {
-  cmsPublishedUrl?: string | null; // A
-  canonicalUrl?: string | null;    // C (explicit field on the record)
+  cmsPublishedUrl?: string | null;     // 1 — CMS publish-response URL
+  storedPublishedUrl?: string | null;  // 2 — persisted published_url (external_url)
+  canonicalUrl?: string | null;        // explicit canonical field (non-CMS only)
+  /** True when the content was published through an external CMS integration. */
+  isCmsPublished?: boolean | null;
   status?: string | null;
   slug?: string | null;
-  origin?: string | null;          // for the hosted /blog/<slug> fallback (B)
-  hostedPathPrefix?: string;       // defaults to '/blog'
+  origin?: string | null;              // for the hosted /blog/<slug> fallback (3)
+  hostedPathPrefix?: string;           // defaults to '/blog'
 }): string {
-  // A — CMS published URL (highest authority: it's the live, public destination).
+  // 1 — CMS publish-response URL (highest authority: live public destination).
   if (isRealUrl(input.cmsPublishedUrl)) return input.cmsPublishedUrl!.trim();
 
-  // B — Omnivyra hosted URL, only once the content is actually published.
+  // 2 — stored published URL (the persisted CMS response from a prior publish).
+  if (isRealUrl(input.storedPublishedUrl)) return input.storedPublishedUrl!.trim();
+
+  // For CMS-published content we NEVER reconstruct a URL — fail closed below.
+  if (input.isCmsPublished === true) return '';
+
+  // 3 — Omnivyra-hosted URL, only for content actually hosted on Omnivyra and
+  // only once it is published. This is the real destination, not a guess.
   const slug = typeof input.slug === 'string' ? input.slug.trim() : '';
   const published = String(input.status || '').toLowerCase() === 'published';
   if (published && slug && isRealUrl(input.origin)) {
@@ -96,10 +115,10 @@ export function resolveCanonicalContentUrl(input: {
     return `${input.origin!.replace(/\/+$/, '')}${prefix}/${encodeURIComponent(slug)}`;
   }
 
-  // C — explicit canonical_url field, if a real URL was stored on the record.
+  // explicit canonical_url field (non-CMS records only), if a real URL exists.
   if (isRealUrl(input.canonicalUrl)) return input.canonicalUrl!.trim();
 
-  // Fail closed — no canonical URL exists yet.
+  // Fail closed — no authoritative URL exists yet.
   return '';
 }
 

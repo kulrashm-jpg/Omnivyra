@@ -16,6 +16,10 @@ import { buildMasterContentDocument } from '@/lib/planning/masterContentDocument
 // `{ok:false}` for Text / malformed / flag-OFF ⇒ Text behavior is
 // byte-identical (the block below is a no-op in those cases).
 import { loadCreatorWorkspace } from '@/backend/services/creator/intelligence/workspace';
+// PHASE CREATOR-BRIEF-UNIVERSAL-COVERAGE — read-time creator-brief synthesis.
+// Gap-fills empty creator briefs at the single read authority so no creator row
+// renders "-", regardless of creation path. Creator-only; writer rows untouched.
+import { synthesizeCreatorBrief, isCreatorContentType } from '@/lib/shared/creatorBriefSynthesis';
 
 /**
  * GET /api/activity-workspace/resolve?workspaceKey=... OR ?campaignId=...&executionId=...
@@ -323,6 +327,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return a.day.localeCompare(b.day);
       });
 
+    // PHASE CREATOR-BRIEF-UNIVERSAL-COVERAGE — read-time gap-fill for creator
+    // rows ONLY. Writer/text rows skip this entirely → byte-identical payload.
+    const briefContentType = nonEmpty((dailyExecutionItem as any)?.content_type) || nonEmpty((raw as any)?.content_type);
+    const isCreatorRow =
+      isCreatorContentType(briefContentType) ||
+      nonEmpty((raw as any)?.intent_type) === 'creator' ||
+      (creator_asset != null && typeof creator_asset === 'object');
+    let effectiveCreatorCard: unknown = creator_card;
+    let effectiveIntent: unknown = (dailyExecutionItem as any)?.intent;
+    if (isCreatorRow) {
+      const synth = synthesizeCreatorBrief({
+        existingCard: creator_card && typeof creator_card === 'object' ? (creator_card as Record<string, any>) : null,
+        rawItem: raw as Record<string, any>,
+        intent: (dailyExecutionItem as any)?.intent ?? null,
+        topic: title,
+        contentType: briefContentType,
+      });
+      effectiveCreatorCard = synth.creator_card;
+      effectiveIntent = synth.intent;
+    }
+
     const payload = {
       campaignId,
       weekNumber: found.weekNumber,
@@ -335,14 +360,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ),
       dailyExecutionItem: {
         ...dailyExecutionItem,
+        ...(isCreatorRow ? { intent: effectiveIntent } : {}),
         ...(master_content_id != null ? { master_content_id } : {}),
-        ...(creator_card != null && typeof creator_card === 'object' ? { creator_card } : {}),
+        ...(effectiveCreatorCard != null && typeof effectiveCreatorCard === 'object' ? { creator_card: effectiveCreatorCard } : {}),
         ...(creator_asset != null && typeof creator_asset === 'object' ? { creator_asset } : {}),
         ...(content_status != null ? { content_status } : {}),
       },
       schedules,
       ...(master_content_id != null ? { master_content_id } : {}),
-      ...(creator_card != null && typeof creator_card === 'object' ? { creator_card } : {}),
+      ...(effectiveCreatorCard != null && typeof effectiveCreatorCard === 'object' ? { creator_card: effectiveCreatorCard } : {}),
       ...(distribution_strategy != null ? { distribution_strategy } : {}),
       ...(distribution_reason != null ? { distribution_reason } : {}),
       ...(planning_adjustment_reason != null ? { planning_adjustment_reason } : {}),

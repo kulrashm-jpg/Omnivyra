@@ -496,7 +496,7 @@ export default function DashboardPage() {
                 setDayDetailPanelDate(null);
                 setPostPreview(fullEvt);
               } else if (act.execution_id) {
-                router.push(`/activity-workspace?campaignId=${encodeURIComponent(act.campaign_id)}&executionId=${encodeURIComponent(act.execution_id)}`);
+                router.push(`/activity-workspace?campaignId=${encodeURIComponent(act.campaign_id)}&executionId=${encodeURIComponent(act.execution_id)}&mode=activity`);
               }
             }}
           />
@@ -514,7 +514,7 @@ export default function DashboardPage() {
           onOpenWorkspace={(evt) => {
             setPostPreview(null);
             if (evt.execution_id) {
-              router.push(`/activity-workspace?campaignId=${encodeURIComponent(evt.campaign_id)}&executionId=${encodeURIComponent(evt.execution_id)}`);
+              router.push(`/activity-workspace?campaignId=${encodeURIComponent(evt.campaign_id)}&executionId=${encodeURIComponent(evt.execution_id)}&mode=activity`);
             } else {
               router.push(`/campaign-calendar/${encodeURIComponent(evt.campaign_id)}${evt.date ? `?date=${encodeURIComponent(evt.date)}` : ''}`);
             }

@@ -32,6 +32,7 @@ export default function WorkspaceContentPanels({ d }: { d: WorkspaceState }) {
     setSchedules,
     setShowAddVariantForm,
     showAddVariantForm,
+    workspaceVisibility,
   } = d as WorkspaceState & {
     getAddablePlatformsForContentType: (contentType: string) => string[];
   };
@@ -42,6 +43,9 @@ export default function WorkspaceContentPanels({ d }: { d: WorkspaceState }) {
 
   return (
     <div className="space-y-4">
+      {/* Master Content is the CAMPAIGN-scoped repurposing source — hidden in
+          ACTIVITY_DETAIL_MODE (the user is fixing one activity). */}
+      {workspaceVisibility.masterContent ? (
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
         <button
           type="button"
@@ -86,6 +90,7 @@ export default function WorkspaceContentPanels({ d }: { d: WorkspaceState }) {
           </div>
         ) : null}
       </section>
+      ) : null}
 
       <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -95,25 +100,33 @@ export default function WorkspaceContentPanels({ d }: { d: WorkspaceState }) {
               Create, review, and schedule the platform-specific versions of this activity.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => handleRepurposeAll()}
-              disabled={isGeneratingMaster || isRepurposingAny || !hasMasterGenerated}
-              className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Sparkles className="h-4 w-4" />
-              {isGeneratingMaster ? 'Creating master...' : isRepurposingAny ? 'Repurposing...' : 'Repurpose all'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowAddVariantForm(!showAddVariantForm)}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
-            >
-              <Plus className="h-4 w-4" />
-              Add platform
-            </button>
-          </div>
+          {/* Cross-platform controls (Repurpose all / Add platform) are
+              hidden when this view is scoped to a SINGLE engagement (one
+              platform card) — opening one post from the calendar shouldn't
+              surface the full multi-platform repurposing surface. The
+              per-platform card keeps its own Repurpose. Shown for genuinely
+              multi-platform activities and for empty/new ones. */}
+          {workspaceVisibility.repurposeAll && schedules.length !== 1 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleRepurposeAll()}
+                disabled={isGeneratingMaster || isRepurposingAny || !hasMasterGenerated}
+                className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Sparkles className="h-4 w-4" />
+                {isGeneratingMaster ? 'Creating master...' : isRepurposingAny ? 'Repurposing...' : 'Repurpose all'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAddVariantForm(!showAddVariantForm)}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                <Plus className="h-4 w-4" />
+                Add platform
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {showAddVariantForm ? (

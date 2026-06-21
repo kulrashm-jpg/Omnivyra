@@ -1512,6 +1512,11 @@ export default function CreatorTypeWorkflowPage() {
   // stacks below the form and is easy to miss.
   const resultPanelRef = React.useRef<HTMLDivElement | null>(null);
   const hadResultRef = React.useRef(false);
+  // Required "main topic" field — when generation is gated on an empty topic we
+  // scroll to + focus + highlight this field (it sits at the top of a long form,
+  // so a bottom-of-page error alone leaves the operator hunting for it).
+  const topicFieldRef = React.useRef<HTMLDivElement | null>(null);
+  const [topicMissing, setTopicMissing] = React.useState(false);
   // Render-job progress tracker. Carousel / infographic / pdf / slider
   // render in a durable background job; the polling effect updates this
   // state every 2s so the banner can show a real progress bar instead
@@ -1911,6 +1916,18 @@ export default function CreatorTypeWorkflowPage() {
 
   const setAnswer = (id: string, value: string) => {
     setAnswers((current) => ({ ...current, [id]: value }));
+    if (id === 'topic' && value.trim()) setTopicMissing(false);
+  };
+
+  // Surface the empty required topic field: highlight it, scroll it into view,
+  // and focus its input so the operator immediately sees what's missing.
+  const flagMissingTopic = () => {
+    setTopicMissing(true);
+    const node = topicFieldRef.current;
+    if (!node) return;
+    try { node.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch { node.scrollIntoView(); }
+    const input = node.querySelector('input, textarea') as HTMLElement | null;
+    if (input) window.setTimeout(() => { try { input.focus(); } catch { /* noop */ } }, 300);
   };
 
   const selectedAsset = savedAssets.find((asset) => asset.id === selectedAssetId) || null;
@@ -2738,6 +2755,7 @@ export default function CreatorTypeWorkflowPage() {
     if (generationInFlightRef.current || isGenerating) return;
     if (!String(answers.topic || '').trim()) {
       setError('Please answer the main topic question first.');
+      flagMissingTopic();
       return;
     }
 
@@ -2793,6 +2811,7 @@ export default function CreatorTypeWorkflowPage() {
         generationInFlightRef.current = false;
         setIsGenerating(false);
         setError('Please answer the main topic question first.');
+        flagMissingTopic();
         return;
       }
       const response = await fetch('/api/command-center/creator-content/generate', {
@@ -4016,9 +4035,13 @@ export default function CreatorTypeWorkflowPage() {
                   : field.id === 'refinement' ? (freeformFieldSuggestions as Record<string, string[]>).refinement ?? []
                   : field.id === 'objective' ? (freeformFieldSuggestions as Record<string, string[]>).objective ?? []
                   : [];
+                const isTopicField = field.id === 'topic';
+                const topicInvalid = isTopicField && topicMissing && !String(answers.topic || '').trim();
                 return (
-                <div key={field.id} className="block">
-                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">{field.label}</span>
+                <div key={field.id} ref={isTopicField ? topicFieldRef : undefined} className="block scroll-mt-24">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">
+                    {field.label}{isTopicField ? <span className="text-rose-500"> *</span> : null}
+                  </span>
                   {field.kind === 'single-select' ? (
                     <div className="grid gap-3 md:grid-cols-3">
                       {field.options.map((option) => {
@@ -4077,8 +4100,16 @@ export default function CreatorTypeWorkflowPage() {
                         value={answers[field.id] || ''}
                         onChange={(event) => setAnswer(field.id, event.target.value)}
                         placeholder={field.placeholder}
-                        className="w-full rounded-2xl border border-gray-200 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+                        aria-invalid={topicInvalid || undefined}
+                        className={`w-full rounded-2xl border px-4 py-3 text-sm text-gray-900 outline-none transition ${
+                          topicInvalid
+                            ? 'border-rose-400 ring-2 ring-rose-200 focus:border-rose-400 focus:ring-rose-200'
+                            : 'border-gray-200 focus:border-slate-400 focus:ring-2 focus:ring-slate-200'
+                        }`}
                       />
+                      {topicInvalid ? (
+                        <p className="text-xs font-medium text-rose-600">This is required to generate — tell us what the {type} is about.</p>
+                      ) : null}
                     </div>
                   )}
                   {freeformChips.length > 0 ? (

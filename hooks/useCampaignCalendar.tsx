@@ -2,6 +2,10 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCampaignResume } from './useCampaignResume';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+// Pure (no server deps) execution-mode classifier — video/reel/short →
+// CREATOR_REQUIRED, etc. Used to label rows whose source omits execution_mode
+// so attachment-required content (video) is never shown as "AI Ready".
+import { inferExecutionMode } from '../backend/services/executionModeInference';
 
 /** Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc. */
 function RepurposeDots({ index, total, contentType }: { index: number; total: number; contentType?: string }) {
@@ -277,6 +281,9 @@ export function useCampaignCalendar() {
                     platform: String(ev.platform || 'linkedin'),
                     content_type: String(ev.asset_type || ev.content_type || 'post'),
                     execution_status,
+                    execution_mode: (typeof ev.execution_mode === 'string' && ev.execution_mode)
+                      ? ev.execution_mode
+                      : inferExecutionMode(String(ev.asset_type || ev.content_type || 'post')),
                     execution_jobs: [],
                     // raw_item carries canonical_label/group (badge), pending,
                     // daily_plan_id (upload deep-link) + content/cta.
@@ -342,7 +349,12 @@ export function useCampaignCalendar() {
               : [];
 
             const execution_status = activityExecutionStatus(execution_jobs, legacyReady, legacyMissingMedia);
-            const execution_mode = typeof (item as any)?.execution_mode === 'string' ? (item as any).execution_mode : undefined;
+            // Derive execution_mode from content_type when the source omits it,
+            // so attachment-required formats (video/reel/short) show as Creator
+            // (needs media/URL) rather than defaulting to "AI Ready".
+            const execution_mode = (typeof (item as any)?.execution_mode === 'string' && (item as any).execution_mode)
+              ? (item as any).execution_mode
+              : inferExecutionMode(content_type);
             mapped.push({
               execution_id,
               week_number: weekNumber,
@@ -355,7 +367,7 @@ export function useCampaignCalendar() {
               execution_status,
               execution_jobs,
               raw_item: item,
-              ...(execution_mode ? { execution_mode } : {}),
+              execution_mode,
             });
           });
         }
@@ -411,6 +423,7 @@ export function useCampaignCalendar() {
                 execution_status,
                 execution_jobs: [],
                 raw_item: raw,
+                execution_mode: inferExecutionMode(contentType),
                 // repurpose_index / repurpose_total assigned in the post-processing pass below
               };
             });
@@ -690,7 +703,7 @@ export function useCampaignCalendar() {
     try {
       if (typeof window !== 'undefined') {
         window.sessionStorage.setItem(workspaceKey, JSON.stringify(payload));
-        window.open(`/activity-workspace?workspaceKey=${encodeURIComponent(workspaceKey)}`, '_blank');
+        window.open(`/activity-workspace?workspaceKey=${encodeURIComponent(workspaceKey)}&mode=activity`, '_blank');
       }
     } catch (err) {
       console.error('Failed to open activity detail from calendar:', err);

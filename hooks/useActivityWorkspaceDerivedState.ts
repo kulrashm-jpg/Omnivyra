@@ -96,7 +96,14 @@ export function useActivityWorkspaceDerivedState({
     }
     (payload?.schedules || schedules || []).forEach((schedule: ScheduleItem) => add(schedule.platform));
     const list = Array.from(seen);
-    return list.length > 0 ? list : allPlatformOptions;
+    if (list.length > 0) return list;
+    // A specific opened activity has its OWN platform(s) — never suggest ALL
+    // platforms (that's noise for a single engagement, e.g. a Facebook Poll
+    // showing 8 "suggested" platforms). The full platform set is only meaningful
+    // for the multi-platform daily-topic planning view; for a single activity we
+    // leave it empty so the brief reflects the activity's real platform once its
+    // schedule / variants resolve, rather than over-sharing.
+    return isDailyTopicView ? allPlatformOptions : [];
   })();
   const platformOptions = suggestedPlatforms;
   const contentTypeOptionsByPlatform = CONTENT_TYPE_OPTIONS_BY_PLATFORM;

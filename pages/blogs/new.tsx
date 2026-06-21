@@ -247,6 +247,10 @@ export default function BlogNewPage() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [workspaceSeeds, setWorkspaceSeeds] = useState<WorkspacePlatformSeed[]>([]);
   const [workspaceBlogUrl, setWorkspaceBlogUrl] = useState('');
+  // PHASE BLOG-PROMOTION-URL-AUTHORITY — the live CMS publish-response URL
+  // captured from THIS session's publish (highest authority). The persisted
+  // blog record is the authoritative fallback (resolved at promote time).
+  const [cmsPublishedUrl, setCmsPublishedUrl] = useState<string | null>(null);
   // PHASE BLOG-PROMOTION (resume path) — if saved drafts already exist, resume
   // them instead of regenerating.
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -620,6 +624,13 @@ export default function BlogNewPage() {
       if (!res.ok || data?.success === false) {
         throw new Error(data?.message || data?.error || 'Publish failed');
       }
+      // Capture the CMS publish-response URL (top URL authority). For immediate
+      // publishes the record already carries external_url; queued/scheduled jobs
+      // populate it later, so the promote path re-reads the record authoritatively.
+      const responseUrl =
+        (data?.blog && typeof data.blog.external_url === 'string' ? data.blog.external_url : null) ??
+        (typeof data?.external_url === 'string' ? data.external_url : null);
+      if (responseUrl) setCmsPublishedUrl(responseUrl);
       const successMessage = data?.message
         ? String(data.message)
         : `Publishing job queued for ${integration.name}.`;
@@ -673,14 +684,44 @@ export default function BlogNewPage() {
     }
   };
 
+  // PHASE BLOG-PROMOTION-URL-AUTHORITY — the SINGLE URL-resolution authority for
+  // the promotion path. The persisted blog record is authoritative: its
+  // `external_url` is the CMS publish response, and `integration_id` tells us
+  // whether the content was published through a CMS (so we never reconstruct a
+  // slug URL for CMS content). Fails closed when no real URL exists.
+  const resolvePromotionBlogUrl = async (): Promise<string> => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : null;
+    if (savedId && selectedCompanyId) {
+      try {
+        const resp = await fetch(
+          `/api/blogs/${encodeURIComponent(savedId)}?company_id=${encodeURIComponent(selectedCompanyId)}`,
+          { credentials: 'include' },
+        );
+        if (resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          const blog = (data?.blog ?? {}) as Record<string, any>;
+          return resolveCanonicalContentUrl({
+            cmsPublishedUrl: cmsPublishedUrl ?? (typeof blog.external_url === 'string' ? blog.external_url : null),
+            storedPublishedUrl: typeof blog.external_url === 'string' ? blog.external_url : null,
+            isCmsPublished: Boolean(blog.integration_id),
+            status: typeof blog.status === 'string' ? blog.status : liveState?.status ?? null,
+            slug: typeof blog.slug === 'string' ? blog.slug : liveState?.slug ?? null,
+            origin,
+          });
+        }
+      } catch {
+        /* fall through to the conservative in-session resolution below */
+      }
+    }
+    // Record unavailable → use only this session's captured CMS URL; never guess
+    // a slug URL (isCmsPublished:true suppresses reconstruction → fail closed).
+    return resolveCanonicalContentUrl({ cmsPublishedUrl, isCmsPublished: true });
+  };
+
   // Resume saved drafts directly into the workspace — no adapt/regeneration.
-  const handleResumeDrafts = () => {
+  const handleResumeDrafts = async () => {
     if (!liveState) return;
-    const canonicalUrl = resolveCanonicalContentUrl({
-      status: liveState.status,
-      slug: liveState.slug,
-      origin: typeof window !== 'undefined' ? window.location.origin : null,
-    });
+    const canonicalUrl = await resolvePromotionBlogUrl();
     setWorkspaceSeeds(resumeSeeds);
     setWorkspaceBlogUrl(canonicalUrl);
     setResumeOpen(false);
@@ -705,11 +746,7 @@ export default function BlogNewPage() {
     setPromoteGenerating(true);
     const source = liveState.content_markdown || buildTextDownload(liveState);
     const topic = liveState.title;
-    const canonicalUrl = resolveCanonicalContentUrl({
-      status: liveState.status,
-      slug: liveState.slug,
-      origin: typeof window !== 'undefined' ? window.location.origin : null,
-    });
+    const canonicalUrl = await resolvePromotionBlogUrl();
     try {
       const seeds: WorkspacePlatformSeed[] = await Promise.all(
         selectedKeys.map(async (key): Promise<WorkspacePlatformSeed> => {
