@@ -3,7 +3,7 @@
  * inside the super-admin shell.
  *
  * Operator flow:
- *   1. Open the Security tab. The component fetches `/api/auth/passkeys/list`.
+ *   1. Open the Security tab. The component fetches `/api/auth/passkeys`.
  *      - Bridge principals get a 403 BRIDGE_FACTOR_INSUFFICIENT and a
  *        banner instructing them to log in via Supabase first (Phase-2
  *        bootstrap canonical session is the path).

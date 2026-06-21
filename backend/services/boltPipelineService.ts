@@ -19,6 +19,7 @@ import { retryWithBackoff } from '../utils/retryWithBackoff';
 import { getUserFriendlyMessage } from '../utils/userFriendlyErrors';
 import { getConnectedPlatformsForCompany, CONTENT_PLATFORM_AFFINITY } from '../utils/platformEligibility';
 import { sanitizeBoltPlanForTextOnly } from '../utils/boltTextContentConfig';
+import { sanitizeBoltPlanForCombined } from '../../lib/shared/bolt/sanitizeBoltPlanForCombined';
 import { filterConnectedPlatformsForContent } from '../../lib/shared/social/platformContentFilter';
 import { aggregateBoltAiMetrics } from './boltMetricsAggregator';
 import { getBlueprintCacheMetrics } from './contentBlueprintCache';
@@ -1692,11 +1693,21 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
           // → BLUEPRINT_INVALID_CONTENT_TYPE → BLUEPRINT_SAVE_FAILED
           // friendly message). Pre-sanitise here, then hand the original
           // plan to runCommitPlan (which sanitises again — idempotent).
+          // Combined: sanitize unsupported content types (e.g. blog → article)
+          // while PRESERVING creator formats — the AI planner occasionally emits
+          // a BOLT-excluded type that the validator would otherwise reject. Text:
+          // the existing text-only sanitiser. Validate AND commit the SAME
+          // sanitized plan so downstream never sees an excluded type.
           const planForValidation = preserveCreatorBlueprint
-            ? plan
+            ? { weeks: sanitizeBoltPlanForCombined(plan.weeks) }
             : { weeks: sanitizeBoltPlanForTextOnly(plan.weeks) };
           assertValidBoltBlueprint(planForValidation);
-          await runCommitPlan(campaignId, plan, payload.executionConfig as Record<string, unknown>, preserveCreatorBlueprint);
+          await runCommitPlan(
+            campaignId,
+            preserveCreatorBlueprint ? planForValidation : plan,
+            payload.executionConfig as Record<string, unknown>,
+            preserveCreatorBlueprint,
+          );
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
             duration_ms: Date.now() - stageStart,

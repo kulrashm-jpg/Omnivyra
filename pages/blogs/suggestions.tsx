@@ -170,12 +170,14 @@ export default function BlogSuggestionsPage() {
       const data = await resp.json();
       setSuggestions(data);
 
-      // Auto-prime with first suggestion per field
+      // Pre-select ALL suggestions per field by default — the user can
+      // deselect any chip they don't want. (Previously only the first
+      // option per field was primed.)
       setSelected({
-        uniqueness: data.uniqueness_directive_options?.[0] ? [data.uniqueness_directive_options[0]] : [],
-        mustInclude: data.must_include_points_options?.[0] ? [data.must_include_points_options[0]] : [],
-        objective: data.campaign_objective_options?.[0] ? [data.campaign_objective_options[0]] : [],
-        trend: data.trend_context_options?.[0] ? [data.trend_context_options[0]] : [],
+        uniqueness: Array.isArray(data.uniqueness_directive_options) ? [...data.uniqueness_directive_options] : [],
+        mustInclude: Array.isArray(data.must_include_points_options) ? [...data.must_include_points_options] : [],
+        objective: Array.isArray(data.campaign_objective_options) ? [...data.campaign_objective_options] : [],
+        trend: Array.isArray(data.trend_context_options) ? [...data.trend_context_options] : [],
       });
     } catch (err: any) {
       setError(err.message);
@@ -214,8 +216,17 @@ export default function BlogSuggestionsPage() {
         }),
       });
 
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'Generation failed');
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        // The blog quality gate returns 422 with a descriptive message; the
+        // long-form engine can also 500/timeout. Surface that verbatim so the
+        // user (and support) sees WHY generation stopped instead of silently
+        // landing back on this page with the modal gone.
+        throw new Error(data?.error || `Generation failed (status ${resp.status}). Please try again.`);
+      }
+      if (!data?.result) {
+        throw new Error('Generation returned no draft. Please try again.');
+      }
 
       // Store result and navigate to editor
       const token = `blog_prefill_${Date.now()}`;
@@ -228,7 +239,10 @@ export default function BlogSuggestionsPage() {
       }));
       router.push({ pathname: '/blogs/new', query: { prefill: token } });
     } catch (err: any) {
-      setError(err.message);
+      setError(err instanceof Error ? err.message : 'Generation failed. Please try again.');
+      // Bring the error banner into view — generation failures otherwise look
+      // like an unexplained "bounce back" because the progress modal closes.
+      if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
     } finally {
       setGenerating(false);
     }

@@ -284,13 +284,38 @@ export default function BoltCombinedStrategyPage() {
   const formatCapable = useMemo(() => {
     const map: Record<string, boolean> = {};
     const connected = platformPicker.supported;
+    // Align to the SELECTED platforms — so deselecting X disables the X-exclusive
+    // Tweet (tweet → X-only). Fall back to all connected platforms only when the
+    // user hasn't narrowed the selection yet, so we don't over-disable on load.
+    const effective = selectedPlatforms.length > 0 ? selectedPlatforms : connected;
     const gating = !platformPicker.loading && connected.length > 0;
     for (const f of [...TEXT_FORMATS, ...CREATOR_FORMATS]) {
-      map[f.value] = gating ? getSupportedPlatformsForFormat(f.value, connected).length > 0 : true;
+      map[f.value] = gating ? getSupportedPlatformsForFormat(f.value, effective).length > 0 : true;
     }
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [platformPicker.loading, platformPicker.supported]);
+  }, [platformPicker.loading, platformPicker.supported, selectedPlatforms]);
+
+  // Keep format selections aligned to the SELECTED platforms: when a platform is
+  // deselected, drop any selected format no longer supported by the remaining
+  // selection (e.g. deselect X → Tweet, which is X-exclusive, is removed). Pure
+  // removal — never re-adds a format — so it converges with the format→platform
+  // auto-select effect above. Skipped when nothing is selected (handled by the
+  // connected-fallback in formatCapable).
+  useEffect(() => {
+    if (platformPicker.loading || selectedPlatforms.length === 0) return;
+    const supported = (fmt: AnyFormat) =>
+      getSupportedPlatformsForFormat(fmt, selectedPlatforms).length > 0;
+    setTextFormats((prev) => {
+      const next = prev.filter(supported);
+      return next.length === prev.length ? prev : next;
+    });
+    setCreatorFormats((prev) => {
+      const next = prev.filter(supported);
+      return next.length === prev.length ? prev : next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPlatforms, platformPicker.loading]);
 
   // Phase 6G-2 — read-only assignment explainability (Intelligent Mix only).
   const [showDecisions, setShowDecisions] = useState(false);

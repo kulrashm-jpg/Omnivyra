@@ -10,12 +10,24 @@
  * company export endpoint.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, CheckCircle2, Coins, Download, FileText, Lock, RefreshCw, TrendingDown,
+  AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Coins, Download, FileText, Lock,
+  RefreshCw, ShoppingCart, Sparkles, TrendingDown,
 } from 'lucide-react';
 import { useCompanyContext } from '../../../components/CompanyContext';
 import { fetchWithAuth } from '../../../components/community-ai/fetchWithAuth';
+import CreditAdvisorDashboard from '../../../components/credit-advisor/CreditAdvisorDashboard';
+import OptimizationPanel from '../../../components/credit-advisor/OptimizationPanel';
+import TopUpPanel from '../../../components/billing/TopUpPanel';
+
+type BillingView = 'advisor' | 'billing' | 'buy';
+
+const VIEW_OPTIONS: { key: BillingView; label: string; icon: React.ReactNode; blurb: string }[] = [
+  { key: 'advisor', label: 'Credit Advisor', icon: <Sparkles className="h-4 w-4" />, blurb: 'Consumption intelligence, runway forecast, and savings — read-only.' },
+  { key: 'billing', label: 'Billing & Subscription', icon: <FileText className="h-4 w-4" />, blurb: 'Wallet, forecast, plan, ledger, and recent events.' },
+  { key: 'buy', label: 'Buy Credits', icon: <ShoppingCart className="h-4 w-4" />, blurb: 'Add top-up credits for heavier periods.' },
+];
 
 interface SummaryPayload {
   organizationId: string;
@@ -72,6 +84,16 @@ function Card({ title, icon, children, right }: { title: string; icon?: React.Re
     </div>
   );
 }
+function CollapseToggle({ expanded, onToggle, total }: { expanded: boolean; onToggle: () => void; total: number }) {
+  return (
+    <button type="button" onClick={onToggle}
+      className="text-sm text-slate-600 flex items-center gap-1 hover:text-slate-900">
+      {expanded
+        ? <><ChevronUp className="h-4 w-4" />Minimize</>
+        : <><ChevronDown className="h-4 w-4" />Show all ({total})</>}
+    </button>
+  );
+}
 function Metric({ label, value, hint }: { label: string; value: React.ReactNode; hint?: React.ReactNode }) {
   return (
     <div>
@@ -89,6 +111,15 @@ export default function CompanyBillingPortal() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+
+  // Tab switcher (dropdown): Credit Advisor / Billing & Subscription / Buy Credits.
+  const [view, setView] = useState<BillingView>('billing');
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Collapsible list sections — default collapsed to 2 rows; expand to see all.
+  const [expandModules, setExpandModules] = useState(false);
+  const [expandLedger, setExpandLedger] = useState(false);
+  const [expandEvents, setExpandEvents] = useState(false);
+  const currentView = VIEW_OPTIONS.find(o => o.key === view) ?? VIEW_OPTIONS[1];
 
   // Standard users have no billing access. The server also enforces this,
   // but we avoid even rendering the data fetch for them.
@@ -160,15 +191,75 @@ export default function CompanyBillingPortal() {
     <div className="max-w-6xl mx-auto p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Billing &amp; Usage</h1>
+          <h1 className="text-2xl font-bold text-slate-900">{currentView.label}</h1>
           <p className="text-sm text-slate-500">{selectedCompanyName || selectedCompanyId}</p>
         </div>
-        <button type="button" onClick={() => setTick(t => t + 1)}
-          className="text-sm text-slate-600 flex items-center gap-1 hover:text-slate-900">
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          {/* Tab dropdown */}
+          <div className="relative">
+            <button type="button" onClick={() => setMenuOpen(o => !o)}
+              className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50">
+              <span className="text-slate-500">{currentView.icon}</span>
+              {currentView.label}
+              <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {menuOpen && (
+              <>
+                <button type="button" aria-hidden onClick={() => setMenuOpen(false)}
+                  className="fixed inset-0 z-10 cursor-default" tabIndex={-1} />
+                <div className="absolute right-0 z-20 mt-2 w-72 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                  {VIEW_OPTIONS.map(o => (
+                    <button key={o.key} type="button"
+                      onClick={() => { setView(o.key); setMenuOpen(false); }}
+                      className={`flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-slate-50 ${view === o.key ? 'bg-slate-50' : ''}`}>
+                      <span className="mt-0.5 text-slate-500">{o.icon}</span>
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
+                          {o.label}
+                          {view === o.key && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />}
+                        </span>
+                        <span className="block text-xs text-slate-500">{o.blurb}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          {view === 'billing' && (
+            <button type="button" onClick={() => setTick(t => t + 1)}
+              className="text-sm text-slate-600 flex items-center gap-1 hover:text-slate-900">
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh
+            </button>
+          )}
+        </div>
       </div>
 
+      {view === 'advisor' && (
+        <div className="space-y-6">
+          <CreditAdvisorDashboard orgId={selectedCompanyId} />
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">Consumption Optimization</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Where credits go, why, and how to extend your runway — deterministic, read-only.
+            </p>
+            <div className="mt-4">
+              <OptimizationPanel orgId={selectedCompanyId} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {view === 'buy' && (
+        <div className="max-w-3xl">
+          <p className="mb-4 text-sm text-slate-500">
+            Add credits for heavier periods. Top-up credits are consumed after monthly plan credits and never expire.
+          </p>
+          <TopUpPanel orgId={selectedCompanyId} />
+        </div>
+      )}
+
+      {view === 'billing' && (<>
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-md p-3 mb-6 flex items-center gap-2">
           <AlertTriangle className="h-4 w-4" />{error}
@@ -217,14 +308,20 @@ export default function CompanyBillingPortal() {
         </Card>
       </div>
 
-      <Card title="Top Consuming Modules" icon={<Coins className="h-5 w-5 text-slate-500" />}>
+      <Card
+        title="Top Consuming Modules"
+        icon={<Coins className="h-5 w-5 text-slate-500" />}
+        right={(summary?.topModules?.length ?? 0) > 2
+          ? <CollapseToggle expanded={expandModules} onToggle={() => setExpandModules(e => !e)} total={summary?.topModules?.length ?? 0} />
+          : undefined}
+      >
         {summary?.topModules?.length ? (
           <table className="min-w-full text-sm">
             <thead className="text-left text-slate-500 text-xs uppercase tracking-wide">
               <tr><th className="py-2 pr-3">Module</th><th className="py-2 pr-3">Credits (period)</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {summary.topModules.map(m => (
+              {(expandModules ? summary.topModules : summary.topModules.slice(0, 2)).map(m => (
                 <tr key={m.module}>
                   <td className="py-2 pr-3"><code className="text-xs text-slate-700">{m.module}</code></td>
                   <td className="py-2 pr-3 font-mono text-slate-900">{fmt(m.credits)}</td>
@@ -239,10 +336,15 @@ export default function CompanyBillingPortal() {
         title="Ledger"
         icon={<FileText className="h-5 w-5 text-slate-600" />}
         right={
-          <button type="button" onClick={exportUsage}
-            className="text-sm px-3 py-1 border border-slate-300 rounded hover:bg-slate-50 flex items-center gap-1">
-            <Download className="h-4 w-4" />Export usage CSV
-          </button>
+          <div className="flex items-center gap-3">
+            {ledger.length > 2 && (
+              <CollapseToggle expanded={expandLedger} onToggle={() => setExpandLedger(e => !e)} total={ledger.length} />
+            )}
+            <button type="button" onClick={exportUsage}
+              className="text-sm px-3 py-1 border border-slate-300 rounded hover:bg-slate-50 flex items-center gap-1">
+              <Download className="h-4 w-4" />Export usage CSV
+            </button>
+          </div>
         }
       >
         <div className="overflow-x-auto">
@@ -259,7 +361,7 @@ export default function CompanyBillingPortal() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {ledger.map(r => (
+              {(expandLedger ? ledger : ledger.slice(0, 2)).map(r => (
                 <tr key={r.id}>
                   <td className="py-2 pr-3 text-slate-500 whitespace-nowrap">{dt(r.created_at)}</td>
                   <td className="py-2 pr-3">
@@ -286,9 +388,15 @@ export default function CompanyBillingPortal() {
         </div>
       </Card>
 
-      <Card title="Recent Billing Events" icon={<CheckCircle2 className="h-5 w-5 text-slate-500" />}>
+      <Card
+        title="Recent Billing Events"
+        icon={<CheckCircle2 className="h-5 w-5 text-slate-500" />}
+        right={(summary?.recentEvents?.length ?? 0) > 2
+          ? <CollapseToggle expanded={expandEvents} onToggle={() => setExpandEvents(e => !e)} total={Math.min(summary?.recentEvents?.length ?? 0, 12)} />
+          : undefined}
+      >
         <ol className="space-y-2">
-          {(summary?.recentEvents ?? []).slice(0, 12).map(e => (
+          {(summary?.recentEvents ?? []).slice(0, expandEvents ? 12 : 2).map(e => (
             <li key={e.id} className="flex gap-3 text-sm">
               <span className="w-40 shrink-0 text-slate-500 text-xs">{dt(e.created_at)}</span>
               <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${phasePill(e.execution_phase)}`}>{e.execution_phase}</span>
@@ -298,6 +406,7 @@ export default function CompanyBillingPortal() {
           {(summary?.recentEvents ?? []).length === 0 && <li className="text-sm text-slate-500">No recent events.</li>}
         </ol>
       </Card>
+      </>)}
     </div>
   );
 }

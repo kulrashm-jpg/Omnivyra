@@ -10,7 +10,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/apiFetch';
-import { getPlan, TOPUPS, formatPrice } from '@/lib/billing/commercialPlans';
+import { getPlan, TOPUPS, formatPrice, CURRENCIES } from '@/lib/billing/commercialPlans';
+import { currencySymbol, type Currency } from '@/lib/billing/currency';
 
 interface Bucket { key: 'plan' | 'bonus' | 'topup'; label: string; available: number; neverExpires: boolean; note: string }
 interface Allocation {
@@ -35,6 +36,7 @@ const money = (a: number | null, c: string | null) => (a == null ? '—' : `${c 
 export default function BillingCenter({ orgId }: { orgId: string | null | undefined }) {
   const [data, setData] = useState<Center | null>(null);
   const [loading, setLoading] = useState(true);
+  const [currency, setCurrency] = useState<Currency>('USD');
 
   const load = useCallback(async () => {
     if (!orgId) { setLoading(false); return; }
@@ -124,15 +126,37 @@ export default function BillingCenter({ orgId }: { orgId: string | null | undefi
 
       {/* 5 — Buy More Credits (hand-off to the top-up checkout) */}
       <section className={CARD} aria-label="Buy more credits">
-        <h2 className="text-lg font-black text-[#071D3A]">Buy more credits</h2>
-        <p className="mt-1 text-sm text-[#5D6F83]">Top-up credits are added to your balance and never expire.</p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-[#071D3A]">Buy more credits</h2>
+            <p className="mt-1 text-sm text-[#5D6F83]">Top-up credits are added to your balance and never expire.</p>
+          </div>
+          {/* Currency selector — pay in USD / EUR / INR */}
+          <div className="inline-flex items-center gap-2">
+            <span className="text-xs font-semibold text-[#5D6F83]">Pay in</span>
+            <div className="inline-flex rounded-lg border border-[#D8E3F0] p-0.5">
+              {CURRENCIES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCurrency(c)}
+                  className={`rounded-md px-3 py-1 text-xs font-black transition ${
+                    currency === c ? 'bg-[#0A66C2] text-white' : 'text-[#5D6F83] hover:bg-[#EEF5FF]'
+                  }`}
+                >
+                  {currencySymbol(c)} {c}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           {TOPUPS.map((t) => (
             <div key={t.id} className="flex flex-col rounded-2xl border border-[#D8E3F0] bg-[#F7FBFF] px-5 py-5 text-center">
               <p className="text-2xl font-black text-[#0A66C2]">{t.credits.toLocaleString()}</p>
               <p className="text-xs font-semibold text-[#5D6F83]">{t.label}</p>
-              <p className="mt-1 text-base font-black text-[#071D3A]">{formatPrice(t.priceUsd, 'USD')}</p>
-              <Link href={`/command-center/topup?pack=${t.id}`} className="mt-3 inline-flex min-h-[40px] items-center justify-center rounded-lg bg-[#0A66C2] px-4 py-2 text-sm font-black text-white transition hover:bg-[#0857A8]">
+              <p className="mt-1 text-base font-black text-[#071D3A]">{formatPrice(t.priceUsd, currency)}</p>
+              <Link href={`/command-center/topup?pack=${t.id}&currency=${currency}`} className="mt-3 inline-flex min-h-[40px] items-center justify-center rounded-lg bg-[#0A66C2] px-4 py-2 text-sm font-black text-white transition hover:bg-[#0857A8]">
                 Buy
               </Link>
             </div>

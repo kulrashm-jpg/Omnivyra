@@ -112,7 +112,7 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       {
         label: 'Writer Content',
         href: '/command-center/writer-content',
-        description: '9 text-first content types',
+        description: '5 text-first content types',
         contentSectionId: 'writer',
       },
       {

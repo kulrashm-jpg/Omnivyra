@@ -19,20 +19,16 @@ export const CONTENT_NAV_SECTIONS: ContentNavSection[] = [
   {
     id: 'writer',
     label: 'Writer Content',
-    description: '9 text-first content types',
+    description: '5 text-first content types',
     summary: 'Draft, adapt, and publish text-led assets across owned and social channels.',
     badge: 'Text-first',
     href: '/command-center/writer-content',
     items: [
       { id: 'post', label: 'Post', route: '/posts/create', description: 'Short-form social copy' },
       { id: 'blog', label: 'Blog', route: '/blogs/create', description: 'Long-form authority article' },
-      { id: 'story', label: 'Story', route: '/stories/create', description: 'Narrative-driven brand content' },
       { id: 'article', label: 'Article', route: '/articles/create', description: 'Editorial, perspective-led piece' },
-      { id: 'whitepaper', label: 'Whitepaper', route: '/whitepapers/create', description: 'Premium authority asset' },
-      { id: 'case-study', label: 'Case Study', route: '/case-studies/create', description: 'Proof-led customer story' },
+      { id: 'story', label: 'Story', route: '/stories/create', description: 'Narrative-driven brand content' },
       { id: 'thread', label: 'Thread', route: '/threads/create', description: 'Multi-part thought sequence' },
-      { id: 'guide', label: 'Guide', route: '/guides/create', description: 'Evergreen pillar resource' },
-      { id: 'newsletter', label: 'Newsletter', route: '/newsletters/create', description: 'Email-ready editorial asset' },
     ],
   },
   {

@@ -250,7 +250,7 @@ export default function BlogIntelligencePage() {
                 {suggestionsLoading ? (
                   <div className="flex items-center gap-2 text-sm text-blue-700">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Enriching each recommendation with brief suggestions and positioning cues.
+                    We&rsquo;re customizing topics for you — tailoring angles, suggestions, and positioning cues for each recommendation.
                   </div>
                 ) : null}
 

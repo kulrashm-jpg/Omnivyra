@@ -13,7 +13,7 @@ import { logger } from '../../../../backend/services/logger';
 import { supabase } from '@/backend/db/supabaseClient';
 import { resolvePrincipal } from '@/backend/security/IdentityResolver';
 import { getFxConfig } from '@/backend/services/pricingConfigService';
-import { resolvePrice } from '@/lib/billing/currency';
+import { resolvePrice, CURRENCIES, type Currency } from '@/lib/billing/currency';
 import { createOrder as orchestratorCreateOrder } from '@/backend/services/payments/orchestrator';
 import { getProviderCredentials } from '@/backend/services/payments/orchestrator';
 
@@ -39,12 +39,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!pkg || (pkg as any).is_active !== true) return res.status(400).json({ error: 'package_not_available' });
 
   const credits = Number((pkg as any).credits);
-  const currency = 'INR';
+  // Customer-selected charge currency (USD / EUR / INR); defaults to INR.
+  const requested = String(body.currency ?? 'INR').toUpperCase();
+  const currency: Currency = (CURRENCIES as readonly string[]).includes(requested)
+    ? (requested as Currency)
+    : 'INR';
   const canonicalUsd = (pkg as any).canonical_usd_price;
-  let amount = Number((pkg as any).price);
+  let amount = Number((pkg as any).price); // INR fallback (DB authoritative)
   if (canonicalUsd != null && Number.isFinite(Number(canonicalUsd))) {
     const fx = await getFxConfig();
-    amount = resolvePrice(Number(canonicalUsd), 'INR', fx, (pkg as any).sku ?? undefined);
+    amount = resolvePrice(Number(canonicalUsd), currency, fx, (pkg as any).sku ?? undefined);
+  } else if (currency !== 'INR') {
+    // No canonical USD to convert from → can't price this pack in a non-INR currency.
+    return res.status(400).json({ error: 'currency_not_available_for_package' });
   }
   if (!Number.isFinite(credits) || credits <= 0 || !Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json({ error: 'package_invalid' });

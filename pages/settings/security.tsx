@@ -276,7 +276,10 @@ function PasskeysSection({ onChanged }: { onChanged: () => Promise<void> }) {
           {busy ? 'Working…' : 'Enroll new passkey'}
         </button>
       </div>
-      {passkeys === null ? <div>Loading…</div>
+      {passkeys === null
+        ? (err
+            ? <button onClick={() => { setErr(null); void reload(); }} style={btn}>Retry</button>
+            : <div>Loading…</div>)
         : passkeys.length === 0 ? <div style={muted}>No passkeys registered.</div>
         : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
@@ -518,7 +521,10 @@ function TrustedDevicesSection({ onChanged }: { onChanged: () => Promise<void> }
           </button>
         </div>
       ) : null}
-      {devices === null ? <div>Loading…</div>
+      {devices === null
+        ? (err
+            ? <button onClick={() => { setErr(null); void reload(); }} style={btn}>Retry</button>
+            : <div>Loading…</div>)
         : devices.length === 0 ? <div style={muted}>No trusted devices.</div>
         : (
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>

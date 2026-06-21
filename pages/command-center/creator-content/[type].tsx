@@ -2805,7 +2805,17 @@ export default function CreatorTypeWorkflowPage() {
 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(data?.error || data?.message || 'Failed to generate creator content.');
+        const baseMessage = data?.error || data?.message || 'Failed to generate creator content.';
+        // Surface the server's actionable context (per-rule rejection
+        // reasons + remediation hints) instead of the opaque top-line —
+        // e.g. the writer attachment validator returns `details`/`hints`
+        // explaining how to unblock the payload.
+        const hintLines = Array.isArray(data?.hints) ? data.hints.filter(Boolean) : [];
+        const detailLines = hintLines.length === 0 && Array.isArray(data?.details)
+          ? data.details.filter(Boolean)
+          : [];
+        const extra = [...hintLines, ...detailLines];
+        throw new Error(extra.length > 0 ? `${baseMessage} — ${extra.join(' ')}` : baseMessage);
       }
       setResult(data as CreatorResult);
       const generatedMediaBundle = data?.output?.asset_payload?.media_bundle || {};

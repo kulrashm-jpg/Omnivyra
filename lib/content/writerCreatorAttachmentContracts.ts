@@ -498,7 +498,16 @@ export function validateAttachmentPayload(input: AttachmentValidationInput): Att
   if (input.attachmentMode === 'supporting_visual') {
     if (hasOverlayText(input.overlayText)) errors.push('supporting_visual rejects overlay_text');
     if (hasCta) errors.push('supporting_visual forbids CTA');
-    if (paragraphLike) errors.push('supporting_visual rejects paragraph overlays');
+    // The paragraph rejection only applies when the source text would
+    // actually be transformed into overlay copy. In the canonical
+    // supporting_visual contract (sourceTextTransform === 'none') the source
+    // snippet is conceptual context for a textless background image and is
+    // never rendered — so a normal-length post must NOT be blocked here.
+    // Keep the rejection for transform-bearing policies (e.g. 'summarize'),
+    // which would distill the long source into on-image copy.
+    if (paragraphLike && policy?.sourceTextTransform && policy.sourceTextTransform !== 'none') {
+      errors.push('supporting_visual rejects paragraph overlays');
+    }
     if (input.sourceType === 'thread' && policy?.sourceTextTransform !== 'support_visual_only' && policy?.sourceTextTransform !== 'none') {
       errors.push('supporting_visual rejects thread duplication transforms');
     }

@@ -18,6 +18,8 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -57,9 +59,23 @@ function TrendIcon({ trend }: { trend: TrendDirection }) {
   return <Minus className="h-3.5 w-3.5 text-slate-400" />;
 }
 
+function MiniToggle({ expanded, onToggle, total }: { expanded: boolean; onToggle: () => void; total: number }) {
+  return (
+    <button type="button" onClick={onToggle}
+      className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800">
+      {expanded
+        ? <><ChevronUp className="h-3.5 w-3.5" />Minimize</>
+        : <><ChevronDown className="h-3.5 w-3.5" />Show all ({total})</>}
+    </button>
+  );
+}
+
 export default function OptimizationPanel({ orgId }: { orgId: string | null | undefined }) {
   const { status, report, error, refresh } = useCreditOptimization(orgId, 30);
   const [scenarioId, setScenarioId] = useState<string | null>(null);
+  // Collapsible list sections — default collapsed to 2 rows; expand to see all.
+  const [expandAutomations, setExpandAutomations] = useState(false);
+  const [expandDrivers, setExpandDrivers] = useState(false);
 
   if (!orgId || status === 'loading') {
     return <div className="py-12 text-center text-slate-400">Loading optimization intelligence…</div>;
@@ -186,9 +202,15 @@ export default function OptimizationPanel({ orgId }: { orgId: string | null | un
         {/* Widget 8 — Automation consumption */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Bot className="h-4 w-4 text-indigo-500" /> Automation consumption
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Bot className="h-4 w-4 text-indigo-500" /> Automation consumption
+              </CardTitle>
+              {automations.rows.length > 2 && (
+                <MiniToggle expanded={expandAutomations} onToggle={() => setExpandAutomations(e => !e)}
+                  total={Math.min(automations.rows.length, 10)} />
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
@@ -202,7 +224,7 @@ export default function OptimizationPanel({ orgId }: { orgId: string | null | un
                   </tr>
                 </thead>
                 <tbody>
-                  {automations.rows.slice(0, 10).map((a) => (
+                  {(expandAutomations ? automations.rows.slice(0, 10) : automations.rows.slice(0, 2)).map((a) => (
                     <tr key={a.id} className="border-b last:border-0">
                       <td className="py-2 pr-2">
                         <div className="font-medium text-slate-700">{a.name}</div>
@@ -233,16 +255,22 @@ export default function OptimizationPanel({ orgId }: { orgId: string | null | un
         {/* Widget 10 — Consumption drivers */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <BarChart3 className="h-4 w-4 text-indigo-500" /> Consumption drivers
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <BarChart3 className="h-4 w-4 text-indigo-500" /> Consumption drivers
+              </CardTitle>
+              {drivers.length > 2 && (
+                <MiniToggle expanded={expandDrivers} onToggle={() => setExpandDrivers(e => !e)}
+                  total={Math.min(drivers.length, 7)} />
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             {drivers.length === 0 ? (
               <p className="text-sm text-slate-400">No consumption in this window.</p>
             ) : (
               <ul className="space-y-3">
-                {drivers.slice(0, 7).map((d) => (
+                {(expandDrivers ? drivers.slice(0, 7) : drivers.slice(0, 2)).map((d) => (
                   <li key={d.module} className="flex items-center justify-between text-sm">
                     <span className="flex items-center gap-1.5 font-medium text-slate-700">
                       {d.module} <TrendIcon trend={d.trend} />

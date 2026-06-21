@@ -8,6 +8,8 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/apiFetch';
+import { resolvePrice, currencySymbol, CURRENCIES, type Currency } from '@/lib/billing/currency';
+import { TOPUPS } from '@/lib/billing/commercialPlans';
 
 const RAZORPAY_JS = 'https://checkout.razorpay.com/v1/checkout.js';
 const CASHFREE_JS = 'https://sdk.cashfree.com/js/v3/cashfree.js';
@@ -57,6 +59,15 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
   const [lastPackId, setLastPackId] = useState<string | null>(null);
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [preselectId, setPreselectId] = useState<string | null>(null);
+  const [currency, setCurrency] = useState<Currency>('INR');
+
+  // Display price for a pack in the selected currency (derived from the canonical
+  // USD price; falls back to the catalog INR price if no USD anchor is known).
+  const priceLabel = (pack: Pack): string => {
+    const usd = TOPUPS.find((t) => t.id === pack.id)?.priceUsd;
+    if (usd == null) return `₹${pack.price.toLocaleString()}`;
+    return `${currencySymbol(currency)}${resolvePrice(usd, currency).toLocaleString()}`;
+  };
 
   const refreshHistory = useCallback(async () => {
     if (!orgId) return;
@@ -84,8 +95,11 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
     refreshHistory();
     refreshBreakdown();
     try {
-      const pid = new URLSearchParams(window.location.search).get('pack');
+      const params = new URLSearchParams(window.location.search);
+      const pid = params.get('pack');
       if (pid) setPreselectId(pid);
+      const cur = (params.get('currency') ?? '').toUpperCase();
+      if ((CURRENCIES as readonly string[]).includes(cur)) setCurrency(cur as Currency);
     } catch { /* SSR / no window */ }
   }, [refreshHistory, refreshBreakdown]);
 
@@ -111,7 +125,7 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
     setStatus({ kind: 'creating' });
     try {
       // Order via the Payment Orchestrator (internal routing: Razorpay → Cashfree).
-      const order = await postJson('/api/billing/checkout/create-order', { org_id: orgId, package_id: pack.id });
+      const order = await postJson('/api/billing/checkout/create-order', { org_id: orgId, package_id: pack.id, currency });
       if (!order?.ok) { setStatus({ kind: 'failed', msg: order?.error ?? 'Could not create order' }); return; }
 
       setStatus({ kind: 'paying' });
@@ -145,7 +159,7 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
     } catch (err: any) {
       setStatus({ kind: 'failed', msg: err?.message ?? 'Something went wrong' });
     }
-  }, [orgId, runVerify]);
+  }, [orgId, runVerify, currency]);
 
   const busy = status.kind === 'creating' || status.kind === 'paying' || status.kind === 'verifying';
 
@@ -176,6 +190,25 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
         </div>
       )}
 
+      {/* Currency selector — pay in USD / EUR / INR */}
+      <div className="flex items-center justify-center gap-2">
+        <span className="text-xs font-semibold text-slate-500">Pay in</span>
+        <div className="inline-flex rounded-lg border border-slate-200 p-0.5">
+          {CURRENCIES.map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => setCurrency(c)}
+              className={`rounded-md px-3 py-1 text-xs font-bold transition ${
+                currency === c ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              {currencySymbol(c)} {c}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Packs */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {packs.map((p) => (
@@ -187,7 +220,7 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
           >
             <div className="text-3xl font-black text-indigo-600">{p.credits.toLocaleString()}</div>
             <div className="text-xs text-slate-500">{p.label}</div>
-            <div className="mt-2 text-sm font-semibold text-slate-700">₹{p.price.toLocaleString()}</div>
+            <div className="mt-2 text-sm font-semibold text-slate-700">{priceLabel(p)}</div>
             <button
               onClick={() => buy(p)}
               disabled={busy || !orgId}

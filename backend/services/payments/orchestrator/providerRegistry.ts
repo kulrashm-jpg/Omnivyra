@@ -15,7 +15,10 @@ export const PROVIDER_REGISTRY: PaymentProvider[] = [
     provider_name: 'Razorpay',
     enabled: true,
     priority: 1,
-    supported_currencies: ['INR'],
+    // INR + international (USD/EUR). USD/EUR settle only when the merchant
+    // account is international-enabled; otherwise the provider rejects them at
+    // order time and routing falls through to the next usable provider.
+    supported_currencies: ['INR', 'USD', 'EUR'],
     supported_payment_methods: ['card', 'upi', 'netbanking', 'wallet'],
     mode: 'test',
   },
@@ -24,11 +27,11 @@ export const PROVIDER_REGISTRY: PaymentProvider[] = [
     provider_name: 'Cashfree',
     enabled: true,
     priority: 2,
-    supported_currencies: ['INR'],
+    supported_currencies: ['INR', 'USD', 'EUR'],
     supported_payment_methods: ['card', 'upi', 'netbanking'],
     mode: 'test',
   },
-  // Future: Stripe (USD/EUR), PayPal — append here; routing picks them up by currency.
+  // Future: Stripe, PayPal — append here; routing picks them up by currency.
 ];
 
 /** Enabled providers, highest precedence first. */
