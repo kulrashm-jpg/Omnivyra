@@ -96,22 +96,46 @@ export interface TenantAccessOptions {
  * caller is responsible for translating the result into the right
  * domain-level error.
  */
+type ReadError = { code?: string | null; message?: string | null } | null;
+
 /**
- * Read a single Supabase row with a bounded retry on TRANSIENT errors.
- * A genuine "no row" result is NOT an error and returns immediately — only
- * actual query/transport errors are retried. This prevents a momentary
- * Supabase/network blip on the membership or org lookup from being
- * misclassified as NOT_A_MEMBER / ORG_NOT_FOUND and locking out a legitimate
- * member with a hard "Access denied" 403.
+ * A DETERMINISTIC identity/query error — the query can never succeed for this
+ * input no matter how many times it runs (e.g. a synthetic, non-uuid principal
+ * such as 'content_architect' compared against a uuid column). This is NOT a
+ * transient/infra failure: it must be treated as "no membership" so the
+ * existing content-architect / invited-admin fallbacks run, and it must NOT be
+ * retried.
+ *
+ * Postgres SQLSTATE: 22P02 invalid_text_representation (invalid uuid/int
+ * syntax), 22023 invalid_parameter_value. Message regex is a defensive
+ * fallback when a code is absent.
+ */
+export function isDeterministicIdentityError(error: ReadError): boolean {
+  if (!error) return false;
+  const code = String(error.code ?? '');
+  if (code === '22P02' || code === '22023') return true;
+  const msg = String(error.message ?? '').toLowerCase();
+  return /invalid input syntax for type (uuid|integer|bigint|numeric|smallint)/.test(msg)
+    || /invalid uuid/.test(msg);
+}
+
+/**
+ * Read a single Supabase row with a bounded retry on TRANSIENT errors only.
+ * A genuine "no row" result is NOT an error and returns immediately. A
+ * DETERMINISTIC identity/query error also returns immediately (retrying cannot
+ * help). Only transient/transport errors are retried — preventing a momentary
+ * Supabase/network blip from being misclassified, while never masking a
+ * deterministic input error as an infra failure.
  */
 async function readSingleWithRetry<T>(
   label: string,
-  run: () => PromiseLike<{ data: T | null; error: { message?: string } | null }>,
-): Promise<{ data: T | null; error: { message?: string } | null }> {
-  let last: { data: T | null; error: { message?: string } | null } = { data: null, error: null };
+  run: () => PromiseLike<{ data: T | null; error: ReadError }>,
+): Promise<{ data: T | null; error: ReadError }> {
+  let last: { data: T | null; error: ReadError } = { data: null, error: null };
   for (let attempt = 0; attempt < 3; attempt++) {
     last = await run();
     if (!last.error) return last;
+    if (isDeterministicIdentityError(last.error)) return last; // won't change on retry
     if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 60 * (attempt + 1)));
   }
   logger.error('tenant_guard_read_retry_exhausted', { label, message: last.error?.message });
@@ -166,8 +190,21 @@ export async function assertTenantAccess(input: {
   );
 
   if (roleErr) {
-    // A persistent query error is NOT proof of non-membership — surface it as
-    // a transient, retryable failure so a real member is never locked out by a
+    if (isDeterministicIdentityError(roleErr)) {
+      // Synthetic / non-uuid principal (e.g. 'content_architect', bridge ids)
+      // compared against the uuid user_id column. The query can never match —
+      // this is NOT an infra failure. Treat it as "no membership" so the
+      // existing content-architect / invited-admin fallbacks run, exactly as
+      // before the tenant-hardening change.
+      logger.warn('tenant_guard_identity_mismatch', {
+        userId,
+        organizationId,
+        code: roleErr.code ?? null,
+      });
+      return { ok: false, reason: 'NOT_A_MEMBER', userId };
+    }
+    // A transient/transport query error is NOT proof of non-membership — surface
+    // it as a retryable failure so a real member is never locked out by a
     // DB/network blip (which previously became a hard NOT_A_MEMBER → 403).
     logger.error('tenant_guard_db_error', {
       userId,
@@ -204,7 +241,11 @@ export async function assertTenantAccess(input: {
   );
 
   if (orgErr) {
-    // Transient read failure — retryable, not a "missing org" verdict.
+    // Deterministic (malformed org id) → not found, not transient. Transient/
+    // transport failure → retryable lookup error.
+    if (isDeterministicIdentityError(orgErr)) {
+      return { ok: false, reason: 'ORG_NOT_FOUND', userId };
+    }
     return { ok: false, reason: 'TENANT_LOOKUP_ERROR', userId };
   }
   if (!orgRow) {
