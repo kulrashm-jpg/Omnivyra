@@ -43,6 +43,7 @@ import {
   readLifecycleState,
   CreatorLifecycleTransitionError,
 } from '../../../lib/shared/creatorLifecycleStateMachine';
+import { resolveVideoForPlatform, readCreatorVideoAsset } from '../../../lib/shared/creatorVideoResolution';
 
 // ── Small pure helpers (faithful copies of the structuredPlanScheduler
 //    internals; the content-type fallback map is already duplicated across
@@ -331,10 +332,26 @@ export async function scheduleCreatorAttachmentPost(input: {
   dbContentType: string;
 }): Promise<CreatorAttachmentScheduleResult> {
   const uploadedMediaUrl = String(input.attachedContent.uploaded_media_url || '').trim();
+  // Single authority for "which video URL is used for platform X?". For
+  // 'same'/legacy rows this returns the validated uploaded_media_url unchanged;
+  // for 'different' rows it returns the platform-specific URL when supplied,
+  // falling back to the same-video url / validated upload (never fails).
+  //
+  // Format propagation: thread the row's existing format (its creator content
+  // format) so the authority can resolve (platform, format) — e.g. a YouTube
+  // 'short' row resolves the Short mapping. Where the row's format code matches
+  // the stored mapping format the format-specific asset wins; otherwise the
+  // authority falls back to the platform primary (no regression).
+  const resolvedMediaUrl = resolveVideoForPlatform({
+    creatorAsset: readCreatorVideoAsset(input.attachedContent),
+    platform: input.platform,
+    format: normalizeCreatorFormat(input.row.content_type || ''),
+    uploadedMediaUrl,
+  });
   return scheduleCreatorRowPost({
     ...input,
     variant: {
-      mediaUrls: uploadedMediaUrl ? [uploadedMediaUrl] : [],
+      mediaUrls: resolvedMediaUrl ? [resolvedMediaUrl] : [],
       idempotencyKey: `creator-upload:${input.row.id}`,
       transitionReason: 'attachment_post_upload_scheduled',
       failureRestoreStatus: CREATOR_LIFECYCLE_STATES.READY_FOR_SCHEDULE,

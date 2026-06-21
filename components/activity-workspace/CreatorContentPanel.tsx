@@ -30,7 +30,18 @@ import {
   FileText,
   Megaphone,
   RefreshCw,
+  Users,
+  Plus,
+  Trash2,
 } from 'lucide-react';
+import { useCompanyContext } from '../CompanyContext';
+import {
+  getVideoFormatsForPlatform,
+  isValidPlatformVideoFormat,
+  platformSupportsVideo,
+  normalizeVideoPlatform,
+  listVideoCapablePlatforms,
+} from '../../lib/shared/videoFormatCapabilities';
 
 /* ────────────────────── types ────────────────────── */
 
@@ -74,6 +85,23 @@ export type CreatorAssetPayload = {
   creator_profile?: CreatorProfile;
   marketing?: MarketingPackage;
   platformUploads?: Record<string, PlatformUpload>;
+  /** PHASE CREATOR-VIDEO-UX-SIMPLIFICATION — ownership + same/different mapping. */
+  uploaded_by?: { user_id: string; name?: string };
+  video_mode?: 'same' | 'different';
+  platform_videos?: Record<string, string>;
+  /**
+   * PLATFORM-SPECIFIC VIDEO MAPPING — richer per-row mappings (platform +
+   * format + url + title). `platform_videos` above is derived from these (one
+   * primary url per platform) so the publish resolver (resolveVideoForPlatform)
+   * keeps working unchanged.
+   */
+  platform_video_mappings?: Array<{
+    platformId: string;
+    videoFormat: string;
+    videoUrl: string;
+    videoTitle?: string;
+    uploadedBy?: string;
+  }>;
 };
 
 /**
@@ -571,6 +599,26 @@ function PlatformCard({
 /* ────────────────────── main component ────────────────────── */
 
 const DEFAULT_PLATFORMS = ['linkedin', 'x', 'instagram', 'facebook', 'threads', 'reddit'];
+
+/**
+ * PHASE CREATOR-VIDEO-PUBLISHING-CONSISTENCY — UI honesty gate.
+ * Per-platform "different videos" is resolved by resolveVideoForPlatform() at
+ * scheduling, but the validated single-URL upload lifecycle (uploaded_media_url
+ * + upload validation) is what actually gates publishing per row. Until that
+ * lifecycle accepts per-platform validated media, the "different videos" option
+ * is disabled so we never expose functionality that isn't executed end-to-end.
+ */
+// PLATFORM-SPECIFIC VIDEO MAPPING — enabled. "Different videos" now uses the
+// per-platform mapping rows (platform + format + url + title) with connected-
+// platform governance + format capability validation, and derives the
+// per-platform primary url (`platform_videos`) that the publish resolver
+// already consumes.
+const DIFFERENT_VIDEO_ENABLED = true;
+
+/** A single per-platform video mapping row (platform + format + url + title). */
+type VideoMappingRow = { id: string; platformId: string; videoFormat: string; videoUrl: string; videoTitle: string };
+let __vmapSeq = 0;
+const nextVmapId = () => `vmap-${++__vmapSeq}`;
 
 function UploadedMediaPreview({ url, mime }: { url: string; mime?: string | null }) {
   const lower = (mime || '').toLowerCase();
@@ -1380,6 +1428,219 @@ export default function CreatorContentPanel({
 
   const [isSaving, setIsSaving] = useState(false);
 
+  /* ── PHASE CREATOR-VIDEO-UX-SIMPLIFICATION ──────────────────────────
+   * Video workflow collapses to: who uploaded + same/different video.
+   * Marketing Package, Creator Profile, transcript, SEO, per-platform
+   * marketing blocks are all dead-collection (dropped server-side, no
+   * consumers) — hidden for video. AI generates packaging during
+   * execution; the creator only supplies the asset + ownership. */
+  // `String(...)` keeps this a plain boolean so it does NOT narrow `assetType`
+  // inside the gated legacy (`!isVideoWorkflow`) branch, which still references
+  // assetType === 'video' for image/carousel rendering.
+  const isVideoWorkflow = String(assetType) === 'video';
+  const { user, userName, selectedCompanyId } = useCompanyContext();
+  const [uploadedById, setUploadedById] = useState<string>(creatorAsset?.uploaded_by?.user_id ?? '');
+  const [uploadedByName, setUploadedByName] = useState<string>(creatorAsset?.uploaded_by?.name ?? '');
+  const [videoMode, setVideoMode] = useState<'same' | 'different'>(
+    DIFFERENT_VIDEO_ENABLED && creatorAsset?.video_mode === 'different' ? 'different' : 'same',
+  );
+  const [sameVideoUrl, setSameVideoUrl] = useState<string>(creatorAsset?.url ?? '');
+  const [videoTitle, setVideoTitle] = useState<string>(creatorAsset?.description ?? '');
+  // Per-platform video mapping rows (platform + format + url + title). Seeded
+  // from the richer platform_video_mappings, else from legacy platform_videos
+  // (one row per platform, default format) for backward compatibility.
+  const [mappings, setMappings] = useState<VideoMappingRow[]>(() => {
+    const rich = creatorAsset?.platform_video_mappings;
+    if (Array.isArray(rich) && rich.length > 0) {
+      return rich.map((m) => ({
+        id: nextVmapId(),
+        platformId: normalizeVideoPlatform(m.platformId),
+        videoFormat: m.videoFormat || (getVideoFormatsForPlatform(m.platformId)[0] ?? ''),
+        videoUrl: m.videoUrl || '',
+        videoTitle: m.videoTitle || '',
+      }));
+    }
+    const legacy = creatorAsset?.platform_videos ?? {};
+    return Object.entries(legacy)
+      .filter(([, url]) => String(url || '').trim())
+      .map(([p, url]) => ({
+        id: nextVmapId(),
+        platformId: normalizeVideoPlatform(p),
+        videoFormat: getVideoFormatsForPlatform(p)[0] ?? '',
+        videoUrl: String(url),
+        videoTitle: '',
+      }));
+  });
+  // Connected platforms (governance) — only these are selectable in mappings.
+  const [connectedPlatforms, setConnectedPlatforms] = useState<string[]>([]);
+  const [teamMembers, setTeamMembers] = useState<Array<{ user_id: string; name: string }>>([]);
+
+  // Prefill "Uploaded By" with the logged-in user once context resolves.
+  useEffect(() => {
+    if (!uploadedById && user?.userId) {
+      setUploadedById(user.userId);
+      setUploadedByName(userName || '');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.userId, userName]);
+
+  // Team-member fallback dropdown (only the video workflow needs it).
+  useEffect(() => {
+    if (!isVideoWorkflow || !selectedCompanyId) return;
+    let cancelled = false;
+    fetch(`/api/company/users?companyId=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !Array.isArray(d?.users)) return;
+        setTeamMembers(
+          d.users
+            .filter((u: any) => u?.user_id)
+            .map((u: any) => ({ user_id: String(u.user_id), name: String(u.name || u.email || u.user_id) })),
+        );
+      })
+      .catch(() => { /* dropdown is best-effort; prefill still works */ });
+    return () => { cancelled = true; };
+  }, [isVideoWorkflow, selectedCompanyId]);
+
+  // Connected-platform registry (governance): only connected, video-capable
+  // platforms may be selected in mappings.
+  useEffect(() => {
+    if (!isVideoWorkflow || !selectedCompanyId) return;
+    let cancelled = false;
+    fetch(`/api/social-accounts/status?companyId=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !Array.isArray(d?.accounts)) return;
+        const connected = d.accounts
+          .filter((a: any) => a?.connected)
+          .map((a: any) => normalizeVideoPlatform(String(a.platform_key || '')))
+          .filter((p: string) => platformSupportsVideo(p));
+        setConnectedPlatforms(Array.from(new Set<string>(connected)));
+      })
+      .catch(() => { /* governance is best-effort on load; save still fail-closes */ });
+    return () => { cancelled = true; };
+  }, [isVideoWorkflow, selectedCompanyId]);
+
+  // Platforms offered in the mapping picker — connected ∩ video-capable.
+  const availableVideoPlatforms = useMemo(() => connectedPlatforms, [connectedPlatforms]);
+
+  // ── Mapping row helpers ────────────────────────────────────────────────────
+  const addMappingRow = () => {
+    const platformId = availableVideoPlatforms[0] ?? '';
+    setMappings((prev) => [
+      ...prev,
+      { id: nextVmapId(), platformId, videoFormat: getVideoFormatsForPlatform(platformId)[0] ?? '', videoUrl: '', videoTitle: '' },
+    ]);
+  };
+  const removeMappingRow = (id: string) => setMappings((prev) => prev.filter((r) => r.id !== id));
+  const updateMappingRow = (id: string, patch: Partial<VideoMappingRow>) =>
+    setMappings((prev) => prev.map((r) => {
+      if (r.id !== id) return r;
+      const next = { ...r, ...patch };
+      // When the platform changes, reset to a format valid for it.
+      if (patch.platformId && !isValidPlatformVideoFormat(next.platformId, next.videoFormat)) {
+        next.videoFormat = getVideoFormatsForPlatform(next.platformId)[0] ?? '';
+      }
+      return next;
+    }));
+
+  // ── Governance validation (UI + Save use the SAME checks; fail closed) ─────
+  const mappingRowError = (row: VideoMappingRow): string | null => {
+    if (!row.platformId) return 'Select a platform.';
+    if (connectedPlatforms.length > 0 && !connectedPlatforms.includes(row.platformId)) return 'Platform disconnected — reconnect or remove this row.';
+    if (!row.videoFormat) return 'Select a format.';
+    if (!isValidPlatformVideoFormat(row.platformId, row.videoFormat)) return `${row.videoFormat} is not valid for this platform.`;
+    if (!row.videoUrl.trim()) return 'Add the video URL.';
+    return null;
+  };
+  const duplicateMappingIds = useMemo(() => {
+    const seen = new Map<string, string>();
+    const dups = new Set<string>();
+    for (const r of mappings) {
+      const key = `${r.platformId}::${r.videoFormat}`;
+      if (!r.platformId || !r.videoFormat) continue;
+      if (seen.has(key)) { dups.add(r.id); dups.add(seen.get(key)!); }
+      else seen.set(key, r.id);
+    }
+    return dups;
+  }, [mappings]);
+  const mappingsValid = mappings.length > 0
+    && mappings.every((r) => !mappingRowError(r))
+    && duplicateMappingIds.size === 0;
+
+  const canSaveVideo = !!uploadedById && (
+    videoMode === 'same' ? sameVideoUrl.trim().length > 0 : mappingsValid
+  );
+
+  const handleSaveVideoSimplified = async () => {
+    if (!uploadedById) { onNotice?.('info', 'Select who uploaded this video.'); return; }
+    if (videoMode === 'same' && !sameVideoUrl.trim()) { onNotice?.('info', 'Add the video URL.'); return; }
+    if (videoMode === 'different') {
+      // Fail-closed governance: at least one row; every row valid (connected,
+      // capable format, url present); no duplicate platform+format combos.
+      if (mappings.length === 0) { onNotice?.('info', 'Add at least one platform video.'); return; }
+      if (duplicateMappingIds.size > 0) { onNotice?.('error', 'Duplicate platform + format combinations are not allowed.'); return; }
+      const firstErr = mappings.map(mappingRowError).find(Boolean);
+      if (firstErr) { onNotice?.('error', firstErr); return; }
+    }
+    setIsSaving(true);
+    try {
+      // Build the rich mappings; derive the per-platform primary url that the
+      // publish resolver (resolveVideoForPlatform) already consumes.
+      const platform_video_mappings = videoMode === 'different'
+        ? mappings.map((r) => ({
+            platformId: r.platformId,
+            videoFormat: r.videoFormat,
+            videoUrl: r.videoUrl.trim(),
+            videoTitle: r.videoTitle.trim() || undefined,
+            uploadedBy: uploadedById,
+          }))
+        : undefined;
+      const platform_videos = videoMode === 'different'
+        ? mappings.reduce<Record<string, string>>((acc, r) => {
+            // One primary url per platform — first row for that platform wins.
+            if (!acc[r.platformId]) acc[r.platformId] = r.videoUrl.trim();
+            return acc;
+          }, {})
+        : undefined;
+      const primaryUrl = videoMode === 'same'
+        ? sameVideoUrl.trim()
+        : (mappings[0]?.videoUrl.trim() ?? '');
+      const asset: CreatorAssetPayload = {
+        type: assetType,
+        url: primaryUrl || undefined,
+        theme: theme || undefined,
+        description: videoTitle.trim() || undefined,
+        uploaded_by: { user_id: uploadedById, name: uploadedByName || undefined },
+        video_mode: videoMode,
+        ...(platform_videos ? { platform_videos } : {}),
+        ...(platform_video_mappings ? { platform_video_mappings } : {}),
+        ...(platform_videos
+          ? { platformUploads: Object.fromEntries(Object.entries(platform_videos).map(([p, v]) => [p, { externalLink: v }])) }
+          : {}),
+      };
+      const res = await fetch('/api/activity-workspace/creator-asset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          execution_id: executionId,
+          campaign_id: campaignId,
+          week_number: weekNumber,
+          day,
+          creator_asset: asset,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? data?.message ?? 'Failed to save video asset');
+      onAssetSaved(asset);
+      onNotice?.('success', 'Video asset saved. AI will generate captions, hashtags and CTA at publish time.');
+    } catch (err) {
+      onNotice?.('error', String((err as Error)?.message ?? 'Failed to save'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   /* ── Apply master to all ── */
   const handleApplyToAll = () => {
     if (!masterUrl.trim() && !masterCaption.trim()) {
@@ -1534,6 +1795,200 @@ export default function CreatorContentPanel({
           />
         )}
 
+        {/* ── PHASE CREATOR-VIDEO-UX-SIMPLIFICATION: simplified video flow ── */}
+        {isVideoWorkflow && (
+          <div className="px-5 py-4 space-y-4">
+            <SectionHeader
+              icon={<Video className="h-3.5 w-3.5" />}
+              title="Video Asset"
+              subtitle="Upload your video, confirm ownership, and choose platform mapping."
+            />
+
+            {/* Uploaded By — reuses the logged-in user; team dropdown as fallback */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1 flex items-center gap-1">
+                <Users className="h-3 w-3" /> Uploaded by
+              </label>
+              <select
+                value={uploadedById}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setUploadedById(id);
+                  const m = teamMembers.find((t) => t.user_id === id);
+                  setUploadedByName(m?.name ?? (id === user?.userId ? (userName || '') : ''));
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-400 bg-white"
+              >
+                {user?.userId && !teamMembers.some((t) => t.user_id === user.userId) && (
+                  <option value={user.userId}>{userName || 'Me'} (you)</option>
+                )}
+                {teamMembers.map((t) => (
+                  <option key={t.user_id} value={t.user_id}>
+                    {t.name}{t.user_id === user?.userId ? ' (you)' : ''}
+                  </option>
+                ))}
+                {!user?.userId && teamMembers.length === 0 && <option value="">Loading…</option>}
+              </select>
+            </div>
+
+            {/* Step 1 — same vs different video */}
+            <div>
+              <p className="text-xs font-medium text-gray-600 mb-2">How would you like to provide videos?</p>
+              <div className="space-y-2">
+                <label className="flex items-start gap-2 text-sm text-gray-800 cursor-pointer">
+                  <input type="radio" name="video-mode" checked={videoMode === 'same'} onChange={() => setVideoMode('same')} className="mt-0.5" />
+                  <span>Use the <b>same video</b> across all selected platforms</span>
+                </label>
+                <label className={`flex items-start gap-2 text-sm ${DIFFERENT_VIDEO_ENABLED ? 'text-gray-800 cursor-pointer' : 'text-gray-400 cursor-not-allowed'}`}>
+                  <input
+                    type="radio"
+                    name="video-mode"
+                    checked={videoMode === 'different'}
+                    disabled={!DIFFERENT_VIDEO_ENABLED}
+                    onChange={() => { if (DIFFERENT_VIDEO_ENABLED) setVideoMode('different'); }}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    Use <b>different videos</b> for different platforms
+                    {!DIFFERENT_VIDEO_ENABLED && (
+                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">Coming soon</span>
+                    )}
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Same-video mode — URL + optional title only */}
+            {videoMode === 'same' && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1 flex items-center gap-1">
+                    <Link2 className="h-3 w-3" /> Video URL
+                  </label>
+                  <input
+                    type="url"
+                    value={sameVideoUrl}
+                    onChange={(e) => setSameVideoUrl(e.target.value)}
+                    placeholder="https://youtube.com/watch?v=…  or a direct .mp4 link"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-400"
+                  />
+                  {sameVideoUrl.trim() && <LinkPreview url={sameVideoUrl.trim()} label="Open video" />}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Video title <span className="text-gray-400 font-normal">(optional)</span></label>
+                  <input
+                    type="text"
+                    value={videoTitle}
+                    onChange={(e) => setVideoTitle(e.target.value)}
+                    placeholder="Short label for this video…"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-400"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Different-video mode — platform video mapping rows */}
+            {videoMode === 'different' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-gray-600">Platform video mapping</p>
+                  <button
+                    type="button"
+                    onClick={addMappingRow}
+                    disabled={availableVideoPlatforms.length === 0}
+                    className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Add Platform
+                  </button>
+                </div>
+
+                {availableVideoPlatforms.length === 0 ? (
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    No connected video-capable platforms. Connect an account (Instagram, YouTube, TikTok, …) to map platform videos.
+                  </p>
+                ) : null}
+
+                {mappings.map((row) => {
+                  const err = mappingRowError(row);
+                  const isDup = duplicateMappingIds.has(row.id);
+                  const formats = getVideoFormatsForPlatform(row.platformId);
+                  const platformOptions = Array.from(new Set([...availableVideoPlatforms, ...(row.platformId ? [row.platformId] : [])]));
+                  return (
+                    <div key={row.id} className={`rounded-lg border p-3 ${err || isDup ? 'border-red-200 bg-red-50/40' : 'border-gray-200'}`}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          value={row.platformId}
+                          onChange={(e) => updateMappingRow(row.id, { platformId: e.target.value })}
+                          className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-800 focus:outline-none focus:border-indigo-400"
+                        >
+                          {platformOptions.map((p) => (
+                            <option key={p} value={p}>{PLATFORM_LABELS[p] ?? p}</option>
+                          ))}
+                        </select>
+                        <select
+                          value={row.videoFormat}
+                          onChange={(e) => updateMappingRow(row.id, { videoFormat: e.target.value })}
+                          className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm text-gray-800 focus:outline-none focus:border-indigo-400"
+                        >
+                          {formats.length === 0 ? <option value="">—</option> : null}
+                          {formats.map((f) => <option key={f} value={f}>{f}</option>)}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => removeMappingRow(row.id)}
+                          className="ml-auto inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Remove
+                        </button>
+                      </div>
+                      <input
+                        type="url"
+                        value={row.videoUrl}
+                        onChange={(e) => updateMappingRow(row.id, { videoUrl: e.target.value })}
+                        placeholder="https://… video URL"
+                        className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"
+                      />
+                      <input
+                        type="text"
+                        value={row.videoTitle}
+                        onChange={(e) => updateMappingRow(row.id, { videoTitle: e.target.value })}
+                        placeholder="Video title (optional)"
+                        className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"
+                      />
+                      {(err || isDup) ? (
+                        <p className="mt-1.5 text-[11px] font-medium text-red-600">
+                          {isDup ? 'Duplicate platform + format combination.' : err}
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+
+                {/* Informational guidance — connected platforms + supported formats (read-only) */}
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Connected platforms</p>
+                  <p className="text-xs text-gray-600">
+                    {availableVideoPlatforms.length > 0
+                      ? availableVideoPlatforms.map((p) => `${PLATFORM_LABELS[p] ?? p} ✓`).join('   ')
+                      : 'None connected.'}
+                  </p>
+                  <p className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-wide text-gray-500">Supported formats</p>
+                  <ul className="space-y-0.5 text-xs text-gray-600">
+                    {listVideoCapablePlatforms().map((p) => (
+                      <li key={p}>{PLATFORM_LABELS[p] ?? p} → {getVideoFormatsForPlatform(p).join(', ')}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            <p className="text-[11px] text-gray-400">
+              Captions, hashtags, SEO and CTA are generated automatically by AI for each platform — you don't need to enter them here.
+            </p>
+          </div>
+        )}
+
+        {!isVideoWorkflow && (<>
         {/* ── Section 1: Creator Profile ───────────────────────────── */}
         <div className="px-5 py-4">
           <button
@@ -1862,16 +2317,18 @@ export default function CreatorContentPanel({
           )}
         </div>
 
+        </>)}
+
         {/* ── Actions ─────────────────────────────────────────────── */}
         <div className="px-5 py-4 bg-gray-50/60 flex flex-wrap gap-3">
           <button
             type="button"
-            onClick={handleSave}
-            disabled={isSaving || !canSave}
+            onClick={isVideoWorkflow ? handleSaveVideoSimplified : handleSave}
+            disabled={isSaving || (isVideoWorkflow ? !canSaveVideo : !canSave)}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
             {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            Save Creator Asset
+            {isVideoWorkflow ? 'Save Video Asset' : 'Save Creator Asset'}
           </button>
           {hasAsset && (
             <button
@@ -1884,11 +2341,17 @@ export default function CreatorContentPanel({
               Generate Promotion Content
             </button>
           )}
-          {!canSave && (
-            <p className="text-xs text-gray-400 self-center">
-              Add at least one platform link + description to enable save.
-            </p>
-          )}
+          {isVideoWorkflow
+            ? !canSaveVideo && (
+                <p className="text-xs text-gray-400 self-center">
+                  Select who uploaded it and add {videoMode === 'same' ? 'the video URL' : 'at least one platform video URL'} to enable save.
+                </p>
+              )
+            : !canSave && (
+                <p className="text-xs text-gray-400 self-center">
+                  Add at least one platform link + description to enable save.
+                </p>
+              )}
         </div>
       </div>
     </div>

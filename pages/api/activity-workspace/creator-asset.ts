@@ -17,6 +17,7 @@ import { inferExecutionMode } from '@/backend/services/executionModeInference';
 import { deriveCreatorAssetTypeFromIntent } from '@/backend/services/creatorTemplateRegistryService';
 import { normalizeCreatorPlatform } from '@/backend/services/creatorCapabilityMap';
 import { validateAssetReadiness } from '@/backend/services/creatorAssetValidationService';
+import { normalizeVideoPlatform, isValidPlatformVideoFormat } from '@/lib/shared/videoFormatCapabilities';
 
 export type CreatorAssetInput = {
   type: 'video' | 'image' | 'carousel';
@@ -28,6 +29,11 @@ export type CreatorAssetInput = {
   transcript?: string;
   theme?: string;
   metadata?: Record<string, unknown>;
+  /** PHASE CREATOR-VIDEO-UX-SIMPLIFICATION — ownership + same/different mapping. */
+  uploaded_by?: { user_id: string; name?: string };
+  video_mode?: 'same' | 'different';
+  platform_videos?: Record<string, string>;
+  platform_video_mappings?: Array<{ platformId: string; videoFormat: string; videoUrl: string; videoTitle?: string; uploadedBy?: string }>;
 };
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -131,6 +137,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       transcript: typeof creatorAssetRaw.transcript === 'string' ? creatorAssetRaw.transcript : undefined,
       theme: typeof creatorAssetRaw.theme === 'string' ? creatorAssetRaw.theme : undefined,
       metadata: asObject(creatorAssetRaw.metadata) ?? undefined,
+      uploaded_by: (() => {
+        const ub = asObject(creatorAssetRaw.uploaded_by);
+        return ub && typeof ub.user_id === 'string' && ub.user_id
+          ? { user_id: ub.user_id, name: typeof ub.name === 'string' ? ub.name : undefined }
+          : undefined;
+      })(),
+      video_mode: creatorAssetRaw.video_mode === 'different'
+        ? 'different'
+        : creatorAssetRaw.video_mode === 'same' ? 'same' : undefined,
+      platform_videos: (() => {
+        const pv = asObject(creatorAssetRaw.platform_videos);
+        if (!pv) return undefined;
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(pv)) if (typeof v === 'string' && v.trim()) out[k] = v.trim();
+        return Object.keys(out).length > 0 ? out : undefined;
+      })(),
+      // Server-side governance (fail-closed): keep only mappings whose
+      // (platform, format) is valid per the capability registry, with a url,
+      // and dedupe duplicate platform+format combinations.
+      platform_video_mappings: (() => {
+        const arr = Array.isArray(creatorAssetRaw.platform_video_mappings) ? creatorAssetRaw.platform_video_mappings : null;
+        if (!arr) return undefined;
+        const out: NonNullable<CreatorAssetInput['platform_video_mappings']> = [];
+        const seen = new Set<string>();
+        for (const raw of arr) {
+          const m = asObject(raw);
+          if (!m) continue;
+          const platformId = normalizeVideoPlatform(String(m.platformId || ''));
+          const videoFormat = String(m.videoFormat || '');
+          const videoUrl = typeof m.videoUrl === 'string' ? m.videoUrl.trim() : '';
+          if (!platformId || !videoUrl) continue;
+          if (!isValidPlatformVideoFormat(platformId, videoFormat)) continue; // drop invalid combo
+          const key = `${platformId}::${videoFormat}`;
+          if (seen.has(key)) continue; // drop duplicate
+          seen.add(key);
+          out.push({
+            platformId,
+            videoFormat,
+            videoUrl,
+            ...(typeof m.videoTitle === 'string' && m.videoTitle.trim() ? { videoTitle: m.videoTitle.trim() } : {}),
+            ...(typeof m.uploadedBy === 'string' && m.uploadedBy ? { uploadedBy: m.uploadedBy } : {}),
+          });
+        }
+        return out.length > 0 ? out : undefined;
+      })(),
     };
 
     let companyId: string | null = null;
