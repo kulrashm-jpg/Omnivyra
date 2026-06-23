@@ -45,8 +45,12 @@ import { getMetricsSnapshot }        from '../services/metricsCollector';
 import { runPublishingWorker }       from '../services/publishingJobService';
 import { createCreatorRenderWorker, recoverOrphanedCreatorRenderJobs } from '../services/creatorRenderDurableQueue';
 import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcessor';
-import { startCreatorContentWorkers } from '../queue/contentGenerationQueues';
+import { startCreatorContentWorkers, startWhatsAppBroadcastWorker, startWhatsAppWebhookWorker, startAnalyticsIngestionWorker } from '../queue/contentGenerationQueues';
 import { processCreatorContentJob } from '../queue/jobProcessors/creatorContentProcessor';
+import { processWhatsAppBroadcastJob } from '../queue/jobProcessors/whatsappBroadcastProcessor';
+import { processWhatsAppWebhookJob } from '../queue/jobProcessors/whatsappWebhookProcessor';
+import { processAnalyticsIngestionJob } from '../queue/jobProcessors/analyticsIngestionProcessor';
+import { runRenderParityPreflight, logPreflightReport } from './renderParityPreflight';
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
 import { startCron } from '../scheduler/cron';
 
@@ -293,6 +297,15 @@ async function main(): Promise<void> {
   // Redis readiness gate — before any queue processing begins
   await ensureRedisReady();
 
+  // Parity preflight — verify this runtime can do what localhost does (render
+  // SVG text glyphs = fonts present) and has prod-required env/assets. Logged
+  // loudly so a local↔prod divergence (e.g. missing fonts → blank renders) is
+  // visible at boot, not discovered via broken output. Non-fatal: the
+  // fail-CLOSED enforcement is the predeploy gate; this is runtime visibility.
+  await runRenderParityPreflight()
+    .then(logPreflightReport)
+    .catch((err) => console.error('[parity-preflight] probe errored (non-fatal):', err?.message));
+
   // Pre-warm template cache (zero GPT cost, improves first-job latency)
   await runCacheWarmup().catch((err) =>
     console.warn('[main] cache warmup failed (non-fatal):', err?.message));
@@ -313,6 +326,35 @@ async function main(): Promise<void> {
     });
   } catch (err) {
     console.error('[main] startCreatorContentWorkers FAILED — creator asset rendering will NOT work:',
+      err instanceof Error ? err.message : String(err));
+  }
+
+  // Topology-parity remediation (PROD-QUEUE-CONTRACT-AUDIT verdict D): these
+  // three queues are enqueued/exposed in production (analytics-ingestion via
+  // the daily vercel.json cron; whatsapp-broadcast/-webhook via the shipped
+  // WhatsApp feature) but had NO prod consumer — only the dev bootstrap
+  // (startWorkers.ts) registered them, so prod jobs sat in `waiting`. Reuse the
+  // SAME authority + processor as dev (no second implementation). Non-fatal +
+  // loud, mirroring the creator block.
+  try {
+    await startWhatsAppBroadcastWorker(processWhatsAppBroadcastJob);
+    console.info('[main] whatsapp broadcast worker registered', { queues: ['whatsapp-broadcast'] });
+  } catch (err) {
+    console.error('[main] startWhatsAppBroadcastWorker FAILED — WhatsApp broadcasts will NOT send:',
+      err instanceof Error ? err.message : String(err));
+  }
+  try {
+    await startWhatsAppWebhookWorker(processWhatsAppWebhookJob);
+    console.info('[main] whatsapp webhook worker registered', { queues: ['whatsapp-webhook'] });
+  } catch (err) {
+    console.error('[main] startWhatsAppWebhookWorker FAILED — inbound WhatsApp events will NOT process:',
+      err instanceof Error ? err.message : String(err));
+  }
+  try {
+    await startAnalyticsIngestionWorker(processAnalyticsIngestionJob);
+    console.info('[main] analytics ingestion worker registered', { queues: ['analytics-ingestion'] });
+  } catch (err) {
+    console.error('[main] startAnalyticsIngestionWorker FAILED — analytics ingestion will NOT run:',
       err instanceof Error ? err.message : String(err));
   }
 

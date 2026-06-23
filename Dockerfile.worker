@@ -50,6 +50,20 @@ RUN npm ci --omit=dev --legacy-peer-deps
 RUN npx playwright install --with-deps chromium \
   && rm -rf /var/lib/apt/lists/*
 
+# Text fonts for sharp/librsvg SVG <text> rasterization. Infographic/brand_card
+# bodies render as native SVG <text> with font-family "Inter, Arial"
+# (creatorAssetRenderer.ts). Without system fonts, librsvg emits text with NO
+# glyphs in production — local dev (Windows) silently resolves Arial, so the
+# same asset renders correctly locally but blank/garbled in prod. fonts-liberation
+# is a metric-compatible Arial substitute (resolves the "Arial" fallback);
+# DejaVu/Noto provide robust Latin/Unicode coverage. fc-cache registers them so
+# fontconfig (used by librsvg) can find them. (Brand-exact Inter can be bundled
+# + COPY'd here later for full typographic parity.)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fontconfig fonts-liberation fonts-dejavu-core fonts-noto-core \
+ && fc-cache -f \
+ && rm -rf /var/lib/apt/lists/*
+
 # Copy compiled output from builder
 COPY --from=builder /app/dist ./dist
 

@@ -176,12 +176,48 @@ try {
   }
 }
 
+// ── Render parity gate ───────────────────────────────────────────────────────
+// Verify THIS environment can rasterize SVG text glyphs (the infographic /
+// brand_card render path). On the dev box this catches render-CODE regressions;
+// the SAME script run INSIDE the worker Docker image in CI catches the FONT/ENV
+// gap that shipped blank infographics in prod while localhost rendered text.
+// exit 1 = blank (block deploy); exit 2 = environmental (sharp unavailable) → skip.
+process.stdout.write(`Verifying render-text parity (SVG glyph rasterization)...\n`);
+try {
+  execSync('node scripts/verify-render-parity.js', { stdio: 'inherit' });
+  process.stdout.write(`  render parity: OK\n`);
+} catch (e) {
+  const code = (e && typeof e.status === 'number') ? e.status : 1;
+  if (code === 2) {
+    process.stdout.write(
+      `  render parity: SKIPPED (sharp unavailable in this shell). ` +
+      `Run inside the worker image in CI for the prod-env check.\n`,
+    );
+  } else {
+    process.stdout.write(
+      `RESULT: BLOCKED — render-text parity failed. This environment cannot rasterize\n` +
+      `text glyphs (fonts missing) — infographics/brand_cards would render BLANK.\n` +
+      `Verify the worker image: build Dockerfile.worker, then run\n` +
+      `'node scripts/verify-render-parity.js' inside it (must exit 0).\n`,
+    );
+    process.exit(1);
+  }
+}
+
 process.stdout.write(
   `\nRESULT: OK — clean tree at ${shortSha} (== origin/main), worker typecheck + env OK.\n\n` +
   `Manual deploy is your action (not automated here). AFTER a verified\n` +
   `successful 'vercel --prod' deploy of omnivyra, record traceability:\n\n` +
   `  git tag -a ${tag} ${shortSha} -m "omnivyra prod deploy ${stamp}"\n` +
   `  git push origin ${tag}\n\n` +
-  `Then confirm: vercel inspect <deployment-url>  ==  ${shortSha}\n`,
+  `Then confirm: vercel inspect <deployment-url>  ==  ${shortSha}\n\n` +
+  `── DEPLOY LOCKSTEP (avoid Vercel/Railway skew) ──\n` +
+  `The Railway worker AUTO-deploys 'main'; Vercel is MANUAL. To keep them in\n` +
+  `lockstep, deploy BOTH from this same SHA (${shortSha}):\n` +
+  `  1. git push origin main   → Railway rebuilds the worker from ${shortSha}\n` +
+  `  2. vercel --prod          → Vercel app from the SAME checkout\n` +
+  `  3. Verify Railway's running commit == ${shortSha} (Railway dashboard/CLI)\n` +
+  `Running app and worker on different SHAs is a parity hazard (the worker may\n` +
+  `expect schema/contracts the app hasn't shipped, or vice versa).\n`,
 );
 process.exit(0);

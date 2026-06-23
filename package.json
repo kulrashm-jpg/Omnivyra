@@ -102,6 +102,7 @@
     "typecheck": "node scripts/typecheck-all.js",
     "typecheck:ci": "node scripts/typecheck-baseline.js",
     "predeploy:check": "node scripts/predeploy-check.js",
+    "verify:render-parity": "node scripts/verify-render-parity.js",
     "check:file-lengths": "node scripts/check-file-lengths.js",
     "audit:architecture-risk": "node architecture-migration/tools/ownership-risk-audit.mjs",
     "audit:semantic-enforcement": "node architecture-migration/tools/semantic-enforcement-engine.mjs",

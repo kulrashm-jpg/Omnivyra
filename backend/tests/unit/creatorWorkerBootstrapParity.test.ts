@@ -35,7 +35,9 @@ describe('creator-content worker bootstrap parity (dev ↔ prod)', () => {
 
   it('PROD bootstrap (main.ts) registers the creator-content workers via the SAME authority', () => {
     // Imports the same authority + processor (no second implementation).
-    expect(mainTs).toMatch(/import\s*\{\s*startCreatorContentWorkers\s*\}\s*from\s*['"]\.\.\/queue\/contentGenerationQueues['"]/);
+    // startCreatorContentWorkers must be imported from contentGenerationQueues
+    // (co-imported with the other parity-remediation starters is fine).
+    expect(mainTs).toMatch(/import\s*\{[^}]*\bstartCreatorContentWorkers\b[^}]*\}\s*from\s*['"]\.\.\/queue\/contentGenerationQueues['"]/);
     expect(mainTs).toMatch(/import\s*\{\s*processCreatorContentJob\s*\}\s*from\s*['"]\.\.\/queue\/jobProcessors\/creatorContentProcessor['"]/);
     // And calls it.
     expect(mainTs).toContain('startCreatorContentWorkers(processCreatorContentJob)');

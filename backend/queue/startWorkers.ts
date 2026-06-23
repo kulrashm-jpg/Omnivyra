@@ -31,12 +31,11 @@ import { processEngagementPollingJob } from './jobProcessors/engagementPollingPr
 import { processBoltJob } from './jobProcessors/boltProcessor';
 import { processContentGenerationJob } from './jobProcessors/contentGenerationProcessor';
 import { processCreatorContentJob } from './jobProcessors/creatorContentProcessor';
-import { processBoltContentJob } from './jobProcessors/boltContentJobProcessor';
 import { processWhatsAppBroadcastJob } from './jobProcessors/whatsappBroadcastProcessor';
 import { processWhatsAppWebhookJob } from './jobProcessors/whatsappWebhookProcessor';
 import { processAnalyticsIngestionJob } from './jobProcessors/analyticsIngestionProcessor';
 import { getIntelligencePollingWorker } from '../workers/intelligencePollingWorker';
-import { initializeContentQueues, startContentWorkers, startCreatorContentWorkers, startBoltContentWorkers, startWhatsAppBroadcastWorker, startWhatsAppWebhookWorker, startAnalyticsIngestionWorker } from './contentGenerationQueues';
+import { initializeContentQueues, startContentWorkers, startCreatorContentWorkers, startWhatsAppBroadcastWorker, startWhatsAppWebhookWorker, startAnalyticsIngestionWorker } from './contentGenerationQueues';
 
 let publishWorker: ReturnType<typeof getWorker>;
 let boltWorker: ReturnType<typeof getWorker>;
@@ -187,9 +186,13 @@ export async function startWorkers(): Promise<void> {
   try { await startCreatorContentWorkers(processCreatorContentJob); _diag('startWorkers:after-startCreatorContentWorkers'); }
   catch (e) { _diag('startWorkers:startCreatorContentWorkers-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
-  // Start BOLT content job workers (async per-topic master+variant+schedule)
-  try { await startBoltContentWorkers(processBoltContentJob); _diag('startWorkers:after-startBoltContentWorkers'); }
-  catch (e) { _diag('startWorkers:startBoltContentWorkers-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
+  // NOTE: bolt-content-jobs worker intentionally NOT registered. Per
+  // PROD-QUEUE-CONTRACT-AUDIT it is SUPERSEDED — the producer queueBoltContentJobs
+  // is gated on options.run_id and NO caller passes run_id (boltPipelineService
+  // omits it for the inline path; both campaign API endpoints omit it), so the
+  // queue is never enqueued in dev OR prod. Removing the dev consumer aligns
+  // local↔prod topology (prod never registered it either). The inline
+  // processBlockSchedule path handles structured scheduling.
 
   // Start WhatsApp broadcast workers (batched sends, tier-aware chunking)
   try { await startWhatsAppBroadcastWorker(processWhatsAppBroadcastJob); _diag('startWorkers:after-startWhatsAppBroadcastWorker'); }
