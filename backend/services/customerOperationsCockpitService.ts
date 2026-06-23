@@ -17,6 +17,14 @@ import { prioritizeCustomers, type PriorityTier } from './customerOpportunityPri
 import { generatePortfolioInsights, type ExecutiveInsight } from './customerExecutiveInsightService';
 import { loadReadinessHistory, computeCompanyEvolution, snapshotFromCurrent, generatePortfolioEvolution, type Trajectory } from './customerEvolutionService';
 import { checkCompanyIdentityDrift } from './companyIdentityDriftService';
+import { getCustomerOutcomes, type OutcomeClassification, type PortfolioOutcomes } from './customerOutcomeIntelligenceService';
+import { getCustomerImpactAttribution, type AttributionStatus, type PortfolioImpact } from './customerImpactAttributionService';
+import { getCustomerSignalConfidence, type ConfidenceLevel, type PortfolioSignalHealth } from './customerSignalConfidenceService';
+import { getCustomerAcquisitionIntelligence, type AcquisitionResult } from './customerAcquisitionIntelligenceService';
+import { generatePortfolioPlaybooks, type PlaybookCompanyInput, type RecommendedPlaybook, type PlaybookPortfolio } from './customerActionPlaybookService';
+import { scoreCoverage, type TelemetryCoverageResult } from './customerTelemetryCoverageService';
+import { getOnboardingConversion, type OnboardingConversionResult } from './onboardingConversionService';
+import type { ReadinessArea, ReadinessState } from './customerReadinessService';
 
 export type IdentityHealth = 'OK' | 'DRIFT' | 'UNKNOWN';
 
@@ -42,6 +50,14 @@ export interface CockpitCompany {
   narrative: string;
   trajectory: Trajectory;
   score_delta: number | null;
+  outcome_classification: OutcomeClassification;
+  net_change: number | null;
+  impact_status: AttributionStatus;
+  overall_signal_confidence: ConfidenceLevel;
+  stale_sources: number;
+  low_confidence_sources: number;
+  unknown_sources: number;
+  recommended_playbooks: RecommendedPlaybook[];
   ga: string; gsc: string; social: string; community: string;
   opportunity_count: number;
   highest_severity: OpportunitySeverity | null;
@@ -63,6 +79,14 @@ export interface CockpitResult {
   };
   companies: CockpitCompany[];
   signup_funnel: SignupFunnel;
+  outcomes: PortfolioOutcomes;
+  executive_outcome_summary: string[];
+  impact: PortfolioImpact;
+  signal_health: PortfolioSignalHealth;
+  acquisition: AcquisitionResult;
+  playbooks: PlaybookPortfolio;
+  telemetry: TelemetryCoverageResult;
+  onboarding_conversion: OnboardingConversionResult;
   portfolio: {
     priority_distribution: Record<PriorityTier, number>;
     trajectory_distribution: Record<Trajectory, number>;
@@ -169,6 +193,50 @@ export async function getCustomerOperations(
   const history = await loadReadinessHistory(ids);
   const identity = await loadIdentity(ids);
   const signup_funnel = await (deps.loadFunnel ?? loadSignupFunnel)();
+  const companyRefs = tenants.map((t) => ({ company_id: t.company_id, company_name: t.company_name }));
+  const outcomesResult = await getCustomerOutcomes(companyRefs);
+  const outcomeByCompany = new Map(outcomesResult.per_company.map((o) => [o.company_id, o]));
+  const impactResult = await getCustomerImpactAttribution(companyRefs);
+  const impactByCompany = new Map(impactResult.per_company.map((a) => [a.company_id, a]));
+  const signalRefs = tenants.map((t) => ({
+    company_id: t.company_id, company_name: t.company_name,
+    areas: {
+      COMPANY_PROFILE: t.company_profile_ready, WEBSITE: t.website_ready, GOOGLE_ANALYTICS: t.ga_ready,
+      GOOGLE_SEARCH_CONSOLE: t.gsc_ready, SOCIAL_INTEGRATIONS: t.social_ready, COMMUNITY: t.community_ready,
+      TEAM_MEMBERS: t.team_ready, BILLING: t.billing_ready,
+    } as Record<ReadinessArea, ReadinessState>,
+  }));
+  const signalResult = await getCustomerSignalConfidence(signalRefs);
+  const signalByCompany = new Map(signalResult.per_company.map((s) => [s.company_id, s]));
+
+  // Acquisition (portfolio-level, pre-company funnel) over the full population.
+  const acquisition = await getCustomerAcquisitionIntelligence({
+    companies_total: tenants.length,
+    active_total: tenants.filter((t) => t.tenant_status === 'ACTIVE').length,
+  });
+  const acquisitionComplete = acquisition.funnel.every((s) => s.measurable);
+
+  // Onboarding conversion (portfolio-level; two cohorts) — active ids from readiness.
+  const onboarding_conversion = await getOnboardingConversion({
+    activeCompanyIds: tenants.filter((t) => t.tenant_status === 'ACTIVE').map((t) => t.company_id),
+  });
+
+  // Action playbooks (admin-only, read-only) — gap → playbook, gated by signal confidence.
+  const playbookInputs: PlaybookCompanyInput[] = tenants.map((t) => {
+    const sig = signalByCompany.get(t.company_id);
+    const signal_confidence = Object.fromEntries((sig?.per_area ?? []).map((s) => [s.area, s.signal_confidence])) as Record<ReadinessArea, ConfidenceLevel>;
+    return {
+      company_id: t.company_id, company_name: t.company_name,
+      priority_tier: prioByCompany.get(t.company_id)?.priority_tier ?? 'READ_ONLY',
+      priority_score: prioByCompany.get(t.company_id)?.priority_score ?? 0,
+      areas: signalRefs.find((r) => r.company_id === t.company_id)!.areas,
+      signal_confidence,
+      outcome_classification: outcomeByCompany.get(t.company_id)?.outcome_classification ?? 'NO_HISTORY',
+      acquisition_evidence_complete: acquisitionComplete,
+    };
+  });
+  const playbookResult = generatePortfolioPlaybooks(playbookInputs);
+  const playbooksByCompany = new Map(playbookResult.per_company.map((c) => [c.company_id, c.recommended]));
 
   const evolutions: ReturnType<typeof computeCompanyEvolution>[] = [];
   const companiesAll: CockpitCompany[] = tenants.map((t: CompanyReadiness) => {
@@ -188,6 +256,14 @@ export async function getCustomerOperations(
       priority_score: p?.priority_score ?? 0, priority_tier: p?.priority_tier ?? 'READ_ONLY',
       key_insight: i?.key_insight ?? null, primary_blocker: i?.primary_blocker ?? null, primary_opportunity: i?.primary_opportunity ?? null, narrative: i?.narrative ?? '',
       trajectory: evo.trajectory, score_delta: evo.score_delta,
+      outcome_classification: outcomeByCompany.get(t.company_id)?.outcome_classification ?? 'NO_HISTORY',
+      net_change: outcomeByCompany.get(t.company_id)?.net_change ?? null,
+      impact_status: impactByCompany.get(t.company_id)?.impact_status ?? 'INSUFFICIENT_DATA',
+      overall_signal_confidence: signalByCompany.get(t.company_id)?.overall_signal_confidence ?? 'UNKNOWN',
+      stale_sources: signalByCompany.get(t.company_id)?.stale_sources.length ?? 0,
+      low_confidence_sources: signalByCompany.get(t.company_id)?.low_confidence_sources.length ?? 0,
+      unknown_sources: signalByCompany.get(t.company_id)?.unknown_sources.length ?? 0,
+      recommended_playbooks: playbooksByCompany.get(t.company_id) ?? [],
       ga: t.ga_ready, gsc: t.gsc_ready, social: t.social_ready, community: t.community_ready,
       opportunity_count: o?.opportunity_count ?? 0, highest_severity: o?.highest_severity ?? null,
       last_activity_at: t.last_activity_at,
@@ -210,6 +286,14 @@ export async function getCustomerOperations(
 
   return {
     summary, companies, signup_funnel,
+    outcomes: outcomesResult.portfolio,
+    executive_outcome_summary: outcomesResult.executive_summary,
+    impact: impactResult.portfolio,
+    signal_health: signalResult.portfolio,
+    acquisition,
+    playbooks: playbookResult.portfolio,
+    telemetry: scoreCoverage(),
+    onboarding_conversion,
     portfolio: { priority_distribution: prio.distribution, trajectory_distribution: evoPortfolio.trajectory_distribution, top_blockers: ins.portfolio.top_blockers },
   };
 }

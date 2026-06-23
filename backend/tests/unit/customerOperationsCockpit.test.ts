@@ -15,7 +15,11 @@ const co = (over: Partial<CockpitCompany> = {}): CockpitCompany => ({
   identity_health: 'OK', tenant_status: 'ACTIVE', plan: 'Pro', paying: true, user_count: 3, active_user_count_30d: 2,
   readiness_score: 70, readiness_bucket: 'PARTIAL', priority_score: 60, priority_tier: 'HIGH',
   key_insight: null, primary_blocker: null, primary_opportunity: null, narrative: '',
-  trajectory: 'UNKNOWN', score_delta: null, ga: 'NOT_READY', gsc: 'NOT_READY', social: 'READY', community: 'UNKNOWN',
+  trajectory: 'UNKNOWN', score_delta: null, outcome_classification: 'NO_HISTORY', net_change: null,
+  impact_status: 'INSUFFICIENT_DATA',
+  overall_signal_confidence: 'UNKNOWN', stale_sources: 0, low_confidence_sources: 0, unknown_sources: 0,
+  recommended_playbooks: [],
+  ga: 'NOT_READY', gsc: 'NOT_READY', social: 'READY', community: 'UNKNOWN',
   opportunity_count: 2, highest_severity: 'MEDIUM', last_activity_at: '2026-06-20T00:00:00Z',
   ...over,
 });
