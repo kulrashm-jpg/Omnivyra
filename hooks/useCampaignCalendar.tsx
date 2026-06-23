@@ -6,6 +6,7 @@ import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 // CREATOR_REQUIRED, etc. Used to label rows whose source omits execution_mode
 // so attachment-required content (video) is never shown as "AI Ready".
 import { inferExecutionMode } from '../backend/services/executionModeInference';
+import { isActivityOverdue } from '../lib/shared/statusOverlay';
 
 /** Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc. */
 function RepurposeDots({ index, total, contentType }: { index: number; total: number; contentType?: string }) {
@@ -52,6 +53,8 @@ type CalendarActivity = {
     execution_status?: ExecutionStatus;
   }>;
   raw_item: Record<string, unknown>;
+  /** PHASE STATUS-OVERLAY-PARITY — past-due scheduled overlay (Dashboard parity). */
+  is_overdue?: boolean;
   /** When set, ownership colors override default card styling (additive). */
   execution_mode?: string;
   /** Repurpose lineage: e.g. 1/3, 2/3, 3/3 for repurposed content. */
@@ -271,6 +274,15 @@ export function useCampaignCalendar() {
                   const grp = String(ev.canonical_group || '');
                   const execution_status: ExecutionStatus =
                     grp === 'scheduled' || grp === 'published' ? 'SCHEDULED' : 'PENDING';
+                  // PHASE STATUS-OVERLAY-PARITY — apply the SAME overdue overlay
+                  // the Dashboard uses (shared authority) so a past-due scheduled
+                  // post shows "Overdue" here too, not a green "Scheduled".
+                  const is_overdue = isActivityOverdue({
+                    status: (ev as { status?: string }).status,
+                    date,
+                    scheduledFor: ev.scheduled_for,
+                    isOverdue: (ev as { is_overdue?: boolean }).is_overdue,
+                  });
                   return {
                     execution_id: String(ev.execution_id || ev.scheduled_post_id || `evt-${i}`),
                     week_number: 0,
@@ -281,6 +293,7 @@ export function useCampaignCalendar() {
                     platform: String(ev.platform || 'linkedin'),
                     content_type: String(ev.asset_type || ev.content_type || 'post'),
                     execution_status,
+                    is_overdue,
                     execution_mode: (typeof ev.execution_mode === 'string' && ev.execution_mode)
                       ? ev.execution_mode
                       : inferExecutionMode(String(ev.asset_type || ev.content_type || 'post')),

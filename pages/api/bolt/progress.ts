@@ -117,10 +117,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       'continuing-to-refinement': 'Continuing to refinement',
       refining: 'Refining language and tone',
     };
+    // PHASE DAILY-PLAN-STAGE-VISIBILITY — intra-stage substages for the daily-plan
+    // build, surfaced exactly like ai/plan substages (parent label stays stable).
+    const weeklyStructureSubStageLabels: Record<string, string> = {
+      preparing: 'Preparing weekly structure',
+      allocating: 'Allocating content types',
+      'building-rows': 'Building activity rows',
+      validating: 'Validating activities',
+      saving: 'Saving activities',
+    };
     const stage = row.current_stage;
     let stageLabel = stageLabels[stage];
     let aiPlanSubStage: string | undefined;
     let aiPlanSubStageLabel: string | undefined;
+    let weeklyStructureSubStage: string | undefined;
+    let weeklyStructureSubStageLabel: string | undefined;
+    if (!stageLabel && stage?.startsWith('generate-weekly-structure:')) {
+      // generate-weekly-structure:<sub> — keep the parent "Creating daily plans"
+      // label and surface the sub-stage separately (like ai/plan).
+      stageLabel = stageLabels['generate-weekly-structure'];
+      const sub = stage.slice('generate-weekly-structure:'.length);
+      weeklyStructureSubStage = sub;
+      weeklyStructureSubStageLabel = weeklyStructureSubStageLabels[sub];
+    }
     if (!stageLabel && stage?.startsWith('ai/plan:')) {
       // ai/plan:<substage> — surface as the parent label so progress-bar
       // logic (which keys off stage === 'ai/plan') keeps working, and ship
@@ -248,6 +267,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stage_label: stageLabel,
       ai_plan_substage: aiPlanSubStage,
       ai_plan_substage_label: aiPlanSubStageLabel,
+      weekly_structure_substage: weeklyStructureSubStage,
+      weekly_structure_substage_label: weeklyStructureSubStageLabel,
       status: row.status,
       progress_percentage: row.progress_percentage,
       result_campaign_id: row.result_campaign_id ?? undefined,

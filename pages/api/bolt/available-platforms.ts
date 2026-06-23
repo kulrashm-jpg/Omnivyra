@@ -19,7 +19,9 @@
  *
  * Mode mapping (Round-5):
  *   bolt-text         → ContentCapability 'text'        (filter)
- *   bolt-creator      → ContentCapability 'creator'     (filter)
+ *   bolt-creator      → creator asset capability set    (filter)
+ *                       {creator, image, carousel} — every visual-capable
+ *                       connected platform; UI narrows per selected format.
  *   intelligent-mix   → union: all registry-known       (no capability filter)
  *   strategy-mix      → union: all registry-known       (no capability filter)
  *
@@ -113,7 +115,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Single-capability mode — route through the canonical filter helper.
-    const filtered = filterConnectedPlatformsForContent(connected, { workflowType: capability });
+    // BOLT Creator produces image / carousel / video assets, so its picker must
+    // activate EVERY connected platform that accepts ANY of those — not just the
+    // native-creator set (Instagram / TikTok / YouTube) the coarse 'creator'
+    // capability resolves to. Expanding the resolved capability set lights up
+    // LinkedIn / Facebook / X / Pinterest (all visual-capable); the UI then
+    // narrows the list per the format(s) the user selects (CREATOR_FORMAT_CAPABILITY).
+    const filtered = filterConnectedPlatformsForContent(connected, {
+      workflowType: capability,
+      ...(mode === 'bolt-creator'
+        ? { attachedAssetTypes: ['image', 'carousel', 'video'] }
+        : {}),
+    });
     return res.status(200).json({
       mode,
       capability: filtered.capability,

@@ -2,6 +2,7 @@ import React from 'react';
 import { ArrowLeft, Save, X } from 'lucide-react';
 import type { useActivityWorkspace } from '../../hooks/useActivityWorkspace';
 import { isActivityDetailMode } from '@/lib/shared/activityWorkspaceMode';
+import { isActivityOverdue, resolveOverlayGroup, OVERLAY_GROUP_LABELS } from '@/lib/shared/statusOverlay';
 
 type S = ReturnType<typeof useActivityWorkspace>;
 
@@ -42,6 +43,10 @@ export default function ActivityWorkspaceHeader({ d }: { d: S }) {
     const platform = String(first?.platform || (payload as any)?.dailyExecutionItem?.platform || '').trim();
     const status = String(first?.status || '').trim();
     const scheduledTime = [first?.date, first?.time].filter(Boolean).join(' ').trim();
+    // PHASE STATUS-OVERLAY-PARITY — same overdue/canonical overlay as Dashboard
+    // + Calendar (shared authority), so the workspace status pill agrees.
+    const overdue = isActivityOverdue({ status, date: first?.date, scheduledFor: (first as any)?.scheduled_for });
+    const statusLabel = status ? OVERLAY_GROUP_LABELS[resolveOverlayGroup({ status, overdue })] : '';
     const campaignId = String((payload as any)?.campaignId || '').trim();
     const companyId = String((payload as any)?.companyId || '').trim();
     const backToCalendar = () => {
@@ -51,10 +56,12 @@ export default function ActivityWorkspaceHeader({ d }: { d: S }) {
         try { window.history.back(); } catch { window.close(); }
       }
     };
-    const Pill = ({ label, value }: { label: string; value: string }) => (
-      <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-700">
-        <span className="text-gray-400">{label}:</span>
-        <span className="font-medium text-gray-800">{value}</span>
+    const Pill = ({ label, value, tone }: { label: string; value: string; tone?: 'overdue' }) => (
+      <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs ${
+        tone === 'overdue' ? 'border-red-300 bg-red-600 text-white' : 'border-gray-200 bg-gray-50 text-gray-700'
+      }`}>
+        <span className={tone === 'overdue' ? 'text-red-100' : 'text-gray-400'}>{label}:</span>
+        <span className={`font-medium ${tone === 'overdue' ? 'text-white' : 'text-gray-800'}`}>{value}</span>
       </span>
     );
     return (
@@ -67,7 +74,7 @@ export default function ActivityWorkspaceHeader({ d }: { d: S }) {
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {platform ? <Pill label="Platform" value={labelize ? labelize(platform) : platform} /> : null}
               {contentType ? <Pill label="Content type" value={String(contentType)} /> : null}
-              {status ? <Pill label="Status" value={status} /> : null}
+              {statusLabel ? <Pill label="Status" value={statusLabel} tone={overdue ? 'overdue' : undefined} /> : null}
               {scheduledTime ? <Pill label="Scheduled" value={scheduledTime} /> : null}
             </div>
           </div>

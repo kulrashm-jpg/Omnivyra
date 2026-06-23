@@ -25,6 +25,14 @@
 import dns from 'dns/promises';
 import { Agent, buildConnector } from 'undici';
 import { logger } from './logger';
+import {
+  normalizeDomain,
+  registrableRoot,
+} from '../../lib/shared/domain/companyDomain';
+
+// Re-exported from the pure shared module so this remains the historical
+// import site while `lib/shared/domain/companyDomain.ts` is the single source.
+export { normalizeDomain, registrableRoot };
 
 const MAX_REDIRECTS = 8;
 const PER_HOP_TIMEOUT_MS = 3_000;
@@ -35,15 +43,6 @@ const MAX_RESPONSE_BYTES = 1_048_576; // 1 MB
  *  network error. */
 const REBIND_BLOCK_CODE = 'EREBINDBLOCK';
 
-const KNOWN_MULTI_PART_TLDS = new Set([
-  'co.uk', 'org.uk', 'ac.uk', 'gov.uk',
-  'co.jp', 'or.jp', 'ne.jp', 'ac.jp', 'go.jp',
-  'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au',
-  'co.in', 'net.in', 'org.in',
-  'com.br', 'com.mx', 'com.ar', 'com.cn',
-  'co.kr', 'co.za', 'co.nz',
-]);
-
 export interface ResolveDomainResult {
   input_domain: string;
   final_domain: string;
@@ -53,27 +52,6 @@ export interface ResolveDomainResult {
   resolution_blocked?: boolean;
   /** True when the resolution failed (DNS, timeout, fetch error). Callers MUST reject. */
   resolution_failed?: boolean;
-}
-
-export function normalizeDomain(raw: string): string {
-  if (!raw) return '';
-  let s = String(raw).trim().toLowerCase();
-  s = s.replace(/^[a-z][a-z0-9+\-.]*:\/\//, '');
-  s = s.split('/')[0].split('?')[0].split('#')[0];
-  s = s.replace(/^www\./, '');
-  s = s.split(':')[0];
-  return s;
-}
-
-export function registrableRoot(host: string): string {
-  if (!host) return '';
-  const parts = host.split('.').filter(Boolean);
-  if (parts.length <= 2) return host;
-  const lastTwo = parts.slice(-2).join('.');
-  if (KNOWN_MULTI_PART_TLDS.has(lastTwo) && parts.length >= 3) {
-    return parts.slice(-3).join('.');
-  }
-  return lastTwo;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';
 import { ProgressCard } from '../../components/bolt/ProgressCard';
+import { getProgressPipeline } from '../../lib/shared/bolt/progressModel';
 import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
 import { FORMATS_SUPPORTING_CROSS_PLATFORM } from '../../lib/shared/bolt/crossPlatformSharing';
 
@@ -114,13 +115,8 @@ function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (
   );
 }
 
-/* ─── BOLT stage pipeline (creator — no schedule stages) ─────────────────── */
-const BOLT_PIPELINE: { stage: string; label: string }[] = [
-  { stage: 'source-recommendation',    label: 'Preparing week plan' },
-  { stage: 'ai/plan',                  label: 'Creating week plan' },
-  { stage: 'commit-plan',              label: 'Saving blueprint' },
-  { stage: 'generate-weekly-structure', label: 'Creating daily activity plan' },
-];
+/* ─── BOLT stage pipeline — single canonical authority (PROGRESS-PARITY) ──── */
+const BOLT_PIPELINE = getProgressPipeline('CREATOR');
 
 /* ─── Inline BOLT progress tracker — shared ProgressCard renderer (6H-B) ──── */
 function CardBoltProgress({ progress, startedAt }: {

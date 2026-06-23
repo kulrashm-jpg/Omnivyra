@@ -106,6 +106,11 @@ import {
 
 const AI_PLAN_TIMEOUT_MS = 120_000;
 const GENERATE_WEEKLY_TIMEOUT_MS = 90_000;
+// PHASE DAILY-PLAN-STAGE-VISIBILITY — heartbeat cadence for intra-stage
+// "Building Activities" substages. Lightweight (fire-and-forget current_stage
+// refresh) so the UI never sits frozen on a single label during the deterministic
+// daily-plan build. Does NOT affect execution/timeout/persistence.
+const GENERATE_WEEKLY_HEARTBEAT_MS = 8_000;
 
 function normalizeOptionalUuid(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -1120,6 +1125,14 @@ async function runGenerateWeeklyStructure(
     await updateRun({ current_stage: batchStageName, status: 'running' });
     await logEvent(runId, batchStageName, 'started');
 
+    // PHASE DAILY-PLAN-STAGE-VISIBILITY — intra-stage "Building Activities"
+    // substages emitted from the ORCHESTRATOR around the deterministic build
+    // (generateWeeklyStructureService is NOT touched). Mirrors the ai/plan
+    // substage pattern: fire-and-forget current_stage refresh, never throws.
+    const emitWeeklySub = (sub: string) =>
+      void updateRun({ current_stage: `generate-weekly-structure:${sub}` }).catch(() => { /* advisory */ });
+    emitWeeklySub('preparing');
+
           // Resolve format_frequency: always pass it when available so generateWeeklyStructure
           // creates daily plans for ALL selected content types (not just the AI plan's content_type_mix).
           const resolvedFormatFreq = (() => {
@@ -1163,15 +1176,26 @@ async function runGenerateWeeklyStructure(
           : {}),
       });
 
-    const data = await retryWithBackoff(
-      () =>
-        withTimeout(
-          callService(),
-          GENERATE_WEEKLY_TIMEOUT_MS * Math.max(1, batchWeeks.length / 2),
-          `generate-weekly-structure weeks ${batchWeeks.join(',')}`
-        ),
-      { maxRetries: 3, initialDelayMs: 1000 }
-    );
+    // Heartbeat: while the deterministic build runs (up to ~180s) keep the
+    // "Building activity rows…" substage fresh so the elapsed timer + tips
+    // animate and the screen never looks frozen. Cleared in `finally`.
+    emitWeeklySub('building-rows');
+    const weeklyHeartbeat = setInterval(() => emitWeeklySub('building-rows'), GENERATE_WEEKLY_HEARTBEAT_MS);
+    let data: Awaited<ReturnType<typeof callService>>;
+    try {
+      data = await retryWithBackoff(
+        () =>
+          withTimeout(
+            callService(),
+            GENERATE_WEEKLY_TIMEOUT_MS * Math.max(1, batchWeeks.length / 2),
+            `generate-weekly-structure weeks ${batchWeeks.join(',')}`
+          ),
+        { maxRetries: 3, initialDelayMs: 1000 }
+      );
+    } finally {
+      clearInterval(weeklyHeartbeat);
+    }
+    emitWeeklySub('saving');
 
     const count = Array.isArray(data?.dailyPlan) ? data.dailyPlan.length : 0;
     dailySlotsCreated += count;
@@ -1182,6 +1206,12 @@ async function runGenerateWeeklyStructure(
         dailySlots: Math.floor(count / batchWeeks.length),
       });
     }
+    // Advance the per-week numeric progress shown by ProgressCard
+    // ("Nw generated · X slots") — progress telemetry only, not a campaign output.
+    void updateRun({
+      weeks_generated: completedWeeksSoFar.length + batchWeeks.length,
+      daily_slots_created: dailySlotsCreated,
+    }).catch(() => { /* advisory */ });
 
     completedWeeksSoFar = [...completedWeeksSoFar, ...batchWeeks];
   }

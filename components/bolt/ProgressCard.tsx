@@ -13,10 +13,14 @@
 
 import React, { useState, useEffect } from 'react';
 import type { BOLTProgress } from '../BOLTProgressModal';
+// PHASE BOLT-PROGRESS-PARITY — stage ordering/labels/resolution now come from
+// the single canonical authority. ProgressStep gains `backendStages` so the
+// resolver maps runtime stages to canonical steps. ai/plan substage rendering
+// below is unchanged (still keyed off `step.stage === 'ai/plan'`).
+import { resolveCanonicalStageIndex, type ProgressStep } from '../../lib/shared/bolt/progressModel';
 
 export type { BOLTProgress };
-
-export type ProgressStep = { stage: string; label: string };
+export type { ProgressStep };
 
 export type ContentJobProgress = {
   total: number; done: number; failed: number; active: number;
@@ -24,20 +28,9 @@ export type ContentJobProgress = {
   is_complete: boolean;
 };
 
-// Map a runtime stage (incl. ai/plan:<sub> and generate-weekly-structure-week-N
-// substage names) to its index within THIS surface's pipeline.
+// Map a runtime stage to its index within the canonical pipeline (single authority).
 function resolveStageIndex(stage: string | undefined, pipeline: ProgressStep[]): number {
-  if (!stage) return -1;
-  const exact = pipeline.findIndex((s) => s.stage === stage);
-  if (exact !== -1) return exact;
-  if (stage.startsWith('ai/plan:')) return pipeline.findIndex((s) => s.stage === 'ai/plan');
-  if (stage.startsWith('generate-weekly-structure')) return pipeline.findIndex((s) => s.stage === 'generate-weekly-structure');
-  if (stage.startsWith('schedule')) {
-    const sched = pipeline.findIndex((s) => s.stage === stage);
-    if (sched !== -1) return sched;
-    return pipeline.findIndex((s) => s.stage.startsWith('schedule'));
-  }
-  return -1;
+  return resolveCanonicalStageIndex(stage, pipeline);
 }
 
 const AI_PLAN_FALLBACK_TIPS = [
@@ -142,6 +135,9 @@ export function ProgressCard({ progress, pipeline, startedAt, dotClass = 'bg-vio
           const isDone    = currentIdx > i;
           const isCurrent = !isCompleted && currentIdx === i;
           const showAiPlanDetail = isCurrent && step.stage === 'ai/plan';
+          // PHASE DAILY-PLAN-STAGE-VISIBILITY — reuse the SAME substage line for
+          // the Building Activities step so it animates exactly like ai/plan.
+          const showWeeklyDetail = isCurrent && step.stage === 'generate-weekly-structure';
           return (
             <React.Fragment key={step.stage}>
               <div className="flex items-center gap-2">
@@ -164,6 +160,13 @@ export function ProgressCard({ progress, pipeline, startedAt, dotClass = 'bg-vio
                 <AiPlanSubStageLine
                   substage={progress.ai_plan_substage}
                   substageLabel={progress.ai_plan_substage_label}
+                  elapsedMs={elapsedMs}
+                />
+              )}
+              {showWeeklyDetail && (
+                <AiPlanSubStageLine
+                  substage={progress.weekly_structure_substage}
+                  substageLabel={progress.weekly_structure_substage_label}
                   elapsedMs={elapsedMs}
                 />
               )}

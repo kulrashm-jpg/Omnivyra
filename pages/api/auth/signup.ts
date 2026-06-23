@@ -24,7 +24,10 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
+import {
+  validateCompanyIdentity,
+  COMPANY_IDENTITY_VALIDATION_VERSION,
+} from '../../../backend/services/companyIdentityValidationService';
 import { httpStatusFor, ELIGIBILITY_MESSAGES } from '../../../lib/auth/domainEligibilityModel';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { logger } from '../../../backend/services/logger';
@@ -77,23 +80,13 @@ export default async function handler(
   const domain = normalizedEmail.split('@')[1] ?? '';
   if (!domain) return res.status(400).json({ error: 'Invalid email address' });
 
-  // ── 1. Domain eligibility (single source of truth) ───────────────────────
-  // Personal/public, disposable, no-email-capability, forwarding, and blocked
-  // domains are all classified by the one engine and messaged from
-  // ELIGIBILITY_MESSAGES. CLAIMED_DOMAIN is decided later (section 4); the
-  // canonical/forwarding website probe stays staged in setup-company. On a
-  // transient lookup error we log and proceed rather than block a real signup.
-  try {
-    const eligibility = await checkDomainEligibility(normalizedEmail);
-    if (!eligibility.eligible) {
-      return res.status(httpStatusFor(eligibility.result)).json({
-        error: ELIGIBILITY_MESSAGES[eligibility.result],
-        code: eligibility.result,
-      });
-    }
-  } catch (err: any) {
-    logger.warn('auth_signup_eligibility_check_failed', { email: normalizedEmail, message: err?.message });
-  }
+  // ── 1. Authoritative company-identity gate ───────────────────────────────
+  // The single eligibility decision (personal-email, email capability, live
+  // canonical website at the email domain, website⇄email-domain match) now
+  // runs in section 4.5 below — AFTER the existing-user / orphan / claimed
+  // checks — so a returning user whose website is transiently down can still
+  // resume, and an already-claimed domain keeps the richer notify flow in
+  // section 4. See validateCompanyIdentity (companyIdentityValidationService).
 
   // ── 2. Same email already a completed user? ──────────────────────────────
   // An existing public.users row with an active role = finished account;
@@ -238,8 +231,56 @@ export default async function handler(
     }
   }
 
+  // ── 4.5. Authoritative company-identity validation (rules 1–4) ───────────
+  // THE single eligibility decision. Runs only for genuinely-new, non-claimed
+  // signups (returning users resumed in §2/§3; claimed domains returned in §4).
+  // Fail-CLOSED: if validation cannot complete, we never let the client create
+  // an account — onboarding/setup-company will no longer re-validate (Phase 8),
+  // so the verdict must be settled here. Rule 5 (already-claimed) is owned by
+  // §4 above, so it is disabled in this call to avoid a second, side-effect-free
+  // claimed check racing the notify/referral flow.
+  let identity;
+  try {
+    identity = await validateCompanyIdentity(normalizedEmail, {
+      lookupClaimedCompany: async () => null,
+    });
+  } catch (err: any) {
+    logger.error('auth_signup_identity_validation_threw', { email: normalizedEmail, message: err?.message });
+    return res.status(503).json({
+      error: 'We could not verify your organization right now. Please try again in a moment.',
+      code:  'IDENTITY_VALIDATION_UNAVAILABLE',
+    });
+  }
+
+  if (!identity.eligible) {
+    // PUBLIC_EMAIL / NO_EMAIL_CAPABILITY / NO_WEBSITE_FOUND / FORWARDING_DOMAIN /
+    // DOMAIN_NOT_CANONICAL / DOMAIN_MISMATCH / BLOCKED — all messaged from the
+    // single ELIGIBILITY_MESSAGES source. Review-needed cases surface the
+    // "contact our team" copy; no review row is written yet (Phase 5 pending).
+    const reason = identity.validationReason ?? 'BLOCKED';
+    logger.info('auth_signup_identity_blocked', {
+      email: normalizedEmail,
+      reason,
+      requiresManualReview: identity.requiresManualReview,
+    });
+    return res.status(httpStatusFor(reason)).json({
+      error: ELIGIBILITY_MESSAGES[reason],
+      code:  reason,
+    });
+  }
+
   // ── 5. Fresh signup path — upsert signup_intents and let the client proceed.
+  // The validated identity is persisted on the intent so onboarding/setup-company
+  // consume the verdict instead of re-deriving it (system-of-record handoff).
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const intentData = {
+    company_name:             trimmedCompany,
+    validated_company_domain: identity.companyIdentityDomain,
+    validated_website_domain: identity.normalizedWebsiteDomain,
+    validated_website_url:    identity.websiteUrl,
+    validated_at:             new Date().toISOString(),
+    validation_version:       COMPANY_IDENTITY_VALIDATION_VERSION,
+  };
 
   const { data: existingIntent } = await supabase
     .from('signup_intents')
@@ -255,7 +296,7 @@ export default async function handler(
       source:      'signup_form',
       status:      'pending',
       expires_at:  expiresAt,
-      intent_data: { company_name: trimmedCompany },
+      intent_data: intentData,
     });
 
     if (insertErr) {
@@ -263,11 +304,11 @@ export default async function handler(
       return res.status(500).json({ error: 'Failed to initiate signup' });
     }
   } else {
-    // Refresh the existing pending intent with the latest company name in
-    // case the user changed it before re-submitting the signup form.
+    // Refresh the existing pending intent with the latest company name +
+    // validated identity in case the user changed it before re-submitting.
     await supabase
       .from('signup_intents')
-      .update({ intent_data: { company_name: trimmedCompany } })
+      .update({ intent_data: intentData })
       .eq('id', (existingIntent as { id: string }).id);
   }
 

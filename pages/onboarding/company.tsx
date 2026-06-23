@@ -24,7 +24,7 @@ import { apiFetch } from '../../lib/apiFetch';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { userScopedStorageKey } from '../../utils/authStorage';
 
-type Step = 'loading' | 'website' | 'details' | 'saving' | 'joined' | 'company-exists';
+type Step = 'loading' | 'details' | 'saving' | 'joined' | 'company-exists';
 const COMPANY_DRAFT_KEY = 'onboarding_company_draft_v1';
 
 const INDUSTRIES = [
@@ -66,13 +66,9 @@ const BUSINESS_TYPES = [
   { value: 'agency', label: 'Agency' },
 ];
 
-const FREE_DOMAINS = new Set(['gmail.com','googlemail.com','yahoo.com','outlook.com','hotmail.com','live.com','msn.com','icloud.com','me.com','mac.com','protonmail.com','proton.me','aol.com','mail.com']);
-
-function deriveWebsiteFromEmail(email: string | null | undefined): string {
-  const domain = String(email || '').split('@')[1]?.trim().toLowerCase();
-  if (!domain || FREE_DOMAINS.has(domain)) return '';
-  return `https://www.${domain}`;
-}
+// Phase 7: onboarding no longer derives the website from the email. The company
+// identity (website) is validated ONCE at signup and read from the server via
+// /api/onboarding/validated-identity. This component only DISPLAYS it.
 
 function guessCompanyName(url: string): string {
   try {
@@ -84,12 +80,6 @@ function guessCompanyName(url: string): string {
   }
 }
 
-function normaliseUrl(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-  return trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
-}
-
 export default function CompanySetupPage() {
   const router = useRouter();
   const { refreshCompanies } = useCompanyContext();
@@ -97,7 +87,9 @@ export default function CompanySetupPage() {
   const [step, setStep]             = useState<Step>('loading');
   const [session, setSession]       = useState<any>(null);
   const [websiteInput, setWebsite]  = useState('');
-  const [websiteDerivedFromEmail, setWebsiteDerivedFromEmail] = useState(false);
+  // True once the signup-validated website has been loaded from the server.
+  // The website field is ALWAYS presentation-only; this only drives the copy.
+  const [websiteValidated, setWebsiteValidated] = useState(false);
   const [companyName, setCompanyName] = useState('');
   const [industry, setIndustry]     = useState('');
   const [businessTypes, setBusinessTypes] = useState<string[]>([]);
@@ -124,34 +116,42 @@ export default function CompanySetupPage() {
       const { data: userData } = await getSupabaseBrowser().auth.getUser();
       const draftKey = userScopedStorageKey(COMPANY_DRAFT_KEY, userData.user?.id) ?? COMPANY_DRAFT_KEY;
       setCompanyDraftKey(draftKey);
-      const emailDerivedWebsite = deriveWebsiteFromEmail(userData.user?.email);
-      if (emailDerivedWebsite) {
-        setWebsite(emailDerivedWebsite);
-        setCompanyName((current) => current || guessCompanyName(emailDerivedWebsite));
-        setWebsiteDerivedFromEmail(true);
-      } else {
-        setWebsiteDerivedFromEmail(false);
+      // Phase 7: READ the signup-validated company identity (system-of-record).
+      // The website is presentation-only — never derived here, never editable,
+      // and is exactly what setup-company will persist (same shared resolver).
+      try {
+        const idRes = await apiFetch('/api/onboarding/validated-identity');
+        if (idRes.ok) {
+          const identity = await idRes.json().catch(() => null) as
+            | { websiteUrl?: string | null }
+            | null;
+          if (identity?.websiteUrl) {
+            setWebsite(identity.websiteUrl);
+            setCompanyName((current) => current || guessCompanyName(identity.websiteUrl!));
+            setWebsiteValidated(true);
+          }
+        }
+      } catch {
+        // Non-fatal — the website simply shows empty (read-only). setup-company
+        // resolves the canonical website server-side regardless.
       }
 
       try {
         const draftRaw = localStorage.getItem(draftKey);
         if (draftRaw) {
+          // NOTE: the website is intentionally NOT restored from draft — it is
+          // owned by the server-validated identity and must never diverge.
           const draft = JSON.parse(draftRaw) as {
-            websiteInput?: string;
             companyName?: string;
             industry?: string;
             businessTypes?: string[];
             teamSize?: string;
             step?: Step;
           };
-          if (draft.websiteInput && !emailDerivedWebsite) setWebsite(draft.websiteInput);
           if (draft.companyName) setCompanyName(draft.companyName);
           if (draft.industry) setIndustry(draft.industry);
           if (Array.isArray(draft.businessTypes)) setBusinessTypes(draft.businessTypes);
           if (draft.teamSize) setTeamSize(draft.teamSize);
-          if (draft.step === 'details' && (draft.companyName || draft.websiteInput || emailDerivedWebsite)) {
-            setStep('details');
-          }
         }
       } catch {
         // Ignore unreadable draft state
@@ -192,57 +192,26 @@ export default function CompanySetupPage() {
         // Non-fatal — fall through to company creation form
       }
 
-      setStep((current) => (current === 'details' ? current : emailDerivedWebsite ? 'details' : 'website'));
+      setStep((current) => (current === 'details' ? current : 'details'));
     });
   }, [router]);
 
   useEffect(() => {
     if (step === 'loading' || step === 'saving' || step === 'joined' || step === 'company-exists') return;
     try {
+      // Website is NOT persisted to draft — it is owned by the server-validated
+      // identity and reloaded each visit so it can never diverge.
       localStorage.setItem(
         companyDraftKey,
-        JSON.stringify({ websiteInput, companyName, industry, businessTypes, teamSize, step }),
+        JSON.stringify({ companyName, industry, businessTypes, teamSize, step }),
       );
       localStorage.removeItem(COMPANY_DRAFT_KEY);
     } catch {
       // ignore storage failures
     }
-  }, [websiteInput, companyName, industry, businessTypes, teamSize, step, companyDraftKey]);
+  }, [companyName, industry, businessTypes, teamSize, step, companyDraftKey]);
 
-  // ── Step A: website submitted ─────────────────────────────────────────────
-  function handleWebsiteNext(e: FormEvent) {
-    e.preventDefault();
-    const url = normaliseUrl(websiteInput);
-    if (!url) { setErrorMsg('Please enter your company website.'); return; }
-
-    // Client-side public website validation (mirrors server-side validatePublicWebsite)
-    try {
-      const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
-      if (!hostname || !hostname.includes('.')) {
-        setErrorMsg('Please enter a valid website URL with a domain (e.g. yourcompany.com).');
-        return;
-      }
-      if (/^localhost$|^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^0\.0\.0\.0$/.test(hostname)) {
-        setErrorMsg('Please enter a public website URL, not a local or private address.');
-        return;
-      }
-      if (FREE_DOMAINS.has(hostname)) {
-        setErrorMsg('Please enter your company website, not a personal email provider domain.');
-        return;
-      }
-    } catch {
-      setErrorMsg('Please enter a valid website URL (e.g. yourcompany.com).');
-      return;
-    }
-
-    setErrorMsg(null);
-    const guessed = guessCompanyName(url);
-    setCompanyName(guessed);
-    setWebsite(url);
-    setStep('details');
-  }
-
-  // ── Step B: details submitted ─────────────────────────────────────────────
+  // ── Details submitted ──────────────────────────────────────────────────────
   async function handleDetailsSubmit(e: FormEvent) {
     e.preventDefault();
     if (!companyName.trim()) { setErrorMsg('Please enter your company name.'); return; }
@@ -322,16 +291,14 @@ export default function CompanySetupPage() {
             <Link href="/">
               <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
             </Link>
-            {(step === 'website' || step === 'details') && (
-              <span className="text-xs text-[#6B7C93]">
-                {step === 'website' ? 'Last step' : 'Almost done'}
-              </span>
+            {step === 'details' && (
+              <span className="text-xs text-[#6B7C93]">Almost done</span>
             )}
           </div>
           <div className="h-0.5 w-full bg-gray-100">
             <div
               className="h-0.5 bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] transition-all duration-500"
-              style={{ width: step === 'saving' ? '100%' : step === 'details' ? '80%' : step === 'website' ? '50%' : '20%' }}
+              style={{ width: step === 'saving' ? '100%' : step === 'details' ? '80%' : '20%' }}
             />
           </div>
         </header>
@@ -350,70 +317,7 @@ export default function CompanySetupPage() {
               </div>
             )}
 
-            {/* ── Step A: website URL ──────────────────────────────────── */}
-            {step === 'website' && (
-              <div className="animate-fadeIn">
-                <div className="mb-8 text-center">
-                  <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] shadow-lg">
-                    <svg className="h-7 w-7 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={1.6} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
-                    </svg>
-                  </div>
-                  <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]">
-                    Tell us about your company
-                  </h1>
-                  <p className="mt-2 text-sm leading-relaxed text-[#6B7C93]">
-                    Enter your website and we'll pre-fill your company details — you can edit anything before saving.
-                  </p>
-                </div>
-
-                <form onSubmit={handleWebsiteNext} className="space-y-4">
-                  <div>
-                    <label htmlFor="website" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
-                      Company website
-                    </label>
-                    <div className="relative">
-                      <div className="pointer-events-none absolute inset-y-0 left-4 flex items-center">
-                        <svg className="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
-                        </svg>
-                      </div>
-                      <input
-                        id="website"
-                        type="text"
-                        autoFocus
-                        placeholder="yourcompany.com"
-                        value={websiteInput}
-                        onChange={e => { setWebsite(e.target.value); setErrorMsg(null); }}
-                        className="w-full rounded-xl border-2 border-gray-200 bg-white py-3 pl-10 pr-4 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
-                      />
-                    </div>
-                    <p className="mt-1 text-xs text-[#6B7C93]">No https:// needed — just the domain</p>
-                  </div>
-
-                  {errorMsg && (
-                    <p className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">{errorMsg}</p>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95"
-                  >
-                    Continue →
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => { setWebsite(''); setStep('details'); setErrorMsg(null); }}
-                    className="w-full text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors"
-                  >
-                    Skip — I'll fill in details manually
-                  </button>
-                </form>
-              </div>
-            )}
-
-            {/* ── Step B: details form ─────────────────────────────────── */}
+            {/* ── Details form ─────────────────────────────────────────── */}
             {(step === 'details' || step === 'saving') && (
               <div className="animate-fadeIn">
                 <div className="mb-8 text-center">
@@ -424,10 +328,8 @@ export default function CompanySetupPage() {
                     Confirm your details
                   </h1>
                   <p className="mt-2 text-sm leading-relaxed text-[#6B7C93]">
-                    {websiteDerivedFromEmail
-                      ? `We used your verified email domain to set ${websiteInput}. This prevents the wrong company website from being attached.`
-                      : websiteInput
-                      ? `We've pre-filled what we can from ${websiteInput} — update anything that's off.`
+                    {websiteValidated
+                      ? `Your company website was confirmed from your verified email domain. Fill in the remaining details.`
                       : 'Fill in your company details to personalise your experience.'}
                   </p>
                 </div>
@@ -451,34 +353,28 @@ export default function CompanySetupPage() {
                     />
                   </div>
 
-                  {/* Website */}
-                  {websiteInput && (
-                    <div>
-                      <label htmlFor="websiteEdit" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
-                        Website
-                      </label>
-                      <input
-                        id="websiteEdit"
-                        type="text"
-                        value={websiteInput}
-                        readOnly={websiteDerivedFromEmail}
-                        aria-readonly={websiteDerivedFromEmail}
-                        onChange={e => {
-                          if (!websiteDerivedFromEmail) setWebsite(e.target.value);
-                        }}
-                        className={`w-full rounded-xl border-2 border-gray-200 px-4 py-3 text-sm outline-none transition ${
-                          websiteDerivedFromEmail
-                            ? 'bg-slate-100 text-slate-600 cursor-not-allowed'
-                            : 'bg-white text-[#0B1F33] focus:border-[#0A66C2]'
-                        }`}
-                      />
-                      {websiteDerivedFromEmail && (
-                        <p className="mt-1 text-xs text-[#6B7C93]">
-                          Locked from your verified email domain. Social links will be discovered from this site during AI refinement when available.
-                        </p>
-                      )}
-                    </div>
-                  )}
+                  {/* Website — presentation-only. The company identity (website)
+                      was validated once at signup; onboarding can only display it,
+                      never edit it, and never present a different value. */}
+                  <div>
+                    <label htmlFor="websiteDisplay" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
+                      Website
+                    </label>
+                    <input
+                      id="websiteDisplay"
+                      type="text"
+                      value={websiteInput}
+                      readOnly
+                      aria-readonly="true"
+                      tabIndex={-1}
+                      placeholder="Confirmed from your verified company domain"
+                      className="w-full rounded-xl border-2 border-gray-200 bg-slate-100 px-4 py-3 text-sm text-slate-600 cursor-not-allowed outline-none"
+                    />
+                    <p className="mt-1 text-xs text-[#6B7C93]">
+                      Locked from your verified email domain — this is the website that will be
+                      attached to your company. Social links are discovered from it during AI refinement.
+                    </p>
+                  </div>
 
                   {/* Industry */}
                   <div>
@@ -579,15 +475,6 @@ export default function CompanySetupPage() {
                     ) : 'Continue to my workspace →'}
                   </button>
 
-                  {!websiteInput && (
-                    <button
-                      type="button"
-                      onClick={() => { setStep('website'); setErrorMsg(null); }}
-                      className="w-full text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors"
-                    >
-                      ← Back
-                    </button>
-                  )}
                 </form>
 
                 {/* What we use this for */}
@@ -648,10 +535,10 @@ export default function CompanySetupPage() {
                 <p className="mt-6 text-xs text-[#6B7C93]">
                   Not the right company?{' '}
                   <button
-                    onClick={() => { setExistingCompanyId(null); setExistingCompanyName(null); setExistingAdminName(null); setStep('website'); setErrorMsg(null); }}
+                    onClick={() => { router.replace('/login'); }}
                     className="text-[#0A66C2] hover:underline"
                   >
-                    Start over
+                    Use a different account
                   </button>
                 </p>
               </div>

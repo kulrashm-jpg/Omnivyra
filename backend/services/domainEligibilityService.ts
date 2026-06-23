@@ -70,6 +70,7 @@ async function checkMxRecords(domain: string): Promise<{ has_mx: boolean; mx_hos
 // reason strings; normalizeStoredResult maps those on read (they expire within 24h).
 const ALL_RESULTS = new Set<DomainEligibilityResult>([
   'DOMAIN_ELIGIBLE', 'PUBLIC_EMAIL', 'DISPOSABLE_EMAIL', 'NO_EMAIL_CAPABILITY',
+  'NO_WEBSITE_FOUND', 'DOMAIN_MISMATCH',
   'FORWARDING_DOMAIN', 'DOMAIN_NOT_CANONICAL', 'CLAIMED_DOMAIN', 'BLOCKED',
 ]);
 const LEGACY_REASON_TO_RESULT: Record<string, DomainEligibilityResult> = {

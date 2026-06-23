@@ -16,6 +16,7 @@ import { getSupportedPlatformsForFormat } from '../../lib/shared/bolt/contentPla
 import { buildAssignmentExplanation, buildAssignmentDecisions } from '../../lib/shared/intelligence/assignmentExplanation';
 import { AssignmentSummary } from '../../components/bolt/AssignmentSummary';
 import { ProgressCard } from '../../components/bolt/ProgressCard';
+import { getProgressPipeline } from '../../lib/shared/bolt/progressModel';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
@@ -133,14 +134,8 @@ function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (
   );
 }
 
-/* ─── BOLT stage pipeline ───────────────────────────────────────────────────── */
-const BOLT_PIPELINE: { stage: string; label: string }[] = [
-  { stage: 'source-recommendation',     label: 'Analysing signals' },
-  { stage: 'ai/plan',                   label: 'Creating campaign plan' },
-  { stage: 'commit-plan',               label: 'Saving blueprint' },
-  { stage: 'generate-weekly-structure', label: 'Building daily activities' },
-  { stage: 'schedule-structured-plan',  label: 'Scheduling content' },
-];
+/* ─── BOLT stage pipeline — single canonical authority (PROGRESS-PARITY) ──── */
+const BOLT_PIPELINE = getProgressPipeline('COMBINED');
 
 /* ─── Inline BOLT progress — shared ProgressCard renderer (6H-B) ───────────── */
 function CardBoltProgress({ progress, startedAt }: { progress: BOLTProgress; theme: typeof CARD_THEMES[0]; startedAt: number }) {

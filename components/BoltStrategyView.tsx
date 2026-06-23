@@ -14,6 +14,7 @@ import { BoltCampaignChat } from './bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../pages/api/bolt/strategy-cards';
 import type { BOLTProgress } from './BOLTProgressModal';
 import { ProgressCard } from './bolt/ProgressCard';
+import { getProgressPipeline } from '../lib/shared/bolt/progressModel';
 import { UpgradePrompt } from './monetization';
 import { saveCampaignResume } from '../lib/campaignResumeStore';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
@@ -179,17 +180,8 @@ function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (
   );
 }
 
-/* ─── BOLT stage pipeline (mirrors BOLTProgressModal stages) ─────────────── */
-const BOLT_PIPELINE: { stage: string; label: string }[] = [
-  { stage: 'source-recommendation', label: 'Preparing week plan' },
-  { stage: 'ai/plan',               label: 'Creating week plan' },
-  { stage: 'commit-plan',           label: 'Saving blueprint' },
-  { stage: 'generate-weekly-structure', label: 'Creating daily plans' },
-  { stage: 'schedule-structured-plan', label: 'Building activity workspace' },
-  { stage: 'schedule-creating-content', label: 'Creating content' },
-  { stage: 'schedule-repurposing-content', label: 'Repurposing content' },
-  { stage: 'schedule-writing-posts', label: 'Scheduling posts' },
-];
+/* ─── BOLT stage pipeline — single canonical authority (PROGRESS-PARITY) ──── */
+const BOLT_PIPELINE = getProgressPipeline('TEXT');
 
 type ContentJobProgress = {
   total: number; done: number; failed: number; active: number;

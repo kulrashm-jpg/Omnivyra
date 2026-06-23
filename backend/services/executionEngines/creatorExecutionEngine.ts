@@ -36,11 +36,28 @@ import type {
 } from './types';
 import { ownedDbTable } from '../../db/writeOwner';
 
-type CreatorBlueprintType = 'video_script' | 'carousel' | 'story';
+export type CreatorBlueprintType = 'video_script' | 'carousel' | 'story' | 'image';
 
-function inferBlueprintType(assetType: string, contentType: string): CreatorBlueprintType {
+/**
+ * Map an asset/content type to the blueprint type that drives BOTH the
+ * generation prompt and content-quality validation routing.
+ *
+ * IMAGE FIX: static single-visual assets (image / infographic / banner) are
+ * NOT video scripts. Previously they fell through to the `video_script`
+ * default, which ran the video validator against an image and emitted false
+ * "Too few scenes / Missing hook_scene / Script too short / Missing CTA scene"
+ * issues. They now resolve to `'image'` so validation routes to the image
+ * validator. (carousel / story / video behaviour is unchanged.)
+ */
+export function inferBlueprintType(assetType: string, contentType: string): CreatorBlueprintType {
   if (assetType === 'carousel') return 'carousel';
   if (String(contentType || '').toLowerCase() === 'story') return 'story';
+  const at = String(assetType || '').toLowerCase();
+  const ct = String(contentType || '').toLowerCase();
+  if (at === 'image' || at === 'infographic' || at === 'banner'
+    || ct === 'image' || ct === 'infographic' || ct === 'banner') {
+    return 'image';
+  }
   return 'video_script';
 }
 
@@ -816,7 +833,14 @@ async function generateBlueprint(
       ? context.creatorCard.platform_specs
       : undefined,
   };
-  const systemPrompt = getCreatorSystemPrompt(blueprintType, creatorContext);
+  // Generation-prompt selection is intentionally UNCHANGED for images (this
+  // phase fixes validation routing only). `getCreatorSystemPrompt` has no
+  // 'image' factory, so image blueprints reuse the prior prompt; only their
+  // VALIDATION (below / at the validation call site) now uses the image lane.
+  const systemPrompt = getCreatorSystemPrompt(
+    blueprintType === 'image' ? 'video_script' : blueprintType,
+    creatorContext,
+  );
   const analyticsIntelligence = extractAnalyticsIntelligence(context);
   const promptInput = {
     topic: context.topic,

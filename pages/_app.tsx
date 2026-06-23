@@ -227,8 +227,12 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isOnboardingRoute = router.pathname.startsWith('/onboarding');
   const isLoginRoute = router.pathname === '/login' || router.pathname === '/create-account';
   const isCaptureRoute = router.pathname.startsWith('/capture');
+  // The campaigns LIST page is auth-bypassed (via isCampaignOrPlanRoute) for
+  // resilience, but it IS a workspace page and should still get the app header.
+  // Keep its auth treatment unchanged; only opt it back into the layout.
+  const isCampaignsListRoute = router.pathname === '/campaigns';
   // Authenticated routes get AppLayout (header + footer)
-  const showAppLayout = isAuthenticated && !isPublic && !isOnboardingRoute && !isLoginRoute && !isCaptureRoute;
+  const showAppLayout = isAuthenticated && !isOnboardingRoute && !isLoginRoute && !isCaptureRoute && (!isPublic || isCampaignsListRoute);
 
   // AuthErrorBanner renders any non-session-fatal auth error from
   // CompanyContext (USER_INVITED, USER_NOT_FOUND, SCHEMA_MISMATCH,

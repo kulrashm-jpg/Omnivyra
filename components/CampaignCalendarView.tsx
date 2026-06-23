@@ -49,6 +49,8 @@ type CalendarActivity = {
     execution_status?: ExecutionStatus;
   }>;
   raw_item: Record<string, unknown>;
+  /** PHASE STATUS-OVERLAY-PARITY — past-due scheduled overlay (Dashboard parity). */
+  is_overdue?: boolean;
   /** When set, ownership colors override default card styling (additive). */
   execution_mode?: string;
   /** Repurpose lineage: e.g. 1/3, 2/3, 3/3 for repurposed content. */
@@ -510,13 +512,25 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                       />
                                       <div className="flex flex-wrap items-center gap-2">
                                         <span className="text-xs leading-none" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (modeLabel ?? undefined)}>{execDot}</span>
-                                        <span
-                                          className={`text-[11px] px-2 py-1 rounded-full font-medium border ${getExecutionStatusBadgeClasses(badgeView.styleKey)}`}
-                                          title={badgeView.canonical ? badgeView.text : undefined}
-                                        >
-                                          {badgeView.text}
-                                        </span>
-                                        {scheduledExecIds.has(String(activity.execution_id)) && (
+                                        {/* PHASE STATUS-OVERLAY-PARITY — overdue overlay
+                                            (shared authority with the Dashboard). A past-due
+                                            scheduled post shows "Overdue" here too. */}
+                                        {activity.is_overdue ? (
+                                          <span
+                                            className="text-[11px] px-2 py-1 rounded-full font-medium border border-red-300 bg-red-600 text-white"
+                                            title="Scheduled time has passed"
+                                          >
+                                            Overdue
+                                          </span>
+                                        ) : (
+                                          <span
+                                            className={`text-[11px] px-2 py-1 rounded-full font-medium border ${getExecutionStatusBadgeClasses(badgeView.styleKey)}`}
+                                            title={badgeView.canonical ? badgeView.text : undefined}
+                                          >
+                                            {badgeView.text}
+                                          </span>
+                                        )}
+                                        {!activity.is_overdue && scheduledExecIds.has(String(activity.execution_id)) && (
                                           <span className="text-[11px] px-2 py-1 rounded-full font-medium border border-emerald-200 bg-emerald-50 text-emerald-700">
                                             ✓ Scheduled
                                           </span>

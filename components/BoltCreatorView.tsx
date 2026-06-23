@@ -7,6 +7,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { getProgressPipeline, resolveCanonicalStageIndex, type ProgressStep } from '../lib/shared/bolt/progressModel';
 import { useCompanyContext } from './CompanyContext';
 import { CORE_AUDIENCE_LABELS } from '../lib/shared/audience/audienceRegistry';
 import { BOLT_DURATION_OPTIONS } from '../lib/shared/campaignDuration';
@@ -121,47 +122,18 @@ function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (
   );
 }
 
-/* ─── BOLT stage pipeline (creator — no schedule stages) ─────────────────── */
-// Canonical full Creator pipeline. Week Plan only runs the first 4 —
-// creator-asset-generation is gated by `shouldRunCreatorAssetGeneration`
-// which requires `outcomeView !== 'week_plan'` in
-// `backend/services/boltPipelineService.ts`.
-const BOLT_PIPELINE_FULL: { stage: string; label: string }[] = [
-  { stage: 'source-recommendation',    label: 'Preparing week plan' },
-  { stage: 'ai/plan',                  label: 'Creating week plan' },
-  { stage: 'commit-plan',              label: 'Saving blueprint' },
-  { stage: 'generate-weekly-structure', label: 'Creating daily activity plan' },
-  { stage: 'creator-asset-generation', label: 'Generating creator assets' },
-];
-
-function getPipelineForOutcome(outcomeView: OutcomeView): { stage: string; label: string }[] {
-  // Week Plan: hide the asset-generation stage that the pipeline
-  // doesn't run. Daily Plan + Schedule run all five.
-  if (outcomeView === 'week_plan') return BOLT_PIPELINE_FULL.slice(0, 4);
-  return BOLT_PIPELINE_FULL;
-}
-
-// Back-compat alias for any unrefactored consumers (none inside this file).
-const BOLT_PIPELINE = BOLT_PIPELINE_FULL;
+/* ─── BOLT stage pipeline — single canonical authority (PROGRESS-PARITY) ──── */
+const BOLT_PIPELINE = getProgressPipeline('CREATOR');
 
 function stageIndexInPipeline(
   stage: string | undefined,
-  pipeline: { stage: string; label: string }[] = BOLT_PIPELINE_FULL,
+  pipeline: ProgressStep[] = BOLT_PIPELINE,
 ): number {
-  if (!stage) return -1;
-  const exact = pipeline.findIndex((s) => s.stage === stage);
-  if (exact !== -1) return exact;
-  if (stage.startsWith('generate-weekly-structure')) {
-    return pipeline.findIndex((s) => s.stage === 'generate-weekly-structure');
-  }
-  if (stage.startsWith('render-creator')) {
-    return pipeline.findIndex((s) => s.stage === 'creator-asset-generation');
-  }
-  return -1;
+  return resolveCanonicalStageIndex(stage, pipeline);
 }
 
 function stageIndex(stage: string | undefined): number {
-  return stageIndexInPipeline(stage, BOLT_PIPELINE_FULL);
+  return stageIndexInPipeline(stage, BOLT_PIPELINE);
 }
 
 function formatElapsed(ms: number): string {
@@ -185,7 +157,7 @@ function CardBoltProgress({ progress, theme, startedAt, outcomeView }: {
     return () => clearInterval(id);
   }, [startedAt]);
 
-  const pipeline = getPipelineForOutcome(outcomeView);
+  const pipeline = BOLT_PIPELINE;
   const isCompleted = progress.status === 'completed';
   // When completed, push currentIdx beyond the last visible stage so
   // every step shows ✓ — matches the Week Plan UX expectation that

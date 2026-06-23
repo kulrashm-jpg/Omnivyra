@@ -10,8 +10,15 @@
  * - Engagement signals in content structure
  */
 
-import { CreatorContentType } from '../adapters/commandCenter/creatorContentAdapter';
+import type { CreatorContentType } from '../adapters/commandCenter/creatorContentAdapter';
 import { CREATOR_VALIDATION_RULES } from '../prompts/creatorContentPromptsV1';
+
+/**
+ * Blueprint types this validator can route. Mirrors creatorExecutionEngine's
+ * CreatorBlueprintType: the three script/visual-sequence content types plus the
+ * static-image lane. Image assets must NEVER be validated by validateVideoScript.
+ */
+export type CreatorValidationContentType = CreatorContentType | 'image';
 
 export interface CreatorValidationResult {
   pass: boolean;
@@ -31,8 +38,17 @@ export interface CreatorValidationResult {
  */
 export async function validateCreatorContentQuality(
   blueprint: any,
-  contentType: CreatorContentType
+  contentType: CreatorValidationContentType
 ): Promise<CreatorValidationResult> {
+  // IMAGE LANE: static single-visual assets (image / infographic / banner) are
+  // validated here BEFORE any rules lookup. They have no scenes/script/hook/CTA,
+  // so the video validator must never run on them. (Previously image fell
+  // through to validateVideoScript, emitting false "Too few scenes /
+  // Missing hook_scene / Script too short / Missing call-to-action scene".)
+  if (contentType === 'image') {
+    return validateImage(blueprint);
+  }
+
   const rules = CREATOR_VALIDATION_RULES[contentType];
   const issues: string[] = [];
   const autoRepairs: string[] = [];
@@ -51,6 +67,30 @@ export async function validateCreatorContentQuality(
     pass: false,
     severity: 'blocking',
     issues: [`Unknown content type: ${contentType}`],
+  };
+}
+
+/**
+ * Validate a static image asset (image / infographic / banner).
+ *
+ * Image assets are single visuals — they carry no scenes, script duration,
+ * hook_scene, or CTA scene, so NONE of the video-script checks apply. This
+ * validator is intentionally lenient and NEVER emits video-shaped issues; it
+ * only produces a non-blocking advisory quality assessment. It does not gate
+ * rendering or scheduling.
+ */
+function validateImage(image: any): CreatorValidationResult {
+  const img = image && typeof image === 'object' ? image : {};
+  const visual = String(
+    img.visual_description ?? img.visual_descriptor ?? img.visual ?? '',
+  ).trim();
+  const qualityAssessment: any = {
+    visual_clarity: visual.length >= 20 ? 'clear' : 'unclear',
+    platform_fit: {},
+  };
+  return {
+    pass: true,
+    quality_assessment: qualityAssessment,
   };
 }
 

@@ -19,9 +19,7 @@ import {
   findMatchingCompany,
   extractDomain,
   isFreeEmailDomain,
-  validatePublicWebsite,
 } from '../../../backend/services/companyMatchService';
-import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 import { grantInitialFreeCredit } from '../../../backend/services/initialFreeCreditService';
 import { grantEarnCredit } from '../../../backend/services/earnCreditsService';
 import {
@@ -32,11 +30,19 @@ import {
   SELF_REGISTERED_JOIN_SOURCE,
   selectCompatibleCompanyRole,
 } from '../../../backend/services/companyMembershipIntegrityService';
-import { resolveDomain } from '../../../backend/services/domainCanonicalService';
-import { httpStatusFor, ELIGIBILITY_MESSAGES, reviewableResults } from '../../../lib/auth/domainEligibilityModel';
-import { checkRateLimit, DOMAIN_RESOLUTION_LIMIT } from '../../../lib/auth/rateLimit';
-import { logDomainEvent } from '../../../backend/services/domainEventLogger';
 import { notifyAdminAndProspectOfClaimedDomain } from '../../../backend/services/claimedDomainNotifyService';
+import {
+  deriveWebsiteFromEmail,
+  resolveValidatedWebsite,
+} from '../../../backend/services/validatedWebsiteService';
+import { monitorCompanyIdentityDrift } from '../../../backend/services/companyIdentityDriftService';
+import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
+
+// Phase 8: company-legitimacy validation (eligibility, live-website existence,
+// canonical/forwarding) is NO LONGER performed here. It is decided ONCE at
+// signup by validateCompanyIdentity and consumed via the validated identity on
+// the signup intent. setup-company retains ONLY auth, membership, duplicate-
+// company, race-protection, invite routing, and credit logic.
 
 type Result =
   | { companyId: string; selfJoined?: boolean; matchedCompanyName?: string }
@@ -44,11 +50,9 @@ type Result =
   | { code: string; error: string; limit?: number; current?: number | null }
   | { error: string };
 
-function deriveWebsiteFromEmail(email: string | null | undefined): string | null {
-  const domain = extractDomain(email ?? '');
-  if (!domain || isFreeEmailDomain(domain)) return null;
-  return `https://www.${domain}`;
-}
+// Website-resolution helpers now live in backend/services/validatedWebsiteService.ts
+// (single source shared with the onboarding /validated-identity endpoint so the
+// website shown in onboarding is byte-identical to what is persisted here).
 
 /** Returns the display name of the first active COMPANY_ADMIN for a company. */
 async function fetchAdminName(
@@ -85,18 +89,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-
-  // Client IP — used to rate-limit the outbound domain-canonical HTTP probe
-  // (caps the SSRF/abuse surface a single IP can drive). Mirrors the
-  // extraction in pages/api/auth/sync-supabase-user.ts.
-  const clientIp = (() => {
-    const raw = String(
-      req.headers['x-forwarded-for']
-      ?? (req.socket as any)?.remoteAddress
-      ?? 'unknown',
-    ).split(',')[0].trim();
-    return raw && raw !== 'unknown' ? raw : undefined;
-  })();
 
   /**
    * Rule 5 — a verified user from an already-claimed domain tried to create an
@@ -171,27 +163,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const userProfileIndustry = String(typedUserProfileRow?.industry || '').trim();
   const profileIndustry = industry.trim() || userProfileIndustry;
   const emailDerivedWebsite = deriveWebsiteFromEmail(user.email);
-  const canonicalWebsite = emailDerivedWebsite || website.trim();
+  // CONSUME the website validated once at signup (system-of-record). No probe,
+  // no existence/canonical/forwarding check happens here. Falls back to the pure
+  // email-derived value, then any user-entered value, for paths without an intent.
+  const { canonicalWebsite } = await resolveValidatedWebsite(user.email, {
+    emailDerived: emailDerivedWebsite,
+    userEntered:  website,
+  });
 
   if (!companyName.trim()) return res.status(400).json({ error: 'companyName is required' });
 
-  // ── Website validation: must be a real public URL ─────────────────────────
-  // Skip for public-email users who join via invite (they don't create a company)
-  const websiteErr = validatePublicWebsite(canonicalWebsite);
-  if (websiteErr && !isFreeEmailDomain(extractDomain(user.email ?? '') ?? '')) {
-    return res.status(400).json({ error: websiteErr });
-  }
-
-  // ── Domain eligibility gate ───────────────────────────────────────────────
+  // ── Public-email routing (invite / approved access only) ──────────────────
+  // No legitimacy validation here — see Phase 8 note at the imports. We classify
+  // public-email purely to route invited / approved-access users to their join
+  // path (they join an existing company; they never create one).
   if (user.email) {
-    const eligibility = await checkDomainEligibility(user.email, user.id);
-    if (!eligibility.eligible && !reviewableResults.has(eligibility.result)) {
-      return res.status(403).json({ error: 'Your email domain is not eligible for free credits.' });
-    }
-
-    // Public email domain — allowed only via invite or approved access request.
-    // Cannot create a company or receive free credits.
-    if (eligibility.result === 'PUBLIC_EMAIL') {
+    if (isFreeEmailDomain(extractDomain(user.email) ?? '')) {
       // ── Path A: team invite ──────────────────────────────────────────────
       const { data: invite } = await supabase
         .from('user_company_roles')
@@ -453,96 +440,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
     }
 
-    // ── Rule 4: the work-email domain must HOST A LIVE WEBSITE on itself ──────
-    // (not email/DNS forwarding, not a redirect to another domain). This is
-    // the gate that lets the FIRST user of a domain create the company. It
-    // runs only here — once the domain is claimed the branches above have
-    // already returned, and invited / public-email users never reach this.
-    // resolveDomain is SSRF-hardened and fail-closed: any DNS/timeout/fetch
-    // failure → resolution_failed, which we treat as "no hosted website".
-    if (adminEmailDomain) {
-      if (clientIp) {
-        const rl = await checkRateLimit(clientIp, DOMAIN_RESOLUTION_LIMIT);
-        if (!rl.allowed) {
-          return res.status(429).json({
-            code:  'DOMAIN_RESOLUTION_FAILED',
-            error: 'Too many domain verification attempts. Please try again in a few minutes.',
-          });
-        }
-      }
+    // ── Rule 4 (live-website / canonical / forwarding) REMOVED — Phase 8 ──────
+    // This domain-legitimacy probe (resolveDomain) is no longer run here. The
+    // FIRST user of a domain was already authoritatively validated at signup by
+    // validateCompanyIdentity (live website exists, canonical, non-forwarding)
+    // before the account was created. setup-company consumes that verdict and
+    // never re-probes. As a result this endpoint can no longer emit
+    // DOMAIN_RESOLUTION_FAILED, DOMAIN_NOT_CANONICAL, or FORWARDING_DOMAIN.
 
-      let resolution;
-      try {
-        resolution = await resolveDomain(adminEmailDomain);
-      } catch (err) {
-        void logDomainEvent({
-          event_type:   'DOMAIN_RESOLUTION_FAILED',
-          company_id:   null,
-          final_domain: adminEmailDomain,
-          user_id:      user.id,
-          metadata:     { reason: 'threw', message: err instanceof Error ? err.message : String(err) },
-        });
-        return res.status(503).json({
-          code:  'DOMAIN_RESOLUTION_FAILED',
-          error: 'We could not verify that your company domain hosts a live website. Please try again shortly.',
-        });
-      }
-
-      if (resolution.resolution_failed || resolution.resolution_blocked) {
-        void logDomainEvent({
-          event_type:   resolution.resolution_blocked ? 'DOMAIN_RESOLUTION_BLOCKED' : 'DOMAIN_RESOLUTION_FAILED',
-          company_id:   null,
-          final_domain: adminEmailDomain,
-          user_id:      user.id,
-          metadata:     { reason: resolution.resolution_blocked ? 'ssrf_or_rebind' : 'fail_closed' },
-        });
-        return res.status(httpStatusFor('DOMAIN_NOT_CANONICAL')).json({
-          code:  'DOMAIN_NOT_CANONICAL',
-          error: ELIGIBILITY_MESSAGES.DOMAIN_NOT_CANONICAL,
-        });
-      }
-
-      if (resolution.input_domain !== resolution.final_domain) {
-        void logDomainEvent({
-          event_type:   'DOMAIN_NOT_CANONICAL',
-          company_id:   null,
-          final_domain: resolution.final_domain,
-          user_id:      user.id,
-          metadata:     { input_domain: resolution.input_domain, is_forwarding: resolution.is_forwarding },
-        });
-        return res.status(httpStatusFor('DOMAIN_NOT_CANONICAL')).json({
-          code:  'DOMAIN_NOT_CANONICAL',
-          error: ELIGIBILITY_MESSAGES.DOMAIN_NOT_CANONICAL,
-        });
-      }
-
-      if (resolution.is_forwarding) {
-        void logDomainEvent({
-          event_type:   'DOMAIN_FORWARDING_BLOCKED',
-          company_id:   null,
-          final_domain: resolution.final_domain,
-          user_id:      user.id,
-          metadata:     { input_domain: resolution.input_domain },
-        });
-        return res.status(httpStatusFor('FORWARDING_DOMAIN')).json({
-          code:  'FORWARDING_DOMAIN',
-          error: ELIGIBILITY_MESSAGES.FORWARDING_DOMAIN,
-        });
-      }
+    // ── Identity write via the canonical writer (Phase 11C) ───────────────────
+    // companyIdentityWriter governs website + website_domain + admin_email_domain
+    // atomically (Invariants A–D): they can never be persisted as a partial pair.
+    // The legacy `|| companyId` placeholder is dropped — it produced an
+    // inconsistent website(set)/website_domain(null) pair and was unreachable for
+    // real work-email signups (canonicalWebsite is always set there). Every other
+    // column, the explicit companyId, and the 23505 race handling below are
+    // unchanged; the injected insert preserves the Postgres error code.
+    let companyErr: (Error & { code?: string }) | null = null;
+    try {
+      await createCompanyIdentity(
+        {
+          id:                companyId,
+          name:              companyName.trim(),
+          website:           canonicalWebsite || null,
+          websiteDomain:     websiteDomain,
+          adminEmailDomain:  adminEmailDomain,
+          industry:          profileIndustry || null,
+          size:              companySize.trim() || null,
+          status:            'active',
+          domain_claimed_at: adminEmailDomain ? now : null, // STEP 5
+          created_at:        now,
+        },
+        {
+          insertCompany: async (record) => {
+            const { data, error } = await supabase
+              .from('companies').insert(record).select('id').single();
+            if (error) {
+              const e = new Error(error.message) as Error & { code?: string };
+              e.code = error.code;
+              throw e;
+            }
+            return { id: (data as { id: string }).id };
+          },
+        },
+      );
+    } catch (err) {
+      companyErr = err as Error & { code?: string };
     }
-
-    const { error: companyErr } = await supabase.from('companies').insert({
-      id:                 companyId,
-      name:               companyName.trim(),
-      website:            canonicalWebsite || companyId, // NOT NULL — use companyId as placeholder if blank
-      industry:           profileIndustry || null,
-      size:               companySize.trim() || null,
-      status:             'active',
-      website_domain:     websiteDomain,
-      admin_email_domain: adminEmailDomain,
-      domain_claimed_at:  adminEmailDomain ? now : null, // STEP 5
-      created_at:         now,
-    });
 
     // ── Race condition: another request won the domain UNIQUE race ────────────
     if (companyErr?.code === '23505' && adminEmailDomain) {
@@ -721,6 +665,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         // (Frontend clears localStorage after this call succeeds)
       }
     }
+
+    // ── Telemetry only: detect company-identity drift at creation (never blocks).
+    monitorCompanyIdentityDrift({
+      id:                 companyId,
+      name:               companyName.trim(),
+      website:            canonicalWebsite || null,
+      website_domain:     websiteDomain,
+      admin_email_domain: adminEmailDomain,
+    });
 
     return res.status(200).json({ companyId });
   } catch (err: any) {

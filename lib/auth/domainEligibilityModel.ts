@@ -16,6 +16,8 @@ export type DomainEligibilityResult =
   | 'PUBLIC_EMAIL'
   | 'DISPOSABLE_EMAIL'
   | 'NO_EMAIL_CAPABILITY'
+  | 'NO_WEBSITE_FOUND'
+  | 'DOMAIN_MISMATCH'
   | 'FORWARDING_DOMAIN'
   | 'DOMAIN_NOT_CANONICAL'
   | 'CLAIMED_DOMAIN'
@@ -37,6 +39,7 @@ export const reviewableResults: ReadonlySet<DomainEligibilityResult> = new Set<D
   'PUBLIC_EMAIL',
   'FORWARDING_DOMAIN',
   'DOMAIN_NOT_CANONICAL',
+  'NO_WEBSITE_FOUND',
 ]);
 
 // Forwarding + non-canonical share this review-path copy by design.
@@ -57,6 +60,13 @@ export const ELIGIBILITY_MESSAGES: Record<DomainEligibilityResult, string> = {
   NO_EMAIL_CAPABILITY:
     'This domain cannot currently receive email.\n\n' +
     'Please use an active work email address associated with your organization.',
+  NO_WEBSITE_FOUND:
+    "We couldn't find a live website at your organization's email domain.\n\n" +
+    'If your organization uses a different website domain than its email domain, ' +
+    'please contact our team and we will review your request.',
+  DOMAIN_MISMATCH:
+    'Your website domain does not match your email domain.\n\n' +
+    "Please use a website on your organization's email domain.",
   FORWARDING_DOMAIN: REVIEW_MESSAGE,
   DOMAIN_NOT_CANONICAL: REVIEW_MESSAGE,
   CLAIMED_DOMAIN:

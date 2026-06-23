@@ -52,6 +52,10 @@ export type BOLTProgress = {
   // Optional + advisory — UI must keep working when the backend doesn't emit it.
   ai_plan_substage?: string;
   ai_plan_substage_label?: string;
+  // Intra-stage milestone surfaced during generate-weekly-structure
+  // (e.g. 'preparing', 'building-rows', 'saving'). Same advisory contract.
+  weekly_structure_substage?: string;
+  weekly_structure_substage_label?: string;
   // Phase 6H-D — failure explainability (failure-only). Populated from the
   // already-persisted failed_stage + failure-event error_code; friendly only.
   failed_stage?: string;

@@ -18,6 +18,7 @@ import {
   SYSTEM_USER_ID,
 } from '../../../backend/services/auditActorService';
 import { logger } from '../../../backend/services/logger';
+import { monitorCompanyIdentityDrift } from '../../../backend/services/companyIdentityDriftService';
 
 const normalizeWebsite = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -139,6 +140,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (error || !data) {
       return res.status(500).json({ error: 'FAILED_TO_CREATE_COMPANY' });
     }
+
+    // Telemetry only: admin-created companies set `website` but not
+    // website_domain / admin_email_domain — surface that drift (never blocks).
+    monitorCompanyIdentityDrift(data);
 
     const profileWebsite = String(website || '').trim() || normalizedWebsite;
     await saveProfile({

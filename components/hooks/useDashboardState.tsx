@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../CompanyContext';
 import { getAuthToken } from '../../utils/getAuthToken';
 import { apiFetch } from '../../lib/apiFetch';
+import { isActivityOverdue } from '../../lib/shared/statusOverlay';
 import { getStageLabelWithDuration } from '../../lib/shared/CampaignStage';
 import { navigateToCampaign, buildResumeUrl, loadCampaignResume } from '../../lib/campaignResumeStore';
 import type { CollaborationMessage } from '../collaboration/FloatingChatPanel';
@@ -241,26 +242,15 @@ export function useDashboardState() {
     return 'other';
   };
   /** Overdue is a calendar-date fact: only past scheduled items should be red. */
-  const isCalendarEventOverdue = (ev: ActivityEvent): boolean => {
-    const status = String(ev.status || '').trim().toLowerCase();
-    if (status === 'published') return false;
-
-    const todayKey = formatDateKey(new Date());
-    const eventDateKey = String(ev.date || '').slice(0, 10);
-    if (eventDateKey) {
-      if (eventDateKey < todayKey) return true;
-      if (eventDateKey > todayKey) return false;
-    }
-
-    if (ev.scheduled_for) {
-      const scheduledAt = new Date(ev.scheduled_for);
-      if (Number.isFinite(scheduledAt.getTime())) {
-        return scheduledAt.getTime() < Date.now();
-      }
-    }
-
-    return Boolean(ev.is_overdue);
-  };
+  // PHASE STATUS-OVERLAY-PARITY — overdue rule lives in the single shared
+  // authority so Dashboard, Calendar, and Workspace agree. Behavior identical.
+  const isCalendarEventOverdue = (ev: ActivityEvent): boolean =>
+    isActivityOverdue({
+      status: ev.status,
+      date: ev.date,
+      scheduledFor: ev.scheduled_for,
+      isOverdue: ev.is_overdue,
+    });
 
   /** Maps a scheduled_post's status + overdue flag to one of the legend stages. */
   const getEventStage = (ev: ActivityEvent): CalendarExecutionStage => {

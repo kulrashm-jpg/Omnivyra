@@ -44,6 +44,7 @@ import {
   CreatorLifecycleTransitionError,
 } from '../../../lib/shared/creatorLifecycleStateMachine';
 import { resolveVideoForPlatform, readCreatorVideoAsset } from '../../../lib/shared/creatorVideoResolution';
+import { buildAutonomousScheduleDiagnostic } from './creatorScheduleDrift';
 
 // ── Small pure helpers (faithful copies of the structuredPlanScheduler
 //    internals; the content-type fallback map is already duplicated across
@@ -374,6 +375,28 @@ function readRenderedMediaUrls(content: Record<string, unknown>): string[] {
 }
 
 /**
+ * Best-effort persistence of the visibility marker. Never throws and never
+ * mutates content_status / failure columns / lifecycle — observability only.
+ */
+async function annotateAutonomousScheduleSkip(
+  rowId: string,
+  content: Record<string, unknown>,
+  reason: string,
+): Promise<void> {
+  try {
+    const nowIso = new Date().toISOString();
+    await ownedDbTable('daily_content_plans')
+      .update({
+        content: JSON.stringify({ ...content, ...buildAutonomousScheduleDiagnostic(reason, nowIso) }),
+        updated_at: nowIso,
+      })
+      .eq('id', rowId);
+  } catch (err: any) {
+    console.warn('[creator-row-schedule][autonomous-skip-annotate-failed]', rowId, err?.message);
+  }
+}
+
+/**
  * Autonomous (image/carousel/infographic) scheduling — media comes from the
  * already-rendered asset URLs. Distinct idempotency key (`creator-render:`)
  * so it never collides with the upload path.
@@ -569,9 +592,11 @@ export async function scheduleRenderedAutonomousRowById(
         : null,
     });
     if (!eligibility.can_schedule_now) {
+      await annotateAutonomousScheduleSkip(row.id, attachedContent, eligibility.reason);
       return { status: 'skipped', scheduledPostId: null, reason: eligibility.reason };
     }
     if (readRenderedMediaUrls(attachedContent).length === 0) {
+      await annotateAutonomousScheduleSkip(row.id, attachedContent, 'no_rendered_media');
       return { status: 'skipped', scheduledPostId: null, reason: 'no_rendered_media' };
     }
 
@@ -593,6 +618,7 @@ export async function scheduleRenderedAutonomousRowById(
       userId = (companyUser as { user_id?: string } | null)?.user_id ?? null;
     }
     if (!userId) {
+      await annotateAutonomousScheduleSkip(row.id, attachedContent, 'no_user_for_campaign');
       return { status: 'skipped', scheduledPostId: null, reason: 'no_user_for_campaign' };
     }
 
@@ -611,6 +637,7 @@ export async function scheduleRenderedAutonomousRowById(
 
     const platform = normalize(String(row.platform || ''));
     if (!platform) {
+      await annotateAutonomousScheduleSkip(row.id, attachedContent, 'unrecognized_platform');
       return { status: 'skipped', scheduledPostId: null, reason: 'unrecognized_platform' };
     }
 
@@ -626,6 +653,7 @@ export async function scheduleRenderedAutonomousRowById(
     const socialAccountId = (accounts as Array<{ id: string; platform: string }> | null ?? [])
       .find((a) => normalize(a.platform) === platform)?.id ?? null;
     if (!socialAccountId) {
+      await annotateAutonomousScheduleSkip(row.id, attachedContent, 'no_social_account');
       return { status: 'skipped', scheduledPostId: null, reason: 'no_social_account' };
     }
 

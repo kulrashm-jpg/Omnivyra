@@ -220,7 +220,7 @@ export default function CampaignsList() {
         {/* Page Header */}
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-8">
           <div>
-            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Campaign Planning</h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Campaign Details</h1>
             <p className="text-sm text-gray-500 mt-1">Manage your marketing campaigns and content strategy</p>
           </div>
           <button

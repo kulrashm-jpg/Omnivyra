@@ -11,6 +11,7 @@ import type { GetServerSideProps } from 'next';
 import { CORE_AUDIENCE_LABELS } from '../../lib/shared/audience/audienceRegistry';
 import { BOLT_DURATION_OPTIONS } from '../../lib/shared/campaignDuration';
 import { useRouter } from 'next/router';
+import { getProgressPipeline, resolveCanonicalStageIndex } from '../../lib/shared/bolt/progressModel';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
@@ -148,25 +149,13 @@ function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (
   );
 }
 
-/* ─── BOLT stage pipeline (mirrors BOLTProgressModal stages) ─────────────── */
-const BOLT_PIPELINE: { stage: string; label: string }[] = [
-  { stage: 'source-recommendation', label: 'Preparing week plan' },
-  { stage: 'ai/plan',               label: 'Creating week plan' },
-  { stage: 'commit-plan',           label: 'Saving blueprint' },
-  { stage: 'generate-weekly-structure', label: 'Creating daily plans' },
-  { stage: 'schedule-structured-plan', label: 'Building activity workspace' },
-  { stage: 'schedule-creating-content', label: 'Creating content' },
-  { stage: 'schedule-repurposing-content', label: 'Repurposing content' },
-  { stage: 'schedule-writing-posts', label: 'Scheduling posts' },
-];
+/* ─── BOLT stage pipeline — single canonical authority (PROGRESS-PARITY) ──── */
+// Deprecated route (SSR-redirects to /command-center/bolt-text); kept canonical
+// so any fallback render shares the one authority.
+const BOLT_PIPELINE = getProgressPipeline('TEXT');
 
 function stageIndex(stage: string | undefined): number {
-  if (!stage) return -1;
-  const exact = BOLT_PIPELINE.findIndex((s) => s.stage === stage);
-  if (exact !== -1) return exact;
-  // sub-stages like generate-weekly-structure-week-1
-  if (stage.startsWith('generate-weekly-structure')) return 3;
-  return -1;
+  return resolveCanonicalStageIndex(stage, BOLT_PIPELINE);
 }
 
 function formatElapsed(ms: number): string {

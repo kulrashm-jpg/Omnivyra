@@ -15,6 +15,7 @@ import { BoltCampaignChat } from '../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../pages/api/bolt/strategy-cards';
 import type { BOLTProgress } from '../components/BOLTProgressModal';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
+import { getProgressPipeline, resolveCanonicalStageIndex } from '../lib/shared/bolt/progressModel';
 import { saveCampaignResume } from '../lib/campaignResumeStore';
 import { useBoltPlatformPicker } from './useBoltPlatformPicker';
 import { CREATOR_FORMAT_CAPABILITY, type CreatorContentFormat } from '../lib/shared/bolt/creatorFormatCapability';
@@ -143,22 +144,12 @@ function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (
   );
 }
 
-/* ─── BOLT stage pipeline (creator — no schedule stages) ─────────────────── */
-const BOLT_PIPELINE: { stage: string; label: string }[] = [
-  { stage: 'source-recommendation',    label: 'Preparing week plan' },
-  { stage: 'ai/plan',                  label: 'Creating week plan' },
-  { stage: 'commit-plan',              label: 'Saving blueprint' },
-  { stage: 'generate-weekly-structure', label: 'Creating daily activity plan' },
-  { stage: 'creator-asset-generation', label: 'Generating creator assets' },
-];
+// PROGRESS-PARITY — single canonical authority (legacy in-hook tracker; the
+// live Creator renderer is components/BoltCreatorView.tsx).
+const BOLT_PIPELINE = getProgressPipeline('CREATOR');
 
 function stageIndex(stage: string | undefined): number {
-  if (!stage) return -1;
-  const exact = BOLT_PIPELINE.findIndex((s) => s.stage === stage);
-  if (exact !== -1) return exact;
-  if (stage.startsWith('generate-weekly-structure')) return 3;
-  if (stage.startsWith('render-creator')) return 4;
-  return -1;
+  return resolveCanonicalStageIndex(stage, BOLT_PIPELINE);
 }
 
 function formatElapsed(ms: number): string {

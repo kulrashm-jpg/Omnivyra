@@ -8,6 +8,7 @@
  *   • intelligence-polling — external signal ingestion
  *   • ai-heavy:campaign-planning — Campaign Planner v2 pipeline
  *   • engine-jobs      — LEAD + MARKET_PULSE processing
+ *   • creator-{video,carousel,story} — BOLT creator asset rendering (bolt-creator-row jobs)
  *
  * Entry: node --require ts-node/register/transpile-only backend/workers/main.ts
  * Health: GET http://localhost:8080/health
@@ -44,6 +45,8 @@ import { getMetricsSnapshot }        from '../services/metricsCollector';
 import { runPublishingWorker }       from '../services/publishingJobService';
 import { createCreatorRenderWorker, recoverOrphanedCreatorRenderJobs } from '../services/creatorRenderDurableQueue';
 import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcessor';
+import { startCreatorContentWorkers } from '../queue/contentGenerationQueues';
+import { processCreatorContentJob } from '../queue/jobProcessors/creatorContentProcessor';
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
 import { startCron } from '../scheduler/cron';
 
@@ -294,6 +297,25 @@ async function main(): Promise<void> {
   await runCacheWarmup().catch((err) =>
     console.warn('[main] cache warmup failed (non-fatal):', err?.message));
 
+  // Creator content workers (creator-video / creator-carousel / creator-story).
+  // These consume the `bolt-creator-row:<id>` render jobs that
+  // runCreatorAssetGenerationRuntime enqueues. They were registered ONLY in the
+  // dev bootstrap (startWorkers.ts:187); without them in this production process
+  // those jobs sit in `waiting` until waitUntilFinished(300000) times out →
+  // CREATOR_ASSET_RENDER_FAILED → render_failed. Reuse the SAME authority +
+  // processor as dev — no second implementation. Non-fatal so a registration
+  // failure can't stop the other workers, but logged loudly so the gap is
+  // never silent again.
+  try {
+    await startCreatorContentWorkers(processCreatorContentJob);
+    console.info('[main] creator content workers registered', {
+      queues: ['creator-video', 'creator-carousel', 'creator-story'],
+    });
+  } catch (err) {
+    console.error('[main] startCreatorContentWorkers FAILED — creator asset rendering will NOT work:',
+      err instanceof Error ? err.message : String(err));
+  }
+
   // Scheduler — runs the 10-min social-account token refresh (X tokens
   // expire in 2h) plus all other cron cycles. Co-located in the worker
   // process so a single Railway service (Dockerfile.worker CMD = main.js)
@@ -335,6 +357,7 @@ async function main(): Promise<void> {
     queues: ['publish', 'bolt-execution', 'engagement-polling',
              'intelligence-polling', 'ai-heavy', 'engine-jobs',
              'lead-thread-recompute', 'conversation-memory-rebuild', 'creator-render',
+             'creator-video', 'creator-carousel', 'creator-story',
              'publishing_jobs'],
     boltConcurrency,
     pid: process.pid,

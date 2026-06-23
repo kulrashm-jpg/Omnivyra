@@ -16,6 +16,7 @@ import type { BOLTProgress } from '../components/BOLTProgressModal';
 import { saveCampaignResume } from '../lib/campaignResumeStore';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
 import { useBoltPlatformPicker } from './useBoltPlatformPicker';
+import { getProgressPipeline, resolveCanonicalStageIndex } from '../lib/shared/bolt/progressModel';
 import { FORMAT_REQUIRED_PLATFORMS } from '../lib/shared/bolt/formatPlatformBinding';
 import { BOLT_DURATION_OPTIONS } from '../lib/shared/campaignDuration';
 
@@ -176,16 +177,9 @@ function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (
 // Canonical full pipeline for Schedule view. Week Plan and Daily Plan
 // truncate this list to the stages that actually run for their
 // outcomeView — see `getPipelineForOutcome` below.
-const BOLT_PIPELINE_FULL: { stage: string; label: string }[] = [
-  { stage: 'source-recommendation', label: 'Preparing week plan' },
-  { stage: 'ai/plan',               label: 'Creating week plan' },
-  { stage: 'commit-plan',           label: 'Saving blueprint' },
-  { stage: 'generate-weekly-structure', label: 'Creating daily plans' },
-  { stage: 'schedule-structured-plan', label: 'Building activity workspace' },
-  { stage: 'schedule-creating-content', label: 'Creating content' },
-  { stage: 'schedule-repurposing-content', label: 'Repurposing content' },
-  { stage: 'schedule-writing-posts', label: 'Scheduling posts' },
-];
+// PROGRESS-PARITY — single canonical authority (legacy in-hook tracker; the
+// live Text renderer is components/BoltStrategyView.tsx).
+const BOLT_PIPELINE_FULL = getProgressPipeline('TEXT');
 
 /**
  * Stages the pipeline ACTUALLY runs for each outcome view.
@@ -203,28 +197,17 @@ const BOLT_PIPELINE_FULL: { stage: string; label: string }[] = [
  * green check. This filter keeps the visible stages aligned with what
  * the backend actually executes.
  */
-function getPipelineForOutcome(outcomeView: OutcomeView): { stage: string; label: string }[] {
-  if (outcomeView === 'schedule') return BOLT_PIPELINE_FULL;
-  // week_plan + daily_plan
-  return BOLT_PIPELINE_FULL.slice(0, 4);
+function getPipelineForOutcome(_outcomeView: OutcomeView) {
+  return BOLT_PIPELINE_FULL;
 }
 
-// Back-compat re-export for any consumer still importing the constant
-// (no module-internal consumers left after this refactor).
 const BOLT_PIPELINE = BOLT_PIPELINE_FULL;
 
 function stageIndexInPipeline(
   stage: string | undefined,
-  pipeline: { stage: string; label: string }[] = BOLT_PIPELINE_FULL,
+  pipeline = BOLT_PIPELINE_FULL,
 ): number {
-  if (!stage) return -1;
-  const exact = pipeline.findIndex((s) => s.stage === stage);
-  if (exact !== -1) return exact;
-  // sub-stages like generate-weekly-structure-week-1
-  if (stage.startsWith('generate-weekly-structure')) {
-    return pipeline.findIndex((s) => s.stage === 'generate-weekly-structure');
-  }
-  return -1;
+  return resolveCanonicalStageIndex(stage, pipeline);
 }
 
 function stageIndex(stage: string | undefined): number {
