@@ -12,9 +12,18 @@
  * Contract:
  *   Request body: { asset_payload: Record<string, unknown> }
  *   Response 200: { success: true, rendered: { url?, files?, metadata? } }
+ *   GET/POST ?probe=1: font-runtime parity diagnostics (no auth).
  *
  * Auth: requires an authenticated Supabase session. The renderer's own
  * `options` block carries companyId/userId for storage attribution.
+ *
+ * FONT PROVISIONING (PHASE 13Z): the Vercel runtime ships no fonts, so the
+ * infographic SVG <text> (font-family "Inter, Arial") rendered blank. fontconfig
+ * reads FONTCONFIG_FILE when it FIRST initializes (at sharp/librsvg load), so the
+ * env MUST be configured before that native lib loads. We therefore call
+ * ensureRenderFonts() first and DEFER (dynamic-import) the sharp-loading modules
+ * (creatorAssetRenderer, renderTextCapabilityProbe) until after — keeping the top
+ * of this module free of any sharp dependency.
  *
  * STRICT scope:
  *   - Pure passthrough to `renderAsset` — no orchestration,
@@ -27,7 +36,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { renderAsset } from '../../../../backend/services/creatorAssetRenderer';
+import { ensureRenderFonts } from '../../../../backend/services/creatorRenderFonts';
 
 export const config = {
   api: {
@@ -38,6 +47,26 @@ export const config = {
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Configure fontconfig BEFORE any sharp/librsvg module loads (they are
+  // dynamic-imported below). Must run first — fontconfig reads FONTCONFIG_FILE
+  // at native-lib init, which a later call would miss.
+  const diag = ensureRenderFonts();
+
+  // Parity probe (?probe=1): runs INSIDE this same function bundle/trace, so it
+  // conclusively reports whether render-inline's runtime can rasterize text
+  // glyphs. Used by the post-deploy gate. No auth (renders an internal SVG,
+  // returns only font diagnostics — no user data).
+  if (req.query.probe === '1' || req.query.probe === 'true') {
+    const { probeRenderTextCapability } = await import('../../../../backend/services/renderTextCapabilityProbe');
+    const probe = await probeRenderTextCapability();
+    return res.status(200).json({
+      ok: probe.ok,
+      inkRatio: probe.inkRatio,
+      resolvedFontDir: diag.resolvedFontDir,
+      fontCount: diag.fontCount,
+    });
+  }
+
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
@@ -63,6 +92,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const campaignId = typeof body.campaign_id === 'string' ? body.campaign_id.trim() : '';
 
   try {
+    // Deferred import: loads sharp AFTER ensureRenderFonts() set FONTCONFIG_FILE.
+    const { renderAsset } = await import('../../../../backend/services/creatorAssetRenderer');
     const rendered = await renderAsset(assetPayload, {
       companyId: companyId || undefined,
       campaignId: campaignId || undefined,

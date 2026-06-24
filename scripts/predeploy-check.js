@@ -204,6 +204,26 @@ try {
   }
 }
 
+// ── Vercel render-inline probe (POST-deploy) ────────────────────────────────
+// render-inline rasterizes infographic text in the VERCEL runtime (not the
+// worker). This verifies the LIVE function can render glyphs via its in-bundle
+// ?probe=1 endpoint. It must run AFTER deploy (a pre-deploy run would test the
+// OLD build), so it's opt-in here via POSTDEPLOY_PROBE=1; otherwise it's printed
+// as a required post-deploy step below.
+if (process.env.POSTDEPLOY_PROBE === '1') {
+  process.stdout.write(`Verifying LIVE Vercel render-inline parity (?probe=1)...\n`);
+  try {
+    execSync('node scripts/verify-vercel-render-parity.js', { stdio: 'inherit' });
+    process.stdout.write(`  vercel render parity: OK\n`);
+  } catch (e) {
+    process.stdout.write(
+      `RESULT: BLOCKED — live Vercel render-inline probe failed (ok!=true or inkRatio<=0).\n` +
+      `Infographics would render blank. Do not consider the deploy successful.\n`,
+    );
+    process.exit(1);
+  }
+}
+
 process.stdout.write(
   `\nRESULT: OK — clean tree at ${shortSha} (== origin/main), worker typecheck + env OK.\n\n` +
   `Manual deploy is your action (not automated here). AFTER a verified\n` +
@@ -218,6 +238,11 @@ process.stdout.write(
   `  2. vercel --prod          → Vercel app from the SAME checkout\n` +
   `  3. Verify Railway's running commit == ${shortSha} (Railway dashboard/CLI)\n` +
   `Running app and worker on different SHAs is a parity hazard (the worker may\n` +
-  `expect schema/contracts the app hasn't shipped, or vice versa).\n`,
+  `expect schema/contracts the app hasn't shipped, or vice versa).\n\n` +
+  `── POST-DEPLOY: Vercel render-inline font parity (REQUIRED) ──\n` +
+  `After the Vercel deploy, confirm the live render runtime renders text:\n` +
+  `  npm run verify:vercel-render-parity   (must print PASS / ok=true, inkRatio>0)\n` +
+  `Blank infographics ⇒ fonts not traced into the Lambda — do NOT call the\n` +
+  `deploy successful until this passes.\n`,
 );
 process.exit(0);

@@ -6,6 +6,14 @@ const nextConfig = {
   experimental: {
     webpackBuildWorker: false,
   },
+  // Force the vendored render fonts into the render-inline serverless function
+  // bundle (PHASE 13Z). render-inline rasterizes infographic SVG <text> via
+  // sharp->librsvg in the Vercel runtime, which ships no fonts; these files are
+  // what ensureRenderFonts() points fontconfig at. Without this include the
+  // fonts are not traced into the Lambda and text renders blank.
+  outputFileTracingIncludes: {
+    '/api/command-center/creator-content/render-inline': ['./assets/fonts/**'],
+  },
   turbopack: {},
   // Don't bundle server-only packages - they use Node built-ins or are API-route-only.
   serverExternalPackages: [
