@@ -15,7 +15,12 @@ import {
 } from '../../../../lib/content/writerCreatorAttachmentContracts';
 import { containsDirectThreadDuplication, transformThreadForVisual } from '../../../../lib/content/writerCreatorThreadTransform';
 import { detectSemanticThreadDuplication } from '../../../../backend/services/creatorSemanticDuplication';
-import { runCreatorOrchestration } from '../../../../backend/services/creator/creatorOrchestrator';
+// PHASE 14N: runCreatorOrchestration is DEFERRED (dynamic-imported in the
+// handler) so ensureRenderFonts() configures fontconfig BEFORE the orchestrator
+// pulls in creatorAssetRenderer → sharp. Mirrors render-inline (which renders
+// text correctly). A static import here would load sharp at module-eval, before
+// the handler-time font init — the cause of the generate-inline tofu render.
+import { ensureRenderFonts } from '../../../../backend/services/creatorRenderFonts';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
@@ -585,10 +590,39 @@ function shouldUseCreatorFallback(error: unknown): boolean {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // PHASE 14N — generate-inline font parity. Configure fontconfig at HANDLER
+  // time (cwd + traced fonts ready on Vercel) BEFORE the orchestrator/sharp is
+  // dynamic-imported below. Identical init to render-inline.
+  const fontDiag = ensureRenderFonts();
+
+  // Parity probe (?probe=1): same diagnostics render-inline exposes, but for THIS
+  // (generate) function's own runtime/bundle. No auth — renders an internal SVG,
+  // returns only font diagnostics.
+  if (req.query.probe === '1' || req.query.probe === 'true') {
+    const { probeRenderTextCapability } = await import('../../../../backend/services/renderTextCapabilityProbe');
+    const probe = await probeRenderTextCapability();
+    return res.status(200).json({
+      ok: probe.ok,
+      inkRatio: probe.inkRatio,
+      resolvedFontDir: fontDiag.resolvedFontDir,
+      fontCount: fontDiag.fontCount,
+      fontconfigFile: process.env.FONTCONFIG_FILE ?? null,
+    });
+  }
+
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // Deterministic, non-user-facing font diagnostics for this generate request
+  // (lands in the Vercel function logs).
+  console.info('[creator-font-init]', {
+    resolvedFontDir: fontDiag.resolvedFontDir,
+    fontCount: fontDiag.fontCount,
+    configPath: fontDiag.configPath,
+    fontconfigFile: process.env.FONTCONFIG_FILE ?? null,
+  });
 
   const user = await resolveUserContext(req);
   const body = (req.body || {}) as GenerateCreatorBody;
@@ -906,6 +940,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         persistedAssetIdForResponse = first.result.persistedAssetId;
         return first.result.output;
       }
+      // PHASE 14N: dynamic-import the orchestrator AFTER ensureRenderFonts() ran
+      // (handler top) so creatorAssetRenderer → sharp/fontconfig initializes with
+      // the vendored fonts already configured — mirroring render-inline.
+      const { runCreatorOrchestration } = await import('../../../../backend/services/creator/creatorOrchestrator');
       const orchestrated = await measureCreatorDuration('creator_orchestrate', {
         contentType,
         platform: primaryPlatform,
