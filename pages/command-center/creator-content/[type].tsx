@@ -845,6 +845,32 @@ type SavedBlockReference = {
   name: string;
 };
 
+/**
+ * Canonical resolution of a saved creator asset's image URL(s). Different write
+ * paths populate different fields — the `url` column, the `files` column,
+ * top-level `metadata.files`, or (legacy Creator flow)
+ * `metadata.creator_continuity.files`. The UI reconciles them here in a fixed
+ * deterministic priority so historical AND newly generated assets render.
+ * Read-only: no write path, storage, or schema is changed.
+ */
+function resolveSavedAssetMedia(row: Record<string, unknown>): string[] {
+  const arr = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0) : [];
+  const meta = (row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata))
+    ? row.metadata as Record<string, unknown>
+    : {};
+  const continuity = (meta.creator_continuity && typeof meta.creator_continuity === 'object' && !Array.isArray(meta.creator_continuity))
+    ? meta.creator_continuity as Record<string, unknown>
+    : {};
+  const continuityFiles = arr(continuity.files);  // 1. legacy Creator-flow reader path
+  if (continuityFiles.length > 0) return continuityFiles;
+  const metaFiles = arr(meta.files);               // 2. top-level metadata.files
+  if (metaFiles.length > 0) return metaFiles;
+  const columnFiles = arr(row.files);              // 3. files column
+  if (columnFiles.length > 0) return columnFiles;
+  return typeof row.url === 'string' && row.url.trim() ? [row.url.trim()] : [];  // 4. url column
+}
+
 type SavedCreatorAsset = {
   id: string;
   name: string;
@@ -853,6 +879,15 @@ type SavedCreatorAsset = {
   tags: string[];
   usage_count: number;
   created_at?: string;
+  /**
+   * Canonical resolved image URL(s) for the saved asset. The render/persistence
+   * pipeline writes the URL to different places depending on path (the `url`
+   * column, the `files` column, or `metadata.files`), while older Creator-flow
+   * assets used `metadata.creator_continuity.files`. This field reconciles all
+   * of them at read time via a deterministic priority order (see
+   * resolveSavedAssetMedia) so every asset — historical or new — renders.
+   */
+  media_files?: string[];
   /**
    * Continuity metadata surfaced by the saved-templates API. Populated
    * when the saved template was created by the Creator flow; null for
@@ -1483,6 +1518,11 @@ export default function CreatorTypeWorkflowPage() {
   const [savedAssets, setSavedAssets] = React.useState<SavedCreatorAsset[]>([]);
   const [isLoadingAssets, setIsLoadingAssets] = React.useState(false);
   const [selectedAssetId, setSelectedAssetId] = React.useState<string | null>(null);
+  // PHASE 14F: bump to force a savedAssets refetch after a generate; the ref
+  // asks the loader to select the newest asset once that refetch lands, so a
+  // newly generated render appears and is selected without a page reload.
+  const [assetReloadNonce, setAssetReloadNonce] = React.useState(0);
+  const selectNewestAssetRef = React.useRef(false);
   const [brandMode, setBrandMode] = React.useState<CreatorBrandMode>('independent');
   const [brandPanelOpen, setBrandPanelOpen] = React.useState(false);
   const [brandPresence, setBrandPresence] = React.useState<BrandPresence>('balanced');
@@ -1850,9 +1890,19 @@ export default function CreatorTypeWorkflowPage() {
             usage_count: 0,
             created_at: typeof row.createdAt === 'string' ? row.createdAt as string : undefined,
             creator_metadata: continuity,
+            media_files: resolveSavedAssetMedia(row),
           } as SavedCreatorAsset;
         });
         setSavedAssets(mapped);
+        // PHASE 14F: after a post-generate refetch, select the newest asset so
+        // the freshly generated render is shown immediately (no page reload).
+        if (selectNewestAssetRef.current && mapped.length > 0) {
+          const newest = [...mapped].sort(
+            (a, b) => (b.created_at || '').localeCompare(a.created_at || ''),
+          )[0];
+          if (newest) setSelectedAssetId(newest.id);
+          selectNewestAssetRef.current = false;
+        }
       })
       .catch(() => {
         if (!cancelled) setSavedAssets([]);
@@ -1863,7 +1913,7 @@ export default function CreatorTypeWorkflowPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedCompanyId, savedBlock?.id, type]);
+  }, [selectedCompanyId, savedBlock?.id, type, assetReloadNonce]);
 
   React.useEffect(() => {
     if (!selectedAssetId || isLoadingAssets || savedAssets.length === 0) return;
@@ -2837,6 +2887,11 @@ export default function CreatorTypeWorkflowPage() {
         throw new Error(extra.length > 0 ? `${baseMessage} — ${extra.join(' ')}` : baseMessage);
       }
       setResult(data as CreatorResult);
+      // PHASE 14F: the generate persisted a new creator_assets row server-side.
+      // Refetch saved assets and select the newest so the freshly generated
+      // render appears and is shown immediately — no page reload required.
+      selectNewestAssetRef.current = true;
+      setAssetReloadNonce((n) => n + 1);
       const generatedMediaBundle = data?.output?.asset_payload?.media_bundle || {};
       const generatedMediaUrl = typeof generatedMediaBundle.url === 'string' ? generatedMediaBundle.url : '';
       const generatedMetadata = generatedMediaBundle.metadata && typeof generatedMediaBundle.metadata === 'object'
@@ -3746,9 +3801,12 @@ export default function CreatorTypeWorkflowPage() {
                 // generate. Falls back to the single image when the
                 // asset is a single-frame type.
                 if (!selectedAsset) return null;
-                const meta = selectedAsset.creator_metadata;
-                const savedFiles: string[] = Array.isArray(meta?.files)
-                  ? (meta!.files as string[]).filter(Boolean)
+                // Canonical reader path (PHASE 14F): resolve image URL(s) from
+                // the reconciled media_files (creator_continuity.files →
+                // metadata.files → files column → url column), instead of only
+                // creator_metadata.files which most write paths never populate.
+                const savedFiles: string[] = Array.isArray(selectedAsset.media_files)
+                  ? selectedAsset.media_files.filter(Boolean)
                   : [];
                 if (savedFiles.length === 0) return null;
                 const savedType = getSavedAssetCreatorType(selectedAsset);
