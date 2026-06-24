@@ -42,6 +42,13 @@ export interface OutreachContext {
 export type OutreachDecision =
   | {
       ok: true;
+      // `reason` is declared (optional, always absent) on the success branch so
+      // `decision.reason` is a valid property of the whole union. The worker
+      // tsconfig runs with `strict:false`, which does NOT narrow the `ok`
+      // discriminant — without this, the `!decision.ok` reject branch reads of
+      // `.reason` fail to compile (TS2339). Behavior is unchanged: success
+      // returns never set it.
+      reason?: undefined;
       company_id: string;
       recipientEmail: string;
       companyName: string | null;
