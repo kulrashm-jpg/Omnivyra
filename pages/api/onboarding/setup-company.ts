@@ -607,6 +607,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }, { onConflict: 'company_id' });
     // Non-fatal if profile insert fails — company + role are sufficient
 
+    // ── 5b. Eager profile scoring trigger ─────────────────────────────────────
+    // Profiles were previously only scored lazily, on a later getProfile()
+    // autoRefine read — so a newly created profile that nothing happened to read
+    // through that path kept overall_confidence=0 / last_refined_at=null forever.
+    // Fire the existing refinement once at creation so the profile is scored
+    // automatically. Best-effort and fully non-fatal: it never blocks the
+    // onboarding response and never fails setup. Only when a website exists,
+    // since extraction needs a source to produce a non-zero score.
+    if (canonicalWebsite) {
+      void import('../../../backend/services/companyProfileService')
+        .then(({ getProfile }) => getProfile(companyId, { autoRefine: true }))
+        .catch((e) =>
+          console.warn('[setup-company] eager profile scoring failed (non-fatal):', (e as Error)?.message ?? e),
+        );
+    }
+
     // ── 6. Update free_credit_profiles with org_id (if exists) ───────────────
     await supabase
       .from('free_credit_profiles')
