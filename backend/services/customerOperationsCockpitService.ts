@@ -32,6 +32,11 @@ import { analyzeValueDrivers, buildDriverCompanies, type ValueDriverResult } fro
 import { analyzeCampaignExecution, type ExecutionAdoptionResult } from './campaignExecutionAdoptionService';
 import { analyzeMonetization, buildMonetizationCompanies, type MonetizationResult } from './monetizationIntelligenceService';
 import { analyzePopulationIntegrity, buildPopulationCompanies, type PopulationIntegrityResult } from './customerPopulationIntegrityService';
+import { simulateInterventionPortfolio, type GovCompany, type SimulationResult } from './customerInterventionGovernanceService';
+import { buildCustomerSuccessOperatingSystem, type OpsCompany, type OperatingSystemResult } from './customerSuccessOperatingSystemService';
+import { simulatePortfolio, type SimInput, type SimulationPortfolio } from './customerInterventionSimulationService';
+import { calculateRevenuePortfolio, loadRevenueEvents, type RevenueCompany, type RevenuePortfolio } from './customerRevenueIntelligenceService';
+import { calculateDataFoundation, type FoundationResult } from './customerDataFoundationService';
 import { VALUE_CATEGORIES } from './customerValueRealizationService';
 import type { ReadinessArea, ReadinessState } from './customerReadinessService';
 
@@ -104,6 +109,11 @@ export interface CockpitResult {
   execution_adoption: ExecutionAdoptionResult;
   monetization: MonetizationResult;
   population_integrity: PopulationIntegrityResult;
+  intervention_governance: SimulationResult;
+  operating_system: OperatingSystemResult;
+  intervention_simulation: SimulationPortfolio;
+  revenue_intelligence: RevenuePortfolio;
+  data_foundation: FoundationResult;
   portfolio: {
     priority_distribution: Record<PriorityTier, number>;
     trajectory_distribution: Record<Trajectory, number>;
@@ -325,6 +335,68 @@ export async function getCustomerOperations(
 
   const companies = applyCockpitFilters(companiesAll, filters);
 
+  // Intervention governance (pure; deterministic state + eligibility + suppression, no new DB reads).
+  const populationClassBy = new Map(population_integrity.per_company.map((c) => [c.company_id, c.tenant_class]));
+  const trajectoryBy = new Map(companiesAll.map((c) => [c.company_id, c.trajectory]));
+  const govCompanies: GovCompany[] = tenants.map((t) => {
+    const sig = signalByCompany.get(t.company_id);
+    const sigConf = { COMPANY_PROFILE: 'UNKNOWN', WEBSITE: 'UNKNOWN', GOOGLE_ANALYTICS: 'UNKNOWN', GOOGLE_SEARCH_CONSOLE: 'UNKNOWN', SOCIAL_INTEGRATIONS: 'UNKNOWN', COMMUNITY: 'UNKNOWN', TEAM_MEMBERS: 'UNKNOWN', BILLING: 'UNKNOWN' } as Record<ReadinessArea, ConfidenceLevel>;
+    for (const s of sig?.per_area ?? []) sigConf[s.area] = s.signal_confidence;
+    const vc = valueCompanies.find((x) => x.company_id === t.company_id);
+    return {
+      company_id: t.company_id, company_name: t.company_name, tenant_class: populationClassBy.get(t.company_id) ?? 'UNKNOWN',
+      areas: signalRefs.find((r) => r.company_id === t.company_id)!.areas,
+      signal_confidence: sigConf, overall_confidence: sig?.overall_signal_confidence ?? 'UNKNOWN',
+      is_active: t.tenant_status === 'ACTIVE', is_paying: t.billing_ready === 'READY',
+      has_value: populationValueBy.get(t.company_id)?.has_value ?? false,
+      value_category_count: VALUE_CATEGORIES.filter((cat) => (vc?.signals[cat] ?? 0) > 0).length,
+      adoption_score: adoptionBy.get(t.company_id) ?? 0, execution_volume: populationValueBy.get(t.company_id)?.volume ?? 0,
+      trajectory: trajectoryBy.get(t.company_id) ?? 'UNKNOWN', readiness_bucket: t.readiness_bucket,
+      created_at: t.created_at, active_30d: t.active_user_count_30d,
+    };
+  });
+  const intervention_governance = simulateInterventionPortfolio(govCompanies, Date.now());
+
+  // Customer Success Operating System (pure; composes governance + priority + value, no new DB reads).
+  const govByCompany = new Map(intervention_governance.per_company.map((g) => [g.company_id, g]));
+  const opsCompanies: OpsCompany[] = tenants.map((t) => {
+    const g = govByCompany.get(t.company_id)!;
+    return {
+      company_id: t.company_id, company_name: t.company_name, tenant_class: g.tenant_class,
+      customer_state: g.customer_state, priority_score: prioByCompany.get(t.company_id)?.priority_score ?? 0, priority_tier: prioByCompany.get(t.company_id)?.priority_tier ?? 'READ_ONLY',
+      eligible_interventions: g.eligible_interventions, globally_suppressed: g.globally_suppressed,
+      has_value: populationValueBy.get(t.company_id)?.has_value ?? false, readiness_score: t.overall_readiness_score,
+      overall_confidence: signalByCompany.get(t.company_id)?.overall_signal_confidence ?? 'UNKNOWN',
+    };
+  });
+  const operating_system = buildCustomerSuccessOperatingSystem(opsCompanies);
+
+  // Intervention simulation (pure; "if we acted" over governance output, no execution, no new DB reads).
+  const simInputs: SimInput[] = intervention_governance.per_company.map((g) => ({ ...g, confidence: g.state_confidence }));
+  const intervention_simulation = simulatePortfolio(simInputs);
+
+  // Revenue intelligence (evidence-only; recorded revenue events, UNKNOWN otherwise).
+  const revenueEventsBy = await loadRevenueEvents(ids);
+  const revenueCompanies: RevenueCompany[] = tenants.map((t) => ({
+    company_id: t.company_id, company_name: t.company_name, tenant_class: populationClassBy.get(t.company_id) ?? 'UNKNOWN',
+    events: revenueEventsBy.get(t.company_id) ?? [],
+    has_value: populationValueBy.get(t.company_id)?.has_value ?? false,
+    adoption_score: adoptionBy.get(t.company_id) ?? 0, execution_volume: populationValueBy.get(t.company_id)?.volume ?? 0,
+  }));
+  const revenue_intelligence = calculateRevenuePortfolio(revenueCompanies);
+
+  // Data foundation audit (pure; composes population + telemetry + confidence + revenue + value).
+  const sh = signalResult.portfolio;
+  const data_foundation = calculateDataFoundation({
+    population: { total: population_integrity.portfolio_summary.total_companies, customer: population_integrity.portfolio_summary.counts.CUSTOMER, qa: population_integrity.portfolio_summary.counts.QA, test: population_integrity.portfolio_summary.counts.TEST, internal: population_integrity.portfolio_summary.counts.INTERNAL, unknown: population_integrity.portfolio_summary.counts.UNKNOWN },
+    telemetry_coverage_pct: scoreCoverage().coverage_percentage,
+    confidence: { high: sh.healthy_signals, low: sh.low_confidence_signals, unknown: sh.unknown_signals, medium: Math.max(0, (sh.per_area.length * tenants.length) - sh.healthy_signals - sh.low_confidence_signals - sh.unknown_signals) },
+    revenue: { coverage_pct: revenue_intelligence.data_quality.revenue_coverage_pct ?? 0, customer_revenue_count: revenue_intelligence.data_quality.customer_class_with_revenue.CUSTOMER ?? 0, mrr_known: revenue_intelligence.mrr !== 'UNKNOWN' },
+    value_coverage_pct: value_realization.funnel.find((f) => f.stage === 'VALUE_SIGNAL_PRESENT')?.conversion_pct ?? 0,
+    // Audited entity joins: companies↔(profiles,domains,analytics,social,roles,value,canonical_revenue) joinable; ↔(signup_intents,engagement,community,invoices) NOT.
+    joinability: { joinable: 7, total: 11 },
+  });
+
   const evoPortfolio = generatePortfolioEvolution(evolutions);
   const summary = {
     total_companies: companies.length,
@@ -355,6 +427,11 @@ export async function getCustomerOperations(
     execution_adoption,
     monetization,
     population_integrity,
+    intervention_governance,
+    operating_system,
+    intervention_simulation,
+    revenue_intelligence,
+    data_foundation,
     portfolio: { priority_distribution: prio.distribution, trajectory_distribution: evoPortfolio.trajectory_distribution, top_blockers: ins.portfolio.top_blockers },
   };
 }

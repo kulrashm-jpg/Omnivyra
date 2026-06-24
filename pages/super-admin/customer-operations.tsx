@@ -25,6 +25,13 @@ import type { ValueDriverResult } from '../../backend/services/valueDriverIntell
 import type { ExecutionAdoptionResult } from '../../backend/services/campaignExecutionAdoptionService';
 import type { MonetizationResult } from '../../backend/services/monetizationIntelligenceService';
 import type { PopulationIntegrityResult } from '../../backend/services/customerPopulationIntegrityService';
+import type { SimulationResult } from '../../backend/services/customerInterventionGovernanceService';
+import type { OperatingSystemResult } from '../../backend/services/customerSuccessOperatingSystemService';
+import type { SimulationPortfolio } from '../../backend/services/customerInterventionSimulationService';
+import type { RevenuePortfolio } from '../../backend/services/customerRevenueIntelligenceService';
+import type { FoundationResult } from '../../backend/services/customerDataFoundationService';
+
+const readyColor = (r: string) => r === 'READY' ? 'text-emerald-600' : r === 'PARTIAL' ? 'text-amber-600' : 'text-red-600';
 
 const confColor = (c: string) =>
   c === 'HIGH' ? 'text-emerald-600' : c === 'MEDIUM' ? 'text-amber-600' : c === 'LOW' ? 'text-red-600' : 'text-[#9AA7B8]';
@@ -67,6 +74,11 @@ export default function CustomerOperationsPage() {
   const [execution, setExecution] = useState<ExecutionAdoptionResult | null>(null);
   const [monetization, setMonetization] = useState<MonetizationResult | null>(null);
   const [population, setPopulation] = useState<PopulationIntegrityResult | null>(null);
+  const [governance, setGovernance] = useState<SimulationResult | null>(null);
+  const [opsystem, setOpsystem] = useState<OperatingSystemResult | null>(null);
+  const [simulation, setSimulation] = useState<SimulationPortfolio | null>(null);
+  const [revenue, setRevenue] = useState<RevenuePortfolio | null>(null);
+  const [foundation, setFoundation] = useState<FoundationResult | null>(null);
   const [execSummary, setExecSummary] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +107,11 @@ export default function CustomerOperationsPage() {
         setExecution(json.execution_adoption ?? null);
         setMonetization(json.monetization ?? null);
         setPopulation(json.population_integrity ?? null);
+        setGovernance(json.intervention_governance ?? null);
+        setOpsystem(json.operating_system ?? null);
+        setSimulation(json.intervention_simulation ?? null);
+        setRevenue(json.revenue_intelligence ?? null);
+        setFoundation(json.data_foundation ?? null);
       } catch { setError('Failed to load customer operations.'); }
       finally { setLoading(false); }
     })();
@@ -132,6 +149,26 @@ export default function CustomerOperationsPage() {
     () => new Map((population?.per_company ?? []).map((c) => [c.company_id, c])),
     [population],
   );
+  const governanceByCompany = useMemo(
+    () => new Map((governance?.per_company ?? []).map((c) => [c.company_id, c])),
+    [governance],
+  );
+  const simByCompany = useMemo(
+    () => new Map((simulation?.per_customer ?? []).map((c) => [c.company_id, c])),
+    [simulation],
+  );
+  const revenueByCompany = useMemo(
+    () => new Map((revenue?.per_customer ?? []).map((c) => [c.company_id, c])),
+    [revenue],
+  );
+  const queuesByCompany = useMemo(() => {
+    const m = new Map<string, string[]>();
+    if (opsystem) {
+      const all: [string, typeof opsystem.queues.activation_queue][] = [['ACTIVATION', opsystem.queues.activation_queue], ['ADOPTION', opsystem.queues.adoption_queue], ['VALUE', opsystem.queues.value_queue], ['RETENTION', opsystem.queues.retention_queue], ['EXPANSION', opsystem.queues.expansion_queue], ['OBSERVATION', opsystem.queues.observation_queue]];
+      for (const [name, q] of all) for (const e of q) m.set(e.company_id, [...(m.get(e.company_id) ?? []), name]);
+    }
+    return m;
+  }, [opsystem]);
   const plans = useMemo(() => Array.from(new Set(companies.map((c) => c.plan))).sort(), [companies]);
   const rows = useMemo(() => {
     const q = f.search.trim().toLowerCase();
@@ -158,6 +195,36 @@ export default function CustomerOperationsPage() {
         <div className="mx-auto max-w-[88rem]">
           <h1 className="text-2xl font-bold text-[#0B1F33]">Customer Operations Command Center</h1>
           <p className="mt-1 text-sm text-[#6B7C93]">Read-only operational cockpit — readiness, opportunities, priority, insights, evolution, identity, subscription, signup funnel.</p>
+
+          {/* Data foundation — executive verdict (shown first) */}
+          {foundation && (
+            <div className="mt-6 rounded-xl border-2 border-slate-400 bg-slate-50 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Customer data foundation</p>
+                <span className="text-sm font-bold text-[#0B1F33]">Foundation {foundation.foundation_score} · {foundation.foundation_status.replace('FOUNDATION_', '')} · {foundation.answers.maturity}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {[['Integrity', foundation.scores.customer_integrity_score], ['Telemetry', foundation.scores.telemetry_score], ['Confidence', foundation.scores.confidence_score], ['Joinability', foundation.scores.joinability_score], ['Coverage', foundation.scores.coverage_score]].map(([k, v]) => (
+                  <div key={k as string} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2"><p className="text-xs text-[#6B7C93]">{k}</p><p className="text-lg font-bold text-[#0B1F33]">{v}</p></div>
+                ))}
+              </div>
+              <div className="mt-2 grid gap-2 lg:grid-cols-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Recommendation readiness</p>
+                  <div className="mt-1 flex flex-wrap gap-1.5">{foundation.recommendation_readiness.map((r) => <span key={r.category} className={`rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs ${readyColor(r.readiness)}`} title={`limited by ${r.limiting_factor}`}>{r.category.replace(/_/g, ' ')}: {r.readiness}</span>)}</div>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Automation readiness</p>
+                  <div className="mt-1 flex flex-wrap gap-1.5">{foundation.automation_readiness.map((r) => <span key={r.category} className={`rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs ${readyColor(r.readiness)}`} title={`limited by ${r.limiting_factor}`}>{r.category.replace(/_/g, ' ')}: {r.readiness}</span>)}</div>
+                </div>
+              </div>
+              <div className="mt-2 space-y-0.5 rounded bg-white px-2 py-1.5 text-xs text-[#0B1F33]">
+                <p><strong>Dataset trustworthy?</strong> {foundation.answers.dataset_trustworthy}</p>
+                <p><strong>Recommendation safe?</strong> {foundation.answers.recommendation_safe}</p>
+                <p><strong>Automation safe?</strong> {foundation.answers.automation_safe}</p>
+              </div>
+            </div>
+          )}
 
           {/* Top cards */}
           <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-6">
@@ -631,6 +698,129 @@ export default function CustomerOperationsPage() {
             </div>
           )}
 
+          {/* Intervention readiness (governance) */}
+          {governance && (
+            <div className="mt-3 rounded-xl border-2 border-indigo-300 bg-indigo-50/30 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Intervention readiness <span className="font-normal normal-case text-[#9AA7B8]">(governance gate — no execution)</span></p>
+                <span className="text-xs text-[#6B7C93]">{governance.companies_with_any_eligible} eligible companies · {governance.companies_globally_suppressed} suppressed (non-customer)</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {Object.entries(governance.state_distribution).filter(([, n]) => n > 0).map(([s, n]) => (
+                  <span key={s} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-[#0B1F33]">{s.replace(/_/g, ' ')} <strong>{n}</strong></span>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-[#6B7C93]">Totals (intervention×company): <strong className="text-emerald-600">{governance.totals.eligible} eligible</strong> · {governance.totals.suppressed} suppressed · {governance.totals.blocked} blocked (no gap) · {governance.totals.unknown} unknown</p>
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left text-[#9AA7B8]"><tr>{['Intervention', 'Eligible', 'Suppressed', 'Blocked', 'Unknown'].map((h) => <th key={h} className="py-1 pr-3">{h}</th>)}</tr></thead>
+                  <tbody>
+                    {governance.by_intervention.map((b) => (
+                      <tr key={b.id} className="border-t border-slate-100">
+                        <td className="py-1 pr-3 text-[#0B1F33]">{b.id.replace(/_/g, ' ')}</td>
+                        <td className="py-1 pr-3 font-medium text-emerald-600">{b.eligible}</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{b.suppressed}</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{b.blocked}</td>
+                        <td className="py-1 pr-3 text-[#9AA7B8]">{b.unknown}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Customer Success Operating System */}
+          {opsystem && (
+            <div className="mt-3 rounded-xl border-2 border-emerald-300 bg-emerald-50/30 px-4 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Customer Success Operating System <span className="font-normal normal-case text-[#9AA7B8]">(visibility only)</span></p>
+              <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Executive attention (top 5)</p>
+              <div className="mt-1 flex flex-wrap gap-2">
+                {opsystem.executive_attention.top_5.length ? opsystem.executive_attention.top_5.map((a) => (
+                  <span key={a.company_id} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-[#0B1F33]" title={a.reason}>
+                    {a.company_name} <span className="text-[#6B7C93]">[{a.customer_state}]</span> <strong className="text-indigo-600">{a.attention_score}</strong>
+                  </span>
+                )) : <span className="text-xs text-[#9AA7B8]">none</span>}
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                {([['Activation', opsystem.queues.activation_queue], ['Adoption', opsystem.queues.adoption_queue], ['Value', opsystem.queues.value_queue], ['Retention', opsystem.queues.retention_queue], ['Expansion', opsystem.queues.expansion_queue], ['Observation', opsystem.queues.observation_queue]] as [string, typeof opsystem.queues.activation_queue][]).map(([label, q]) => (
+                  <div key={label} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                    <p className="text-xs font-semibold text-[#0B1F33]">{label} <span className="text-[#9AA7B8]">({q.length})</span></p>
+                    {q.slice(0, 4).map((e) => <p key={e.company_id} className="truncate text-xs text-[#6B7C93]" title={`${e.queue_reason} · ${e.evidence}`}>{e.company_name}</p>)}
+                    {q.length === 0 && <p className="text-xs text-[#9AA7B8]">—</p>}
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-[#6B7C93]">Workload: {opsystem.workload.customer_companies} customers · {opsystem.workload.suppressed_companies} suppressed · {opsystem.workload.customer_companies_with_multiple_queues} in multiple queues · {opsystem.workload.customer_companies_without_actionable_queue} observe-only</p>
+            </div>
+          )}
+
+          {/* Intervention simulation */}
+          {simulation && (
+            <div className="mt-3 rounded-xl border-2 border-sky-300 bg-sky-50/30 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Intervention simulation <span className="font-normal normal-case text-[#9AA7B8]">("if we acted" — no execution)</span></p>
+                <span className="text-xs text-[#6B7C93]">{simulation.portfolio_summary.total_eligible} eligible · {simulation.portfolio_summary.total_suppressed} suppressed · {simulation.collision.collision_count} collisions</span>
+              </div>
+              <p className="mt-2 text-xs text-[#6B7C93]">Capacity: {simulation.capacity.eligible_customers} eligible customers · {simulation.capacity.queue_pressure} total interventions · {simulation.capacity.interventions_per_eligible_customer ?? '—'}/customer · 1:{simulation.capacity.customers_with_1_intervention} 2:{simulation.capacity.customers_with_2_interventions} 3+:{simulation.capacity.customers_with_3_plus_interventions}</p>
+              <div className="mt-2 grid gap-3 lg:grid-cols-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Reach (eligible) / confidence</p>
+                  <div className="mt-1 overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead className="text-left text-[#9AA7B8]"><tr>{['Intervention', 'Eligible', 'HIGH', 'MED'].map((h) => <th key={h} className="py-1 pr-3">{h}</th>)}</tr></thead>
+                      <tbody>
+                        {simulation.per_intervention.filter((s) => s.eligible > 0).map((s) => (
+                          <tr key={s.id} className="border-t border-slate-100">
+                            <td className="py-1 pr-3 text-[#0B1F33]">{s.id.replace(/_/g, ' ')}</td>
+                            <td className="py-1 pr-3 font-medium text-emerald-600">{s.eligible}</td>
+                            <td className="py-1 pr-3 text-[#6B7C93]">{s.confidence_distribution.HIGH}</td>
+                            <td className="py-1 pr-3 text-[#6B7C93]">{s.confidence_distribution.MEDIUM}</td>
+                          </tr>
+                        ))}
+                        {simulation.per_intervention.every((s) => s.eligible === 0) && <tr><td colSpan={4} className="py-1 text-[#9AA7B8]">no eligible interventions</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Collisions (customers with ≥2)</p>
+                  <div className="mt-1 space-y-1">
+                    {simulation.collision.customers_in_collision.map((c) => (
+                      <p key={c.company_id} className="text-xs text-[#6B7C93]">{c.company_name}: <strong className="text-[#0B1F33]">{c.highest_priority_intervention}</strong> (defer {c.deferred.length})</p>
+                    ))}
+                    {simulation.collision.customers_in_collision.length === 0 && <p className="text-xs text-[#9AA7B8]">none</p>}
+                    {simulation.collision.collision_matrix.length > 0 && <p className="mt-1 text-xs text-[#9AA7B8]">Top pair: {simulation.collision.collision_matrix[0].pair} ×{simulation.collision.collision_matrix[0].count}</p>}
+                  </div>
+                </div>
+              </div>
+              <p className="mt-1 text-xs text-[#9AA7B8]">{simulation.unknown_gaps[0]}</p>
+            </div>
+          )}
+
+          {/* Revenue intelligence */}
+          {revenue && (
+            <div className="mt-3 rounded-xl border-2 border-amber-400 bg-amber-50/40 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Revenue intelligence <span className="font-normal normal-case text-red-500">(evidence-only · no estimates)</span></p>
+                <span className="text-xs text-[#6B7C93]">coverage {revenue.data_quality.revenue_coverage_pct ?? 0}% · confidence {revenue.data_quality.revenue_confidence}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-4 text-sm">
+                <span>MRR <strong className="text-red-500">{revenue.mrr}</strong></span>
+                <span>ARR <strong className="text-red-500">{revenue.arr}</strong></span>
+                <span>Active subs <strong className="text-red-500">{revenue.active_subscriptions}</strong></span>
+                <span>Paying (recorded) <strong className="text-[#0B1F33]">{revenue.paying_customers}</strong></span>
+              </div>
+              <p className="mt-2 text-xs text-[#6B7C93]">Observable revenue: {Object.entries(revenue.observable_revenue_by_currency).map(([cur, amt]) => `${amt} ${cur}`).join(' · ') || 'none recorded'}</p>
+              <p className="mt-1 text-xs text-[#6B7C93]">Coverage: {revenue.data_quality.customers_with_measurable_revenue} measurable · {revenue.data_quality.customers_with_unknown_revenue} UNKNOWN · classes-with-revenue: {Object.entries(revenue.data_quality.customer_class_with_revenue).map(([k, v]) => `${k}=${v}`).join(', ') || 'none'}</p>
+              {revenue.concentration.length > 0 && (
+                <p className="mt-1 text-xs text-[#6B7C93]">Concentration ({revenue.concentration[0].currency}): top1 {revenue.concentration[0].top1_share_pct ?? '—'}% · {revenue.concentration[0].companies_with_revenue} companies · total {revenue.concentration[0].total}</p>
+              )}
+              <p className="mt-2 rounded bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">Can revenue be measured? {revenue.can_revenue_be_measured}</p>
+              <p className="mt-1 text-xs text-[#9AA7B8]">{revenue.unknown_gaps.join(' · ')}</p>
+            </div>
+          )}
+
           {/* Filters */}
           <div className="mt-6 flex flex-wrap items-center gap-2">
             <input value={f.search} onChange={(e) => setF({ ...f, search: e.target.value })} placeholder="Search…" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#0A66C2]" />
@@ -748,6 +938,29 @@ export default function CustomerOperationsPage() {
                 {(() => { const p = populationByCompany.get(selected.company_id); return p
                   ? <><Row k="Tenant class" v={p.tenant_class} /><Row k="Confidence" v={p.classification_confidence} /><div className="text-xs text-[#6B7C93]">Evidence: {p.classification_evidence.join('; ')}</div></>
                   : <p className="text-[#6B7C93]">No classification</p>; })()}
+              </Section>
+              <Section title="Intervention governance">
+                {(() => { const g = governanceByCompany.get(selected.company_id); return g
+                  ? <><Row k="Customer state" v={`${g.customer_state} (${g.state_confidence})`} />
+                      <Row k="Eligible" v={g.eligible_interventions.join(', ') || '—'} />
+                      {g.globally_suppressed && <Row k="Suppressed" v={g.global_suppression_reason ?? ''} />}
+                      <div className="text-xs text-[#6B7C93]">Ineligible: {g.ineligible_interventions.slice(0, 6).map((i) => `${i.id}=${i.status}`).join('; ')}</div></>
+                  : <p className="text-[#6B7C93]">No governance record</p>; })()}
+              </Section>
+              <Section title="Operating queues">
+                {(() => { const qs = queuesByCompany.get(selected.company_id); const g = governanceByCompany.get(selected.company_id); return qs?.length
+                  ? <><Row k="Queues" v={qs.join(', ')} /><Row k="Confidence" v={g?.state_confidence ?? '—'} />{g?.globally_suppressed && <div className="text-xs text-red-600">Suppressed: {g.global_suppression_reason}</div>}</>
+                  : <p className="text-[#6B7C93]">{g?.globally_suppressed ? `Excluded (${g.global_suppression_reason})` : 'No queue'}</p>; })()}
+              </Section>
+              <Section title="Simulation">
+                {(() => { const s = simByCompany.get(selected.company_id); return s
+                  ? <><Row k="Eligible interventions" v={String(s.eligible_count)} /><Row k="Highest priority" v={s.highest_priority_intervention ?? '—'} /><Row k="Collision" v={s.collision ? `yes (defer ${s.deferred_in_collision.length})` : 'no'} /><div className="text-xs text-[#6B7C93]">{s.eligible_interventions.join(', ') || 'none'}</div></>
+                  : <p className="text-[#6B7C93]">Excluded (non-customer) or no simulation</p>; })()}
+              </Section>
+              <Section title="Revenue">
+                {(() => { const rv = revenueByCompany.get(selected.company_id); return rv
+                  ? <><Row k="Total revenue" v={rv.measurable ? String(rv.total_revenue) : 'UNKNOWN'} /><Row k="By currency" v={Object.entries(rv.revenue_by_currency).map(([c, a]) => `${a} ${c}`).join(', ') || '—'} /><Row k="Events / confidence" v={`${rv.event_count} / ${rv.confidence}`} /></>
+                  : <p className="text-[#6B7C93]">No revenue record (UNKNOWN)</p>; })()}
               </Section>
               <Section title="Recommended actions">
                 {selected.recommended_playbooks.length ? selected.recommended_playbooks.map((p) => (
