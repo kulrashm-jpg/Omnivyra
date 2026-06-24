@@ -13,6 +13,10 @@ const nextConfig = {
   // fonts are not traced into the Lambda and text renders blank.
   outputFileTracingIncludes: {
     '/api/command-center/creator-content/render-inline': ['./assets/fonts/**'],
+    // PHASE 14J: the Generate button uses /generate (synchronous inline render
+    // via the orchestrator), so the vendored fonts must be traced into THIS
+    // function too — otherwise generate-inline renders text-less on Vercel.
+    '/api/command-center/creator-content/generate': ['./assets/fonts/**'],
   },
   turbopack: {},
   // Don't bundle server-only packages - they use Node built-ins or are API-route-only.

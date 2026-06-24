@@ -50,7 +50,15 @@ import {
   buildTableCardSvg,
   type InfographicCardBrand,
 } from './creator/infographicDataCards';
+import { ensureRenderFonts } from './creatorRenderFonts';
 
+// FONT PARITY (PHASE 14J): configure fontconfig to discover the vendored fonts
+// BEFORE sharp loads. Every infographic render path — render-inline,
+// generate-inline (orchestrator), and the worker — flows through this module,
+// so initializing here (the single render chokepoint) gives them all the
+// identical font contract render-inline previously had alone. Idempotent +
+// never throws; a no-op where system fonts already exist (e.g. the worker).
+ensureRenderFonts();
 const sharp = require('sharp') as typeof import('sharp');
 // Loaded only in the server renderer for deterministic downloadable PDF assets.
 const PDFDocument = require('pdfkit');
