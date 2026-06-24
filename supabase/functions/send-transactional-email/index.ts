@@ -60,6 +60,15 @@ type Template =
       companyName: string | null;
       missingMilestones: string[];
       ctaUrl: string;
+    }
+  | {
+      type: "credit_alert";
+      recipientEmail: string;
+      companyName: string | null;
+      consumedPercent: number;
+      remainingCredits: number;
+      projectedRequiredCredits: number;
+      ctaUrl: string;
     };
 
 type Envelope = { to: string; subject: string; html: string };
@@ -201,6 +210,19 @@ function render(t: Template): Envelope {
         ),
       };
     }
+    case "credit_alert": {
+      const co = t.companyName ? ` for <strong>${t.companyName}</strong>` : "";
+      const body =
+        `You've used <strong>${t.consumedPercent}%</strong> of this cycle's credits${co}.<br/><br/>` +
+        `Remaining: <strong>${t.remainingCredits.toLocaleString()}</strong> credits. ` +
+        `Projected need before your cycle ends: <strong>${t.projectedRequiredCredits.toLocaleString()}</strong>.<br/><br/>` +
+        `At the current rate your credits are likely to run out before the period ends — top up or adjust usage to avoid interruption.`;
+      return {
+        to: t.recipientEmail,
+        subject: `Low credits — ${t.consumedPercent}% consumed`,
+        html: actionLayout("Your credits are running low", body, "Review credits", t.ctaUrl),
+      };
+    }
   }
 }
 
@@ -305,6 +327,7 @@ Deno.serve(async (req) => {
     "inbound_signup_notice",
     "domain_verification_reminder",
     "activation_outreach",
+    "credit_alert",
   ]);
   const requestedType = (body as { type?: string }).type;
   if (!requestedType || !KNOWN_TYPES.has(requestedType)) {

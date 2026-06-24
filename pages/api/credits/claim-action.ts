@@ -102,7 +102,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         await createCredit({
           orgId,
           amount:         credits,
-          category:       'incentive',
+          category:       'paid', // approved policy: earn / promo / referral → PAID (never expire, consumed after FREE, subscription-locked). No new INCENTIVE allocations.
           referenceType:  'free_credits_earn',
           referenceId:    `${user.id}:${category}`,
           note:           `Free credits — ${category.replace(/_/g, ' ')}`,

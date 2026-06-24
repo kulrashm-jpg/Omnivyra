@@ -11,6 +11,11 @@
  * purchase flow. Assumes a valid subscription (plan assignment) already exists.
  */
 import { createCredit } from './creditExecutionService';
+import {
+  resolveSubscriptionState,
+  canReceiveSubscriptionCredits,
+  type SubscriptionState,
+} from './subscriptionStateResolver';
 import { SYSTEM_USER_ID } from './auditActorService';
 import { supabase } from '../db/supabaseClient';
 
@@ -54,7 +59,7 @@ export function buildAllocationKey(orgId: string, planKey: string | null, period
   return `monthly_alloc:${orgId}:${planKey ?? 'none'}:${periodStart}`;
 }
 
-export type AllocationStatusKind = 'allocated' | 'dry_run' | 'no_plan' | 'not_billable';
+export type AllocationStatusKind = 'allocated' | 'dry_run' | 'no_plan' | 'not_billable' | 'subscription_inactive';
 
 export interface AllocationResult {
   status: AllocationStatusKind;
@@ -65,6 +70,8 @@ export interface AllocationResult {
   nextAllocationDate: string;
   idempotencyKey: string;
   referenceType: string;
+  /** Canonical subscription state at allocation time (when evaluated). */
+  subscriptionState?: SubscriptionState;
 }
 
 async function resolvePlanKey(orgId: string): Promise<string | null> {
@@ -90,6 +97,8 @@ export async function allocateMonthlyCreditsForOrg(params: {
   anchorDay?: number;
   performedBy?: string;
   dryRun?: boolean;
+  /** Pre-resolved canonical state (testing / batch seam, mirrors `planKey?`). */
+  subscriptionState?: SubscriptionState;
 }): Promise<AllocationResult> {
   const { orgId } = params;
   const now = params.now ?? new Date();
@@ -102,7 +111,17 @@ export async function allocateMonthlyCreditsForOrg(params: {
 
   if (!planKey) return { ...base, status: 'no_plan', credits: 0 };
   if (!credits) return { ...base, status: 'not_billable', credits: 0 };
-  if (params.dryRun) return { ...base, status: 'dry_run', credits };
+
+  // Subscription-validity gate (canonical resolver). CANCELED / EXPIRED / PAST_DUE / GRACE /
+  // paused cannot receive NEW subscription credits; only ACTIVE / TRIALING may. Legacy
+  // admin-assigned plans (no billing_subscriptions row) resolve to ACTIVE, so existing
+  // allocation is unchanged until the subscription lifecycle write-path lands.
+  const subscriptionState = params.subscriptionState ?? (await resolveSubscriptionState(orgId, { db: supabase, now: () => now.getTime() }));
+  if (!canReceiveSubscriptionCredits(subscriptionState)) {
+    return { ...base, status: 'subscription_inactive', credits: 0, subscriptionState };
+  }
+
+  if (params.dryRun) return { ...base, status: 'dry_run', credits, subscriptionState };
 
   await createCredit({
     orgId,
@@ -114,7 +133,7 @@ export async function allocateMonthlyCreditsForOrg(params: {
     note: `Monthly ${planKey} allocation (${periodStart})`,
   });
 
-  return { ...base, status: 'allocated', credits };
+  return { ...base, status: 'allocated', credits, subscriptionState };
 }
 
 export interface AllocationSweepSummary {

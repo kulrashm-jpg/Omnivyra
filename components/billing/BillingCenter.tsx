@@ -112,7 +112,7 @@ export default function BillingCenter({ orgId }: { orgId: string | null | undefi
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">Spent 1st · resets</span>
           </div>
           <p className="mt-2 text-3xl font-black text-[#0B5ED7]">{(planBucket?.available ?? 0).toLocaleString()}</p>
-          <p className="mt-1 text-xs text-[#5D6F83]">{planBucket?.note ?? 'Included with your plan. Spent first; refresh each billing cycle.'}</p>
+          <p className="mt-1 text-xs text-[#5D6F83]">{planBucket?.note ?? 'Expires according to your signup / subscription validity. Spent first.'}</p>
         </section>
         <section className={CARD} aria-label="Top-up credits">
           <div className="flex items-center justify-between">
@@ -120,7 +120,7 @@ export default function BillingCenter({ orgId }: { orgId: string | null | undefi
             <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">Never expires</span>
           </div>
           <p className="mt-2 text-3xl font-black text-[#0B5ED7]">{(topupBucket?.available ?? 0).toLocaleString()}</p>
-          <p className="mt-1 text-xs text-[#5D6F83]">{topupBucket?.note ?? 'Purchased credits. Spent only after monthly credits; never expire.'}</p>
+          <p className="mt-1 text-xs text-[#5D6F83]">{topupBucket?.note ?? 'Never expires. Requires an active subscription to use.'}</p>
         </section>
       </div>
 
@@ -129,7 +129,7 @@ export default function BillingCenter({ orgId }: { orgId: string | null | undefi
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-black text-[#071D3A]">Buy more credits</h2>
-            <p className="mt-1 text-sm text-[#5D6F83]">Top-up credits are added to your balance and never expire.</p>
+            <p className="mt-1 text-sm text-[#5D6F83]">Top-up credits never expire and require an active subscription to use.</p>
           </div>
           {/* Currency selector — pay in USD / EUR / INR */}
           <div className="inline-flex items-center gap-2">

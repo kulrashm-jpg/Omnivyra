@@ -130,7 +130,7 @@ export async function grantAdminCreditExtension(opts: AdminGrantOpts): Promise<A
     await createCredit({
       orgId:          opts.organizationId,
       amount:         opts.credits,
-      category:       'free',
+      category:       'paid', // approved policy: admin grants → PAID (never expire, consumed after FREE, subscription-locked)
       referenceType:  'admin_extension',
       referenceId:    opts.organizationId,
       note:           `Admin free-credit extension (${opts.reasonType}): ${opts.reason}`,

@@ -60,12 +60,23 @@ type ActivationOutreachPayload = {
   ctaUrl: string;
 };
 
+type CreditAlertPayload = {
+  type: 'credit_alert';
+  recipientEmail: string;
+  companyName: string | null;
+  consumedPercent: number;
+  remainingCredits: number;
+  projectedRequiredCredits: number;
+  ctaUrl: string;
+};
+
 type EmailPayload =
   | InvitePayload
   | CompanyReferralPayload
   | InboundSignupNoticePayload
   | InviteCredentialsPayload
-  | ActivationOutreachPayload;
+  | ActivationOutreachPayload
+  | CreditAlertPayload;
 
 async function invokeEdgeFunction(payload: EmailPayload, context: { idempotencyKey?: string }): Promise<void> {
   const { error } = await supabase.functions.invoke('send-transactional-email', {
@@ -196,6 +207,36 @@ export async function sendActivationOutreach(
       recipientEmail: opts.recipientEmail,
       companyName: opts.companyName,
       missingMilestones: opts.missingMilestones,
+      ctaUrl: opts.ctaUrl,
+    },
+    { idempotencyKey },
+  );
+}
+
+/**
+ * credit_alert — low-credit forecast email (consumed ≥ 85% AND forecast insufficient before
+ * period end). Renders server-side via the existing Edge Function. Best-effort. Governed callers
+ * resolve the recipient from the company admin; do not pass arbitrary emails.
+ */
+export async function sendCreditAlert(
+  opts: {
+    recipientEmail: string;
+    companyName: string | null;
+    consumedPercent: number;
+    remainingCredits: number;
+    projectedRequiredCredits: number;
+    ctaUrl: string;
+  },
+  idempotencyKey?: string,
+): Promise<void> {
+  await invokeEdgeFunction(
+    {
+      type: 'credit_alert',
+      recipientEmail: opts.recipientEmail,
+      companyName: opts.companyName,
+      consumedPercent: opts.consumedPercent,
+      remainingCredits: opts.remainingCredits,
+      projectedRequiredCredits: opts.projectedRequiredCredits,
       ctaUrl: opts.ctaUrl,
     },
     { idempotencyKey },
