@@ -52,11 +52,20 @@ type InviteCredentialsPayload = {
   temporaryPassword: string;
 };
 
+type ActivationOutreachPayload = {
+  type: 'activation_outreach';
+  recipientEmail: string;
+  companyName: string | null;
+  missingMilestones: string[];
+  ctaUrl: string;
+};
+
 type EmailPayload =
   | InvitePayload
   | CompanyReferralPayload
   | InboundSignupNoticePayload
-  | InviteCredentialsPayload;
+  | InviteCredentialsPayload
+  | ActivationOutreachPayload;
 
 async function invokeEdgeFunction(payload: EmailPayload, context: { idempotencyKey?: string }): Promise<void> {
   const { error } = await supabase.functions.invoke('send-transactional-email', {
@@ -156,6 +165,38 @@ export async function sendInboundSignupNoticeToAdmin(
       prospectEmail: opts.prospectEmail,
       companyName: opts.companyName,
       supportEmail: opts.supportEmail,
+    },
+    { idempotencyKey },
+  );
+}
+
+/**
+ * activation_outreach — LOW-LEVEL primitive. Mirrors the deployed Edge Function template.
+ *
+ * GOVERNANCE: this primitive takes a raw `recipientEmail` and performs NO recipient
+ * validation. Operational callers MUST NOT call it directly — use
+ * `activationOutreachService.sendGovernedActivationOutreach(companyId)`, which resolves the
+ * recipient from the company's active admin and enforces CUSTOMER classification. This export
+ * exists only so the governed service has a single send seam.
+ *
+ * @internal governed callers only
+ */
+export async function sendActivationOutreach(
+  opts: {
+    recipientEmail: string;
+    companyName: string | null;
+    missingMilestones: string[];
+    ctaUrl: string;
+  },
+  idempotencyKey?: string,
+): Promise<void> {
+  await invokeEdgeFunction(
+    {
+      type: 'activation_outreach',
+      recipientEmail: opts.recipientEmail,
+      companyName: opts.companyName,
+      missingMilestones: opts.missingMilestones,
+      ctaUrl: opts.ctaUrl,
     },
     { idempotencyKey },
   );

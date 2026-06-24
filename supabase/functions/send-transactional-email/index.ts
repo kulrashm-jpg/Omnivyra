@@ -53,6 +53,13 @@ type Template =
       role: string;
       loginUrl: string;
       temporaryPassword: string;
+    }
+  | {
+      type: "activation_outreach";
+      recipientEmail: string;
+      companyName: string | null;
+      missingMilestones: string[];
+      ctaUrl: string;
     };
 
 type Envelope = { to: string; subject: string; html: string };
@@ -175,6 +182,25 @@ function render(t: Template): Envelope {
         ),
       };
     }
+    case "activation_outreach": {
+      const n = t.missingMilestones.length;
+      const list = t.missingMilestones.map((m) => `&bull;&nbsp;${m}`).join("<br/>");
+      const greeting = t.companyName ? `Hi ${t.companyName} — ` : "Hi — ";
+      const body =
+        `${greeting}you're ${n} step${n === 1 ? "" : "s"} away from finishing your Omnivyra setup.<br/><br/>` +
+        `Remaining:<br/>${list}<br/><br/>` +
+        `Each step confirms automatically once you complete it.`;
+      return {
+        to: t.recipientEmail,
+        subject: `Finish setting up Omnivyra — ${n} step${n === 1 ? "" : "s"} remaining`,
+        html: actionLayout(
+          "Finish setting up Omnivyra",
+          body,
+          "Open Omnivyra",
+          t.ctaUrl,
+        ),
+      };
+    }
   }
 }
 
@@ -278,6 +304,7 @@ Deno.serve(async (req) => {
     "company_referral",
     "inbound_signup_notice",
     "domain_verification_reminder",
+    "activation_outreach",
   ]);
   const requestedType = (body as { type?: string }).type;
   if (!requestedType || !KNOWN_TYPES.has(requestedType)) {
