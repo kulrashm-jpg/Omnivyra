@@ -84,10 +84,16 @@ function buildConfig(fontDir: string): string {
  */
 export function ensureRenderFonts(): RenderFontDiagnostics {
   if (_diag) {
-    // Re-assert env on warm invocations (cheap; guards against env resets).
+    // Re-assert env on warm invocations. MUST be guarded: production hardens
+    // process.env as a readonly proxy whose set-trap throws ("'set' on proxy:
+    // trap returned falsish") — an unguarded write here crashed warm render
+    // invocations with a 500. The write is a no-op in prod (blocked) and only
+    // takes effect in dev/local where process.env is writable.
     if (_diag.resolvedFontDir) {
-      process.env.FONTCONFIG_FILE = CONFIG_PATH;
-      process.env.FONTCONFIG_PATH = path.dirname(CONFIG_PATH);
+      try {
+        process.env.FONTCONFIG_FILE = CONFIG_PATH;
+        process.env.FONTCONFIG_PATH = path.dirname(CONFIG_PATH);
+      } catch { /* prod readonly-proxy blocks env writes — non-fatal */ }
     }
     return _diag;
   }
