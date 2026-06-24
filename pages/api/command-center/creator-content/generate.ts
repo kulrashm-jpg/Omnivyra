@@ -599,7 +599,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // (generate) function's own runtime/bundle. No auth — renders an internal SVG,
   // returns only font diagnostics.
   if (req.query.probe === '1' || req.query.probe === 'true') {
-    const { probeRenderTextCapability } = await import('../../../../backend/services/renderTextCapabilityProbe');
+    const { probeRenderTextCapability, renderProbeImage } = await import('../../../../backend/services/renderTextCapabilityProbe');
+    // ?probe=1&img=1 → return the rendered PNG so the actual glyphs can be
+    // VISUALLY checked (readable vs tofu/.notdef boxes — ink alone can't tell).
+    if (req.query.img === '1') {
+      const buf = await renderProbeImage();
+      if (buf) { res.setHeader('Content-Type', 'image/png'); return res.status(200).send(buf); }
+      return res.status(500).json({ error: 'probe image render failed' });
+    }
     const probe = await probeRenderTextCapability();
     return res.status(200).json({
       ok: probe.ok,
