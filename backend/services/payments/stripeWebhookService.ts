@@ -51,6 +51,10 @@ export interface StripeEventObject {
   // Subscription event payloads carry these:
   current_period_start?: number;
   current_period_end?: number;
+  trial_end?: number;
+  cancel_at_period_end?: boolean;
+  plan?: { id?: string } | null;
+  items?: { data?: Array<{ price?: { id?: string } }> } | null;
 }
 
 export interface StripeEventPayload {
@@ -207,6 +211,9 @@ export interface StripeWebhookDeps {
 
   recordPaymentTransaction?: (input: RecordPaymentTransactionInput) => Promise<{ inserted: boolean; duplicate: boolean }>;
 
+  /** Subscription lifecycle write-path — populates billing_subscriptions from sub events. Best-effort. */
+  applySubscriptionEvent?: (eventType: string, obj: StripeEventObject, organizationId: string | null) => Promise<{ applied: boolean; reason?: string }>;
+
   markEvent?: (eventId: string, status: 'processed' | 'duplicate' | 'failed' | 'ignored', error?: string) => Promise<void>;
 }
 
@@ -273,6 +280,17 @@ export async function processStripeWebhookEvent(
     // Append-only: we record into payment_provider_events (already done).
     // No payment_transactions write; reconciler (7F) emits compensating
     // adjustment rows from Stripe's balance_transactions export.
+    //
+    // Subscription lifecycle write-path: maintain billing_subscriptions as the authoritative
+    // ledger. Best-effort — a failure here never breaks webhook processing (the event is
+    // already durably recorded above and can be replayed/reconciled).
+    if (action === 'record_subscription' && deps.applySubscriptionEvent) {
+      try {
+        await deps.applySubscriptionEvent(evt.type, obj, resolved.organizationId);
+      } catch {
+        /* best-effort: ledger upsert failure must not fail the webhook */
+      }
+    }
     await markProcessed(deps, recorded.id);
     return {
       status: 'processed',

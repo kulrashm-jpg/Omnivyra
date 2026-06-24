@@ -58,6 +58,11 @@ function fireAlerts(orgId: string): void {
   checkCreditAlerts(orgId).catch(err =>
     logger.warn('credit_alert_check_failed', { orgId, message: err?.message ?? 'unknown' }),
   );
+  // Consumption-based warnings (80/90/95 in-app + 85%+forecast email). Best-effort, isolated,
+  // runs only after a successful deduction (this helper is invoked post-CONFIRM). Never blocks.
+  import('./creditConsumptionWarningService')
+    .then(m => m.notifyConsumptionWarnings(orgId))
+    .catch(err => logger.warn('credit_consumption_warning_failed', { orgId, message: err?.message ?? 'unknown' }));
 }
 
 // ── Public types ───────────────────────────────────────────────────────────────

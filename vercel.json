@@ -34,6 +34,22 @@
     {
       "path": "/api/cron/reconcile-recent-publishes",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/credit-expiry",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/subscription-status-expiry",
+      "schedule": "15 5 * * *"
+    },
+    {
+      "path": "/api/cron/subscription-credit-expiry",
+      "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/cron/subscription-monthly-allocation",
+      "schedule": "0 6 1 * *"
     }
   ],
   "experimentalServices": {

@@ -6,6 +6,7 @@ import Breadcrumbs from './Breadcrumbs';
 import CommandPalette from './CommandPalette';
 import SectionNav from './SectionNav';
 import RewardToast from '../retention/RewardToast';
+import CreditWarningBanner from '../billing/CreditWarningBanner';
 import { useRetention } from '../../hooks/useRetention';
 // P2-1 — variant experience shared analytics + operator-controls
 // providers. Mounted at AppLayout so every authenticated page gets a
@@ -49,6 +50,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
     <VariantExperienceShell>
       <div className="flex min-h-screen flex-col bg-gray-50">
         <GlobalHeader onOpenCommandPalette={() => setIsCommandPaletteOpen(true)} />
+        <CreditWarningBanner />
         <CommandPalette open={isCommandPaletteOpen} onClose={() => setIsCommandPaletteOpen(false)} />
         {!isCommandCenterHome ? (
           <div className="relative z-20 border-b border-slate-200 bg-white/90 backdrop-blur">

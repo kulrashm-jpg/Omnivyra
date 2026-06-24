@@ -8,6 +8,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { resolveTopupEntitlement } from './subscriptionStateResolver';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -61,11 +62,17 @@ export async function getWalletSnapshot(orgId: string): Promise<WalletSnapshot |
 
 /**
  * Compute available (unreserved) balance per category.
+ *
+ * Top-up lock (subscription-linked): when `opts.topupUsable === false`, paid (top-up) AVAILABILITY
+ * is gated to 0 — a DERIVED gate only. The underlying `paid_balance` is never mutated; the credits
+ * remain stored and re-appear automatically when entitlement is restored (renewal). Free +
+ * incentive + consumption ordering are unaffected.
  */
-export function computeAvailable(wallet: WalletSnapshot): AvailableBalance {
+export function computeAvailable(wallet: WalletSnapshot, opts?: { topupUsable?: boolean }): AvailableBalance {
+  const topupUsable = opts?.topupUsable !== false; // default true (backward compatible)
   const free      = Math.max(0, wallet.free_balance      - wallet.reserved_free);
   const incentive = Math.max(0, wallet.incentive_balance - wallet.reserved_incentive);
-  const paid      = Math.max(0, wallet.paid_balance      - wallet.reserved_paid);
+  const paid      = topupUsable ? Math.max(0, wallet.paid_balance - wallet.reserved_paid) : 0;
   return { free, incentive, paid, total: free + incentive + paid };
 }
 
@@ -109,7 +116,8 @@ export async function resolveDeduction(orgId: string, amount: number): Promise<{
   const wallet = await getWalletSnapshot(orgId);
   if (!wallet) return { wallet: null, available: null, split: null };
 
-  const available = computeAvailable(wallet);
+  const { usable } = await resolveTopupEntitlement(orgId, { db: supabase });
+  const available = computeAvailable(wallet, { topupUsable: usable });
   const split = computeSplit(amount, available);
 
   return { wallet, available, split };
@@ -122,5 +130,6 @@ export async function resolveDeduction(orgId: string, amount: number): Promise<{
 export async function getTotalAvailable(orgId: string): Promise<number | null> {
   const wallet = await getWalletSnapshot(orgId);
   if (!wallet) return null;
-  return computeAvailable(wallet).total;
+  const { usable } = await resolveTopupEntitlement(orgId, { db: supabase });
+  return computeAvailable(wallet, { topupUsable: usable }).total;
 }

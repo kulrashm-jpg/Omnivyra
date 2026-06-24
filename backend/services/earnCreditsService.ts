@@ -54,7 +54,7 @@ export async function grantEarnCredit(params: {
     await createCredit({
       orgId,
       amount:         action.credits,
-      category:       'incentive',
+      category:       'paid', // approved policy: promo / earn / referral / package incentives → PAID (never expire, consumed after FREE, subscription-locked). No future 'incentive' allocations.
       referenceType:  actionType,
       referenceId:    refId,
       note:           `Earn more: ${action.label}`,

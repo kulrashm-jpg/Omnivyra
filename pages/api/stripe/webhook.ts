@@ -18,6 +18,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
+import { applyStripeSubscriptionEvent } from '../../../backend/services/billingSubscriptionService';
 import {
   recordPaymentProviderEvent,
   completePurchase,
@@ -136,6 +137,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (code === '23505') return { inserted: false, duplicate: true };
       throw new Error(`payment_transactions insert failed: ${error.message}`);
     },
+    applySubscriptionEvent: async (eventType, obj, organizationId) =>
+      applyStripeSubscriptionEvent(eventType, obj as any, organizationId, { db: { from: ownedDbTable } }),
     markEvent: async (eventId, status, errorMsg) => {
       await ownedDbTable('payment_provider_events')
         .update({

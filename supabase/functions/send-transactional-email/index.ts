@@ -53,6 +53,22 @@ type Template =
       role: string;
       loginUrl: string;
       temporaryPassword: string;
+    }
+  | {
+      type: "activation_outreach";
+      recipientEmail: string;
+      companyName: string | null;
+      missingMilestones: string[];
+      ctaUrl: string;
+    }
+  | {
+      type: "credit_alert";
+      recipientEmail: string;
+      companyName: string | null;
+      consumedPercent: number;
+      remainingCredits: number;
+      projectedRequiredCredits: number;
+      ctaUrl: string;
     };
 
 type Envelope = { to: string; subject: string; html: string };
@@ -175,6 +191,38 @@ function render(t: Template): Envelope {
         ),
       };
     }
+    case "activation_outreach": {
+      const n = t.missingMilestones.length;
+      const list = t.missingMilestones.map((m) => `&bull;&nbsp;${m}`).join("<br/>");
+      const greeting = t.companyName ? `Hi ${t.companyName} — ` : "Hi — ";
+      const body =
+        `${greeting}you're ${n} step${n === 1 ? "" : "s"} away from finishing your Omnivyra setup.<br/><br/>` +
+        `Remaining:<br/>${list}<br/><br/>` +
+        `Each step confirms automatically once you complete it.`;
+      return {
+        to: t.recipientEmail,
+        subject: `Finish setting up Omnivyra — ${n} step${n === 1 ? "" : "s"} remaining`,
+        html: actionLayout(
+          "Finish setting up Omnivyra",
+          body,
+          "Open Omnivyra",
+          t.ctaUrl,
+        ),
+      };
+    }
+    case "credit_alert": {
+      const co = t.companyName ? ` for <strong>${t.companyName}</strong>` : "";
+      const body =
+        `You've used <strong>${t.consumedPercent}%</strong> of this cycle's credits${co}.<br/><br/>` +
+        `Remaining: <strong>${t.remainingCredits.toLocaleString()}</strong> credits. ` +
+        `Projected need before your cycle ends: <strong>${t.projectedRequiredCredits.toLocaleString()}</strong>.<br/><br/>` +
+        `At the current rate your credits are likely to run out before the period ends — top up or adjust usage to avoid interruption.`;
+      return {
+        to: t.recipientEmail,
+        subject: `Low credits — ${t.consumedPercent}% consumed`,
+        html: actionLayout("Your credits are running low", body, "Review credits", t.ctaUrl),
+      };
+    }
   }
 }
 
@@ -278,6 +326,8 @@ Deno.serve(async (req) => {
     "company_referral",
     "inbound_signup_notice",
     "domain_verification_reminder",
+    "activation_outreach",
+    "credit_alert",
   ]);
   const requestedType = (body as { type?: string }).type;
   if (!requestedType || !KNOWN_TYPES.has(requestedType)) {

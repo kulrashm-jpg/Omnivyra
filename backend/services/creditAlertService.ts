@@ -20,7 +20,48 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { supabase } from '../db/supabaseClient';
 
-export type AlertType = 'low_20pct' | 'low_10pct' | 'depleted' | 'auto_topup';
+export type AlertType =
+  | 'low_20pct' | 'low_10pct' | 'depleted' | 'auto_topup'
+  // Consumption-based warnings (approved policy) — deduped per billing cycle.
+  | 'consumed_80' | 'consumed_90' | 'consumed_95' | 'forecast_insufficient_85';
+
+const CONSUMED_ALERT_BY_THRESHOLD: Record<number, AlertType> = { 80: 'consumed_80', 90: 'consumed_90', 95: 'consumed_95' };
+
+/** Which consumed_80/90/95 alerts have already fired for this org since `sinceIso` (cycle start). */
+export async function getFiredConsumptionThresholds(orgId: string, sinceIso: string): Promise<number[]> {
+  const { data } = await ownedDbTable('credit_alert_log')
+    .select('alert_type')
+    .eq('organization_id', orgId)
+    .in('alert_type', ['consumed_80', 'consumed_90', 'consumed_95'])
+    .gte('notified_at', sinceIso);
+  const fired = new Set((data ?? []).map((r: any) => r.alert_type));
+  return [80, 90, 95].filter((t) => fired.has(CONSUMED_ALERT_BY_THRESHOLD[t]));
+}
+
+/** Emit a consumption in-app warning + record it (dedup). */
+export async function emitConsumptionAlert(orgId: string, threshold: number, consumedPct: number): Promise<void> {
+  const type = CONSUMED_ALERT_BY_THRESHOLD[threshold];
+  if (!type) return;
+  await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: type, balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+  try {
+    await ownedDbTable('notifications').insert({
+      organization_id: orgId, type: 'credit_alert', category: type,
+      message: `You have used ${threshold}% of this cycle's credits.`, read: false, created_at: new Date().toISOString(),
+    });
+  } catch { /* notifications table optional */ }
+}
+
+/** Whether the low-credit forecast email already went out this cycle. */
+export async function wasForecastEmailSent(orgId: string, sinceIso: string): Promise<boolean> {
+  const { data } = await ownedDbTable('credit_alert_log')
+    .select('id').eq('organization_id', orgId).eq('alert_type', 'forecast_insufficient_85').gte('notified_at', sinceIso).limit(1).maybeSingle();
+  return !!data;
+}
+
+/** Record that the forecast email fired (per-cycle dedup). */
+export async function recordForecastEmail(orgId: string, consumedPct: number): Promise<void> {
+  await ownedDbTable('credit_alert_log').insert({ organization_id: orgId, alert_type: 'forecast_insufficient_85', balance_at_alert: Math.round(consumedPct), notified_at: new Date().toISOString() });
+}
 
 export type CreditAlertResult = {
   balance: number;

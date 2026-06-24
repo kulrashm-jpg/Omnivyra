@@ -185,7 +185,7 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
             ))}
           </div>
           <p className="mt-3 text-[11px] text-[#5D6F83]">
-            Credits are spent in order — <strong>plan</strong> first, then <strong>bonus</strong>, then <strong>top-up</strong>. Top-up credits are only used once your plan credits run out, and they never expire.
+            Credits are spent in order — <strong>plan</strong> first, then <strong>bonus</strong>, then <strong>top-up</strong>. Top-up credits never expire and require an active subscription to use.
           </p>
         </div>
       )}
@@ -278,7 +278,7 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
         )}
       </div>
 
-      <p className="text-center text-xs text-slate-400">Razorpay test mode · top-up credits never expire.</p>
+      <p className="text-center text-xs text-slate-400">Razorpay test mode · top-up credits never expire · require an active subscription to use.</p>
     </div>
   );
 }
