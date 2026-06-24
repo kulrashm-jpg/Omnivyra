@@ -85,3 +85,18 @@ export async function probeRenderTextCapability(
     };
   }
 }
+
+/**
+ * Render the probe SVG and return the PNG bytes — for VISUAL validation
+ * (readable glyphs vs tofu/.notdef boxes). The ink-ratio check can't tell those
+ * apart (boxes have ink); inspecting the actual pixels can. Uses the same
+ * sharp→librsvg→fontconfig path as the asset renderer, so it reflects the real
+ * font resolution. Returns null (never throws) on failure.
+ */
+export async function renderProbeImage(fontFamily = 'Inter, Arial'): Promise<Buffer | null> {
+  try {
+    return await sharp(Buffer.from(probeSvg(fontFamily))).png().toBuffer();
+  } catch {
+    return null;
+  }
+}
