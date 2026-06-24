@@ -24,6 +24,15 @@ import { getCustomerAcquisitionIntelligence, type AcquisitionResult } from './cu
 import { generatePortfolioPlaybooks, type PlaybookCompanyInput, type RecommendedPlaybook, type PlaybookPortfolio } from './customerActionPlaybookService';
 import { scoreCoverage, type TelemetryCoverageResult } from './customerTelemetryCoverageService';
 import { getOnboardingConversion, type OnboardingConversionResult } from './onboardingConversionService';
+import { analyzeActivation, activationFromReadiness, type ActivationResult } from './customerActivationService';
+import { getProfileCompletion, type ProfileCompletionResult } from './profileCompletionIntelligenceService';
+import { analyzeDigitalAdoption, adoptionFromReadiness, type DigitalAdoptionResult } from './digitalAdoptionService';
+import { getCustomerValueRealization, loadValueCompanies, type ValueRealizationResult } from './customerValueRealizationService';
+import { analyzeValueDrivers, buildDriverCompanies, type ValueDriverResult } from './valueDriverIntelligenceService';
+import { analyzeCampaignExecution, type ExecutionAdoptionResult } from './campaignExecutionAdoptionService';
+import { analyzeMonetization, buildMonetizationCompanies, type MonetizationResult } from './monetizationIntelligenceService';
+import { analyzePopulationIntegrity, buildPopulationCompanies, type PopulationIntegrityResult } from './customerPopulationIntegrityService';
+import { VALUE_CATEGORIES } from './customerValueRealizationService';
 import type { ReadinessArea, ReadinessState } from './customerReadinessService';
 
 export type IdentityHealth = 'OK' | 'DRIFT' | 'UNKNOWN';
@@ -87,6 +96,14 @@ export interface CockpitResult {
   playbooks: PlaybookPortfolio;
   telemetry: TelemetryCoverageResult;
   onboarding_conversion: OnboardingConversionResult;
+  activation: ActivationResult;
+  profile_completion: ProfileCompletionResult;
+  digital_adoption: DigitalAdoptionResult;
+  value_realization: ValueRealizationResult;
+  value_drivers: ValueDriverResult;
+  execution_adoption: ExecutionAdoptionResult;
+  monetization: MonetizationResult;
+  population_integrity: PopulationIntegrityResult;
   portfolio: {
     priority_distribution: Record<PriorityTier, number>;
     trajectory_distribution: Record<Trajectory, number>;
@@ -221,6 +238,42 @@ export async function getCustomerOperations(
     activeCompanyIds: tenants.filter((t) => t.tenant_status === 'ACTIVE').map((t) => t.company_id),
   });
 
+  // Activation intelligence (pure over readiness; no new DB reads).
+  const activation = analyzeActivation(tenants.map(activationFromReadiness), Date.now());
+
+  // Profile completion intelligence (own loader; active ids from readiness).
+  const profile_completion = await getProfileCompletion({
+    activeCompanyIds: tenants.filter((t) => t.tenant_status === 'ACTIVE').map((t) => t.company_id),
+  });
+
+  // Digital adoption intelligence (pure over readiness; no new DB reads).
+  const digital_adoption = analyzeDigitalAdoption(tenants.map(adoptionFromReadiness));
+
+  // Value-signal counts loaded ONCE, shared by value-realization (14E), drivers (14F), execution (14G).
+  const valueCtx = tenants.map((t) => ({ company_id: t.company_id, company_name: t.company_name, is_active: t.tenant_status === 'ACTIVE', is_paying: t.billing_ready === 'READY' }));
+  const valueCompanies = await loadValueCompanies(valueCtx);
+  const value_realization = await getCustomerValueRealization(valueCtx, { load: async () => valueCompanies });
+
+  // Value driver association (pure; composes readiness + value-realization, no new DB reads).
+  const valueByCompany = new Map(value_realization.classifications.map((c) => [c.company_id, { value_signals: c.value_signals as string[] }]));
+  const value_drivers = analyzeValueDrivers(buildDriverCompanies(tenants, valueByCompany));
+
+  // Execution adoption depth (pure over the same loaded value-signal counts).
+  const execution_adoption = analyzeCampaignExecution(valueCompanies);
+
+  // Monetization alignment (pure; composes billing + activation + execution/value volume).
+  const monetizationValueBy = new Map(valueCompanies.map((v) => {
+    const volume = VALUE_CATEGORIES.reduce((a, cat) => a + (v.signals[cat] ?? 0), 0);
+    return [v.company_id, { value_present: VALUE_CATEGORIES.some((cat) => (v.signals[cat] ?? 0) > 0), volume }];
+  }));
+  const monetization = analyzeMonetization(buildMonetizationCompanies(tenants, monetizationValueBy));
+
+  // Population integrity (pure; deterministic tenant classification + contamination, no new DB reads).
+  const identityBy = new Map(tenants.map((t) => [t.company_id, { website_domain: identity.get(t.company_id)?.website_domain ?? null, admin_email_domain: identity.get(t.company_id)?.admin_email_domain ?? null, domain_verified: t.website_ready === 'READY' }]));
+  const adoptionBy = new Map(digital_adoption.classifications.map((c) => [c.company_id, c.adoption_score]));
+  const populationValueBy = new Map(valueCompanies.map((v) => [v.company_id, { has_value: VALUE_CATEGORIES.some((cat) => (v.signals[cat] ?? 0) > 0), volume: VALUE_CATEGORIES.reduce((a, cat) => a + (v.signals[cat] ?? 0), 0) }]));
+  const population_integrity = analyzePopulationIntegrity(buildPopulationCompanies(tenants, identityBy, adoptionBy, populationValueBy));
+
   // Action playbooks (admin-only, read-only) — gap → playbook, gated by signal confidence.
   const playbookInputs: PlaybookCompanyInput[] = tenants.map((t) => {
     const sig = signalByCompany.get(t.company_id);
@@ -294,6 +347,14 @@ export async function getCustomerOperations(
     playbooks: playbookResult.portfolio,
     telemetry: scoreCoverage(),
     onboarding_conversion,
+    activation,
+    profile_completion,
+    digital_adoption,
+    value_realization,
+    value_drivers,
+    execution_adoption,
+    monetization,
+    population_integrity,
     portfolio: { priority_distribution: prio.distribution, trajectory_distribution: evoPortfolio.trajectory_distribution, top_blockers: ins.portfolio.top_blockers },
   };
 }

@@ -17,6 +17,14 @@ import type { AcquisitionResult } from '../../backend/services/customerAcquisiti
 import type { PlaybookPortfolio } from '../../backend/services/customerActionPlaybookService';
 import type { TelemetryCoverageResult } from '../../backend/services/customerTelemetryCoverageService';
 import type { OnboardingConversionResult } from '../../backend/services/onboardingConversionService';
+import type { ActivationResult } from '../../backend/services/customerActivationService';
+import type { ProfileCompletionResult } from '../../backend/services/profileCompletionIntelligenceService';
+import type { DigitalAdoptionResult } from '../../backend/services/digitalAdoptionService';
+import type { ValueRealizationResult } from '../../backend/services/customerValueRealizationService';
+import type { ValueDriverResult } from '../../backend/services/valueDriverIntelligenceService';
+import type { ExecutionAdoptionResult } from '../../backend/services/campaignExecutionAdoptionService';
+import type { MonetizationResult } from '../../backend/services/monetizationIntelligenceService';
+import type { PopulationIntegrityResult } from '../../backend/services/customerPopulationIntegrityService';
 
 const confColor = (c: string) =>
   c === 'HIGH' ? 'text-emerald-600' : c === 'MEDIUM' ? 'text-amber-600' : c === 'LOW' ? 'text-red-600' : 'text-[#9AA7B8]';
@@ -51,6 +59,14 @@ export default function CustomerOperationsPage() {
   const [playbooks, setPlaybooks] = useState<PlaybookPortfolio | null>(null);
   const [telemetry, setTelemetry] = useState<TelemetryCoverageResult | null>(null);
   const [onboarding, setOnboarding] = useState<OnboardingConversionResult | null>(null);
+  const [activation, setActivation] = useState<ActivationResult | null>(null);
+  const [profile, setProfile] = useState<ProfileCompletionResult | null>(null);
+  const [adoption, setAdoption] = useState<DigitalAdoptionResult | null>(null);
+  const [value, setValue] = useState<ValueRealizationResult | null>(null);
+  const [drivers, setDrivers] = useState<ValueDriverResult | null>(null);
+  const [execution, setExecution] = useState<ExecutionAdoptionResult | null>(null);
+  const [monetization, setMonetization] = useState<MonetizationResult | null>(null);
+  const [population, setPopulation] = useState<PopulationIntegrityResult | null>(null);
   const [execSummary, setExecSummary] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +87,14 @@ export default function CustomerOperationsPage() {
         setPlaybooks(json.playbooks ?? null);
         setTelemetry(json.telemetry ?? null);
         setOnboarding(json.onboarding_conversion ?? null);
+        setActivation(json.activation ?? null);
+        setProfile(json.profile_completion ?? null);
+        setAdoption(json.digital_adoption ?? null);
+        setValue(json.value_realization ?? null);
+        setDrivers(json.value_drivers ?? null);
+        setExecution(json.execution_adoption ?? null);
+        setMonetization(json.monetization ?? null);
+        setPopulation(json.population_integrity ?? null);
       } catch { setError('Failed to load customer operations.'); }
       finally { setLoading(false); }
     })();
@@ -79,6 +103,34 @@ export default function CustomerOperationsPage() {
   const onboardingByCompany = useMemo(
     () => new Map((onboarding?.companies.classifications ?? []).map((c) => [c.id, c])),
     [onboarding],
+  );
+  const activationByCompany = useMemo(
+    () => new Map((activation?.classifications ?? []).map((c) => [c.company_id, c])),
+    [activation],
+  );
+  const profileByCompany = useMemo(
+    () => new Map((profile?.classifications ?? []).map((c) => [c.company_id, c])),
+    [profile],
+  );
+  const adoptionByCompany = useMemo(
+    () => new Map((adoption?.classifications ?? []).map((c) => [c.company_id, c])),
+    [adoption],
+  );
+  const valueByCompany = useMemo(
+    () => new Map((value?.classifications ?? []).map((c) => [c.company_id, c])),
+    [value],
+  );
+  const executionByCompany = useMemo(
+    () => new Map((execution?.classifications ?? []).map((c) => [c.company_id, c])),
+    [execution],
+  );
+  const monetizationByCompany = useMemo(
+    () => new Map((monetization?.classifications ?? []).map((c) => [c.company_id, c])),
+    [monetization],
+  );
+  const populationByCompany = useMemo(
+    () => new Map((population?.per_company ?? []).map((c) => [c.company_id, c])),
+    [population],
   );
   const plans = useMemo(() => Array.from(new Set(companies.map((c) => c.plan))).sort(), [companies]);
   const rows = useMemo(() => {
@@ -307,6 +359,278 @@ export default function CustomerOperationsPage() {
             </div>
           )}
 
+          {/* Customer activation intelligence */}
+          {activation && (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Customer activation intelligence</p>
+                <span className="text-xs text-[#6B7C93]">activation {activation.activation_conversion_pct ?? '—'}% · {activation.by_status.ACTIVATED} active / {activation.total}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                {activation.funnel.map((s, idx) => (
+                  <React.Fragment key={s.stage}>
+                    {idx > 0 && <span className="text-[#9AA7B8]">→</span>}
+                    <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[#0B1F33]" title={`lost ${s.lost} (${s.loss_pct ?? '—'}%)`}>
+                      {s.stage.replace(/_/g, ' ')} <strong>{s.reached}</strong>
+                    </span>
+                  </React.Fragment>
+                ))}
+              </div>
+              {activation.largest_dropoff && (
+                <p className="mt-2 text-xs text-[#6B7C93]">Largest drop-off: <strong className="text-red-600">{activation.largest_dropoff.stage.replace(/_/g, ' ')}</strong> ({activation.largest_dropoff.lost} lost, {activation.largest_dropoff.loss_pct}%)</p>
+              )}
+              <div className="mt-1 flex flex-wrap gap-2">
+                {activation.by_blocker.map((b) => (
+                  <span key={b.blocker} className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-[#0B1F33]">{b.blocker} <strong className="text-red-600">{b.count}</strong></span>
+                ))}
+              </div>
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left text-[#9AA7B8]"><tr>{['Milestone', 'With (n / act / rate)', 'Without (n / act / rate)'].map((h) => <th key={h} className="py-1 pr-3">{h}</th>)}</tr></thead>
+                  <tbody>
+                    {activation.correlations.map((c) => (
+                      <tr key={c.milestone} className="border-t border-slate-100">
+                        <td className="py-1 pr-3 text-[#0B1F33]">{c.milestone.replace(/_/g, ' ')}</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{c.population_with} / {c.activated_with} / <strong className="text-emerald-600">{c.rate_with ?? '—'}%</strong></td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{c.population_without} / {c.activated_without} / {c.rate_without ?? '—'}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-1 text-xs text-[#9AA7B8]">Association only — not causal. Gaps: {activation.unknown_gaps.join(' · ')}</p>
+            </div>
+          )}
+
+          {/* Profile completion intelligence */}
+          {profile && (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Profile completion intelligence</p>
+                <span className="text-xs text-[#6B7C93]">ready {profile.completion_rate ?? '—'}% · confident {profile.confident_rate ?? '—'}%</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                {profile.funnel.map((s, idx) => (
+                  <React.Fragment key={s.stage}>
+                    {idx > 0 && <span className="text-[#9AA7B8]">→</span>}
+                    <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[#0B1F33]" title={`lost ${s.lost} (${s.loss_pct ?? '—'}%)`}>
+                      {s.stage.replace(/_/g, ' ')} <strong>{s.reached}</strong>
+                    </span>
+                  </React.Fragment>
+                ))}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {profile.gap_analysis.filter((g) => g.count > 0).map((g) => (
+                  <span key={g.failure} className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-[#0B1F33]" title={`${g.pct}% of companies`}>
+                    {g.failure} <strong className="text-red-600">{g.count}</strong>
+                  </span>
+                ))}
+              </div>
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left text-[#9AA7B8]"><tr>{['Association', 'Population', 'Positive', 'Rate', 'Conf'].map((h) => <th key={h} className="py-1 pr-3">{h}</th>)}</tr></thead>
+                  <tbody>
+                    {profile.associations.map((a) => (
+                      <tr key={a.pair} className="border-t border-slate-100">
+                        <td className="py-1 pr-3 text-[#0B1F33]">{a.pair}</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{a.population}</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{a.positive}</td>
+                        <td className="py-1 pr-3 font-medium text-emerald-600">{a.rate ?? '—'}%</td>
+                        <td className={`py-1 pr-3 ${confColor(a.confidence)}`}>{a.confidence}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-1 text-xs text-[#9AA7B8]">Association only — not causal. Gaps: {profile.unknown_gaps.join(' · ')}</p>
+            </div>
+          )}
+
+          {/* Digital adoption intelligence */}
+          {adoption && (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Digital adoption intelligence</p>
+                <span className="text-xs text-[#6B7C93]">mean score {adoption.mean_adoption_score ?? '—'} · {adoption.by_status.ADOPTED} adopted / {adoption.by_status.PARTIAL} partial / {adoption.by_status.NOT_STARTED} none</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                {adoption.funnel.map((s, idx) => (
+                  <React.Fragment key={s.stage}>
+                    {idx > 0 && <span className="text-[#9AA7B8]">→</span>}
+                    <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[#0B1F33]" title={`${s.conversion_pct ?? '—'}% reached · lost ${s.lost}`}>
+                      {s.stage.replace(/_/g, ' ')} <strong>{s.reached}</strong>
+                    </span>
+                  </React.Fragment>
+                ))}
+              </div>
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left text-[#9AA7B8]"><tr>{['Capability', 'Ready', 'Missing', 'Act% present', 'Act% absent'].map((h) => <th key={h} className="py-1 pr-3">{h}</th>)}</tr></thead>
+                  <tbody>
+                    {adoption.capability_matrix.map((c) => (
+                      <tr key={c.capability} className="border-t border-slate-100">
+                        <td className="py-1 pr-3 text-[#0B1F33]">{c.capability}</td>
+                        <td className="py-1 pr-3 text-emerald-600">{c.ready}</td>
+                        <td className="py-1 pr-3 text-red-600">{c.missing}</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{c.rate_when_present ?? '—'}%</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{c.rate_when_absent ?? '—'}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-1 text-xs text-[#6B7C93]">Top activated paths: {adoption.paths_activated.map((p) => `${p.path}×${p.count}`).join(' · ') || '—'}</p>
+              <p className="mt-1 text-xs text-[#9AA7B8]">Association only — not causal. Gaps: {adoption.unknown_gaps.join(' · ')}</p>
+            </div>
+          )}
+
+          {/* Customer value realization */}
+          {value && (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Customer value realization</p>
+                <span className="text-xs text-[#6B7C93]">mean value {value.mean_value_score ?? '—'} · realized {value.by_status.REALIZED_VALUE} · early {value.by_status.EARLY_VALUE} · none {value.by_status.NO_VALUE}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                {value.funnel.map((s, idx) => (
+                  <React.Fragment key={s.stage}>
+                    {idx > 0 && <span className="text-[#9AA7B8]">→</span>}
+                    <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[#0B1F33]" title={`${s.conversion_pct ?? '—'}% · lost ${s.lost}`}>
+                      {s.stage.replace(/_/g, ' ')} <strong>{s.reached}</strong>
+                    </span>
+                  </React.Fragment>
+                ))}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {value.segments.map((s) => (
+                  <span key={s.segment} className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-[#0B1F33]" title={s.examples.join(', ')}>
+                    {s.segment.replace(/_/g, ' ')} <strong className={s.segment === 'PAYING_WITHOUT_VALUE' ? 'text-red-600' : 'text-[#0B1F33]'}>{s.count}</strong>
+                  </span>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-[#6B7C93]">Billing vs value: {value.billing_vs_value.paying} paying · {value.billing_vs_value.value_realized} with value · <strong className="text-red-600">{value.billing_vs_value.paying_without_value} paying-without-value</strong></p>
+              <p className="mt-1 text-xs text-[#9AA7B8]">{value.billing_vs_value.note} · Gaps: {value.unknown_gaps.join(' · ')}</p>
+            </div>
+          )}
+
+          {/* Value driver intelligence */}
+          {drivers && (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Value driver intelligence <span className="font-normal normal-case text-red-500">(association ≠ causation)</span></p>
+                <span className="text-xs text-[#6B7C93]">{drivers.value_realizing}/{drivers.total} value-realizing</span>
+              </div>
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left text-[#9AA7B8]"><tr>{['Capability driver', 'With (n/val/rate)', 'Without (n/val/rate)', 'Lift', 'Strength'].map((h) => <th key={h} className="py-1 pr-3">{h}</th>)}</tr></thead>
+                  <tbody>
+                    {drivers.associations.map((a) => (
+                      <tr key={a.signal} className="border-t border-slate-100">
+                        <td className="py-1 pr-3 text-[#0B1F33]">{a.signal.replace(/_/g, ' ')}</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{a.population_with}/{a.value_with}/{a.rate_with ?? '—'}%</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{a.population_without}/{a.value_without}/{a.rate_without ?? '—'}%</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{a.lift ?? '—'}</td>
+                        <td className={`py-1 pr-3 ${a.strength.startsWith('STRONG') ? 'text-emerald-600' : a.strength.startsWith('MODERATE') ? 'text-amber-600' : a.strength === 'INSUFFICIENT_DATA' ? 'text-[#9AA7B8]' : 'text-slate-600'}`}>{a.strength.replace('_ASSOCIATION', '')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-xs text-[#6B7C93]">Realized-value paths: {drivers.paths.realized.map((p) => `[${p.path}]×${p.count}`).join(' · ') || '—'}</p>
+              <p className="mt-1 text-xs text-[#6B7C93]">Largest gaps (realized vs no-value): {drivers.gap_comparison.largest_gaps.map((g) => `${g.capability} Δ${g.delta}`).join(' · ') || '—'}</p>
+              <p className="mt-1 text-xs text-[#9AA7B8]">Insufficient data: {drivers.ranking.insufficient_data.join(', ') || 'none'} · Never observed: {drivers.ranking.never_observed.join(', ') || 'none'}. Value-constituent signals excluded (circular).</p>
+            </div>
+          )}
+
+          {/* Campaign execution adoption */}
+          {execution && (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Campaign execution adoption</p>
+                <span className="text-xs text-[#6B7C93]">sustained {execution.by_status.SUSTAINED_EXECUTION} · active {execution.by_status.ACTIVE_EXECUTION} · early {execution.by_status.EARLY_EXECUTION} · none {execution.by_status.NO_EXECUTION}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                {execution.funnel.map((s, idx) => (
+                  <React.Fragment key={s.stage}>
+                    {idx > 0 && <span className="text-[#9AA7B8]">→</span>}
+                    <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[#0B1F33]" title={`${s.conversion_pct ?? '—'}%`}>
+                      {s.stage.replace(/_/g, ' ')} <strong>{s.reached}</strong>
+                    </span>
+                  </React.Fragment>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-[#6B7C93]">Depth: single-use {execution.depth.single_use} · repeat {execution.depth.repeat} · sustained {execution.depth.sustained}</p>
+              <p className="mt-1 text-xs text-[#6B7C93]">Concentration: top company = <strong className="text-[#0B1F33]">{execution.concentration.top1_share_pct ?? '—'}%</strong> · top 3 = <strong className="text-[#0B1F33]">{execution.concentration.top3_share_pct ?? '—'}%</strong> of {execution.concentration.total_volume} total executions</p>
+              <p className="mt-1 text-xs text-[#9AA7B8]">Association ≠ causation. {execution.unknown_gaps[0]}</p>
+            </div>
+          )}
+
+          {/* Monetization intelligence */}
+          {monetization && (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Monetization intelligence <span className="font-normal normal-case text-red-500">(association ≠ causation)</span></p>
+                <span className="text-xs text-[#6B7C93]">billing↔value alignment {monetization.billing_value_alignment.alignment_pct ?? '—'}% · misalignment {monetization.billing_value_alignment.misalignment_pct ?? '—'}%</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                {monetization.funnel.map((s, idx) => (
+                  <React.Fragment key={s.stage}>
+                    {idx > 0 && <span className="text-[#9AA7B8]">→</span>}
+                    <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[#0B1F33]" title={`${s.conversion_pct ?? '—'}% · lost ${s.lost}`}>
+                      {s.stage.replace(/_/g, ' ')} <strong>{s.reached}</strong>
+                    </span>
+                  </React.Fragment>
+                ))}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {Object.entries(monetization.by_status).filter(([, n]) => n > 0).map(([k, n]) => (
+                  <span key={k} className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-[#0B1F33]">
+                    {k.replace(/_/g, ' ')} <strong className={k === 'PAYING_ACTIVE_NO_VALUE' || k === 'PAYING_INACTIVE' ? 'text-red-600' : 'text-[#0B1F33]'}>{n}</strong>
+                  </span>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-[#6B7C93]">Largest cohort: <strong className="text-[#0B1F33]">{monetization.billing_value_alignment.largest_cohort?.cohort}</strong> ({monetization.billing_value_alignment.largest_cohort?.count})</p>
+              <p className="mt-1 text-xs text-[#6B7C93]">Concentration — revenue: <strong className="text-red-500">{monetization.concentration.revenue.note}</strong></p>
+              <p className="mt-1 text-xs text-[#6B7C93]">Plan (count share): top1 {monetization.concentration.plan.top1_pct ?? '—'}% · Execution: top1 {monetization.concentration.execution.top1_pct ?? '—'}%</p>
+              <p className="mt-1 text-xs text-[#9AA7B8]">{monetization.unknown_gaps.join(' · ')}</p>
+            </div>
+          )}
+
+          {/* Customer population integrity */}
+          {population && (
+            <div className="mt-3 rounded-xl border-2 border-amber-300 bg-amber-50/40 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Customer population integrity</p>
+                <span className="text-xs font-semibold text-amber-700">purity {population.portfolio_summary.population_purity_score ?? '—'}% (real customers)</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {Object.entries(population.portfolio_summary.counts).filter(([, n]) => n > 0).map(([cls, n]) => (
+                  <span key={cls} className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-[#0B1F33]">
+                    {cls} <strong className={cls === 'CUSTOMER' ? 'text-emerald-600' : 'text-red-600'}>{n}</strong> <span className="text-[#9AA7B8]">({population.portfolio_summary.ratios[cls as keyof typeof population.portfolio_summary.ratios] ?? '—'}%)</span>
+                  </span>
+                ))}
+              </div>
+              <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">Contamination (all vs customer-only)</p>
+              <div className="mt-1 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-left text-[#9AA7B8]"><tr>{['Domain', 'Metric', 'All', 'Customer-only', 'Δ'].map((h) => <th key={h} className="py-1 pr-3">{h}</th>)}</tr></thead>
+                  <tbody>
+                    {population.contamination.map((c) => (
+                      <tr key={c.domain} className="border-t border-slate-100">
+                        <td className="py-1 pr-3 text-[#0B1F33]">{c.domain.replace(/_/g, ' ')}</td>
+                        <td className="py-1 pr-3 text-[#9AA7B8]">{c.metric}</td>
+                        <td className="py-1 pr-3 text-[#6B7C93]">{c.all ?? '—'}</td>
+                        <td className="py-1 pr-3 font-medium text-emerald-700">{c.customer_only ?? '—'}</td>
+                        <td className={`py-1 pr-3 ${(c.delta_all_vs_customer ?? 0) !== 0 ? 'text-red-600' : 'text-[#9AA7B8]'}`}>{c.delta_all_vs_customer ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-xs text-[#9AA7B8]">{population.unknown_gaps.join(' · ')}</p>
+            </div>
+          )}
+
           {/* Filters */}
           <div className="mt-6 flex flex-wrap items-center gap-2">
             <input value={f.search} onChange={(e) => setF({ ...f, search: e.target.value })} placeholder="Search…" className="rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-[#0A66C2]" />
@@ -389,6 +713,41 @@ export default function CustomerOperationsPage() {
                 {(() => { const o = onboardingByCompany.get(selected.company_id); return o
                   ? <><Row k="Status" v={o.label} /><Row k="Blocker" v={o.reason ?? '—'} /></>
                   : <p className="text-[#6B7C93]">No onboarding record</p>; })()}
+              </Section>
+              <Section title="Activation">
+                {(() => { const a = activationByCompany.get(selected.company_id); return a
+                  ? <><Row k="Status" v={a.status} /><Row k="Blocker" v={a.blocker ?? '—'} /><Row k="Blockers" v={a.all_blockers.join(', ') || '—'} /></>
+                  : <p className="text-[#6B7C93]">No activation record</p>; })()}
+              </Section>
+              <Section title="Profile completion">
+                {(() => { const p = profileByCompany.get(selected.company_id); return p
+                  ? <><Row k="Status" v={p.status} /><Row k="Reason" v={p.reason ?? '—'} /><Row k="Gaps" v={p.all_gaps.join(', ') || '—'} /></>
+                  : <p className="text-[#6B7C93]">No profile record</p>; })()}
+              </Section>
+              <Section title="Digital adoption">
+                {(() => { const a = adoptionByCompany.get(selected.company_id); return a
+                  ? <><Row k="Score" v={`${a.adoption_score} (${a.adoption_status})`} /><Row k="Adopted" v={a.adopted_capabilities.join(', ') || '—'} /><Row k="Missing" v={a.missing_capabilities.join(', ') || '—'} /></>
+                  : <p className="text-[#6B7C93]">No adoption record</p>; })()}
+              </Section>
+              <Section title="Value realization">
+                {(() => { const v = valueByCompany.get(selected.company_id); return v
+                  ? <><Row k="Score" v={`${v.value_score} (${v.value_status})`} /><Row k="Signals" v={v.value_signals.join(', ') || '—'} /><Row k="Missing" v={v.missing_value_signals.join(', ') || '—'} /></>
+                  : <p className="text-[#6B7C93]">No value record</p>; })()}
+              </Section>
+              <Section title="Execution adoption">
+                {(() => { const e = executionByCompany.get(selected.company_id); return e
+                  ? <><Row k="Status" v={`${e.execution_status} (score ${e.execution_score})`} /><Row k="Frequency" v={String(e.execution_frequency)} /><Row k="Signals" v={e.execution_signals.join(', ') || '—'} /></>
+                  : <p className="text-[#6B7C93]">No execution record</p>; })()}
+              </Section>
+              <Section title="Monetization">
+                {(() => { const m = monetizationByCompany.get(selected.company_id); return m
+                  ? <><Row k="Status" v={m.monetization_status} /><Row k="Billing / Active" v={`${m.billing_status} / ${m.activation_status}`} /><Row k="Value / Execution" v={`${m.value_status} / ${m.execution_status}`} /></>
+                  : <p className="text-[#6B7C93]">No monetization record</p>; })()}
+              </Section>
+              <Section title="Population integrity">
+                {(() => { const p = populationByCompany.get(selected.company_id); return p
+                  ? <><Row k="Tenant class" v={p.tenant_class} /><Row k="Confidence" v={p.classification_confidence} /><div className="text-xs text-[#6B7C93]">Evidence: {p.classification_evidence.join('; ')}</div></>
+                  : <p className="text-[#6B7C93]">No classification</p>; })()}
               </Section>
               <Section title="Recommended actions">
                 {selected.recommended_playbooks.length ? selected.recommended_playbooks.map((p) => (
