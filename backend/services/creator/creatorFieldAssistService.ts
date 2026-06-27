@@ -1,0 +1,392 @@
+/**
+ * Creator Field-Level AI Assist — service.
+ *
+ * Implements user-invoked, field-scoped AI assistance for template forms.
+ * AI is an ASSISTANT: it operates ONLY on the explicitly targeted field(s),
+ * returns ONLY updated field values, and NEVER regenerates a whole asset or
+ * overwrites content without an explicit user action.
+ *
+ * Pure + decoupled. The LLM call is injected (`llm`) so the endpoint wires the
+ * billed gateway while tests run offline. A deterministic transform backs every
+ * action, so the endpoint always returns updated values even if the LLM is
+ * unavailable.
+ */
+
+import {
+  getTemplateById,
+  type CreatorTemplate,
+  type TemplateField,
+  type TemplateAssetFamily,
+  type TemplateFieldAssistAction,
+  TEMPLATE_FIELD_ASSIST_ACTIONS,
+  isTemplateAssetFamily,
+} from '../../../lib/creator-templates';
+import { buildCreatorGroundingBlock, type CreatorCompanyContext, type CreatorBrandVoice } from './creatorCopyContextResolver';
+import { validateCreatorCopyValue, type CopyViolation } from './creatorCopyValidation';
+
+export type FieldAssistScope = 'flat' | 'slide' | 'section';
+
+export interface FieldAssistTarget {
+  scope: FieldAssistScope;
+  fieldKey: string;
+  index?: number;
+  currentValue?: string;
+}
+
+export interface FieldAssistContext {
+  topic?: string;
+  audience?: string;
+  objective?: string;
+  tone?: string;
+  brand?: string;
+  /** Canonical company context (business understanding) — server-resolved. */
+  company?: CreatorCompanyContext;
+  /** Canonical brand voice (communication style) — server-resolved. */
+  brandVoice?: CreatorBrandVoice;
+}
+
+export interface FieldAssistRequest {
+  assetFamily: TemplateAssetFamily;
+  templateId: string;
+  action: TemplateFieldAssistAction;
+  targets: FieldAssistTarget[];
+  context?: FieldAssistContext;
+}
+
+export interface FieldAssistUpdate {
+  scope: FieldAssistScope;
+  fieldKey: string;
+  index?: number;
+  value: string;
+}
+
+export type AssistLlm = (messages: Array<{ role: 'system' | 'user'; content: string }>) => Promise<string>;
+
+const SCOPES: ReadonlySet<FieldAssistScope> = new Set(['flat', 'slide', 'section']);
+const MAX_TARGETS = 60;
+
+/* ── Validation ─────────────────────────────────────────────────────── */
+
+export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request?: FieldAssistRequest; errors: string[] } {
+  const errors: string[] = [];
+  const body = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+
+  const assetFamily = body.asset_family ?? body.assetFamily;
+  if (!isTemplateAssetFamily(assetFamily)) errors.push('asset_family must be image | carousel | infographic');
+
+  const templateId = String(body.template_id ?? body.templateId ?? '').trim();
+  if (!templateId) errors.push('template_id is required');
+
+  const action = body.action;
+  if (!TEMPLATE_FIELD_ASSIST_ACTIONS.includes(action as TemplateFieldAssistAction)) {
+    errors.push(`action must be one of ${TEMPLATE_FIELD_ASSIST_ACTIONS.join(', ')}`);
+  }
+
+  const rawTargets = Array.isArray(body.targets) ? body.targets : [];
+  if (rawTargets.length === 0) errors.push('at least one target is required');
+  if (rawTargets.length > MAX_TARGETS) errors.push(`too many targets (max ${MAX_TARGETS})`);
+
+  const targets: FieldAssistTarget[] = [];
+  for (const t of rawTargets) {
+    const obj = (t && typeof t === 'object' ? t : {}) as Record<string, unknown>;
+    const scope = obj.scope as FieldAssistScope;
+    const fieldKey = String(obj.field_key ?? obj.fieldKey ?? '').trim();
+    if (!SCOPES.has(scope) || !fieldKey) {
+      errors.push('each target needs a valid scope (flat|slide|section) and field_key');
+      continue;
+    }
+    const idxRaw = obj.index ?? obj.idx;
+    const index = typeof idxRaw === 'number' && Number.isInteger(idxRaw) && idxRaw >= 0 ? idxRaw : undefined;
+    targets.push({ scope, fieldKey, index, currentValue: String(obj.current_value ?? obj.currentValue ?? '') });
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  const rawContext = (body.context && typeof body.context === 'object' ? body.context : {}) as Record<string, unknown>;
+  const context: FieldAssistContext = {
+    topic: str(rawContext.topic),
+    audience: str(rawContext.audience),
+    objective: str(rawContext.objective),
+    tone: str(rawContext.tone),
+    brand: str(rawContext.brand),
+  };
+
+  return {
+    ok: true,
+    errors: [],
+    request: { assetFamily: assetFamily as TemplateAssetFamily, templateId, action: action as TemplateFieldAssistAction, targets, context },
+  };
+}
+
+/* ── Field resolution (AI may only touch template-defined fields) ───── */
+
+export function resolveTemplateField(template: CreatorTemplate, scope: FieldAssistScope, fieldKey: string): TemplateField | null {
+  const def = template.formDefinition;
+  const pool = scope === 'slide' ? def.slides?.fields : scope === 'section' ? def.sections?.fields : def.fields;
+  return (pool ?? []).find((f) => f.key === fieldKey) ?? null;
+}
+
+/** Whether the field permits the requested action (template-declared). */
+export function fieldAllowsAction(field: TemplateField, action: TemplateFieldAssistAction): boolean {
+  const a = field.aiAssist;
+  switch (action) {
+    case 'generate': return a.generate;
+    case 'rewrite': return a.rewrite;
+    case 'expand': return a.expand !== false && a.generate; // expand/shorten/improve default-on when generate is on
+    case 'shorten': return a.shorten !== false && a.generate;
+    case 'improve': return a.improve !== false && a.generate;
+    default: return false;
+  }
+}
+
+/* ── Prompt construction (pure) ─────────────────────────────────────── */
+
+export function buildFieldAssistMessages(
+  template: CreatorTemplate,
+  request: FieldAssistRequest,
+  resolved: Array<{ target: FieldAssistTarget; field: TemplateField }>,
+): Array<{ role: 'system' | 'user'; content: string }> {
+  const ctx = request.context ?? {};
+  const actionVerb: Record<TemplateFieldAssistAction, string> = {
+    generate: 'Write a fresh value',
+    rewrite: 'Rewrite the existing value',
+    expand: 'Expand the existing value with a bit more detail',
+    shorten: 'Shorten the existing value while keeping its meaning',
+    improve: 'Improve the wording of the existing value without changing its meaning',
+  };
+  // Canonical grounding — the SAME company + brand-voice block every Creator
+  // AI prompt uses (field assist + master generation).
+  const { brandVoiceLines, companyLines } = buildCreatorGroundingBlock({
+    company: request.context?.company,
+    brandVoice: request.context?.brandVoice,
+  });
+
+  const system = [
+    `You are a marketing copy assistant for a ${template.assetFamily} asset ("${template.name}").`,
+    'You ONLY produce text for the specific fields requested. You NEVER return a whole asset, extra fields, commentary, or markdown.',
+    'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section","field_key":"...","index":<number|optional>,"value":"..."}]}.',
+    'Keep each value within its max length. Match the platform-native, concise tone of social creative copy.',
+    // Brand voice (communication style) — canonical, server-resolved.
+    ...(brandVoiceLines.length ? ['Write in the brand voice:', ...brandVoiceLines] : []),
+    // Ground copy in the company's ACTUAL business — never invent company facts.
+    'Ground the copy in the company context provided below; do not invent products, claims, or company facts that are not given.',
+  ].join(' ');
+
+  const fieldLines = resolved.map(({ target, field }) => {
+    const where = target.scope === 'slide' ? ` (slide ${Number(target.index) + 1})`
+      : target.scope === 'section' ? ` (section ${Number(target.index) + 1})`
+        : '';
+    const max = field.maxLength ? `, max ${field.maxLength} chars` : '';
+    const cur = target.currentValue ? ` — current: "${target.currentValue}"` : ' — current: (empty)';
+    return `- scope=${target.scope} field_key=${field.key}${where}: "${field.label}"${max}${cur}`;
+  }).join('\n');
+
+  const contextLines = [
+    ctx.topic ? `Topic: ${ctx.topic}` : '',
+    ctx.audience ? `Audience (this asset): ${ctx.audience}` : '',
+    ctx.objective ? `Objective: ${ctx.objective}` : '',
+    ctx.tone ? `Requested tone: ${ctx.tone}` : '',
+    // Canonical company context (business understanding) — shared grounding.
+    ...companyLines,
+  ].filter(Boolean).join('\n');
+
+  const user = [
+    `${actionVerb[request.action]} for the following field(s):`,
+    fieldLines,
+    contextLines ? `\nContext:\n${contextLines}` : '',
+    '\nReturn ONLY the JSON object.',
+  ].join('\n');
+
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+/* ── Deterministic fallback transforms (pure) ───────────────────────── */
+
+export function deterministicTransform(
+  action: TemplateFieldAssistAction,
+  field: TemplateField,
+  currentValue: string,
+  context: FieldAssistContext,
+): string {
+  const cur = str(currentValue);
+  const topic = str(context.topic);
+  const key = field.key.toLowerCase();
+
+  const generateSeed = (): string => {
+    if (key.includes('cta')) return 'Learn more';
+    if (key.includes('author')) return '';
+    if (key.includes('metric')) return '100%';
+    if (key.includes('year') || key.includes('date')) return '2024';
+    if (key.includes('step')) return topic ? `${capitalize(topic)} step` : 'Key step';
+    if (topic) return capitalize(topic);
+    return field.label;
+  };
+
+  let out: string;
+  switch (action) {
+    case 'generate':
+      out = generateSeed();
+      break;
+    case 'shorten':
+      out = cur ? firstSentence(cur) : generateSeed();
+      break;
+    case 'expand':
+      out = cur ? `${cur}${topic ? ` — built for ${topic}` : ' — with added detail'}` : generateSeed();
+      break;
+    case 'rewrite':
+    case 'improve':
+    default:
+      out = cur ? capitalize(collapseWhitespace(cur)) : generateSeed();
+      break;
+  }
+  return clamp(out, field.maxLength);
+}
+
+/* ── Response parsing (pure, tolerant) ──────────────────────────────── */
+
+export function parseAssistResponse(
+  text: string,
+  resolved: Array<{ target: FieldAssistTarget; field: TemplateField }>,
+): Map<string, string> {
+  const byKey = new Map<string, string>();
+  const parsed = tryParseJson(text);
+  const updates = parsed && Array.isArray((parsed as Record<string, unknown>).updates)
+    ? ((parsed as Record<string, unknown>).updates as unknown[])
+    : [];
+  for (const u of updates) {
+    const obj = (u && typeof u === 'object' ? u : {}) as Record<string, unknown>;
+    const scope = String(obj.scope ?? '');
+    const fieldKey = String(obj.field_key ?? obj.fieldKey ?? '');
+    const index = typeof obj.index === 'number' ? obj.index : undefined;
+    const value = typeof obj.value === 'string' ? obj.value : '';
+    if (!scope || !fieldKey) continue;
+    byKey.set(targetKey(scope as FieldAssistScope, fieldKey, index), value);
+  }
+  // Clamp to each field's max length.
+  const out = new Map<string, string>();
+  for (const { target, field } of resolved) {
+    const k = targetKey(target.scope, target.fieldKey, target.index);
+    if (byKey.has(k)) out.set(k, clamp(str(byKey.get(k)!), field.maxLength));
+  }
+  return out;
+}
+
+/* ── Orchestration ──────────────────────────────────────────────────── */
+
+export interface RunFieldAssistResult {
+  updates: FieldAssistUpdate[];
+  usedFallback: boolean;
+  invalidTargets: FieldAssistTarget[];
+  /** Deterministic-validation violations that were repaired/flagged. */
+  violations: CopyViolation[];
+}
+
+/**
+ * Produce updated values for ONLY the requested targets. Never returns more
+ * than the targets asked for; never returns a full asset.
+ */
+export async function runCreatorFieldAssist(input: {
+  template: CreatorTemplate;
+  request: FieldAssistRequest;
+  llm?: AssistLlm;
+}): Promise<RunFieldAssistResult> {
+  const { template, request } = input;
+
+  const resolved: Array<{ target: FieldAssistTarget; field: TemplateField }> = [];
+  const invalidTargets: FieldAssistTarget[] = [];
+  for (const target of request.targets) {
+    const field = resolveTemplateField(template, target.scope, target.fieldKey);
+    if (!field || !fieldAllowsAction(field, request.action)) {
+      invalidTargets.push(target);
+      continue;
+    }
+    resolved.push({ target, field });
+  }
+
+  if (resolved.length === 0) {
+    return { updates: [], usedFallback: false, invalidTargets, violations: [] };
+  }
+
+  let llmValues = new Map<string, string>();
+  let usedFallback = false;
+  if (input.llm) {
+    try {
+      const messages = buildFieldAssistMessages(template, request, resolved);
+      const text = await input.llm(messages);
+      llmValues = parseAssistResponse(text, resolved);
+    } catch {
+      usedFallback = true;
+    }
+  } else {
+    usedFallback = true;
+  }
+
+  const updates: FieldAssistUpdate[] = [];
+  const violations: CopyViolation[] = [];
+  const brandVoice = request.context?.brandVoice;
+  for (const { target, field } of resolved) {
+    const k = targetKey(target.scope, target.fieldKey, target.index);
+    let value = llmValues.get(k);
+    if (value == null || value.length === 0) {
+      value = deterministicTransform(request.action, field, target.currentValue ?? '', request.context ?? {});
+      usedFallback = true;
+    }
+    // Canonical deterministic validation — repair forbidden words / prohibited
+    // claims / banned CTAs / fabricated superlatives against the brand voice.
+    let v = validateCreatorCopyValue(value, target.fieldKey, brandVoice);
+    if (!v.ok) {
+      // Repair emptied the value → deterministic fallback, then re-validate.
+      value = deterministicTransform(request.action, field, target.currentValue ?? '', request.context ?? {});
+      usedFallback = true;
+      v = validateCreatorCopyValue(value, target.fieldKey, brandVoice);
+    }
+    if (v.repaired) usedFallback = true;
+    violations.push(...v.violations);
+    updates.push({ scope: target.scope, fieldKey: target.fieldKey, index: target.index, value: v.value });
+  }
+
+  return { updates, usedFallback, invalidTargets, violations };
+}
+
+/** Convenience: resolve the template then run assist (endpoint helper). */
+export async function loadTemplateForAssist(request: FieldAssistRequest): Promise<CreatorTemplate | null> {
+  return getTemplateById(request.templateId, request.assetFamily);
+}
+
+/* ── helpers ────────────────────────────────────────────────────────── */
+
+function str(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim();
+}
+function collapseWhitespace(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+function capitalize(s: string): string {
+  const t = collapseWhitespace(s);
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+}
+function firstSentence(s: string): string {
+  const m = collapseWhitespace(s).match(/^[^.!?]*[.!?]?/);
+  return (m ? m[0] : s).trim();
+}
+function clamp(s: string, max?: number): string {
+  const t = s.trim();
+  return typeof max === 'number' && max > 0 && t.length > max ? t.slice(0, max).trim() : t;
+}
+function targetKey(scope: FieldAssistScope, fieldKey: string, index?: number): string {
+  return `${scope}:${index ?? ''}:${fieldKey}`;
+}
+function tryParseJson(text: string): unknown {
+  const t = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  try {
+    return JSON.parse(t);
+  } catch {
+    // Tolerate a JSON object embedded in surrounding prose.
+    const start = t.indexOf('{');
+    const end = t.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try { return JSON.parse(t.slice(start, end + 1)); } catch { return null; }
+    }
+    return null;
+  }
+}

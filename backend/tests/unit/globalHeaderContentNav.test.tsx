@@ -110,7 +110,7 @@ describe('GlobalHeader Content expandable navigation', () => {
     const menu = openDesktopContentMenu();
     fireEvent.keyDown(menu, { key: 'ArrowDown' });
     fireEvent.keyDown(menu, { key: 'Enter' });
-    expect(push).toHaveBeenCalledWith('/command-center/creator-content/image');
+    expect(push).toHaveBeenCalledWith('/command-center/creator-content/image/templates');
   });
 
   test('mobile Content menu links section headers to their landing pages with sub-items always visible', () => {
@@ -121,7 +121,7 @@ describe('GlobalHeader Content expandable navigation', () => {
     expect(screen.getByRole('link', { name: /Creator Content/i })).toHaveAttribute('href', '/command-center/creator-content');
     // Sub-items are rendered without needing to expand an accordion.
     expect(screen.getByRole('link', { name: /Article/i })).toHaveAttribute('href', '/articles/create');
-    expect(screen.getByRole('link', { name: /Infographic/i })).toHaveAttribute('href', '/command-center/creator-content/infographic');
+    expect(screen.getByRole('link', { name: /Infographic/i })).toHaveAttribute('href', '/command-center/creator-content/infographic/templates');
   });
 
   test('counts, routes, and active item state are preserved', () => {
@@ -129,7 +129,7 @@ describe('GlobalHeader Content expandable navigation', () => {
     expect(CONTENT_NAV_SECTIONS.find((section) => section.id === 'creator')?.description).toBe('3 AI-supported creator content types');
     expect(getContentNavRoutes().every((route) => route.startsWith('/'))).toBe(true);
 
-    renderHeader('/command-center/creator-content/carousel');
+    renderHeader('/command-center/creator-content/carousel/templates');
     const menu = openDesktopContentMenu();
     // The active route auto-expands the Creator section on open (no click needed).
     expect(within(menu).getByRole('menuitem', { name: 'Carousel' })).toHaveClass('bg-sky-600');

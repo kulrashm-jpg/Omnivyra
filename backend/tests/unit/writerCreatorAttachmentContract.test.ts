@@ -8,11 +8,36 @@ import {
   creatorContentAssetFamily,
   CREATOR_CONTENT_ASSET_TYPES,
   validateAttachmentPayload,
+  resolveAttachmentModeFromIntent,
 } from '../../../lib/content/writerCreatorAttachmentContracts';
 import { mediaTypesFromCreatorAttachments, mediaUrlsFromCreatorAttachments } from '../../../lib/content/schedulerAttachmentSemantics';
 import { containsDirectThreadDuplication, transformThreadForVisual } from '../../../lib/content/writerCreatorThreadTransform';
 import fs from 'fs';
 import path from 'path';
+
+describe('text-bearing template wins over supporting_image session (crisp overlay regression)', () => {
+  // A user-selected Headline+Sub+CTA template is a `banner`: overlay text present
+  // → embedded_copy → the renderer composites the deterministic crisp overlay.
+  it('banner + overlay text resolves to embedded_copy (deterministic overlay applies)', () => {
+    const r = resolveAttachmentModeFromIntent({
+      assetType: 'banner',
+      requestedMode: 'supporting_visual', // even if the writer session asked for supporting_visual
+      overlayText: { headline: 'Boost activation by 92%', cta: 'Start free' },
+    });
+    expect(r.mode).toBe('embedded_copy');
+  });
+
+  // The hard zero-text pin for genuine supporting_image (logo-only) is preserved:
+  // a clean visual never bakes text, so the publish validator never rejects it.
+  it('supporting_image stays pinned to supporting_visual (zero-text governance preserved)', () => {
+    const r = resolveAttachmentModeFromIntent({
+      assetType: 'supporting_image',
+      requestedMode: 'embedded_copy',
+      overlayText: { headline: 'Some text' },
+    });
+    expect(r.mode).toBe('supporting_visual');
+  });
+});
 
 describe('Writer -> Creator attachment contracts', () => {
   it('exposes first-class post/thread asset catalogs aligned with canonical creator taxonomy', () => {

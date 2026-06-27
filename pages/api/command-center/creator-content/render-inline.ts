@@ -92,6 +92,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const campaignId = typeof body.campaign_id === 'string' ? body.campaign_id.trim() : '';
 
   try {
+    // PART A — register a user template_id before render (canonical flow).
+    try {
+      const { ensureUserTemplateRegisteredForAsset } = await import('../../../../backend/services/creator/userTemplateService');
+      await ensureUserTemplateRegisteredForAsset(assetPayload);
+    } catch { /* best-effort */ }
     // Deferred import: loads sharp AFTER ensureRenderFonts() set FONTCONFIG_FILE.
     const { renderAsset } = await import('../../../../backend/services/creatorAssetRenderer');
     const rendered = await renderAsset(assetPayload, {

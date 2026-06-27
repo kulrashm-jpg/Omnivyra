@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -10,8 +10,8 @@ import PostToSocialPlatformPanel from '@/components/content/post-to-social/PostT
 import { filterConnectedPlatformsForContent } from '@/lib/shared/social/platformContentFilter';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '@/lib/shared/social/capabilityEvents';
 import { defaultScheduleValue, getContentTypeLabel, normalizePlatform, parseHashtags, resolveSocialPublishType, type ConnectedAccount, type DraftPayload, type PlatformConfigItem, type PlatformOption, type PlatformState } from '@/components/content/post-to-social/schedulerShared';
-import { clearThreadPublishLink, loadThreadNodeAttachments, saveThreadPublishLink } from '@/lib/thread/threadStorage';
-import { resolveThreadNodeAttachments } from '@/lib/thread/threadNodeAttachmentResolver';
+import { clearThreadPublishLink, saveThreadPublishLink } from '@/lib/thread/threadStorage';
+import { getThreadNodeAttachmentsFromGraph } from '@/lib/thread/threadNodeUsageGraph';
 import { getThreadContinuationLink } from '@/lib/thread/threadLinks';
 import { openThreadRuntimeTracer } from '@/backend/services/threadRuntime/threadRuntimeInstrumentation';
 import {
@@ -21,21 +21,20 @@ import {
   buildWriterCreatorPrefill,
   createWriterSourceId,
   launchCreatorFromWriter,
-  loadWriterAttachedAssetsDurable,
-  readWriterAttachedAssets,
   type CreatorAssetLaunchType,
   type WriterAttachedAsset,
   type WriterSourceType,
 } from '@/lib/content/writerCreatorAssetLaunch';
+import { loadWriterAttachmentsViaGraph } from '@/lib/content/writerAttachmentGraph';
+import { detachUsage, writerDraftConsumer } from '@/lib/content/creatorAssetUsageGraph';
 import {
   defaultAttachmentModeForAsset,
   defaultTransformForAsset,
   type AttachmentMode,
 } from '@/lib/content/writerCreatorAttachmentContracts';
-import {
-  mediaTypesFromCreatorAttachments,
-  mediaUrlsFromCreatorAttachments,
-} from '@/lib/content/schedulerAttachmentSemantics';
+import { mediaTypesFromCreatorAttachments } from '@/lib/content/schedulerAttachmentSemantics';
+import { attachmentRefsForConsumer, resolveSchedulingMediaUrls } from '@/lib/content/writerSchedulingRefs';
+import AssetReusePicker from '@/components/creator/AssetReusePicker';
 import { splitThreadIntoSegments, buildThreadNodesFromSegments } from '@/lib/thread/threadFlow';
 import { validatePostForPlatform } from '@/lib/preview/platformLimitValidation';
 export default function MultiPlatformSchedulerPage() {
@@ -51,6 +50,8 @@ export default function MultiPlatformSchedulerPage() {
   const [adaptingPlatform, setAdaptingPlatform] = useState<string | null>(null);
   const [assetMenuOpen, setAssetMenuOpen] = useState(false);
   const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
+  // "Reuse Existing Asset" — the Catalog-driven picker, opened per asset type.
+  const [reuseAssetType, setReuseAssetType] = useState<string | null>(null);
   // Video attachment by URL — not a generated Creator asset; the user supplies
   // a link that is published as a video alongside the post text. Kept separate
   // from `attachedAssets` (generated visuals) so it never touches the
@@ -325,28 +326,39 @@ export default function MultiPlatformSchedulerPage() {
     }));
   };
 
+  // The ONE attachment refresh: relationship discovery from the persisted Usage
+  // Graph, payloads from the resolver. Every attachment action calls a graph
+  // operation then this — the UI never mutates the attachment array locally.
+  const refreshAttachmentsFromGraph = useCallback(() => {
+    if (!writerSourceType || !writerSourceId) { setAttachedAssets([]); return; }
+    void loadWriterAttachmentsViaGraph({
+      companyId: selectedCompanyId,
+      sourceType: writerSourceType,
+      sourceId: writerSourceId,
+    }).then(setAttachedAssets).catch(() => { /* keep current list on transient error */ });
+  }, [selectedCompanyId, writerSourceType, writerSourceId]);
+
   useEffect(() => {
     if (!writerSourceType || !writerSourceId) {
       setAttachedAssets([]);
       return;
     }
-    const refresh = () => setAttachedAssets(readWriterAttachedAssets(writerSourceType, writerSourceId));
-    const refreshDurable = () => {
-      void loadWriterAttachedAssetsDurable({
-        companyId: selectedCompanyId,
-        sourceType: writerSourceType,
-        sourceId: writerSourceId,
-      }).then(setAttachedAssets);
-    };
-    refresh();
-    refreshDurable();
-    window.addEventListener('focus', refreshDurable);
-    window.addEventListener('storage', refresh);
+    refreshAttachmentsFromGraph();
+    window.addEventListener('focus', refreshAttachmentsFromGraph);
+    window.addEventListener('storage', refreshAttachmentsFromGraph);
     return () => {
-      window.removeEventListener('focus', refreshDurable);
-      window.removeEventListener('storage', refresh);
+      window.removeEventListener('focus', refreshAttachmentsFromGraph);
+      window.removeEventListener('storage', refreshAttachmentsFromGraph);
     };
-  }, [selectedCompanyId, writerSourceId, writerSourceType]);
+  }, [refreshAttachmentsFromGraph, writerSourceId, writerSourceType]);
+
+  // Remove an attachment → canonical graph op, then refresh from the graph.
+  // No local array mutation (no splice/filter/setAttachedAssets here).
+  const handleRemoveAttachment = useCallback(async (assetId: string) => {
+    if (!writerSourceType || !writerSourceId) return;
+    await detachUsage(assetId, writerDraftConsumer(writerSourceType, writerSourceId));
+    refreshAttachmentsFromGraph();
+  }, [writerSourceType, writerSourceId, refreshAttachmentsFromGraph]);
 
   const isLikelyVideoUrl = (value: string) => /^https?:\/\/\S+$/i.test(value.trim());
 
@@ -416,14 +428,27 @@ export default function MultiPlatformSchedulerPage() {
             No asset
           </button>
           {supportedCreatorAssetTypes.map((assetType) => (
-            <button
-              key={assetType}
-              type="button"
-              onClick={() => launchAssetCreator(assetType)}
-              className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              {assetLabel(assetType)}
-            </button>
+            <div key={assetType} className="flex items-center justify-between gap-2 px-4 py-2.5 transition hover:bg-slate-50">
+              <span className="text-sm font-semibold text-slate-700">{assetLabel(assetType)}</span>
+              <span className="flex shrink-0 gap-1.5">
+                {/* Create New — unchanged generation flow */}
+                <button
+                  type="button"
+                  onClick={() => launchAssetCreator(assetType)}
+                  className="rounded-lg bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Create new
+                </button>
+                {/* Reuse Existing — Catalog-driven, no regeneration */}
+                <button
+                  type="button"
+                  onClick={() => { setAssetMenuOpen(false); setReuseAssetType(assetType); }}
+                  className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300"
+                >
+                  Reuse
+                </button>
+              </span>
+            </div>
           ))}
           {/* Video — attach a URL (not generated); published with the post text. */}
           <button
@@ -465,6 +490,14 @@ export default function MultiPlatformSchedulerPage() {
             </div>
           ) : null}
         </div>
+      ) : null}
+      {reuseAssetType && writerSourceType && writerSourceId ? (
+        <AssetReusePicker
+          consumer={writerDraftConsumer(writerSourceType, writerSourceId)}
+          assetType={reuseAssetType}
+          onAttached={refreshAttachmentsFromGraph}
+          onClose={() => setReuseAssetType(null)}
+        />
       ) : null}
     </div>
   ) : null;
@@ -682,7 +715,13 @@ export default function MultiPlatformSchedulerPage() {
       const draftMediaUrls = Array.isArray(draft?.mediaUrls)
         ? draft.mediaUrls.map((url) => String(url || '').trim()).filter(Boolean)
         : [];
-      const mediaUrlsFromAttachedAssets = mediaUrlsFromCreatorAttachments(attachedAssets);
+      // Reference-based transport: the canonical refs come from the Usage Graph;
+      // payload resolution happens ONCE here (the publish boundary) via the
+      // resolver — never from payload-extraction helpers, never earlier.
+      const assetRefs = (writerSourceType && writerSourceId)
+        ? await attachmentRefsForConsumer(writerDraftConsumer(writerSourceType, writerSourceId))
+        : [];
+      const mediaUrlsFromAttachedAssets = await resolveSchedulingMediaUrls(assetRefs);
       // User-supplied video URL — carried as media and tagged as a video so the
       // target platform shows the video alongside the post text.
       const videoUrls = videoUrl.trim() ? [videoUrl.trim()] : [];
@@ -726,6 +765,7 @@ export default function MultiPlatformSchedulerPage() {
             hashtags: hashtagsArray,
             mediaUrls: mediaUrlsFromAttachments,
             mediaTypes: mediaTypesFromAttachments,
+            assetRefs,
             creatorAttachments,
             scheduledFor: scheduleDate.toISOString(),
             status: 'scheduled',
@@ -756,14 +796,10 @@ export default function MultiPlatformSchedulerPage() {
         // RPC silently ignores the per-node media JSONB fields, so this
         // payload extension is a no-op on the DB side. Post-migration, child
         // rows persist their own media_urls + media_types.
-        const nodeAttachmentMap = sourceContentType === 'thread' && draft?.sourceId
-          ? loadThreadNodeAttachments(draft.sourceId)
-          : null;
-        const perNodeAttachments = sourceContentType === 'thread'
-          ? resolveThreadNodeAttachments({
-              nodeAttachmentMap,
-              attachedAssets,
-            })
+        // Per-node attachments are read from the canonical Usage Graph (resolved
+        // projection) — never from the legacy thread_node_attachments store.
+        const perNodeAttachments = sourceContentType === 'thread' && draft?.sourceId
+          ? await getThreadNodeAttachmentsFromGraph(draft.sourceId)
           : {};
         const threadNodes = sourceContentType === 'thread'
           ? buildThreadNodesFromSegments(
@@ -796,6 +832,7 @@ export default function MultiPlatformSchedulerPage() {
             hashtags: hashtagsArray.join(' '),
             mediaUrls: mediaUrlsFromAttachments,
             mediaTypes: mediaTypesFromAttachments,
+            assetRefs,
             creatorAttachments,
             scheduledFor: scheduleDate.toISOString(),
             contentType: publishContentType,
@@ -1029,19 +1066,30 @@ export default function MultiPlatformSchedulerPage() {
                           ) : (
                             <div className="mt-3 grid gap-2">
                               {attachedAssets.map((asset) => (
-                                <a
+                                <div
                                   key={asset.id}
-                                  href={asset.url || `/command-center/creator-content/${asset.creatorType}`}
-                                  target={asset.url ? '_blank' : undefined}
-                                  rel={asset.url ? 'noreferrer' : undefined}
-                                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 transition hover:border-slate-300"
+                                  className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 transition hover:border-slate-300"
                                 >
-                                  <span className="font-semibold">{asset.title}</span>
-                                  <span className="mt-1 block text-xs text-slate-500">
-                                    {asset.creatorType.charAt(0).toUpperCase() + asset.creatorType.slice(1)}
-                                    {asset.previewKind ? ` - ${asset.previewKind.replace(/_/g, ' ')}` : ''}
-                                  </span>
-                                </a>
+                                  <a
+                                    href={asset.url || `/command-center/creator-content/${asset.creatorType}`}
+                                    target={asset.url ? '_blank' : undefined}
+                                    rel={asset.url ? 'noreferrer' : undefined}
+                                    className="min-w-0 flex-1"
+                                  >
+                                    <span className="font-semibold">{asset.title}</span>
+                                    <span className="mt-1 block text-xs text-slate-500">
+                                      {asset.creatorType.charAt(0).toUpperCase() + asset.creatorType.slice(1)}
+                                      {asset.previewKind ? ` - ${asset.previewKind.replace(/_/g, ' ')}` : ''}
+                                    </span>
+                                  </a>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleRemoveAttachment(asset.id)}
+                                    className="ml-3 shrink-0 text-xs font-semibold text-slate-400 transition hover:text-rose-500"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
                               ))}
                               {videoUrl.trim() ? (
                                 <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">

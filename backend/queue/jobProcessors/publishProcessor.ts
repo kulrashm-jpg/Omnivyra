@@ -27,6 +27,8 @@ import { publishToPlatform } from '../../adapters/platformAdapter';
 import { publishThread } from '../../services/threadRuntime/threadPublishOrchestrator';
 import { validatePublishReadiness } from '../../services/publishReadinessValidator';
 import { refreshDurableMediaBeforePublish } from '../../services/mediaReferenceResolver';
+import { refreshScheduledPostMediaFromRefs } from '../../services/publishNowService';
+import { resolvePublishingOrganization } from '../../services/creator/publishingOrganizationResolver';
 import { logPipelineEvent } from '../../../lib/shared/observability';
 import { categorizeError } from '../../services/errorRecoveryService';
 import { recordPostAnalytics } from '../../services/analyticsService';
@@ -64,17 +66,9 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
   // Resolve the owning organization BEFORE the runner so the tenant
   // guard has the canonical org id. social_accounts.company_id IS the
   // canonical owning tenant — we never trust caller-supplied org ids.
-  let resolvedOrgId: string | null = null;
-  try {
-    const { data: acct } = await supabase
-      .from('social_accounts')
-      .select('company_id')
-      .eq('id', social_account_id)
-      .single();
-    resolvedOrgId = (acct?.company_id as string | undefined) ?? null;
-  } catch {
-    /* fall through — runner will reject with NO_ORG_ID */
-  }
+  // Canonical organization identity (the single resolver) — social_accounts.company_id
+  // is the owning tenant; never a caller-supplied id, never userId-as-companyId.
+  const resolvedOrgId: string | null = await resolvePublishingOrganization({ socialAccountId: social_account_id });
 
   const outcome = await runJob(
     {
@@ -322,6 +316,13 @@ async function processPublishJobInner(params: {
     // manual path. No-op unless DURABLE_MEDIA_REFS; fail-open.
     await refreshDurableMediaBeforePublish(scheduled_post_id);
 
+    // Step 4c.2: Creator asset re-resolution — re-resolve CreatorAssetRef through
+    // the SAME shared path the sync entrypoints use and refresh the row's media
+    // snapshot, so the adapter uploads the CURRENT rendering payload (not the
+    // schedule-time snapshot) and retries stay deterministic. No-op/fallback when
+    // refs are unavailable; fail-open. Telemetry comes from the shared path only.
+    await refreshScheduledPostMediaFromRefs({ scheduledPostId: scheduled_post_id, userId: user_id, post: scheduledPost as unknown as Record<string, unknown> });
+
     // Step 5: Publish to platform.
     //
     // Phase 1B.2A.1 — thread orchestrator delegation (queue side).
@@ -463,18 +464,14 @@ async function processPublishJobInner(params: {
 
       // Schedule analytics polls at +15min and +24h
       try {
-        const { data: acct } = await supabase
-          .from('social_accounts')
-          .select('company_id')
-          .eq('id', social_account_id)
-          .single();
-        if (acct?.company_id) {
+        const pollOrgId = await resolvePublishingOrganization({ socialAccountId: social_account_id });
+        if (pollOrgId) {
           await schedulePostPolls({
             scheduledPostId:  scheduled_post_id,
             socialAccountId:  social_account_id,
             platform:         scheduledPost.platform,
             platformPostId:   result.platform_post_id,
-            companyId:        String(acct.company_id),
+            companyId:        pollOrgId,
             userId:           user_id,
           });
         }

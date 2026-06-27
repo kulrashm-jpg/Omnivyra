@@ -43,6 +43,7 @@ import {
   type RenderStrategy,
 } from './intelligence/canonical/creatorAssetRegistry';
 import { appendVariantTrackingCta } from './creatorVariantLinkBinding';
+import { stampAssetAttribution } from './designAttributionService';
 import {
   applyTransition,
   LIFECYCLE_STATES,
@@ -128,6 +129,15 @@ export type CreatorOrchestrationInput = {
     variant_id: string;
     variant_family: string;
   } | null;
+
+  /**
+   * UNIFY MASTER GENERATION — the canonical brand voice resolved ONCE by the
+   * caller (generate route) via the shared Context Assembly. When present, the
+   * orchestrator applies the SAME deterministic copy validation that field
+   * assist uses to the generated copy (overlay / slides / sections) before
+   * render. No second brand lookup happens here. Null/empty → unchanged.
+   */
+  canonicalBrandVoice?: import('./creatorCopyContextResolver').CreatorBrandVoice | null;
 };
 
 export type CreatorOrchestrationResult = {
@@ -250,6 +260,26 @@ async function persistCreatorAssetRow(input: {
   const previewKind = String(safeObject(mediaBundle.metadata).preview_kind || input.output.asset_type);
   const creatorType = String(input.contentType || input.output.asset_type);
 
+  // ── CANONICAL DESIGN ATTRIBUTION SEAM ──────────────────────────────────
+  // Stamp the immutable Template / Collection / Campaign-Design-System
+  // provenance onto the asset metadata exactly ONCE, here — the single point
+  // where every origin (bolt + direct/queue) and every family (image / carousel
+  // / infographic) converges on `sharedMetadata` before persistence. The stamp
+  // rides the existing metadata unchanged through publishing + analytics
+  // (additive only; no generation/render change). Immutable once set.
+  const card = safeObject(sharedMetadata.creator_card);
+  const attrTemplateId = (typeof sharedMetadata.template_id === 'string' && sharedMetadata.template_id.trim()) ? sharedMetadata.template_id.trim()
+    : (typeof sharedMetadata.infographic_template_id === 'string' && sharedMetadata.infographic_template_id.trim()) ? sharedMetadata.infographic_template_id.trim()
+      : (typeof card.template_id === 'string' && card.template_id.trim()) ? card.template_id.trim() : null;
+  const attrVersionRaw = sharedMetadata.template_version ?? card.template_version;
+  const attrTemplateVersion = typeof attrVersionRaw === 'number' ? attrVersionRaw
+    : Number.isFinite(Number(attrVersionRaw)) ? Number(attrVersionRaw) : null;
+  const attributedMetadata = await stampAssetAttribution(sharedMetadata, {
+    campaignId: input.campaignId,
+    templateId: attrTemplateId,
+    templateVersion: attrTemplateVersion,
+  });
+
   // BOLT branch — preserves legacy `bolt-render-<rowId>-<hash:16>` id so
   // pre-existing creator_assets rows from the prior runtime are upserted
   // in place (no orphan creation, no destructive migration).
@@ -268,7 +298,7 @@ async function persistCreatorAssetRow(input: {
       files: urls,
       preview_kind: previewKind,
       platform_context: String(input.primaryPlatform || ''),
-      metadata: sharedMetadata,
+      metadata: attributedMetadata,
       source_content: input.output as unknown as Record<string, unknown>,
       render_identity_hash: renderIdentityHash,
       updated_at: new Date().toISOString(),
@@ -307,7 +337,7 @@ async function persistCreatorAssetRow(input: {
         previewKind,
         platformContext: input.primaryPlatform || null,
         attachmentOrder: 0,
-        metadata: sharedMetadata,
+        metadata: attributedMetadata,
         sourceContent: input.output as unknown as Record<string, unknown>,
         renderIdentityHash,
       });
@@ -325,7 +355,7 @@ async function persistCreatorAssetRow(input: {
       files: urls,
       previewKind,
       platformContext: input.primaryPlatform || null,
-      metadata: sharedMetadata,
+      metadata: attributedMetadata,
       sourceContent: input.output as unknown as Record<string, unknown>,
       renderIdentityHash,
     });
@@ -387,6 +417,11 @@ async function runRenderDispatch(input: {
   }
 
   if (input.strategy === 'inline') {
+    // PART A — register a user template_id before the inline render.
+    try {
+      const { ensureUserTemplateRegisteredForAsset } = await import('./userTemplateService');
+      await ensureUserTemplateRegisteredForAsset(renderInput);
+    } catch { /* best-effort */ }
     const rendered = await renderAsset(renderInput, {
       campaignId: input.campaignId,
       userId: input.userId,
@@ -420,6 +455,22 @@ export async function runCreatorOrchestration(
 
   const engine = createCreatorExecutionEngine();
   const primaryPlatform = String(input.targetPlatforms[0] || 'linkedin').toLowerCase();
+
+  // CAMPAIGN-003 — template-aware plan gate at the single canonical generation
+  // entry. When an asset selects a template that RESOLVES, the planned asset
+  // must be compatible with the template's contract (family / slide / section /
+  // layout / CTA) BEFORE generation. Unresolved template ids are a no-op (the
+  // renderer falls back to the default style → legacy/stale campaigns unbroken).
+  {
+    const card = safeObject(input.creatorCard);
+    if (typeof card.template_id === 'string' && card.template_id.trim()) {
+      const { validatePlannedCard } = await import('./campaignPlanValidationService');
+      const planCheck = await validatePlannedCard(card, effectiveContentType);
+      if (planCheck && !planCheck.ok) {
+        throw new Error(`Invalid campaign plan — generated asset rejected before generation: ${planCheck.errors.join(' ')}`);
+      }
+    }
+  }
 
   // Final Corrective Pass — P2-2. Generation telemetry. The orchestrator
   // is the single canonical entry point for asset generation (direct +
@@ -485,9 +536,58 @@ export async function runCreatorOrchestration(
   // 2) adapt
   const adapted = await engine.adaptForPlatform(generatedWithVariant, primaryPlatform) as CanonicalCreatorOutput;
 
+  // 2b) Template Content Ingestion — when a creator template supplied
+  //     user-entered structured content (carousel slides / infographic
+  //     sections), it is AUTHORITATIVE. Authored entries are honored verbatim
+  //     (no rewrite / reorder / summarization); only EMPTY carousel slots are
+  //     filled from the generated draft (deterministic partial generation).
+  //     No-op for non-template and AI-only flows → byte-identical passthrough.
+  const { applyAuthoritativeTemplateContent } =
+    require('./templateContentIngestion') as typeof import('./templateContentIngestion');
+  const ingestion = applyAuthoritativeTemplateContent(
+    adapted as unknown as Record<string, unknown>,
+    safeObject(input.creatorCard),
+    effectiveContentType,
+  );
+  let renderReady = ingestion.output as unknown as CanonicalCreatorOutput;
+  if (ingestion.applied) {
+    console.info('[creator-orchestrator][template-content-ingested]', {
+      applied: ingestion.applied,
+      authored: ingestion.authoredCount,
+      filled_from_generated: ingestion.filledFromGenerated,
+      content_type: effectiveContentType,
+    });
+  }
+
+  // 2c) UNIFY MASTER GENERATION — apply the SAME canonical deterministic copy
+  //     validation field assist uses to the MASTER-generated copy (overlay /
+  //     slides / sections) before render. Uses the brand voice resolved ONCE by
+  //     the caller (no second brand lookup). No-op when the brand defines no
+  //     constraints, so existing (no-brand-vocabulary) flows are byte-identical.
+  let masterCopyViolations: import('./creatorCopyValidation').CopyViolation[] = [];
+  if (input.canonicalBrandVoice) {
+    const { validateCreatorOutputCopy } =
+      require('./creatorCopyValidation') as typeof import('./creatorCopyValidation');
+    const copyValidation = validateCreatorOutputCopy(
+      safeObject((renderReady as unknown as Record<string, unknown>).asset_payload),
+      input.canonicalBrandVoice,
+    );
+    masterCopyViolations = copyValidation.violations;
+    if (copyValidation.repaired) {
+      renderReady = {
+        ...(renderReady as unknown as Record<string, unknown>),
+        asset_payload: copyValidation.assetPayload,
+      } as unknown as CanonicalCreatorOutput;
+      console.info('[creator-orchestrator][canonical-copy-validated]', {
+        violations: copyValidation.violations.length,
+        content_type: effectiveContentType,
+      });
+    }
+  }
+
   // 3) render
   const renderResult = await runRenderDispatch({
-    output: adapted,
+    output: renderReady,
     contentType: effectiveContentType,
     primaryPlatform,
     companyId: input.companyId,
@@ -495,6 +595,49 @@ export async function runCreatorOrchestration(
     campaignId: input.campaignId,
     strategy,
   });
+
+  // 3b) CREATOR DIAGNOSTIC REPORT — deterministic, READ-ONLY inspection artifact
+  //     assembled from signals already produced (context assembly, content
+  //     validation, render metadata, visual validation). Attached to
+  //     generation metadata. Never changes generation/rendering. Best-effort.
+  try {
+    const { buildCreatorDiagnosticReport } =
+      require('./creatorDiagnosticReport') as typeof import('./creatorDiagnosticReport');
+    const card = safeObject(input.creatorCard);
+    const renderedPayload = safeObject((renderResult.output as unknown as Record<string, unknown>).asset_payload);
+    const renderMeta = safeObject(safeObject(renderedPayload.media_bundle).metadata);
+    const report = buildCreatorDiagnosticReport({
+      assetType: effectiveContentType,
+      contentType: input.contentType,
+      platform: primaryPlatform,
+      companyId: input.companyId,
+      durationMs: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - generationStartedAt),
+      template: card.template_id ? {
+        id: String(card.template_id),
+        version: typeof card.template_version === 'number' ? card.template_version : undefined,
+        assetFamily: typeof card.template_asset_family === 'string' ? String(card.template_asset_family) : undefined,
+        renderingContractVersion: typeof renderMeta.renderingContractVersion === 'string' ? String(renderMeta.renderingContractVersion) : undefined,
+      } : undefined,
+      companyContext: safeObject(card.canonical_company_context),
+      brandVoice: (input.canonicalBrandVoice ?? safeObject(card.canonical_brand_voice)) as Record<string, unknown>,
+      contentViolations: masterCopyViolations,
+      renderMetadata: renderMeta,
+    });
+    renderResult.output = {
+      ...(renderResult.output as unknown as Record<string, unknown>),
+      asset_payload: {
+        ...renderedPayload,
+        media_bundle: {
+          ...safeObject(renderedPayload.media_bundle),
+          metadata: { ...renderMeta, creator_diagnostic_report: report },
+        },
+      },
+    } as unknown as CanonicalCreatorOutput;
+  } catch (error) {
+    console.warn('[creator-orchestrator][diagnostic-report-failed]', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   // 4) optional readiness
   let readiness: { ready: boolean; failure_reason?: string } | undefined;

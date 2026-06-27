@@ -1,5 +1,7 @@
 import {
   getWriterAllowedAssetTypes as _getWriterAllowedAssetTypes,
+  canAttachTo,
+  resolveAttachmentGovernance,
 } from '../../backend/services/creator/intelligence/canonical/creatorAssetRegistry';
 
 export type AttachmentMode =
@@ -487,28 +489,42 @@ export function validateAttachmentPayload(input: AttachmentValidationInput): Att
   // any change to this heuristic MUST update the exported helper too.
   const paragraphLike = isParagraphLikeForSupportingVisual(sourceText);
 
-  // Canonical taxonomy guard: carousel is sequence-oriented and aligns
-  // only with thread storytelling. Post flow is single-attachment by
-  // contract, so the orchestration must reject any carousel payload
-  // attached from a post source — even if the UI is bypassed.
-  if (input.sourceType === 'post' && input.assetType === 'carousel') {
-    errors.push('post flow does not support carousel asset type');
+  // GENERIC, CONTRACT-DRIVEN VALIDATION. The validator never tests asset types:
+  // eligibility comes from `canAttachTo` and all content governance from the
+  // canonical `attachmentGovernance` contract. A new/changed asset adjusts
+  // registry metadata only — this function does not change.
+  const eligible = canAttachTo(input.sourceType, input.assetType);
+  const gov = resolveAttachmentGovernance(input.assetType);
+  const transform = policy?.sourceTextTransform ?? 'none';
+
+  if (!eligible) {
+    errors.push(`${input.sourceType} flow does not support ${input.assetType} asset type`);
+  }
+
+  // Mode must be one this asset's governance accepts.
+  if (input.attachmentMode && !gov.supportedAttachmentModes.includes(input.attachmentMode)) {
+    errors.push(`${input.assetType} does not support ${input.attachmentMode} attachment`);
+  }
+  // Transform must be within the asset's allowed set (when constrained).
+  if (policy?.sourceTextTransform && gov.allowedSourceTextTransforms !== 'all' && !gov.allowedSourceTextTransforms.includes(transform)) {
+    errors.push(`${input.assetType} does not allow the ${transform} transform`);
   }
 
   if (input.attachmentMode === 'supporting_visual') {
+    if (!gov.allowsSupportingVisual) errors.push(`${input.assetType} does not support supporting_visual attachment`);
+    // Supporting-visual is textless by contract: no overlay, no CTA, no embedded copy.
     if (hasOverlayText(input.overlayText)) errors.push('supporting_visual rejects overlay_text');
     if (hasCta) errors.push('supporting_visual forbids CTA');
-    // The paragraph rejection only applies when the source text would
-    // actually be transformed into overlay copy. In the canonical
-    // supporting_visual contract (sourceTextTransform === 'none') the source
-    // snippet is conceptual context for a textless background image and is
-    // never rendered — so a normal-length post must NOT be blocked here.
-    // Keep the rejection for transform-bearing policies (e.g. 'summarize'),
-    // which would distill the long source into on-image copy.
+    // The paragraph rejection only applies when the source text would actually be
+    // transformed into overlay copy. With transform 'none' the snippet is
+    // conceptual context for a textless background and is never rendered.
     if (paragraphLike && policy?.sourceTextTransform && policy.sourceTextTransform !== 'none') {
       errors.push('supporting_visual rejects paragraph overlays');
     }
-    if (input.sourceType === 'thread' && policy?.sourceTextTransform !== 'support_visual_only' && policy?.sourceTextTransform !== 'none') {
+    // Duplicate-text governance: forbid raw source duplication into the visual.
+    if (gov.duplicateTextPolicy === 'forbid_raw_duplication'
+      && input.sourceType === 'thread'
+      && policy?.sourceTextTransform !== 'support_visual_only' && policy?.sourceTextTransform !== 'none') {
       errors.push('supporting_visual rejects thread duplication transforms');
     }
     if (policy?.allowCTA) errors.push('supporting_visual copy policy cannot allow CTA');
@@ -522,27 +538,17 @@ export function validateAttachmentPayload(input: AttachmentValidationInput): Att
     errors.push('embedded_copy CTA requires explicit copy policy allowCTA');
   }
 
-  // Rule #9 — thread+carousel requires a transform policy in embedded_copy
-  // mode to prevent raw thread segments being duplicated onto carousel slides
-  // (the embedded copy WOULD render the raw segments verbatim, defeating the
-  // "embedded_copy" intent that carousel slides should re-present thread
-  // content via summarize/extract/framework/quote/etc.).
-  //
-  // In supporting_visual mode, the carousel carries NO embedded text by
-  // contract (SUPPORTING_VISUAL_COPY_POLICY: allowHeadline/allowKeyInsight/
-  // allowCTA = false; sourceTextTransform = 'none'). Raw thread duplication
-  // is therefore structurally impossible: there is no text-bearing surface
-  // on the carousel for raw segments to leak into. The transform-required
-  // rule has no semantic load to bear here and would create a contradiction
-  // with the supporting_visual contract that pins sourceTextTransform='none'.
-  // Skip the rule for supporting_visual; keep it strict for embedded_copy.
-  if (
-    input.sourceType === 'thread'
-    && input.assetType === 'carousel'
+  // Transform-required governance (was the thread+carousel special case): when an
+  // asset's contract forbids raw duplication via `requiresTransformForEmbeddedCopy`,
+  // embedded_copy must carry a non-'none' transform so source content is
+  // re-presented, not duplicated verbatim. Gated by eligibility so an ineligible
+  // combo (already rejected above) does not accrue a second, misleading error —
+  // preserving the prior thread-scoped behavior exactly.
+  if (eligible
+    && gov.requiresTransformForEmbeddedCopy
     && input.attachmentMode !== 'supporting_visual'
-  ) {
-    const transform = policy?.sourceTextTransform ?? 'none';
-    if (transform === 'none') errors.push('thread carousel requires transform policy');
+    && transform === 'none') {
+    errors.push('thread carousel requires transform policy');
   }
 
   return { ok: errors.length === 0, errors };

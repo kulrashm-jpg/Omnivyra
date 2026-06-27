@@ -79,6 +79,15 @@ export type RenderStrategy = 'queue' | 'inline' | 'skipped';
  */
 export type WriterSourceKey = 'post' | 'thread';
 
+/**
+ * Canonical ATTACHMENT TARGETS — the writer content types an asset may be
+ * attached to. Superset of WriterSourceKey; extensible without touching routing,
+ * the writer, or the attachment layer (add the target to an asset's
+ * `writer_source_eligibility`). Generation availability AND attachment
+ * eligibility both resolve from this single capability.
+ */
+export type AttachmentTarget = 'post' | 'thread' | 'article' | 'newsletter' | 'guide';
+
 export interface CreatorAssetDefinition {
   canonical_key: CanonicalAssetKey;
   canonical_asset_family: CanonicalAssetFamily;
@@ -115,11 +124,13 @@ export interface CreatorAssetDefinition {
    */
   writer_attachment_subtypes: string[];
   /**
-   * Phase 1 unification — which writer sources may attach this asset.
-   * Empty ⇒ not writer-attachable. Used by selectors
-   * `getPostAllowedAssetTypes` / `getThreadAllowedAssetTypes`.
+   * Phase 1 unification — which writer ATTACHMENT TARGETS may attach this asset.
+   * The single canonical attachment-eligibility capability: empty ⇒ not
+   * writer-attachable. Drives `getAllowedAssetTypesForTarget` / `canAttachTo`
+   * (and the post/thread selectors). Adding a target here (e.g. 'article') makes
+   * the asset attachable there with NO routing/writer/attachment-layer change.
    */
-  writer_source_eligibility: WriterSourceKey[];
+  writer_source_eligibility: AttachmentTarget[];
   /**
    * Phase 3 unification — render dispatch strategy. The orchestrator
    * uses this single field to decide queue vs inline render across all
@@ -462,10 +473,16 @@ export function getWriterAllowedAssetTypes(): readonly string[] {
   return out;
 }
 
-export function getPostAllowedAssetTypes(): readonly string[] {
+/**
+ * Canonical attachment-eligibility selector: the writer asset subtypes that may
+ * attach to `target`. Single source for BOTH the Add-Asset menu (generation
+ * availability) and attachment validation. Generalises the post/thread selectors
+ * to every AttachmentTarget — no parallel arrays, no per-type branching.
+ */
+export function getAllowedAssetTypesForTarget(target: AttachmentTarget): readonly string[] {
   const out: string[] = [];
   for (const def of REGISTRY_ENTRIES) {
-    if (!def.writer_source_eligibility.includes('post')) continue;
+    if (!def.writer_source_eligibility.includes(target)) continue;
     for (const subtype of def.writer_attachment_subtypes) {
       if (!out.includes(subtype)) out.push(subtype);
     }
@@ -473,15 +490,77 @@ export function getPostAllowedAssetTypes(): readonly string[] {
   return out;
 }
 
+export function getPostAllowedAssetTypes(): readonly string[] {
+  return getAllowedAssetTypesForTarget('post');
+}
+
 export function getThreadAllowedAssetTypes(): readonly string[] {
-  const out: string[] = [];
-  for (const def of REGISTRY_ENTRIES) {
-    if (!def.writer_source_eligibility.includes('thread')) continue;
-    for (const subtype of def.writer_attachment_subtypes) {
-      if (!out.includes(subtype)) out.push(subtype);
-    }
-  }
-  return out;
+  return getAllowedAssetTypesForTarget('thread');
+}
+
+/**
+ * The ONE canonical attachment-eligibility check. True when `assetType` (a writer
+ * subtype or any runtime/alias of a canonical asset) may attach to `target`.
+ * Attachment layers and routing must call this rather than testing asset types —
+ * future asset types become attachable via registry metadata only.
+ */
+export function canAttachTo(target: AttachmentTarget, assetType: unknown): boolean {
+  const subtype = String(assetType ?? '').trim();
+  if (!subtype) return false;
+  if (getAllowedAssetTypesForTarget(target).includes(subtype)) return true;
+  const def = getCreatorAsset(subtype);
+  return !!def && def.writer_source_eligibility.includes(target);
+}
+
+/* ── Canonical ATTACHMENT GOVERNANCE ─────────────────────────────────────
+ * The single capability contract that drives content-governance validation
+ * (`validateAttachmentPayload`). The validator reads this — it never tests asset
+ * types. A new/changed asset adjusts the override map below (metadata only); the
+ * validator never changes. Defaults reproduce today's universal behavior. */
+
+export type AttachmentModeKey = 'embedded_copy' | 'supporting_visual';
+
+export interface AttachmentGovernance {
+  /** Attachment modes this asset accepts. */
+  supportedAttachmentModes: AttachmentModeKey[];
+  /** Whether the textless supporting-visual mode is available. */
+  allowsSupportingVisual: boolean;
+  /** Whether on-image overlay copy is permitted (embedded_copy). */
+  allowsOverlay: boolean;
+  /** Whether a CTA may be embedded (embedded_copy, with policy). */
+  allowsCTA: boolean;
+  /** embedded_copy requires a non-'none' source-text transform (e.g. carousel,
+   *  so raw thread segments are re-presented, not duplicated verbatim). */
+  requiresTransformForEmbeddedCopy: boolean;
+  /** Allowed source-text transforms, or 'all'. */
+  allowedSourceTextTransforms: string[] | 'all';
+  /** How raw source-text duplication is governed. */
+  duplicateTextPolicy: 'forbid_raw_duplication' | 'allow';
+}
+
+/** Default governance — preserves the prior universal behavior for every asset. */
+const DEFAULT_ATTACHMENT_GOVERNANCE: AttachmentGovernance = {
+  supportedAttachmentModes: ['embedded_copy', 'supporting_visual'],
+  allowsSupportingVisual: true,
+  allowsOverlay: true,
+  allowsCTA: true,
+  requiresTransformForEmbeddedCopy: false,
+  allowedSourceTextTransforms: 'all',
+  duplicateTextPolicy: 'forbid_raw_duplication',
+};
+
+/** Per-canonical-asset governance overrides (metadata-only extension point). */
+const ATTACHMENT_GOVERNANCE_OVERRIDES: Partial<Record<CanonicalAssetKey, Partial<AttachmentGovernance>>> = {
+  // Carousel re-presents thread content via a transform — raw duplication of
+  // thread segments onto slides is forbidden in embedded_copy.
+  carousel: { requiresTransformForEmbeddedCopy: true },
+};
+
+/** Resolve the effective attachment governance for an asset (default + override). */
+export function resolveAttachmentGovernance(assetType: unknown): AttachmentGovernance {
+  const def = getCreatorAsset(assetType);
+  const override = def ? (ATTACHMENT_GOVERNANCE_OVERRIDES[def.canonical_key] ?? {}) : {};
+  return { ...DEFAULT_ATTACHMENT_GOVERNANCE, ...override };
 }
 
 /** Canonical assets the platform supports (derived from platform_support arrays). */

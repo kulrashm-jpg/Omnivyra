@@ -240,6 +240,18 @@ async function publishOneNode(input: {
     };
   }
 
+  // Re-resolve this node's creator asset refs at publish time through the SAME
+  // shared resolution path the single-row publishers use (no thread-specific
+  // resolver). On success the node's media snapshot is refreshed so the adapter
+  // uploads the CURRENT rendering payload; on failure the snapshot is retained
+  // (fail-open). Dynamic import avoids the publishNowService ↔ orchestrator cycle.
+  try {
+    const { refreshScheduledPostMediaFromRefs } = await import('../publishNowService');
+    await refreshScheduledPostMediaFromRefs({ scheduledPostId: row.id, userId: input.userId, post: row });
+  } catch {
+    /* fail-open — never block a node publish on snapshot refresh */
+  }
+
   // Call the canonical publish path. The adapter accepts the optional reply
   // context (Twitter uses it; others ignore).
   let publishResult;

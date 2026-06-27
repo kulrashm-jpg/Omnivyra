@@ -26,6 +26,15 @@
  *     falls back to the legacy layout card → byte-identical default.
  */
 
+// Canonical chart geometry — the single source of truth lives in the
+// template style. The builders consume it via the card-brand context;
+// absent → the default (whose values equal the prior literals → byte-identical).
+import { DEFAULT_INFOGRAPHIC_STYLE, type InfographicChartStyle, type InfographicChartGeometry } from '../../../lib/creator-templates';
+
+function chartGeom(brand: InfographicCardBrand): InfographicChartGeometry {
+  return (brand.chart ?? DEFAULT_INFOGRAPHIC_STYLE.chart_style).geometry;
+}
+
 // ── Feature flags (default OFF) ─────────────────────────────────────
 export function infographicChartsEnabled(): boolean {
   return process.env.INFOGRAPHIC_CHARTS_ENABLED === 'true';
@@ -75,6 +84,16 @@ export type InfographicCardBrand = {
   panel: string;
   /** the renderer's adaptive font multiplier */
   fontMultiplier: number;
+  /** Canonical chart style (geometry + radii). Absent → defaults. */
+  chart?: InfographicChartStyle;
+  /** Canonical chart/card visual constants (from InfographicStyleSchema).
+   *  Optional — absent → the prior literals, so callers stay byte-identical. */
+  barCornerRadius?: number;
+  donutHoleRatio?: number;
+  cardCornerRadius?: number;
+  cardStripeWidth?: number;
+  cardStripeRadius?: number;
+  cardFillOpacity?: number;
 };
 
 export type CardGeometry = { x: number; y: number; width: number; height: number };
@@ -235,9 +254,13 @@ export function resolveStructuredCards(
 // ── Card-base helper (matches the renderer's renderCardBase style) ───
 function cardBase(geom: CardGeometry, brand: InfographicCardBrand, accentFill: string): string {
   const { x, y, width, height } = geom;
+  const rx = brand.cardCornerRadius ?? 14;
+  const op = brand.cardFillOpacity ?? 0.97;
+  const sw = brand.cardStripeWidth ?? 6;
+  const sr = brand.cardStripeRadius ?? 3;
   return (
-    `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="14" fill="${brand.panel}" opacity="0.97" />` +
-    `<rect x="${x}" y="${y}" width="6" height="${height}" rx="3" fill="${accentFill}" />`
+    `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${rx}" fill="${brand.panel}" opacity="${op}" />` +
+    `<rect x="${x}" y="${y}" width="${sw}" height="${height}" rx="${sr}" fill="${accentFill}" />`
   );
 }
 
@@ -246,14 +269,15 @@ function cardTitleSvg(
   brand: InfographicCardBrand,
   title: string,
 ): { svg: string; bottomY: number } {
-  if (!title) return { svg: '', bottomY: geom.y + 24 };
-  const size = Math.round(20 * brand.fontMultiplier);
-  const tx = geom.x + 28;
-  const ty = geom.y + 24 + size;
+  const gt = chartGeom(brand).title;
+  if (!title) return { svg: '', bottomY: geom.y + gt.emptyBottomY };
+  const size = Math.round(gt.sizeBase * brand.fontMultiplier);
+  const tx = geom.x + gt.xInset;
+  const ty = geom.y + gt.yInset + size;
   // Char budget keeps the title to a single line inside the card.
-  const maxChars = Math.max(8, Math.floor((geom.width - 56) / (size * 0.55)));
-  const svg = `<text x="${tx}" y="${ty}" font-size="${size}" font-family="${brand.fontFamily}" font-weight="800" fill="${brand.text}">${escapeXml(truncate(title, maxChars))}</text>`;
-  return { svg, bottomY: ty + 10 };
+  const maxChars = Math.max(8, Math.floor((geom.width - gt.widthInset) / (size * gt.charFactor)));
+  const svg = `<text x="${tx}" y="${ty}" font-size="${size}" font-family="${brand.fontFamily}" font-weight="${chartGeom(brand).weights.chartTitle}" fill="${brand.text}">${escapeXml(truncate(title, maxChars))}</text>`;
+  return { svg, bottomY: ty + gt.bottomGap };
 }
 
 // ====================================================================
@@ -281,14 +305,15 @@ export function buildChartCardSvg(
   const base = cardBase(geom, brand, accentFill);
 
   // Plot area inside the card, below the title.
-  const padL = 28;
-  const padR = 24;
-  const padB = 44; // room for x-axis labels
+  const gp = chartGeom(brand).plot;
+  const padL = gp.padL;
+  const padR = gp.padR;
+  const padB = gp.padB; // room for x-axis labels
   const plotX = geom.x + padL;
-  const plotY = bottomY + 14;
+  const plotY = bottomY + gp.yGap;
   const plotW = geom.width - padL - padR;
   const plotH = geom.y + geom.height - padB - plotY;
-  if (plotW <= 20 || plotH <= 20) {
+  if (plotW <= gp.min || plotH <= gp.min) {
     // Card too small to host a chart → let caller fall back.
     return null;
   }
@@ -308,70 +333,76 @@ type Plot = { plotX: number; plotY: number; plotW: number; plotH: number };
 
 function buildBarBody(data: ChartDataPoint[], plot: Plot, brand: InfographicCardBrand): string {
   const { plotX, plotY, plotW, plotH } = plot;
+  const G = chartGeom(brand);
+  const g = G.bar;
   const colors = resolveSeriesColors(brand, data.length);
   const maxV = Math.max(...data.map((d) => d.value), 0);
-  const gap = Math.max(8, Math.round(plotW * 0.04));
-  const barW = Math.max(6, Math.floor((plotW - gap * (data.length - 1)) / data.length));
+  const gap = Math.max(g.gapMin, Math.round(plotW * g.gapRatio));
+  const barW = Math.max(g.barWMin, Math.floor((plotW - gap * (data.length - 1)) / data.length));
   const baselineY = plotY + plotH;
-  const labelSize = Math.max(9, Math.round(11 * brand.fontMultiplier));
-  const valueSize = Math.max(9, Math.round(11 * brand.fontMultiplier));
+  const labelSize = Math.max(G.minFontSize, Math.round(g.labelSizeBase * brand.fontMultiplier));
+  const valueSize = Math.max(G.minFontSize, Math.round(g.labelSizeBase * brand.fontMultiplier));
   // Baseline axis.
-  let out = `<line x1="${plotX}" y1="${baselineY}" x2="${plotX + plotW}" y2="${baselineY}" stroke="${brand.bodyTextColor}" stroke-opacity="0.25" stroke-width="1" />`;
+  let out = `<line x1="${plotX}" y1="${baselineY}" x2="${plotX + plotW}" y2="${baselineY}" stroke="${brand.bodyTextColor}" stroke-opacity="${g.axisOpacity}" stroke-width="${g.axisStrokeWidth}" />`;
   data.forEach((d, i) => {
     const bx = plotX + i * (barW + gap);
-    const h = maxV > 0 ? Math.max(0, Math.round((Math.max(0, d.value) / maxV) * (plotH - 22))) : 0;
+    const h = maxV > 0 ? Math.max(0, Math.round((Math.max(0, d.value) / maxV) * (plotH - g.headroom))) : 0;
     const by = baselineY - h;
     const cx = bx + barW / 2;
-    out += `<rect x="${bx}" y="${by}" width="${barW}" height="${h}" rx="4" fill="${colors[i]}" />`;
+    out += `<rect x="${bx}" y="${by}" width="${barW}" height="${h}" rx="${brand.barCornerRadius ?? 4}" fill="${colors[i]}" />`;
     // Value label above the bar (dark on white panel = high contrast).
-    out += `<text x="${cx}" y="${by - 6}" text-anchor="middle" font-size="${valueSize}" font-family="${brand.fontFamily}" font-weight="700" fill="${brand.text}">${escapeXml(formatValue(d.value))}</text>`;
+    out += `<text x="${cx}" y="${by - g.valueLabelYOffset}" text-anchor="middle" font-size="${valueSize}" font-family="${brand.fontFamily}" font-weight="${G.weights.barValue}" fill="${brand.text}">${escapeXml(formatValue(d.value))}</text>`;
     // X label under the baseline.
-    out += `<text x="${cx}" y="${baselineY + labelSize + 6}" text-anchor="middle" font-size="${labelSize}" font-family="${brand.fontFamily}" font-weight="500" fill="${brand.bodyTextColor}">${escapeXml(truncate(d.label, Math.max(4, Math.floor(barW / (labelSize * 0.55)) + 2)))}</text>`;
+    out += `<text x="${cx}" y="${baselineY + labelSize + g.xLabelYOffset}" text-anchor="middle" font-size="${labelSize}" font-family="${brand.fontFamily}" font-weight="${G.weights.barLabel}" fill="${brand.bodyTextColor}">${escapeXml(truncate(d.label, Math.max(4, Math.floor(barW / (labelSize * g.labelCharFactor)) + g.labelCharPad)))}</text>`;
   });
   return out;
 }
 
 function buildLineBody(data: ChartDataPoint[], plot: Plot, brand: InfographicCardBrand): string {
   const { plotX, plotY, plotW, plotH } = plot;
+  const G = chartGeom(brand);
+  const g = G.line;
   const accent = isHexColor(brand.accent) ? brand.accent : DEFAULT_SERIES_RAMP[0];
   const maxV = Math.max(...data.map((d) => d.value), 0);
   const minV = Math.min(...data.map((d) => d.value), 0);
   const span = maxV - minV || 1;
   const baselineY = plotY + plotH;
-  const usableH = plotH - 26; // headroom for value labels
+  const usableH = plotH - g.usableHeadroom; // headroom for value labels
   const stepX = data.length > 1 ? plotW / (data.length - 1) : 0;
-  const labelSize = Math.max(9, Math.round(11 * brand.fontMultiplier));
+  const labelSize = Math.max(G.minFontSize, Math.round(g.labelSizeBase * brand.fontMultiplier));
   const pointFor = (d: ChartDataPoint, i: number) => {
     const px = data.length > 1 ? plotX + i * stepX : plotX + plotW / 2;
     const py = baselineY - Math.round(((d.value - minV) / span) * usableH);
     return { px, py };
   };
   const pts = data.map(pointFor);
-  let out = `<line x1="${plotX}" y1="${baselineY}" x2="${plotX + plotW}" y2="${baselineY}" stroke="${brand.bodyTextColor}" stroke-opacity="0.25" stroke-width="1" />`;
+  let out = `<line x1="${plotX}" y1="${baselineY}" x2="${plotX + plotW}" y2="${baselineY}" stroke="${brand.bodyTextColor}" stroke-opacity="${g.axisOpacity}" stroke-width="${g.axisStrokeWidth}" />`;
   if (pts.length > 1) {
-    out += `<polyline points="${pts.map((p) => `${p.px},${p.py}`).join(' ')}" fill="none" stroke="${accent}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />`;
+    out += `<polyline points="${pts.map((p) => `${p.px},${p.py}`).join(' ')}" fill="none" stroke="${accent}" stroke-width="${g.lineStrokeWidth}" stroke-linecap="round" stroke-linejoin="round" />`;
   }
   pts.forEach((p, i) => {
-    out += `<circle cx="${p.px}" cy="${p.py}" r="4.5" fill="${accent}" stroke="${brand.panel}" stroke-width="2" />`;
+    out += `<circle cx="${p.px}" cy="${p.py}" r="${g.pointRadius}" fill="${accent}" stroke="${brand.panel}" stroke-width="${g.pointStrokeWidth}" />`;
     // Only label values when sparse enough to avoid collision.
-    if (data.length <= 6) {
-      out += `<text x="${p.px}" y="${p.py - 10}" text-anchor="middle" font-size="${labelSize}" font-family="${brand.fontFamily}" font-weight="700" fill="${brand.text}">${escapeXml(formatValue(data[i].value))}</text>`;
+    if (data.length <= g.valueLabelMaxPoints) {
+      out += `<text x="${p.px}" y="${p.py - g.valueLabelYOffset}" text-anchor="middle" font-size="${labelSize}" font-family="${brand.fontFamily}" font-weight="${G.weights.lineValue}" fill="${brand.text}">${escapeXml(formatValue(data[i].value))}</text>`;
     }
-    out += `<text x="${p.px}" y="${baselineY + labelSize + 6}" text-anchor="middle" font-size="${labelSize}" font-family="${brand.fontFamily}" font-weight="500" fill="${brand.bodyTextColor}">${escapeXml(truncate(data[i].label, 8))}</text>`;
+    out += `<text x="${p.px}" y="${baselineY + labelSize + g.xLabelYOffset}" text-anchor="middle" font-size="${labelSize}" font-family="${brand.fontFamily}" font-weight="${G.weights.lineLabel}" fill="${brand.bodyTextColor}">${escapeXml(truncate(data[i].label, g.labelMaxChars))}</text>`;
   });
   return out;
 }
 
 function buildPieBody(data: ChartDataPoint[], plot: Plot, brand: InfographicCardBrand): string {
   const { plotX, plotY, plotW, plotH } = plot;
+  const G = chartGeom(brand);
+  const g = G.pie;
   const colors = resolveSeriesColors(brand, data.length);
   const positive = data.map((d) => ({ ...d, value: Math.max(0, d.value) }));
   const total = positive.reduce((s, d) => s + d.value, 0);
   if (total <= 0) return '';
   // Pie occupies the left ~55%; legend the right ~45%.
-  const pieZoneW = Math.round(plotW * 0.52);
-  const r = Math.max(20, Math.floor(Math.min(pieZoneW, plotH) / 2) - 6);
-  const cx = plotX + r + 6;
+  const pieZoneW = Math.round(plotW * g.zoneRatio);
+  const r = Math.max(g.rMin, Math.floor(Math.min(pieZoneW, plotH) / 2) - g.rPad);
+  const cx = plotX + r + g.cxPad;
   const cy = plotY + plotH / 2;
   let out = '';
   let angle = -Math.PI / 2; // start at top
@@ -396,19 +427,19 @@ function buildPieBody(data: ChartDataPoint[], plot: Plot, brand: InfographicCard
     out += `<path d="M ${cx} ${cy} L ${x0} ${y0} A ${r} ${r} 0 ${largeArc} 1 ${x1} ${y1} Z" fill="${colors[i]}" />`;
   });
   // Donut hole for a cleaner, modern read.
-  out += `<circle cx="${cx}" cy="${cy}" r="${Math.round(r * 0.55)}" fill="${brand.panel}" />`;
+  out += `<circle cx="${cx}" cy="${cy}" r="${Math.round(r * (brand.donutHoleRatio ?? 0.55))}" fill="${brand.panel}" />`;
 
   // Legend: swatch + label + percentage (dark text on white panel = AA).
-  const legendX = plotX + pieZoneW + 14;
+  const legendX = plotX + pieZoneW + g.legendXGap;
   const legendW = plotX + plotW - legendX;
-  const rowH = Math.max(18, Math.floor(plotH / Math.max(1, positive.length + 1)));
-  const legendSize = Math.max(9, Math.round(12 * brand.fontMultiplier));
-  let ly = plotY + Math.round(rowH * 0.6);
+  const rowH = Math.max(g.rowHMin, Math.floor(plotH / Math.max(1, positive.length + 1)));
+  const legendSize = Math.max(G.minFontSize, Math.round(g.legendSizeBase * brand.fontMultiplier));
+  let ly = plotY + Math.round(rowH * g.legendStartYRatio);
   positive.forEach((d, i) => {
     const pct = Math.round((d.value / total) * 100);
-    out += `<rect x="${legendX}" y="${ly - legendSize + 2}" width="${legendSize}" height="${legendSize}" rx="3" fill="${colors[i]}" />`;
-    const labelMax = Math.max(4, Math.floor((legendW - legendSize - 10) / (legendSize * 0.55)) - 4);
-    out += `<text x="${legendX + legendSize + 8}" y="${ly}" font-size="${legendSize}" font-family="${brand.fontFamily}" font-weight="600" fill="${brand.text}">${escapeXml(truncate(d.label, labelMax))} ${pct}%</text>`;
+    out += `<rect x="${legendX}" y="${ly - legendSize + g.swatchYOffset}" width="${legendSize}" height="${legendSize}" rx="${g.swatchRx}" fill="${colors[i]}" />`;
+    const labelMax = Math.max(4, Math.floor((legendW - legendSize - g.labelInsetSub) / (legendSize * g.labelCharFactor)) - g.labelCharPad);
+    out += `<text x="${legendX + legendSize + g.labelGap}" y="${ly}" font-size="${legendSize}" font-family="${brand.fontFamily}" font-weight="${G.weights.legend}" fill="${brand.text}">${escapeXml(truncate(d.label, labelMax))} ${pct}%</text>`;
     ly += rowH;
   });
   return out;
@@ -451,12 +482,14 @@ export function buildTableCardSvg(
   const { svg: titleSvg, bottomY } = cardTitleSvg(geom, brand, normalized.title);
   const base = cardBase(geom, brand, accentFill);
 
-  const padL = 28;
-  const padR = 24;
-  const padB = 20;
+  const G = chartGeom(brand);
+  const g = G.table;
+  const padL = g.padL;
+  const padR = g.padR;
+  const padB = g.padB;
   const gridX = geom.x + padL;
   const gridW = geom.width - padL - padR;
-  const gridTop = bottomY + 12;
+  const gridTop = bottomY + g.gridTopGap;
   const gridBottom = geom.y + geom.height - padB;
   const gridH = gridBottom - gridTop;
   if (gridW <= 40 || gridH <= 40) return null;
@@ -464,37 +497,37 @@ export function buildTableCardSvg(
   const cols = normalized.columns.length;
   const colW = Math.floor(gridW / cols);
   const totalRows = normalized.rows.length + 1; // +1 header
-  const rowH = Math.max(22, Math.min(56, Math.floor(gridH / Math.max(1, totalRows))));
-  const headerSize = Math.max(9, Math.round(12 * brand.fontMultiplier));
-  const cellSize = Math.max(9, Math.round(12 * brand.fontMultiplier));
+  const rowH = Math.max(g.rowHMin, Math.min(g.rowHMax, Math.floor(gridH / Math.max(1, totalRows))));
+  const headerSize = Math.max(G.minFontSize, Math.round(g.headerSizeBase * brand.fontMultiplier));
+  const cellSize = Math.max(G.minFontSize, Math.round(g.cellSizeBase * brand.fontMultiplier));
 
-  const cellCharBudget = Math.max(4, Math.floor((colW - 16) / (cellSize * 0.55)));
-  const headerCharBudget = Math.max(4, Math.floor((colW - 16) / (headerSize * 0.55)));
+  const cellCharBudget = Math.max(4, Math.floor((colW - g.charInset) / (cellSize * g.charFactor)));
+  const headerCharBudget = Math.max(4, Math.floor((colW - g.charInset) / (headerSize * g.charFactor)));
 
   let out = '';
   // Header band.
-  out += `<rect x="${gridX}" y="${gridTop}" width="${gridW}" height="${rowH}" rx="6" fill="${accentFill}" opacity="0.16" />`;
+  out += `<rect x="${gridX}" y="${gridTop}" width="${gridW}" height="${rowH}" rx="${g.headerRx}" fill="${accentFill}" opacity="${g.headerOpacity}" />`;
   normalized.columns.forEach((col, c) => {
-    const tx = gridX + c * colW + 12;
-    const ty = gridTop + Math.round(rowH / 2) + Math.round(headerSize * 0.35);
-    out += `<text x="${tx}" y="${ty}" font-size="${headerSize}" font-family="${brand.fontFamily}" font-weight="800" fill="${brand.text}">${escapeXml(truncate(col, headerCharBudget))}</text>`;
+    const tx = gridX + c * colW + g.textInset;
+    const ty = gridTop + Math.round(rowH / 2) + Math.round(headerSize * g.headerTextYRatio);
+    out += `<text x="${tx}" y="${ty}" font-size="${headerSize}" font-family="${brand.fontFamily}" font-weight="${G.weights.tableHeader}" fill="${brand.text}">${escapeXml(truncate(col, headerCharBudget))}</text>`;
   });
   // Body rows.
   normalized.rows.forEach((row, r) => {
     const ry = gridTop + (r + 1) * rowH;
     if (r % 2 === 1) {
-      out += `<rect x="${gridX}" y="${ry}" width="${gridW}" height="${rowH}" fill="${brand.bodyTextColor}" opacity="0.05" />`;
+      out += `<rect x="${gridX}" y="${ry}" width="${gridW}" height="${rowH}" fill="${brand.bodyTextColor}" opacity="${g.zebraOpacity}" />`;
     }
     row.forEach((cell, c) => {
-      const tx = gridX + c * colW + 12;
-      const ty = ry + Math.round(rowH / 2) + Math.round(cellSize * 0.35);
-      out += `<text x="${tx}" y="${ty}" font-size="${cellSize}" font-family="${brand.fontFamily}" font-weight="500" fill="${brand.bodyTextColor}">${escapeXml(truncate(cell, cellCharBudget))}</text>`;
+      const tx = gridX + c * colW + g.textInset;
+      const ty = ry + Math.round(rowH / 2) + Math.round(cellSize * g.cellTextYRatio);
+      out += `<text x="${tx}" y="${ty}" font-size="${cellSize}" font-family="${brand.fontFamily}" font-weight="${G.weights.tableCell}" fill="${brand.bodyTextColor}">${escapeXml(truncate(cell, cellCharBudget))}</text>`;
     });
   });
   // Column separators (subtle).
   for (let c = 1; c < cols; c += 1) {
     const lx = gridX + c * colW;
-    out += `<line x1="${lx}" y1="${gridTop}" x2="${lx}" y2="${gridTop + totalRows * rowH}" stroke="${brand.bodyTextColor}" stroke-opacity="0.10" stroke-width="1" />`;
+    out += `<line x1="${lx}" y1="${gridTop}" x2="${lx}" y2="${gridTop + totalRows * rowH}" stroke="${brand.bodyTextColor}" stroke-opacity="${g.separatorOpacity}" stroke-width="${g.separatorWidth}" />`;
   }
   return `${base}${titleSvg}${out}`;
 }

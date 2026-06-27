@@ -33,6 +33,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: 'Scheduled post not found' });
     }
 
+    // NB: creator asset re-resolution + media-snapshot refresh now happens inside
+    // publishNow() (the shared async-worker path), so it covers this sync publish-now
+    // call AND the cron/queue workers from one place — no duplication here.
+
     const capability = resolveEngagementCapability(post.platform, 'post_create');
     if (capability.status !== 'api_verified') {
       void logAuditEvent({

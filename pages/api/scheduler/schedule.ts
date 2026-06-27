@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { resolvePublishMedia } from '@/backend/services/creator/creatorPublishResolution';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 import { validateCreatorPublishSemantics } from '@/backend/services/creatorPublishValidation';
 import { recordCreatorRenderMetric } from '@/backend/services/creatorRenderObservability';
@@ -42,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userId = await requireUserId(req, res);
     if (!userId) return;
 
-    const { companyId, title, content, hashtags, mediaType, mediaUrls, mediaTypes, creatorAttachments, scheduledFor, platform, accountId, contentType, nodes: rawNodes } = req.body;
+    const { companyId, title, content, hashtags, mediaType, mediaUrls, mediaTypes, assetRefs, creatorAttachments, scheduledFor, platform, accountId, contentType, nodes: rawNodes } = req.body;
 
     if (companyId) {
       const access = await enforceCompanyAccess({ req, res, companyId: String(companyId) });
@@ -192,9 +193,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   ? (((renderManifest as Record<string, unknown>).media_bundle as Record<string, unknown>).metadata as Record<string, unknown>).strategy_analytics
                     ?? null
                   : null);
+            // Reference-pipeline back-compat: embed the canonical asset reference
+            // onto each persisted attachment. New clients send `assetRefs`; legacy
+            // raw payloads are converted to a reference here, once. Additive JSONB —
+            // legacy consumers ignore it; a future server-side resolver reads it.
+            const assetRefFromBody = Array.isArray(assetRefs)
+              ? (assetRefs as Array<Record<string, unknown>>).find((r) => r && typeof r === 'object' && String(r.assetId) === String(asset.id))
+              : undefined;
+            const asset_ref = typeof asset.id === 'string' && asset.id
+              ? {
+                  assetId: String(asset.id),
+                  version: Number(assetRefFromBody?.version ?? asset.version) || 1,
+                  selectedVariant: typeof assetRefFromBody?.selectedVariant === 'string' ? assetRefFromBody.selectedVariant : null,
+                }
+              : null;
             return {
             id: typeof asset.id === 'string' ? asset.id : null,
             creatorType: typeof asset.creatorType === 'string' ? asset.creatorType : null,
+            asset_ref,
             attachmentMode,
             attachment_mode: attachmentMode,
             compositionIntent,
@@ -212,11 +228,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       : [];
 
+    // Single publishing-resolution path: refs → server resolver → media (with the
+    // canonical telemetry). Legacy client media is fallback transport only.
+    const { mediaUrls: effectiveMediaUrls } = await resolvePublishMedia({
+      companyId: String(companyId),
+      userId,
+      platform: dbPlatform,
+      assetRefs,
+      creatorAttachments,
+      legacyMediaUrls: normalizedMediaUrls,
+    });
+
     const scheduleValidation = validateCreatorPublishSemantics({
       platform: dbPlatform,
       contentType: dbContentType,
       text: content,
-      mediaUrls: normalizedMediaUrls,
+      mediaUrls: effectiveMediaUrls,
       creatorAttachmentMetadata: normalizedCreatorAttachments,
     });
     if (scheduleValidation.ok === false) {
@@ -381,8 +408,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       content,
       title: title || null,
       hashtags: hashtagArray.length ? hashtagArray : null,
-      media_urls: normalizedMediaUrls.length
-        ? normalizedMediaUrls
+      media_urls: effectiveMediaUrls.length
+        ? effectiveMediaUrls
         : (mediaType && mediaType !== 'none' ? [] : null),
       media_types: normalizedMediaTypes.length ? normalizedMediaTypes : null,
       creator_attachment_metadata: normalizedCreatorAttachments.length ? normalizedCreatorAttachments : null,

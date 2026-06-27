@@ -8,12 +8,16 @@ import { buildCreatorContentBlocks, launchBlogFromCreator } from '../../../lib/c
 import { buildCreatorFlowContext, serializeCreatorFlowContext, type CreatorFlowContext } from '../../../lib/content/creatorFlowContext';
 import { appendCreatorVisualReviewCandidate } from '../../../lib/content/creatorVisualReview';
 import {
-  appendWriterAttachedAssetDurable,
-  getWriterCreatorPrefillKey,
   type CreatorAssetLaunchType,
   type WriterOverlayText,
   type WriterCreatorSourcePayload,
 } from '../../../lib/content/writerCreatorAssetLaunch';
+import {
+  loadAttachmentSession,
+  attachAssetToSession,
+  resolveReturnDestination,
+} from '../../../lib/content/creatorAttachmentSession';
+import { generateCreatorAssetId } from '../../../lib/content/creatorAssetIdFactory';
 import {
   buildAssetCompositionIntent,
   normalizeAttachmentMode,
@@ -41,6 +45,33 @@ import {
 } from '../../../lib/variants/creatorStrategyMapping';
 import { runVariantFanOut } from '../../../lib/variants/fanOutRunner';
 import { resolvePurposeStrategy } from '../../../backend/services/creator/purposeStrategyRegistry';
+// Creator Template Foundation — template-driven form + generation inputs.
+// All additions are gated on an active template resolved from
+// ?template_id=…; with no template_id the page behaves byte-identically.
+import TemplateFieldsPanel, { type TemplateAiAssistContext } from '../../../components/creator/TemplateFieldsPanel';
+// Quality Inspector — read-only display of the attached creator_diagnostic_report.
+import CreatorQualityInspector from '../../../components/creator/CreatorQualityInspector';
+import type { CreatorDiagnosticReport } from '../../../backend/services/creator/creatorDiagnosticReport';
+import {
+  getTemplateById,
+  familyForCreatorType,
+  resolveTemplateCreatorCardPatch,
+  creatorIngestPrefillKey,
+  buildGenerationReview,
+  buildCreatorCampaignPackage,
+  type CreatorTemplate,
+} from '../../../lib/creator-templates';
+import GenerationReviewPanel from '../../../components/creator/GenerationReviewPanel';
+import AssetReviewPanel from '../../../components/creator/AssetReviewPanel';
+import CampaignPackagePanel from '../../../components/creator/CampaignPackagePanel';
+import {
+  type TemplateFieldValues,
+  initTemplateValues,
+  applyTemplateFieldUpdates,
+  projectImageOverlayText,
+  projectCarouselSlides,
+  projectInfographicSections,
+} from '../../../lib/creator-templates/values';
 
 type CreatorTypeId =
   | 'carousel'
@@ -1046,6 +1077,13 @@ function getMediaPreviewMetadata(result: CreatorResult | null) {
   return mediaBundle.metadata || {};
 }
 
+/** Read-only: extract the deterministic diagnostic report from asset metadata. */
+function getDiagnosticReport(result: CreatorResult | null): CreatorDiagnosticReport | null {
+  const meta = getMediaPreviewMetadata(result) as Record<string, unknown>;
+  const r = meta.creator_diagnostic_report;
+  return r && typeof r === 'object' && !Array.isArray(r) ? (r as CreatorDiagnosticReport) : null;
+}
+
 function pickOptionValue(field: WorkflowField | undefined, candidates: string[]): string | null {
   if (!field || field.kind !== 'single-select') return null;
   const normalizedCandidates = candidates.map((candidate) => candidate.toLowerCase());
@@ -1483,6 +1521,30 @@ export default function CreatorTypeWorkflowPage() {
     }
   }, [router, type]);
 
+  // Template-first: a template-capable asset opened FRESH (no template selected)
+  // is sent to the template gallery to choose one (recommendation auto-selects
+  // the best). This is the canonical safety net — it enforces template selection
+  // regardless of which entry point (nav / landing / bookmark / stale link)
+  // reached the workflow. It NEVER fires when:
+  //   - a template is already chosen (?template_id=…),
+  //   - the user explicitly skipped (?skip_templates=1),
+  //   - the workflow was opened with authoring context (writer prefill /
+  //     attachment / text-transform / edit), which is template-less by design.
+  // No loop: the gallery lives at /<type>/templates; picking a template returns
+  // here with ?template_id=… and the redirect no longer fires.
+  React.useEffect(() => {
+    if (!router.isReady) return;
+    if (type !== 'image' && type !== 'carousel' && type !== 'infographic') return;
+    const q = router.query;
+    const has = (k: string) => typeof q[k] === 'string' && (q[k] as string).trim().length > 0;
+    if (has('template_id') || q.skip_templates === '1' || has('prefill') || has('session') || has('source') || has('source_text_transform') || has('asset_type')) return;
+    void router.replace(
+      { pathname: `/command-center/creator-content/${type}/templates`, query: { ...q, type: undefined } },
+      undefined,
+      { shallow: false },
+    );
+  }, [router, type]);
+
   const config = type ? WORKFLOW_CONFIG[type] : null;
 
   const [answers, setAnswers] = React.useState<Record<string, string>>({});
@@ -1534,6 +1596,14 @@ export default function CreatorTypeWorkflowPage() {
   const [writerSource, setWriterSource] = React.useState<WriterCreatorSourcePayload | null>(null);
   const [standaloneAttachmentMode, setStandaloneAttachmentMode] = React.useState<AttachmentMode>('supporting_visual');
   const [recommendedAttachmentMode, setRecommendedAttachmentMode] = React.useState<AttachmentMode | null>(null);
+  // Creator Template Foundation — active template + its form values. When a
+  // template is active, it drives the form fields AND the generation inputs
+  // (purpose_key / subtype / infographic_layout / attachment_mode / slides).
+  const [activeTemplate, setActiveTemplate] = React.useState<CreatorTemplate | null>(null);
+  const [templateValues, setTemplateValues] = React.useState<TemplateFieldValues>({ fields: {} });
+  // Field-level AI assist — the busyKey of the in-flight assist action (per
+  // field / batch); the panel disables that single control while it runs.
+  const [aiBusyKey, setAiBusyKey] = React.useState<string | null>(null);
   const [selectedPlatform, setSelectedPlatform] = React.useState('linkedin');
   // Connected platforms that support the current creator content type
   // (creator capability). null = still loading; [] = company has none
@@ -1545,6 +1615,8 @@ export default function CreatorTypeWorkflowPage() {
   const generationInFlightRef = React.useRef(false);
   const saveInFlightRef = React.useRef(false);
   const processedWriterPrefillRef = React.useRef('');
+  // CreatorAttachmentSession token in flight (owns attach + return for this launch).
+  const attachmentSessionTokenRef = React.useRef('');
   // Output panel ref + previous-result tracker. When `result`
   // transitions from null → non-null, we scroll the panel into view
   // so the operator can see the generated carousel/image/etc.
@@ -1561,6 +1633,11 @@ export default function CreatorTypeWorkflowPage() {
   // render in a durable background job; the polling effect updates this
   // state every 2s so the banner can show a real progress bar instead
   // of a generic spinner.
+  // CREATOR-011 — snapshot the editor values that produced the asset, and count
+  // regenerations, for the read-only Asset Review (presentation only).
+  const [generatedSnapshot, setGeneratedSnapshot] = React.useState<TemplateFieldValues | null>(null);
+  const [regenCount, setRegenCount] = React.useState(0);
+  const regenSeenResultRef = React.useRef(false);
   const [renderJobProgress, setRenderJobProgress] = React.useState<{
     percent: number;
     status: 'queued' | 'active' | 'completed' | 'failed' | 'cancelled' | 'dead_letter' | 'waiting';
@@ -1580,6 +1657,97 @@ export default function CreatorTypeWorkflowPage() {
   const writerAssetType: WriterCreatorAssetType | null = writerCompositionIntent?.assetType ?? null;
   const writerSupportingVisual = writerAttachmentMode === 'supporting_visual';
   const writerEmbeddedCopy = writerAttachmentMode === 'embedded_copy';
+
+  // Creator Template Foundation — resolve the active template from the URL
+  // (?template_id=…) once the router is ready. Initialises the template form
+  // values and, for image templates, syncs the attachment-mode contract
+  // (text-in-image vs clean visual) onto the existing standalone selector.
+  // No template_id → activeTemplate stays null and the page is unchanged.
+  React.useEffect(() => {
+    if (!router.isReady) return;
+    const templateId = typeof router.query.template_id === 'string' ? router.query.template_id : '';
+    const family = familyForCreatorType(type);
+    if (!templateId || !family) {
+      setActiveTemplate(null);
+      return;
+    }
+    const tpl = getTemplateById(templateId, family);
+    setActiveTemplate(tpl);
+    if (tpl) {
+      setTemplateValues(initTemplateValues(tpl));
+      // CREATOR-007 — seed the canonical form values from deterministic content
+      // ingestion when handed off via ?ingest=<token>. The editor stays fully
+      // editable; this only pre-fills. Guarded to the matching template id.
+      const ingestToken = typeof router.query.ingest === 'string' ? router.query.ingest : '';
+      if (ingestToken) {
+        try {
+          const rawV = window.sessionStorage.getItem(creatorIngestPrefillKey(ingestToken));
+          if (rawV) {
+            const parsed = JSON.parse(rawV) as { templateId?: string; values?: TemplateFieldValues };
+            if (parsed && parsed.templateId === tpl.id && parsed.values && typeof parsed.values === 'object') {
+              setTemplateValues(parsed.values);
+            }
+          }
+        } catch { /* ignore malformed prefill */ }
+      }
+      if (tpl.assetFamily === 'image' && tpl.renderingContract.attachmentMode) {
+        setStandaloneAttachmentMode(tpl.renderingContract.attachmentMode);
+      }
+    }
+  }, [router.isReady, router.query.template_id, router.query.ingest, type]);
+
+  // CREATOR-011 — snapshot values at generation; count regenerations.
+  React.useEffect(() => {
+    if (result) {
+      setGeneratedSnapshot(templateValues);
+      if (regenSeenResultRef.current) setRegenCount((c) => c + 1);
+      regenSeenResultRef.current = true;
+    } else {
+      regenSeenResultRef.current = false; setRegenCount(0); setGeneratedSnapshot(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result]);
+
+  // Field-level AI assist handler. User-invoked; updates ONLY the targeted
+  // field(s) returned by the endpoint — never a full asset, never an automatic
+  // overwrite. Manual content for non-targeted fields is preserved.
+  const handleTemplateAiAssist = React.useCallback(async (ctx: TemplateAiAssistContext) => {
+    if (!activeTemplate || ctx.targets.length === 0) return;
+    setAiBusyKey(ctx.busyKey);
+    setError(null);
+    try {
+      const resp = await fetch('/api/creator-templates/field-assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: selectedCompanyId || undefined,
+          asset_family: activeTemplate.assetFamily,
+          template_id: activeTemplate.id,
+          action: ctx.action,
+          targets: ctx.targets.map((t) => ({ scope: t.scope, field_key: t.fieldKey, index: t.index, current_value: t.currentValue })),
+          context: {
+            topic: String(answers.topic || '').trim(),
+            audience: String(answers.audience || '').trim(),
+            objective: String(answers.objective || '').trim(),
+            tone: String(answers.styleDirection || '').trim(),
+          },
+        }),
+      });
+      if (!resp.ok) {
+        const detail = await resp.json().catch(() => ({}));
+        throw new Error(detail?.error || `AI assist failed (${resp.status})`);
+      }
+      const data = await resp.json();
+      const updates = Array.isArray(data?.updates) ? data.updates : [];
+      if (updates.length > 0) {
+        setTemplateValues((prev) => applyTemplateFieldUpdates(prev, updates));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'AI assist failed');
+    } finally {
+      setAiBusyKey(null);
+    }
+  }, [activeTemplate, selectedCompanyId, answers]);
 
   React.useEffect(() => {
     if (authChecked && !isLoading && !user?.userId) {
@@ -1680,17 +1848,23 @@ export default function CreatorTypeWorkflowPage() {
 
   React.useEffect(() => {
     if (!router.isReady || !config || !type || typeof window === 'undefined') return;
-    const prefillToken = typeof router.query.prefill === 'string' ? router.query.prefill : '';
+    // Canonical lifecycle: read the CreatorAttachmentSession (new `?session=` token;
+    // `?prefill=` accepted as a legacy fallback inside loadAttachmentSession). The
+    // session's launchContext IS the former writer payload, so derivation below is
+    // byte-identical — only the source of the payload changed (one object, one key).
+    const sessionToken = (typeof router.query.session === 'string' ? router.query.session : '')
+      || (typeof router.query.prefill === 'string' ? router.query.prefill : '');
     const source = typeof router.query.source === 'string' ? router.query.source : '';
-    if (!prefillToken || source !== 'writer' || processedWriterPrefillRef.current === prefillToken) return;
+    if (!sessionToken || source !== 'writer' || processedWriterPrefillRef.current === sessionToken) return;
 
     try {
-      const raw = window.sessionStorage.getItem(getWriterCreatorPrefillKey(prefillToken));
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as WriterCreatorSourcePayload;
+      const session = loadAttachmentSession(sessionToken);
+      if (!session) return;
+      const parsed = session.launchContext;
       if (parsed.sourceType !== 'post' && parsed.sourceType !== 'thread') return;
 
-      processedWriterPrefillRef.current = prefillToken;
+      processedWriterPrefillRef.current = sessionToken;
+      attachmentSessionTokenRef.current = sessionToken;
       const assetType = normalizeWriterCreatorAssetType(parsed.compositionIntent?.assetType ?? router.query.asset_type);
       const attachmentMode = normalizeAttachmentMode(parsed.compositionIntent?.attachmentMode ?? router.query.attachment_mode);
       const sourceTextTransform = normalizeSourceTextTransform(
@@ -1738,7 +1912,7 @@ export default function CreatorTypeWorkflowPage() {
     } catch {
       setError('Could not import the Writer context. You can still complete this Creator flow manually.');
     }
-  }, [config, router.isReady, router.query.asset_type, router.query.attachment_mode, router.query.platform, router.query.prefill, router.query.source, router.query.source_text_transform, type]);
+  }, [config, router.isReady, router.query.session, router.query.asset_type, router.query.attachment_mode, router.query.platform, router.query.prefill, router.query.source, router.query.source_text_transform, type]);
 
   // Operator feedback: navigating to a creator-content type from
   // header or content cards must NOT prefill any field. We kill the
@@ -2763,7 +2937,13 @@ export default function CreatorTypeWorkflowPage() {
         copy_policy: writerCopyPolicy,
         source_text_transform: writerCopyPolicy?.sourceTextTransform ?? null,
         infographic_layout: type === 'infographic' ? String(answers.structureMode || 'framework') : null,
-        overlay_text: overlayPayload,
+        overlay_text: activeTemplate && activeTemplate.assetFamily === 'image'
+          // Template "Text Inside Image" — the template fields are the ONLY
+          // source of on-image text. `__template_authoritative` tells the
+          // renderer to render exactly these fields (no topic/title/"Learn
+          // more" fallback injection) and collapse empty optional fields.
+          ? ({ ...(overlayPayload || { hook: '', headline: '', keyInsight: '', cta: '', supportingText: '' }), ...projectImageOverlayText(activeTemplate, templateValues), __template_authoritative: true } as Record<string, unknown>)
+          : overlayPayload,
         brand_generation_mode: brandMode,
         brand_presence: brandMode === 'brand-aware' ? brandPresence : 'none',
         brand_context: brandMode === 'brand-aware'
@@ -2789,7 +2969,17 @@ export default function CreatorTypeWorkflowPage() {
           : null,
         constraints: constraintLines.join('\n'),
         asset_type: type,
-        template_id: null,
+        // Creator Template Foundation — project the active template onto the
+        // EXISTING pipeline inputs (template_id + purpose_key / subtype /
+        // infographic_layout / attachment_mode / slide_count). No template →
+        // template_id stays null and nothing else changes.
+        ...(activeTemplate ? resolveTemplateCreatorCardPatch(activeTemplate) : { template_id: null }),
+        ...(activeTemplate && activeTemplate.assetFamily === 'carousel'
+          ? { slides: projectCarouselSlides(templateValues), slide_count: templateValues.slideCount ?? null }
+          : {}),
+        ...(activeTemplate && activeTemplate.assetFamily === 'infographic'
+          ? { infographic_sections: projectInfographicSections(templateValues), template_fields: templateValues.fields }
+          : {}),
       },
       target_platforms: [selectedPlatform || config.primaryPlatforms[0]],
     };
@@ -2799,6 +2989,7 @@ export default function CreatorTypeWorkflowPage() {
     writerAssetType, writerAttachmentMode, standaloneAttachmentMode,
     overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
     brandContextLines, selectedPlatform, selectedCompanyId,
+    activeTemplate, templateValues,
   ]);
 
   const handleGenerate = async () => {
@@ -2950,37 +3141,41 @@ export default function CreatorTypeWorkflowPage() {
             ...(!writerSource && type === 'image' ? { recommended_attachment_mode: recommendedAttachmentMode ?? undefined } : {}),
             platform: selectedPlatform,
           };
-        void appendWriterAttachedAssetDurable({
-          companyId: selectedCompanyId,
-          sourceType: writerSource.sourceType,
-          sourceId: writerSource.sourceId,
-          sourceContent: {
-            sourceType: writerSource.sourceType,
-            sourceId: writerSource.sourceId,
-            title: writerSource.title,
-            body: writerSource.body,
-            platform: writerSource.platform,
-            hashtags: writerSource.hashtags,
+        // Canonical lifecycle — attach through the session (which owns the draft
+        // target + lifecycle and delegates to the ONE durable persistence). Creator
+        // never appends to writer storage directly.
+        void attachAssetToSession(
+          attachmentSessionTokenRef.current || (typeof router.query.session === 'string' ? router.query.session : ''),
+          {
+            id: generateCreatorAssetId({ kind: type }),
+            creatorType: (writerAssetType ?? normalizeWriterCreatorAssetType(type)) as CreatorAssetLaunchType,
+            title: `${config.title} for ${writerSource.title}`,
+            url: typeof mediaBundle.url === 'string' ? mediaBundle.url : undefined,
+            files: filesFromBundle,
+            previewKind: typeof mediaBundle.metadata?.preview_kind === 'string' ? mediaBundle.metadata.preview_kind : undefined,
+            attachmentMode: writerAttachmentMode ?? undefined,
+            compositionIntent: writerCompositionIntent ?? undefined,
+            platformContext: selectedPlatform,
+            renderIdentityHash: typeof generatedMetadata.renderIdentityHash === 'string'
+              ? generatedMetadata.renderIdentityHash
+              : typeof generatedMetadata.render_identity_hash === 'string'
+                ? generatedMetadata.render_identity_hash
+                : undefined,
+            metadata: attachmentMetadata,
+            createdAt: new Date().toISOString(),
           },
-          asset: {
-          id: `${writerSource.id}-${type}-${Date.now()}`,
-          creatorType: (writerAssetType ?? normalizeWriterCreatorAssetType(type)) as CreatorAssetLaunchType,
-          title: `${config.title} for ${writerSource.title}`,
-          url: typeof mediaBundle.url === 'string' ? mediaBundle.url : undefined,
-          files: filesFromBundle,
-          previewKind: typeof mediaBundle.metadata?.preview_kind === 'string' ? mediaBundle.metadata.preview_kind : undefined,
-          attachmentMode: writerAttachmentMode ?? undefined,
-          compositionIntent: writerCompositionIntent ?? undefined,
-          platformContext: selectedPlatform,
-          renderIdentityHash: typeof generatedMetadata.renderIdentityHash === 'string'
-            ? generatedMetadata.renderIdentityHash
-            : typeof generatedMetadata.render_identity_hash === 'string'
-              ? generatedMetadata.render_identity_hash
-              : undefined,
-          metadata: attachmentMetadata,
-          createdAt: new Date().toISOString(),
+          {
+            companyId: selectedCompanyId,
+            sourceContent: {
+              sourceType: writerSource.sourceType,
+              sourceId: writerSource.sourceId,
+              title: writerSource.title,
+              body: writerSource.body,
+              platform: writerSource.platform,
+              hashtags: writerSource.hashtags,
+            },
           },
-        });
+        );
       }
     } catch (generationError) {
       const isAbort = generationError instanceof Error && generationError.name === 'AbortError';
@@ -3083,7 +3278,7 @@ export default function CreatorTypeWorkflowPage() {
       const primaryPlatform = selectedPlatform || result.primary_platform || null;
       const creatorAttachments = generatedMediaUrls.length > 0
         ? [{
-            id: selectedAsset?.id || `creator-${type}-${Date.now()}`,
+            id: selectedAsset?.id || generateCreatorAssetId({ kind: type }),
             creatorType: config.contentType,
             title: String(answers.topic || config.title),
             url: typeof mediaBundle.url === 'string' ? mediaBundle.url : generatedMediaUrls[0],
@@ -3512,6 +3707,30 @@ export default function CreatorTypeWorkflowPage() {
             </div>
 
             <div className="space-y-5">
+              {activeTemplate ? (
+                <div>
+                  <div className="mb-3 flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+                    <div className="text-sm text-blue-900">
+                      <span className="font-semibold">Template:</span> {activeTemplate.name}
+                      <span className="ml-2 text-blue-700">{activeTemplate.description}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/command-center/creator-content/${type}/templates`)}
+                      className="ml-3 shrink-0 text-xs font-semibold text-blue-700 underline hover:text-blue-900"
+                    >
+                      Change
+                    </button>
+                  </div>
+                  <TemplateFieldsPanel
+                    template={activeTemplate}
+                    values={templateValues}
+                    onChange={setTemplateValues}
+                    onAiAssist={handleTemplateAiAssist}
+                    aiBusyKey={aiBusyKey}
+                  />
+                </div>
+              ) : null}
               <div>
                 <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">{config.subtypeLabel}</span>
                 <div className="grid gap-3 md:grid-cols-3">
@@ -4337,6 +4556,13 @@ export default function CreatorTypeWorkflowPage() {
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
                 {result ? 'Generated Output' : 'Pick A Direction'}
               </p>
+              {/* Quality Inspector — read-only panel for the attached diagnostic
+                  report (image / carousel / infographic). Renders only when the
+                  asset metadata carries a creator_diagnostic_report. */}
+              {(() => {
+                const diagnosticReport = getDiagnosticReport(result);
+                return diagnosticReport ? <CreatorQualityInspector report={diagnosticReport} /> : null;
+              })()}
               {!result ? (
                 <div className="mt-4 space-y-5">
                   <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
@@ -4442,6 +4668,96 @@ export default function CreatorTypeWorkflowPage() {
                       ))}
                     </div>
                   </div>
+
+                  {/* CREATOR-010 — Generation Review & Traceability (read-only,
+                      derived from the existing result + diagnostic report). */}
+                  {(() => {
+                    const review = buildGenerationReview({
+                      result,
+                      error,
+                      inProgress: isGenerating,
+                      progressStatus: renderJobProgress?.status ?? null,
+                    });
+                    return (
+                      <GenerationReviewPanel
+                        model={review}
+                        onRegenerate={handleGenerate}
+                        onDownload={handleDownloadBrief}
+                        onOpenInEditor={() => { if (typeof document !== 'undefined') document.getElementById('creator-template-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                        downloadBusy={actionInProgress === 'download'}
+                        regenerateBusy={isGenerating}
+                      />
+                    );
+                  })()}
+
+                  {/* CREATOR-011 — Asset Review & Quick Refine (read-only review +
+                      lightweight refinement of EXISTING editor values). */}
+                  {activeTemplate ? (() => {
+                    const bundle = (result.output.asset_payload?.media_bundle ?? {}) as { url?: string; files?: string[]; metadata?: Record<string, unknown> };
+                    const md = (bundle.metadata ?? {}) as Record<string, unknown>;
+                    const diag = getDiagnosticReport(result);
+                    const previewUrl = bundle.url ?? (Array.isArray(bundle.files) ? bundle.files[0] : undefined) ?? null;
+                    const appliedVariant = (md.applied_variant ?? {}) as Record<string, unknown>;
+                    const reviewMeta = { ...((diag?.rendering ?? {}) as Record<string, unknown>), brand_mode: md.brand_mode };
+                    const edited = generatedSnapshot ? JSON.stringify(templateValues) !== JSON.stringify(generatedSnapshot) : false;
+                    return (
+                      <AssetReviewPanel
+                        template={activeTemplate}
+                        values={templateValues}
+                        onChange={setTemplateValues}
+                        meta={reviewMeta}
+                        previewUrl={previewUrl}
+                        assetId={(result as { persisted_asset_id?: string | null }).persisted_asset_id ?? null}
+                        assetName={activeTemplate.name}
+                        assetType={result.output.asset_type ?? null}
+                        platform={result.primary_platform ?? null}
+                        variant={typeof appliedVariant.variant_family === 'string' ? appliedVariant.variant_family : null}
+                        status={isGenerating ? 'processing' : 'completed'}
+                        timestamp={diag?.generatedAt ?? null}
+                        templateVersion={diag?.template?.version ?? activeTemplate.version ?? null}
+                        originalValues={generatedSnapshot}
+                        edited={edited}
+                        regenerations={regenCount}
+                        onDownload={handleDownloadBrief}
+                        onOpenEditor={() => { if (typeof document !== 'undefined') document.getElementById('creator-template-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                        onRegenerate={handleGenerate}
+                        onDuplicate={handleSaveAsBlock}
+                        downloadBusy={actionInProgress === 'download'}
+                        regenerateBusy={isGenerating}
+                      />
+                    );
+                  })() : null}
+
+                  {/* CAMPAIGN-005 / PLATFORM-001 — Campaign Package via the ONE
+                      canonical creator-result→package projection (no inline asset
+                      assembly). References only; no duplicate storage / re-render. */}
+                  {activeTemplate ? (() => {
+                    const edited = generatedSnapshot ? JSON.stringify(templateValues) !== JSON.stringify(generatedSnapshot) : false;
+                    const pkg = buildCreatorCampaignPackage(result, {
+                      templateName: activeTemplate.name,
+                      templateId: activeTemplate.id,
+                      assetFamily: activeTemplate.assetFamily,
+                      selectedPlatform: selectedPlatform || result.primary_platform || null,
+                      campaign: {
+                        name: (typeof answers.topic === 'string' && answers.topic.trim()) ? answers.topic.trim() : activeTemplate.name,
+                        objective: (typeof answers.objective === 'string' && answers.objective.trim()) ? answers.objective.trim() : null,
+                        audience: (typeof answers.audience === 'string' && answers.audience.trim()) ? answers.audience.trim() : null,
+                        platforms: [selectedPlatform || result.primary_platform].filter((p): p is string => !!p),
+                      },
+                      edited,
+                      regenerations: regenCount,
+                      inProgress: isGenerating,
+                    });
+                    return (
+                      <CampaignPackagePanel
+                        pkg={pkg}
+                        onOpenAsset={() => { if (typeof document !== 'undefined') document.getElementById('creator-template-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                        onRegenerate={handleGenerate}
+                        onDuplicate={handleSaveAsBlock}
+                        regenerateBusy={isGenerating}
+                      />
+                    );
+                  })() : null}
 
                   {(() => {
                     // Async-render status banner. Carousel / infographic
@@ -4960,6 +5276,12 @@ export default function CreatorTypeWorkflowPage() {
                       <button
                         type="button"
                         onClick={() => {
+                          // Return to the Writer draft (never back to Creator). The
+                          // return destination is owned by the CreatorAttachmentSession
+                          // — no page inspects return_to directly. Fallback to history.
+                          const token = attachmentSessionTokenRef.current || (typeof router.query.session === 'string' ? router.query.session : '') || (typeof router.query.prefill === 'string' ? router.query.prefill : '');
+                          const returnTo = resolveReturnDestination(token);
+                          if (returnTo) { void router.push(returnTo); return; }
                           try { router.back(); } catch { /* router.back may throw if no history */ }
                         }}
                         disabled={Boolean(actionInProgress)}

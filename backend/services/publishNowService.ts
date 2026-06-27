@@ -23,6 +23,8 @@ import { checkAndCompleteCampaignIfEligible } from './CampaignCompletionService'
 import { validatePlatformContentCompatibility } from './platformContentValidator';
 import { validatePublishReadiness } from './publishReadinessValidator';
 import { refreshDurableMediaBeforePublish } from './mediaReferenceResolver';
+import { resolvePublishMedia } from './creator/creatorPublishResolution';
+import { resolvePublishingOrganization } from './creator/publishingOrganizationResolver';
 import { logPipelineEvent } from '../../lib/shared/observability';
 import { logger } from './logger';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
@@ -185,6 +187,51 @@ export type PublishNowResult = {
  * Publish a scheduled post immediately using the canonical path (platformAdapter).
  * Behaves like a queue job executed synchronously: idempotency, same success/failure updates.
  */
+/**
+ * Re-resolve a scheduled post's creator asset refs through the canonical publishing
+ * resolution path (`resolvePublishMedia`) and, on genuine success, REFRESH the row's
+ * `media_urls` snapshot so the adapter (which reads the row) and any retry use the
+ * CURRENT rendering payload rather than the schedule-time snapshot. This is the single
+ * async-worker resolution entry; both `publishNow` (cron + publish-now) and the BullMQ
+ * `processPublishJob` call it. No-op / fallback when refs are unavailable or unresolved
+ * (no behaviour regression). Fail-open — never blocks publish on a refresh error. The
+ * shared path owns telemetry (`creator_publish_ref_resolution`); none is emitted here.
+ */
+export async function refreshScheduledPostMediaFromRefs(input: {
+  scheduledPostId: string;
+  userId: string;
+  post?: Record<string, unknown> | null;
+}): Promise<void> {
+  try {
+    const post = (input.post ?? (await getScheduledPost(input.scheduledPostId))) as Record<string, unknown> | null;
+    if (!post) return;
+    // Canonical organization identity — never userId-as-companyId. Resolved from the
+    // connected account / campaign so the server asset resolver receives the real org.
+    const organizationId = await resolvePublishingOrganization({
+      socialAccountId: (post.social_account_id as string | null) ?? null,
+      campaignId: (post.campaign_id as string | null) ?? null,
+      scheduledPostId: input.scheduledPostId,
+    });
+    const { mediaUrls, resolvedCount } = await resolvePublishMedia({
+      companyId: organizationId ?? '',
+      userId: input.userId,
+      platform: String(post.platform ?? ''),
+      creatorAttachments: post.creator_attachment_metadata,
+      legacyMediaUrls: post.media_urls,
+    });
+    if (resolvedCount > 0 && mediaUrls.length) {
+      const current = Array.isArray(post.media_urls) ? (post.media_urls as unknown[]).map(String) : [];
+      const changed = current.length !== mediaUrls.length || mediaUrls.some((u, i) => u !== current[i]);
+      if (changed) {
+        await ownedDbTable('scheduled_posts').update({ media_urls: mediaUrls }).eq('id', input.scheduledPostId);
+      }
+      post.media_urls = mediaUrls; // keep the in-memory row consistent for the caller
+    }
+  } catch {
+    /* fail-open — snapshot refresh must never block a publish */
+  }
+}
+
 export async function publishNow(input: PublishNowInput): Promise<PublishNowResult> {
   const { scheduled_post_id, social_account_id, user_id } = input;
   const timestamp = new Date().toISOString();
@@ -239,6 +286,12 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       timestamp,
     };
   }
+
+  // Re-resolve creator asset refs and refresh the media snapshot BEFORE any media
+  // is consumed (validation + adapter), so late/cron publishes upload the current
+  // rendering payload — not the schedule-time snapshot. No-op/fallback when refs
+  // are unavailable. Mutates scheduledPost.media_urls in place.
+  await refreshScheduledPostMediaFromRefs({ scheduledPostId: scheduled_post_id, userId: user_id, post: scheduledPost as unknown as Record<string, unknown> });
 
   // Authoritative capability validation. Runs BEFORE adapter selection, account
   // resolution, or any media upload — so queue workers, scheduled jobs, and

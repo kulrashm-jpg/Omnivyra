@@ -3,7 +3,7 @@
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Copy, Loader2, Sparkles } from 'lucide-react';
 import { useCompanyContext } from '../CompanyContext';
 import { getThreadExecutionDescription, getThreadExecutionLabel } from '../../lib/thread/threadExecution';
@@ -23,10 +23,9 @@ import {
   saveThreadResult,
   saveThreadSession,
   createThreadSessionToken,
-  loadThreadNodeAttachments,
-  saveThreadNodeAttachments,
   type ThreadNodeAttachmentMap,
 } from '../../lib/thread/threadStorage';
+import { getThreadNodeAttachmentMapFromGraph, syncThreadNodeMapToGraph } from '../../lib/thread/threadNodeUsageGraph';
 import { getThreadContinuationLink, getThreadSchedulerLink } from '../../lib/thread/threadLinks';
 import { openThreadRuntimeTracer } from '../../backend/services/threadRuntime/threadRuntimeInstrumentation';
 import type { ThreadSegmentEditorRuntimeEvent } from './ThreadSegmentsEditor';
@@ -36,11 +35,10 @@ import {
   buildWriterCreatorPrefill,
   createWriterSourceId,
   launchCreatorFromWriter,
-  loadWriterAttachedAssetsDurable,
-  readWriterAttachedAssets,
   type CreatorAssetLaunchType,
   type WriterAttachedAsset,
 } from '../../lib/content/writerCreatorAssetLaunch';
+import { loadWriterAttachmentsViaGraph } from '../../lib/content/writerAttachmentGraph';
 import {
   attachmentModeLabel,
   defaultAttachmentModeForAsset,
@@ -352,40 +350,48 @@ export default function ThreadResultView() {
     [activeSessionToken, session?.topic],
   );
 
-  useEffect(() => {
+  // Relationship discovery comes solely from the canonical Usage Graph (via the
+  // shared bridge → listAssetsForConsumer → resolveCreatorAsset). This component
+  // never reads the legacy store or infers attachment ownership.
+  const refreshAttachmentsFromGraph = useCallback(() => {
     if (!writerSourceId) return;
-    const refresh = () => setAttachedAssets(readWriterAttachedAssets('thread', writerSourceId));
-    const refreshDurable = () => {
-      void loadWriterAttachedAssetsDurable({
-        companyId: selectedCompanyId,
-        sourceType: 'thread',
-        sourceId: writerSourceId,
-      }).then(setAttachedAssets);
-    };
-    refresh();
-    refreshDurable();
-    window.addEventListener('focus', refreshDurable);
-    window.addEventListener('storage', refresh);
-    return () => {
-      window.removeEventListener('focus', refreshDurable);
-      window.removeEventListener('storage', refresh);
-    };
+    void loadWriterAttachmentsViaGraph({
+      companyId: selectedCompanyId,
+      sourceType: 'thread',
+      sourceId: writerSourceId,
+    }).then(setAttachedAssets).catch(() => { /* keep current list on transient error */ });
   }, [selectedCompanyId, writerSourceId]);
 
-  // G2 — load per-node attachment assignments for this session token.
+  useEffect(() => {
+    if (!writerSourceId) return;
+    refreshAttachmentsFromGraph();
+    window.addEventListener('focus', refreshAttachmentsFromGraph);
+    window.addEventListener('storage', refreshAttachmentsFromGraph);
+    return () => {
+      window.removeEventListener('focus', refreshAttachmentsFromGraph);
+      window.removeEventListener('storage', refreshAttachmentsFromGraph);
+    };
+  }, [refreshAttachmentsFromGraph, writerSourceId]);
+
+  // Per-node assignments are read from the canonical Usage Graph (one-time
+  // migration from the legacy store happens inside the bridge).
   useEffect(() => {
     if (!activeSessionToken) {
       setNodeAttachmentMap({});
       return;
     }
-    const loaded = loadThreadNodeAttachments(activeSessionToken);
-    setNodeAttachmentMap(loaded ?? {});
+    let cancelled = false;
+    void getThreadNodeAttachmentMapFromGraph(activeSessionToken).then((map) => {
+      if (!cancelled) setNodeAttachmentMap(map);
+    });
+    return () => { cancelled = true; };
   }, [activeSessionToken]);
 
-  // G2 — persist per-node attachment map on every change.
+  // Assignment changes delegate to the Usage Graph (attach/detach) — no local
+  // relationship storage. Optimistic UI; the graph is the canonical record.
   const handleNodeAttachmentsChange = (next: ThreadNodeAttachmentMap) => {
     setNodeAttachmentMap(next);
-    if (activeSessionToken) saveThreadNodeAttachments(activeSessionToken, next);
+    if (activeSessionToken) void syncThreadNodeMapToGraph(activeSessionToken, next);
   };
 
   const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {

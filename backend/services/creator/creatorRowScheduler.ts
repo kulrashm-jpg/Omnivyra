@@ -210,6 +210,22 @@ async function scheduleCreatorRowPost(input: {
   const idempotencyKey = variant.idempotencyKey;
   const nowIso = new Date().toISOString();
 
+  // (1b) DESIGN ATTRIBUTION propagation — the single creator scheduling seam.
+  // Resolve the immutable attribution via the SAME canonical builder used at
+  // generation (deterministic → identical stamp; campaign/collection/design-
+  // system fields come from the campaign's pinned design system). Copied onto
+  // scheduled_posts so the Performance Intelligence reader consumes it directly.
+  let designAttribution: Record<string, unknown> | null = null;
+  try {
+    const ac = attachedContent as Record<string, unknown>;
+    const card = (ac.creator_card && typeof ac.creator_card === 'object' ? ac.creator_card : {}) as Record<string, unknown>;
+    const templateId = (typeof ac.template_id === 'string' && ac.template_id) || (typeof ac.infographic_template_id === 'string' && ac.infographic_template_id) || (typeof card.template_id === 'string' && card.template_id) || null;
+    const tvRaw = ac.template_version ?? card.template_version;
+    const templateVersion = typeof tvRaw === 'number' ? tvRaw : Number.isFinite(Number(tvRaw)) ? Number(tvRaw) : null;
+    const { resolveCampaignAttribution } = await import('./designAttributionService');
+    designAttribution = await resolveCampaignAttribution({ campaignId, templateId, templateVersion }) as unknown as Record<string, unknown>;
+  } catch { /* best-effort — attribution stays null, analytics loop simply skips this asset */ }
+
   // (2) INSERT scheduled_posts with a deterministic idempotency_key.
   let scheduledPostId: string | null = null;
   const { data: inserted, error: insertError } = await ownedDbTable('scheduled_posts')
@@ -228,6 +244,7 @@ async function scheduleCreatorRowPost(input: {
       repurpose_index: 1,
       repurpose_total: 1,
       idempotency_key: idempotencyKey,
+      design_attribution: designAttribution,
       created_at: nowIso,
       updated_at: nowIso,
     })

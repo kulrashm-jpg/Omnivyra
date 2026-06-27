@@ -39,9 +39,9 @@ export const CONTENT_NAV_SECTIONS: ContentNavSection[] = [
     badge: 'Visual assets',
     href: '/command-center/creator-content',
     items: [
-      { id: 'image', label: 'Image', route: '/command-center/creator-content/image', description: 'Single-message static visual' },
-      { id: 'carousel', label: 'Carousel', route: '/command-center/creator-content/carousel', description: 'Multi-slide narrative asset' },
-      { id: 'infographic', label: 'Infographic', route: '/command-center/creator-content/infographic', description: 'Structured visual explanation' },
+      { id: 'image', label: 'Image', route: '/command-center/creator-content/image/templates', description: 'Single-message static visual' },
+      { id: 'carousel', label: 'Carousel', route: '/command-center/creator-content/carousel/templates', description: 'Multi-slide narrative asset' },
+      { id: 'infographic', label: 'Infographic', route: '/command-center/creator-content/infographic/templates', description: 'Structured visual explanation' },
     ],
   },
 ];

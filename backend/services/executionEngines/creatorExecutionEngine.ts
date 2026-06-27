@@ -2,7 +2,7 @@ import { supabase } from '../../db/supabaseClient';
 import { enqueueScheduledPostAt } from '../../scheduler/schedulerService';
 import { createHash } from 'crypto';
 import { config } from '@/config';
-import { getCreatorSystemPrompt } from '../../prompts/creatorContentPromptsV1';
+import { buildCreatorBlueprintPromptSpecification } from '../creator/creatorPromptSpecification';
 import {
   repurposeCarouselForPlatforms,
   repurposeVideoScriptForPlatforms,
@@ -833,14 +833,12 @@ async function generateBlueprint(
       ? context.creatorCard.platform_specs
       : undefined,
   };
-  // Generation-prompt selection is intentionally UNCHANGED for images (this
-  // phase fixes validation routing only). `getCreatorSystemPrompt` has no
-  // 'image' factory, so image blueprints reuse the prior prompt; only their
-  // VALIDATION (below / at the validation call site) now uses the image lane.
-  const systemPrompt = getCreatorSystemPrompt(
-    blueprintType === 'image' ? 'video_script' : blueprintType,
-    creatorContext,
-  );
+  // EXTERNALIZE MASTER PROMPT — the engine no longer constructs the blueprint
+  // prompt. It gathers the structured inputs (context + template + intent) and
+  // delegates composition to the canonical Prompt Specification layer, then
+  // executes the returned spec unchanged. Byte-identical to the prior inline
+  // construction (behavior preserved); a new asset family extends the spec
+  // layer, never this engine.
   const analyticsIntelligence = extractAnalyticsIntelligence(context);
   const promptInput = {
     topic: context.topic,
@@ -857,21 +855,17 @@ async function generateBlueprint(
     template_style: template.style_schema,
     template_mapping_rules: template.mapping_rules,
   };
-  const prompt = `Generate a creator asset blueprint.
-
-Input:
-${JSON.stringify(promptInput, null, 2)}
-
-Analytics intelligence guidance:
-${analyticsIntelligence.promptBlock ?? 'No analytics/search intelligence is available. Use only the supplied creator and campaign context.'}
-${analyticsIntelligence.lowConfidenceNote ? `\nConfidence note: ${analyticsIntelligence.lowConfidenceNote}` : ''}
-
-Template alignment rule:
-${buildTemplateAlignmentInstruction({ assetType, template })}
-
-${assetType === 'image' ? 'Single-image output rule: include top-level "headline" and "visual_description" fields. The visual_description must describe the actual preview composition, focal object, layout, palette, hierarchy, and intended viewer reaction. Do not return only generic placeholder language.' : ''}
-${opts?.completionRetryHint ? `\n${opts.completionRetryHint}\n` : ''}${opts?.qualityRetryHint ? `\n${opts.qualityRetryHint}\n` : ''}
-Return JSON only.`;
+  const promptSpec = buildCreatorBlueprintPromptSpecification({
+    assetType,
+    blueprintType,
+    creatorContext,
+    promptInput,
+    analyticsPromptBlock: analyticsIntelligence.promptBlock,
+    analyticsLowConfidenceNote: analyticsIntelligence.lowConfidenceNote,
+    templateAlignmentInstruction: buildTemplateAlignmentInstruction({ assetType, template }),
+    completionRetryHint: opts?.completionRetryHint,
+    qualityRetryHint: opts?.qualityRetryHint,
+  });
 
   const result = await runCompletionWithOperation({
     companyId: context.companyId,
@@ -880,13 +874,10 @@ Return JSON only.`;
     referenceId: context.correlation?.referenceId ?? null,
     parentActivityId: context.correlation?.parentActivityId ?? null,
     model: config.OPENAI_MODEL,
-    operation: `creator_execution_blueprint_${assetType}`,
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: prompt },
-    ],
+    operation: promptSpec.operation,
+    temperature: promptSpec.temperature,
+    response_format: promptSpec.response_format,
+    messages: promptSpec.messages,
   });
 
   const parsed = JSON.parse(String(result?.output || '{}')) as Record<string, unknown>;
@@ -974,11 +965,53 @@ async function withRenderedMedia(output: CanonicalCreatorOutput): Promise<Canoni
     return output;
   }
 
-  const renderedMedia = await renderAsset(safeObject(output.asset_payload), {
-    campaignId: String(output.metadata.campaign_id || '') || null,
-    userId: String(output.metadata.user_id || '') || null,
-    companyId: String(output.metadata.company_id || '') || null,
-  });
+  // PART A — register a user template_id before render (canonical runtime flow).
+  try {
+    const { ensureUserTemplateRegisteredForAsset } = await import('../creator/userTemplateService');
+    await ensureUserTemplateRegisteredForAsset(output.asset_payload);
+  } catch { /* best-effort */ }
+
+  // CAMPAIGN-007 — operational health events (best-effort, EXISTING audit store).
+  const _opMd = safeObject(safeObject(safeObject(output.asset_payload).media_bundle).metadata);
+  const _opCard = safeObject(_opMd.creator_card);
+  const _opTplRaw = _opMd.template_id ?? _opMd.infographic_template_id ?? _opCard.template_id;
+  const opTemplateId = typeof _opTplRaw === 'string' ? _opTplRaw.trim() : '';
+  const opTemplateVersion = typeof _opMd.template_version === 'number' ? _opMd.template_version : 0;
+  const emitTemplateEvent = (action: string) => {
+    if (!opTemplateId) return;
+    void import('../creator/userTemplateService')
+      .then(({ recordTemplateEvent }) => recordTemplateEvent({ templateId: opTemplateId, templateVersion: opTemplateVersion, action: action as never }))
+      .catch(() => { /* best-effort telemetry */ });
+  };
+
+  // CAMPAIGN-001 — deterministic content-contract gate: if a template was
+  // selected, the generated content must satisfy its rendering contract +
+  // form definition BEFORE we render. Reject (don't render) on violation.
+  // Non-template payloads are a strict no-op (existing flows unaffected).
+  {
+    const { validateAssetPayloadAgainstTemplate } = await import('../../../lib/creator-templates');
+    const gate = validateAssetPayloadAgainstTemplate(output.asset_payload);
+    if (gate.matched && !gate.ok) {
+      emitTemplateEvent('validation_failed');
+      throw new Error(`Generated content violates the selected template contract: ${gate.errors.join(' ')}`);
+    }
+  }
+
+  emitTemplateEvent('generation_started');
+  let renderedMedia: Awaited<ReturnType<typeof renderAsset>>;
+  try {
+    renderedMedia = await renderAsset(safeObject(output.asset_payload), {
+      campaignId: String(output.metadata.campaign_id || '') || null,
+      userId: String(output.metadata.user_id || '') || null,
+      companyId: String(output.metadata.company_id || '') || null,
+    });
+    emitTemplateEvent('render_succeeded');
+    emitTemplateEvent('generation_succeeded');
+  } catch (err) {
+    emitTemplateEvent('render_failed');
+    emitTemplateEvent('generation_failed');
+    throw err;
+  }
 
   const mediaBundle = safeObject(safeObject(output.asset_payload).media_bundle);
   const nextMediaBundle: Record<string, unknown> = {
@@ -1148,6 +1181,14 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
               attachment_mode: intent.creatorCard?.attachment_mode ?? null,
               writer_asset_type: intent.creatorCard?.writer_asset_type ?? null,
               creator_content_asset_type: intent.creatorCard?.creator_content_asset_type ?? intent.contentType,
+              // Canonical lib/creator-templates template_id (the visual-language
+              // template selected in the Campaign Creator). Threaded onto render
+              // metadata so creatorAssetRenderer.templateIdForRender → resolveTemplate
+              // resolves the selected family style. NOT the engine's internal
+              // creatorTemplateRegistryService template (template.id) — a different system.
+              template_id: typeof intent.creatorCard?.template_id === 'string' && intent.creatorCard.template_id.trim()
+                ? intent.creatorCard.template_id.trim()
+                : null,
               asset_composition_intent: safeObject(intent.creatorCard?.asset_composition_intent),
               copy_policy: safeObject(intent.creatorCard?.copy_policy),
               source_text_transform: intent.creatorCard?.source_text_transform ?? null,

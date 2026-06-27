@@ -14,6 +14,7 @@ import {
   getPostAllowedAssetTypes as _getPostAllowedAssetTypes,
   getThreadAllowedAssetTypes as _getThreadAllowedAssetTypes,
 } from '../../backend/services/creator/intelligence/canonical/creatorAssetRegistry';
+import { createAttachmentSession } from './creatorAttachmentSession';
 
 export type WriterSourceType = 'post' | 'thread';
 export type CreatorAssetLaunchType = WriterCreatorAssetType;
@@ -247,22 +248,34 @@ export function launchCreatorFromWriter(input: {
 }): void {
   if (typeof window === 'undefined') return;
   const routeType = creatorRouteTypeForAsset(input.assetType);
-  // Taxonomy consolidation — when the writer assetType maps to a
-  // different route type (e.g., banner → image), include a layout
-  // preset in the URL so the consolidated workflow opens on the
-  // correct preset (e.g., Image with Wide Banner layout pre-selected).
+  // Taxonomy consolidation — when the writer assetType maps to a different route
+  // type (e.g., banner → image), include a layout preset so the consolidated
+  // workflow opens on the correct preset.
   const layoutPreset = creatorLayoutForAsset(input.assetType);
-  const token = `${input.source.sourceType}_${input.assetType}_${Date.now()}`;
-  window.sessionStorage.setItem(getWriterCreatorPrefillKey(token), JSON.stringify(input.source));
+  const returnTo = `${window.location.pathname}${window.location.search}`;
+  // CANONICAL LIFECYCLE: the writer launch is just an adapter that creates the
+  // ONE CreatorAttachmentSession (launch context + return destination + draft +
+  // routing/composition consolidated into a single object/key). The generation
+  // page and return read the session — no scattered prefill key / return_to.
+  const session = createAttachmentSession({
+    source: 'writer',
+    launchContext: input.source,
+    returnDestination: returnTo,
+    assetType: input.assetType,
+    attachmentMode: input.source.compositionIntent.attachmentMode,
+    sourceTextTransform: input.source.compositionIntent.copyPolicy?.sourceTextTransform ?? null,
+    layout: layoutPreset,
+    platform: input.source.platform ?? null,
+  });
+  // Enter the canonical Creator workflow at the TEMPLATE GALLERY (one pipeline),
+  // requesting the optional helper stages be skipped (post content already exists).
   void input.router.push({
-    pathname: `/command-center/creator-content/${routeType}`,
+    pathname: `/command-center/creator-content/${routeType}/templates`,
     query: {
       source: 'writer',
-      sourceType: input.source.sourceType,
-      asset_type: input.assetType,
-      attachment_mode: input.source.compositionIntent.attachmentMode,
-      source_text_transform: input.source.compositionIntent.copyPolicy?.sourceTextTransform ?? 'none',
-      prefill: token,
+      session: session.token,
+      skip_blueprint: '1',
+      skip_ingestion: '1',
       ...(layoutPreset ? { layout: layoutPreset } : {}),
       ...(input.source.platform ? { platform: input.source.platform } : {}),
     },

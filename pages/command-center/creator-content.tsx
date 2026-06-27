@@ -173,7 +173,7 @@ export default function CreatorContentPage() {
           {CREATOR_CARDS.map((card) => (
             <div
               key={card.id}
-              onClick={() => router.push(`/command-center/creator-content/${card.id}`)}
+              onClick={() => router.push(`/command-center/creator-content/${card.id}/templates`)}
               className={`group flex min-h-[500px] cursor-pointer flex-col rounded-[24px] border bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)]`}
             >
               <div className="mb-5 flex items-start justify-between gap-3">
@@ -209,7 +209,7 @@ export default function CreatorContentPage() {
               <button
                 onClick={(event) => {
                   event.stopPropagation();
-                  router.push(`/command-center/creator-content/${card.id}`);
+                  router.push(`/command-center/creator-content/${card.id}/templates`);
                 }}
                 className={`mt-6 w-full rounded-xl py-3 text-sm font-semibold text-white shadow-sm transition-colors ${card.ctaColor}`}
               >

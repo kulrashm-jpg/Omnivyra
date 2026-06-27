@@ -736,7 +736,7 @@ export function composeCreatorImagePrompt(
 
   // Build the purpose layer — directives + scene-selection hints.
   // Empty array when no strategy resolved.
-  const purposeLayer: string[] = purposeStrategy
+  const purposeLayerRaw: string[] = purposeStrategy
     ? [
         `Purpose strategy: ${purposeStrategy.generatedAsLabel} — ${purposeStrategy.whyChosen}`,
         ...purposeStrategy.promptDirectives,
@@ -744,7 +744,14 @@ export function composeCreatorImagePrompt(
         `Density discipline: ${purposeStrategy.densityBias}.`,
         `Branding intensity: ${purposeStrategy.brandingIntensity}.`,
         `Typography weight: ${purposeStrategy.typographyWeight}.`,
-        `CTA intensity: ${purposeStrategy.ctaIntensity}.`,
+        // Supporting visuals are text-free: express the same strength as a
+        // composition-only "conversion intensity" so the literal token "CTA"
+        // never enters a supporting_visual prompt (the fail-closed governance
+        // gate `supporting_visual_cta_prompt_leak` rejects any \bcta\b token,
+        // including in suppression/strategy lines). embedded_copy is unchanged.
+        ...(input.attachmentMode === 'supporting_visual'
+          ? [`Conversion intensity: ${purposeStrategy.ctaIntensity}.`]
+          : [`CTA intensity: ${purposeStrategy.ctaIntensity}.`]),
         ...(purposeStrategy.slideArc
           ? [`Slide arc (in order): ${purposeStrategy.slideArc.map((s) => s.role).join(' → ')}. Each slide must accomplish: ${purposeStrategy.slideArc.map((s) => `${s.role}: ${s.intent}`).join(' | ')}`]
           : []),
@@ -757,6 +764,19 @@ export function composeCreatorImagePrompt(
           : []),
       ]
     : [];
+
+  // Supporting visuals are governed text-free: the purpose strategy's
+  // messaging/CTA-copy directives (whyChosen rationale, promptDirectives,
+  // slide-arc intents) routinely carry the literal token "CTA", which the
+  // fail-closed render gate rejects as `supporting_visual_cta_prompt_leak`.
+  // Those lines describe COPY strategy, not what to draw, so they are
+  // irrelevant to a clean visual — drop any CTA/button-bearing purpose line
+  // for supporting_visual only. The token-free visual directives (scene,
+  // density, branding, typography, conversion intensity, info architecture)
+  // are retained. embedded_copy is unchanged.
+  const purposeLayer: string[] = input.attachmentMode === 'supporting_visual'
+    ? purposeLayerRaw.filter((line) => !/\b(cta|call to action|button)\b/i.test(line))
+    : purposeLayerRaw;
 
   // Composition hints from the strategy augment (not replace) the
   // default composition layer so existing composition discipline is
@@ -794,7 +814,7 @@ export function composeCreatorImagePrompt(
     ? 'Create a production-ready editorial marketing visual that stands on its own as a complete social creative — not an ad poster, text layout, slide, or wireframe.'
     : 'Create a production-ready editorial marketing visual scene, not an ad poster, text layout, slide, or wireframe.';
   const textBanFooter = [
-    'Strictly avoid all visible text: no words, letters, numbers, captions, signage, fake logos, UI text, CTA buttons, or tagline text.',
+    'Strictly avoid all visible text: no words, letters, numbers, captions, signage, fake logos, UI text, action buttons, or tagline text.',
     'Strictly avoid inventing any fictional brand name, company name, app name, product name, or wordmark on any surface — including dashboards, screens, business cards, badges, packaging, or signage.',
     'If a screen, dashboard, paper, or object appears, keep ALL markings abstract and unreadable; render UI as soft shapes, blurred bars, and anonymized gradients with no readable glyphs.',
   ];

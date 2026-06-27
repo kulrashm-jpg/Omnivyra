@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -18,11 +18,10 @@ import {
   buildWriterCreatorPrefill,
   createWriterSourceId,
   launchCreatorFromWriter,
-  loadWriterAttachedAssetsDurable,
-  readWriterAttachedAssets,
   type CreatorAssetLaunchType,
   type WriterAttachedAsset,
 } from '../../lib/content/writerCreatorAssetLaunch';
+import { loadWriterAttachmentsViaGraph } from '../../lib/content/writerAttachmentGraph';
 import {
   attachmentModeLabel,
   defaultAttachmentModeForAsset,
@@ -249,25 +248,28 @@ export default function ShortformResultPage({
     };
   }, [contentType, token, topic]);
 
+  // Relationship discovery comes solely from the canonical Usage Graph (via the
+  // shared bridge → listAssetsForConsumer → resolveCreatorAsset). This component
+  // never reads the legacy store or infers attachment ownership.
+  const refreshAttachmentsFromGraph = useCallback(() => {
+    if (!writerSourceId) return;
+    void loadWriterAttachmentsViaGraph({
+      companyId: selectedCompanyId,
+      sourceType: 'post',
+      sourceId: writerSourceId,
+    }).then(setAttachedAssets).catch(() => { /* keep current list on transient error */ });
+  }, [selectedCompanyId, writerSourceId]);
+
   useEffect(() => {
     if (!writerSourceId) return;
-    const refresh = () => setAttachedAssets(readWriterAttachedAssets('post', writerSourceId));
-    const refreshDurable = () => {
-      void loadWriterAttachedAssetsDurable({
-        companyId: selectedCompanyId,
-        sourceType: 'post',
-        sourceId: writerSourceId,
-      }).then(setAttachedAssets);
-    };
-    refresh();
-    refreshDurable();
-    window.addEventListener('focus', refreshDurable);
-    window.addEventListener('storage', refresh);
+    refreshAttachmentsFromGraph();
+    window.addEventListener('focus', refreshAttachmentsFromGraph);
+    window.addEventListener('storage', refreshAttachmentsFromGraph);
     return () => {
-      window.removeEventListener('focus', refreshDurable);
-      window.removeEventListener('storage', refresh);
+      window.removeEventListener('focus', refreshAttachmentsFromGraph);
+      window.removeEventListener('storage', refreshAttachmentsFromGraph);
     };
-  }, [selectedCompanyId, writerSourceId]);
+  }, [refreshAttachmentsFromGraph, writerSourceId]);
 
   const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {
     // Attachment mode + source-text transform are NOT user-facing knobs

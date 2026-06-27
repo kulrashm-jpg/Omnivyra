@@ -7,7 +7,7 @@ import { persistCreatorRenderJobState } from './creatorRenderPersistence';
 import { config, envIsExplicit } from '@/config';
 import { withSanctionedEnvAccess } from '@/lib/config/enforcer';
 
-export type CreatorDurableRenderJobName = 'infographic' | 'carousel' | 'pdf' | 'slider' | 'multi_slide_export';
+export type CreatorDurableRenderJobName = 'infographic' | 'carousel' | 'pdf' | 'slider' | 'multi_slide_export' | 'user_template_preview';
 
 export type CreatorDurableRenderJobData = {
   idempotencyKey: string;

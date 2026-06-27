@@ -5,6 +5,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { createLegacyScheduledPost, listLegacyScheduledPosts } from '@/backend/services/structuredPlanScheduler';
+import { resolvePublishMedia } from '@/backend/services/creator/creatorPublishResolution';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 
@@ -66,13 +67,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
+      // Single publishing-resolution path: any creator asset refs resolve through the
+      // server resolver; legacy `mediaUrls` is fallback transport only. No-op when no
+      // refs are sent (legacy clients) — media passes through unchanged.
+      const { mediaUrls: resolvedMediaUrls } = await resolvePublishMedia({
+        companyId: String(postData.companyId ?? userId),
+        userId,
+        platform: postData.platform,
+        assetRefs: postData.assetRefs,
+        creatorAttachments: postData.creatorAttachments,
+        legacyMediaUrls: postData.mediaUrls || [],
+      });
+
       // Create scheduled post
       const scheduledPost = await createLegacyScheduledPost({
         userId,
         platform: postData.platform,
         contentType: postData.contentType || 'post',
         content: postData.content,
-        mediaUrls: postData.mediaUrls || [],
+        mediaUrls: resolvedMediaUrls,
         hashtags: postData.hashtags || [],
         scheduledFor: postData.scheduledFor,
         title: postData.title,

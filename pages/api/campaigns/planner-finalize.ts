@@ -351,6 +351,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(400).json({ error: 'Invalid calendar_plan: each activity must have week_number, day, platform, and content_type' });
         }
       }
+
+      // CAMPAIGN-004 — template-aware approval gate (canonical validator; no
+      // duplicate logic). Validates ONLY activities that already carry a
+      // template selection (no inference). Rejects the plan BEFORE any
+      // generation when a planned asset is incompatible with its template;
+      // never auto-corrects or substitutes templates.
+      const { plannedAssetsFromActivities, validateCampaignPlanAssets } =
+        await import('../../../backend/services/creator/campaignPlanValidationService');
+      const plannedAssets = plannedAssetsFromActivities(activities);
+      if (plannedAssets.length > 0) {
+        const planValidation = await validateCampaignPlanAssets(plannedAssets);
+        if (!planValidation.ok) {
+          return res.status(422).json({
+            error: 'Campaign plan rejected: one or more planned assets are incompatible with their selected template.',
+            code: 'TEMPLATE_PLAN_INVALID',
+            validation: planValidation.perAsset.filter((a) => !a.ok),
+          });
+        }
+      }
     }
 
     let weeks: unknown[];

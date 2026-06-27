@@ -50,6 +50,20 @@ import {
   buildTableCardSvg,
   type InfographicCardBrand,
 } from './creator/infographicDataCards';
+// Canonical Template visual-language consumption (TEMPLATE-003). The renderer
+// reads its visual constants from the resolved family style via the ONE
+// canonical resolver. No template / unknown id → the canonical DEFAULT style,
+// whose values equal the prior hardcoded constants → byte-identical output.
+import {
+  resolveTemplate,
+  DEFAULT_IMAGE_STYLE,
+  DEFAULT_INFOGRAPHIC_STYLE,
+  type InfographicStyleSchema,
+  type InfographicEngineGeometry,
+  type ImageStyleSchema,
+  type CarouselStyleSchema,
+  type PresetVariant,
+} from '../../lib/creator-templates';
 import { ensureRenderFonts } from './creatorRenderFonts';
 
 // FONT PARITY (PHASE 14J): configure fontconfig to discover the vendored fonts
@@ -255,6 +269,49 @@ function createFallbackUrl(label: string, width: number, height: number): string
   return `${FALLBACK_BASE}/${width}x${height}/111827/ffffff.png?text=${text}`;
 }
 
+// ── Canonical Template visual-language seam (TEMPLATE-003) ────────────
+// The renderer reads its deterministic visual constants from the resolved
+// family style. Everything flows through the ONE canonical resolveTemplate()
+// — no second resolver. When no template_id is present (or it is unknown) the
+// resolver returns the canonical DEFAULT style, whose values are byte-for-byte
+// the prior hardcoded constants, so existing campaigns render identically.
+
+/** template_id carried on render metadata (top-level or projected onto creator_card). */
+function templateIdForRender(metadata: Record<string, unknown>): string | null {
+  const card = safeObject(metadata.creator_card);
+  const raw = metadata.template_id ?? metadata.infographic_template_id ?? card.template_id;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+function resolveInfographicRenderStyle(metadata: Record<string, unknown>): InfographicStyleSchema {
+  return resolveTemplate(templateIdForRender(metadata), { family: 'infographic' }).infographicStyle as InfographicStyleSchema;
+}
+function resolveImageRenderStyle(metadata: Record<string, unknown>): ImageStyleSchema {
+  return resolveTemplate(templateIdForRender(metadata), { family: 'image' }).imageStyle as ImageStyleSchema;
+}
+function resolveCarouselRenderStyle(metadata: Record<string, unknown>): CarouselStyleSchema {
+  return resolveTemplate(templateIdForRender(metadata), { family: 'carousel' }).carouselStyle as CarouselStyleSchema;
+}
+/**
+ * Project the carousel visual language onto the overlay base preset the slide
+ * composer consumes (`getOverlayPreset`'s `style`). The deck shares the image
+ * overlay system, so we keep the image platform-preset matrix / CTA / footer /
+ * background from the canonical default and override only the carousel-owned
+ * base fields (typography, panel, safe margin, brand mode). For the DEFAULT
+ * carousel style these equal DEFAULT_IMAGE_STYLE's, so the deck stays
+ * byte-identical; a non-default variant's `panel.opacity` surfaces because the
+ * default platform presets (e.g. linkedin) don't override it.
+ */
+function carouselOverlayBaseStyle(cs: CarouselStyleSchema): ImageStyleSchema {
+  return {
+    ...DEFAULT_IMAGE_STYLE,
+    safe_margins: cs.safe_margins,
+    typography: cs.typography,
+    panel: cs.panel,
+    // Deck slides read `branding.defaultMode` (fileNamePrefix !== 'image').
+    branding: { imageMode: DEFAULT_IMAGE_STYLE.branding.imageMode, defaultMode: cs.branding.mode },
+  };
+}
+
 function buildSvg(input: {
   width: number;
   height: number;
@@ -318,9 +375,14 @@ async function renderBackgroundPng(input: {
   height?: number;
   colors?: string[];
   variantId?: string;
+  /** Carousel visual language frame radius. 0 (default) → square full-bleed
+   *  background (byte-identical); >0 rounds the slide corners. */
+  frameRadius?: number;
 }): Promise<Buffer> {
   const width = input.width ?? 1200;
   const height = input.height ?? 1200;
+  const frameRadius = Math.max(0, Math.round(input.frameRadius ?? 0));
+  const frameRx = frameRadius > 0 ? ` rx="${frameRadius}"` : '';
   const colors = input.colors?.filter((color) => /^#[0-9a-f]{6}$/i.test(color)).slice(0, 3) || [];
   const variant = parseInt(createHash('sha1').update(input.variantId || 'creator-default').digest('hex').slice(0, 4), 16);
   // Background DYNAMISM: stay on-brand (same palette) but vary the gradient
@@ -355,13 +417,13 @@ async function renderBackgroundPng(input: {
           <stop offset="100%" stop-color="${accent}" />
         </linearGradient>
       </defs>
-      <rect width="${width}" height="${height}" fill="url(#bg)" />
+      <rect width="${width}" height="${height}"${frameRx} fill="url(#bg)" />
       <circle cx="${topCircleX}" cy="${topCircleY}" r="${120 + (variant % 38)}" fill="rgba(255,255,255,0.13)" />
       <circle cx="${bottomCircleX}" cy="${bottomCircleY}" r="${92 + (variant % 30)}" fill="rgba(255,255,255,0.1)" />
       <path d="M80 ${height - 300} C260 ${height - curveLift}, 410 ${height - 210}, 590 ${height - 360} S900 ${height - 230}, ${width - 82} ${height - 390}" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="12" stroke-linecap="round"/>
     </svg>
   `.trim();
-  const cacheKey = `background:${width}x${height}:${colors.join(',')}:${input.variantId || 'creator-default'}`;
+  const cacheKey = `background:${width}x${height}:${colors.join(',')}:${input.variantId || 'creator-default'}:r${frameRadius}`;
   return getCachedRenderBuffer(cacheKey, () => sharp(Buffer.from(svg)).png().toBuffer());
 }
 
@@ -400,6 +462,27 @@ function compactText(value: unknown, fallback = ''): string {
     .trim();
 }
 
+/**
+ * Build a descriptive, screen-reader alt text that always satisfies the
+ * accessibility gate's 12-char minimum (`validateCreatorAccessibility`). Alt
+ * text is metadata only (aria-label / manifest) — never rendered into pixels —
+ * so enriching a short subject (e.g. a 5-char topic like "Image") is safe and
+ * accessibility-correct. Prevents `render_manifest_rejected:alt_text_missing_or_too_short`
+ * on writer-governed renders with short topics/headlines.
+ */
+function buildAccessibleAltText(primary: unknown, opts?: { supporting?: unknown; kind?: string; platform?: unknown }): string {
+  const subject = compactText(primary) || 'Branded creative';
+  const supporting = compactText(opts?.supporting);
+  let alt = supporting && supporting !== subject ? `${subject} — ${supporting}` : subject;
+  if (alt.length < 12) {
+    const kind = compactText(opts?.kind).replace(/_/g, ' ') || 'promotional';
+    const platform = compactText(opts?.platform);
+    alt = compactText(`${subject} — ${kind} visual${platform ? ` for ${platform}` : ''}`);
+  }
+  if (alt.length < 12) alt = compactText(`${alt} social media visual`);
+  return alt;
+}
+
 function normalizeOverlayText(input: {
   assetPayload: Record<string, unknown>;
   metadata: Record<string, unknown>;
@@ -409,12 +492,19 @@ function normalizeOverlayText(input: {
   const direct = safeObject(input.assetPayload.overlay_text);
   const metadataOverlay = safeObject(input.metadata.overlay_text);
   const overlay = Object.keys(direct).length > 0 ? direct : metadataOverlay;
-  const cta = compactText(overlay.cta || input.metadata.cta || 'Learn more')
-    .replace(/\b(click here|submit|read now)\b/gi, 'Learn more')
-    .slice(0, 42);
+  // Template "Text Inside Image" — when the overlay is template-authoritative,
+  // the user's template fields are the ONLY source of on-image text. Suppress
+  // the topic/title/"Learn more" fallbacks so we never inject text the template
+  // didn't declare, and empty optional fields collapse gracefully (the SVG
+  // composer skips blank blocks). Strictly opt-in via the marker the creator
+  // page sets on overlay_text — every existing flow (no marker) is unchanged.
+  const authoritative = direct.__template_authoritative === true || metadataOverlay.__template_authoritative === true;
+  const cta = authoritative
+    ? compactText(overlay.cta || '').replace(/\b(click here|submit|read now)\b/gi, 'Learn more').slice(0, 42)
+    : compactText(overlay.cta || input.metadata.cta || 'Learn more').replace(/\b(click here|submit|read now)\b/gi, 'Learn more').slice(0, 42);
   return {
-    hook: compactText(overlay.hook || input.metadata.topic || input.title).slice(0, 76),
-    headline: compactText(overlay.headline || input.title).slice(0, 84),
+    hook: compactText(authoritative ? overlay.hook : (overlay.hook || input.metadata.topic || input.title)).slice(0, 76),
+    headline: compactText(authoritative ? overlay.headline : (overlay.headline || input.title)).slice(0, 84),
     keyInsight: compactText(overlay.keyInsight || overlay.key_insight || '').slice(0, 132),
     cta,
     supportingText: compactText(overlay.supportingText || overlay.supporting_text || '').slice(0, 96),
@@ -452,17 +542,18 @@ function resolveBrandAssets(metadata: Record<string, unknown>): {
   };
 }
 
-function resolveRenderSize(platform: string, fileNamePrefix: string): { width: number; height: number } {
+function resolveRenderSize(
+  platform: string,
+  fileNamePrefix: string,
+  imageStyle: ImageStyleSchema = DEFAULT_IMAGE_STYLE,
+): { width: number; height: number } {
+  // Canvas is now sourced from the canonical style schemas (single source of
+  // truth) instead of inline literals. banner + per-platform image-feed sizes
+  // live in imageStyle.canvas; the infographic canvas in infographicStyle.
   const key = String(platform || '').toLowerCase();
-  if (fileNamePrefix === 'banner') return { width: 1600, height: 900 };
-  if (fileNamePrefix === 'infographic') return { width: 1200, height: 1500 };
-  if (key === 'linkedin' || key === 'x' || key === 'twitter' || key === 'reddit') return { width: 1200, height: 675 };
-  if (key === 'instagram' || key === 'facebook' || key === 'threads') return { width: 1080, height: 1350 };
-  // Pinterest — 2:3 vertical pin canvas. Now a first-class destination
-  // because asset-aware activation lets image/carousel posts publish
-  // there (Part 1). Previously fell through to the 1:1 default.
-  if (key === 'pinterest') return { width: 1000, height: 1500 };
-  return { width: 1200, height: 1200 };
+  if (fileNamePrefix === 'banner') return { ...imageStyle.canvas.banner };
+  if (fileNamePrefix === 'infographic') return { ...DEFAULT_INFOGRAPHIC_STYLE.canvas };
+  return { ...(imageStyle.canvas.byPlatform[key] ?? imageStyle.canvas.default) };
 }
 
 function getOverlayPreset(
@@ -470,6 +561,9 @@ function getOverlayPreset(
   fileNamePrefix: string,
   overlay: Record<string, string>,
   subtypeHint?: ImageSubtypeHint | null,
+  // Canonical Template visual language for the image/carousel overlay base.
+  // Default == prior literals → byte-identical for callers that don't pass one.
+  style: ImageStyleSchema = DEFAULT_IMAGE_STYLE,
 ): OverlayLayoutPreset {
   const key = String(platform || '').toLowerCase();
   const textUnits = [overlay.hook, overlay.headline, overlay.keyInsight, overlay.supportingText, overlay.cta]
@@ -487,89 +581,77 @@ function getOverlayPreset(
       ? false
       : textUnits > 255;
   const minimal = subtypeDensity === 'minimal';
+  const t = style.typography;
   const base: OverlayLayoutPreset = {
     name: dense ? 'balanced-dense' : 'balanced',
-    panelWidthRatio: dense ? 0.74 : 0.7,
-    panelOpacity: 0.42,
-    margin: 86,
-    hookSize: 24,
-    headlineSize: dense ? 50 : 58,
-    insightSize: dense ? 28 : 31,
-    supportSize: 24,
-    ctaSize: 27,
-    maxHeadlineLines: dense ? 3 : 2,
-    maxInsightLines: dense ? 3 : 2,
-    maxSupportLines: 1,
-    headlineChars: dense ? 25 : 22,
-    insightChars: dense ? 44 : 40,
-    supportChars: 48,
-    ctaProminence: 'standard',
-    footerMode: 'subtle',
-    brandMode: fileNamePrefix === 'image' ? 'compact' : 'standard',
+    panelWidthRatio: dense ? style.panel.widthRatio.dense : style.panel.widthRatio.normal,
+    panelOpacity: style.panel.opacity,
+    margin: style.safe_margins.base,
+    hookSize: t.hookSize,
+    headlineSize: dense ? t.headlineSize.dense : t.headlineSize.normal,
+    insightSize: dense ? t.insightSize.dense : t.insightSize.normal,
+    supportSize: t.supportSize,
+    ctaSize: t.ctaSize,
+    maxHeadlineLines: dense ? t.maxHeadlineLines.dense : t.maxHeadlineLines.normal,
+    maxInsightLines: dense ? t.maxInsightLines.dense : t.maxInsightLines.normal,
+    maxSupportLines: t.maxSupportLines,
+    headlineChars: dense ? t.headlineChars.dense : t.headlineChars.normal,
+    insightChars: dense ? t.insightChars.dense : t.insightChars.normal,
+    supportChars: t.supportChars,
+    ctaProminence: style.cta.prominence,
+    footerMode: style.footer.mode,
+    brandMode: fileNamePrefix === 'image' ? style.branding.imageMode : style.branding.defaultMode,
   };
 
-  if (key === 'linkedin') {
-    const wideImage = fileNamePrefix === 'image';
+  // Per-platform overrides are now externalized into the canonical
+  // `style.platformPresets` table (single source of truth). Resolve the
+  // matched platform's overrides on top of `base`; a matched platform
+  // returns immediately (subtype overrides apply ONLY to default/unknown
+  // platforms, preserving the prior control flow). 'twitter' shares 'x'.
+  const pkey = key === 'twitter' ? 'x' : key;
+  const wide = fileNamePrefix === 'image';
+  const override = style.platformPresets[pkey];
+  if (override) {
+    const pick = <T,>(v: PresetVariant<T> | undefined, current: T): T => {
+      if (v === undefined) return current;
+      if (v && typeof v === 'object') {
+        if ('dense' in v) return dense ? (v as { dense: T }).dense : (v as { normal: T }).normal;
+        if ('wide' in v) return wide ? (v as { wide: T }).wide : (v as { narrow: T }).narrow;
+      }
+      return v as T;
+    };
+    // PRECEDENCE (TEMPLATE-015): runtime safety > platform geometry > template
+    // visual language > default. Platform GEOMETRY (sizes, margins, panel width,
+    // fit limits) stays platform-owned via `pick`. TEMPLATE VISUAL LANGUAGE
+    // (panel opacity, CTA prominence, footer mode, brand mode) takes precedence
+    // over the platform preset ONLY when the template asserts a non-default
+    // identity; for the default style the platform value applies, preserving
+    // byte-identical legacy output. `base.*` already holds the template value.
+    const defaultBrandMode = fileNamePrefix === 'image' ? DEFAULT_IMAGE_STYLE.branding.imageMode : DEFAULT_IMAGE_STYLE.branding.defaultMode;
+    const tplWins = <T,>(templateVal: T, defaultVal: T, platformVal: T): T => (templateVal !== defaultVal ? templateVal : platformVal);
     return {
       ...base,
-      name: 'linkedin-editorial',
-      margin: 54,
-      panelWidthRatio: wideImage ? 0.62 : 0.66,
-      hookSize: 20,
-      headlineSize: dense ? 36 : 42,
-      insightSize: wideImage ? 21 : 23,
-      supportSize: 19,
-      ctaSize: 21,
-      headlineChars: dense ? 31 : 28,
-      insightChars: wideImage ? 52 : 48,
-      maxInsightLines: wideImage ? 1 : 2,
-      maxSupportLines: wideImage ? 0 : 1,
-      ctaProminence: 'standard',
-      footerMode: wideImage ? 'hidden' : 'subtle',
+      name: override.name,
+      panelWidthRatio: pick(override.panelWidthRatio, base.panelWidthRatio),
+      panelOpacity: tplWins(base.panelOpacity, DEFAULT_IMAGE_STYLE.panel.opacity, override.panelOpacity ?? base.panelOpacity),
+      margin: override.margin ?? base.margin,
+      hookSize: override.hookSize ?? base.hookSize,
+      headlineSize: pick(override.headlineSize, base.headlineSize),
+      insightSize: pick(override.insightSize, base.insightSize),
+      supportSize: override.supportSize ?? base.supportSize,
+      ctaSize: override.ctaSize ?? base.ctaSize,
+      maxHeadlineLines: pick(override.maxHeadlineLines, base.maxHeadlineLines),
+      maxInsightLines: pick(override.maxInsightLines, base.maxInsightLines),
+      maxSupportLines: pick(override.maxSupportLines, base.maxSupportLines),
+      headlineChars: pick(override.headlineChars, base.headlineChars),
+      insightChars: pick(override.insightChars, base.insightChars),
+      supportChars: override.supportChars ?? base.supportChars,
+      ctaProminence: tplWins(base.ctaProminence, DEFAULT_IMAGE_STYLE.cta.prominence, pick(override.ctaProminence, base.ctaProminence)),
+      footerMode: tplWins(base.footerMode, DEFAULT_IMAGE_STYLE.footer.mode, pick(override.footerMode, base.footerMode)),
+      brandMode: tplWins(base.brandMode, defaultBrandMode, pick(override.brandMode, base.brandMode)),
     };
   }
-  if (key === 'instagram') {
-    return { ...base, name: 'instagram-visual', panelWidthRatio: 0.78, margin: 76, headlineSize: dense ? 48 : 56, insightSize: dense ? 26 : 29, ctaProminence: 'strong', footerMode: 'subtle' };
-  }
-  if (key === 'facebook') {
-    return { ...base, name: 'facebook-community', panelWidthRatio: 0.74, headlineSize: dense ? 50 : 57, ctaProminence: 'strong', footerMode: 'standard' };
-  }
-  if (key === 'x' || key === 'twitter') {
-    return { ...base, name: 'x-compact', margin: 48, panelWidthRatio: 0.56, hookSize: 18, headlineSize: dense ? 34 : 40, insightSize: 20, ctaSize: 19, headlineChars: dense ? 31 : 28, insightChars: 56, maxInsightLines: 1, maxSupportLines: 0, ctaProminence: 'subtle', footerMode: 'hidden', brandMode: 'compact' };
-  }
-  if (key === 'threads') {
-    return { ...base, name: 'threads-clean', panelWidthRatio: 0.64, headlineSize: dense ? 44 : 52, insightSize: 25, insightChars: 52, maxInsightLines: 1, maxSupportLines: 0, ctaProminence: 'subtle', footerMode: 'hidden', brandMode: 'compact' };
-  }
-  if (key === 'reddit') {
-    return { ...base, name: 'reddit-low-brand', margin: 52, panelWidthRatio: 0.6, hookSize: 18, headlineSize: dense ? 34 : 40, insightSize: 20, ctaSize: 19, headlineChars: dense ? 32 : 29, insightChars: 56, maxInsightLines: 1, maxSupportLines: 0, ctaProminence: 'subtle', footerMode: 'hidden', brandMode: 'subtle', panelOpacity: 0.32 };
-  }
-  // Pinterest — vertical 2:3 canvas; the image is the hero, overlay
-  // panel stays tight and lower-half so the visual reads cleanly in
-  // pin grids. Now a first-class destination per Phase 2.C asset-
-  // aware activation; previously fell through to `base`.
-  if (key === 'pinterest') {
-    return {
-      ...base,
-      name: 'pinterest-pin',
-      margin: 72,
-      panelWidthRatio: 0.72,
-      panelOpacity: 0.46,
-      hookSize: 20,
-      headlineSize: dense ? 44 : 52,
-      insightSize: dense ? 24 : 26,
-      supportSize: 22,
-      ctaSize: 24,
-      headlineChars: dense ? 26 : 22,
-      insightChars: dense ? 46 : 42,
-      maxHeadlineLines: dense ? 3 : 2,
-      maxInsightLines: 2,
-      maxSupportLines: 0,
-      ctaProminence: 'standard',
-      footerMode: 'subtle',
-      brandMode: 'compact',
-    };
-  }
-  // Per-platform preset finalised above. Layer subtype overrides on top:
+  // No platform match (default/unknown). Layer subtype overrides on top:
   // these are deliberate visual differentiations the audit requested
   // ("subtype currently does not meaningfully affect rendering"). Quote
   // subtypes get a tighter panel + larger headline; promotional subtypes
@@ -690,13 +772,25 @@ function buildOverlaySvg(input: {
     layoutModes: Array<'text_top' | 'text_center' | 'text_bottom'>;
     waveAnchors: Array<{ entryY: number; exitY: number }>;
   };
+  /**
+   * Canonical Template visual language (image/banner/carousel base overlay
+   * preset). Resolved by the caller via resolveTemplate(); the overlay base
+   * is built from it. Omitted → DEFAULT_IMAGE_STYLE → byte-identical.
+   */
+  imageStyle?: ImageStyleSchema;
+  /**
+   * Deck continuity-wave gate (carousel visual language
+   * `decoration.wave.enabled`). Omitted/true → the wave renders exactly as
+   * before (byte-identical); false → the deck suppresses the continuity wave.
+   */
+  waveEnabled?: boolean;
 }): { svg: string; quality: OverlayQualityReport; brandPlacement: { top: number; left: number; maxWidth: number; maxHeight: number } } {
   // Resolve strategy modifiers. When no strategy supplied, all
   // multipliers are 1.0 + ctaMode='standard' so behaviour is byte
   // identical to the pre-phase renderer (legacy gate, PHASE 10).
   const { applyScale } = require('./creator/renderStrategyRegistry') as typeof import('./creator/renderStrategyRegistry');
   const strategyMods = input.renderStrategy?.modifiers ?? null;
-  const presetRaw = getOverlayPreset(input.platform, input.fileNamePrefix, input.overlay, input.subtypeHint ?? null);
+  const presetRaw = getOverlayPreset(input.platform, input.fileNamePrefix, input.overlay, input.subtypeHint ?? null, input.imageStyle ?? DEFAULT_IMAGE_STYLE);
   // Apply strategy multipliers to the preset table BEFORE downstream
   // sizing math reads from it. Each multiplier is bounded inside
   // applyScale so a malformed strategy can't yield off-canvas sizes.
@@ -939,9 +1033,13 @@ function buildOverlaySvg(input: {
     0.14,
     Math.min(0.45, overlayStrategy.shadeMidOpacity * 0.7 * scrimIntensity),
   );
-  const headingColor = '#ffffff';
-  const insightColor = 'rgba(255,255,255,0.94)';
-  const supportColor = 'rgba(255,255,255,0.78)';
+  // Template visual language: overlay text colors resolve from imageStyle
+  // (colors are NOT platform-overridden, so they always carry the template
+  // identity). Default style == the prior hardcoded white stack → byte-identical.
+  const overlayColors = (input.imageStyle ?? DEFAULT_IMAGE_STYLE).colorScheme;
+  const headingColor = overlayColors.title;
+  const insightColor = overlayColors.body;
+  const supportColor = overlayColors.support;
 
   // CTA emission. The strategy's ctaMode decides whether (and how)
   // the overlay renders a CTA pill. 'absent' suppresses entirely;
@@ -1011,6 +1109,10 @@ function buildOverlaySvg(input: {
   const waveBMidB = Math.round((waveBEntryY + (waveBExitY * 2)) / 3 + h * 0.04);
   const waveB = `M 0 ${waveBEntryY} C ${Math.round(w * 0.30)} ${waveBMidA}, ${Math.round(w * 0.55)} ${waveBMidB}, ${w} ${waveBExitY}`;
   const waveStrokeWidth = Math.max(2, Math.round(h * 0.006));
+  // Carousel visual language: continuity wave is on unless the resolved
+  // carouselStyle disables it. Omitted (image renders / default) → on →
+  // byte-identical.
+  const renderWave = input.waveEnabled !== false;
 
   const svg = `
     <svg width="${input.width}" height="${input.height}" viewBox="0 0 ${input.width} ${input.height}" xmlns="http://www.w3.org/2000/svg">
@@ -1029,7 +1131,7 @@ function buildOverlaySvg(input: {
         </filter>
       </defs>
       <!-- Visual continuity wave (filled, upper sweep) -->
-      <path d="${waveA}" fill="url(#waveGradient)" />
+      ${renderWave ? `<path d="${waveA}" fill="url(#waveGradient)" />` : ''}
       <!-- Operator feedback: "the wave gets truncated halfway... it
            should be complete, and then it should continue the next
            slide." Two stroked layers ensure the curve reads as a
@@ -1043,8 +1145,8 @@ function buildOverlaySvg(input: {
            context's wave anchors so slide N's right edge matches
            slide N+1's left edge — the swipe-through experience reads
            as one continuous flowing line. -->
-      <path d="M 0 ${waveAEntryY} C ${Math.round(w * 0.28)} ${waveAMidA}, ${Math.round(w * 0.62)} ${waveAMidB}, ${w} ${waveAExitY}" fill="none" stroke="${accent}" stroke-opacity="0.55" stroke-width="${Math.max(2, Math.round(waveStrokeWidth * 0.7))}" stroke-linecap="round" />
-      <path d="${waveB}" fill="none" stroke="${accent}" stroke-opacity="0.48" stroke-width="${Math.round(waveStrokeWidth * 1.4)}" stroke-linecap="round" />
+      ${renderWave ? `<path d="M 0 ${waveAEntryY} C ${Math.round(w * 0.28)} ${waveAMidA}, ${Math.round(w * 0.62)} ${waveAMidB}, ${w} ${waveAExitY}" fill="none" stroke="${accent}" stroke-opacity="0.55" stroke-width="${Math.max(2, Math.round(waveStrokeWidth * 0.7))}" stroke-linecap="round" />` : ''}
+      ${renderWave ? `<path d="${waveB}" fill="none" stroke="${accent}" stroke-opacity="0.48" stroke-width="${Math.round(waveStrokeWidth * 1.4)}" stroke-linecap="round" />` : ''}
       <rect x="0" y="${scrimTop}" width="${input.width}" height="${scrimHeight}" fill="url(#bottomScrim)" />
       ${(() => {
         // Next-slide swipe indicator. Rendered on every slide except
@@ -2465,6 +2567,8 @@ async function composeSingleVisualAsset(
         fileNamePrefix,
         subtypeHint,
         renderStrategy,
+        // Image/banner overlay base resolved via the canonical resolveTemplate().
+        imageStyle: resolveImageRenderStyle(metadata),
       });
   const brandPlacement = overlayRender?.brandPlacement
     ?? defaultBrandPlacement({ width, height, fileNamePrefix });
@@ -2634,8 +2738,13 @@ async function composeSingleVisualAsset(
     }, { dedupeKey: `synthetic_order.${platform}.${enforcedAssetType ?? fileNamePrefix}`, throttleMs: 10_000 });
   }
 
+  const accessibleAltText = buildAccessibleAltText(title, {
+    supporting: typeof governedOverlay.supportingText === 'string' ? governedOverlay.supportingText : '',
+    kind: 'promotional',
+    platform,
+  });
   const accessibilityValidation = validateCreatorAccessibility({
-    altText: title,
+    altText: accessibleAltText,
     readingOrder: effectiveReadingOrder,
     minFontSize: fileNamePrefix === 'banner' ? 20 : 18,
     contrastRatio: geometry.contrastRatio,
@@ -2662,7 +2771,7 @@ async function composeSingleVisualAsset(
     typographySafetyResult: geometry,
     transformIntent: typeof metadata.source_text_transform === 'string' ? metadata.source_text_transform : null,
     exportMetadata: { width, height, preview_kind: 'social_creative', provider_ocr: providerOcr },
-    altText: title,
+    altText: accessibleAltText,
     readingOrder: effectiveReadingOrder,
     accessibilityValidation,
     governanceCompatibility,
@@ -3113,8 +3222,15 @@ function normalizeStructuredItems(
   })).filter((item) => item.headline || item.body);
 
   if (clean.length > 0) {
-    const sliceLimit = fileNamePrefix === 'pdf' ? 7 : 8;
-    const sliced = clean.slice(0, sliceLimit);
+    // Carousel slide-limit removal — render EXACTLY the slides supplied by the
+    // generation pipeline (template-driven dynamic counts: 3/5/7/8/9/10/…).
+    // The former artificial cap (8 for carousel/slider, 7 for pdf) truncated
+    // larger decks; it is intentionally removed with NO replacement limit.
+    // Ordering is preserved (index order). The downstream render loop, deck
+    // context, per-slide upload, OCR, and PDF paging are all driven by
+    // `renderItems.length`, so every supplied slide is rendered, previewed,
+    // and exported.
+    const sliced = clean;
     // Purpose-strategy role overlay — when the strategy supplies a
     // role sequence (Educational: hook → concept → explanation →
     // example → summary, Story: hook → problem → journey → ..., etc.),
@@ -3283,6 +3399,9 @@ async function renderStructuredSlidePng(input: {
   /** Deck-wide context. Provided when called from
    *  composeStructuredDeckAsset; absent for single-slide callers. */
   deckContext?: DeckRenderContext;
+  /** Canonical carousel visual language (deck path). Drives the slide overlay
+   *  base preset + continuity-wave gating. Default style → byte-identical. */
+  carouselStyle?: CarouselStyleSchema;
 }): Promise<{ buffer: Buffer; quality: OverlayQualityReport }> {
   const platform = compactText(input.metadata.platform || input.metadata.primary_platform, 'linkedin');
   // Operator feedback: drop the third "supporting / explanation"
@@ -3306,6 +3425,8 @@ async function renderStructuredSlidePng(input: {
     // Per-slide index keeps slides within a carousel distinct; mixing the
     // slide body keeps DIFFERENT carousels distinct from each other too.
     variantId: `${input.brandKit.layoutVariantId}:${input.index}:${String(input.item?.body || '').slice(0, 48)}`,
+    // Carousel visual language — slide frame radius (0 → square, byte-identical).
+    frameRadius: input.carouselStyle?.frame.cornerRadius ?? 0,
   });
   // Strategy-aware carousel/infographic slide rendering — read the
   // resolved purpose_strategy.id from metadata and look up the
@@ -3367,6 +3488,10 @@ async function renderStructuredSlidePng(input: {
     slideIndex: input.index,
     slideTotal: input.total,
     deckContext: input.deckContext,
+    // Activate the carousel visual language: overlay base preset from the
+    // resolved carouselStyle, and the continuity wave gated by its decoration.
+    imageStyle: input.carouselStyle ? carouselOverlayBaseStyle(input.carouselStyle) : undefined,
+    waveEnabled: input.carouselStyle ? input.carouselStyle.decoration.wave.enabled : undefined,
   });
   const brandMark = await loadBrandMark({
     brandKit: input.brandKit,
@@ -3481,8 +3606,14 @@ async function composeStructuredDeckAsset(
         assetType: fileNamePrefix,
       });
   const renderItems = normalizeStructuredItems(items, fallbackLabel, fileNamePrefix, metadata);
-  const width = fileNamePrefix === 'slider' ? 1600 : 1200;
-  const height = fileNamePrefix === 'slider' ? 900 : fileNamePrefix === 'pdf' ? 1500 : 1200;
+  // Canonical Template visual language (carousel/slider/pdf). Default style ==
+  // prior canvas constants → byte-identical.
+  const carouselStyle = resolveCarouselRenderStyle(metadata);
+  const deckCanvas = fileNamePrefix === 'slider' ? carouselStyle.canvas.slider
+    : fileNamePrefix === 'pdf' ? carouselStyle.canvas.pdf
+    : carouselStyle.canvas.carousel;
+  const width = deckCanvas.width;
+  const height = deckCanvas.height;
   const files: string[] = [];
   const qualityReports: OverlayQualityReport[] = [];
   const slideOcrResults: Array<Awaited<ReturnType<typeof runCreatorOcr>>> = [];
@@ -3509,6 +3640,7 @@ async function composeStructuredDeckAsset(
       height,
       brandKit,
       deckContext,
+      carouselStyle,
     });
     qualityReports.push(rendered.quality);
     const url = await uploadRenderedPng({
@@ -3766,6 +3898,10 @@ async function composeStructuredDeckAsset(
       },
       overlay_renderer: 'deterministic_svg_v1',
       overlay_quality: avgQuality,
+      // Per-slide overlay quality reports — additive, so post-render visual
+      // validation can validate every slide independently (one failing slide
+      // fails the carousel).
+      overlay_quality_reports: qualityReports,
       platform_visual_profile: resolvePlatformVisualProfile(platform),
       creator_quality_score: quality,
       visual_governance: visualGovernance,
@@ -3829,14 +3965,30 @@ function resolveInfographicSections(assetPayload: Record<string, unknown>, metad
   const transformItems = Array.isArray(rawTransform.items)
     ? rawTransform.items.map((item) => compactText(item, '')).filter(Boolean)
     : [];
-  const source = transformItems.length > 0
+  const rawSource = transformItems.length > 0
     ? transformItems
     : [overlay.hook, overlay.headline, overlay.keyInsight, overlay.supportingText].filter(Boolean);
-  const clipped = source.slice(0, 6).map((item, index) => ({
-    title: compactText(item.split(':')[0] || `Section ${index + 1}`, `Section ${index + 1}`).slice(0, 52),
-    body: compactText(item.includes(':') ? item.split(':').slice(1).join(':') : item, '').slice(0, 120),
-    icon: ['01', '02', '03', '04', '05', '06'][index] ?? String(index + 1).padStart(2, '0'),
-  }));
+  // Dedupe near-identical items so a sparse overlay (e.g. hook===headline===
+  // topic) doesn't yield two identical cards. Key on the normalized prefix.
+  const seen = new Set<string>();
+  const source = rawSource.filter((item) => {
+    const key = compactText(item, '').toLowerCase().replace(/\s+/g, ' ').slice(0, 80);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const clipped = source.slice(0, 6).map((item, index) => {
+    // Only split title/body on an explicit "Label: detail" form. Without a
+    // colon, the item is the TITLE and the body is left empty so the copy
+    // composer's lead fills it — never duplicate the title verbatim as body
+    // (the previous behavior rendered the same sentence twice per card).
+    const hasColon = item.includes(':');
+    return {
+      title: compactText(hasColon ? item.split(':')[0] : item, `Section ${index + 1}`).slice(0, 52),
+      body: hasColon ? compactText(item.split(':').slice(1).join(':'), '').slice(0, 120) : '',
+      icon: ['01', '02', '03', '04', '05', '06'][index] ?? String(index + 1).padStart(2, '0'),
+    };
+  });
   return clipped.length > 0 ? clipped : [{ title: 'Key idea', body: compactText(metadata.summary, 'Visual framework'), icon: '01' }];
 }
 
@@ -3873,6 +4025,11 @@ function resolveInfographicEngine(input: {
   height: number;
   sectionCount: number;
   headerH?: number;
+  /** Resolved from the template style's spacing; default to prior literals. */
+  sideMargin?: number;
+  bottomMargin?: number;
+  /** Per-layout engine geometry (gaps / minimums / offsets). Default == prior literals. */
+  geometry?: InfographicEngineGeometry;
 }): {
   engineId: string;
   cardWidth: number;
@@ -3881,26 +4038,29 @@ function resolveInfographicEngine(input: {
 } {
   const count = Math.max(1, input.sectionCount);
   const headerH = input.headerH ?? 150;
-  const bottomMargin = 90;
-  const sideMargin = 80;
+  const bottomMargin = input.bottomMargin ?? 90;
+  const sideMargin = input.sideMargin ?? 80;
+  const geom = input.geometry ?? DEFAULT_INFOGRAPHIC_STYLE.geometry.engine;
   const availableH = input.height - headerH - bottomMargin;
   const availableW = input.width - sideMargin * 2;
 
   if (input.layout === 'timeline') {
+    const g = geom.timeline;
     const rows = count;
-    const gap = 18;
-    const cardH = Math.max(160, Math.floor((availableH - gap * (rows - 1)) / rows));
+    const gap = g.gap;
+    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows));
     return {
       engineId: 'infographic-timeline-engine-v2',
-      cardWidth: availableW - 50,
+      cardWidth: availableW - g.railOffset,
       cardHeight: cardH,
-      position: (index) => ({ x: sideMargin + 50, y: headerH + index * (cardH + gap), iconZone: 'left' }),
+      position: (index) => ({ x: sideMargin + g.railOffset, y: headerH + index * (cardH + gap), iconZone: 'left' }),
     };
   }
   if (input.layout === 'process') {
+    const g = geom.process;
     const rows = count;
-    const gap = 32; // bigger gap so the arrow connectors have room to breathe
-    const cardH = Math.max(160, Math.floor((availableH - gap * (rows - 1)) / rows));
+    const gap = g.gap; // bigger gap so the arrow connectors have room to breathe
+    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows));
     return {
       engineId: 'infographic-process-engine-v2',
       cardWidth: availableW,
@@ -3909,29 +4069,31 @@ function resolveInfographicEngine(input: {
     };
   }
   if (input.layout === 'comparison') {
+    const g = geom.comparison;
     const rows = Math.max(1, Math.ceil(count / 2));
-    const gap = 30;
-    const cardH = Math.max(220, Math.floor((availableH - gap * (rows - 1)) / rows));
-    const colW = Math.floor((availableW - 40) / 2);
+    const gap = g.gap;
+    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows));
+    const colW = Math.floor((availableW - g.columnGap) / 2);
     return {
       engineId: 'infographic-comparison-engine-v2',
       cardWidth: colW,
       cardHeight: cardH,
       position: (index) => ({
-        x: sideMargin + (index % 2) * (colW + 40),
+        x: sideMargin + (index % 2) * (colW + g.columnGap),
         y: headerH + Math.floor(index / 2) * (cardH + gap),
         iconZone: 'top',
       }),
     };
   }
   if (input.layout === 'stats') {
+    const g = geom.stats;
     // 1-2 sections → single row; 3 → 3-col row; 4 → 2×2; 5-6 → 3×2.
     const cols = count <= 2 ? count : count === 3 ? 3 : count === 4 ? 2 : 3;
     const rows = Math.max(1, Math.ceil(count / cols));
-    const gapX = 30;
-    const gapY = 30;
+    const gapX = g.gapX;
+    const gapY = g.gapY;
     const colW = Math.floor((availableW - gapX * (cols - 1)) / cols);
-    const cardH = Math.max(260, Math.floor((availableH - gapY * (rows - 1)) / rows));
+    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gapY * (rows - 1)) / rows));
     return {
       engineId: 'infographic-stats-engine-v2',
       cardWidth: colW,
@@ -3944,28 +4106,30 @@ function resolveInfographicEngine(input: {
     };
   }
   if (input.layout === 'hierarchy') {
+    const g = geom.hierarchy;
     const rows = count;
-    const gap = 22;
-    const cardH = Math.max(170, Math.floor((availableH - gap * (rows - 1)) / rows));
+    const gap = g.gap;
+    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows));
     return {
       engineId: 'infographic-hierarchy-engine-v2',
-      cardWidth: availableW - 40,
+      cardWidth: availableW - g.widthInset,
       cardHeight: cardH,
       // Subtle right-indent per step communicates downward flow.
       position: (index) => ({
-        x: sideMargin + Math.min(index, 4) * 20,
+        x: sideMargin + Math.min(index, g.maxIndentSteps) * g.indentStep,
         y: headerH + index * (cardH + gap),
         iconZone: 'left',
       }),
     };
   }
   // framework (default) — 2-column pillar grid filling the canvas.
+  const g = geom.framework;
   const cols = count === 1 ? 1 : 2;
   const rows = Math.max(1, Math.ceil(count / cols));
-  const gapX = 30;
-  const gapY = 26;
+  const gapX = g.gapX;
+  const gapY = g.gapY;
   const colW = Math.floor((availableW - gapX * (cols - 1)) / cols);
-  const cardH = Math.max(220, Math.floor((availableH - gapY * (rows - 1)) / rows));
+  const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gapY * (rows - 1)) / rows));
   return {
     engineId: 'infographic-framework-engine-v2',
     cardWidth: colW,
@@ -4016,16 +4180,26 @@ async function renderInfographicAsset(
     body: stripPromptDirectives(section.body),
   }));
   const layout = resolveInfographicLayout(metadata);
-  const corrected = autoCorrectVisualCopy({
-    assetType: 'infographic',
-    textBlocks: rawSections.flatMap((section) => [section.title, section.body]),
-    allowCTA: false,
-  });
-  const sectionsBase = rawSections.map((section, index) => ({
+  // autoCorrectVisualCopy ends in `.filter(Boolean)`, dropping empty blocks.
+  // Correcting a FLAT [title, body, title, body, …] array therefore shifts
+  // the title/body pairing the moment any body is empty — which is the
+  // common case for a section without an explicit "Label: detail" form
+  // (titles leak into the wrong card, bodies duplicate). Correct each field
+  // INDEPENDENTLY so positions can never shift.
+  const correctionLog: string[] = [];
+  const correctCopyField = (value: string): string => {
+    const v = String(value || '');
+    if (!v.trim()) return '';
+    const c = autoCorrectVisualCopy({ assetType: 'infographic', textBlocks: [v], allowCTA: false });
+    correctionLog.push(...c.corrections);
+    return c.textBlocks[0] ?? v;
+  };
+  const sectionsBase = rawSections.map((section) => ({
     ...section,
-    title: corrected.textBlocks[index * 2] ?? section.title,
-    body: corrected.textBlocks[index * 2 + 1] ?? section.body,
+    title: correctCopyField(section.title) || section.title,
+    body: correctCopyField(section.body),
   }));
+  const corrected = { corrections: [...new Set(correctionLog)] };
 
   // Operator feedback: every card needs explanatory text, and the
   // whole infographic must read as one coherent message ending in
@@ -4137,9 +4311,17 @@ async function renderInfographicAsset(
   // y≈headerH-12 and got covered by the card panel (operator report:
   // "text is overlapping / hidden"). No subtitle → 150 (byte-identical).
   // The cards are pushed down by the same value via the engine below.
+  // Canonical Template visual language — resolved through resolveTemplate().
+  // Default (no template) == prior hardcoded constants → byte-identical.
+  const infographicStyle = resolveInfographicRenderStyle(metadata);
   const headerSubtitle = composerNarrative || String(metadata.summary || '').trim();
-  const headerH = headerSubtitle ? 212 : 150;
-  const engine = resolveInfographicEngine({ layout, width, height, sectionCount: sections.length, headerH });
+  const headerH = headerSubtitle ? infographicStyle.spacing.headerHeightWithSubtitle : infographicStyle.spacing.headerHeight;
+  const engine = resolveInfographicEngine({
+    layout, width, height, sectionCount: sections.length, headerH,
+    sideMargin: infographicStyle.spacing.sideMargin,
+    bottomMargin: infographicStyle.spacing.bottomMargin,
+    geometry: infographicStyle.geometry.engine,
+  });
   const geometry = validateLayoutGeometry({
     width,
     height,
@@ -4158,14 +4340,14 @@ async function renderInfographicAsset(
     minFontSize: 16,
   });
   const palette = brandKit.normalizedPalette;
-  const bg = palette[0] || '#0f172a';
+  const bg = palette[0] || infographicStyle.color_scheme.backgroundBase;
   // Phase 4A — use the kit's canonical (WCAG-validated) accent instead of the
   // positional palette[1] assumption. Byte-identical for a defaults-only tenant
   // (chooseAccent(DEFAULT_PALETTE) === palette[1]); branded tenants get the
   // runtime's accent; custom-palette tenants get the contrast-correct accent.
-  const accent = brandKit.accentColor || palette[1] || '#22c55e';
-  const panel = '#ffffff';
-  const text = '#111827';
+  const accent = brandKit.accentColor || palette[1] || infographicStyle.color_scheme.accent;
+  const panel = infographicStyle.color_scheme.panel;
+  const text = infographicStyle.color_scheme.primaryText;
   // Brand typography activation (Phase A.1) — consume the brand font (same
   // source the image/overlay path uses) with the prior 'Inter, Arial' literal
   // as the safe fallback, so output is byte-identical when no brand font is set.
@@ -4174,7 +4356,7 @@ async function renderInfographicAsset(
   // Roman") can't break the double-quoted SVG font-family attribute.
   const fontFamily = (typeof brandKit.typography?.fontFamily === 'string' && brandKit.typography.fontFamily.trim())
     ? brandKit.typography.fontFamily.trim().replace(/"/g, "'")
-    : 'Inter, Arial';
+    : infographicStyle.typography.fontFamily;
   const renderBrandBody = (o: Parameters<typeof renderWrappedBodyText>[0]): string =>
     renderWrappedBodyText({ ...o, fontFamily });
   const cardWidth = engine.cardWidth;
@@ -4212,16 +4394,17 @@ async function renderInfographicAsset(
   const maxSectionChars = sections.reduce((max, section) => {
     return Math.max(max, String(section.title || '').length + String(section.body || '').length);
   }, 0);
-  const infographicFontMultiplier =
-    maxSectionChars <= 60 ? 1.40
-    : maxSectionChars <= 110 ? 1.28
-    : maxSectionChars <= 170 ? 1.16
-    : maxSectionChars <= 230 ? 1.05
-    : maxSectionChars <= 300 ? 0.96
-    : 0.88;
-  const titleFontSize = Math.round(44 * infographicFontMultiplier);
-  const cardTitleFontSize = Math.round(25 * infographicFontMultiplier);
-  const cardBodyFontSize = Math.round(18 * infographicFontMultiplier);
+  // Adaptive multiplier — resolved from the style's breakpoint table (the
+  // default table is the prior literal ladder 1.40…0.88 → byte-identical).
+  const infographicFontMultiplier = (() => {
+    const scale = infographicStyle.typography.fontMultiplierScale;
+    for (const stop of scale) {
+      if (maxSectionChars <= stop.maxSectionChars) return stop.multiplier;
+    }
+    return scale[scale.length - 1]?.multiplier ?? 1;
+  })();
+  const titleFontSize = Math.round(infographicStyle.typography.baseSizes.headerTitle * infographicFontMultiplier);
+  const cardTitleFontSize = Math.round(infographicStyle.typography.baseSizes.cardTitle * infographicFontMultiplier);
 
   // Brand mark placement — top-right, sized at ~14% canvas width.
   const logoMaxWidth = Math.round(width * 0.14);
@@ -4272,13 +4455,14 @@ async function renderInfographicAsset(
   // Visual continuity wave. Single accent stroke from left to right
   // with a gentle sway. Lives inside the inner safe area so it
   // doesn't crowd the title or section cards.
-  const waveTopY = headerH - 20;
+  const waveGeom = infographicStyle.geometry.wave;
+  const waveTopY = headerH - waveGeom.topOffset;
   const waveEntryY = waveTopY;
-  const waveExitY = waveTopY + Math.round(height * 0.02);
-  const waveCpAY = waveTopY - Math.round(height * 0.025);
-  const waveCpBY = waveTopY + Math.round(height * 0.040);
-  const wavePath = `M 80 ${waveEntryY} C ${Math.round(width * 0.30)} ${waveCpAY}, ${Math.round(width * 0.62)} ${waveCpBY}, ${width - 80} ${waveExitY}`;
-  const waveStrokeWidth = Math.max(2, Math.round(height * 0.005));
+  const waveExitY = waveTopY + Math.round(height * waveGeom.exitYRatio);
+  const waveCpAY = waveTopY - Math.round(height * waveGeom.cpAYRatio);
+  const waveCpBY = waveTopY + Math.round(height * waveGeom.cpBYRatio);
+  const wavePath = `M ${waveGeom.startXInset} ${waveEntryY} C ${Math.round(width * waveGeom.cpAXRatio)} ${waveCpAY}, ${Math.round(width * waveGeom.cpBXRatio)} ${waveCpBY}, ${width - waveGeom.endXInset} ${waveExitY}`;
+  const waveStrokeWidth = Math.max(2, Math.round(height * infographicStyle.decoration_style.wave.strokeWidthRatio));
 
   // Operator feedback: the previous renderer produced "text cards" —
   // four small boxes with title + body, no visual hierarchy, no
@@ -4301,12 +4485,12 @@ async function renderInfographicAsset(
   // elements can't be derived.
   const accentSecondary = palette[2] || '#0ea5e9';
   const accentTertiary = palette[3] || '#a855f7';
-  const bodyTextColor = '#334155';
-  const tinyLabelColor = '#64748b';
+  const bodyTextColor = infographicStyle.color_scheme.bodyText;
+  const tinyLabelColor = infographicStyle.color_scheme.tinyLabelText;
 
   const renderCardBase = (x: number, y: number, accentFill: string): string => `
-    <rect x="${x}" y="${y}" width="${cardWidth}" height="${cardHeight}" rx="14" fill="${panel}" opacity="0.97" />
-    <rect x="${x}" y="${y}" width="6" height="${cardHeight}" rx="3" fill="${accentFill}" />
+    <rect x="${x}" y="${y}" width="${cardWidth}" height="${cardHeight}" rx="${infographicStyle.card_style.cornerRadius}" fill="${panel}" opacity="${infographicStyle.card_style.fillOpacity}" />
+    <rect x="${x}" y="${y}" width="${infographicStyle.card_style.accentStripeWidth}" height="${cardHeight}" rx="${infographicStyle.card_style.accentStripeRadius}" fill="${accentFill}" />
   `;
 
   /**
@@ -4319,46 +4503,54 @@ async function renderInfographicAsset(
   const renderConceptGlyph = (cx: number, cy: number, size: number, idx: number, accentForCenterDisc: string): string => {
     const variant = idx % 6;
     const s = size;
+    const gg = infographicStyle.geometry.glyph;
+    const gf = infographicStyle.icon_style.glyphFill;
     if (variant === 0) {
       // Lightbulb (insight / idea)
+      const g = gg.lightbulb;
       return `
-        <path d="M ${cx - s * 0.5} ${cy - s * 0.1} a ${s * 0.5} ${s * 0.5} 0 1 1 ${s} 0 c 0 ${s * 0.25} -${s * 0.15} ${s * 0.4} -${s * 0.25} ${s * 0.5} l -${s * 0.5} 0 c -${s * 0.1} -${s * 0.1} -${s * 0.25} -${s * 0.25} -${s * 0.25} -${s * 0.5} z" fill="#ffffff" />
-        <rect x="${cx - s * 0.22}" y="${cy + s * 0.45}" width="${s * 0.44}" height="${s * 0.18}" rx="${s * 0.07}" fill="#ffffff" />
-        <rect x="${cx - s * 0.16}" y="${cy + s * 0.66}" width="${s * 0.32}" height="${s * 0.1}" rx="${s * 0.05}" fill="#ffffff" />
+        <path d="M ${cx - s * g.r} ${cy - s * g.topDy} a ${s * g.r} ${s * g.r} 0 1 1 ${s} 0 c ${s * g.c1[0]} ${s * g.c1[1]} -${s * g.c1[2]} ${s * g.c1[3]} -${s * g.c1[4]} ${s * g.c1[5]} l -${s * g.lDx} 0 c -${s * g.c2[0]} -${s * g.c2[1]} -${s * g.c2[2]} -${s * g.c2[3]} -${s * g.c2[4]} -${s * g.c2[5]} z" fill="${gf}" />
+        <rect x="${cx - s * g.b1[0]}" y="${cy + s * g.b1[1]}" width="${s * g.b1[2]}" height="${s * g.b1[3]}" rx="${s * g.b1[4]}" fill="${gf}" />
+        <rect x="${cx - s * g.b2[0]}" y="${cy + s * g.b2[1]}" width="${s * g.b2[2]}" height="${s * g.b2[3]}" rx="${s * g.b2[4]}" fill="${gf}" />
       `;
     }
     if (variant === 1) {
       // Target / bullseye (goal / focus)
+      const g = gg.target;
       return `
-        <circle cx="${cx}" cy="${cy}" r="${s * 0.95}" fill="none" stroke="#ffffff" stroke-width="${s * 0.14}" />
-        <circle cx="${cx}" cy="${cy}" r="${s * 0.50}" fill="none" stroke="#ffffff" stroke-width="${s * 0.14}" />
-        <circle cx="${cx}" cy="${cy}" r="${s * 0.18}" fill="#ffffff" />
+        <circle cx="${cx}" cy="${cy}" r="${s * g.r1}" fill="none" stroke="${gf}" stroke-width="${s * g.sw1}" />
+        <circle cx="${cx}" cy="${cy}" r="${s * g.r2}" fill="none" stroke="${gf}" stroke-width="${s * g.sw2}" />
+        <circle cx="${cx}" cy="${cy}" r="${s * g.r3}" fill="${gf}" />
       `;
     }
     if (variant === 2) {
       // Upward growth arrow (growth / trend)
-      const tip = s * 0.95;
+      const g = gg.arrow;
+      const tip = s * g.tip;
       return `
-        <polyline points="${cx - tip},${cy + s * 0.5} ${cx - s * 0.35},${cy} ${cx},${cy + s * 0.15} ${cx + tip},${cy - s * 0.55}" fill="none" stroke="#ffffff" stroke-width="${s * 0.18}" stroke-linecap="round" stroke-linejoin="round" />
-        <polygon points="${cx + tip - s * 0.45},${cy - s * 0.55} ${cx + tip},${cy - s * 0.55} ${cx + tip},${cy - s * 0.1}" fill="#ffffff" />
+        <polyline points="${cx - tip},${cy + s * g.p1y} ${cx - s * g.p2x},${cy} ${cx},${cy + s * g.p3y} ${cx + tip},${cy - s * g.p4y}" fill="none" stroke="${gf}" stroke-width="${s * g.sw}" stroke-linecap="round" stroke-linejoin="round" />
+        <polygon points="${cx + tip - s * g.headBackX},${cy - s * g.headY} ${cx + tip},${cy - s * g.headY} ${cx + tip},${cy - s * g.headTipY}" fill="${gf}" />
       `;
     }
     if (variant === 3) {
       // Checkmark (validation / done)
+      const g = gg.check;
       return `
-        <polyline points="${cx - s * 0.6},${cy + s * 0.05} ${cx - s * 0.1},${cy + s * 0.55} ${cx + s * 0.7},${cy - s * 0.55}" fill="none" stroke="#ffffff" stroke-width="${s * 0.22}" stroke-linecap="round" stroke-linejoin="round" />
+        <polyline points="${cx - s * g.p1x},${cy + s * g.p1y} ${cx - s * g.p2x},${cy + s * g.p2y} ${cx + s * g.p3x},${cy - s * g.p3y}" fill="none" stroke="${gf}" stroke-width="${s * g.sw}" stroke-linecap="round" stroke-linejoin="round" />
       `;
     }
     if (variant === 4) {
       // Lightning bolt (impact / energy)
+      const b = gg.bolt;
       return `
-        <polygon points="${cx + s * 0.05},${cy - s * 0.9} ${cx - s * 0.55},${cy + s * 0.1} ${cx - s * 0.05},${cy + s * 0.1} ${cx - s * 0.25},${cy + s * 0.9} ${cx + s * 0.55},${cy - s * 0.15} ${cx + s * 0.05},${cy - s * 0.15}" fill="#ffffff" />
+        <polygon points="${cx + s * b[0]},${cy - s * b[1]} ${cx - s * b[2]},${cy + s * b[3]} ${cx - s * b[4]},${cy + s * b[5]} ${cx - s * b[6]},${cy + s * b[7]} ${cx + s * b[8]},${cy - s * b[9]} ${cx + s * b[10]},${cy - s * b[11]}" fill="${gf}" />
       `;
     }
     // variant 5 — Gear (process / system)
-    const teeth = 8;
-    const outerR = s * 0.92;
-    const innerR = s * 0.62;
+    const g = gg.gear;
+    const teeth = g.teeth;
+    const outerR = s * g.outerR;
+    const innerR = s * g.innerR;
     const path: string[] = [];
     for (let i = 0; i < teeth; i += 1) {
       const a1 = (i / teeth) * 2 * Math.PI;
@@ -4370,8 +4562,8 @@ async function renderInfographicAsset(
       path.push(`${cx + innerR * Math.cos(a3)},${cy + innerR * Math.sin(a3)}`);
     }
     return `
-      <polygon points="${path.join(' ')}" fill="#ffffff" />
-      <circle cx="${cx}" cy="${cy}" r="${s * 0.28}" fill="${accentForCenterDisc}" />
+      <polygon points="${path.join(' ')}" fill="${gf}" />
+      <circle cx="${cx}" cy="${cy}" r="${s * g.discR}" fill="${accentForCenterDisc}" />
     `;
   };
 
@@ -4391,8 +4583,225 @@ async function renderInfographicAsset(
     bodyTextColor,
     panel,
     fontMultiplier: infographicFontMultiplier,
+    // Canonical chart/card visual constants — data-card builders read these.
+    chart: infographicStyle.chart_style,
+    barCornerRadius: infographicStyle.chart_style.barCornerRadius,
+    donutHoleRatio: infographicStyle.chart_style.donutHoleRatio,
+    cardCornerRadius: infographicStyle.card_style.cornerRadius,
+    cardStripeWidth: infographicStyle.card_style.accentStripeWidth,
+    cardStripeRadius: infographicStyle.card_style.accentStripeRadius,
+    cardFillOpacity: infographicStyle.card_style.fillOpacity,
   };
 
+  // ── Title fitter — single-line truncation with ellipsis. The legacy
+  //    layout titles (framework/process/comparison/timeline/hierarchy)
+  //    rendered the raw title with no width bound, so long titles ran off
+  //    the card edge / off-canvas. This clamps to the card's text width.
+  const fitTitle = (title: string, widthPx: number, fontPx: number): string => {
+    const s = String(title || '').replace(/\s+/g, ' ').trim();
+    const max = Math.max(6, Math.floor(widthPx / (fontPx * 0.58)));
+    return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
+  };
+
+  // ── Dense section body renderer (ROOT-CAUSE FIX).
+  //    composeInfographicCopy produces lead + bullets + stat + impact +
+  //    risk + example for EVERY section, but only the `stats` concept-card
+  //    path rendered them — every other layout (incl. the DEFAULT
+  //    `framework`) drew just the title + a single lead line, leaving
+  //    size-to-fill cards 50–90% empty ("blank / partially rendered").
+  //    This helper lays the dense copy into an arbitrary content rectangle
+  //    so framework/process/comparison/timeline/hierarchy fill their cards
+  //    with the content the composer already generated. Fully deterministic
+  //    (no network/AI/random); every block is height-clamped so nothing
+  //    overflows. When a field is absent the block has zero height — a
+  //    sparse section degrades gracefully to lead-only (prior behavior).
+  const renderDenseBody = (args: {
+    x: number; y: number; width: number; height: number;
+    lead: string;
+    bullets: string[];
+    stat: { value: string; label: string } | null;
+    example: string | null;
+    take: string | null;
+    impact: string | null;
+    risk: string | null;
+    accentFill: string;
+  }): string => {
+    const { x, y, width, height, accentFill } = args;
+    if (width <= 40 || height <= 30) return '';
+    const db = infographicStyle.geometry.denseBody;
+    const dd = db.detail;
+    const leadSize = Math.round(db.leadSize * infographicFontMultiplier);
+    const bulletSize = Math.round(db.bulletSize * infographicFontMultiplier);
+    const labelSize = Math.round(db.labelSize * infographicFontMultiplier);
+    const valSize = Math.round(db.valueSize * infographicFontMultiplier);
+    const cpl = (fontPx: number, w: number): number => Math.max(8, Math.floor(w / (fontPx * db.charWidthFactor)));
+    // Word-wrap that appends an ellipsis ONLY when the source text was
+    // truncated (a tail was dropped) — so long copy never ends abruptly
+    // mid-word. Non-truncated text is returned unchanged.
+    const clampLines = (textValue: string, fontPx: number, w: number, maxLines: number): string[] => {
+      const lines = balanceTextLines(textValue, cpl(fontPx, w), maxLines);
+      if (lines.length === 0) return lines;
+      const joined = lines.join(' ').replace(/\s+/g, ' ').trim();
+      const original = String(textValue || '').replace(/\s+/g, ' ').trim();
+      if (lines.length >= maxLines && joined.length < original.length) {
+        const last = lines[lines.length - 1].replace(/[\s.,;:]+$/u, '');
+        lines[lines.length - 1] = last.endsWith('…') ? last : `${last}…`;
+      }
+      return lines;
+    };
+
+    // Every block flows top-down from a LOCAL origin (0,0); the whole block
+    // is then translated to (x, y) and vertically centered inside the card
+    // (offsetY). This removes the mid-card gap the old bottom-anchored
+    // footer produced AND makes sparse sections read as intentionally
+    // centered instead of clustering at the top over dead space.
+    const parts: string[] = [];
+    let cursor = 0;
+    const fits = (h: number): boolean => cursor + h <= height;
+
+    // Stat callout chip.
+    if (args.stat && String(args.stat.value || '').trim()) {
+      const statVal = String(args.stat.value).trim().slice(0, 18);
+      const statLabel = String(args.stat.label || '').trim();
+      const chipH = Math.round(valSize * db.statChipHeightMul);
+      if (fits(chipH)) {
+        const valFont = Math.round(valSize * db.statValueFontMul);
+        const labelX = dd.statValueX + statVal.length * Math.round(valFont * db.statValueCharWidthMul) + dd.statLabelInset;
+        const labelMax = Math.max(0, Math.floor((width - labelX - dd.statLabelInset) / (labelSize * dd.labelCharFactor)));
+        parts.push(`<rect x="0" y="${cursor}" width="${width}" height="${chipH}" rx="${dd.statChipRx}" fill="${accentFill}" opacity="${dd.statChipOpacity}" />`);
+        parts.push(`<text x="${dd.statValueX}" y="${cursor + Math.round(chipH * dd.statValueYMul)}" font-size="${valFont}" font-family="${fontFamily}" font-weight="${dd.statValueWeight}" fill="${accentFill}">${escapeXml(statVal)}</text>`);
+        if (statLabel && labelMax >= 4) {
+          parts.push(`<text x="${labelX}" y="${cursor + Math.round(chipH * dd.statLabelYMul)}" font-size="${labelSize}" font-family="${fontFamily}" font-weight="${dd.statLabelWeight}" fill="${bodyTextColor}">${escapeXml(statLabel.slice(0, labelMax))}</text>`);
+        }
+        cursor += chipH + db.gapAfterStat;
+      }
+    }
+
+    // Lead paragraph (≤3 lines).
+    const lead = String(args.lead || '').trim();
+    if (lead) {
+      const lineH = Math.round(leadSize * db.leadLineHeightMul);
+      const lines = clampLines(lead, leadSize, width, db.leadMaxLines);
+      for (const ln of lines) {
+        if (!fits(lineH)) break;
+        parts.push(`<text x="0" y="${cursor + leadSize}" font-size="${leadSize}" font-family="${fontFamily}" font-weight="${dd.leadWeight}" fill="${bodyTextColor}">${escapeXml(ln)}</text>`);
+        cursor += lineH;
+      }
+      cursor += db.gapAfterLead;
+    }
+
+    // Bullet list — the bulk of the information density.
+    const bullets = (Array.isArray(args.bullets) ? args.bullets : [])
+      .map((b) => String(b || '').trim())
+      .filter((b) => b.length >= 4);
+    const bulletLineH = Math.round(bulletSize * db.bulletLineHeightMul);
+    for (const bullet of bullets) {
+      const lines = clampLines(bullet, bulletSize, width - (db.bulletTextIndent + 2), db.bulletMaxLines);
+      if (lines.length === 0) continue;
+      if (!fits(lines.length * bulletLineH)) break;
+      parts.push(`<circle cx="${db.bulletDotX}" cy="${cursor + Math.round(bulletSize * db.bulletDotCyMul)}" r="${db.bulletDotRadius}" fill="${accentFill}" />`);
+      lines.forEach((ln, i) => parts.push(`<text x="${db.bulletTextIndent}" y="${cursor + bulletSize + i * bulletLineH}" font-size="${bulletSize}" font-family="${fontFamily}" font-weight="${dd.bulletWeight}" fill="${bodyTextColor}">${escapeXml(ln)}</text>`));
+      cursor += lines.length * bulletLineH + dd.bulletInterGap;
+    }
+
+    // Impact / Risk mini-panels (flow directly after the bullets).
+    const impact = String(args.impact || '').trim();
+    const risk = String(args.risk || '').trim();
+    if (impact || risk) {
+      const gap = db.panelGap;
+      const twoUp = Boolean(impact && risk && width > db.panelTwoUpMinWidth);
+      const panelW = twoUp ? Math.floor((width - gap) / 2) : width;
+      const innerW = panelW - db.panelInnerInset;
+      const valLineH = Math.round(valSize * db.panelValueLineHeightMul);
+      const iLines = impact ? clampLines(impact, valSize, innerW, db.panelMaxLines) : [];
+      const rLines = risk ? clampLines(risk, valSize, innerW, db.panelMaxLines) : [];
+      const maxLines = Math.max(iLines.length, rLines.length, 1);
+      const panelH = db.panelHeightBase + maxLines * valLineH + db.panelHeightPad;
+      if (fits(panelH + db.gapBeforePanels)) {
+        cursor += db.gapBeforePanels;
+        const top = cursor;
+        const renderPanel = (px: number, lbl: string, lines: string[], color: string): string =>
+          lines.length === 0 ? '' : (
+            `<rect x="${px}" y="${top}" width="${panelW}" height="${panelH}" rx="${dd.panelRx}" fill="${color}" opacity="${dd.panelOpacity}" />` +
+            `<rect x="${px}" y="${top}" width="${dd.panelStripeWidth}" height="${panelH}" rx="${dd.panelStripeRx}" fill="${color}" />` +
+            `<text x="${px + dd.panelTextInset}" y="${top + db.panelLabelY}" font-size="${labelSize}" font-family="${fontFamily}" font-weight="${dd.panelLabelWeight}" fill="${color}" letter-spacing="${dd.panelLabelSpacing}">${lbl}</text>` +
+            lines.map((ln, i) => `<text x="${px + dd.panelTextInset}" y="${top + db.panelValueStartY + i * valLineH}" font-size="${valSize}" font-family="${fontFamily}" font-weight="${dd.panelValueWeight}" fill="${text}">${escapeXml(ln)}</text>`).join('')
+          );
+        if (twoUp) {
+          parts.push(renderPanel(0, '+ IMPACT', iLines, dd.impactColor));
+          parts.push(renderPanel(panelW + gap, '! RISK', rLines, dd.riskColor));
+        } else if (impact) {
+          parts.push(renderPanel(0, '+ IMPACT', iLines, dd.impactColor));
+        } else if (risk) {
+          parts.push(renderPanel(0, '! RISK', rLines, dd.riskColor));
+        }
+        cursor += panelH;
+      }
+    }
+
+    // Example / takeaway footer band.
+    const example = String(args.example || '').trim();
+    const take = String(args.take || '').trim();
+    if (example || take) {
+      const label = example ? 'EXAMPLE' : 'TAKEAWAY';
+      const value = example || take;
+      const valLineH = Math.round(valSize * db.footerValueLineHeightMul);
+      const lines = clampLines(value, valSize, width - db.footerInnerInset, db.footerMaxLines);
+      const bandH = db.footerHeightBase + lines.length * valLineH + db.footerHeightPad;
+      if (fits(bandH + db.gapBeforeFooter)) {
+        cursor += db.gapBeforeFooter;
+        const top = cursor;
+        parts.push(`<rect x="0" y="${top}" width="${width}" height="${bandH}" rx="${dd.footerRx}" fill="${accentFill}" opacity="${dd.footerOpacity}" />`);
+        parts.push(`<text x="${dd.footerTextInset}" y="${top + db.footerLabelY}" font-size="${labelSize}" font-family="${fontFamily}" font-weight="${dd.footerLabelWeight}" fill="${accentFill}" letter-spacing="${dd.footerLabelSpacing}">${label}</text>`);
+        lines.forEach((ln, i) => parts.push(`<text x="${dd.footerTextInset}" y="${top + db.footerValueStartY + i * valLineH}" font-size="${valSize}" font-family="${fontFamily}" font-weight="${example ? dd.footerExampleWeight : dd.footerTakeWeight}" fill="${example ? bodyTextColor : text}">${escapeXml(ln)}</text>`));
+        cursor += bandH;
+      }
+    }
+
+    if (parts.length === 0) return '';
+    // Keep the block TOP-aligned under the layout's (fixed-position) title.
+    // A tiny optical nudge only — never center, which would detach the body
+    // from the title on tall, sparsely-filled cards. Underfill leaves
+    // contiguous trailing space at the bottom, which reads as card padding.
+    const usedH = cursor;
+    const offsetY = Math.min(db.offsetYCap, Math.max(0, Math.round((height - usedH) / 2)));
+    return `<g transform="translate(${x}, ${y + offsetY})">${parts.join('')}</g>`;
+  };
+
+  // Rich-field accessor — sections carry the composer's dense output
+  // (attached at section-merge above); this reads them with safe defaults.
+  const richFieldsOf = (s: Record<string, unknown>): {
+    bullets: string[];
+    stat: { value: string; label: string } | null;
+    example: string | null;
+    take: string | null;
+    impact: string | null;
+    risk: string | null;
+  } => ({
+    bullets: Array.isArray((s as { bullets?: unknown }).bullets) ? ((s as { bullets: unknown[] }).bullets).map(String) : [],
+    stat: (s as { stat?: { value: string; label: string } | null }).stat ?? null,
+    example: (s as { example?: string | null }).example ?? null,
+    take: (s as { take?: string | null }).take ?? null,
+    impact: (s as { impact?: string | null }).impact ?? null,
+    risk: (s as { risk?: string | null }).risk ?? null,
+  });
+
+  // Binds a section's lead (`body`) + composer rich fields into a dense
+  // body over the supplied content rectangle. Used by every non-stats
+  // layout so they all fill their cards with the generated content.
+  const denseBodyFor = (
+    s: Record<string, unknown>,
+    geom: { x: number; y: number; width: number; height: number },
+    accentFill: string,
+  ): string => renderDenseBody({
+    ...geom,
+    lead: String((s as { body?: unknown }).body || ''),
+    ...richFieldsOf(s),
+    accentFill,
+  });
+
+  const L = infographicStyle.geometry.layouts;
+  const GT = infographicStyle.geometry.text;
   const cards = sections.map((section, index) => {
     const { x, y } = engine.position(index);
     const cycleAccent = [accent, accentSecondary, accentTertiary][index % 3];
@@ -4471,134 +4880,128 @@ async function renderInfographicAsset(
         // We're now using native SVG <text> with manual word-wrapping
         // via balanceTextLines for EVERY text block on the card.
 
+        const SC = infographicStyle.geometry.statsConcept;
+        const cpl058 = (fontPx: number, w: number): number => Math.max(8, Math.floor(w / (fontPx * SC.charWidthFactor)));
         // Icon disc — smaller (8% min dim).
-        const iconR = Math.min(Math.round(cardWidth * 0.08), Math.round(cardHeight * 0.08));
-        const iconCx = x + 36 + iconR;
-        const iconCy = y + 36 + iconR;
+        const iconR = Math.min(Math.round(cardWidth * SC.iconDiscRatio), Math.round(cardHeight * SC.iconDiscRatio));
+        const iconCx = x + SC.iconInset + iconR;
+        const iconCy = y + SC.iconInset + iconR;
 
         // Stat rail on the right when present.
-        const railW = stat ? Math.round(cardWidth * 0.24) : 0;
-        const contentRight = stat ? x + cardWidth - railW - 20 : x + cardWidth - 28;
-        const contentLeftX = x + 28;
+        const railW = stat ? Math.round(cardWidth * SC.railWidthRatio) : 0;
+        const contentRight = stat ? x + cardWidth - railW - SC.contentRightPadWithRail : x + cardWidth - SC.contentRightPad;
+        const contentLeftX = x + SC.contentLeftInset;
         const contentWidth = contentRight - contentLeftX;
 
         // Font sizing — all in pixel-space, no multipliers smaller
         // than 1.0 so text is always legible.
-        const titleSize = Math.round(20 * infographicFontMultiplier);
-        const leadSize = Math.round(14 * infographicFontMultiplier);
-        const bulletSize = Math.round(13 * infographicFontMultiplier);
-        const panelLabelSize = Math.round(10 * infographicFontMultiplier);
-        const panelTextSize = Math.round(12 * infographicFontMultiplier);
-        const footerLabelSize = Math.round(10 * infographicFontMultiplier);
-        const footerTextSize = Math.round(12 * infographicFontMultiplier);
+        const titleSize = Math.round(SC.titleSize * infographicFontMultiplier);
+        const leadSize = Math.round(SC.leadSize * infographicFontMultiplier);
+        const bulletSize = Math.round(SC.bulletSize * infographicFontMultiplier);
+        const panelLabelSize = Math.round(SC.panels.labelSize * infographicFontMultiplier);
+        const panelTextSize = Math.round(SC.panels.textSize * infographicFontMultiplier);
+        const footerLabelSize = Math.round(SC.footer.labelSize * infographicFontMultiplier);
+        const footerTextSize = Math.round(SC.footer.textSize * infographicFontMultiplier);
 
-        // Character budgets for word wrap. Inter at body weights
-        // averages ~0.58× font size per character; this estimate is
-        // intentionally conservative so the wrap fires BEFORE the
-        // SVG text element actually overflows its zone.
-        const charsPerLine = (fontPx: number, width: number) => Math.max(8, Math.floor(width / (fontPx * 0.58)));
+        const charsPerLine = cpl058;
 
         // Title — wraps up to 2 lines next to the icon.
-        const titleX = iconCx + iconR + 18;
-        const titleZoneW = (stat ? cardWidth - (iconR * 2 + 36 + 18) - railW - 36 : cardWidth - (iconR * 2 + 36 + 18) - 36);
-        const titleLines = balanceTextLines(cleanTitle, charsPerLine(titleSize, titleZoneW), 2);
-        const titleLineH = Math.round(titleSize * 1.2);
+        const titleX = iconCx + iconR + SC.titleIconGap;
+        const titleZoneW = (stat ? cardWidth - (iconR * 2 + SC.titleZoneIconGap + SC.titleIconGap) - railW - SC.titleZoneTailInset : cardWidth - (iconR * 2 + SC.titleZoneIconGap + SC.titleIconGap) - SC.titleZoneTailInset);
+        const titleLines = balanceTextLines(cleanTitle, charsPerLine(titleSize, titleZoneW), SC.titleMaxLines);
+        const titleLineH = Math.round(titleSize * SC.titleLineHeightMul);
         const titleStartY = iconCy - iconR + titleSize;
         const titleBlockH = titleLines.length * titleLineH;
-        const titleSvg = titleLines.map((line, i) => `<text x="${titleX}" y="${titleStartY + i * titleLineH}" font-size="${titleSize}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(line)}</text>`).join('');
+        const titleSvg = titleLines.map((line, i) => `<text x="${titleX}" y="${titleStartY + i * titleLineH}" font-size="${titleSize}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(line)}</text>`).join('');
 
         // Footer-up layout: compute footer geometry first so we know
         // how much vertical space the lead + bullets have.
         const hasImpactRow = Boolean(impact || risk);
         const hasFooterBand = Boolean(example || take);
-        const footerBandH = hasFooterBand ? 70 : 0;
-        const footerBandY = y + cardHeight - footerBandH - 12;
-        const impactRowH = hasImpactRow ? 78 : 0;
-        const impactRowY = (hasFooterBand ? footerBandY : y + cardHeight - 12) - impactRowH - (hasImpactRow && hasFooterBand ? 10 : 0);
+        const footerBandH = hasFooterBand ? SC.footerBandH : 0;
+        const footerBandY = y + cardHeight - footerBandH - SC.footerBottomPad;
+        const impactRowH = hasImpactRow ? SC.impactRowH : 0;
+        const impactRowY = (hasFooterBand ? footerBandY : y + cardHeight - SC.footerBottomPad) - impactRowH - (hasImpactRow && hasFooterBand ? SC.impactFooterGap : 0);
 
-        const headerBottom = Math.max(iconCy + iconR + 12, titleStartY + titleBlockH + 4);
-        const leadY = headerBottom + 18;
+        const headerBottom = Math.max(iconCy + iconR + SC.headerBottomPad, titleStartY + titleBlockH + SC.titleBlockPad);
+        const leadY = headerBottom + SC.leadGap;
         const leadCharsPerLine = charsPerLine(leadSize, contentWidth);
         // Lead — up to 3 lines.
-        const leadLines = balanceTextLines(lead, leadCharsPerLine, 3);
-        const leadLineH = Math.round(leadSize * 1.45);
-        const leadSvg = leadLines.map((line, i) => `<text x="${contentLeftX}" y="${leadY + i * leadLineH}" font-size="${leadSize}" font-family="${fontFamily}" font-weight="500" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('');
+        const leadLines = balanceTextLines(lead, leadCharsPerLine, SC.leadMaxLines);
+        const leadLineH = Math.round(leadSize * SC.leadLineHeightMul);
+        const leadSvg = leadLines.map((line, i) => `<text x="${contentLeftX}" y="${leadY + i * leadLineH}" font-size="${leadSize}" font-family="${fontFamily}" font-weight="${GT.bodyWeight}" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('');
         const leadBlockH = leadLines.length * leadLineH;
 
-        // Bullets — each up to 2 lines, indented under a dot. Max 4
-        // bullets per card (cards are dense already).
-        const bulletsStartY = leadY + leadBlockH + 12;
-        const bulletLineH = Math.round(bulletSize * 1.4);
-        const bulletCharsPerLine = charsPerLine(bulletSize, contentWidth - 18);
-        const maxBullets = 4;
+        // Bullets — each up to 2 lines, indented under a dot.
+        const bulletsStartY = leadY + leadBlockH + SC.bulletsStartGap;
+        const bulletLineH = Math.round(bulletSize * SC.bulletLineHeightMul);
+        const bulletCharsPerLine = charsPerLine(bulletSize, contentWidth - SC.bulletCharInset);
+        const maxBullets = SC.maxBullets;
         let bulletYCursor = bulletsStartY;
         const bulletsSvgParts: string[] = [];
         for (const bullet of bullets.slice(0, maxBullets)) {
-          const lines = balanceTextLines(bullet, bulletCharsPerLine, 2);
+          const lines = balanceTextLines(bullet, bulletCharsPerLine, SC.bulletMaxLines);
           if (lines.length === 0) continue;
           // Stop if the next bullet would push into the footer zone.
-          if (bulletYCursor + lines.length * bulletLineH > impactRowY - 14) break;
-          bulletsSvgParts.push(`<circle cx="${contentLeftX + 4}" cy="${bulletYCursor - Math.round(bulletSize * 0.3)}" r="3" fill="${cycleAccent}" />`);
+          if (bulletYCursor + lines.length * bulletLineH > impactRowY - SC.bulletFooterPad) break;
+          bulletsSvgParts.push(`<circle cx="${contentLeftX + SC.bulletDotInset}" cy="${bulletYCursor - Math.round(bulletSize * SC.bulletDotCyMul)}" r="${SC.bulletDotRadius}" fill="${cycleAccent}" />`);
           for (let li = 0; li < lines.length; li += 1) {
-            bulletsSvgParts.push(`<text x="${contentLeftX + 16}" y="${bulletYCursor + li * bulletLineH}" font-size="${bulletSize}" font-family="${fontFamily}" font-weight="500" fill="${bodyTextColor}">${escapeXml(lines[li])}</text>`);
+            bulletsSvgParts.push(`<text x="${contentLeftX + SC.bulletTextInset}" y="${bulletYCursor + li * bulletLineH}" font-size="${bulletSize}" font-family="${fontFamily}" font-weight="${GT.bodyWeight}" fill="${bodyTextColor}">${escapeXml(lines[li])}</text>`);
           }
-          bulletYCursor += lines.length * bulletLineH + 4;
+          bulletYCursor += lines.length * bulletLineH + SC.bulletInterGap;
         }
         const bulletsSvg = bulletsSvgParts.join('');
 
         // Stat rail (right side, optional).
         let statRail = '';
         if (stat) {
-          const statBoxX = x + cardWidth - railW - 8;
-          const statBoxY = y + 20;
-          const statBoxH = cardHeight - impactRowH - footerBandH - 56;
-          const statValueSize = Math.round(Math.min(railW * 0.42, 50));
-          const statLabelSize = Math.round(11 * infographicFontMultiplier);
-          const statLabelLines = balanceTextLines(stat.label, Math.max(10, Math.floor((railW - 16) / (statLabelSize * 0.55))), 4);
-          const statLabelLineH = Math.round(statLabelSize * 1.35);
-          const statLabelStartY = statBoxY + 110;
+          const SR = SC.statRail;
+          const statBoxX = x + cardWidth - railW - SR.boxXPad;
+          const statBoxY = y + SR.boxY;
+          const statBoxH = cardHeight - impactRowH - footerBandH - SR.boxHInset;
+          const statValueSize = Math.round(Math.min(railW * SR.valueSizeRatio, SR.valueSizeMax));
+          const statLabelSize = Math.round(SR.labelSize * infographicFontMultiplier);
+          const statLabelLines = balanceTextLines(stat.label, Math.max(10, Math.floor((railW - 16) / (statLabelSize * SR.labelCharFactor))), SR.labelMaxLines);
+          const statLabelLineH = Math.round(statLabelSize * SR.labelLineHeightMul);
+          const statLabelStartY = statBoxY + SR.labelStartY;
           statRail = `
-            <rect x="${statBoxX}" y="${statBoxY}" width="${railW}" height="${statBoxH}" rx="12" fill="${cycleAccent}" opacity="0.10" />
-            <text x="${statBoxX + railW / 2}" y="${statBoxY + 70}" text-anchor="middle" font-size="${statValueSize}" font-family="${fontFamily}" font-weight="900" fill="${cycleAccent}">${escapeXml(stat.value)}</text>
-            ${statLabelLines.map((line, i) => `<text x="${statBoxX + railW / 2}" y="${statLabelStartY + i * statLabelLineH}" text-anchor="middle" font-size="${statLabelSize}" font-family="${fontFamily}" font-weight="500" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('')}
+            <rect x="${statBoxX}" y="${statBoxY}" width="${railW}" height="${statBoxH}" rx="${SR.rx}" fill="${cycleAccent}" opacity="${SR.opacity}" />
+            <text x="${statBoxX + railW / 2}" y="${statBoxY + SR.valueY}" text-anchor="middle" font-size="${statValueSize}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${cycleAccent}">${escapeXml(stat.value)}</text>
+            ${statLabelLines.map((line, i) => `<text x="${statBoxX + railW / 2}" y="${statLabelStartY + i * statLabelLineH}" text-anchor="middle" font-size="${statLabelSize}" font-family="${fontFamily}" font-weight="${GT.bodyWeight}" fill="${bodyTextColor}">${escapeXml(line)}</text>`).join('')}
           `;
         }
 
-        // Impact + risk panels. Tightened to fix truncation:
-        //  - char width estimate raised 0.55 → 0.58 so wraps fire
-        //    before the SVG text actually overflows the panel rect
-        //  - max lines raised 2 → 3 so longer impact/risk sentences
-        //    don't lose their tail
-        //  - panel height auto-sized from line count, not fixed
-        const impactPanelColor = '#10b981';
-        const riskPanelColor = '#f59e0b';
+        // Impact + risk panels (auto-sized from line count).
+        const PN = SC.panels;
+        const impactPanelColor = PN.impactColor;
+        const riskPanelColor = PN.riskColor;
         let impactRow = '';
         let renderedImpactRowH = impactRowH;
         if (hasImpactRow) {
-          const panelGap = 12;
-          const panelW = impact && risk ? Math.floor((cardWidth - 32 - panelGap) / 2) : cardWidth - 32;
-          const panelInnerW = panelW - 32;
-          const panelValueLineH = Math.round(panelTextSize * 1.35);
+          const panelGap = PN.gap;
+          const panelW = impact && risk ? Math.floor((cardWidth - PN.outerInset - panelGap) / 2) : cardWidth - PN.outerInset;
+          const panelInnerW = panelW - PN.innerInset;
+          const panelValueLineH = Math.round(panelTextSize * PN.valueLineHeightMul);
           const wrapPanelValue = (v: string): string[] => {
-            const cpl = Math.max(10, Math.floor(panelInnerW / (panelTextSize * 0.58)));
-            return balanceTextLines(v, cpl, 3);
+            const cpl = Math.max(10, Math.floor(panelInnerW / (panelTextSize * PN.charFactor)));
+            return balanceTextLines(v, cpl, PN.maxLines);
           };
           const impactLines = impact ? wrapPanelValue(impact) : [];
           const riskLines = risk ? wrapPanelValue(risk) : [];
           const maxLines = Math.max(impactLines.length, riskLines.length, 1);
-          renderedImpactRowH = 28 + maxLines * panelValueLineH + 8;
+          renderedImpactRowH = PN.heightBase + maxLines * panelValueLineH + PN.heightPad;
           const renderPanel = (px: number, label: string, lines: string[], color: string): string => {
             if (lines.length === 0) return '';
-            const labelY = impactRowY + 22;
-            const valueStartY = impactRowY + 42;
+            const labelY = impactRowY + PN.labelYOffset;
+            const valueStartY = impactRowY + PN.valueStartYOffset;
             return `
-              <rect x="${px}" y="${impactRowY}" width="${panelW}" height="${renderedImpactRowH}" rx="10" fill="${color}" opacity="0.13" />
-              <rect x="${px}" y="${impactRowY}" width="4" height="${renderedImpactRowH}" rx="2" fill="${color}" />
-              <text x="${px + 18}" y="${labelY}" font-size="${panelLabelSize}" font-family="${fontFamily}" font-weight="800" fill="${color}" letter-spacing="2.4">${escapeXml(label)}</text>
-              ${lines.map((line, i) => `<text x="${px + 18}" y="${valueStartY + i * panelValueLineH}" font-size="${panelTextSize}" font-family="${fontFamily}" font-weight="600" fill="${text}">${escapeXml(line)}</text>`).join('')}
+              <rect x="${px}" y="${impactRowY}" width="${panelW}" height="${renderedImpactRowH}" rx="${PN.rx}" fill="${color}" opacity="${PN.opacity}" />
+              <rect x="${px}" y="${impactRowY}" width="${PN.stripeWidth}" height="${renderedImpactRowH}" rx="${PN.stripeRx}" fill="${color}" />
+              <text x="${px + PN.textInset}" y="${labelY}" font-size="${panelLabelSize}" font-family="${fontFamily}" font-weight="${GT.labelWeight}" fill="${color}" letter-spacing="${PN.labelSpacing}">${escapeXml(label)}</text>
+              ${lines.map((line, i) => `<text x="${px + PN.textInset}" y="${valueStartY + i * panelValueLineH}" font-size="${panelTextSize}" font-family="${fontFamily}" font-weight="${GT.panelValueWeight}" fill="${text}">${escapeXml(line)}</text>`).join('')}
             `;
           };
-          const impactPanelX = x + 16;
+          const impactPanelX = x + PN.xInset;
           const riskPanelX = impact && risk ? impactPanelX + panelW + panelGap : impactPanelX;
           impactRow = [
             renderPanel(impactPanelX, '+ IMPACT', impactLines, impactPanelColor),
@@ -4606,33 +5009,32 @@ async function renderInfographicAsset(
           ].join('');
         }
 
-        // Footer band (example or take). Same fix: tighter char-width
-        // estimate + 3-line allowance so the example sentence isn't
-        // chopped mid-thought.
+        // Footer band (example or take).
+        const FB = SC.footer;
         let footerBlock = '';
         let renderedFooterBandH = footerBandH;
         if (hasFooterBand) {
           const label = example ? 'EXAMPLE' : 'TAKEAWAY';
           const value = example || take;
-          const innerW = cardWidth - 64;
-          const valueCharsPerLine = Math.max(20, Math.floor(innerW / (footerTextSize * 0.58)));
-          const valueLines = balanceTextLines(value, valueCharsPerLine, 3);
-          const valueLineH = Math.round(footerTextSize * 1.4);
-          renderedFooterBandH = 30 + valueLines.length * valueLineH + 6;
-          const valueStartY = footerBandY + 38;
+          const innerW = cardWidth - FB.innerInset;
+          const valueCharsPerLine = Math.max(20, Math.floor(innerW / (footerTextSize * FB.charFactor)));
+          const valueLines = balanceTextLines(value, valueCharsPerLine, FB.maxLines);
+          const valueLineH = Math.round(footerTextSize * FB.lineHeightMul);
+          renderedFooterBandH = FB.heightBase + valueLines.length * valueLineH + FB.heightPad;
+          const valueStartY = footerBandY + FB.valueStartYOffset;
           const valueColor = example ? bodyTextColor : text;
-          const valueWeight = example ? '500' : '700';
+          const valueWeight = example ? GT.bodyWeight : GT.takeWeight;
           footerBlock = `
-            <rect x="${x + 16}" y="${footerBandY}" width="${cardWidth - 32}" height="${renderedFooterBandH}" rx="10" fill="${cycleAccent}" opacity="0.08" />
-            <text x="${x + 32}" y="${footerBandY + 20}" font-size="${footerLabelSize}" font-family="${fontFamily}" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">${label}</text>
-            ${valueLines.map((line, i) => `<text x="${x + 32}" y="${valueStartY + i * valueLineH}" font-size="${footerTextSize}" font-family="${fontFamily}" font-weight="${valueWeight}" fill="${valueColor}">${escapeXml(line)}</text>`).join('')}
+            <rect x="${x + FB.xInset}" y="${footerBandY}" width="${cardWidth - PN.outerInset}" height="${renderedFooterBandH}" rx="${FB.rx}" fill="${cycleAccent}" opacity="${FB.opacity}" />
+            <text x="${x + FB.textInset}" y="${footerBandY + FB.labelYOffset}" font-size="${footerLabelSize}" font-family="${fontFamily}" font-weight="${GT.labelWeight}" fill="${cycleAccent}" letter-spacing="${FB.labelSpacing}">${label}</text>
+            ${valueLines.map((line, i) => `<text x="${x + FB.textInset}" y="${valueStartY + i * valueLineH}" font-size="${footerTextSize}" font-family="${fontFamily}" font-weight="${valueWeight}" fill="${valueColor}">${escapeXml(line)}</text>`).join('')}
           `;
         }
 
         return `
           ${renderCardBase(x, y, cycleAccent)}
           <circle cx="${iconCx}" cy="${iconCy}" r="${iconR}" fill="${cycleAccent}" />
-          ${renderConceptGlyph(iconCx, iconCy, Math.round(iconR * 0.5), index, cycleAccent)}
+          ${renderConceptGlyph(iconCx, iconCy, Math.round(iconR * SC.glyphSizeRatio), index, cycleAccent)}
           ${titleSvg}
           ${leadSvg}
           ${bulletsSvg}
@@ -4647,29 +5049,30 @@ async function renderInfographicAsset(
 
       // Variant A: donut chart (percent visual)
       if (variant === 0) {
-        const donutR = Math.min(Math.round(cardWidth * 0.28), Math.round(cardHeight * 0.28));
+        const S = L.stats; const D = S.donut;
+        const donutR = Math.min(Math.round(cardWidth * D.radiusRatio), Math.round(cardHeight * D.radiusRatio));
         const donutCx = cardCx;
-        const donutCy = y + 50 + donutR;
-        const donutStroke = Math.max(14, Math.round(donutR * 0.30));
+        const donutCy = y + D.yOffset + donutR;
+        const donutStroke = Math.max(D.strokeMin, Math.round(donutR * D.strokeRatio));
         const circumference = 2 * Math.PI * donutR;
         const filledArc = (percentValue / 100) * circumference;
         const displayStat = numericMatch ? `${numericMatch[1]}%` : `${Math.round(percentValue)}%`;
         return `
           ${renderCardBase(x, y, cycleAccent)}
-          <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-opacity="0.14" stroke-width="${donutStroke}" />
+          <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-opacity="${D.trackOpacity}" stroke-width="${donutStroke}" />
           <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-width="${donutStroke}" stroke-linecap="round" stroke-dasharray="${filledArc} ${circumference - filledArc}" transform="rotate(-90 ${donutCx} ${donutCy})" />
-          <text x="${donutCx}" y="${donutCy + Math.round(donutR * 0.22)}" text-anchor="middle" font-size="${Math.max(36, Math.round(donutR * 0.72))}" font-family="${fontFamily}" font-weight="900" fill="${text}">${escapeXml(displayStat)}</text>
-          <text x="${cardCx}" y="${donutCy + donutR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+          <text x="${donutCx}" y="${donutCy + Math.round(donutR * D.statYRatio)}" text-anchor="middle" font-size="${Math.max(D.statFontMin, Math.round(donutR * D.statFontRatio))}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${text}">${escapeXml(displayStat)}</text>
+          <text x="${cardCx}" y="${donutCy + donutR + D.titleGap}" text-anchor="middle" font-size="${Math.round(S.titleFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(section.title)}</text>
           ${renderBrandBody({
             x: cardCx,
-            y: donutCy + donutR + 66,
-            width: cardWidth - 56,
-            height: y + cardHeight - 28 - (donutCy + donutR + 66),
+            y: donutCy + donutR + D.bodyGap,
+            width: cardWidth - S.bodyWidthInset,
+            height: y + cardHeight - S.bodyBottomPad - (donutCy + donutR + D.bodyGap),
             text: String(subBody),
-            fontPx: Math.round(15 * infographicFontMultiplier),
+            fontPx: Math.round(S.bodyFont * infographicFontMultiplier),
             color: bodyTextColor,
             weight: '500',
-            lineHeightMul: 1.5,
+            lineHeightMul: S.bodyLineHeightMul,
             align: 'center',
           })}
         `;
@@ -4682,29 +5085,30 @@ async function renderInfographicAsset(
         const numeralStr = rawNumericMatch
           ? `${rawNumericMatch[1]}${rawNumericMatch[2]}`.toUpperCase()
           : (numericMatch ? `${numericMatch[1]}%` : `${Math.round(percentValue)}%`);
-        const barW = cardWidth - 56;
-        const barH = 14;
-        const barX = x + 28;
-        const barY = y + Math.round(cardHeight * 0.50);
+        const S = L.stats; const B = S.bar;
+        const barW = cardWidth - B.widthInset;
+        const barH = B.height;
+        const barX = x + B.xInset;
+        const barY = y + Math.round(cardHeight * B.yRatio);
         const barFillRatio = numericMatch
           ? Math.min(1, percentValue / 100)
-          : Math.min(1, 0.35 + (index * 0.18));
+          : Math.min(1, B.fillBase + (index * B.fillIndexStep));
         return `
           ${renderCardBase(x, y, cycleAccent)}
-          <text x="${cardCx}" y="${y + Math.round(cardHeight * 0.36)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * 0.38, cardWidth * 0.36))}" font-family="${fontFamily}" font-weight="900" fill="${cycleAccent}">${escapeXml(numeralStr)}</text>
-          <rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" opacity="0.16" />
+          <text x="${cardCx}" y="${y + Math.round(cardHeight * B.numeralYRatio)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * B.numeralFontHRatio, cardWidth * B.numeralFontWRatio))}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${cycleAccent}">${escapeXml(numeralStr)}</text>
+          <rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" opacity="${B.trackOpacity}" />
           <rect x="${barX}" y="${barY}" width="${Math.round(barW * barFillRatio)}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" />
-          <text x="${cardCx}" y="${barY + barH + 38}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+          <text x="${cardCx}" y="${barY + barH + B.titleGap}" text-anchor="middle" font-size="${Math.round(S.titleFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(section.title)}</text>
           ${renderBrandBody({
             x: cardCx,
-            y: barY + barH + 56,
-            width: cardWidth - 56,
-            height: y + cardHeight - 28 - (barY + barH + 56),
+            y: barY + barH + B.bodyGap,
+            width: cardWidth - S.bodyWidthInset,
+            height: y + cardHeight - S.bodyBottomPad - (barY + barH + B.bodyGap),
             text: String(subBody),
-            fontPx: Math.round(15 * infographicFontMultiplier),
+            fontPx: Math.round(S.bodyFont * infographicFontMultiplier),
             color: bodyTextColor,
             weight: '500',
-            lineHeightMul: 1.5,
+            lineHeightMul: S.bodyLineHeightMul,
             align: 'center',
           })}
         `;
@@ -4712,35 +5116,36 @@ async function renderInfographicAsset(
 
       // Variant C: pictogram — 10 dots filled proportionally (1 dot
       // per 10% of the value). Reads as "8 out of 10" visually.
-      const totalDots = 10;
+      const S = L.stats; const DT = S.dot;
+      const totalDots = DT.count;
       const filledDots = numericMatch
         ? Math.round(percentValue / 10)
-        : Math.max(1, Math.min(totalDots, 4 + index));
-      const dotR = Math.max(8, Math.round(cardWidth * 0.022));
-      const dotGap = Math.round(dotR * 2.6);
+        : Math.max(1, Math.min(totalDots, DT.filledBase + index));
+      const dotR = Math.max(DT.radiusMin, Math.round(cardWidth * DT.radiusRatio));
+      const dotGap = Math.round(dotR * DT.gapMul);
       const rowW = (totalDots - 1) * dotGap;
       const dotStartX = cardCx - rowW / 2;
-      const dotY = y + Math.round(cardHeight * 0.38);
+      const dotY = y + Math.round(cardHeight * DT.yRatio);
       const dots = Array.from({ length: totalDots }, (_, i) => {
-        const fillOpacity = i < filledDots ? '1' : '0.18';
+        const fillOpacity = i < filledDots ? '1' : String(DT.emptyOpacity);
         return `<circle cx="${dotStartX + i * dotGap}" cy="${dotY}" r="${dotR}" fill="${cycleAccent}" opacity="${fillOpacity}" />`;
       }).join('');
       const ratioLabel = `${filledDots}/10`;
       return `
         ${renderCardBase(x, y, cycleAccent)}
-        <text x="${cardCx}" y="${y + Math.round(cardHeight * 0.22)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * 0.20, cardWidth * 0.22))}" font-family="${fontFamily}" font-weight="900" fill="${cycleAccent}">${escapeXml(ratioLabel)}</text>
+        <text x="${cardCx}" y="${y + Math.round(cardHeight * DT.ratioYRatio)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * DT.ratioFontHRatio, cardWidth * DT.ratioFontWRatio))}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${cycleAccent}">${escapeXml(ratioLabel)}</text>
         ${dots}
-        <text x="${cardCx}" y="${dotY + dotR + 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
+        <text x="${cardCx}" y="${dotY + dotR + DT.titleGap}" text-anchor="middle" font-size="${Math.round(S.titleFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(section.title)}</text>
         ${renderBrandBody({
           x: cardCx,
-          y: dotY + dotR + 66,
-          width: cardWidth - 56,
-          height: y + cardHeight - 28 - (dotY + dotR + 66),
+          y: dotY + dotR + DT.bodyGap,
+          width: cardWidth - S.bodyWidthInset,
+          height: y + cardHeight - S.bodyBottomPad - (dotY + dotR + DT.bodyGap),
           text: String(subBody),
-          fontPx: Math.round(15 * infographicFontMultiplier),
+          fontPx: Math.round(S.bodyFont * infographicFontMultiplier),
           color: bodyTextColor,
           weight: '500',
-          lineHeightMul: 1.5,
+          lineHeightMul: S.bodyLineHeightMul,
           align: 'center',
         })}
       `;
@@ -4752,42 +5157,33 @@ async function renderInfographicAsset(
       // as a flow. The number badge sits in a tinted gradient panel
       // on the left, title + body fill the body of the chevron, and
       // a center-aligned arrow at the bottom links to the next step.
+      const P = L.process;
       const stepNum = String(index + 1).padStart(2, '0');
-      const badgeR = Math.round(Math.min(cardHeight, cardWidth) * 0.13);
-      const badgePanelW = badgeR * 3;
+      const badgeR = Math.round(Math.min(cardHeight, cardWidth) * P.badgeRadiusRatio);
+      const badgePanelW = badgeR * P.badgePanelWMul;
       const badgeCx = x + badgePanelW / 2;
       const badgeCy = y + cardHeight / 2;
       const isLast = index === sections.length - 1;
-      const connectorH = 24;
-      const arrowY1 = y + cardHeight + 4;
+      const connectorH = P.connectorHeight;
+      const arrowY1 = y + cardHeight + P.connectorArrowGap;
       const arrowY2 = y + cardHeight + connectorH;
       const arrowMidX = x + cardWidth / 2;
+      const titleFont = Math.round(cardTitleFontSize * P.titleFontMul);
       const connector = isLast ? '' : `
-        <line x1="${arrowMidX}" y1="${arrowY1}" x2="${arrowMidX}" y2="${arrowY2 - 4}" stroke="${cycleAccent}" stroke-width="4" stroke-linecap="round" stroke-opacity="0.85" />
-        <polygon points="${arrowMidX - 12},${arrowY2 - 4} ${arrowMidX + 12},${arrowY2 - 4} ${arrowMidX},${arrowY2 + 10}" fill="${cycleAccent}" />
+        <line x1="${arrowMidX}" y1="${arrowY1}" x2="${arrowMidX}" y2="${arrowY2 - P.connectorArrowGap}" stroke="${cycleAccent}" stroke-width="${P.connectorStrokeWidth}" stroke-linecap="round" stroke-opacity="${P.connectorOpacity}" />
+        <polygon points="${arrowMidX - P.connectorArrowHalfW},${arrowY2 - P.connectorArrowGap} ${arrowMidX + P.connectorArrowHalfW},${arrowY2 - P.connectorArrowGap} ${arrowMidX},${arrowY2 + P.connectorTipExt}" fill="${cycleAccent}" />
       `;
       return `
         ${renderCardBase(x, y, cycleAccent)}
         <!-- Tinted badge panel on the left -->
-        <rect x="${x + 6}" y="${y}" width="${badgePanelW}" height="${cardHeight}" rx="14" fill="${cycleAccent}" opacity="0.10" />
+        <rect x="${x + 6}" y="${y}" width="${badgePanelW}" height="${cardHeight}" rx="${P.bandRx}" fill="${cycleAccent}" opacity="${P.bandOpacity}" />
         <!-- Step badge -->
         <circle cx="${badgeCx}" cy="${badgeCy}" r="${badgeR}" fill="${cycleAccent}" />
-        <text x="${badgeCx}" y="${badgeCy + Math.round(badgeR * 0.35)}" text-anchor="middle" font-size="${Math.round(badgeR * 0.85)}" font-family="${fontFamily}" font-weight="900" fill="#ffffff">${stepNum}</text>
+        <text x="${badgeCx}" y="${badgeCy + Math.round(badgeR * P.badgeNumYRatio)}" text-anchor="middle" font-size="${Math.round(badgeR * P.badgeNumFontRatio)}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${GT.whiteFg}">${stepNum}</text>
         <!-- Step label above the title -->
-        <text x="${x + badgePanelW + 34}" y="${y + 44}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">STEP ${stepNum}</text>
-        <text x="${x + badgePanelW + 34}" y="${y + 80}" font-size="${Math.round(cardTitleFontSize * 1.15)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        ${renderBrandBody({
-          x: x + badgePanelW + 34,
-          y: y + 96,
-          width: cardWidth - badgePanelW - 70,
-          height: cardHeight - 116,
-          text: String(section.body),
-          fontPx: Math.round(cardBodyFontSize * 1.05),
-          color: bodyTextColor,
-          weight: '500',
-          lineHeightMul: 1.5,
-          align: 'left',
-        })}
+        <text x="${x + badgePanelW + P.labelX}" y="${y + P.labelY}" font-size="${Math.round(P.labelFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.labelWeight}" fill="${cycleAccent}" letter-spacing="${P.labelSpacing}">STEP ${stepNum}</text>
+        <text x="${x + badgePanelW + P.titleX}" y="${y + P.titleY}" font-size="${titleFont}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(fitTitle(section.title, cardWidth - badgePanelW - P.bodyWidthInset, titleFont))}</text>
+        ${denseBodyFor(section, { x: x + badgePanelW + P.bodyX, y: y + P.bodyY, width: cardWidth - badgePanelW - P.bodyWidthInset, height: cardHeight - P.bodyHeightInset }, cycleAccent)}
         ${connector}
       `;
     }
@@ -4796,106 +5192,67 @@ async function renderInfographicAsset(
       // 2-column grid; alternate cards get the secondary accent so
       // the "A vs B" contrast reads visually. Header band at top of
       // each card carries the title in caps; body fills below.
+      const C = L.comparison;
       const isAlt = index % 2 === 1;
       const cardAccent = isAlt ? accentSecondary : accent;
+      const cmpLabelFont = Math.round(C.labelFont * infographicFontMultiplier);
       return `
         ${renderCardBase(x, y, cardAccent)}
-        <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="44" rx="14" fill="${cardAccent}" opacity="0.10" />
-        <text x="${x + 28}" y="${y + 30}" font-size="${Math.round(14 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${cardAccent}" letter-spacing="2.4">${escapeXml(String(section.title).toUpperCase())}</text>
-        ${renderBrandBody({
-          x: x + 28,
-          y: y + 62,
-          width: cardWidth - 56,
-          height: cardHeight - 84,
-          text: String(section.body),
-          fontPx: Math.round(cardBodyFontSize * 1.05),
-          color: bodyTextColor,
-          weight: '500',
-          lineHeightMul: 1.45,
-          align: 'left',
-        })}
+        <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="${C.bandHeight}" rx="${C.bandRx}" fill="${cardAccent}" opacity="${C.bandOpacity}" />
+        <text x="${x + C.labelX}" y="${y + C.labelY}" font-size="${cmpLabelFont}" font-family="${fontFamily}" font-weight="${GT.labelWeight}" fill="${cardAccent}" letter-spacing="${C.labelSpacing}">${escapeXml(fitTitle(String(section.title).toUpperCase(), cardWidth - C.bodyWidthInset, cmpLabelFont))}</text>
+        ${denseBodyFor(section, { x: x + C.bodyX, y: y + C.bodyY, width: cardWidth - C.bodyWidthInset, height: cardHeight - C.bodyHeightInset }, cardAccent)}
       `;
     }
 
     if (layout === 'timeline') {
       // Milestone dot on a left vertical rail + date-style indicator +
       // body. The rail itself is drawn once outside this map.
-      const dotCx = x - 22;
-      const dotCy = y + 40;
+      const T = L.timeline;
+      const dotCx = x - T.dotXOffset;
+      const dotCy = y + T.dotYOffset;
       return `
         ${renderCardBase(x, y, cycleAccent)}
-        <circle cx="${dotCx}" cy="${dotCy}" r="11" fill="${cycleAccent}" stroke="#ffffff" stroke-width="3" />
-        <text x="${x + 28}" y="${y + 32}" font-size="${Math.round(13 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PHASE ${index + 1}</text>
-        <text x="${x + 28}" y="${y + 62}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        ${renderBrandBody({
-          x: x + 28,
-          y: y + 78,
-          width: cardWidth - 56,
-          height: cardHeight - 96,
-          text: String(section.body),
-          fontPx: cardBodyFontSize,
-          color: bodyTextColor,
-          weight: '500',
-          lineHeightMul: 1.45,
-          align: 'left',
-        })}
+        <circle cx="${dotCx}" cy="${dotCy}" r="${T.dotRadius}" fill="${cycleAccent}" stroke="${GT.whiteFg}" stroke-width="${T.dotStrokeWidth}" />
+        <text x="${x + T.labelX}" y="${y + T.labelY}" font-size="${Math.round(T.labelFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.labelWeight}" fill="${cycleAccent}" letter-spacing="${T.labelSpacing}">PHASE ${index + 1}</text>
+        <text x="${x + T.titleX}" y="${y + T.titleY}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(fitTitle(section.title, cardWidth - T.bodyWidthInset, cardTitleFontSize))}</text>
+        ${denseBodyFor(section, { x: x + T.bodyX, y: y + T.bodyY, width: cardWidth - T.bodyWidthInset, height: cardHeight - T.bodyHeightInset }, cycleAccent)}
       `;
     }
 
     if (layout === 'hierarchy') {
       // Indented numbered card — visual flow steps down and slightly
       // right with each row.
+      const H = L.hierarchy;
       const numBadge = String(index + 1).padStart(2, '0');
       return `
         ${renderCardBase(x, y, cycleAccent)}
-        <text x="${x + 28}" y="${y + 56}" font-size="${Math.round(34 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="900" fill="${cycleAccent}">${numBadge}</text>
-        <text x="${x + 96}" y="${y + 48}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-        ${renderBrandBody({
-          x: x + 96,
-          y: y + 64,
-          width: cardWidth - 120,
-          height: cardHeight - 84,
-          text: String(section.body),
-          fontPx: cardBodyFontSize,
-          color: bodyTextColor,
-          weight: '500',
-          lineHeightMul: 1.4,
-          align: 'left',
-        })}
+        <text x="${x + H.numX}" y="${y + H.numY}" font-size="${Math.round(H.numFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${cycleAccent}">${numBadge}</text>
+        <text x="${x + H.titleX}" y="${y + H.titleY}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(fitTitle(section.title, cardWidth - H.bodyWidthInset, cardTitleFontSize))}</text>
+        ${denseBodyFor(section, { x: x + H.bodyX, y: y + H.bodyY, width: cardWidth - H.bodyWidthInset, height: cardHeight - H.bodyHeightInset }, cycleAccent)}
       `;
     }
 
     // framework (default) — pillar card with a tinted accent header
     // band carrying the pillar label, body underneath in the panel.
+    const F = L.framework;
     return `
       ${renderCardBase(x, y, cycleAccent)}
-      <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="48" rx="14" fill="${cycleAccent}" opacity="0.14" />
-      <text x="${x + 28}" y="${y + 22}" font-size="${Math.round(12 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${cycleAccent}" letter-spacing="2.4">PILLAR ${index + 1}</text>
-      <text x="${x + 28}" y="${y + 78}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(section.title)}</text>
-      ${renderBrandBody({
-        x: x + 28,
-        y: y + 94,
-        width: cardWidth - 56,
-        height: cardHeight - 114,
-        text: String(section.body),
-        fontPx: cardBodyFontSize,
-        color: bodyTextColor,
-        weight: '500',
-        lineHeightMul: 1.4,
-        align: 'left',
-      })}
+      <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="${F.bandHeight}" rx="${F.bandRx}" fill="${cycleAccent}" opacity="${F.bandOpacity}" />
+      <text x="${x + F.labelX}" y="${y + F.labelY}" font-size="${Math.round(F.labelFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.labelWeight}" fill="${cycleAccent}" letter-spacing="${F.labelSpacing}">PILLAR ${index + 1}</text>
+      <text x="${x + F.titleX}" y="${y + F.titleY}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(fitTitle(section.title, cardWidth - F.bodyWidthInset, cardTitleFontSize))}</text>
+      ${denseBodyFor(section, { x: x + F.bodyX, y: y + F.bodyY, width: cardWidth - F.bodyWidthInset, height: cardHeight - F.bodyHeightInset }, cycleAccent)}
     `;
   }).join('');
 
   // Timeline layout needs a vertical rail drawn ONCE behind the cards.
   const timelineRail = layout === 'timeline'
-    ? `<line x1="${engine.position(0).x - 22}" y1="${engine.position(0).y - 12}" x2="${engine.position(0).x - 22}" y2="${engine.position(sections.length - 1).y + cardHeight + 12}" stroke="${accent}" stroke-width="3" stroke-linecap="round" opacity="0.4" />`
+    ? `<line x1="${engine.position(0).x - L.timeline.railXOffset}" y1="${engine.position(0).y - L.timeline.railTopPad}" x2="${engine.position(0).x - L.timeline.railXOffset}" y2="${engine.position(sections.length - 1).y + cardHeight + L.timeline.railBottomPad}" stroke="${accent}" stroke-width="${L.timeline.railStrokeWidth}" stroke-linecap="round" opacity="${L.timeline.railOpacity}" />`
     : '';
   // Tinted bottom-half accent fill — adds visual depth and ensures the
   // canvas doesn't read as a sea of empty white space when sections
   // don't fully fill the safe area. Subtle (~6% opacity) so it doesn't
   // compete with the cards.
-  const ambientFill = `<rect x="48" y="${height / 2}" width="${width - 96}" height="${height / 2 - 48}" rx="0" fill="${accent}" opacity="0.04" />`;
+  const ambientFill = `<rect x="${L.ambient.inset}" y="${height / 2}" width="${width - L.ambient.inset * 2}" height="${height / 2 - L.ambient.inset}" rx="${L.ambient.cornerRadius}" fill="${accent}" opacity="${L.ambient.opacity}" />`;
   const sectionLabel = layout.toUpperCase().replace(/_/g, ' ');
   // Operator feedback: drop the "4 STATS" / "5 PROCESS" internal
   // layout identifier from the header — real infographics never show
@@ -4912,21 +5269,22 @@ async function renderInfographicAsset(
   //
   // --- Header text geometry (title + optional subtitle), computed once
   // so the title block and the subtitle block agree on vertical layout. ---
+  const HD = infographicStyle.geometry.header;
   const headerTitleText = compactText(metadata.topic, 'Infographic');
-  const headerLeftX = 80;
-  const headerZoneW = brandPlacement.left - headerLeftX - 24;
-  const headerTitleCharsPerLine = Math.max(10, Math.floor(headerZoneW / (titleFontSize * 0.55)));
-  const headerTitleLines = balanceTextLines(headerTitleText, headerTitleCharsPerLine, 2);
-  const headerTitleLineH = Math.round(titleFontSize * 1.1);
+  const headerLeftX = HD.leftX;
+  const headerZoneW = brandPlacement.left - headerLeftX - HD.zoneRightPad;
+  const headerTitleCharsPerLine = Math.max(10, Math.floor(headerZoneW / (titleFontSize * HD.titleCharFactor)));
+  const headerTitleLines = balanceTextLines(headerTitleText, headerTitleCharsPerLine, HD.titleMaxLines);
+  const headerTitleLineH = Math.round(titleFontSize * HD.titleLineHeightMul);
   const headerTitleBlockH = headerTitleLines.length * headerTitleLineH;
   // With a subtitle, anchor the title near the top so the subtitle has
   // room beneath it inside the band; without one, keep the legacy
   // vertically-centered placement (byte-identical for no-subtitle cards).
   const headerTitleStartY = headerSubtitle
-    ? 44 + titleFontSize
+    ? HD.titleTopY + titleFontSize
     : Math.round((headerH - headerTitleBlockH) / 2) + titleFontSize;
   const headerTitleSvg = headerTitleLines
-    .map((line, i) => `<text x="${headerLeftX}" y="${headerTitleStartY + i * headerTitleLineH}" font-size="${titleFontSize}" font-family="${fontFamily}" font-weight="900" fill="#ffffff" letter-spacing="0.5">${escapeXml(line)}</text>`)
+    .map((line, i) => `<text x="${headerLeftX}" y="${headerTitleStartY + i * headerTitleLineH}" font-size="${titleFontSize}" font-family="${fontFamily}" font-weight="${HD.titleWeight}" fill="${HD.titleFill}" letter-spacing="${HD.titleLetterSpacing}">${escapeXml(line)}</text>`)
     .join('');
   // Subtitle — native SVG <text> (librsvg won't render foreignObject HTML
   // reliably), wrapped to ≤2 lines and CLAMPED so the last line's baseline
@@ -4935,39 +5293,43 @@ async function renderInfographicAsset(
   // under the panel.
   let headerSubtitleSvg = '';
   if (headerSubtitle) {
-    const subSize = Math.round(15 * infographicFontMultiplier);
-    const subCharsPerLine = Math.max(20, Math.floor(headerZoneW / (subSize * 0.55)));
-    const subLines = balanceTextLines(headerSubtitle, subCharsPerLine, 2);
-    const subLineH = Math.round(subSize * 1.45);
+    const subSize = Math.round(HD.subtitleSize * infographicFontMultiplier);
+    const subCharsPerLine = Math.max(20, Math.floor(headerZoneW / (subSize * HD.subtitleCharFactor)));
+    const subLines = balanceTextLines(headerSubtitle, subCharsPerLine, HD.subtitleMaxLines);
+    const subLineH = Math.round(subSize * HD.subtitleLineHeightMul);
     const lastTitleBaseline = headerTitleStartY + (headerTitleLines.length - 1) * headerTitleLineH;
-    let subStartY = lastTitleBaseline + subSize + 16;
+    let subStartY = lastTitleBaseline + subSize + HD.subtitleGap;
     const lastSubBaseline = subStartY + (subLines.length - 1) * subLineH;
-    const maxLastBaseline = (headerH - 12) - 8;
+    const maxLastBaseline = (headerH - HD.panelClampTop) - HD.panelClampPad;
     if (lastSubBaseline > maxLastBaseline) subStartY -= (lastSubBaseline - maxLastBaseline);
     headerSubtitleSvg = subLines
-      .map((line, i) => `<text x="${headerLeftX}" y="${subStartY + i * subLineH}" font-size="${subSize}" font-family="${fontFamily}" font-weight="500" fill="rgba(255,255,255,0.92)">${escapeXml(line)}</text>`)
+      .map((line, i) => `<text x="${headerLeftX}" y="${subStartY + i * subLineH}" font-size="${subSize}" font-family="${fontFamily}" font-weight="${HD.subtitleWeight}" fill="${HD.subtitleFill}">${escapeXml(line)}</text>`)
       .join('');
   }
   // True gradient header band — replaces the flat dark background +
   // flat white inner panel. The full canvas now reads as one designed
   // composition with vertical color flow (accent → background) like
   // every modern infographic template uses.
+  // Gradient defs are generated from the canonical color_scheme.gradients
+  // spec (single source of truth — offsets/opacities/colors live in the
+  // style). PNG output is byte-identical: the gradients are semantically
+  // identical, and the rasterizer ignores SVG whitespace.
+  const gradColor = (c: 'backgroundBase' | 'accent'): string => (c === 'backgroundBase' ? bg : accent);
+  const gradDir = (d: 'vertical' | 'horizontal' | 'diagonal'): string =>
+    d === 'vertical' ? 'x1="0%" y1="0%" x2="0%" y2="100%"'
+    : d === 'horizontal' ? 'x1="0%" y1="0%" x2="100%" y2="0%"'
+    : 'x1="0%" y1="0%" x2="100%" y2="100%"';
+  const buildGradientDef = (id: string, spec: InfographicStyleSchema['color_scheme']['gradients']['background']): string =>
+    `<linearGradient id="${id}" ${gradDir(spec.direction)}>`
+    + spec.stops.map((s) => `<stop offset="${s.offset}%" stop-color="${gradColor(s.color)}"${s.opacity === 1 ? '' : ` stop-opacity="${s.opacity}"`} />`).join('')
+    + `</linearGradient>`;
+  const grads = infographicStyle.color_scheme.gradients;
   const svg = `
     <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <linearGradient id="infographicWaveGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="${accent}" stop-opacity="0.55" />
-          <stop offset="100%" stop-color="${accent}" stop-opacity="0.18" />
-        </linearGradient>
-        <linearGradient id="infographicBgGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="${bg}" />
-          <stop offset="35%" stop-color="${accent}" stop-opacity="0.85" />
-          <stop offset="100%" stop-color="${accent}" />
-        </linearGradient>
-        <linearGradient id="infographicHeaderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="${bg}" />
-          <stop offset="100%" stop-color="${accent}" stop-opacity="0.9" />
-        </linearGradient>
+        ${buildGradientDef('infographicWaveGradient', grads.wave)}
+        ${buildGradientDef('infographicBgGradient', grads.background)}
+        ${buildGradientDef('infographicHeaderGradient', grads.header)}
       </defs>
       <!-- Full-bleed background. Gradient mode → opaque brand gradient
            (byte-identical default). Image mode → a mandatory translucent
@@ -4985,7 +5347,7 @@ async function renderInfographicAsset(
       ${headerSubtitleSvg}
       <!-- Inner safe panel — soft white with rounded corners, floats
            inside the gradient frame. Cards live on top of this. -->
-      <rect x="32" y="${headerH - 12}" width="${width - 64}" height="${height - headerH - 12}" rx="18" fill="#f8fafc" opacity="0.95" />
+      <rect x="${infographicStyle.decoration_style.innerPanel.inset}" y="${headerH - infographicStyle.decoration_style.innerPanel.topOffset}" width="${width - infographicStyle.decoration_style.innerPanel.inset * 2}" height="${height - headerH - infographicStyle.decoration_style.innerPanel.topOffset}" rx="${infographicStyle.decoration_style.innerPanel.cornerRadius}" fill="${infographicStyle.color_scheme.innerPanel}" opacity="${infographicStyle.decoration_style.innerPanel.opacity}" />
       <path d="${wavePath}" fill="none" stroke="url(#infographicWaveGradient)" stroke-width="${waveStrokeWidth}" stroke-linecap="round" />
       ${timelineRail}
       ${cards}
@@ -4993,8 +5355,8 @@ async function renderInfographicAsset(
         <!-- CTA footer band — anchors the whole infographic to a
              single next-step. Pill on a tinted accent strip at the
              very bottom of the canvas. -->
-        <rect x="32" y="${height - 88}" width="${width - 64}" height="56" rx="18" fill="${accent}" opacity="0.16" />
-        <text x="${width / 2}" y="${height - 50}" text-anchor="middle" font-size="${Math.round(22 * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="800" fill="${text}">${escapeXml(resolvedCta)}</text>
+        <rect x="${infographicStyle.decoration_style.ctaFooter.inset}" y="${height - infographicStyle.decoration_style.ctaFooter.bandBottomOffset}" width="${width - infographicStyle.decoration_style.ctaFooter.inset * 2}" height="${infographicStyle.decoration_style.ctaFooter.bandHeight}" rx="${infographicStyle.decoration_style.ctaFooter.cornerRadius}" fill="${accent}" opacity="${infographicStyle.decoration_style.ctaFooter.opacity}" />
+        <text x="${width / 2}" y="${height - infographicStyle.decoration_style.ctaFooter.textBottomOffset}" text-anchor="middle" font-size="${Math.round(infographicStyle.decoration_style.ctaFooter.fontSize * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(resolvedCta)}</text>
       ` : ''}
     </svg>
   `;
@@ -5029,8 +5391,9 @@ async function renderInfographicAsset(
     confidence: finalOcr.confidence,
     provider: finalOcr.provider,
   };
+  const infographicAltText = buildAccessibleAltText(metadata.topic, { kind: 'infographic', platform });
   const accessibilityValidation = validateCreatorAccessibility({
-    altText: compactText(metadata.topic, 'Infographic'),
+    altText: infographicAltText,
     readingOrder: sections.map((_, index) => `section_${index + 1}`),
     minFontSize: 16,
     contrastRatio: geometry.contrastRatio,
@@ -5045,7 +5408,7 @@ async function renderInfographicAsset(
     typographySafetyResult: geometry,
     transformIntent: typeof metadata.source_text_transform === 'string' ? metadata.source_text_transform : null,
     exportMetadata: { width, height, infographic_layout: layout },
-    altText: compactText(metadata.topic, 'Infographic'),
+    altText: infographicAltText,
     readingOrder: sections.map((_, index) => `section_${index + 1}`),
     accessibilityValidation,
   });
@@ -5177,8 +5540,9 @@ async function renderBrandCardAsset(
     minFontSize: 18,
   });
   let providerTextValidation = { ok: true, flags: [] as string[], mode: 'embedded_copy' as const, confidence: undefined as number | undefined, provider: undefined as string | undefined };
+  const quoteAltText = buildAccessibleAltText(quote, { kind: 'quote', platform });
   const accessibilityValidation = validateCreatorAccessibility({
-    altText: quote,
+    altText: quoteAltText,
     readingOrder: ['quote', 'brand'],
     minFontSize: 18,
     contrastRatio: geometry.contrastRatio,
@@ -5193,7 +5557,7 @@ async function renderBrandCardAsset(
     typographySafetyResult: geometry,
     transformIntent: typeof metadata.source_text_transform === 'string' ? metadata.source_text_transform : null,
     exportMetadata: { width, height, preview_kind: 'brand_card_composition' },
-    altText: quote,
+    altText: quoteAltText,
     readingOrder: ['quote', 'brand'],
     accessibilityValidation,
   });
@@ -5317,6 +5681,17 @@ export const BannerRenderer = {
     composeSingleVisualAsset(assetPayload, options, 'banner', getCreatorRendererRegistration('banner').rendererId, 'banner'),
 };
 
+// Platform-aware text image — SAME composer + text-capable (banner) governance
+// and embedded overlay as BannerRenderer, but the 'image' fileNamePrefix makes
+// resolveRenderSize use the platform-native canvas (square/portrait/landscape)
+// instead of the fixed banner 16:9. No duplicate path: it is the existing
+// composeSingleVisualAsset with a platform-sized canvas. Branding, safe
+// margins, typography, and logo placement flow through unchanged.
+export const TextImageRenderer = {
+  render: (assetPayload: Record<string, unknown>, options: RenderOptions): Promise<RenderedMediaBundle> =>
+    composeSingleVisualAsset(assetPayload, options, 'image', getCreatorRendererRegistration('banner').rendererId, 'banner'),
+};
+
 export const BrandCardRenderer = {
   render: (assetPayload: Record<string, unknown>, options: RenderOptions): Promise<RenderedMediaBundle> =>
     renderBrandCardAsset(assetPayload, options),
@@ -5354,7 +5729,7 @@ export const SliderRenderer = {
     renderSliderAsset(assetPayload, options, items),
 };
 
-export async function renderAsset(
+async function renderAssetDispatch(
   assetPayload: Record<string, unknown>,
   options: RenderOptions = {}
 ): Promise<RenderedMediaBundle> {
@@ -5365,6 +5740,16 @@ export async function renderAsset(
 
   try {
     if (assetKind === 'image') {
+      // Platform-aware "Text Inside Image" — a template-authoritative text
+      // overlay renders through the text-capable governance lane but at the
+      // PLATFORM-NATIVE canvas (square / portrait / landscape via
+      // imageStyle.canvas.byPlatform) instead of the fixed banner 16:9.
+      // Template owns the visual language (typography/presets/branding via the
+      // overlay style); the platform owns only the output dimensions. Existing
+      // banner generation (no authoritative marker) is untouched below.
+      const overlayAuthoritative = safeObject(assetPayload.overlay_text).__template_authoritative === true
+        || safeObject(metadata.overlay_text).__template_authoritative === true;
+      if (rendererKind === 'banner' && overlayAuthoritative) return await TextImageRenderer.render(assetPayload, options);
       if (rendererKind === 'supporting_image') return await SupportingImageRenderer.render(assetPayload, options);
       if (rendererKind === 'banner') return await BannerRenderer.render(assetPayload, options);
       if (rendererKind === 'infographic') return await InfographicRenderer.render(assetPayload, options);
@@ -5456,6 +5841,46 @@ export async function renderAsset(
   };
 }
 
+/**
+ * Public render entry — composes the asset, then applies the canonical
+ * deterministic POST-RENDER visual validation. On a repairable failure it
+ * deterministically shortens copy and RE-RENDERS once, re-validates, and keeps
+ * the better result. The final `visual_validation` verdict is attached to the
+ * returned metadata. Universal: image renders here inline (orchestrator) and
+ * carousel/infographic render here in the durable worker, so every asset is
+ * validated. Placeholder/fallback assets carry no quality signals → they pass
+ * (we never fail assets we cannot deterministically assess).
+ */
+export async function renderAsset(
+  assetPayload: Record<string, unknown>,
+  options: RenderOptions = {},
+): Promise<RenderedMediaBundle> {
+  const { validateCreatorVisual, applyVisualRepair } =
+    require('./creator/creatorVisualValidation') as typeof import('./creator/creatorVisualValidation');
+  const contentType = String(
+    safeObject(safeObject(assetPayload.media_bundle).metadata).content_type || assetPayload.asset_kind || '',
+  );
+
+  let bundle = await renderAssetDispatch(assetPayload, options);
+  let verdict = validateCreatorVisual(safeObject(bundle.metadata), contentType);
+
+  if (!verdict.passed && verdict.repairHint && !safeObject(bundle.metadata).placeholder) {
+    const repairedPayload = applyVisualRepair(assetPayload, verdict.repairHint);
+    const retryBundle = await renderAssetDispatch(repairedPayload, options);
+    const retryVerdict = validateCreatorVisual(safeObject(retryBundle.metadata), contentType);
+    // Keep the retry when it passes or strictly reduces the failure count.
+    if (retryVerdict.passed || retryVerdict.failures.length < verdict.failures.length) {
+      bundle = retryBundle;
+      verdict = retryVerdict;
+    }
+  }
+
+  return {
+    ...bundle,
+    metadata: { ...safeObject(bundle.metadata), visual_validation: verdict },
+  };
+}
+
 // ── Test-only internal exports ───────────────────────────────────────────────
 // Pure helpers exposed for unit tests. NOT a public API; do not call these
 // from production code paths — use the higher-level `renderAsset` entry
@@ -5470,4 +5895,14 @@ export const __test = {
   classifyPdfStorageFailure,
   USER_MESSAGE_FOR_PDF_FALLBACK,
   computeCompositionQuality,
+  // TEMPLATE-005 — pure platform preset + canvas resolvers, exposed so the
+  // migration can be proven byte-identical exhaustively (every platform ×
+  // density × file-kind × subtype) without a live image provider.
+  getOverlayPreset,
+  resolveRenderSize,
+  // TEMPLATE-015 — overlay SVG builder + brand-kit resolver, exposed so image
+  // style-variant activation (overlay text colors + platform-precedence) can be
+  // validated deterministically without a live image provider.
+  buildOverlaySvg,
+  resolveCreatorBrandKit,
 };

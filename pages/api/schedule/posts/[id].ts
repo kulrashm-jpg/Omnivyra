@@ -12,6 +12,7 @@ import {
 } from '@/backend/services/structuredPlanScheduler';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
+import { resolvePublishMedia } from '@/backend/services/creator/creatorPublishResolution';
 
 async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const { user, error } = await getSupabaseUserFromRequest(req);
@@ -64,6 +65,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return res.status(404).json({ success: false, error: 'Post not found' });
         }
 
+        // Single publishing-resolution path — only when this PUT actually carries
+        // media/refs (preserve "undefined = don't touch"). Legacy `mediaUrls` is
+        // fallback transport only; no-op when no creator asset refs are sent.
+        let patchMediaUrls = updateData.mediaUrls;
+        if (updateData.mediaUrls !== undefined || updateData.assetRefs !== undefined || updateData.creatorAttachments !== undefined) {
+          const { mediaUrls } = await resolvePublishMedia({
+            companyId: String(updateData.companyId ?? userId),
+            userId,
+            platform: String(updateData.platform ?? ''),
+            assetRefs: updateData.assetRefs,
+            creatorAttachments: updateData.creatorAttachments,
+            legacyMediaUrls: updateData.mediaUrls || [],
+          });
+          patchMediaUrls = mediaUrls;
+        }
+
         await updateLegacyScheduledPost({
           userId,
           id,
@@ -71,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             content: updateData.content,
             title: updateData.title,
             hashtags: updateData.hashtags,
-            mediaUrls: updateData.mediaUrls,
+            mediaUrls: patchMediaUrls,
             scheduledFor: updateData.scheduledFor,
             status: updateData.status,
             contentType: updateData.contentType,

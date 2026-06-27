@@ -14,9 +14,8 @@
  * The Post adapter wraps `buildShortformManualStub` (G18.3) and adds the
  * asset(s) as both:
  *   - `creator_attachment_metadata` on the payload (consumed by the scheduler)
- *   - durable-API attachments via `appendWriterAttachedAsset` (so the result
- *     page's existing attached-assets sidebar picks them up via the canonical
- *     `readWriterAttachedAssets` path)
+ *   - canonical Creator Assets registered in the Library + Usage Graph (so the
+ *     graph-backed result page picks them up via listAssetsForConsumer → resolver)
  *
  * The Thread adapter writes a single ThreadNode (position 0) carrying the
  * assets via Phase 1A's `ThreadNode.attachments` field. Users can split into
@@ -38,11 +37,37 @@ import type { NextRouter } from 'next/router';
 import type { CreatorAttachment } from '../preview/unifiedPreviewContract';
 import { buildShortformManualStub } from './shortformManualStub';
 import {
-  appendWriterAttachedAsset,
   createWriterSourceId,
   type WriterAttachedAsset,
   type WriterSourceType,
 } from './writerCreatorAssetLaunch';
+import { registerGeneratedAsset } from './creatorAssetLibrary';
+import { attachUsage, writerDraftConsumer } from './creatorAssetUsageGraph';
+
+/**
+ * Bridge converted assets onto the canonical pipeline: each becomes a canonical
+ * Creator Asset (Library, with id/version dedup) and a relationship edge (Usage
+ * Graph). They then appear in the Library / Resolver / Catalog / Graph with no
+ * extra sync — no legacy `appendWriterAttachedAsset`, no relationship storage here.
+ * Fired before navigation; the (graph-backed) result page reads after navigation,
+ * so registration completes first.
+ */
+async function bridgeConvertedAssetsToGraph(
+  sourceType: WriterSourceType,
+  sourceId: string,
+  assets: WriterAttachedAsset[],
+): Promise<void> {
+  const consumer = writerDraftConsumer(sourceType, sourceId);
+  // newest-first display: attach in reverse so the first asset gets the top slot.
+  for (let i = assets.length - 1; i >= 0; i -= 1) {
+    const asset = assets[i];
+    if (!asset?.id) continue;
+    // registerGeneratedAsset dedups by id — a re-converted asset reuses the
+    // canonical asset (new version), never a duplicate.
+    const { ref } = await registerGeneratedAsset(asset);
+    await attachUsage(ref, consumer, { role: 'attachment' });
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Canonical conversion payload
@@ -103,8 +128,8 @@ function pickAssetPreviewUrl(asset: CreatorAttachment): string | null {
   return asset.previewUrl || asset.thumbnailUrl || null;
 }
 
-/** Project CreatorAttachment[] into the legacy WriterAttachedAsset shape used
- *  by the result-page attached-assets sidebar (readWriterAttachedAssets). */
+/** Project CreatorAttachment[] into the WriterAttachedAsset payload shape that
+ *  `bridgeConvertedAssetsToGraph` registers as canonical Creator Assets. */
 function projectToWriterAttachedAssets(assets: CreatorAttachment[]): WriterAttachedAsset[] {
   return assets.map((a) => ({
     id: a.id,
@@ -170,14 +195,12 @@ export function buildPostPrefillFromAssets(payload: AssetConversionPayload): {
 
   const token = safeRandomToken('post_from_assets');
 
-  // Mirror attachments to the writer-attached-assets localStorage key so the
-  // result page's existing sidebar picks them up automatically.
+  // Register converted assets as canonical Creator Assets + Usage-Graph edges, so
+  // the (graph-backed) result page picks them up automatically — no legacy store.
   if (typeof window !== 'undefined') {
     const sourceId = createWriterSourceId('post', token);
     const writerAssets = projectToWriterAttachedAssets(payload.sourceAssets);
-    for (const asset of writerAssets) {
-      appendWriterAttachedAsset('post', sourceId, asset);
-    }
+    void bridgeConvertedAssetsToGraph('post', sourceId, writerAssets);
     try {
       window.sessionStorage.setItem(token, JSON.stringify(extended));
     } catch {
@@ -270,14 +293,12 @@ export function buildThreadPrefillFromAssets(payload: AssetConversionPayload): {
     session,
   };
 
-  // Mirror attachments to the writer-attached-assets storage for the result
-  // page's existing sidebar.
+  // Register converted assets canonically (Library + Usage Graph) for the
+  // graph-backed result page — no legacy attachment store.
   if (typeof window !== 'undefined') {
     const sourceId = createWriterSourceId('thread' as WriterSourceType, sessionToken);
     const writerAssets = projectToWriterAttachedAssets(payload.sourceAssets);
-    for (const asset of writerAssets) {
-      appendWriterAttachedAsset('thread' as WriterSourceType, sourceId, asset);
-    }
+    void bridgeConvertedAssetsToGraph('thread' as WriterSourceType, sourceId, writerAssets);
     try {
       window.sessionStorage.setItem(sessionToken, JSON.stringify(session));
       window.sessionStorage.setItem(resultKey, JSON.stringify(generationStub));
@@ -390,9 +411,7 @@ export function launchAssetConversion(router: NextRouter, payload: AssetConversi
       const sourceType: WriterSourceType = payload.targetType === 'post' ? 'post' : 'post';
       const sourceId = createWriterSourceId(sourceType, safeRandomToken('ai_assist'));
       const writerAssets = projectToWriterAttachedAssets(payload.sourceAssets);
-      for (const asset of writerAssets) {
-        appendWriterAttachedAsset(sourceType, sourceId, asset);
-      }
+      void bridgeConvertedAssetsToGraph(sourceType, sourceId, writerAssets);
     }
     const intelligencePath = payload.targetType === 'thread'
       ? '/threads/intelligence'

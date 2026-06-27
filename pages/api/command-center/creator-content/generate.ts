@@ -95,9 +95,28 @@ function normalizeCreatorCardForAttachment(input: {
   const hasWriterIntent = typeof input.creatorCard.attachment_mode === 'string' || Object.keys(rawIntent).length > 0;
   if (!hasWriterIntent) return { creatorCard: input.creatorCard, compositionIntent: null, errors: [] };
 
-  const assetType = normalizeWriterCreatorAssetType(
+  const rawAssetType = normalizeWriterCreatorAssetType(
     rawIntent.assetType ?? input.creatorCard.writer_asset_type ?? input.creatorType ?? input.contentType,
   );
+  // Template-wins precedence. When the user explicitly selected a text-bearing
+  // image template, the page sends an AUTHORITATIVE overlay (`__template_authoritative`)
+  // carrying that template's real copy. Such an asset is a `banner` (on-image
+  // text), NOT a clean `supporting_image`. Without this, a `supporting_image`
+  // writer session pins `supporting_visual` at the hard taxonomy gate
+  // (writerCreatorAttachmentContracts:380), which BLANKS the deterministic
+  // overlay — so the image model bakes garbled text + a fake logo instead of the
+  // crisp composited headline/sub/CTA + brand mark. Coercing to `banner` lets the
+  // renderer composite the deterministic overlay and stays governance-consistent
+  // (banner permits on-image text; supporting_image's zero-text profile would
+  // hard-reject it at schedule time).
+  const rawOverlayForType = safeObject(input.creatorCard.overlay_text);
+  const templateAuthoritativeText =
+    rawOverlayForType.__template_authoritative === true &&
+    Object.entries(rawOverlayForType).some(
+      ([key, value]) => key !== '__template_authoritative' && typeof value === 'string' && value.trim().length > 0,
+    );
+  const assetType =
+    rawAssetType === 'supporting_image' && templateAuthoritativeText ? 'banner' : rawAssetType;
   const requestedMode = normalizeAttachmentMode(rawIntent.attachmentMode ?? input.creatorCard.attachment_mode);
   // Phase 2 fix — resolve attachment_mode from payload signals BEFORE
   // validation. The validator is correct; the writer's mode default
@@ -884,6 +903,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       variantKey: string;
       output: import('../../../../backend/services/executionEngines/types').CanonicalCreatorOutput;
     }> = [];
+    // UNIFY MASTER GENERATION — resolve the CANONICAL Context Assembly ONCE
+    // (shared, cached). The master pipeline consumes the same company + brand
+    // context as field assist; no independent company/brand resolution here.
+    // Best-effort: failure leaves canonicalContext empty (prior behavior).
+    const { resolveCreatorCopyContext } = await import('../../../../backend/services/creator/creatorCopyContextResolver');
+    const canonicalContext = await resolveCreatorCopyContext(companyId);
     const baseOrchestratorInput = {
       campaignId: campaignIdForVariant ?? `creator-content-${Date.now()}`,
       companyId,
@@ -894,7 +919,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       audience: String(body.audience || '').trim() || undefined,
       objective: String(body.objective || '').trim() || undefined,
       summary: String(body.summary || '').trim() || undefined,
-      creatorCard,
+      // Canonical company + brand grounding made available to the generator
+      // (single resolution) + the brand voice for deterministic output validation.
+      creatorCard: {
+        ...creatorCard,
+        canonical_company_context: canonicalContext.company,
+        canonical_brand_voice: canonicalContext.brandVoice,
+      },
+      canonicalBrandVoice: canonicalContext.brandVoice,
       enrichedIntent: intelligenceBrief ? {
         analytics_intelligence: {
           content_type: (intelligenceBrief as any).content_type,
