@@ -526,7 +526,10 @@ function buildBrandLayer(input: CreatorPromptInput): { lines: string[]; grounded
   let groundingScore = 0;
 
   if (kit.companyName) {
-    lines.push(`Brand identity: ${kit.companyName} — visualize the brand's personality without naming or labeling it.`);
+    // CREATOR-106: never put the literal brand name in the image prompt — gpt-image-1
+    // renders it as a garbled wordmark ("Omnivyra" → "Pririvyra"). Express identity
+    // through mood/styling only; the real wordmark is composited cleanly post-render.
+    lines.push('Brand identity: visualize the brand\'s personality through mood, styling, palette, and environment only — never render the brand name, any wordmark, or any lettering in the image.');
     groundingScore++;
   }
   if (kit.industry) {
@@ -549,8 +552,10 @@ function buildBrandLayer(input: CreatorPromptInput): { lines: string[]; grounded
   }
 
   if (kit.logoUrl) {
-    // Tasteful placement rules — no watermark spam, no fake-product-page mockups.
-    lines.push('A brand mark MAY appear subtly in the scene (etched on a device, embroidered on apparel, or as ambient reflected light) — never as a corner watermark, never blown up, never repeated.');
+    // CREATOR-106: do NOT invite an in-scene brand mark — the model renders it as a
+    // garbled wordmark. The real logo is composited deterministically + cleanly after
+    // generation, so the AI image must stay free of any mark or lettering.
+    lines.push('Do NOT render any brand mark, logo, wordmark, or lettering inside the image — the brand mark is composited separately and cleanly after generation. Express brand presence only through palette, lighting, and styling.');
     groundingScore++;
   }
   if (kit.domain) {

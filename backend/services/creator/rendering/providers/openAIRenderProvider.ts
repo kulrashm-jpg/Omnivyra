@@ -87,10 +87,16 @@ export function createOpenAIRenderProvider(
       spec.platform_projection.resolution.w,
       spec.platform_projection.resolution.h,
     );
-    const prompt = [
+    // CREATOR-106: the model bakes garbled text/wordmarks into the scene (e.g.
+    // "Omnivyra" → "Opmpyic" on a laptop). The upstream prompt carries no text-ban,
+    // so enforce one HERE at the single API chokepoint — appended last + never
+    // truncated so it always survives and outweighs earlier scene instructions. Any
+    // real headline/logo is composited cleanly AFTER generation by the renderer.
+    const base = [
       spec.blueprint_projection.visual_prompt,
       spec.blueprint_projection.scene_direction,
-    ].filter(Boolean).join('. ').slice(0, 3800);
+    ].filter(Boolean).join('. ').slice(0, 3400);
+    const prompt = `${base}. ABSOLUTE OVERRIDE (highest priority, overrides every earlier instruction): Strictly avoid all visible text — no words, letters, numbers, captions, signage, labels, UI text, logos, wordmarks, monograms, or brand/company/product names anywhere in the image, including on screens, devices, paper, walls, packaging, or apparel. Render any screen, dashboard, or interface as abstract blurred shapes and anonymized gradients with no readable glyphs. Do NOT depict any name, logo, or label even if an earlier line described one.`;
 
     const resp = await doFetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',

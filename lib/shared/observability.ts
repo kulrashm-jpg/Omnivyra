@@ -37,6 +37,7 @@ export type PipelineEvent =
   | 'ai_asset.override'
   | 'ai_asset.provenance'
   | 'creator.routing_deactivated'
+  | 'creator.runtime_shadow'
   | 'writer.attachment_rejected'
   | 'writer.attachment_mode_coerced'
   | 'embedded_copy_ocr_relaxed'

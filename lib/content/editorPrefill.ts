@@ -1,7 +1,7 @@
 import { htmlToBlocks } from '../blog/htmlToBlocks';
 import type { BlogFormState } from '../../components/blog/BlogEditorForm';
 
-type GeneratedOutput = {
+export type GeneratedOutput = {
   content_blocks?: unknown[];
   content_html?: string;
 };

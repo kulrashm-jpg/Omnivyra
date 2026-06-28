@@ -57,6 +57,7 @@ import type {
   CreatorDistributionMode,
   CreatorSharedCoreContract,
 } from './packagingTypes';
+import { enrichVisualPrompt } from './blueprintPromptAssembler';
 
 /**
  * Pipeline-agnostic input. Deliberately NOT the pipeline's
@@ -90,6 +91,11 @@ export interface ResolveCreatorContextInput {
   /** PASSED IN — never fetched by the engine. */
   brandGrounding?: CreatorBrandGrounding;
   continuityContext?: CreatorContinuityContext;
+
+  /** CREATOR-060: optional visual blueprint id. When present, enriches
+   *  image_prompt + scene_direction via the BlueprintPromptAssembler (additive,
+   *  business intent stays first). Absent ⇒ output is byte-identical to before. */
+  blueprintId?: string;
 }
 
 function clean(s: unknown): string {
@@ -127,6 +133,12 @@ export function resolveCreatorContext(input: ResolveCreatorContextInput): Creato
   const imagePrompt = deriveImagePrompt(topic, contentType, platforms);
   const videoPrompt = deriveVideoPrompt(topic, contentType, platforms);
   const sceneDirection = deriveSceneDirection(topic, contentType);
+
+  // CREATOR-060: blueprint enriches visual intent only (business intent above
+  // stays first). No blueprintId ⇒ enrichVisualPrompt returns the base unchanged,
+  // so visual_direction is byte-identical to legacy output.
+  const bpImagePrompt = enrichVisualPrompt(imagePrompt, input.blueprintId);
+  const bpSceneDirection = enrichVisualPrompt(sceneDirection, input.blueprintId);
 
   // ── Platform strategy (deterministic, content-type-aware) ────────────────
   const platformStrategy: CreatorPlatformStrategy = {};
@@ -182,9 +194,9 @@ export function resolveCreatorContext(input: ResolveCreatorContextInput): Creato
       visual: visualHook,
     },
     visual_direction: {
-      image_prompt: imagePrompt,
+      image_prompt: bpImagePrompt,
       video_prompt: videoPrompt,
-      scene_direction: sceneDirection,
+      scene_direction: bpSceneDirection,
     },
     platform_strategy: platformStrategy,
     reuse_strategy: {

@@ -4,9 +4,12 @@
  * Entry modes: direct, turbo, recommendation, campaign, opportunity.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
-import { ArrowLeft, LayoutGrid, FileText, CalendarDays, Sparkles, RocketIcon, Lock, MessageSquare } from 'lucide-react';
+import { ArrowLeft, LayoutGrid, FileText, CalendarDays, Sparkles, RocketIcon, Lock, MessageSquare, Layers } from 'lucide-react';
+import DesignSystemPanel from '../components/planner/DesignSystemPanel';
+import { familyForCreatorType, type TemplateAssetFamily } from '../lib/creator-templates';
+import type { RequestedFamilyFrequency } from '../lib/creator-templates/designSystemCoverage';
 import { useCompanyContext } from '../components/CompanyContext';
 import {
   PlannerEntryRouter,
@@ -54,11 +57,12 @@ function CampaignPlannerLayout({
 }: CampaignPlannerLayoutProps) {
   const { state, setAccountContext } = usePlannerSession();
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'build'>(() => {
+  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'build' | 'design'>(() => {
     if (typeof window !== 'undefined') {
       const tab = new URLSearchParams(window.location.search).get('tab');
       if (tab === 'strategy') return 'strategy';
       if (tab === 'build') return 'build';
+      if (tab === 'design') return 'design';
     }
     return 'skeleton';
   });
@@ -106,6 +110,23 @@ function CampaignPlannerLayout({
   // Soft gating: Build & Launch opens as soon as there's a skeleton draft and
   // themes are ready — confirming Skeleton/Strategy is status-only, never a gate.
   const canBuild = hasSkeletonDraft && themesReady;
+
+  // Requested asset families (frequency > 0) for Design System coverage validation,
+  // derived from the campaign's chosen content formats. Defensive read across the
+  // possible strategy-context shapes; maps each format → canonical asset family.
+  const requestedFamilies = useMemo<RequestedFamilyFrequency[]>(() => {
+    const raw = ((state as Record<string, any>)?.strategy_context?.content_formats
+      ?? (state as Record<string, any>)?.content_formats
+      ?? (state as Record<string, any>)?.strategy?.content_formats
+      ?? []) as unknown;
+    const formats = Array.isArray(raw) ? raw : [];
+    const byFam = new Map<TemplateAssetFamily, number>();
+    for (const f of formats) {
+      const fam = familyForCreatorType(String(f));
+      if (fam) byFam.set(fam, (byFam.get(fam) ?? 0) + 1);
+    }
+    return Array.from(byFam.entries()).map(([family, frequency]) => ({ family, frequency }));
+  }, [state]);
 
   // When the skeleton becomes final, switch to the Strategy view so the user
   // can work on content through the weekly cards. Driven by the skeleton_confirmed
@@ -163,6 +184,18 @@ function CampaignPlannerLayout({
           <RocketIcon className="h-4 w-4" />
           Build &amp; Launch
           {!canBuild && <Lock className="h-3 w-3 ml-1 text-gray-400" />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('design')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'design'
+              ? 'border-indigo-600 text-indigo-700 bg-indigo-50'
+              : 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+          }`}
+        >
+          <Layers className="h-4 w-4" />
+          Design System
         </button>
       </div>
 
@@ -308,6 +341,15 @@ function CampaignPlannerLayout({
                 skeletonAlreadyConfirmed={hasSkeleton}
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Design System — the campaign's single pinned collection (CREATOR-029) */}
+      {activeTab === 'design' && (
+        <div className="flex-1 min-h-0 overflow-auto">
+          <div className="max-w-3xl mx-auto">
+            <DesignSystemPanel campaignId={campaignId ?? ''} companyId={companyId} requestedFamilies={requestedFamilies} />
           </div>
         </div>
       )}

@@ -28,6 +28,13 @@ import {
   searchImages,
   type ImageResult,
 } from '../../lib/media/imageService';
+import { deriveAssetSlots, applySlotToBlocks, type AssetSlot, type RealizationContext } from '../../lib/content/assetRealization';
+import { getRuntimeProviderChain } from '../../lib/content/assetRealizationProviders';
+import { realizeEmptyImageSlots } from '../../lib/content/realizeGeneratedDocument';
+import { getEmptyImagePolicy } from '../../lib/content/longformEmptyImagePolicy';
+import { aiGenerateViaRenderInline, organizationResolveViaCatalog } from '../../lib/content/clientAssetProviders';
+import { buildImageAssetActions, type UploadResult } from '../../lib/content/assetSlotEditorActions';
+import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import {
   moveBlockUp,
   moveBlockDown,
@@ -718,6 +725,89 @@ export function BlogEditorForm({
     setStockSearchBlockIdx(null);
   };
 
+  // ── Asset-slot actions (CREATOR-038/039) — per-image AI/upload/import/replace ───
+  // Production provider chain: AI (render-inline, flag-gated) → Organization
+  // (Creator Asset Catalog) → Stock (governed, de-duped per doc) → Placeholder.
+  const assetUsedUrls = useRef(new Set<string>()).current;
+  const realizationProviders = useRef(getRuntimeProviderChain({
+    aiGenerate: aiGenerateViaRenderInline,
+    organizationResolve: organizationResolveViaCatalog,
+    organizationId: effectiveCompanyId,
+    usedUrls: assetUsedUrls,
+  })).current;
+  const slotCtx = useCallback((): RealizationContext => ({ contentType: String(state.format_type || 'long-form'), documentTitle: state.title }), [state.format_type, state.title]);
+  // Seed asset slots ONCE from the realized prefill (not lazy) so each image
+  // already carries provider / prompt / caption / alt / history / status.
+  const [assetSlots, setAssetSlots] = useState<Record<string, AssetSlot>>(() =>
+    Object.fromEntries(deriveAssetSlots(state.content_blocks, { contentType: String(state.format_type || 'long-form'), documentTitle: state.title }).map((s) => [s.blockId, s])),
+  );
+  const slotForImage = (block: ImageBlock): AssetSlot =>
+    assetSlots[block.id]
+    || deriveAssetSlots(state.content_blocks, slotCtx()).find((s) => s.blockId === block.id)
+    || deriveAssetSlots([block], slotCtx())[0];
+  const applyImageSlot = (i: number, b: ImageBlock, slot: AssetSlot) => {
+    updateBlock(i, b);
+    setAssetSlots((prev) => ({ ...prev, [slot.blockId]: slot }));
+  };
+  const pickImageUpload = (): Promise<UploadResult | null> => new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) { resolve(null); return; }
+      try {
+        const { data: { user } } = await getSupabaseBrowser().auth.getUser();
+        if (!user?.id) { resolve(null); return; }
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('user_id', user.id);
+        if (effectiveCompanyId) fd.append('campaign_id', effectiveCompanyId);
+        fd.append('platform', 'blog');
+        const res = await fetch('/api/media/upload', { method: 'POST', body: fd });
+        const json = await res.json().catch(() => null);
+        const url = json?.data?.file_url || json?.data?.url;
+        resolve(url ? { url, altText: file.name.replace(/\.[^.]+$/, '') } : null);
+      } catch { resolve(null); }
+    };
+    input.click();
+  });
+  const buildImageActions = (i: number, block: ImageBlock) => buildImageAssetActions({
+    block,
+    slot: slotForImage(block),
+    providers: realizationProviders,
+    ctx: slotCtx(),
+    apply: (b, s) => applyImageSlot(i, b, s),
+    pickUpload: pickImageUpload,
+    pickUrl: () => { const u = typeof window !== 'undefined' ? window.prompt('Paste image URL') : null; return u && u.trim() ? u.trim() : null; },
+    pickOrganizationAsset: async () => { const r = await organizationResolveViaCatalog(slotForImage(block), slotCtx()); return r?.url ? { url: r.url, altText: r.altText } : null; },
+    openMediaLibrary: () => setStockSearchBlockIdx(stockSearchBlockIdx === i ? null : i),
+    stamp: () => Date.now(),
+  });
+
+  // STEP 2 — 'stock' policy: fill freshly-generated empty image slots via the
+  // stock provider (placeholder only if stock fails) once, on open. Existing
+  // drafts (already filled) have no empties → no-op. AI/org are NOT auto-run
+  // (no credit spend); the user invokes those per slot.
+  useEffect(() => {
+    if (getEmptyImagePolicy() !== 'stock') return;
+    let cancelled = false;
+    void (async () => {
+      const chain = getRuntimeProviderChain({ organizationId: effectiveCompanyId, usedUrls: assetUsedUrls });
+      const res = await realizeEmptyImageSlots(state.content_blocks, chain, slotCtx());
+      if (cancelled || res.slots.length === 0) return;
+      setState((prev) => {
+        let cb = prev.content_blocks;
+        for (const s of res.slots) cb = applySlotToBlocks(cb, s);
+        return { ...prev, content_blocks: cb };
+      });
+      setAssetSlots((prev) => { const m = { ...prev }; for (const s of res.slots) m[s.blockId] = s; return m; });
+    })();
+    return () => { cancelled = true; };
+    // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleEnrichBlock = async (idx: number) => {
     if (!effectiveCompanyId) return;
     const block = state.content_blocks[idx];
@@ -1097,6 +1187,7 @@ export function BlogEditorForm({
                         block={block as ImageBlock}
                         onChange={(b) => updateBlock(i, b)}
                         onSearchStock={() => setStockSearchBlockIdx(stockSearchBlockIdx === i ? null : i)}
+                        assetActions={buildImageActions(i, block as ImageBlock)}
                       />
                       {stockSearchBlockIdx === i && (
                         <div className="mt-3">

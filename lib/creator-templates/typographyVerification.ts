@@ -40,12 +40,45 @@ export interface TypographyVerificationReport {
   overlayComplete: boolean;
   aiTypographyDetected: boolean;
   promptRequestsTypography: boolean;
+  editorBindingValid: boolean;
   editorPreviewParity: boolean;
   previewRendererParity: boolean;
   fields: TypographyField[];
   safeAreaViolations: SafeAreaViolation[];
   missingRequired: string[];
   findings: string[];
+}
+
+/* ── Editor field binding (STEP 2) ─────────────────────────────────────── */
+
+export interface EditorBindingResult {
+  valid: boolean;
+  placeholderLeaks: string[];      // a field whose displayed value equals its placeholder
+  legacyDefaults: string[];        // a field showing a value that is neither canonical nor a manual override
+  duplicateState: boolean;         // editorRuntime is the single model → always false
+  findings: string[];
+}
+
+/**
+ * Verify every editor field displays the canonical populated value (or the
+ * user's manual override) — never a placeholder-as-value, never a legacy default.
+ * editorRuntime is the single source of truth, so there is no duplicate state.
+ */
+export function verifyEditorBinding(state: EditorState): EditorBindingResult {
+  const fields = editorFields(state);
+  const placeholderLeaks: string[] = [];
+  const legacyDefaults: string[] = [];
+  for (const f of fields) {
+    // Placeholder may only show when the value is empty — never AS the value.
+    if (f.value.trim().length > 0 && f.value === f.placeholder) placeholderLeaks.push(f.ref);
+    // A populated AUTO field must equal the canonical value; a MANUAL field is the
+    // user's override. Anything else would be a legacy/non-canonical default.
+    if (f.value.trim().length > 0 && f.owner === 'AUTO' && f.value !== f.canonicalValue) legacyDefaults.push(f.ref);
+  }
+  const findings: string[] = [];
+  if (placeholderLeaks.length) findings.push(`Placeholder shown as value: ${placeholderLeaks.join(', ')}.`);
+  if (legacyDefaults.length) findings.push(`Non-canonical (legacy) value bound: ${legacyDefaults.join(', ')}.`);
+  return { valid: placeholderLeaks.length === 0 && legacyDefaults.length === 0, placeholderLeaks, legacyDefaults, duplicateState: false, findings };
 }
 
 /* ── Template safe-area map (per-field soft length budget) ──────────────── */
@@ -69,12 +102,19 @@ function requiredKeys(template: CreatorTemplate): { flat: Set<string>; slide: Se
 /* ── Image-prompt imagery-only check (STEP 3) ──────────────────────────── */
 
 const POSITIVE_TYPOGRAPHY_REQUEST = /(render|add|include|draw|write|place|show|display|overlay)\s+(a\s+|the\s+|some\s+)?(headline|sub\s?headline|caption|cta|call[\s-]to[\s-]action|tagline|statistic|number|percentage|quote|logo|wordmark|button|paragraph|sentence|word|letter|text)/i;
+// A clause is a SUPPRESSION directive (the image-prompt bans/abstracts text), not
+// a real typography request, when it carries any of these markers.
+const SUPPRESSION_MARKER = /\b(never|no|not|avoid|without|don'?t|do not|free of|zero|abstract|unreadable|illegible|blurred|anonymi[sz]ed|soft shapes|no readable)\b/i;
 
-/** True when the composed AI image prompt requests imagery only (text-banned, no positive typography request). */
+/** True when the composed AI image prompt requests imagery only (text-banned, no NON-negated typography request). */
 export function imagePromptIsImageryOnly(composedImagePrompt: string): boolean {
   const bansVisibleText = /strictly avoid all visible text/i.test(composedImagePrompt);
-  const requestsTypography = POSITIVE_TYPOGRAPHY_REQUEST.test(composedImagePrompt);
-  return bansVisibleText && !requestsTypography;
+  if (!bansVisibleText) return false;
+  // Scan clause-by-clause: a positive typography request counts only when it is
+  // NOT a suppression/negated clause (e.g. "NEVER render the words themselves").
+  const clauses = composedImagePrompt.split(/[\n.;:()|]+/);
+  const requestsTypography = clauses.some((clause) => POSITIVE_TYPOGRAPHY_REQUEST.test(clause) && !SUPPRESSION_MARKER.test(clause));
+  return !requestsTypography;
 }
 
 /* ── The verification ──────────────────────────────────────────────────── */
@@ -126,16 +166,20 @@ export function verifyTypographyRuntime(
   const promptRequestsTypography = composedImagePrompt !== undefined ? !imagePromptIsImageryOnly(composedImagePrompt) : false;
   if (promptRequestsTypography) findings.push('AI image prompt requests typography (should be imagery-only).');
 
+  // Editor field binding (STEP 2) — fields show canonical/manual values only.
+  const binding = verifyEditorBinding(state);
+  for (const f of binding.findings) findings.push(f);
+
   const overlayComplete = missingRequired.length === 0;
   const parityOk = editorPreviewParity && previewRendererParity;
   const status: TypographyStatus =
-    !parityOk || aiTypographyDetected || promptRequestsTypography || !overlayComplete ? 'FAIL'
+    !parityOk || aiTypographyDetected || promptRequestsTypography || !overlayComplete || !binding.valid ? 'FAIL'
       : safeAreaViolations.length > 0 ? 'WARN'
         : 'PASS';
 
   return {
     status, source: 'canonical', overlayComplete, aiTypographyDetected, promptRequestsTypography,
-    editorPreviewParity, previewRendererParity, fields, safeAreaViolations, missingRequired, findings,
+    editorBindingValid: binding.valid, editorPreviewParity, previewRendererParity, fields, safeAreaViolations, missingRequired, findings,
   };
 }
 
@@ -145,6 +189,7 @@ export interface TypographyDiagnostics {
   typographySource: 'canonical';
   overlayCompleteness: number;
   safeAreaViolations: number;
+  editorParity: boolean;           // editor fields bound to canonical/manual values
   editorPreviewParity: boolean;
   previewRendererParity: boolean;
   legacyTypographyUsage: number;   // non-canonical overlay characters (always 0 here)
@@ -160,6 +205,7 @@ export function typographyDiagnostics(state: EditorState, template: CreatorTempl
     typographySource: 'canonical',
     overlayCompleteness: report.fields.length ? Math.round((present / report.fields.length) * 100) / 100 : 1,
     safeAreaViolations: report.safeAreaViolations.length,
+    editorParity: report.editorBindingValid,
     editorPreviewParity: report.editorPreviewParity,
     previewRendererParity: report.previewRendererParity,
     legacyTypographyUsage: report.aiTypographyDetected ? 1 : 0,

@@ -3,6 +3,122 @@
 import React from 'react';
 import type { ContentBlock, BlockType } from '../../lib/blog/blockTypes';
 import { BLOCK_LABELS } from '../../lib/blog/blockTypes';
+import { BlockRenderer } from './BlockRenderer';
+import { getTemplateShowcases } from '../../lib/blog/showcaseLoader';
+
+/** Reusable "Structure | Live Example" segmented toggle. */
+function ExampleViewToggle({ view, onChange }: { view: 'example' | 'structure'; onChange: (v: 'example' | 'structure') => void }) {
+  return (
+    <div className="inline-flex rounded-lg bg-gray-100 p-0.5 text-[11px] font-semibold">
+      {(['example', 'structure'] as const).map((v) => (
+        <button
+          key={v}
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onChange(v); }}
+          className={`rounded-md px-2.5 py-1 transition-colors ${view === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+        >
+          {v === 'example' ? '✨ Live Example' : 'Structure'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Renders a realistic worked example of the template, styled like a real article,
+ * at TRUE desktop width then scaled to fit — so the template's actual format
+ * (2/3-column layouts, hero/inline image placement, pull quotes, headings) is
+ * faithfully visible even in a narrow preview. The sample content is the same
+ * across templates; the LAYOUT is what differs and what this shows.
+ */
+const SERIF_TEMPLATES = ['Magazine', 'Visual Feature', 'Narrative Article', 'Opinion Piece', 'Investigative Deep Dive'];
+
+function TemplateExample({ templateName }: { templateName?: string }) {
+  // Curated, publish-ready showcase documents (>= 3) for this template.
+  const docs = React.useMemo(() => getTemplateShowcases(templateName), [templateName]);
+  const [exampleIdx, setExampleIdx] = React.useState(0);
+  React.useEffect(() => { setExampleIdx(0); }, [templateName]);
+  const idx = Math.min(exampleIdx, docs.length - 1);
+  const doc = docs[idx] ?? docs[0];
+  const multi = docs.length > 1;
+  const serif = SERIF_TEMPLATES.includes(templateName || '');
+  const frameRef = React.useRef<HTMLDivElement>(null);
+  const contentRef = React.useRef<HTMLDivElement>(null);
+  const DESKTOP_W = 860; // wide enough to trigger md: column splits in BlockRenderer
+  const [scale, setScale] = React.useState(0.55);
+  const [scaledH, setScaledH] = React.useState(0);
+
+  React.useLayoutEffect(() => {
+    const measure = () => {
+      const fw = frameRef.current?.clientWidth ?? 480;
+      const sc = Math.min(0.85, Math.max(0.32, fw / DESKTOP_W));
+      setScale(sc);
+      if (contentRef.current) setScaledH(contentRef.current.offsetHeight * sc);
+    };
+    measure();
+    // Re-measure after layout settles (images/columns) and on resize.
+    const t = setTimeout(measure, 60);
+    window.addEventListener('resize', measure);
+    return () => { clearTimeout(t); window.removeEventListener('resize', measure); };
+  }, [templateName, idx]);
+
+  const m = doc.meta;
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white shadow-inner overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-4 pt-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-purple-400">
+          Finished example — a publish-ready post in this layout
+        </p>
+        {multi && (
+          <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+            <button type="button" aria-label="Previous example" disabled={idx === 0}
+              onClick={() => setExampleIdx((i) => Math.max(0, i - 1))}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-default">◀</button>
+            <span className="text-[11px] font-medium text-gray-500 tabular-nums">Example {idx + 1} of {docs.length}</span>
+            <button type="button" aria-label="Next example" disabled={idx === docs.length - 1}
+              onClick={() => setExampleIdx((i) => Math.min(docs.length - 1, i + 1))}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-default">▶</button>
+          </div>
+        )}
+      </div>
+      <div ref={frameRef} className="px-3 pb-3" style={{ maxHeight: 560, overflowY: 'auto' }}>
+        <div style={{ height: scaledH, overflow: 'hidden' }}>
+          <div ref={contentRef} style={{ width: DESKTOP_W, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+            {/* A real "page" sheet — generous margins so it reads as a document. */}
+            <div style={{ background: '#ffffff', padding: '52px 68px', minHeight: 640, boxShadow: 'inset 0 0 0 1px #f1f5f9' }}>
+              {/* Designed masthead — kicker, display title, dek, real byline. */}
+              <header className="mb-9">
+                <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-[#0A66C2]">{m.kicker}</p>
+                <h1 className={`${serif ? 'font-serif' : 'font-sans'} text-[46px] font-bold leading-[1.04] tracking-tight text-[#0B1F33]`}>{m.title}</h1>
+                <p className="mt-4 text-[19px] leading-[1.6] text-[#5B6B7C]">{m.subtitle}</p>
+                <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[#6B7C93]">
+                  <span className="font-semibold text-[#0B1F33]">{m.author}</span>
+                  <span aria-hidden>·</span><span>{m.company}</span>
+                  <span aria-hidden>·</span><span>{m.date}</span>
+                  <span aria-hidden>·</span><span>{m.readMins} min read</span>
+                </div>
+                <div className="mt-6 h-px w-full bg-gradient-to-r from-gray-200 to-transparent" />
+              </header>
+              <article
+                className={[
+                  'prose max-w-none',
+                  serif ? 'prose-headings:font-serif prose-headings:tracking-tight' : 'prose-headings:font-sans',
+                  'prose-p:text-[16px] prose-p:leading-[1.8] prose-p:text-[#3D4F61]',
+                  'prose-img:my-7',
+                  'prose-li:text-[15.5px] prose-li:text-[#3D4F61]',
+                  // Editorial drop-cap on the opening paragraph.
+                  '[&>div:first-of-type_p]:first-letter:float-left [&>div:first-of-type_p]:first-letter:mr-3 [&>div:first-of-type_p]:first-letter:font-serif [&>div:first-of-type_p]:first-letter:text-[58px] [&>div:first-of-type_p]:first-letter:font-bold [&>div:first-of-type_p]:first-letter:leading-[0.8] [&>div:first-of-type_p]:first-letter:text-[#0B1F33]',
+                ].join(' ')}
+              >
+                <BlockRenderer blocks={doc.blocks} />
+              </article>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 type Props = {
   name: string;
@@ -302,6 +418,7 @@ export function TemplatePreviewModal({
   description,
   blocks,
   isDefault,
+  topic,
   onClose,
   onSelect,
   onCustomize,
@@ -310,10 +427,13 @@ export function TemplatePreviewModal({
   description: string;
   blocks: ContentBlock[];
   isDefault?: boolean;
+  topic?: string;
   onClose: () => void;
   onSelect: () => void;
   onCustomize: () => void;
 }) {
+  // Default to the worked example — that's what helps users decide.
+  const [view, setView] = React.useState<'example' | 'structure'>('example');
   // Collect unique block types for the legend
   const usedTypes = new Set<BlockType>();
   const collectTypes = (bs: ContentBlock[]) => {
@@ -346,8 +466,10 @@ export function TemplatePreviewModal({
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none p-1 -mr-1 -mt-1">×</button>
           </div>
 
-          {/* Block type legend */}
-          <div className="flex flex-wrap gap-1.5 mt-3">
+          {/* View toggle + block type legend */}
+          <div className="flex flex-wrap items-center gap-2 mt-3">
+            <ExampleViewToggle view={view} onChange={setView} />
+            <span className="mx-0.5 h-4 w-px bg-gray-200" />
             {Array.from(usedTypes).filter(t => t !== 'divider').map((t) => {
               const s = PREVIEW_STYLE[t] ?? PREVIEW_STYLE.paragraph;
               return (
@@ -359,13 +481,17 @@ export function TemplatePreviewModal({
           </div>
         </div>
 
-        {/* Block structure preview */}
+        {/* Live example (real prose) OR block structure */}
         <div className="flex-1 overflow-y-auto px-6 py-4 bg-gray-50/30">
-          <div className="flex flex-col gap-2">
-            {blocks.map((block, i) => (
-              <BlockPreviewRow key={block.id} block={block} index={i} />
-            ))}
-          </div>
+          {view === 'example' ? (
+            <TemplateExample templateName={name} />
+          ) : (
+            <div className="flex flex-col gap-2">
+              {blocks.map((block, i) => (
+                <BlockPreviewRow key={block.id} block={block} index={i} />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Footer actions */}
@@ -398,6 +524,7 @@ export function TemplatePreviewPanel({
   eyebrow,
   accentClassName,
   stats,
+  topic,
   emptyTitle = 'Select a template',
   emptyDescription = 'Choose any layout on the left to preview a dummy version before you use or customize it.',
 }: {
@@ -408,9 +535,11 @@ export function TemplatePreviewPanel({
   eyebrow?: string;
   accentClassName?: string;
   stats?: Array<{ label: string; value: string }>;
+  topic?: string;
   emptyTitle?: string;
   emptyDescription?: string;
 }) {
+  const [view, setView] = React.useState<'example' | 'structure'>('example');
   const usedTypes = new Set<BlockType>();
   const collectTypes = (bs: ContentBlock[]) => {
     for (const b of bs) {
@@ -453,7 +582,9 @@ export function TemplatePreviewPanel({
                 ))}
               </div>
             )}
-            <div className="mt-3 flex flex-wrap gap-1.5">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <ExampleViewToggle view={view} onChange={setView} />
+              <span className="mx-0.5 h-4 w-px bg-gray-200" />
               {Array.from(usedTypes).filter((t) => t !== 'divider').map((t) => {
                 const s = PREVIEW_STYLE[t] ?? PREVIEW_STYLE.paragraph;
                 return (
@@ -474,11 +605,15 @@ export function TemplatePreviewPanel({
 
       <div className="max-h-[70vh] overflow-y-auto bg-gray-50/40 px-5 py-4">
         {blocks && blocks.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            {blocks.map((block, i) => (
-              <BlockPreviewRow key={block.id} block={block} index={i} />
-            ))}
-          </div>
+          view === 'example' ? (
+            <TemplateExample templateName={name} />
+          ) : (
+            <div className="flex flex-col gap-2">
+              {blocks.map((block, i) => (
+                <BlockPreviewRow key={block.id} block={block} index={i} />
+              ))}
+            </div>
+          )
         ) : (
           <div className="flex min-h-[320px] items-center justify-center rounded-xl border border-dashed border-gray-200 bg-white/80 px-6 text-center">
             <div>

@@ -1,0 +1,46 @@
+{
+  "examples": [
+    {
+      "meta": { "kicker": "Research", "title": "The State of AI in Marketing: 2026", "subtitle": "What the data actually says about adoption, impact, and the gap between the hype and the results.", "author": "Dr. Aisha Khan", "company": "Marketing Science Group", "date": "January 30, 2026", "readMins": 11 },
+      "blocks": [
+        { "t": "p", "text": "Adoption stories are easy to tell and hard to verify. We pulled the numbers from three independent surveys to separate what teams say from what they do — and where the impact is real." },
+        { "t": "h2", "text": "The evidence" },
+        { "t": "ins", "title": "What the data shows", "items": ["73% of teams use AI in at least one workflow", "Most usage is shallow — one or two workflows", "Deep, cross-functional adoption is where outsized returns cluster"] },
+        { "t": "img", "seed": "adoption-curve-chart", "alt": "A chart of AI adoption over time", "caption": "Adoption crossed from early-adopter to default in under two years." },
+        { "t": "p", "text": "The headline number hides a wide spread. Self-reported impact runs ahead of measured impact; teams that instrument a single honest metric report smaller — but real — gains." },
+        { "t": "c", "v": "warning", "title": "A caveat worth naming", "body": "Survey enthusiasm is not the same as measured ROI. The gap between the two is the story of 2026." },
+        { "t": "q", "text": "The technology is ahead of the measurement. The teams that close that gap are the ones that win.", "source": "— Dr. Aisha Khan, Marketing Science Group" },
+        { "t": "div" },
+        { "t": "refs", "items": [["McKinsey — The economic potential of generative AI", "https://www.mckinsey.com"], ["Gartner — Marketing Technology Survey 2026", "https://www.gartner.com"], ["Harvard Business Review — How AI changes the marketer's job", "https://hbr.org"]] }
+      ]
+    },
+    {
+      "meta": { "kicker": "Research", "title": "Does Remote Work Actually Work? The Data, Honestly", "subtitle": "Productivity, retention, and the claims on both sides — measured against what the studies really found.", "author": "Dr. Aisha Khan", "company": "Marketing Science Group", "date": "February 17, 2026", "readMins": 10 },
+      "blocks": [
+        { "t": "p", "text": "Both camps cite studies. Both camps are partly right. We read the research that actually controlled for confounders and ignored the rest." },
+        { "t": "h2", "text": "What holds up" },
+        { "t": "ins", "title": "Findings that survive scrutiny", "items": ["Focused individual work tends to improve remotely", "Onboarding and weak ties suffer without intervention", "Outcomes track management quality more than location"] },
+        { "t": "img", "seed": "remote-productivity-data", "alt": "A data visualization of productivity", "caption": "Location explains less of the variance than management does." },
+        { "t": "p", "text": "The strongest finding is also the least convenient for both sides: the policy matters far less than the practices. Well-run teams do well anywhere." },
+        { "t": "c", "v": "note", "title": "Read the methods", "body": "Most viral remote-work statistics fail to separate the pandemic shock from steady-state remote work. Treat 2020-2021 data with care." },
+        { "t": "q", "text": "Location is a weak predictor. Management is a strong one. The debate aimed at the wrong variable.", "source": "— Dr. Aisha Khan, Marketing Science Group" },
+        { "t": "div" },
+        { "t": "refs", "items": [["Stanford — Remote work productivity studies", "https://www.stanford.edu"], ["Nature Human Behaviour — Distributed collaboration", "https://www.nature.com"], ["NBER — Working from home research", "https://www.nber.org"]] }
+      ]
+    },
+    {
+      "meta": { "kicker": "Research", "title": "The Creator Economy, by the Numbers", "subtitle": "Beyond the headlines about million-dollar influencers: what the broad middle of the creator economy actually earns.", "author": "Dr. Aisha Khan", "company": "Marketing Science Group", "date": "March 8, 2026", "readMins": 9 },
+      "blocks": [
+        { "t": "p", "text": "The headlines profile the top 1% and call it an economy. The data on the other 99% tells a more sober — and more useful — story." },
+        { "t": "h2", "text": "The distribution" },
+        { "t": "ins", "title": "What the numbers show", "items": ["Earnings are extremely top-heavy and power-law shaped", "The sustainable middle relies on diversified income", "Platform dependence is the single biggest risk factor"] },
+        { "t": "img", "seed": "creator-economy-chart", "alt": "A chart of creator earnings distribution", "caption": "A long tail, a thin middle, and a famous few." },
+        { "t": "p", "text": "The creators who last are not the ones with the most followers. They are the ones who own a direct relationship with their audience and refuse to depend on a single platform." },
+        { "t": "c", "v": "warning", "title": "The structural risk", "body": "An algorithm change can erase a business overnight. Owned channels — email, community — are the only real insurance." },
+        { "t": "q", "text": "Followers are rented. The relationship is the only thing you own.", "source": "— Dr. Aisha Khan, Marketing Science Group" },
+        { "t": "div" },
+        { "t": "refs", "items": [["Pew Research — The creator landscape", "https://www.pewresearch.org"], ["Goldman Sachs — Creator economy outlook", "https://www.goldmansachs.com"], ["Digital Commerce — Platform dependence study", "https://www.digitalcommerce360.com"]] }
+      ]
+    }
+  ]
+}

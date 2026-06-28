@@ -1,0 +1,43 @@
+{
+  "examples": [
+    {
+      "meta": { "kicker": "Opinion", "title": "Stop Automating Everything", "subtitle": "The race to automate is making a lot of marketing worse. Here is the part worth protecting.", "author": "Tom Becker", "company": "Columnist", "date": "March 7, 2026", "readMins": 6 },
+      "blocks": [
+        { "t": "c", "v": "insight", "title": "The thesis", "body": "AI won't replace marketers who understand their audience — it will replace the busywork that kept them from the work only they can do. The mistake is automating the wrong half." },
+        { "t": "p", "text": "There is a quiet arrogance in the 'automate everything' pitch: the assumption that all of marketing is mechanical, and that taste is a rounding error. It isn't." },
+        { "t": "h2", "text": "Why the panic is misplaced" },
+        { "t": "p", "text": "The fear that AI will flatten marketing into generic sludge is only true if you let it. Generic in, generic out. The best teams use AI to clear busywork and spend the reclaimed time on a real point of view." },
+        { "t": "q", "text": "Automate the chores. Protect the judgment. Confuse the two at your peril.", "source": "— Tom Becker" },
+        { "t": "h2", "text": "The honest objection" },
+        { "t": "p", "text": "Yes, some roles will shrink. The ones built entirely on producing volume should worry. The ones built on understanding people will be more valuable than ever." },
+        { "t": "c", "v": "note", "title": "What to do Monday", "body": "List what your team dreads and what your team is proud of. Automate the first list. Defend the second with everything you have." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Opinion", "title": "Your Meetings Are a Tax on Thinking", "subtitle": "The calendar is not full because the work is hard. It's full because saying no to a meeting feels rude.", "author": "Tom Becker", "company": "Columnist", "date": "February 19, 2026", "readMins": 5 },
+      "blocks": [
+        { "t": "c", "v": "insight", "title": "The thesis", "body": "Most meetings are not collaboration. They are anxiety, scheduled — a way to feel busy without the risk of producing something that can be judged." },
+        { "t": "p", "text": "We have confused presence with progress. A calendar packed wall to wall looks like productivity and feels like drowning, because it is." },
+        { "t": "h2", "text": "The real cost" },
+        { "t": "p", "text": "Every meeting fragments the day into pieces too small for deep work. The output is not the hour spent in the room — it's the two hours of focus that the room destroyed on either side." },
+        { "t": "q", "text": "An hour-long meeting with eight people is not an hour. It's a workday, billed to thinking.", "source": "— Tom Becker" },
+        { "t": "h2", "text": "The honest objection" },
+        { "t": "p", "text": "Some meetings are sacred — the hard decision, the real disagreement, the new relationship. Protect those by killing the rest. Scarcity makes the good ones better." },
+        { "t": "c", "v": "warning", "title": "What to do Monday", "body": "Cancel every recurring meeting for two weeks. Re-add only the ones people actively miss. You will re-add fewer than you fear." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Opinion", "title": "Growth at All Costs Is a Cost", "subtitle": "We treated growth as the goal instead of the byproduct, and built a generation of companies that can't survive their own success.", "author": "Tom Becker", "company": "Columnist", "date": "January 24, 2026", "readMins": 6 },
+      "blocks": [
+        { "t": "c", "v": "insight", "title": "The thesis", "body": "Growth is a result of building something people value. When you make it the goal itself, you start buying numbers you can't afford to keep." },
+        { "t": "p", "text": "There is nothing wrong with growing. There is everything wrong with growth so fast and so funded that it outruns the actual value being created." },
+        { "t": "h2", "text": "How the trap closes" },
+        { "t": "p", "text": "Pour money into acquisition and the chart goes up. Retention quietly rots underneath. By the time the cohort data tells the truth, the company is structured around a number it was renting, not earning." },
+        { "t": "q", "text": "Anyone can buy a growth curve. Almost nobody can keep one they didn't earn.", "source": "— Tom Becker" },
+        { "t": "h2", "text": "The honest objection" },
+        { "t": "p", "text": "Some markets really are winner-take-all, and speed is survival. Fine — but be honest about which game you're playing, because most companies are not in that game and are paying its price anyway." },
+        { "t": "c", "v": "note", "title": "What to do Monday", "body": "Look at cohort retention before you look at top-line growth. If the cohorts leak, the growth is a loan, not income." }
+      ]
+    }
+  ]
+}

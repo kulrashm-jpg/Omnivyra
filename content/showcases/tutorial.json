@@ -1,0 +1,40 @@
+{
+  "examples": [
+    {
+      "meta": { "kicker": "How-To", "title": "Launch Your First AI-Assisted Campaign in 5 Steps", "subtitle": "A practical, repeatable path from idea to live campaign — without boiling the ocean.", "author": "Sam Whitfield", "company": "Cadence", "date": "March 9, 2026", "readMins": 5 },
+      "blocks": [
+        { "t": "img", "seed": "campaign-workflow-board", "alt": "A simple campaign workflow on a board", "caption": "One narrow, repeatable workflow beats a grand rollout." },
+        { "t": "p", "text": "You do not need a platform migration to get value from AI. You need one workflow, one honest metric, and the discipline to keep a human in the loop." },
+        { "t": "h2", "text": "The five steps" },
+        { "t": "ol", "items": ["Pick the single highest-friction step your team dreads most.", "Pilot one AI assist on it — variants, lead scoring, or segmentation.", "Keep a human approval gate; treat every output as a first draft.", "Measure one honest metric, not five vanity ones.", "Expand only after the first win is undeniable."] },
+        { "t": "c", "v": "warning", "title": "Common mistake", "body": "Skipping the approval gate. Speed without review is how off-brand copy reaches production and trust evaporates." },
+        { "t": "q", "text": "The teams that win start embarrassingly small — and then they do not stop.", "source": "— Sam Whitfield, Founder, Cadence" },
+        { "t": "sum", "body": "Start narrow, keep a human gate, measure one thing honestly. Momentum does the rest." }
+      ]
+    },
+    {
+      "meta": { "kicker": "How-To", "title": "Run a Technical SEO Audit in an Afternoon", "subtitle": "A focused, repeatable audit that surfaces the issues actually costing you traffic — and skips the busywork.", "author": "Priya Anand", "company": "Lumen Labs", "date": "February 22, 2026", "readMins": 7 },
+      "blocks": [
+        { "t": "img", "seed": "seo-analytics-screen", "alt": "An analytics dashboard", "caption": "Audit the few things that move rankings, not the hundred that do not." },
+        { "t": "p", "text": "Most SEO audits drown teams in a 200-row checklist nobody finishes. This one focuses on the handful of issues that actually move rankings." },
+        { "t": "h2", "text": "The six-step audit" },
+        { "t": "ol", "items": ["Confirm crawlability: robots.txt, sitemaps, and indexation.", "Check Core Web Vitals on your top 10 pages.", "Find and fix broken internal links and redirect chains.", "Audit titles and meta for your highest-traffic templates.", "Review structured data on key page types.", "Prioritize fixes by traffic-at-risk, then ship the top three."] },
+        { "t": "code", "lang": "bash", "code": "# Quick crawl-health check\ncurl -s https://example.com/robots.txt\ncurl -sI https://example.com/ | grep -i 'x-robots-tag'" },
+        { "t": "c", "v": "note", "title": "Where teams waste time", "body": "Chasing every warning. Sort by traffic-at-risk and fix the top three. The long tail can wait." },
+        { "t": "sum", "body": "A good audit is short and ruthless: crawl, vitals, links, metadata, schema, then ship the three fixes that matter." }
+      ]
+    },
+    {
+      "meta": { "kicker": "How-To", "title": "Migrate to a New CRM Without Losing Your Mind", "subtitle": "A staged migration plan that keeps the business running while you move — and keeps the data clean when you land.", "author": "Jordan Park", "company": "Tideway", "date": "March 6, 2026", "readMins": 8 },
+      "blocks": [
+        { "t": "img", "seed": "crm-migration-planning", "alt": "A team planning a migration", "caption": "Migrate in stages; never big-bang a system the whole company depends on." },
+        { "t": "p", "text": "A CRM migration fails in the data, not the demo. Plan the move like a renovation you have to live in: in stages, with the lights on the whole time." },
+        { "t": "h2", "text": "The migration plan" },
+        { "t": "ol", "items": ["Freeze scope: list the objects and fields you actually use.", "Clean the source data before you move a single record.", "Map fields explicitly; document every transform.", "Run a dry-run import into a sandbox and reconcile.", "Cut over one team first; fix what breaks before scaling.", "Retire the old system only after a clean parity week."] },
+        { "t": "c", "v": "warning", "title": "The trap", "body": "Migrating dirty data. Garbage in, garbage in a more expensive system. Clean first, always." },
+        { "t": "q", "text": "Nobody remembers a slow migration. Everybody remembers a lossy one.", "source": "— Jordan Park, Head of Ops, Tideway" },
+        { "t": "sum", "body": "Freeze, clean, map, dry-run, pilot, retire. Staged and boring beats fast and lossy every time." }
+      ]
+    }
+  ]
+}

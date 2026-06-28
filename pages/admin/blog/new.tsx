@@ -10,7 +10,7 @@ import { createDefaultBlogTemplate } from '../../../lib/blog/blogTemplate';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../../lib/blog/topicDetection';
 import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import type { BlogGenerationOutput } from '../../../lib/blog/blogGenerationEngine';
-import { resolveGeneratedPrefillBlocks } from '../../../lib/content/editorPrefill';
+import { realizeGeneratedBlocks } from '../../../lib/content/realizeGeneratedDocument';
 
 function useBlogAccess() {
   const [allowed, setAllowed] = useState<boolean | null>(null);
@@ -186,7 +186,7 @@ export default function AdminBlogNewPage() {
           tags: Array.isArray(output.tags) ? output.tags : [],
           seo_meta_title: output.seo_meta_title || '',
           seo_meta_description: output.seo_meta_description || '',
-          content_blocks: resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE),
+          content_blocks: realizeGeneratedBlocks(output, DEFAULT_TEMPLATE, { contentType: 'blog', documentTitle: output.title }),
           content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
         });
         // Extract SEO keywords from generated output (attached by BlogGenerateModal)

@@ -1,0 +1,43 @@
+{
+  "examples": [
+    {
+      "meta": { "kicker": "Strategy", "title": "How AI Is Transforming Modern Marketing", "subtitle": "From predictive targeting to generative content, AI quietly became everyday marketing infrastructure — here is what changed, and what to do about it.", "author": "Dana Ortiz", "company": "Northwind", "date": "March 12, 2026", "readMins": 8 },
+      "blocks": [
+        { "t": "img", "seed": "ai-marketing-team", "alt": "A marketing team reviewing AI-assisted drafts", "caption": "AI moved from experiment to everyday infrastructure in under two years." },
+        { "t": "p", "text": "For most teams, AI in marketing stopped being a science project somewhere in the last eighteen months. It now sits quietly inside the tools they already use — drafting variants, scoring leads, deciding which audience sees which message." },
+        { "t": "h2", "text": "Why this is happening now" },
+        { "t": "p", "text": "Three forces converged: models good enough to trust on first-draft work, data finally connected across channels, and budgets under pressure to do more with the same headcount. Together they turned AI from a differentiator into table stakes." },
+        { "t": "ins", "title": "Key takeaways", "items": ["73% of marketing teams now use AI in at least one workflow", "AI-assisted production cuts campaign turnaround by ~40%", "Personalized journeys lift conversion 10–30% on average"] },
+        { "t": "q", "text": "AI didn't replace our marketers — it deleted the busywork that was burning them out.", "source": "— Dana Ortiz, VP Marketing, Northwind" },
+        { "t": "c", "v": "warning", "title": "The most common mistake", "body": "Trying to automate everything at once, losing the thread on quality, and quietly rolling it back. Start with one workflow, prove a single honest metric, and earn the trust to expand." },
+        { "t": "sum", "body": "AI will not replace marketers who understand their audience — it will replace the busywork that kept them from the work only they can do." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Workplace", "title": "Remote Work Grew Up", "subtitle": "The experiment is over. What's left is the harder, more interesting question of how distributed teams actually do their best work.", "author": "Lena Fischer", "company": "Distributed", "date": "February 14, 2026", "readMins": 7 },
+      "blocks": [
+        { "t": "img", "seed": "remote-work-desk", "alt": "A focused remote work setup", "caption": "The debate moved from 'where' to 'how'." },
+        { "t": "p", "text": "The remote-versus-office war is mostly over, and almost nobody won cleanly. What replaced it is more useful: a focus on the practices that make distributed work actually work." },
+        { "t": "h2", "text": "What the best teams figured out" },
+        { "t": "p", "text": "It was never about the location. It was about writing things down, defaulting to async, and being deliberate about the few moments that genuinely need to be synchronous." },
+        { "t": "ins", "title": "What separates strong remote teams", "items": ["Decisions are written, not just spoken", "Async is the default; meetings are the exception", "Onboarding is documented, not improvised"] },
+        { "t": "q", "text": "Remote did not break culture. It just stopped letting us fake it with hallway energy.", "source": "— Lena Fischer, Distributed" },
+        { "t": "c", "v": "note", "title": "The honest tradeoff", "body": "Distributed work rewards clarity and punishes ambiguity. Teams that write well thrive; teams that rely on osmosis struggle." },
+        { "t": "sum", "body": "Remote work grew up the moment teams stopped arguing about where to sit and started investing in how to communicate." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Operations", "title": "The Supply Chain Learns to Bend", "subtitle": "After a decade of shocks, resilience stopped being a buzzword and became a budget line. Here is what actually changed.", "author": "Omar Haddad", "company": "Throughput", "date": "January 27, 2026", "readMins": 9 },
+      "blocks": [
+        { "t": "img", "seed": "supply-chain-logistics", "alt": "A logistics hub", "caption": "Efficiency optimized for a calm world. Resilience plans for a turbulent one." },
+        { "t": "p", "text": "For thirty years, supply chains were tuned for one thing: cost. Then a run of shocks made the hidden price of that tuning impossible to ignore." },
+        { "t": "h2", "text": "From efficient to resilient" },
+        { "t": "p", "text": "The shift is not anti-efficiency — it is anti-fragility. Dual sourcing, regional buffers, and visibility into the second and third tier are no longer luxuries; they are insurance with a measurable payout." },
+        { "t": "ins", "title": "What resilient operations invest in", "items": ["Visibility past tier-one suppliers", "Regional buffers for critical inputs", "Scenario planning, not just forecasting"] },
+        { "t": "q", "text": "We did not get slower. We stopped betting the company on everything going right.", "source": "— Omar Haddad, Throughput" },
+        { "t": "c", "v": "insight", "title": "The lesson", "body": "Resilience is not the opposite of efficiency — it is efficiency priced with risk included. The cheapest chain is rarely the cheapest over a decade." },
+        { "t": "sum", "body": "The modern supply chain trades a little peak efficiency for the ability to bend without breaking — and the math, finally, supports it." }
+      ]
+    }
+  ]
+}

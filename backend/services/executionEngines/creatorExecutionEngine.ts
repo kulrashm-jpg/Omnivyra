@@ -3,6 +3,7 @@ import { enqueueScheduledPostAt } from '../../scheduler/schedulerService';
 import { createHash } from 'crypto';
 import { config } from '@/config';
 import { buildCreatorBlueprintPromptSpecification } from '../creator/creatorPromptSpecification';
+import { assembleBlueprintPrompt } from '../creator/intelligence/blueprintPromptAssembler';
 import {
   repurposeCarouselForPlatforms,
   repurposeVideoScriptForPlatforms,
@@ -287,7 +288,7 @@ function alignBlueprintToTemplate(input: {
   return input.blueprint;
 }
 
-function normalizeCreatorAssetPayload(input: {
+export function normalizeCreatorAssetPayload(input: {
   assetType: string;
   blueprint: Record<string, unknown>;
   overrideAsset?: Record<string, unknown>;
@@ -855,6 +856,13 @@ async function generateBlueprint(
     template_style: template.style_schema,
     template_mapping_rules: template.mapping_rules,
   };
+  // CREATOR-061: complete the single-asset blueprint thread. The wizard-selected
+  // blueprint id rides on creator_card (CREATOR-059); the canonical
+  // BlueprintPromptAssembler (CREATOR-060) translates it to visual directives that
+  // reach the final prompt builder. Single source, additive: no blueprint ⇒ null
+  // ⇒ byte-identical legacy prompt.
+  const blueprintId = typeof context.creatorCard?.blueprint_id === 'string' ? context.creatorCard.blueprint_id : null;
+  const blueprintDirectives = assembleBlueprintPrompt(blueprintId)?.directives ?? null;
   const promptSpec = buildCreatorBlueprintPromptSpecification({
     assetType,
     blueprintType,
@@ -865,6 +873,7 @@ async function generateBlueprint(
     templateAlignmentInstruction: buildTemplateAlignmentInstruction({ assetType, template }),
     completionRetryHint: opts?.completionRetryHint,
     qualityRetryHint: opts?.qualityRetryHint,
+    blueprintDirectives,
   });
 
   const result = await runCompletionWithOperation({

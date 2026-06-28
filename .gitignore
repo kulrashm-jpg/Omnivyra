@@ -94,3 +94,7 @@ architecture-migration/reports/**/semantic-resolution-completion/*.json
 # Local Memurai / Redis runtime artifacts (snapshot + log; not source)
 dump.rdb
 memurai-log.txt
+
+# runtime-simulation debug artifacts (not shipped)
+runtime-*.png
+runtime-report.json

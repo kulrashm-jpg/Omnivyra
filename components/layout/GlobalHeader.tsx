@@ -44,8 +44,10 @@ import {
 import {
   CONTENT_NAV_SECTIONS,
   getContentNavRoutes,
+  resolveCreationEntry,
   type ContentNavSection,
 } from './contentNavigationConfig';
+import { creatorOutcomeFirstEnabled } from '../../lib/creator-outcomes/outcomeRegistry';
 
 type HeaderChildItem = {
   label: string;
@@ -55,6 +57,8 @@ type HeaderChildItem = {
 };
 
 type HeaderNavItem = {
+  // CREATOR-071: stable navigation id — identity no longer relies on display label.
+  id?: string;
   label: string;
   href: string;
   icon: React.ElementType;
@@ -89,6 +93,7 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
     ],
   },
   {
+    id: 'content',
     label: 'Content',
     href: '/command-center/content',
     icon: FileText,
@@ -292,7 +297,8 @@ function NavDropdown({
   isActive: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const isContentMenu = item.label === 'Content';
+  // CREATOR-071: identity by stable id, not display label.
+  const isContentMenu = item.id === 'content';
   const [expandedSection, setExpandedSection] = useState<ContentNavSection['id']>('writer');
   const [focusedCategoryIndex, setFocusedCategoryIndex] = useState(0);
   const [focusedItemIndex, setFocusedItemIndex] = useState(0);
@@ -314,9 +320,12 @@ function NavDropdown({
     if (activeSection) setExpandedSection(activeSection.id);
   }, [isContentMenu, open, router.asPath]);
 
+  // CREATOR-062: every content-creation nav target routes through the single
+  // Unified Marketing Workspace when enabled (flag off ⇒ legacy route unchanged).
+  const unifiedCreation = creatorOutcomeFirstEnabled();
   const navigateToContentItem = (route: string) => {
     setOpen(false);
-    router.push(route);
+    router.push(resolveCreationEntry(route, unifiedCreation));
   };
 
   const handleContentKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -378,7 +387,7 @@ function NavDropdown({
         }`}
       >
         <item.icon className="h-4 w-4" />
-        {item.label}
+        {isContentMenu && unifiedCreation ? 'Create Marketing' : item.label}
         <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
           {item.children.length}
         </span>
@@ -953,12 +962,12 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
                 <div key={item.label} className="rounded-2xl border border-slate-100 bg-slate-50/70 p-2">
                   <div className="flex items-center gap-2 px-2 py-1">
                     <item.icon className="h-4 w-4 text-slate-500" />
-                    <div className="text-sm font-semibold text-slate-900">{item.label}</div>
+                    <div className="text-sm font-semibold text-slate-900">{item.id === 'content' && creatorOutcomeFirstEnabled() ? 'Create Marketing' : item.label}</div>
                     <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500">
                       {item.children.length}
                     </span>
                   </div>
-                  {item.label === 'Content' ? (
+                  {item.id === 'content' ? (
                     <div className="space-y-1 px-1 pb-1 pt-2">
                       {CONTENT_NAV_SECTIONS.map((section) => {
                         const SectionIcon = section.id === 'writer' ? PenTool : Sparkles;
@@ -966,7 +975,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
                         return (
                           <div key={section.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                             <Link
-                              href={section.href}
+                              href={resolveCreationEntry(section.href, creatorOutcomeFirstEnabled())}
                               onClick={() => setMobileOpen(false)}
                               className={`flex w-full items-center justify-between gap-3 px-3 py-3 text-left text-sm transition-colors ${
                                 sectionActive ? 'bg-sky-50 text-sky-800' : 'text-slate-700 hover:bg-slate-50'
@@ -997,7 +1006,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
                                   {section.items.map((contentItem) => (
                                     <Link
                                       key={contentItem.id}
-                                      href={contentItem.route}
+                                      href={resolveCreationEntry(contentItem.route, creatorOutcomeFirstEnabled())}
                                       aria-label={contentItem.label}
                                       onClick={() => setMobileOpen(false)}
                                       className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm ${

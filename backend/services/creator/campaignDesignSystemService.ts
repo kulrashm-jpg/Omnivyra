@@ -24,6 +24,9 @@ import {
   resolveCampaignTemplate,
 } from '../../../lib/creator-templates/campaignDesignSystem';
 import { getCollection, buildResolver } from './collectionService';
+import type { CreatorTemplate } from '../../../lib/creator-templates';
+import { resolveAutoSelection } from '../../../lib/creator-templates/autoSelection';
+import type { RecommendationContext } from '../../../lib/creator-templates/templateRecommendation';
 
 const TABLE = 'campaign_design_systems';
 const nowIso = () => new Date().toISOString();
@@ -98,6 +101,64 @@ export async function detachCampaignDesignSystem(campaignId: string): Promise<bo
     const { error } = await supabase.from(TABLE).delete().eq('campaign_id', campaignId);
     return !error;
   } catch { return false; }
+}
+
+/* ── Per-PIECE template selection (campaign generation) ──────────────────
+ * The campaign's pinned collection holds several templates per asset family.
+ * At generation, each content piece picks the best-fit template for ITS context
+ * (deterministic recommendation engine — no AI call here). The pool is loaded
+ * ONCE per campaign run; `selectTemplateFromPool` is pure and called per piece.
+ */
+
+export interface CampaignTemplatePool {
+  /** Resolved campaign templates grouped by asset family (from the pinned snapshot). */
+  byFamily: Map<TemplateAssetFamily, CreatorTemplate[]>;
+  collectionId: string;
+}
+
+export interface CampaignTemplatePieceSelection {
+  templateId: string;
+  template: CreatorTemplate;
+  source: 'recommended';
+  /** How many candidate templates the family offered (for telemetry/debug). */
+  candidateCount: number;
+}
+
+/** Load + resolve a campaign's pinned templates once, grouped by family. Null when
+ *  no design system is pinned / the table is unapplied ⇒ caller keeps today's flow. */
+export async function loadCampaignTemplatePool(campaignId: string): Promise<CampaignTemplatePool | null> {
+  const ds = await getCampaignDesignSystem(campaignId);
+  if (!ds) return null;
+  // Use the LIVE collection so manual/AI edits made in the gallery reach generation
+  // immediately; fall back to the pinned snapshot only if the collection is gone.
+  const live = await getCollection(ds.collectionId);
+  const templateIds = live?.templateIds ?? ds.pinnedSnapshot.templateIds;
+  const resolve = await buildResolver(templateIds);
+  const byFamily = new Map<TemplateAssetFamily, CreatorTemplate[]>();
+  for (const id of templateIds) {
+    const t = resolve(id);
+    if (!t) continue;
+    const arr = byFamily.get(t.assetFamily) ?? [];
+    arr.push(t);
+    byFamily.set(t.assetFamily, arr);
+  }
+  if (byFamily.size === 0) return null;
+  return { byFamily, collectionId: ds.collectionId };
+}
+
+/** Pure per-piece selection: best-fit template for this family + piece context. */
+export function selectTemplateFromPool(
+  pool: CampaignTemplatePool,
+  family: TemplateAssetFamily,
+  context: RecommendationContext,
+): CampaignTemplatePieceSelection | null {
+  const templates = pool.byFamily.get(family) ?? [];
+  if (templates.length === 0) return null;
+  const selection = resolveAutoSelection({ templates, context: { ...context, assetFamily: family } });
+  if (!selection.templateId) return null;
+  const template = templates.find((t) => t.id === selection.templateId);
+  if (!template) return null;
+  return { templateId: selection.templateId, template, source: 'recommended', candidateCount: templates.length };
 }
 
 /** Recommend the campaign's template for a family (from the PINNED snapshot). */

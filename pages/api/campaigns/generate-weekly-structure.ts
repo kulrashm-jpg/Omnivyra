@@ -4,6 +4,8 @@ import { getExecutionCategoryForContentType, executionCategoryToAiGenerated } fr
 // (behaviour-preserving shim; video stays in the human-production lane).
 import { routeRequiresMediaIntent } from '../../../backend/services/orchestration/routing';
 import { deriveCreatorAssetTypeFromIntent } from '../../../backend/services/creatorTemplateRegistryService';
+import { familyForCreatorType } from '../../../lib/creator-templates';
+import { loadCampaignTemplatePool, selectTemplateFromPool, type CampaignTemplatePool } from '../../../backend/services/creator/campaignDesignSystemService';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorCodes';
@@ -825,6 +827,11 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     const validation = { ok: true, errors: [] as string[] };
 
     const rowsWithContent: Array<{ row: any; contentObj: any }> = [];
+    // Phase 1 — campaign design-system template pool, loaded ONCE per run. When the
+    // campaign has a pinned collection (multiple templates per asset family), each
+    // creator piece below picks its best-fit template from this pool. Null ⇒ no
+    // design system pinned ⇒ generation is byte-identical to today.
+    const campaignTemplatePool: CampaignTemplatePool | null = await loadCampaignTemplatePool(String(campaignId));
     let executionValidationItems: any[] = [];
     const autoRebalanceEffective = useExecutionItems ? false : autoRebalance;
     const autoOptimizeDistributionEffective = useExecutionItems ? false : autoOptimizeDistribution;
@@ -1078,6 +1085,10 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           rowAssetType = 'post_with_asset';
         }
         const creatorComboValid = requiresMediaIntent && isValidCreatorPlatformAssetCombo(platform, rowAssetType);
+        // Resolved template for THIS row: a card-stamped template wins; else the
+        // campaign design-system per-piece selection (computed in the creator block
+        // below). Null when no template applies — stamped onto the row at build.
+        let resolvedTemplateId: string | null = null;
         // Satisfy `daily_content_plans_creator_payload_check`. The deployed
         // function is significantly stricter than its initial migration
         // header suggested — it requires:
@@ -1153,6 +1164,28 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
             distributionMode: 'unique' as const,
             continuityContext: { campaign_id: campaignId, week_index: weekNumber },
           };
+
+          // Phase 1 — per-piece template selection from the campaign's pinned
+          // collection. A card-stamped template wins; otherwise pick the best-fit
+          // template for THIS piece's context. No pool / no family coverage ⇒
+          // resolvedTemplateId stays null and the row is stamped null as before.
+          resolvedTemplateId =
+            typeof creatorCardForRow?.template_id === 'string' && creatorCardForRow.template_id.trim()
+              ? creatorCardForRow.template_id.trim()
+              : null;
+          if (!resolvedTemplateId && campaignTemplatePool) {
+            const assetFamily = familyForCreatorType(rowAssetType);
+            if (assetFamily) {
+              const picked = selectTemplateFromPool(campaignTemplatePool, assetFamily, {
+                assetFamily,
+                contentType: normalizedContentType,
+                objective: objectiveForCopy || null,
+                platform: normalizePlatformKey(platform),
+                audience: String(item.whoAreWeWritingFor || '') || null,
+              });
+              if (picked) resolvedTemplateId = picked.templateId;
+            }
+          }
 
           // Step-7 planning hierarchy takes precedence. When ON +
           // image/carousel it builds a CreatorBlueprintCard, expands it,
@@ -1289,13 +1322,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           target_audience: item.whoAreWeWritingFor,
           intent_type: creatorComboValid ? 'creator' : 'text',
           asset_type: creatorComboValid ? rowAssetType : null,
-          template_id: creatorComboValid
-            ? (
-                typeof creatorCardForRow?.template_id === 'string' && creatorCardForRow.template_id.trim()
-                  ? creatorCardForRow.template_id.trim()
-                  : null
-              )
-            : null,
+          template_id: creatorComboValid ? resolvedTemplateId : null,
           plan_version: currentPlanVersion,
           retry_count: 0,
           max_retries: 3,

@@ -1,0 +1,46 @@
+{
+  "examples": [
+    {
+      "meta": { "kicker": "Case Study", "title": "How One Team Cut Reporting Time by 4x", "subtitle": "A small operations team was drowning in spreadsheets. Here is exactly what they changed — and what it cost them to get there.", "author": "Jordan Park", "company": "Tideway", "date": "March 1, 2026", "readMins": 7 },
+      "blocks": [
+        { "t": "img", "seed": "data-reporting-analyst", "alt": "An analyst reviewing dashboards", "caption": "Before: four people, two days a week, one fragile spreadsheet." },
+        { "t": "h2", "text": "The problem" },
+        { "t": "p", "text": "Every Monday, four people spent the better part of two days assembling the same report from the same five sources. By the time it shipped, half of it was already stale." },
+        { "t": "h2", "text": "The turning point" },
+        { "t": "p", "text": "They did not buy a platform. They automated one step — the data pull and first-pass summary — and kept a human reviewing the output. The third week, the report shipped Monday morning." },
+        { "t": "ins", "title": "Results after one quarter", "items": ["Reporting time cut from ~2 days to ~3 hours", "Errors down sharply with a single source of truth", "Two analysts redeployed to actual analysis"] },
+        { "t": "q", "text": "We did not save time to do nothing. We saved it to finally ask why.", "source": "— Jordan Park, Head of Ops, Tideway" },
+        { "t": "c", "v": "note", "title": "What we'd tell our past selves", "body": "Start with the step everyone hates. The motivation is free, and the win is obvious to the whole team." },
+        { "t": "sum", "body": "One automated step, one human gate, one quarter. The spreadsheet did not disappear — the dread did." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Case Study", "title": "The Startup That Stopped Shipping to Survive", "subtitle": "A frantic team was building everything and selling nothing. Saying no to features is what finally saved them.", "author": "Aiko Tanaka", "company": "Runway", "date": "February 10, 2026", "readMins": 8 },
+      "blocks": [
+        { "t": "img", "seed": "startup-team-whiteboard", "alt": "A startup team at a whiteboard", "caption": "Before: a roadmap with everything on it and a revenue line that flatlined." },
+        { "t": "h2", "text": "The problem" },
+        { "t": "p", "text": "They were shipping a feature a week and losing customers anyway. The product did everything and solved nothing in particular — and the team could not see it from inside the sprint." },
+        { "t": "h2", "text": "The turning point" },
+        { "t": "p", "text": "A new head of product froze the roadmap, interviewed thirty churned customers, and killed two-thirds of the backlog. The team's first reaction was panic. Their second was relief." },
+        { "t": "ins", "title": "Results in two quarters", "items": ["Churn cut nearly in half", "One core workflow finally polished end to end", "Sales cycle shortened as the pitch got simpler"] },
+        { "t": "q", "text": "We did not need to build more. We needed to finish one thing people would pay for.", "source": "— Aiko Tanaka, Runway" },
+        { "t": "c", "v": "warning", "title": "The hard part", "body": "Saying no to good ideas. The backlog was full of features that were genuinely nice — and genuinely distracting." },
+        { "t": "sum", "body": "Survival did not come from shipping more. It came from the discipline to finish the one thing that mattered." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Case Study", "title": "How a Small Nonprofit Reached 10x More People", "subtitle": "No new funding, no bigger team — just a hard look at where the effort was actually going.", "author": "Grace Mensah", "company": "Common Good", "date": "January 15, 2026", "readMins": 7 },
+      "blocks": [
+        { "t": "img", "seed": "nonprofit-community-event", "alt": "A community outreach event", "caption": "Before: enormous effort, modest reach, exhausted volunteers." },
+        { "t": "h2", "text": "The problem" },
+        { "t": "p", "text": "The team poured heroic effort into events that reached a few hundred people, while the channel that quietly reached thousands sat half-managed and unloved." },
+        { "t": "h2", "text": "The turning point" },
+        { "t": "p", "text": "They tracked where outcomes actually came from for one month. The answer was uncomfortable and clarifying: shift effort to the channel that worked, and stop romanticizing the one that did not." },
+        { "t": "ins", "title": "Results in six months", "items": ["Reach grew roughly tenfold on the same budget", "Volunteer hours redirected to high-impact work", "Burnout dropped as the wins became visible"] },
+        { "t": "q", "text": "We were not short on effort. We were short on honesty about where it went.", "source": "— Grace Mensah, Common Good" },
+        { "t": "c", "v": "insight", "title": "The lesson", "body": "Measure where outcomes come from before you decide where effort should go. Passion is not a strategy." },
+        { "t": "sum", "body": "Ten times the reach, same budget. The change was not more work — it was the courage to follow the evidence." }
+      ]
+    }
+  ]
+}

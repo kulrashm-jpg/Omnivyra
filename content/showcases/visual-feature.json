@@ -1,0 +1,43 @@
+{
+  "examples": [
+    {
+      "meta": { "kicker": "Feature", "title": "Inside the New Creative Workflow", "subtitle": "A look at how modern teams pair human taste with machine speed — without losing the craft.", "author": "Marcus Lee", "company": "Studio Verde", "date": "February 28, 2026", "readMins": 6 },
+      "blocks": [
+        { "t": "img", "seed": "creative-studio-floor", "alt": "A creative studio workspace", "caption": "The studio floor: mood boards, screens, and a faster first draft." },
+        { "t": "p", "text": "Walk into a modern creative team and the change is subtle. The whiteboards are still there. The arguments about kerning are still there. What is gone is the dead time." },
+        { "t": "h2", "text": "From blank page to first draft" },
+        { "t": "img", "seed": "designers-iterating", "alt": "Designers iterating on layouts", "caption": "Generative drafts give the team a starting point to react to, not worship." },
+        { "t": "p", "text": "The teams getting this right treat AI like a junior who never tires: ten directions in the time it took to sketch one, and the humans do the part that matters — choosing, cutting, elevating." },
+        { "t": "q", "text": "The machine gives us a hundred starts. Taste is still the whole job.", "source": "— Marcus Lee, Creative Director, Studio Verde" },
+        { "t": "img", "seed": "finished-campaign-screen", "alt": "A finished campaign on screen", "caption": "The finished work still carries a human signature." },
+        { "t": "sum", "body": "Speed did not replace craft. It cleared the runway so the craft could happen sooner." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Design", "title": "Light, Concrete, and the Quiet Confidence of Modern Architecture", "subtitle": "A photo-led tour of buildings that say more by doing less.", "author": "Sofia Marchetti", "company": "Form & Function", "date": "March 2, 2026", "readMins": 5 },
+      "blocks": [
+        { "t": "img", "seed": "modern-architecture-facade", "alt": "A minimalist concrete facade", "caption": "Restraint reads as confidence." },
+        { "t": "p", "text": "The most striking buildings of the decade are not the loudest. They are the ones brave enough to leave things out." },
+        { "t": "h2", "text": "Material honesty" },
+        { "t": "img", "seed": "interior-natural-light", "alt": "An interior flooded with natural light", "caption": "Daylight is the cheapest and most generous material a room can have." },
+        { "t": "p", "text": "Exposed concrete, raw timber, and a single, well-placed window do more for a space than any amount of decoration. The craft is in what you can subtract." },
+        { "t": "q", "text": "Good architecture is not what you add. It is what you have the nerve to remove.", "source": "— Sofia Marchetti, Form & Function" },
+        { "t": "img", "seed": "courtyard-shadow-play", "alt": "Shadows across a quiet courtyard", "caption": "Shadow is a design decision, not an accident." },
+        { "t": "sum", "body": "The buildings that last whisper. Their confidence is in the restraint." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Travel", "title": "A Slow Week on the Northern Coast", "subtitle": "No itinerary, no rush — a photo essay on the case for traveling less and seeing more.", "author": "Theo Lindqvist", "company": "Off-Season", "date": "January 22, 2026", "readMins": 6 },
+      "blocks": [
+        { "t": "img", "seed": "northern-coast-morning", "alt": "A quiet northern coastline at dawn", "caption": "The first morning, before any plans could ruin it." },
+        { "t": "p", "text": "We arrived with a list of things to do and abandoned it by lunch on the first day. What replaced it was better: nothing in particular, slowly." },
+        { "t": "h2", "text": "The case for doing less" },
+        { "t": "img", "seed": "harbor-small-boats", "alt": "Small boats in a quiet harbor", "caption": "The harbor kept its own schedule, and we borrowed it." },
+        { "t": "p", "text": "Slow travel is not laziness. It is the radical act of staying long enough in one place that it stops being a backdrop and starts being a memory." },
+        { "t": "q", "text": "We saw less of the map and far more of the place.", "source": "— Theo Lindqvist, Off-Season" },
+        { "t": "img", "seed": "coastal-evening-light", "alt": "Evening light over the water", "caption": "By the last evening, leaving felt like an interruption." },
+        { "t": "sum", "body": "The best week we ever traveled had no itinerary — only a coastline and the time to notice it." }
+      ]
+    }
+  ]
+}

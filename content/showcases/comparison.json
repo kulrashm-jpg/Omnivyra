@@ -1,0 +1,47 @@
+{
+  "examples": [
+    {
+      "meta": { "kicker": "Comparison", "title": "HubSpot vs Salesforce: An Honest Comparison", "subtitle": "Two great CRMs, two very different philosophies. Here is which one fits which team — without the sales pitch.", "author": "Priya Anand", "company": "Lumen Labs", "date": "March 4, 2026", "readMins": 7 },
+      "blocks": [
+        { "t": "p", "text": "Both will run your business. The real question is what you are optimizing for: speed and simplicity, or depth and control. Here is the honest head to head." },
+        { "t": "h2", "text": "Head to head" },
+        { "t": "cols", "cols": [
+          [ { "t": "h3", "text": "HubSpot" }, { "t": "ul", "items": ["Fast to set up, gentle learning curve", "Marketing + CRM in one suite", "Great for SMB and mid-market", "Pricing climbs with contacts", "Less customizable at the edges"] } ],
+          [ { "t": "h3", "text": "Salesforce" }, { "t": "ul", "items": ["Deep customization and automation", "Vast ecosystem and integrations", "Built for complex enterprise sales", "Steeper setup and admin overhead", "Higher total cost of ownership"] } ]
+        ] },
+        { "t": "ins", "title": "The quick read", "items": ["Choose HubSpot to move fast with a lean team", "Choose Salesforce for complex, custom enterprise workflows", "Migration cost matters more than feature lists"] },
+        { "t": "q", "text": "Pick the CRM your team will actually keep clean. The best features are worthless in a system nobody updates.", "source": "— Priya Anand, Growth Lead, Lumen Labs" },
+        { "t": "h2", "text": "The verdict" },
+        { "t": "c", "v": "insight", "title": "Recommendation", "body": "Under ~50 reps and you want speed: HubSpot. Complex process, heavy customization, big admin team: Salesforce. When unsure, the simpler tool you fully adopt beats the powerful one you half-use." },
+        { "t": "faq", "items": [["Can you migrate later?", "Yes, but plan for it — data mapping and retraining are the real costs, not the license."], ["Which is cheaper?", "HubSpot is usually cheaper at small scale; Salesforce can win at large scale with the right contracts."]] }
+      ]
+    },
+    {
+      "meta": { "kicker": "Comparison", "title": "ChatGPT vs Claude: Which Assistant for Which Job", "subtitle": "They overlap more than the marketing suggests. The differences that matter show up in the work, not the demos.", "author": "Marcus Lee", "company": "Studio Verde", "date": "March 11, 2026", "readMins": 6 },
+      "blocks": [
+        { "t": "p", "text": "Asking which is 'better' is the wrong question. Ask which fits the task in front of you. Here is how they actually differ in day-to-day use." },
+        { "t": "h2", "text": "Side by side" },
+        { "t": "cols", "cols": [
+          [ { "t": "h3", "text": "ChatGPT" }, { "t": "ul", "items": ["Broad tooling and plugins", "Strong code execution surface", "Large, familiar ecosystem", "Great general-purpose default"] } ],
+          [ { "t": "h3", "text": "Claude" }, { "t": "ul", "items": ["Long, careful document work", "Steady tone for writing and review", "Strong at following nuanced instructions", "Comfortable with large context"] } ]
+        ] },
+        { "t": "code", "lang": "text", "code": "Rule of thumb:\n- Drafting + reviewing long docs  -> Claude\n- Tool-heavy automation + plugins -> ChatGPT\n- Most everyday tasks             -> either" },
+        { "t": "q", "text": "Stop benchmarking and start matching. The right model is the one that fits this task, today.", "source": "— Marcus Lee, Creative Director, Studio Verde" },
+        { "t": "c", "v": "note", "title": "In practice", "body": "Many teams keep both and route by task. The switching cost is low; the upside of using the right one is real." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Comparison", "title": "Jira vs Linear: Process or Pace?", "subtitle": "One is built for control, the other for momentum. Your team's stage decides which you'll love.", "author": "Sam Whitfield", "company": "Cadence", "date": "February 26, 2026", "readMins": 6 },
+      "blocks": [
+        { "t": "p", "text": "Jira and Linear are not really competing on features. They are competing on a belief about how teams should work. Pick the belief that matches yours." },
+        { "t": "h2", "text": "Head to head" },
+        { "t": "cols", "cols": [
+          [ { "t": "h3", "text": "Jira" }, { "t": "ul", "items": ["Deep configurability and reporting", "Mature at enterprise scale", "Heavy for small teams", "Strong governance and audit"] } ],
+          [ { "t": "h3", "text": "Linear" }, { "t": "ul", "items": ["Fast, opinionated, keyboard-first", "Loved by product and eng teams", "Less customizable by design", "Momentum over ceremony"] } ]
+        ] },
+        { "t": "ins", "title": "The quick read", "items": ["Small fast team that hates overhead: Linear", "Large org that needs control and reporting: Jira", "Opinionated defaults beat infinite config for most teams"] },
+        { "t": "c", "v": "insight", "title": "Recommendation", "body": "Under ~50 people optimizing for speed: Linear. Regulated, complex, or multi-team governance: Jira. The tool that adds the least friction to shipping usually wins." }
+      ]
+    }
+  ]
+}

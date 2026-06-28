@@ -13,7 +13,7 @@ import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
-import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
+import { realizeGeneratedBlocks } from '../../lib/content/realizeGeneratedDocument';
 import PromotePlatformModal, { type PromotablePlatform } from '../../components/content/PromotePlatformModal';
 import PromotionWorkspace, { type WorkspacePlatformSeed } from '../../components/content/PromotionWorkspace';
 import { resolveCanonicalContentUrl, loadPromotionDrafts, deletePromotionDraft } from '../../lib/content/promotionDraft';
@@ -487,7 +487,7 @@ export default function BlogNewPage() {
             tags: Array.isArray(output.tags) ? output.tags : [],
             seo_meta_title: output.seo_meta_title || '',
             seo_meta_description: output.seo_meta_description || '',
-            content_blocks: resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE),
+            content_blocks: realizeGeneratedBlocks(output, DEFAULT_TEMPLATE, { contentType: 'blog', documentTitle: output.title }),
             content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
             format_type: typeof parsed?.format_type === 'string' ? parsed.format_type : undefined,
           });

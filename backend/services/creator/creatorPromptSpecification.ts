@@ -35,6 +35,10 @@ export interface CreatorBlueprintPromptInput {
   templateAlignmentInstruction: string;
   completionRetryHint?: string | null;
   qualityRetryHint?: string | null;
+  /** CREATOR-061: canonical blueprint visual directives (from the single
+   *  BlueprintPromptAssembler). Additive — when null/empty the user prompt is
+   *  byte-identical to legacy. Enriches visual intent; never overrides the goal. */
+  blueprintDirectives?: string | null;
 }
 
 /** The prompt specification the execution engine consumes unchanged. */
@@ -74,7 +78,7 @@ Template alignment rule:
 ${input.templateAlignmentInstruction}
 
 ${input.assetType === 'image' ? 'Single-image output rule: include top-level "headline" and "visual_description" fields. The visual_description must describe the actual preview composition, focal object, layout, palette, hierarchy, and intended viewer reaction. Do not return only generic placeholder language.' : ''}
-${input.completionRetryHint ? `\n${input.completionRetryHint}\n` : ''}${input.qualityRetryHint ? `\n${input.qualityRetryHint}\n` : ''}
+${input.completionRetryHint ? `\n${input.completionRetryHint}\n` : ''}${input.qualityRetryHint ? `\n${input.qualityRetryHint}\n` : ''}${input.blueprintDirectives ? `\nVisual blueprint direction (enrich visual intent; never override the business goal/brand/audience above):\n${input.blueprintDirectives}\n` : ''}
 Return JSON only.`;
 
   return {

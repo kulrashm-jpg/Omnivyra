@@ -56,6 +56,7 @@ import {
 // whose values equal the prior hardcoded constants → byte-identical output.
 import {
   resolveTemplate,
+  infographicStyleForBlueprint,
   DEFAULT_IMAGE_STYLE,
   DEFAULT_INFOGRAPHIC_STYLE,
   type InfographicStyleSchema,
@@ -95,6 +96,13 @@ type CreatorReviewPreviewInput = {
     tagline?: string;
     logoUrl?: string;
     faviconUrl?: string;
+  };
+  // CREATOR-094: existing GenerationDNA fields, consumed to make each sample's
+  // preview visually distinct (deterministic layout seed; no randomness).
+  designDna?: {
+    composition?: string; hierarchy?: string; typography?: string; spacing?: string;
+    photography?: string; illustration?: string; renderingStyle?: string;
+    shapeLanguage?: string; camera?: string; lighting?: string;
   };
 };
 
@@ -282,8 +290,22 @@ function templateIdForRender(metadata: Record<string, unknown>): string | null {
   const raw = metadata.template_id ?? metadata.infographic_template_id ?? card.template_id;
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
+/** blueprint_id (the chosen Marketing Sample) carried on render metadata. */
+function blueprintIdForRender(metadata: Record<string, unknown>): string | null {
+  const card = safeObject(metadata.creator_card);
+  const raw = metadata.blueprint_id ?? card.blueprint_id;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
 function resolveInfographicRenderStyle(metadata: Record<string, unknown>): InfographicStyleSchema {
-  return resolveTemplate(templateIdForRender(metadata), { family: 'infographic' }).infographicStyle as InfographicStyleSchema;
+  // A system template_id (e.g. sys-infographic-statistics) wins — explicit choice.
+  const tid = templateIdForRender(metadata);
+  if (tid) return resolveTemplate(tid, { family: 'infographic' }).infographicStyle as InfographicStyleSchema;
+  // CREATOR-106: otherwise align the infographic with the chosen Marketing Sample's
+  // style — `technology` → technical, `finance` → financial, `editorial` → editorial,
+  // etc. — so picking a sample visibly changes the infographic, not just the default.
+  const bp = blueprintIdForRender(metadata);
+  if (bp) return infographicStyleForBlueprint(bp);
+  return resolveTemplate(null, { family: 'infographic' }).infographicStyle as InfographicStyleSchema;
 }
 function resolveImageRenderStyle(metadata: Record<string, unknown>): ImageStyleSchema {
   return resolveTemplate(templateIdForRender(metadata), { family: 'image' }).imageStyle as ImageStyleSchema;
@@ -3093,7 +3115,13 @@ export async function renderCreatorAssetReviewPreview(input: CreatorReviewPrevie
   // Seed the background with a per-ASSET token (the title) so different assets
   // for the same company don't all render the identical gradient — layoutVariantId
   // alone is constant per brand. Stays on-brand (same palette), varies arrangement.
-  const background = await renderBackgroundPng({ width, height, colors: brandColors, variantId: `${brandKit.layoutVariantId}:${String(input.title || '').slice(0, 48)}` });
+  // CREATOR-094: seed the layout variant from the Sample Definition's GenerationDNA
+  // (composition/renderingStyle/shapeLanguage/etc.) so distinct DNA → distinct
+  // arrangement. Identical DNA still yields identical output (unavoidable).
+  const dnaSeed = input.designDna
+    ? Object.values(input.designDna).map((v) => String(v ?? '')).filter(Boolean).join('|')
+    : '';
+  const background = await renderBackgroundPng({ width, height, colors: brandColors, variantId: `${brandKit.layoutVariantId}:${dnaSeed || String(input.title || '').slice(0, 48)}` });
   const overlayRender = buildOverlaySvg({
     width,
     height,
@@ -3129,6 +3157,62 @@ export async function renderCreatorAssetReviewPreview(input: CreatorReviewPrevie
       }),
     },
   };
+}
+
+/**
+ * CREATOR-106 — carousel-SHAPED review preview. A carousel sample must LOOK like a
+ * multi-slide carousel, not the flat single image the image gallery shows. We render
+ * three real slides from the SAME design DNA (cover → body → CTA), then compose them
+ * as a peeking deck on a neutral canvas with page dots — unmistakably a carousel.
+ */
+export async function renderCreatorCarouselReviewPreview(input: CreatorReviewPreviewInput): Promise<{
+  buffer: Buffer;
+  metadata: Record<string, unknown>;
+}> {
+  const head = input.overlayText ?? {};
+  // Three distinct slides so the deck reads as a real carousel, not a duplicated image.
+  const slideOverlays = [
+    { headline: head.headline ?? input.title, subheadline: head.subheadline, cta: undefined },
+    { headline: head.subheadline ?? input.body, subheadline: undefined, cta: undefined },
+    { headline: head.cta ?? 'Learn more', subheadline: head.headline ?? input.title, cta: head.cta ?? 'Learn more' },
+  ];
+  const slides: Buffer[] = [];
+  for (const ov of slideOverlays) {
+    // Square canvas (instagram) so the slide isn't side-cropped into the deck card.
+    const { buffer } = await renderCreatorAssetReviewPreview({ ...input, platform: 'instagram', assetType: 'image', overlayText: ov });
+    slides.push(buffer);
+  }
+
+  const S = 1080;
+  const card = 700;          // slide size before frame
+  const framed: Buffer[] = [];
+  for (const s of slides) {
+    framed.push(await sharp(s).resize(card, card, { fit: 'cover' })
+      .extend({ top: 12, bottom: 12, left: 12, right: 12, background: '#ffffff' })
+      .png().toBuffer());
+  }
+  const fc = card + 24;       // framed card size
+  // Deck: back + mid peek up-and-right behind the fully-visible front slide.
+  const positions = [
+    { left: S - fc - 70, top: 95 },                 // back
+    { left: Math.round((S - fc) / 2), top: 135 },   // mid
+    { left: 70, top: 175 },                          // front (slide 1)
+  ];
+  const dotY = S - 70;
+  const dots = `<svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">`
+    + `<circle cx="${S / 2 - 30}" cy="${dotY}" r="8" fill="#2563eb"/>`
+    + `<circle cx="${S / 2}" cy="${dotY}" r="8" fill="#cbd5e1"/>`
+    + `<circle cx="${S / 2 + 30}" cy="${dotY}" r="8" fill="#cbd5e1"/></svg>`;
+  const buffer = await sharp({ create: { width: S, height: S, channels: 4, background: { r: 226, g: 232, b: 240, alpha: 1 } } })
+    .composite([
+      { input: framed[2], top: positions[0].top, left: positions[0].left },
+      { input: framed[1], top: positions[1].top, left: positions[1].left },
+      { input: framed[0], top: positions[2].top, left: positions[2].left },
+      { input: Buffer.from(dots), top: 0, left: 0 },
+    ])
+    .png().toBuffer();
+
+  return { buffer, metadata: { width: S, height: S, preview_kind: 'visual_review_carousel', platform: input.platform, asset_type: 'carousel', slides: slideOverlays.length } };
 }
 
 /**

@@ -49,6 +49,13 @@ import { resolvePurposeStrategy } from '../../../backend/services/creator/purpos
 // All additions are gated on an active template resolved from
 // ?template_id=…; with no template_id the page behaves byte-identically.
 import TemplateFieldsPanel, { type TemplateAiAssistContext } from '../../../components/creator/TemplateFieldsPanel';
+import {
+  freshSyncState,
+  markManual,
+  editorLeadValue,
+  planBriefEditorSync,
+  type BriefEditorSyncState,
+} from '../../../lib/content/creatorBriefEditorSync';
 // Quality Inspector — read-only display of the attached creator_diagnostic_report.
 import CreatorQualityInspector from '../../../components/creator/CreatorQualityInspector';
 import type { CreatorDiagnosticReport } from '../../../backend/services/creator/creatorDiagnosticReport';
@@ -72,6 +79,10 @@ import {
   projectCarouselSlides,
   projectInfographicSections,
 } from '../../../lib/creator-templates/values';
+// CREATOR-PROD-005 — flag-gated deterministic runtime (ON drives the payload;
+// OFF, the default, keeps the legacy projectors untouched → instant rollback).
+import { creatorRuntimeV2Live } from '../../../lib/creator-templates/creatorRuntimeFlag';
+import { runCreatorRuntimeV2 } from '../../../lib/creator-templates/creatorRuntimeV2';
 
 type CreatorTypeId =
   | 'carousel'
@@ -1601,6 +1612,14 @@ export default function CreatorTypeWorkflowPage() {
   // (purpose_key / subtype / infographic_layout / attachment_mode / slides).
   const [activeTemplate, setActiveTemplate] = React.useState<CreatorTemplate | null>(null);
   const [templateValues, setTemplateValues] = React.useState<TemplateFieldValues>({ fields: {} });
+  // Canonical Brief ⇄ Editor sync state (per synchronized endpoint). Reset below
+  // whenever a different template / new asset / different draft loads.
+  const [syncState, setSyncState] = React.useState<BriefEditorSyncState>(freshSyncState);
+  // Reset sync state on a new template / asset / draft so auto-fill resumes for a
+  // genuinely new context (manual locks belong to the asset that was being edited).
+  React.useEffect(() => {
+    setSyncState(freshSyncState());
+  }, [activeTemplate?.id, type, router.query.template_id, router.query.ingest, router.query.session, router.query.prefill]);
   // Field-level AI assist — the busyKey of the in-flight assist action (per
   // field / batch); the panel disables that single control while it runs.
   const [aiBusyKey, setAiBusyKey] = React.useState<string | null>(null);
@@ -2138,10 +2157,57 @@ export default function CreatorTypeWorkflowPage() {
   // config.subtypeOptions.find(...)` access that requires non-null
   // config). All hooks above that point fire on every render.
 
+  // USER-input brief writer: marks `topic` manually_modified so the sync engine
+  // never auto-fills/repopulates it again (respects an intentional edit or clear).
+  // Programmatic restores use `setAnswerSilent` instead (no manual mark).
   const setAnswer = (id: string, value: string) => {
+    setAnswers((current) => ({ ...current, [id]: value }));
+    if (id === 'topic') {
+      if (value.trim()) setTopicMissing(false);
+      setSyncState((s) => markManual(s, 'topic'));
+    }
+  };
+  const setAnswerSilent = (id: string, value: string) => {
     setAnswers((current) => ({ ...current, [id]: value }));
     if (id === 'topic' && value.trim()) setTopicMissing(false);
   };
+
+  // USER-input editor writer: marks the editor lead field manually_modified only
+  // when the lead value actually changes (so editing/clearing it is respected,
+  // while edits to other fields don't lock the lead). The engine writes via the
+  // raw `setTemplateValues` so its own writes never count as manual.
+  const handleEditorChange = (next: TemplateFieldValues) => {
+    if (activeTemplate) {
+      const prevLead = editorLeadValue(activeTemplate, templateValues);
+      const nextLead = editorLeadValue(activeTemplate, next);
+      if (nextLead !== prevLead) setSyncState((s) => markManual(s, 'lead'));
+    }
+    setTemplateValues(next);
+  };
+
+  // Canonical Brief ⇄ Editor synchronization engine. EMPTY-ONLY mirroring driven
+  // by `creatorBriefEditorSync` (the single sync service). Auto-fill runs only
+  // while an endpoint is not `manually_modified`; one write per pass; converges
+  // (each write fills an empty target, then both sides are non-empty / locked).
+  React.useEffect(() => {
+    if (!activeTemplate || !config) return;
+    const hasTopicField = !!config.fields?.some((f) => f.id === 'topic');
+    const plan = planBriefEditorSync({
+      template: activeTemplate,
+      topic: answers.topic ?? '',
+      values: templateValues,
+      state: syncState,
+      hasTopicField,
+    });
+    if (plan.topicWrite !== undefined) {
+      setAnswers((current) => ({ ...current, topic: plan.topicWrite! }));
+      if (plan.topicWrite.trim()) setTopicMissing(false);
+      setSyncState(plan.nextState);
+    } else if (plan.editorWrite) {
+      setTemplateValues(plan.editorWrite);
+      setSyncState(plan.nextState);
+    }
+  }, [answers.topic, templateValues, activeTemplate, config, syncState]);
 
   // Surface the empty required topic field: highlight it, scroll it into view,
   // and focus its input so the operator immediately sees what's missing.
@@ -2682,7 +2748,8 @@ export default function CreatorTypeWorkflowPage() {
       `Reuse existing creator asset "${asset.name}" as the starting context.`,
     ].filter(Boolean).join('\n'));
     if (!String(answers.topic || '').trim()) {
-      setAnswer('topic', asset.name.replace(/\s+Asset$/i, ''));
+      // Programmatic restore (reuse-asset) — not a user edit; never mark manual.
+      setAnswerSilent('topic', asset.name.replace(/\s+Asset$/i, ''));
     }
 
     // Final phase — continuity bundle restore. Resolution order:
@@ -2906,6 +2973,19 @@ export default function CreatorTypeWorkflowPage() {
       config.contentType === 'image' && layoutChoice === 'wide-banner' ? 'banner' :
       config.contentType === 'carousel' && layoutChoice === 'widescreen-presentation' ? 'slider' :
       config.contentType;
+    // CREATOR-PROD-005 — deterministic runtime payload (only when the flag is ON;
+    // OFF is the default and keeps the legacy projectors below). The user's typed
+    // values seed MANUAL overrides so content is preserved verbatim (PROD-004:
+    // 100% parity). Any failure falls back to the legacy payload — never blocks.
+    const v2Runtime = creatorRuntimeV2Live() && activeTemplate
+      ? (() => {
+          try {
+            const v2Source = [String(answers.topic || ''), ...Object.values(templateValues.fields || {})]
+              .filter(Boolean).join('\n').trim() || 'content';
+            return runCreatorRuntimeV2({ template: activeTemplate, sourceText: v2Source, existingValues: templateValues });
+          } catch { return null; }
+        })()
+      : null;
     return {
       company_id: selectedCompanyId || undefined,
       creator_type: type,
@@ -2929,6 +3009,9 @@ export default function CreatorTypeWorkflowPage() {
         lightweight_context: buildCurrentContext(selectedPlatform),
         selected_platform: selectedPlatform,
         ...(variantPinOverride ? { variant_family: variantPinOverride } : {}),
+        // CREATOR-059 follow-up: carry the wizard-selected visual blueprint so the
+        // server can derive style/colour/layout guidance (additive; absent ⇒ no-op).
+        ...(typeof router.query.blueprint === 'string' && router.query.blueprint ? { blueprint_id: router.query.blueprint } : {}),
         ...(!writerSource && type === 'image' ? { attachment_mode: standaloneAttachmentMode } : {}),
         writer_asset_type: writerAssetType,
         creator_content_asset_type: type,
@@ -2942,7 +3025,9 @@ export default function CreatorTypeWorkflowPage() {
           // source of on-image text. `__template_authoritative` tells the
           // renderer to render exactly these fields (no topic/title/"Learn
           // more" fallback injection) and collapse empty optional fields.
-          ? ({ ...(overlayPayload || { hook: '', headline: '', keyInsight: '', cta: '', supportingText: '' }), ...projectImageOverlayText(activeTemplate, templateValues), __template_authoritative: true } as Record<string, unknown>)
+          ? (v2Runtime
+              ? (v2Runtime.payload.overlay_text as Record<string, unknown>)
+              : ({ ...(overlayPayload || { hook: '', headline: '', keyInsight: '', cta: '', supportingText: '' }), ...projectImageOverlayText(activeTemplate, templateValues), __template_authoritative: true } as Record<string, unknown>))
           : overlayPayload,
         brand_generation_mode: brandMode,
         brand_presence: brandMode === 'brand-aware' ? brandPresence : 'none',
@@ -2975,10 +3060,14 @@ export default function CreatorTypeWorkflowPage() {
         // template_id stays null and nothing else changes.
         ...(activeTemplate ? resolveTemplateCreatorCardPatch(activeTemplate) : { template_id: null }),
         ...(activeTemplate && activeTemplate.assetFamily === 'carousel'
-          ? { slides: projectCarouselSlides(templateValues), slide_count: templateValues.slideCount ?? null }
+          ? (v2Runtime
+              ? { slides: v2Runtime.payload.slides ?? [], slide_count: (v2Runtime.payload.slides ?? []).length || null }
+              : { slides: projectCarouselSlides(templateValues), slide_count: templateValues.slideCount ?? null })
           : {}),
         ...(activeTemplate && activeTemplate.assetFamily === 'infographic'
-          ? { infographic_sections: projectInfographicSections(templateValues), template_fields: templateValues.fields }
+          ? (v2Runtime
+              ? { infographic_sections: v2Runtime.payload.infographic_sections ?? [], template_fields: v2Runtime.payload.template_fields }
+              : { infographic_sections: projectInfographicSections(templateValues), template_fields: templateValues.fields })
           : {}),
       },
       target_platforms: [selectedPlatform || config.primaryPlatforms[0]],
@@ -3725,7 +3814,7 @@ export default function CreatorTypeWorkflowPage() {
                   <TemplateFieldsPanel
                     template={activeTemplate}
                     values={templateValues}
-                    onChange={setTemplateValues}
+                    onChange={handleEditorChange}
                     onAiAssist={handleTemplateAiAssist}
                     aiBusyKey={aiBusyKey}
                   />
@@ -4704,7 +4793,7 @@ export default function CreatorTypeWorkflowPage() {
                       <AssetReviewPanel
                         template={activeTemplate}
                         values={templateValues}
-                        onChange={setTemplateValues}
+                        onChange={handleEditorChange}
                         meta={reviewMeta}
                         previewUrl={previewUrl}
                         assetId={(result as { persisted_asset_id?: string | null }).persisted_asset_id ?? null}

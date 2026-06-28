@@ -15,6 +15,7 @@ import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import type { ContentBlock, HeadingBlock } from '../../lib/blog/blockTypes';
 import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
+import { realizeDocumentAssetsSync } from '../../lib/content/assetRealization';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
 import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 
@@ -251,7 +252,10 @@ export default function StoryNewPage() {
         setTargetWordCount(parsed.target_word_count);
       }
       if (output) {
-        const resolvedBlocks = sanitizeStoryBlocks(resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE));
+        const resolvedBlocks = realizeDocumentAssetsSync(
+          sanitizeStoryBlocks(resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE)),
+          { contentType: 'story', documentTitle: output.title },
+        ).blocks;
         setPrefillInitial({
           title: sanitizeStoryEditorText(output.title || ''),
           excerpt: sanitizeStoryEditorText(output.excerpt || ''),

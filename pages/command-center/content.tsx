@@ -16,6 +16,9 @@ type EntryCard = {
   description: string;
   outcome: string;
   bullets: string[];
+  /** Canonical supported formats for this lane — the count badge is derived from
+   *  this list (formats.length) so the number can never drift from the content. */
+  formats: string[];
   route: string;
   cta: string;
   accent: string;
@@ -26,13 +29,15 @@ const ENTRY_CARDS: EntryCard[] = [
     id: 'writer',
     eyebrow: 'Text-First',
     title: 'Writer Content',
-    description: 'Enter the existing writer system for blogs, articles, newsletters, stories, guides, threads, posts, whitepapers, and case studies.',
-    outcome: 'Nine mature writer workflows kept intact behind a cleaner entry point',
+    description: 'Enter the long-form content workflow for Blogs, Articles, Guides, Newsletters, and Whitepapers.',
+    outcome: 'The long-form writing workflow, kept intact behind a cleaner entry point',
     bullets: [
-      'Preserves the current 9 text content paths',
-      'Best for editorial, authority, and structured copy',
-      'Can later absorb creator assets into long-form content',
+      'AI-assisted long-form writing',
+      'Rich structured editor',
+      'Research, SEO and publishing workflow',
+      'Can later be repurposed into creator assets and campaigns',
     ],
+    formats: ['Blog', 'Article', 'Guide', 'Newsletter', 'Whitepaper'],
     route: '/command-center/writer-content',
     cta: 'Open Writer Content',
     accent: 'from-blue-50 via-white to-indigo-50 border-blue-200',
@@ -41,13 +46,15 @@ const ENTRY_CARDS: EntryCard[] = [
     id: 'creator',
     eyebrow: 'Asset-First',
     title: 'Creator Content',
-    description: 'Open the creator workflow for image, carousel, video, short, story, and hybrid asset-plus-caption formats built with AI support.',
-    outcome: 'Dedicated creator workflow for AI-developed, creator-dependent content',
+    description: 'Open the creator workflow for Images, Carousels, and Infographics.',
+    outcome: 'The creator workflow for AI-developed visual assets',
     bullets: [
-      'Covers creator-dependent asset formats',
-      'Designed for campaign, publish, and reuse handoffs',
-      'Uses the existing Creator engine instead of a parallel system',
+      'AI-assisted visual content creation',
+      'Multi-platform creative assets',
+      'Campaign-ready visual packaging',
+      'Reusable assets for publishing and marketing',
     ],
+    formats: ['Image', 'Carousel', 'Infographic'],
     route: '/command-center/creator-content',
     cta: 'Open Creator Content',
     accent: 'from-rose-50 via-white to-amber-50 border-rose-200',
@@ -139,7 +146,7 @@ export default function ContentGatewayPage() {
                   <h2 className="mt-2 text-2xl font-bold tracking-tight text-gray-900">{card.title}</h2>
                 </div>
                 <span className="rounded-full bg-white/90 px-3 py-1 text-[11px] font-semibold text-gray-700 shadow-sm">
-                  {card.id === 'writer' ? '9 formats' : '8 formats'}
+                  {card.formats.length} formats
                 </span>
               </div>
 

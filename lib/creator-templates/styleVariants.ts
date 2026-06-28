@@ -203,6 +203,35 @@ export function variantKeyForTemplate(id: string, family: 'image' | 'carousel' |
   return IMAGE_VARIANT_BY_ID[id] ?? 'default';
 }
 
+/* ── CREATOR-106: Marketing Sample (blueprint) → infographic variant ──────────
+ * When a user picks a Marketing Sample (a visual style like `technology`,
+ * `finance`, `editorial`) and generates an infographic, the output must align with
+ * that sample's look. The 51 sample styles map onto the 12 infographic treatments:
+ * direct name match first, then this semantic table, else `default`. */
+const BLUEPRINT_TO_INFOGRAPHIC_VARIANT: Readonly<Record<string, string>> = {
+  luxury: 'premium', magazine: 'editorial', bold: 'executive-report', gradient: 'modern',
+  abstract: 'modern', brutalist: 'technical', vintage: 'editorial', retro: 'editorial',
+  glassmorphism: 'modern', neumorphism: 'minimal', technology: 'technical', finance: 'financial',
+  education: 'corporate', construction: 'government', restaurant: 'premium', travel: 'startup',
+  retail: 'startup', fashion: 'premium', 'luxury-brand': 'premium', illustration: 'startup',
+  'flat-illustration': 'startup', isometric: 'technical', 'paper-cut': 'editorial', futuristic: 'technical',
+  dashboard: 'technical', infographic: 'modern', 'abstract-3d': 'modern', 'minimal-3d': 'minimal',
+  comparison: 'editorial', statistic: 'financial', quote: 'editorial', timeline: 'modern',
+  checklist: 'minimal', framework: 'executive-report', saas: 'technical', analytics: 'financial',
+};
+
+/** The infographic variant key a Marketing Sample / blueprint id resolves to. */
+export function infographicVariantForBlueprint(id: string): string {
+  if (!id) return 'default';
+  if (INFOGRAPHIC_VARIANTS[id]) return id;                          // corporate, modern, minimal, editorial, dark, healthcare
+  return BLUEPRINT_TO_INFOGRAPHIC_VARIANT[id] ?? 'default';
+}
+
+/** The infographic style schema a Marketing Sample / blueprint id should render with. */
+export function infographicStyleForBlueprint(id: string): InfographicStyleSchema {
+  return INFOGRAPHIC_VARIANTS[infographicVariantForBlueprint(id)] ?? DEFAULT_INFOGRAPHIC_STYLE;
+}
+
 /** Returns the family-specific style schema fields a template should carry,
  *  resolved by its assigned variant. Spread onto the template at build time. */
 export function styleFieldsForTemplate(id: string, family: 'image' | 'carousel' | 'infographic'):

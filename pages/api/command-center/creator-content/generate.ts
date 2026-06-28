@@ -25,6 +25,10 @@ import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
 import { logPipelineEvent } from '../../../../lib/shared/observability';
+import { creatorRuntimeMode } from '../../../../lib/creator-templates/creatorRuntimeFlag';
+import { shadowFromRequest } from '../../../../lib/creator-templates/creatorRuntimeV2';
+import { getTemplateById } from '../../../../lib/creator-templates/index';
+import { mergeBlueprintIntoCreatorCard } from '../../../../lib/creator-outcomes/blueprintRuntimeBridge';
 
 type GenerateCreatorBody = {
   company_id?: string;
@@ -36,6 +40,10 @@ type GenerateCreatorBody = {
   objective?: string;
   summary?: string;
   creator_card?: Record<string, unknown>;
+  /** CREATOR-106: the chosen Marketing Sample (blueprint) id, sent at top level by the
+   *  editor (?blueprint=…). Threaded onto the creator_card so style/colour/layout +
+   *  the infographic variant align with the selected sample. */
+  blueprint_id?: string;
   /** Final Corrective Pass — P1-1. When provided, the generation path
    *  fetches the campaign's persisted variant_strategy and applies it
    *  via the campaignVariantApplier helper. Absence = unchanged behavior. */
@@ -661,7 +669,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const targetPlatforms = Array.isArray(body.target_platforms)
     ? body.target_platforms.map((platform) => String(platform || '').trim().toLowerCase()).filter(Boolean)
     : [];
-  const creatorCardInput = safeObject(body.creator_card);
+  // CREATOR-059 follow-up: derive blueprint style/colour/layout guidance from the
+  // selected blueprint id (rides on creator_card). Additive `blueprint_*` fields;
+  // existing creator_card keys always win; no blueprint ⇒ exact no-op. No engine change.
+  const creatorCardInput = mergeBlueprintIntoCreatorCard(
+    safeObject(body.creator_card),
+    typeof body.blueprint_id === 'string' && body.blueprint_id.trim() ? body.blueprint_id.trim() : null,
+  );
   const normalizedAttachment = normalizeCreatorCardForAttachment({
     creatorCard: creatorCardInput,
     creatorType: String(body.creator_type || ''),
@@ -713,6 +727,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (targetPlatforms.length === 0) {
     return res.status(400).json({ error: 'target_platforms required' });
+  }
+
+  // CREATOR-PROD-002 — Shadow runtime (zero behaviour change). When
+  // CREATOR_RUNTIME_V2=shadow, run the deterministic runtime SILENTLY for parity
+  // diagnostics. Fully isolated: it never throws, never mutates the response,
+  // never blocks rendering. OFF (default) and ON both skip this hook — the
+  // legacy runtime remains the only one that renders.
+  if (creatorRuntimeMode() === 'shadow') {
+    try {
+      const shadow = shadowFromRequest({ creatorCard, contentType, topic }, getTemplateById);
+      logPipelineEvent('creator.runtime_shadow', shadow.ran && shadow.parityMatch === false ? 'warn' : 'info', {
+        ran: String(shadow.ran),
+        parity_match: String(shadow.parityMatch ?? 'n/a'),
+        field_mismatches: String(shadow.fieldMismatchCount ?? 0),
+        slides_legacy: String(shadow.slideCountLegacy ?? 0),
+        slides_v2: String(shadow.slideCountV2 ?? 0),
+        sections_legacy: String(shadow.sectionCountLegacy ?? 0),
+        sections_v2: String(shadow.sectionCountV2 ?? 0),
+        recommendation: String(shadow.recommendation ?? ''),
+        resolution: String(shadow.resolution ?? ''),
+        skip_reason: String(shadow.skipReason ?? ''),
+        family: shadow.family,
+        duration_ms: String(shadow.durationMs),
+      }, { dedupeKey: `creator.shadow.${shadow.family}.${shadow.resolution ?? shadow.skipReason ?? 'x'}`, throttleMs: 10_000 });
+    } catch { /* shadow is fully isolated — never affects the response */ }
   }
 
   const access = await enforceCompanyAccess({ req, res, companyId });

@@ -407,6 +407,7 @@ export default function BlogTemplatePage() {
                 eyebrow={selectedTemplateName ? getBlogTemplateVisuals(selectedTemplateName).eyebrow : undefined}
                 accentClassName={selectedTemplateName ? getBlogTemplateVisuals(selectedTemplateName).accentClassName : undefined}
                 stats={selectedTemplateName ? getBlogTemplateVisuals(selectedTemplateName).stats : undefined}
+                topic={topic ? decodeURIComponent(topic) : undefined}
                 emptyDescription="Choose any template on the left and we’ll show a dummy layout preview here so the user can compare structure before selecting it."
               />
             </div>
@@ -421,6 +422,7 @@ export default function BlogTemplatePage() {
           description={previewTpl.description}
           blocks={previewTpl.blocks}
           isDefault={previewTpl.isDefault}
+          topic={topic ? decodeURIComponent(topic) : undefined}
           onClose={() => setPreviewTpl(null)}
           onSelect={() => {
             setPreviewTpl(null);

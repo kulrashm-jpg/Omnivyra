@@ -58,9 +58,11 @@ function RenderParagraph({ block }: { block: ParagraphBlock }) {
 
 function RenderHeading({ block }: { block: HeadingBlock }) {
   const Tag = `h${block.level}` as 'h2' | 'h3';
+  // Modern editorial headings — a short accent rule instead of a dated
+  // full-width underline; larger, tighter display size.
   const classes = block.level === 2
-    ? 'mt-14 mb-6 border-b border-gray-100 pb-3 text-2xl font-bold tracking-tight text-[#0B1F33]'
-    : 'mt-10 mb-4 text-xl font-semibold text-[#0B1F33]';
+    ? 'mt-14 mb-5 text-[1.8rem] font-bold tracking-tight leading-[1.15] text-[#0B1F33] relative pl-4 before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-1 before:rounded-full before:bg-[#0A66C2]'
+    : 'mt-10 mb-4 text-[1.3rem] font-semibold tracking-tight text-[#0B1F33]';
   return (
     <Tag id={block.anchor || undefined} className={getFormattedBlockClass(block, classes)}>
       {block.text}
@@ -126,21 +128,25 @@ function RenderCallout({ block }: { block: CalloutBlock }) {
 
 function RenderQuote({ block }: { block: QuoteBlock }) {
   const isUrl = block.source?.startsWith('http');
+  // Designed editorial pull-quote: large serif, decorative mark, centered.
   return (
-    <blockquote className={getFormattedBlockClass(block, 'my-8 border-l-4 border-[#0A66C2] bg-[#F5F9FF]/80 py-4 pl-6 pr-4 rounded-r-xl')}>
-      <p className="text-lg leading-relaxed text-[#3D4F61] italic">{block.text}</p>
-      {(block.author || block.source) && (
-        <footer className="mt-3 text-sm text-[#6B7C93] not-italic">
-          {block.author && <span className="font-medium text-[#0B1F33]">{block.author}</span>}
-          {block.author && block.source && <span className="mx-1">·</span>}
-          {block.source && (
-            isUrl
-              ? <a href={block.source} target="_blank" rel="noopener noreferrer" className="text-[#0A66C2] hover:underline">{block.source}</a>
-              : <span>{block.source}</span>
-          )}
-        </footer>
-      )}
-    </blockquote>
+    <figure className={getFormattedBlockClass(block, 'my-12')}>
+      <blockquote className="relative mx-auto max-w-2xl text-center">
+        <span aria-hidden className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 select-none font-serif text-7xl leading-none text-[#0A66C2]/20">&ldquo;</span>
+        <p className="relative font-serif text-[1.6rem] font-medium leading-snug text-[#0B1F33]">{block.text}</p>
+        {(block.author || block.source) && (
+          <figcaption className="mt-4 text-sm text-[#6B7C93]">
+            {block.author && <span className="font-semibold text-[#0B1F33]">{block.author}</span>}
+            {block.author && block.source && <span className="mx-1">·</span>}
+            {block.source && (
+              isUrl
+                ? <a href={block.source} target="_blank" rel="noopener noreferrer" className="text-[#0A66C2] hover:underline">{block.source}</a>
+                : <span>{block.source}</span>
+            )}
+          </figcaption>
+        )}
+      </blockquote>
+    </figure>
   );
 }
 

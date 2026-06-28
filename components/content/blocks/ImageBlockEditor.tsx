@@ -2,21 +2,71 @@
 
 import React from 'react';
 import type { ImageBlock } from '../../../lib/blog/blockTypes';
-import { ImageIcon, Search } from 'lucide-react';
+import { ImageIcon, Search, Sparkles, Upload, Library, Link2, Building2, RefreshCw, Trash2 } from 'lucide-react';
 import { BlockFormatControls } from './BlockFormatControls';
+
+/**
+ * Asset-slot actions (CREATOR-037, STEP 5). Each is optional — buttons render
+ * only when a handler is wired, so this is a pure additive extension of the
+ * existing image block. The host wires these to the universal realization engine
+ * (AI generate / upload / media library / import URL / organization library /
+ * replace / remove). No editor redesign; no second asset system.
+ */
+export type AssetSlotActions = {
+  onGenerateAI?: () => void;
+  onUpload?: () => void;
+  onMediaLibrary?: () => void;
+  onImportUrl?: () => void;
+  onOrganizationLibrary?: () => void;
+  onReplace?: () => void;
+  onRemove?: () => void;
+};
 
 type Props = {
   block: ImageBlock;
   onChange: (block: ImageBlock) => void;
   onSearchStock?: () => void;
+  assetActions?: AssetSlotActions;
 };
 
-export function ImageBlockEditor({ block, onChange, onSearchStock }: Props) {
+function AssetActionBar({ actions }: { actions: AssetSlotActions }) {
+  const items: Array<[boolean | undefined, () => void, React.ReactNode, string]> = [
+    [!!actions.onGenerateAI, actions.onGenerateAI!, <Sparkles className="h-3.5 w-3.5" />, 'Generate with AI'],
+    [!!actions.onUpload, actions.onUpload!, <Upload className="h-3.5 w-3.5" />, 'Upload'],
+    [!!actions.onMediaLibrary, actions.onMediaLibrary!, <Library className="h-3.5 w-3.5" />, 'Media Library'],
+    [!!actions.onImportUrl, actions.onImportUrl!, <Link2 className="h-3.5 w-3.5" />, 'Import URL'],
+    [!!actions.onOrganizationLibrary, actions.onOrganizationLibrary!, <Building2 className="h-3.5 w-3.5" />, 'Organization Library'],
+    [!!actions.onReplace, actions.onReplace!, <RefreshCw className="h-3.5 w-3.5" />, 'Replace'],
+    [!!actions.onRemove, actions.onRemove!, <Trash2 className="h-3.5 w-3.5" />, 'Remove'],
+  ];
+  const shown = items.filter(([on]) => on);
+  if (shown.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {shown.map(([, handler, icon, label], i) => (
+        <button
+          key={i}
+          type="button"
+          onClick={handler}
+          title={label}
+          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+            label === 'Remove' ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:border-gray-300'
+          }`}
+        >
+          {icon} {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function ImageBlockEditor({ block, onChange, onSearchStock, assetActions }: Props) {
   const hasUrl = block.url.trim() !== '';
   const isAltMissing = hasUrl && !block.alt.trim();
 
   return (
     <div className="space-y-3">
+      {assetActions && <AssetActionBar actions={assetActions} />}
       {/* URL + Search button */}
       <div>
         <label className="block text-xs font-medium text-gray-600 mb-1">Image URL *</label>

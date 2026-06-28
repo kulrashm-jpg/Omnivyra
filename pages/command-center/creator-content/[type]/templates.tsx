@@ -33,7 +33,9 @@ import {
   type TemplateRecommendation,
   type PreviewSampleContent,
 } from '../../../../lib/creator-templates';
+import { toggleMemberSet, memberOp } from '../../../../lib/creator-templates/designSystemManage';
 import TemplateRecommendationPanel from '../../../../components/creator/TemplateRecommendationPanel';
+import { ImageCreationWorkspace, CarouselCreationWorkspace, InfographicCreationWorkspace } from '../../../../components/creator/AssetCreationWorkspace';
 import {
   recommendTemplates,
   popularTemplates,
@@ -61,7 +63,7 @@ import {
   type StoryBlueprintId,
 } from '../../../../lib/creator-templates/storyBlueprint';
 import {
-  fromExistingContent, fromAiContent, fromVoiceTranscript, fromWriterDocument,
+  fromExistingContent, fromAiContent, fromWriterDocument,
   intakeToArchitectureBody,
   type ContentSource, type ContentIntakeDocument, type AiBrief, type WriterDocument,
 } from '../../../../lib/creator-templates/contentIntake';
@@ -148,6 +150,8 @@ export default function CreatorTemplateGalleryPage() {
   const { user, authChecked, isLoading, selectedCompanyId } = useCompanyContext();
   const type = typeof router.query.type === 'string' ? router.query.type : null;
   const family = familyForCreatorType(type);
+  // CREATOR-045 — outcome-first gallery toggle (flag-gated; advanced browser stays available).
+  const [advancedMode, setAdvancedMode] = React.useState(false);
 
   // Canonical company context (projection of the Context Assembly) + live
   // Creator-session controls. Changing any control re-runs the deterministic
@@ -190,9 +194,52 @@ export default function CreatorTemplateGalleryPage() {
   const lastRecKeyRef = React.useRef<string | null>(null);
   const markSource = (s: 'user' | 'recommended') => { selectionSourceRef.current = s; setSelectionSource(s); };
 
+  // CREATOR-030 — Campaign Design System management mode. A `collection_id` puts
+  // the canonical gallery into multi-select campaign mode: cards toggle membership
+  // of the campaign's pinned collection (the Design System) DIRECTLY — no member
+  // editor, no temporary state, no second gallery. All browse/search/filter/preview
+  // behavior is unchanged; only selection semantics differ in this mode.
+  const collectionId = typeof router.query.collection_id === 'string' ? router.query.collection_id.trim() : '';
+  const campaignMode = !!collectionId;
+  const manageReturnTo = typeof router.query.return_to === 'string' ? router.query.return_to : '';
+  const [memberIds, setMemberIds] = React.useState<Set<string>>(new Set());
+  const [memberBusy, setMemberBusy] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!campaignMode) return;
+    let cancelled = false;
+    fetch(`/api/creator-templates/collections/${encodeURIComponent(collectionId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled && Array.isArray(d?.collection?.templateIds)) setMemberIds(new Set(d.collection.templateIds as string[])); })
+      .catch(() => { /* best-effort */ });
+    return () => { cancelled = true; };
+  }, [campaignMode, collectionId]);
+
+  const toggleMember = React.useCallback(async (t: CreatorTemplate) => {
+    if (!campaignMode || memberBusy) return;
+    const isMember = memberIds.has(t.id);
+    setMemberBusy(t.id);
+    try {
+      const res = await fetch(`/api/creator-templates/collections/${encodeURIComponent(collectionId)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: memberOp(isMember), template_id: t.id }),
+      });
+      if (res.ok) setMemberIds((prev) => toggleMemberSet(prev, t.id));
+    } catch { /* best-effort */ } finally { setMemberBusy(null); }
+  }, [campaignMode, collectionId, memberIds, memberBusy]);
+
+  const switchFamilyHref = (fam: string) => {
+    const q: Record<string, string> = { collection_id: collectionId };
+    for (const k of ['campaign_id', 'return_to']) { const v = router.query[k]; if (typeof v === 'string' && v) q[k] = v; }
+    return { pathname: `/command-center/creator-content/${fam}/templates`, query: q };
+  };
+  const doneManaging = () => { if (manageReturnTo) router.push(manageReturnTo); else router.back(); };
+
   React.useEffect(() => {
     if (authChecked && !isLoading && !user?.userId) router.replace('/login');
   }, [authChecked, isLoading, user?.userId, router]);
+  // CREATOR-068: honor ?advanced=1 to open the legacy browser (Advanced Mode).
+  React.useEffect(() => { if (router.isReady && router.query.advanced === '1') setAdvancedMode(true); }, [router.isReady, router.query.advanced]);
   React.useEffect(() => { setFavorites(readIds(FAV_KEY)); setRecent(readIds(RECENT_KEY)); }, []);
   React.useEffect(() => { try { setSkipBlueprint(window.localStorage.getItem('creator:blueprint:skip') === '1'); } catch { /* ignore */ } }, []);
 
@@ -465,7 +512,9 @@ export default function CreatorTemplateGalleryPage() {
 
   const renderCard = (t: CreatorTemplate) => {
     const fav = favorites.includes(t.id);
-    const selected = selectedId === t.id;
+    // In campaign mode "selected" = membership of the pinned Design System.
+    const selected = campaignMode ? memberIds.has(t.id) : selectedId === t.id;
+    const cardBusy = campaignMode && memberBusy === t.id;
     const rec = recommendationFor(t.id);                 // recommendation engine result (no logic change)
     const isRecommended = recommendedTemplateId === t.id;
     const matchPct = rec ? Math.round(rec.confidence * 100) : null;
@@ -476,7 +525,7 @@ export default function CreatorTemplateGalleryPage() {
       // metadata (rendering contract / style variant / layout / template id /
       // category internals) lives in the Details drawer.
       <div key={t.id} style={{ border: `${selected ? 2 : 1}px solid ${selected ? '#22c55e' : '#e5e7eb'}`, borderRadius: 14, overflow: 'hidden', background: '#ffffff', display: 'flex', flexDirection: 'column', boxShadow: selected ? '0 0 0 3px rgba(34,197,94,0.18)' : '0 1px 2px rgba(15,23,42,0.04)' }}>
-        <div style={{ position: 'relative', cursor: 'pointer' }} onClick={() => selectTemplate(t)} title="Select this outcome">
+        <div style={{ position: 'relative', cursor: 'pointer' }} onClick={() => (campaignMode ? toggleMember(t) : selectTemplate(t))} title={campaignMode ? (selected ? 'Remove from Design System' : 'Add to Design System') : 'Select this outcome'}>
           <MultiOutcomePreview template={t} continuity={continuity} />
           {t.ownership === 'user' ? <PreviewStatusBadge template={t} /> : null}
           {isRecommended ? (
@@ -485,7 +534,7 @@ export default function CreatorTemplateGalleryPage() {
             <span style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(255,255,255,0.92)', color: '#0f172a', fontSize: 10.5, fontWeight: 800, borderRadius: 999, padding: '2px 8px' }}>{matchPct}% match</span>
           ) : null}
           {selected ? (
-            <span style={{ position: 'absolute', bottom: 8, left: 8, display: 'inline-flex', alignItems: 'center', gap: 4, background: '#16a34a', color: '#fff', fontSize: 10.5, fontWeight: 800, borderRadius: 999, padding: '3px 8px' }}><Check size={12} /> Selected</span>
+            <span style={{ position: 'absolute', bottom: 8, left: 8, display: 'inline-flex', alignItems: 'center', gap: 4, background: '#16a34a', color: '#fff', fontSize: 10.5, fontWeight: 800, borderRadius: 999, padding: '3px 8px' }}><Check size={12} /> {campaignMode ? 'In Design System' : 'Selected'}</span>
           ) : null}
           <button type="button" onClick={(e) => { e.stopPropagation(); toggleFav(t.id); }} title="Favorite"
             style={{ position: 'absolute', top: 8, right: 8, background: 'rgba(2,6,23,0.55)', border: 'none', borderRadius: 999, padding: 6, cursor: 'pointer' }}>
@@ -497,7 +546,13 @@ export default function CreatorTemplateGalleryPage() {
           <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{t.description}</div>
           <BlueprintStrip template={t} />
           <div style={{ display: 'flex', gap: 6, marginTop: 'auto', alignItems: 'center' }}>
-            <button type="button" style={useBtn} onClick={() => chooseTemplate(t)}>{selected ? 'Use →' : 'Quick select'}</button>
+            {campaignMode ? (
+              <button type="button" style={selected ? linkBtn : useBtn} disabled={cardBusy} onClick={() => toggleMember(t)}>
+                {cardBusy ? 'Saving…' : selected ? 'Remove' : 'Add to Design System'}
+              </button>
+            ) : (
+              <button type="button" style={useBtn} onClick={() => chooseTemplate(t)}>{selected ? 'Use →' : 'Quick select'}</button>
+            )}
             <button type="button" style={linkBtn} onClick={() => setDetailsId(t.id)}>Details</button>
           </div>
         </div>
@@ -508,6 +563,25 @@ export default function CreatorTemplateGalleryPage() {
   // All Templates → optional category grouping.
   const grouped = mode === 'all' && groupByCat && !searching;
 
+  // CREATOR-064 — Unified Creator Experience is now the DEFAULT for normal users.
+  // The legacy Template Browser is reachable only via Advanced Mode (advancedMode)
+  // or campaign Design-System management (campaignMode). Runtime/seam unchanged.
+  if (!advancedMode && type && !campaignMode) {
+    // CREATOR-106: ONE runtime path per asset type. The asset IS the primary experience;
+    // each asset mounts its own independent root component (own hero, own goals, own
+    // asset-only sample gallery, own generation). No shared workspace, no creatorflow
+    // sub-flow, no parallel implementations.
+    const AssetWorkspace = family === 'carousel' ? CarouselCreationWorkspace
+      : family === 'infographic' ? InfographicCreationWorkspace
+        : ImageCreationWorkspace;
+    return (
+      <AssetWorkspace
+        onAdvanced={() => setAdvancedMode(true)}
+        onNavigate={(url) => router.push(url)}
+      />
+    );
+  }
+
   return (
     <div style={{ maxWidth: 1180, margin: '0 auto', padding: '28px 20px 96px', color: '#0f172a' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
@@ -517,7 +591,24 @@ export default function CreatorTemplateGalleryPage() {
         <button type="button" style={linkBtn} onClick={continueWithoutTemplate}>Continue without a template →</button>
       </div>
       <h1 style={{ fontSize: 26, fontWeight: 800, margin: '8px 0 4px', color: '#0f172a', textTransform: 'capitalize' }}>{family} templates</h1>
-      <p style={{ color: '#64748b', marginBottom: 12 }}>Pick a template to control the visual design, then add your content — or continue without one.</p>
+      {campaignMode ? (
+        <div style={{ border: '1px solid #c7d2fe', background: '#eef2ff', borderRadius: 12, padding: '10px 14px', margin: '8px 0 14px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, color: '#3730a3', fontWeight: 700, fontSize: 13 }}>
+            <Layers size={16} /> Editing campaign Design System
+          </div>
+          <span style={{ fontSize: 12, color: '#4338ca' }}>{memberIds.size} template{memberIds.size === 1 ? '' : 's'} selected · changes save instantly</span>
+          {/* Family switcher — manage every family without leaving campaign mode */}
+          <div style={{ display: 'flex', gap: 6, marginLeft: 'auto', alignItems: 'center' }}>
+            {(['image', 'carousel', 'infographic'] as const).map((fam) => (
+              <button key={fam} type="button" onClick={() => router.push(switchFamilyHref(fam))}
+                style={{ ...tab(family === fam), textTransform: 'capitalize', padding: '5px 11px', fontSize: 12.5 }}>{fam}</button>
+            ))}
+            <button type="button" onClick={doneManaging} style={{ ...useBtn, padding: '6px 14px' }}>Done</button>
+          </div>
+        </div>
+      ) : (
+        <p style={{ color: '#64748b', marginBottom: 12 }}>Pick a template to control the visual design, then add your content — or continue without one.</p>
+      )}
 
       {/* CREATOR-003 — no family tabs: the page is route-scoped to ONE family,
           so only this family's outcomes are ever visible. */}
@@ -1093,8 +1184,9 @@ function ContentIngestionModal({ template, onContinue, onSkip, onClose }: {
   const [writerBusy, setWriterBusy] = React.useState(false);
   const [brief, setBrief] = React.useState<AiBrief>({ description: '' });
   const [aiBusy, setAiBusy] = React.useState(false);
-  const [transcript, setTranscript] = React.useState('');
   const [recording, setRecording] = React.useState(false);
+  // CREATOR-027A — Voice is an input method INSIDE "Create with AI", not a source.
+  const [aiInputMethod, setAiInputMethod] = React.useState<'type' | 'voice'>('type');
   const validation = result ? validateTemplateValues(template, result.values) : null;
   const imp = result?.imported;
   const rowLine: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#0f172a', padding: '3px 0' };
@@ -1142,7 +1234,9 @@ function ContentIngestionModal({ template, onContinue, onSkip, onClose }: {
     const SR = (typeof window !== 'undefined' && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)) || null;
     if (!SR) { setRecording(false); return; }
     const rec = new SR(); rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
-    rec.onresult = (e: any) => { let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript; setTranscript(t); };
+    // Voice fills the SAME AI brief the user can type into — speech always
+    // becomes editable text first, then runs the identical AI generation.
+    rec.onresult = (e: any) => { let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript; setBrief((b) => ({ ...b, description: t })); };
     rec.onend = () => setRecording(false);
     try { rec.start(); setRecording(true); (window as any).__creatorRec = rec; } catch { setRecording(false); }
   };
@@ -1159,8 +1253,7 @@ function ContentIngestionModal({ template, onContinue, onSkip, onClose }: {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginTop: 12 }}>
               {([
                 ['existing', '📄', 'Existing Content', 'Bring your own article, notes, blog, landing page, product copy, email or proposal.', 'Continue'],
-                ['ai', '✨', 'Create with AI', 'Describe what you want to communicate. AI creates structured content for this template.', 'Generate with AI'],
-                ['voice', '🎤', 'Voice Notes', 'Speak naturally. We transcribe, organize, and populate the template.', 'Record Voice'],
+                ['ai', '✨', 'Create with AI', 'Type or speak a brief. AI creates structured content for this template.', 'Generate with AI'],
                 ['writer', '📚', 'Writer Library', 'Use content already created inside Omnivyra Writer — drafts, blogs, campaigns, articles.', 'Browse Content'],
               ] as Array<[ContentSource, string, string, string, string]>).map(([id, icon, title, desc, btn]) => (
                 <button key={id} type="button" onClick={() => { setSource(id); if (id === 'writer') loadWriter(); }}
@@ -1193,7 +1286,23 @@ function ContentIngestionModal({ template, onContinue, onSkip, onClose }: {
             {source === 'ai' ? (
               <>
                 <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>Describe what you want to communicate. AI produces structured content (not a rendered asset) that flows through the same pipeline.</p>
-                <textarea value={brief.description} onChange={(e) => setBrief({ ...brief, description: e.target.value })} rows={4} placeholder="What should this communicate? e.g. Announce our new API and its 92% faster onboarding."
+                {/* Input method — Type or Voice. Both fill the same brief and run the IDENTICAL AI request. */}
+                <div role="tablist" aria-label="Input method" style={{ display: 'inline-flex', gap: 4, padding: 4, background: '#f1f5f9', borderRadius: 10, marginBottom: 10 }}>
+                  {([['type', '⌨️ Type'], ['voice', '🎤 Voice']] as Array<['type' | 'voice', string]>).map(([m, label]) => (
+                    <button key={m} type="button" role="tab" aria-selected={aiInputMethod === m} onClick={() => setAiInputMethod(m)}
+                      style={{ cursor: 'pointer', border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 12.5, fontWeight: 600, background: aiInputMethod === m ? '#ffffff' : 'transparent', color: aiInputMethod === m ? '#0f172a' : '#64748b', boxShadow: aiInputMethod === m ? '0 1px 2px rgba(15,23,42,0.08)' : 'none' }}>{label}</button>
+                  ))}
+                </div>
+                {aiInputMethod === 'voice' ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    {!recording
+                      ? <button type="button" style={useBtn} onClick={startRecording}>🎤 Record</button>
+                      : <button type="button" style={{ ...useBtn, background: '#dc2626' }} onClick={stopRecording}>■ Stop</button>}
+                    <span style={{ fontSize: 12, color: '#64748b' }}>Speak naturally — your words fill the brief below. Edit before generating.</span>
+                  </div>
+                ) : null}
+                <textarea value={brief.description} onChange={(e) => setBrief({ ...brief, description: e.target.value })} rows={aiInputMethod === 'voice' ? 6 : 4}
+                  placeholder={aiInputMethod === 'voice' ? 'Your transcript appears here as you speak — edit it, then Generate…' : 'What should this communicate? e.g. Announce our new API and its 92% faster onboarding.'}
                   style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', fontSize: 13, padding: 12, borderRadius: 10, border: '1px solid #d1d5db', color: '#0f172a', fontFamily: 'inherit' }} />
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8, marginTop: 10 }}>
                   {([['audience', 'Audience'], ['platform', 'Platform'], ['industry', 'Industry'], ['tone', 'Tone'], ['campaignObjective', 'Campaign objective'], ['callToAction', 'Call-to-action']] as Array<[keyof AiBrief, string]>).map(([k, ph]) => (
@@ -1203,21 +1312,6 @@ function ContentIngestionModal({ template, onContinue, onSkip, onClose }: {
                 </div>
                 <div style={{ marginTop: 14 }}>
                   <button type="button" disabled={!brief.description.trim() || aiBusy} onClick={generateAi} style={{ ...useBtn, justifyContent: 'center', opacity: brief.description.trim() && !aiBusy ? 1 : 0.5 }}>{aiBusy ? 'Generating…' : 'Generate with AI →'}</button>
-                </div>
-              </>
-            ) : null}
-
-            {source === 'voice' ? (
-              <>
-                <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>Speak naturally — we transcribe and organize it into the template. Edit the transcript before continuing.</p>
-                <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
-                  {!recording ? <button type="button" style={useBtn} onClick={startRecording}>🎤 Record</button>
-                    : <button type="button" style={{ ...useBtn, background: '#dc2626' }} onClick={stopRecording}>■ Stop</button>}
-                </div>
-                <textarea value={transcript} onChange={(e) => setTranscript(e.target.value)} rows={8} placeholder="Your transcript appears here as you speak (or type/paste a transcript)…"
-                  style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', fontSize: 13, padding: 12, borderRadius: 10, border: '1px solid #d1d5db', color: '#0f172a', fontFamily: 'inherit' }} />
-                <div style={{ marginTop: 14 }}>
-                  <button type="button" disabled={!transcript.trim()} onClick={() => populateFromDoc(fromVoiceTranscript(transcript))} style={{ ...useBtn, justifyContent: 'center', opacity: transcript.trim() ? 1 : 0.5 }}>Populate Template →</button>
                 </div>
               </>
             ) : null}
@@ -1760,3 +1854,4 @@ function RecRail({ title, items, onUse, onDetails, continuity }: { title: string
 
 const ctrl: React.CSSProperties = { background: '#ffffff', border: '1px solid #d1d5db', borderRadius: 8, padding: '7px 10px', color: '#111827', fontSize: 12.5, minWidth: 170 };
 const chip: React.CSSProperties = { fontSize: 11, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 999, padding: '3px 9px' };
+

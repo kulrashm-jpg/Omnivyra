@@ -13,7 +13,7 @@ import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
-import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
+import { realizeGeneratedBlocks } from '../../lib/content/realizeGeneratedDocument';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
 import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
 
@@ -176,7 +176,7 @@ export default function ArticleNewPage() {
           tags: Array.isArray(output.tags) ? output.tags : [],
           seo_meta_title: output.seo_meta_title || '',
           seo_meta_description: output.seo_meta_description || '',
-          content_blocks: resolveGeneratedPrefillBlocks(output, DEFAULT_TEMPLATE),
+          content_blocks: realizeGeneratedBlocks(output, DEFAULT_TEMPLATE, { contentType: 'article', documentTitle: output.title }),
           content_markdown: (output as unknown as Record<string, unknown>).content_markdown as string || '',
         });
         const outputAny = output as unknown as Record<string, unknown>;

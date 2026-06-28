@@ -1,0 +1,49 @@
+{
+  "examples": [
+    {
+      "meta": { "kicker": "Editorial", "title": "The Quiet Reinvention of the Modern Brand", "subtitle": "Behind the dashboards and the drafts, something more interesting is happening to how brands actually think.", "author": "Elena Rossi", "company": "The Brief", "date": "February 20, 2026", "readMins": 9 },
+      "blocks": [
+        { "t": "img", "seed": "modern-brand-studio", "alt": "An editorial brand moodboard", "caption": "The new rhythm of a brand team — faster, but no less considered." },
+        { "t": "cols", "cols": [
+          [ { "t": "p", "text": "There is a version of this story that is all panic — robots, replacement, the end of the craft. It makes for a good headline and a poor description of what is actually happening on the ground." }, { "t": "q", "text": "AI didn't make us less human. It gave us back the hours to be more human.", "source": "— Elena Rossi, Editor, The Brief" } ],
+          [ { "t": "p", "text": "The real story is quieter. Teams spend less time on the mechanical and more on the meaningful — the positioning, the point of view, the single sentence that makes a campaign land." }, { "t": "img", "seed": "brand-team-meeting", "alt": "A brand team in discussion", "caption": "Connected data, finally, in one place." } ]
+        ] },
+        { "t": "h2", "text": "The work that survives" },
+        { "t": "p", "text": "What machines cannot do is care what your audience feels at 9pm on a Tuesday. That judgment — taste, timing, empathy — is exactly the work that was always being crowded out by busywork. Now there is room for it." },
+        { "t": "ins", "title": "What changed", "items": ["73% of brand teams now use AI in at least one workflow", "Concept-to-first-draft time fell by roughly half", "Senior time shifted from production to positioning"] },
+        { "t": "c", "v": "insight", "title": "Editor's note", "body": "The brands pulling ahead are not the ones with the most AI. They are the ones who used it to make space for better thinking." },
+        { "t": "sum", "body": "The reinvention is not loud. It is a hundred small hours returned to the part of the work that only people can do." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Mobility", "title": "The Long Road to an Electric Everything", "subtitle": "EVs were supposed to be the easy part. The hard part is the world we have to rebuild around them.", "author": "Daniel Mertens", "company": "Current Affairs", "date": "March 3, 2026", "readMins": 10 },
+      "blocks": [
+        { "t": "img", "seed": "electric-vehicle-charging", "alt": "An electric vehicle charging at dusk", "caption": "The car was never the bottleneck. The grid is." },
+        { "t": "cols", "cols": [
+          [ { "t": "p", "text": "Range anxiety made the headlines, but ask any fleet manager and they will tell you the real friction was never the battery. It was everything the battery touches: charging, grids, supply chains, and habits built over a century." }, { "t": "q", "text": "We solved the car years ago. We are still solving the parking lot.", "source": "— Daniel Mertens, Current Affairs" } ],
+          [ { "t": "p", "text": "Cities that moved fastest did the unglamorous work first — depots, kerbside chargers, off-peak tariffs — and let the vehicles follow. The ones still waiting for a silver bullet are still waiting." }, { "t": "img", "seed": "city-grid-infrastructure", "alt": "Urban charging infrastructure", "caption": "Infrastructure, not invention, sets the pace." } ]
+        ] },
+        { "t": "h2", "text": "What the leaders did differently" },
+        { "t": "p", "text": "The pattern is consistent: pick one corridor or one fleet, electrify it end to end, learn in public, then expand. Incrementalism is not timidity here — it is the only thing that has worked at scale." },
+        { "t": "ins", "title": "By the numbers", "items": ["EV share of new sales crossed 25% in leading markets", "Public charging points grew over 40% year on year", "Total cost of ownership now favours EVs in most fleet cases"] },
+        { "t": "c", "v": "note", "title": "The honest caveat", "body": "Grid upgrades, not vehicles, are now the gating factor in most regions. The next decade is an electricity story." },
+        { "t": "sum", "body": "Electrification was never just about the car. It is a slow, deliberate rebuild of the world the car lives in." }
+      ]
+    },
+    {
+      "meta": { "kicker": "Healthcare", "title": "The Hospital That Learned to Listen", "subtitle": "How one health system traded paperwork for presence — and what the rest of medicine can borrow from it.", "author": "Dr. Naomi Clarke", "company": "Vital Signs", "date": "January 18, 2026", "readMins": 8 },
+      "blocks": [
+        { "t": "img", "seed": "hospital-care-team", "alt": "A care team at a hospital station", "caption": "The best technology in the room is the one that disappears." },
+        { "t": "cols", "cols": [
+          [ { "t": "p", "text": "Every reform in medicine promises more time with patients and usually delivers more screens. This system did the opposite by starting from a single question: what steals the most time from the bedside?" }, { "t": "q", "text": "We did not add a tool. We removed an hour of typing.", "source": "— Dr. Naomi Clarke, Vital Signs" } ],
+          [ { "t": "p", "text": "Ambient documentation handled the notes. Clinicians reviewed and signed. The change was small on paper and enormous in practice: two hours a day returned to care." }, { "t": "img", "seed": "medical-dashboard", "alt": "A clinical dashboard", "caption": "Review and sign — the human stays in the loop." } ]
+        ] },
+        { "t": "h2", "text": "What it changed" },
+        { "t": "p", "text": "Burnout scores fell. Note quality rose. And patients reported something simple and rare: their clinician looked at them, not the screen, for most of the visit." },
+        { "t": "ins", "title": "Results after six months", "items": ["~2 hours of charting time returned per clinician per day", "Documentation completeness up, errors down", "Clinician burnout scores improved measurably"] },
+        { "t": "c", "v": "insight", "title": "The transferable lesson", "body": "Start from the thing that steals time, not the thing that demos well. Presence is the product." },
+        { "t": "sum", "body": "Better care did not require a bigger system. It required removing the work that was crowding out the care." }
+      ]
+    }
+  ]
+}
