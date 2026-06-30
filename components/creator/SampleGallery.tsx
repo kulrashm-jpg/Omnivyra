@@ -1,18 +1,17 @@
 'use client';
 
 /**
- * SampleGallery — now a thin scope-configured use of the ONE canonical
- * TemplateDiscovery capability (CREATOR-144). It no longer owns card/search/details/
- * preview logic (those exist exactly once in TemplateDiscovery); it just renders the
- * SYSTEM scope for a goal+family and adapts the template_id selection back to its
- * existing `onUse(template)` callers (the creation workspaces). The "advanced browser"
- * link is gone — TemplateDiscovery IS the full browser (the merge).
+ * SampleGallery — the end-user outcome chooser. As of CREATOR-UX-001 it renders the
+ * outcome-first OutcomeGallery (one outcome per screen, dominant preview, plain language,
+ * single action) instead of the TemplateDiscovery marketplace grid. The canonical
+ * TemplateDiscovery power-browser is unchanged and remains available for multi-scope/ops use;
+ * this flow deliberately does not expose it to normal users. The `onUse(template)` contract
+ * for the two creation workspaces is preserved exactly.
  */
 
 import React from 'react';
 import type { CreatorTemplate, TemplateAssetFamily } from '../../lib/creator-templates/types';
-import { CURATED_SYSTEM_TEMPLATES } from '../../lib/creator-outcomes/curatedSystemTemplates';
-import { TemplateDiscovery } from './TemplateDiscovery';
+import { OutcomeGallery } from './OutcomeGallery';
 
 export function SampleGallery({ goalId, goalLabel, family, onUse, onBack, onAdvanced }: {
   goalId: string | null;
@@ -20,20 +19,16 @@ export function SampleGallery({ goalId, goalLabel, family, onUse, onBack, onAdva
   family?: TemplateAssetFamily;
   onUse: (template: CreatorTemplate) => void;
   onBack?: () => void;
-  /** Deprecated — TemplateDiscovery is the full browser; kept for call-site compatibility. */
+  /** Deprecated — the advanced browser is no longer surfaced in the end-user flow. */
   onAdvanced?: () => void;
 }) {
   void onAdvanced;
-  const byId = (id: string): CreatorTemplate | null => CURATED_SYSTEM_TEMPLATES.find((t) => t.id === id) ?? null;
   return (
-    <TemplateDiscovery
-      scopes={['SYSTEM']}
-      initialScope="SYSTEM"
-      family={family}
+    <OutcomeGallery
       goalId={goalId}
       goalLabel={goalLabel}
-      title="Pick an example you like"
-      onSelect={(id) => { const t = byId(id); if (t) onUse(t); }}
+      family={family}
+      onUse={onUse}
       onBack={onBack}
     />
   );
