@@ -1,6 +1,7 @@
 import { supabase } from '../db/supabaseClient';
 import { logLeadSignalEvent } from '../utils/leadSignalLogger';
 import { ownedDbTable } from '../db/writeOwner';
+import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 
 /**
  * Enforcement rule:
@@ -195,6 +196,11 @@ export async function writeLeadSignal(input: LeadSignalWriteInput): Promise<Lead
   });
 
   const canonical = await retryCanonicalLeadSignalWrite(input.canonical, context);
+  // Phase 3 — engagement signals route through the canonical facade (listening
+  // signals reach it via the community opportunity feed). Additive, fail-open.
+  if ((canonical as { source_type?: string } | null)?.source_type === 'engagement') {
+    adoptLead('engagement', canonical as unknown as Record<string, unknown>);
+  }
   return { mode, canonical };
 }
 

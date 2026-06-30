@@ -1198,6 +1198,16 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
               template_id: typeof intent.creatorCard?.template_id === 'string' && intent.creatorCard.template_id.trim()
                 ? intent.creatorCard.template_id.trim()
                 : null,
+              // CREATOR-106: thread the chosen Marketing Sample (blueprint_id) onto render
+              // metadata — mirrors template_id above. Without this the infographic style
+              // resolver never sees the sample and always renders the default variant.
+              blueprint_id: typeof intent.creatorCard?.blueprint_id === 'string' && intent.creatorCard.blueprint_id.trim()
+                ? intent.creatorCard.blueprint_id.trim()
+                : null,
+              // The sample's accent color (so renderers visibly align output to the pick).
+              blueprint_color_primary: typeof intent.creatorCard?.blueprint_color_primary === 'string' && intent.creatorCard.blueprint_color_primary.trim()
+                ? intent.creatorCard.blueprint_color_primary.trim()
+                : null,
               asset_composition_intent: safeObject(intent.creatorCard?.asset_composition_intent),
               copy_policy: safeObject(intent.creatorCard?.copy_policy),
               source_text_transform: intent.creatorCard?.source_text_transform ?? null,

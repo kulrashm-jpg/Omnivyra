@@ -266,10 +266,16 @@ export default function ArticlesPage() {
     if (!deleteConfirm) return;
     setDeleting(true);
     try {
-      await fetch(`/api/company/blogs?id=${deleteConfirm.id}&company_id=${selectedCompanyId}`, {
+      const res = await fetch(`/api/company/blogs?id=${deleteConfirm.id}&company_id=${selectedCompanyId}`, {
         method: 'DELETE', credentials: 'include',
       });
-    } catch { /* ignore */ }
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert(j.error || 'Could not delete this article. Please try again.');
+      }
+    } catch {
+      alert('Could not delete this article. Please check your connection and try again.');
+    }
     setDeleteConfirm(null);
     setDeleting(false);
     fetchArticles();
@@ -382,7 +388,7 @@ export default function ArticlesPage() {
                 <p className="font-medium text-gray-600">
                   {filterTab === 'all' ? 'No articles yet' : `No ${filterTab} articles`}
                 </p>
-                <p className="text-sm text-gray-400 mt-1">Create your first article to get started.</p>
+                <p className="text-sm text-gray-400 mt-1">Generate an SEO-ready article in minutes — it's saved here, ready to edit, schedule, or publish.</p>
                 <button
                   onClick={() => router.push('/articles/create')}
                   className="mt-3 bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-orange-700 transition-colors"

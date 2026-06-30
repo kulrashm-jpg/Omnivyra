@@ -561,7 +561,13 @@ export default function EngagementInboxPage() {
                 <div className="p-8 text-center text-gray-500">Loading signals...</div>
               ) : signals.length === 0 ? (
                 <div className="p-8 text-center text-gray-500">
-                  No campaign signals yet. Engagement from campaign activities will appear here.
+                  <p>No campaign signals yet. Engagement from your campaign activity will appear here once a campaign is running.</p>
+                  <a
+                    href="/campaigns"
+                    className="mt-4 inline-flex items-center px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
+                  >
+                    Go to Campaigns
+                  </a>
                 </div>
               ) : (
                 <ul className="divide-y divide-gray-100">

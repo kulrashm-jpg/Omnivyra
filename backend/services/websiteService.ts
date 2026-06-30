@@ -106,6 +106,38 @@ export async function createWebsite(input: CreateWebsiteInput): Promise<Website>
   return data as Website;
 }
 
+export interface UpdateWebsiteInput {
+  name?: string;
+  canonicalUrl?: string;
+  cmsProvider?: string | null;
+  status?: WebsiteStatus;
+  domainId?: string | null;
+  /** Full replace of websites.settings (caller merges for PATCH semantics). */
+  settings?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+/** Update an existing website (tenant-scoped). Reuses websites.settings — no new table. */
+export async function updateWebsite(id: string, companyId: string, updates: UpdateWebsiteInput): Promise<Website> {
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (updates.name !== undefined) patch.name = updates.name;
+  if (updates.canonicalUrl !== undefined) patch.canonical_url = normalizeWebsiteUrl(updates.canonicalUrl) || updates.canonicalUrl;
+  if (updates.cmsProvider !== undefined) patch.cms_provider = updates.cmsProvider;
+  if (updates.status !== undefined) patch.status = updates.status;
+  if (updates.domainId !== undefined) patch.domain_id = updates.domainId;
+  if (updates.settings !== undefined) patch.settings = updates.settings;
+  if (updates.metadata !== undefined) patch.metadata = updates.metadata;
+  const { data, error } = await ownedDbTable('websites')
+    .update(patch)
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .is('deleted_at', null)
+    .select('*')
+    .single();
+  if (error) throw new Error(error.message);
+  return data as Website;
+}
+
 export async function getWebsite(id: string, companyId: string): Promise<Website | null> {
   const { data, error } = await ownedDbTable('websites')
     .select('*')

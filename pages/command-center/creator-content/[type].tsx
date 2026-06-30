@@ -18,6 +18,8 @@ import {
   resolveReturnDestination,
 } from '../../../lib/content/creatorAttachmentSession';
 import { generateCreatorAssetId } from '../../../lib/content/creatorAssetIdFactory';
+import { readMarketingBrief, MARKETING_BRIEF_SESSION_KEY } from '../../../lib/content/marketingBriefResolver';
+import type { MarketingBrief } from '../../../lib/content/unifiedCreationModel';
 import {
   buildAssetCompositionIntent,
   normalizeAttachmentMode,
@@ -1059,6 +1061,34 @@ function getCreatorDraftStorageKey(type: CreatorTypeId): string {
   return `creator_flow_draft_${type}`;
 }
 
+/**
+ * CREATOR-106: seed the editor's text fields from the Marketing Workspace brief so the
+ * user doesn't re-enter what they already gave (Who is it for / core message / topic /
+ * constraints). Only fields that exist in this asset's config are set, and all stay
+ * editable. Lossy by design — the workspace brief is freeform, so structured fields
+ * (e.g. dataPoints) seed from the same description and the user refines.
+ */
+function mapBriefToEditorAnswers(brief: MarketingBrief, config: WorkflowConfig): Record<string, string> {
+  const ids = new Set<string>(config.fields.map((f) => f.id));
+  const out: Record<string, string> = {};
+  const set = (id: string, v: string | null | undefined) => { const t = (v ?? '').trim(); if (t && ids.has(id)) out[id] = t; };
+  const message = (brief.freeText ?? '').trim();
+  const firstSentence = message ? message.split(/[.!?\n]/)[0].slice(0, 90).trim() : '';
+
+  set('audience', brief.audience);
+  set('topic', (brief.offer ?? '').trim() || firstSentence);
+  // Core-message style fields across asset types.
+  for (const id of ['keyMessage', 'message', 'coreMessage', 'mainMessage', 'headline']) set(id, message);
+  set('cta', brief.cta);
+  set('offer', brief.offer);
+  // NOTE: do NOT seed dataPoints/stats from the freeform brief — the infographic
+  // renderer extracts metrics from that field and mangles freeform text (e.g. the
+  // year "2026" rendered as a giant "2026B" numeral). Leave it for the user / AI.
+  if (brief.tone && ids.has('refinement')) out.refinement = `Tone: ${brief.tone}`;
+  set('tone', brief.tone);
+  return out;
+}
+
 const CREATOR_DRAFT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7;
 const CREATOR_GENERATION_TIMEOUT_MS = 1000 * 90;
 
@@ -1799,8 +1829,19 @@ export default function CreatorTypeWorkflowPage() {
     // layout choice so the form opens on the intended preset.
     const urlLayout = typeof router.query.layout === 'string' ? router.query.layout : '';
     const layoutOverride = (urlLayout === 'wide-banner' || urlLayout === 'widescreen-presentation' || urlLayout === 'square' || urlLayout === 'portrait' || urlLayout === 'landscape' || urlLayout === 'standard') ? { layout: urlLayout } : {};
+    // CREATOR-106: EXPLICIT carry-over from the Marketing Workspace (?from=workspace).
+    // Seed the editor fields from the workspace brief so the user doesn't re-enter what
+    // they already gave; everything stays editable. Other entry points still start clean.
+    let workspacePrefill: Record<string, string> = {};
+    if (config && router.query.from === 'workspace' && typeof window !== 'undefined') {
+      try {
+        const wb = readMarketingBrief(window.sessionStorage.getItem(MARKETING_BRIEF_SESSION_KEY));
+        if (wb) workspacePrefill = mapBriefToEditorAnswers(wb, config);
+      } catch { /* ignore malformed brief */ }
+    }
     setAnswers({
       ...defaults,
+      ...workspacePrefill,
       ...((restored?.answers && typeof restored.answers === 'object') ? restored.answers as Record<string, string> : {}),
       ...layoutOverride,
     });
@@ -1837,7 +1878,9 @@ export default function CreatorTypeWorkflowPage() {
         ? (restored.recommendedAttachmentMode as AttachmentMode)
         : null,
     );
-    setBrandPanelOpen(false);
+    // CREATOR-106: arriving from the workspace, open the Brand panel so the logo-size
+    // (Small/Medium/Large) + brand controls are visible up front, not buried.
+    setBrandPanelOpen(router.query.from === 'workspace');
     setBrandMode(restored?.brandMode === 'brand-aware' ? 'brand-aware' : 'independent');
     setBrandPresence(
       restored?.brandPresence === 'minimal' || restored?.brandPresence === 'strong'
@@ -1851,7 +1894,7 @@ export default function CreatorTypeWorkflowPage() {
       setBrandOverrides(restored.brandOverrides as Record<string, string>);
     }
     setSelectedAssetId(typeof restored?.selectedAssetId === 'string' ? restored.selectedAssetId : null);
-  }, [config, router.query.prefill, router.query.source, type]);
+  }, [config, router.query.prefill, router.query.source, router.query.from, type]);
 
   // ── Variant deep-link pin (PHASE 1 — Variant Experience Embedding) ──
   // When the Writer (or any sibling surface) routes the operator here

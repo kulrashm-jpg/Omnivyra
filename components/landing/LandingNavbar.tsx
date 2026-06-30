@@ -95,6 +95,16 @@ export default function LandingNavbar() {
                 Login
               </Link>
 
+              {/* Contact Sales — routes to the canonical lead-capture experience */}
+              <Link
+                href="/contact-sales"
+                data-ga-label="Contact Sales"
+                data-ga-location="landing_nav"
+                className="hidden rounded-full border border-[#0A66C2]/30 bg-transparent px-5 py-2 text-sm font-semibold text-[#0A66C2] transition hover:bg-[#0A66C2]/5 md:inline-flex"
+              >
+                Contact Sales
+              </Link>
+
               {/* Get Free Credits — full text on desktop, compact icon on mobile */}
               <Link
                 href="/get-free-credits"

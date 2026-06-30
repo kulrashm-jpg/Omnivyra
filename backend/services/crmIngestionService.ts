@@ -11,6 +11,7 @@ import { bulkCreateTouchpoints, type TouchpointInput } from './touchpointService
 import { normalizeSource, type UnifiedSource } from './sourceNormalizationService';
 import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
 import { ownedDbTable } from '../db/writeOwner';
+import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 
 export interface CrmLeadRecord {
   externalId?: string | null;
@@ -322,6 +323,18 @@ async function ingestCrmRows(
       row,
       unifiedSource,
       unifiedPersonId: identity.unifiedPersonId,
+    });
+
+    // Phase 3 — route every imported CRM lead through the canonical facade
+    // (identity already resolved above; re-resolution is idempotent). Fail-open.
+    adoptLead('crm', {
+      id: leadId,
+      company_id: companyId,
+      source,
+      unified_source: unifiedSource,
+      qualification_score: qualificationScore,
+      unified_person_id: identity.unifiedPersonId,
+      ...row,
     });
 
     await upsertLegacyLead(companyId, row, unifiedSource);

@@ -41,6 +41,40 @@ export type VerificationStatus =
 
 export type CreatedVia = 'user' | 'admin' | 'system';
 
+export interface CompanyDomainVerification {
+  final_domain: string | null;
+  verification_status: VerificationStatus | null;
+  verified: boolean;
+  verified_at: string | null;
+}
+
+/**
+ * Canonical read for a company's primary domain verification state. Reuses the
+ * company_domains store (this service owns it); fail-open (returns null on error).
+ */
+export async function getCompanyDomainVerification(companyId: string): Promise<CompanyDomainVerification | null> {
+  try {
+    const { data } = await ownedDbTable('company_domains')
+      .select('final_domain, domain, verification_status, verified, verified_at, is_primary')
+      .eq('company_id', companyId)
+      .order('is_primary', { ascending: false })
+      .order('verified', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!data) return null;
+    const d = data as Record<string, unknown>;
+    const status = (d.verification_status as VerificationStatus | undefined) ?? null;
+    return {
+      final_domain: (d.final_domain as string) || (d.domain as string) || null,
+      verification_status: status,
+      verified: d.verified === true || status === 'verified' || status === 'admin_override',
+      verified_at: (d.verified_at as string) ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export interface SaveDomainRecordInput {
   company_id: string;
   input_domain: string;

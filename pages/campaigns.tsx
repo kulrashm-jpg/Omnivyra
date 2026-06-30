@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Trash2 } from 'lucide-react';
+import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Trash2, Pause, Play, Ban } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import { getStageLabelWithDuration } from '../lib/shared/CampaignStage';
@@ -174,6 +174,84 @@ export default function CampaignsList() {
       setIsDeletingCampaign(false);
       setPendingDeleteCampaignId(null);
     }
+  };
+
+  // BETA-006 (RULE 7) — campaign lifecycle control. Enforcement already exists: the
+  // scheduler skips enqueuing and the publish processor blocks any campaign whose status
+  // is not 'active', so pausing/cancelling reliably stops execution. Resume (→ active) is
+  // readiness-gated server-side (409 with blocking issues) — surfaced here, never silent.
+  const handleCampaignStatusChange = async (
+    campaignId: string,
+    newStatus: 'active' | 'paused' | 'cancelled',
+    e: React.MouseEvent,
+  ) => {
+    e.stopPropagation();
+    // BETA-010 (RULE 7): Cancel is terminal (no un-cancel from the UI) — confirm before it.
+    // Pause/Resume are reversible and stay frictionless.
+    if (
+      newStatus === 'cancelled' &&
+      !window.confirm('Cancel this campaign? Its scheduled posts will stop publishing. This cannot be undone from here.')
+    ) {
+      return;
+    }
+    try {
+      const res = await fetchWithAuth(`/api/campaigns/${encodeURIComponent(campaignId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      const result = await res.json().catch(() => ({} as any));
+      if (res.ok && result.success) {
+        const verb = newStatus === 'active' ? 'resumed' : newStatus === 'paused' ? 'paused' : 'cancelled';
+        notify('success', `Campaign ${verb}.`);
+        await fetchCampaigns();
+      } else if (res.status === 409 && result.readiness) {
+        const pct = result.readiness.readiness_percentage ?? 0;
+        const issue = (result.readiness.blocking_issues || [])[0];
+        notify('error', `Cannot resume — campaign is ${pct}% ready.${issue ? ` ${issue}` : ''}`);
+      } else {
+        notify('error', `Status change failed: ${result.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      notify('error', `Failed to update campaign: ${error instanceof Error ? error.message : 'Please try again.'}`);
+    }
+  };
+
+  // Pause (active→paused), Resume (paused→active), Cancel (active/paused→cancelled).
+  // Terminal/planning states show no controls. Same icon-button styling as Delete/Open.
+  const renderCampaignControls = (campaign: { id: string; status: string }) => {
+    const isActive = campaign.status === 'active';
+    const isPaused = campaign.status === 'paused';
+    if (!isActive && !isPaused) return null;
+    return (
+      <>
+        {isActive && (
+          <button
+            onClick={(e) => handleCampaignStatusChange(campaign.id, 'paused', e)}
+            className="text-gray-300 hover:text-yellow-600 transition-colors p-1.5 rounded hover:bg-yellow-50"
+            title="Pause Campaign"
+          >
+            <Pause className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {isPaused && (
+          <button
+            onClick={(e) => handleCampaignStatusChange(campaign.id, 'active', e)}
+            className="text-gray-300 hover:text-emerald-600 transition-colors p-1.5 rounded hover:bg-emerald-50"
+            title="Resume Campaign"
+          >
+            <Play className="w-3.5 h-3.5" />
+          </button>
+        )}
+        <button
+          onClick={(e) => handleCampaignStatusChange(campaign.id, 'cancelled', e)}
+          className="text-gray-300 hover:text-red-500 transition-colors p-1.5 rounded hover:bg-red-50"
+          title="Cancel Campaign"
+        >
+          <Ban className="w-3.5 h-3.5" />
+        </button>
+      </>
+    );
   };
 
   const stageColors: Record<string, string> = {
@@ -376,6 +454,7 @@ export default function CampaignsList() {
                           </div>
                         ) : (
                           <>
+                            {renderCampaignControls(campaign)}
                             <button
                               onClick={(e) => handleDeleteCampaign(campaign.id, e)}
                               className="text-gray-300 hover:text-red-500 transition-colors p-1.5 rounded hover:bg-red-50"
@@ -506,6 +585,7 @@ export default function CampaignsList() {
                         </div>
                       ) : (
                         <>
+                          {renderCampaignControls(campaign)}
                           <button
                             onClick={(e) => handleDeleteCampaign(campaign.id, e)}
                             className="text-gray-300 hover:text-red-500 transition-colors p-1.5 rounded hover:bg-red-50"

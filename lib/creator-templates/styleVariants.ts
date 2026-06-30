@@ -232,6 +232,118 @@ export function infographicStyleForBlueprint(id: string): InfographicStyleSchema
   return INFOGRAPHIC_VARIANTS[infographicVariantForBlueprint(id)] ?? DEFAULT_INFOGRAPHIC_STYLE;
 }
 
+/* ── CREATOR-106: Marketing Sample (blueprint) → infographic LAYOUT engine ─────
+ * The sample also drives the STRUCTURE, not just colour — different samples select
+ * different layout engines (stats/comparison/process/framework/hierarchy/timeline),
+ * which the renderer turns into genuinely different grids/flows. Spread so the common
+ * styles land on distinct structures (technology→stats, healthcare→process,
+ * finance→comparison, luxury→hierarchy, corporate→framework). */
+const BLUEPRINT_TO_INFOGRAPHIC_LAYOUT: Readonly<Record<string, string>> = {
+  corporate: 'framework', modern: 'stats', minimal: 'hierarchy', luxury: 'hierarchy',
+  editorial: 'comparison', magazine: 'comparison', dark: 'stats', bold: 'stats',
+  gradient: 'process', abstract: 'framework', brutalist: 'comparison', vintage: 'timeline',
+  retro: 'timeline', glassmorphism: 'stats', neumorphism: 'hierarchy', technology: 'stats',
+  healthcare: 'process', finance: 'comparison', education: 'process', construction: 'process',
+  restaurant: 'framework', travel: 'timeline', retail: 'stats', fashion: 'hierarchy',
+  'luxury-brand': 'hierarchy', illustration: 'framework', 'flat-illustration': 'framework',
+  isometric: 'process', 'paper-cut': 'hierarchy', futuristic: 'stats', dashboard: 'stats',
+  infographic: 'framework', 'abstract-3d': 'process', 'minimal-3d': 'hierarchy',
+  comparison: 'comparison', statistic: 'stats', quote: 'hierarchy', timeline: 'timeline',
+  checklist: 'process', framework: 'framework', saas: 'stats', analytics: 'stats',
+};
+
+/** The infographic LAYOUT engine a Marketing Sample / blueprint id should render with. */
+export function infographicLayoutForBlueprint(id: string): string {
+  return (id && BLUEPRINT_TO_INFOGRAPHIC_LAYOUT[id]) || 'framework';
+}
+
+/* ── CREATOR-107: per-sample COMPOSITION geometry ─────────────────────────────
+ * Beyond the layout engine, each sample carries its own composition (columns, grid
+ * density, hero emphasis), deterministically derived from the blueprint so two samples
+ * on the same engine still differ, while the SAME sample is always identical (a stable
+ * design family). This is the single geometry source the renderer consumes — no generic
+ * per-render geometry decision once a blueprint is selected. */
+function hashInt(s: string): number {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) { h = (h ^ s.charCodeAt(i)) >>> 0; h = Math.imul(h, 16777619) >>> 0; }
+  return h >>> 0;
+}
+
+export interface InfographicComposition {
+  layout: string;        // engine family
+  columns: number;       // grid columns the engine must use (multi-col layouts)
+  densityScale: number;  // gap/margin multiplier (tight ↔ airy)
+  heroScale: number;     // header/hero emphasis multiplier
+}
+
+/* ── CREATOR-113: declared SEMANTIC STRUCTURE per sample ──────────────────────
+ * The sample's layout determines the semantic role of every block (a stats sample's
+ * cards are KPIs; a process sample's are sequential steps; a comparison sample's are
+ * opposing options). This declares that structure explicitly so the renderer + content
+ * composer populate blocks BY ROLE, not by raw card index. */
+export interface SemanticBlock {
+  blockId: string;
+  semanticRole: string;
+  priority: number;
+  required: boolean;
+  preferredContentType: string;
+  /** CREATOR-114: how many of this block the SAMPLE expects (hero=1; the repeating
+   *  block's count is the slot count the content planner must fill — e.g. stats→3 KPIs). */
+  count: number;
+}
+const SEMANTIC_STRUCTURE_BY_LAYOUT: Readonly<Record<string, SemanticBlock[]>> = {
+  stats: [
+    { blockId: 'hero', semanticRole: 'primary_message', priority: 1, required: true, preferredContentType: 'headline', count: 1 },
+    { blockId: 'kpi', semanticRole: 'statistic', priority: 2, required: true, preferredContentType: 'stat', count: 3 },
+  ],
+  process: [
+    { blockId: 'hero', semanticRole: 'primary_message', priority: 1, required: true, preferredContentType: 'headline', count: 1 },
+    { blockId: 'step', semanticRole: 'process_step', priority: 2, required: true, preferredContentType: 'sequence', count: 4 },
+  ],
+  comparison: [
+    { blockId: 'hero', semanticRole: 'primary_message', priority: 1, required: true, preferredContentType: 'headline', count: 1 },
+    { blockId: 'option', semanticRole: 'comparison_side', priority: 2, required: true, preferredContentType: 'comparison', count: 2 },
+  ],
+  framework: [
+    { blockId: 'hero', semanticRole: 'primary_message', priority: 1, required: true, preferredContentType: 'headline', count: 1 },
+    { blockId: 'pillar', semanticRole: 'framework_pillar', priority: 2, required: true, preferredContentType: 'grouped_idea', count: 4 },
+  ],
+  hierarchy: [
+    { blockId: 'hero', semanticRole: 'primary_message', priority: 1, required: true, preferredContentType: 'headline', count: 1 },
+    { blockId: 'level', semanticRole: 'hierarchy_level', priority: 2, required: true, preferredContentType: 'ranked_idea', count: 4 },
+  ],
+  timeline: [
+    { blockId: 'hero', semanticRole: 'primary_message', priority: 1, required: true, preferredContentType: 'headline', count: 1 },
+    { blockId: 'event', semanticRole: 'timeline_event', priority: 2, required: true, preferredContentType: 'dated_milestone', count: 5 },
+  ],
+};
+
+/** CREATOR-114: how many repeating content blocks the SAMPLE expects (3 KPIs for a
+ *  stats sample, 4 steps for process, 2 sides for comparison, …). The content planner
+ *  fills exactly this many slots; the renderer renders exactly this many blocks. */
+export function semanticSlotCountForBlueprint(id: string): number {
+  const struct = semanticStructureForBlueprint(id);
+  const repeating = struct.find((b) => b.blockId !== 'hero');
+  return repeating?.count ?? 4;
+}
+
+/** The declared semantic block structure a Marketing Sample / blueprint id expects. */
+export function semanticStructureForBlueprint(id: string): SemanticBlock[] {
+  return SEMANTIC_STRUCTURE_BY_LAYOUT[infographicLayoutForBlueprint(id)] ?? SEMANTIC_STRUCTURE_BY_LAYOUT.framework;
+}
+
+/** The full composition geometry a Marketing Sample / blueprint id renders with. */
+export function infographicCompositionForBlueprint(id: string): InfographicComposition {
+  const layout = infographicLayoutForBlueprint(id);
+  const h = hashInt(id || 'default');
+  const multiCol = layout === 'stats' || layout === 'framework';
+  const columns = multiCol ? 2 + (h % 2) : layout === 'comparison' ? 2 : 1;   // 2–3 vs 2 vs 1
+  // Unsigned shifts — a signed >> can go negative for large hashes → negative index.
+  const densityScale = [0.82, 1.0, 1.2][(h >>> 4) % 3];                         // tight / balanced / airy
+  const heroScale = [0.92, 1.0, 1.12][(h >>> 7) % 3];
+  return { layout, columns, densityScale, heroScale };
+}
+
 /** Returns the family-specific style schema fields a template should carry,
  *  resolved by its assigned variant. Spread onto the template at build time. */
 export function styleFieldsForTemplate(id: string, family: 'image' | 'carousel' | 'infographic'):

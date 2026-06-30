@@ -233,13 +233,53 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ReportViewPayload | { error: string; code: string }>,
 ) {
-  if (req.method !== 'GET') {
+  if (req.method !== 'GET' && req.method !== 'DELETE') {
+    res.setHeader('Allow', 'GET, DELETE');
     return res.status(405).json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
   }
 
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
   if (authError || !user) {
     return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+  }
+
+  // BETA-005 (RULE 4): delete a report from history. Tenant-scoped — only reports under a
+  // company the caller actively belongs to can be removed, with the same enumeration-safe
+  // 404 as GET. Reports are regenerable, so this is a hard delete of the row.
+  if (req.method === 'DELETE') {
+    const delReportId = req.query.reportId as string;
+    if (!delReportId) {
+      return res.status(400).json({ error: 'reportId is required', code: 'REPORT_ID_REQUIRED' });
+    }
+    const { data: delMembership } = await supabase
+      .from('user_company_roles')
+      .select('company_id')
+      .eq('user_id', user.id)
+      .eq('status', 'active');
+    const delCompanyIds = (delMembership ?? [])
+      .map((row) => (row as { company_id?: string | null }).company_id)
+      .filter((cid): cid is string => Boolean(cid));
+    if (delCompanyIds.length === 0) {
+      return res.status(404).json({ error: 'Report not found', code: 'NOT_FOUND' });
+    }
+    const { data: existing } = await supabase
+      .from('reports')
+      .select('id')
+      .eq('id', delReportId)
+      .in('company_id', delCompanyIds)
+      .maybeSingle();
+    if (!existing) {
+      return res.status(404).json({ error: 'Report not found', code: 'NOT_FOUND' });
+    }
+    const { error: delError } = await supabase
+      .from('reports')
+      .delete()
+      .eq('id', delReportId)
+      .in('company_id', delCompanyIds);
+    if (delError) {
+      return res.status(500).json({ error: 'Failed to delete report', code: 'DELETE_FAILED' });
+    }
+    return res.status(200).json({ status: 'deleted', id: delReportId } as any);
   }
 
   const reportId = req.query.reportId as string;

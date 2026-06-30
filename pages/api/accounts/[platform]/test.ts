@@ -10,10 +10,19 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getToken } from '../../../../backend/auth/tokenStore';
 import { bearerAuthorization } from '../../../../lib/httpAuthHeaders';
+import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // BETA-011 (RULE 6): this endpoint was UNAUTHENTICATED — a caller could pass any
+  // user_id and enumerate which platforms that user has connected (+ account names).
+  // Require a session and restrict the test to the caller's OWN account.
+  const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  if (authError || !user?.id) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   const { platform, user_id } = req.query;
@@ -24,6 +33,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!user_id || typeof user_id !== 'string') {
     return res.status(400).json({ error: 'user_id is required' });
+  }
+
+  if (user_id !== user.id) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
 
   try {

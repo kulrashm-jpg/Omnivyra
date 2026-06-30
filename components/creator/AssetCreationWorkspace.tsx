@@ -20,9 +20,11 @@ import { ArrowLeft, Check, Sparkles, Wand2 } from 'lucide-react';
 import { listOutcomesByCategory, getOutcome } from '../../lib/creator-outcomes/outcomeRegistry';
 import { emptyMarketingBrief, mergeBrief, type MarketingBrief } from '../../lib/content/unifiedCreationModel';
 import { SampleGallery } from './SampleGallery';
-import type { MarketingSample } from '../../lib/creator-outcomes/marketingSample';
+import type { CreatorTemplate } from '../../lib/creator-templates/types';
 import type { TemplateAssetFamily } from '../../lib/creator-templates/types';
 import { MARKETING_BRIEF_SESSION_KEY, serializeMarketingBrief } from '../../lib/content/marketingBriefResolver';
+import ChatVoiceButton from '../ChatVoiceButton';
+import { color, radius, shadow, space, fontSize, fontWeight } from '../../lib/platform/ui';
 
 type Asset = 'image' | 'carousel' | 'infographic';
 const CUSTOM = 'brand-awareness';
@@ -56,12 +58,13 @@ const ASSET_CONFIG: Record<Asset, AssetConfig> = {
   },
 };
 
-const wrap: React.CSSProperties = { maxWidth: 1080, margin: '0 auto', padding: '28px 20px 96px', color: '#0f172a' };
-const card: React.CSSProperties = { border: '1px solid #e5e7eb', borderRadius: 14, background: '#fff', boxShadow: '0 1px 2px rgba(15,23,42,0.05)', textAlign: 'left' };
-const linkBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 13, padding: 0, fontWeight: 600 };
-const primaryBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 8, background: '#2563eb', color: '#fff', border: 'none', borderRadius: 10, padding: '12px 22px', cursor: 'pointer', fontWeight: 700, fontSize: 15 };
-const label: React.CSSProperties = { fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4 };
-const input: React.CSSProperties = { width: '100%', borderRadius: 10, border: '1px solid #d1d5db', padding: '10px 12px', fontSize: 14, color: '#0f172a' };
+// CREATOR-142 — Platform v1.0 tokens only (no raw hex/shadow; one brand blue).
+const wrap: React.CSSProperties = { maxWidth: 1080, margin: '0 auto', padding: `${space['2xl']}px ${space.xl}px ${space['4xl']}px`, color: color.text };
+const card: React.CSSProperties = { border: `1px solid ${color.border}`, borderRadius: radius.lg, background: color.surface, boxShadow: shadow.sm, textAlign: 'left' };
+const linkBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: space.xs, background: 'transparent', border: 'none', color: color.primary[600], cursor: 'pointer', fontSize: fontSize.sm, padding: 0, fontWeight: fontWeight.semibold };
+const primaryBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: space.sm, background: color.primary[600], color: color.onPrimary, border: 'none', borderRadius: radius.md, padding: `${space.md}px ${space.xl}px`, cursor: 'pointer', fontWeight: fontWeight.bold, fontSize: fontSize.sm };
+const label: React.CSSProperties = { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: color.textSubtle, textTransform: 'uppercase', letterSpacing: 0.4 };
+const input: React.CSSProperties = { width: '100%', borderRadius: radius.md, border: `1px solid ${color.border}`, padding: `${space.sm}px ${space.md}px`, fontSize: fontSize.sm, color: color.text };
 
 interface WorkspaceProps { onNavigate: (url: string) => void; onAdvanced?: () => void }
 
@@ -71,17 +74,19 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
   const [goalId, setGoalId] = React.useState<string | null>(null);
   const [customLabel, setCustomLabel] = React.useState<string | null>(null);
   const [brief, setBrief] = React.useState<MarketingBrief>(emptyMarketingBrief());
-  const [selectedSample, setSelectedSample] = React.useState<MarketingSample | null>(null);
+  const [selectedSample, setSelectedSample] = React.useState<CreatorTemplate | null>(null);
+  // CREATOR-106: typed-text base preserved so spoken brief APPENDS to (not replaces) it.
+  const voiceBaseRef = React.useRef('');
 
   const setField = (k: keyof MarketingBrief, v: string) => setBrief((b) => mergeBrief(b, { [k]: v } as Partial<MarketingBrief>));
   const header = (title: string, sub?: string, back?: () => void) => (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         {back ? <button type="button" style={linkBtn} onClick={back}><ArrowLeft size={14} /> Back</button> : <span />}
-        <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 700, textTransform: 'capitalize' }}>{cfg.goalKicker}</span>
+        <span style={{ fontSize: 12, color: color.textSubtle, fontWeight: 700, textTransform: 'capitalize' }}>{cfg.goalKicker}</span>
       </div>
       <h1 style={{ fontSize: 30, fontWeight: 800, margin: '4px 0 6px' }}>{title}</h1>
-      {sub ? <p style={{ color: '#64748b', fontSize: 15, marginBottom: 22 }}>{sub}</p> : null}
+      {sub ? <p style={{ color: color.textMuted, fontSize: 15, marginBottom: 22 }}>{sub}</p> : null}
     </>
   );
 
@@ -103,14 +108,14 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
               {c.outcomes.map((o) => (
                 <button key={o.id} type="button" style={{ ...card, padding: '16px', cursor: 'pointer' }} onClick={() => pick(o.id)}>
                   <div style={{ fontSize: 15.5, fontWeight: 800 }}>{o.label}</div>
-                  <div style={{ fontSize: 12.5, color: '#64748b', marginTop: 5, lineHeight: 1.45 }}>{o.description}</div>
+                  <div style={{ fontSize: 12.5, color: color.textMuted, marginTop: 5, lineHeight: 1.45 }}>{o.description}</div>
                 </button>
               ))}
             </div>
           </div>
         ))}
         <button type="button" style={{ ...card, padding: '16px', display: 'flex', alignItems: 'center', gap: 12, width: '100%', cursor: 'pointer' }} onClick={() => pick(CUSTOM, 'My own idea')}>
-          <Wand2 size={20} color="#7c3aed" /><div><div style={{ fontSize: 15.5, fontWeight: 800 }}>My own idea</div><div style={{ fontSize: 12.5, color: '#64748b', marginTop: 3 }}>Describe anything — we create the {cfg.label}.</div></div>
+          <Wand2 size={20} color={color.primary[600]} /><div><div style={{ fontSize: 15.5, fontWeight: 800 }}>My own idea</div><div style={{ fontSize: 12.5, color: color.textMuted, marginTop: 3 }}>Describe anything — we create the {cfg.label}.</div></div>
         </button>
       </div>
     );
@@ -133,16 +138,36 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
   // ── Brief → Generate ─────────────────────────────────────────────────────
   const generate = () => {
     try { sessionStorage.setItem(MARKETING_BRIEF_SESSION_KEY, serializeMarketingBrief({ ...brief, goalId })); } catch { /* noop */ }
-    const bp = selectedSample ? `&blueprint=${encodeURIComponent(selectedSample.sampleId)}` : '';
+    // CREATOR-125: the gallery now selects a SYSTEM CreatorTemplate — store its
+    // template_id as the canonical selection identity. The downstream editor +
+    // generate runtime still consume blueprint_id, so we project the template's
+    // provenance (metadata.sourceBlueprintId) back to &blueprint= HERE, at the
+    // gallery boundary ONLY (the single temporary compatibility projection — RULE
+    // 9). No deeper runtime changes.
+    const tid = selectedSample ? `&template_id=${encodeURIComponent(selectedSample.id)}` : '';
+    const sourceBlueprintId = selectedSample ? String(selectedSample.metadata?.sourceBlueprintId ?? '') : '';
+    const bp = sourceBlueprintId ? `&blueprint=${encodeURIComponent(sourceBlueprintId)}` : '';
     // CREATOR-106: the sample IS the chosen template, so skip the editor's own template
     // gallery (skip_templates=1) — otherwise [type].tsx bounces back to /templates.
-    onNavigate(`${cfg.editorRoute}?goal=${encodeURIComponent(goalId ?? '')}${bp}&from=workspace&skip_templates=1`);
+    onNavigate(`${cfg.editorRoute}?goal=${encodeURIComponent(goalId ?? '')}${tid}${bp}&from=workspace&skip_templates=1`);
   };
   return (
     <div style={wrap}>
       {header('Tell us once', cfg.briefSub, () => setStep('samples'))}
-      <textarea value={brief.freeText ?? ''} onChange={(e) => setField('freeText', e.target.value)} rows={5}
-        placeholder={`e.g. ${customLabel ?? cfg.label} for our SaaS — audience busy founders, confident friendly tone, CTA "Start free".`} style={{ ...input, resize: 'vertical', marginBottom: 14 }} />
+      <div style={{ position: 'relative', marginBottom: 6 }}>
+        <textarea value={brief.freeText ?? ''} onChange={(e) => { voiceBaseRef.current = e.target.value; setField('freeText', e.target.value); }} rows={5}
+          placeholder={`Type or speak — e.g. ${customLabel ?? cfg.label} for our SaaS — audience busy founders, confident friendly tone, CTA "Start free".`}
+          style={{ ...input, resize: 'vertical', paddingRight: 56 }} />
+        <div style={{ position: 'absolute', right: 10, bottom: 12 }}>
+          <ChatVoiceButton
+            onTranscription={(t) => setField('freeText', `${voiceBaseRef.current.trim() ? `${voiceBaseRef.current.trim()} ` : ''}${t}`)}
+            title="Speak your brief"
+          />
+        </div>
+      </div>
+      <div style={{ fontSize: 12, color: color.textSubtle, marginBottom: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        Tap the mic to speak your brief — we&apos;ll transcribe it as you talk.
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
         {([['audience', 'Audience'], ['tone', 'Tone'], ['cta', 'Call to action'], ['offer', 'Offer / product']] as [keyof MarketingBrief, string][]).map(([k, lbl]) => (
           <div key={k}><div style={{ ...label, marginBottom: 6 }}>{lbl}</div>

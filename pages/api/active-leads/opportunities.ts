@@ -15,9 +15,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import {
-  getOpportunityFeedTypeCounts,
-  queryOpportunityFeed,
-} from '../../../backend/services/opportunityFeedService';
+  getOpportunities,
+  getOpportunityTypeCounts,
+} from '../../../backend/services/leadIntelligence/legacyOpportunityCompat';
 import { isOpportunityType, type OpportunityType } from '../../../backend/types/opportunityFeed';
 
 function parseCsv(value: unknown): string[] {
@@ -39,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     if (req.query.counts_only === '1' || req.query.counts_only === 'true') {
-      const counts = await getOpportunityFeedTypeCounts(companyId);
+      const counts = await getOpportunityTypeCounts(companyId);
       return res.status(200).json({ type_counts: counts });
     }
 
@@ -52,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : null;
     const pageSize = typeof req.query.pageSize === 'string' ? Number(req.query.pageSize) : undefined;
 
-    const page = await queryOpportunityFeed({
+    const page = await getOpportunities({
       organizationId: companyId,
       types: types.length > 0 ? types : undefined,
       platforms: platforms.length > 0 ? platforms : undefined,
@@ -63,7 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       pageSize,
     });
 
-    const counts = await getOpportunityFeedTypeCounts(companyId);
+    const counts = await getOpportunityTypeCounts(companyId);
     return res.status(200).json({ ...page, type_counts: counts });
   } catch (err: any) {
     console.error('[opportunities GET] failed:', err?.message);

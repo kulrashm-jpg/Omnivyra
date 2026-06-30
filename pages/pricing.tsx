@@ -139,6 +139,20 @@ export default function PricingPage() {
           <p className="mx-auto mt-4 max-w-[1280px] text-center text-xs text-slate-400">
             Founder prices apply to members who subscribe before {FOUNDING_MEMBER.expiryLabel}. Payments are processed in INR via Razorpay.
           </p>
+          {/* Phase 9 — human-sales CTA routes to the canonical Lead Capture experience.
+              Self-serve plan CTAs above are unchanged. */}
+          <div className="mx-auto mt-8 flex max-w-[1280px] flex-col items-center justify-between gap-4 rounded-2xl border border-[#C9DDF3] bg-[#EEF6FF] px-6 py-5 text-center sm:flex-row sm:text-left">
+            <div>
+              <p className="text-sm font-black text-[#071D3A]">Need a custom or enterprise plan?</p>
+              <p className="text-sm text-[#5D6F83]">Talk to our team about volume credits, seats, and onboarding.</p>
+            </div>
+            <Link
+              href="/contact-sales"
+              className="inline-flex min-h-[48px] items-center justify-center rounded-xl bg-[#0A66C2] px-6 py-3 text-sm font-black text-white shadow-omnivyra transition hover:bg-[#0857A8]"
+            >
+              Talk to sales
+            </Link>
+          </div>
         </section>
 
         {/* ── Unified feature comparison matrix (the ONLY capability list) ── */}

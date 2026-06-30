@@ -671,7 +671,13 @@ export function getQueue(): Queue {
       connection: getRedisConnection(),
       prefix: getQueuePrefix(),
       defaultJobOptions: {
-        attempts: 1,
+        // BETA-004 (RULE 4): retry transient publish failures (429/502/network) instead
+        // of losing the post permanently. The processor was already built for this
+        // (queue_jobs.status idempotency guard + attemptsMade + retryOwner:'external'),
+        // so enabling attempts here is the smallest production-safe fix. Exponential
+        // backoff (~1m, 2m) matches the processor's own next_retry_at intent.
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 60_000 },
         removeOnComplete: {
           age: 24 * 3600, // Keep completed jobs for 24 hours
           count: 1000,

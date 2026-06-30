@@ -37,6 +37,7 @@ import type {
 import { SIGNAL_EXCERPT_MAX_LENGTH, TYPE_VALUE_MULTIPLIER } from '../types/opportunityFeed';
 import type { RawSignal } from '../types/listeningConnector';
 import type { ModerationDecision } from './moderation/moderationGateService';
+import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 
 // ---------------------------------------------------------------------------
 // PR-OPA-6 — Value-aware priority ranking
@@ -553,6 +554,10 @@ export async function recordOpportunityFromSignal(
     cluster_id: feedItem.cluster_id,
     occurred_at: feedItem.created_at,
   });
+
+  // Phase 3 — a newly classified community opportunity also becomes a canonical
+  // Lead Intelligence record (Active Leads continues to roll these up). Fail-open.
+  adoptLead('community', feedItem as unknown as Record<string, unknown>);
 
   return {
     feed_item: feedItem,

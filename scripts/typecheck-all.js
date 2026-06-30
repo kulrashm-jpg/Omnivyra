@@ -32,7 +32,9 @@ for (const project of PROJECTS) {
       '--noEmit',
       '--incremental', 'false',
     ],
-    { stdio: 'inherit' },
+    // BETA-002: raise the V8 heap so the full FE project type-checks without OOM
+    // (it exits 134 at the default heap on this codebase). No manual env needed.
+    { stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --max-old-space-size=8192`.trim() } },
   );
   const code = result.status === null ? 1 : result.status;
   if (code !== 0) {

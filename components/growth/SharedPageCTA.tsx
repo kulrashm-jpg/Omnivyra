@@ -50,14 +50,22 @@ export default function SharedPageCTA({ contentType = 'content', className = '' 
       <h3 className="text-xl sm:text-2xl font-bold mb-2">{copy.title}</h3>
       <p className="text-sm text-blue-100 max-w-md mx-auto mb-5">{copy.subtitle}</p>
 
-      <Link
-        href="/create-account"
-        className="inline-flex items-center gap-2 px-6 py-3 bg-white text-blue-700 font-semibold text-sm rounded-xl hover:bg-blue-50 transition-colors shadow-lg"
-      >
-        <Sparkles className="w-4 h-4" />
-        {copy.action}
-        <ArrowRight className="w-4 h-4" />
-      </Link>
+      <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
+        <Link
+          href="/create-account"
+          className="inline-flex items-center gap-2 px-6 py-3 bg-white text-blue-700 font-semibold text-sm rounded-xl hover:bg-blue-50 transition-colors shadow-lg"
+        >
+          <Sparkles className="w-4 h-4" />
+          {copy.action}
+          <ArrowRight className="w-4 h-4" />
+        </Link>
+        <Link
+          href="/talk-to-expert"
+          className="inline-flex items-center gap-2 px-6 py-3 border border-white/40 text-white font-semibold text-sm rounded-xl hover:bg-white/10 transition-colors"
+        >
+          Talk to an expert
+        </Link>
+      </div>
 
       <p className="text-xs text-blue-200 mt-4">
         Free to start. No credit card required.

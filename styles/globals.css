@@ -206,3 +206,7 @@ html, body {
 .html-content-renderer em, .html-content-renderer i { font-style: italic; }
 .html-content-renderer u { text-decoration: underline; }
 .html-content-renderer s { text-decoration: line-through; }
+
+/* CREATOR-139 — keyframes for token-driven inline animations (Skeleton/LoadingState). */
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes ovrShimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }

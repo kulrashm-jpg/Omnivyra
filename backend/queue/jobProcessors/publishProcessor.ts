@@ -34,6 +34,7 @@ import { categorizeError } from '../../services/errorRecoveryService';
 import { recordPostAnalytics } from '../../services/analyticsService';
 import { schedulePostPolls } from '../../services/analyticsNormalizationService';
 import { logActivity } from '../../services/activityLogger';
+import { createUserNotification } from '../../services/userNotificationService';
 import { getCampaignReadiness } from '../../services/campaignReadinessService';
 import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
 import { runJob } from '../../services/jobRunner';
@@ -105,7 +106,11 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
         user_id,
       },
     },
-    async () => processPublishJobInner({ scheduled_post_id, social_account_id, user_id, jobId }),
+    async () => processPublishJobInner({
+      scheduled_post_id, social_account_id, user_id, jobId,
+      // Only the LAST BullMQ attempt notifies the user (avoids 3x retry spam — RULE 5).
+      isFinalAttempt: ((job.attemptsMade ?? 0) + 1) >= (job.opts?.attempts ?? 1),
+    }),
   );
 
   if (outcome.status === 'completed') return;
@@ -168,8 +173,9 @@ async function processPublishJobInner(params: {
   social_account_id: string;
   user_id: string;
   jobId: string | undefined;
+  isFinalAttempt?: boolean;
 }): Promise<void> {
-  const { scheduled_post_id, social_account_id, user_id, jobId } = params;
+  const { scheduled_post_id, social_account_id, user_id, jobId, isFinalAttempt } = params;
 
   console.log(`📝 Processing publish job ${jobId} for scheduled_post ${scheduled_post_id}`);
 
@@ -557,6 +563,29 @@ async function processPublishJobInner(params: {
         `Job processing error: ${error.message}`,
         { error: error.stack }
       );
+      // BETA-004 (RULE 9): record the failure to the user-visible activity feed too,
+      // mirroring the success 'post_published' event — so failed publishes are never
+      // invisible to operators/customers (status + reason already land on scheduled_posts).
+      try {
+        await logActivity(user_id, 'post_publish_failed', 'post', scheduled_post_id, {
+          platform: scheduledPost?.platform,
+          error_code: platformError.code,
+          error_message: platformError.user_message,
+        });
+      } catch (activityError: any) {
+        console.warn('Failed to log publish-failure activity:', activityError?.message);
+      }
+      // BETA-007 (RULE 5): on the FINAL failed attempt, push a user notification so a
+      // failed publish reaches the NotificationBell (retries don't spam). Best-effort.
+      if (isFinalAttempt) {
+        await createUserNotification({
+          userId: user_id,
+          type: 'post_publish_failed',
+          title: 'Post failed to publish',
+          message: `Your ${scheduledPost?.platform ?? 'social'} post couldn't be published: ${platformError.user_message}`,
+          metadata: { scheduled_post_id, platform: scheduledPost?.platform, error_code: platformError.code },
+        });
+      }
     } catch (updateError) {
       console.error('Failed to update job status:', updateError);
     }

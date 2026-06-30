@@ -21,6 +21,7 @@ import {
   MessageSquare,
   Moon,
   PenTool,
+  Radar,
   Settings,
   Shield,
   Sparkles,
@@ -174,7 +175,24 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       { label: 'Engagement Center', href: '/command-center/engagement', description: 'Conversation inbox and action queue.' },
       { label: 'Market Pulse', href: '/dashboard/intelligence?intelTab=market-pulse', description: 'Pulse, trend, and audience movement view.' },
       { label: 'Active Leads', href: '/command-center/active-leads', description: 'Lead review and action workspace.' },
-      { label: 'Intelligence', href: '/intelligence', description: 'Broader intelligence signals and insights.' },
+      // BETA-008 (RULE 8): "Intelligence" (→ /intelligence) hidden for Beta — admin-gated shell.
+    ],
+  },
+  {
+    id: 'lead-intelligence',
+    label: 'Lead Intelligence',
+    href: '/lead-intelligence',
+    icon: Radar,
+    description: 'One workspace for every lead source — capture setup, overview, list, and profiles.',
+    matchers: ['/lead-intelligence', '/website-setup', '/website-health', '/integrations', '/leads', '/lead-capture'],
+    children: [
+      { label: 'Overview', href: '/lead-intelligence', description: 'Totals, intent, source and status distribution.' },
+      { label: 'All Leads', href: '/lead-intelligence?tab=leads', description: 'Unified, searchable list across every source.' },
+      { label: 'Website Setup', href: '/website-setup', description: 'Connect a website, verify your domain, install tracking, and activate lead capture.' },
+      { label: 'Website Health', href: '/website-health', description: 'Operational command center: integration, tracking, lead capture, intelligence & one-click validation.' },
+      { label: 'Website Integrations', href: '/integrations?focus=website', description: 'Manage CMS connections and lead webhooks.' },
+      { label: 'Forms', href: '/leads?tab=forms', description: 'Build and embed lead-capture forms.' },
+      { label: 'Lead Capture', href: '/lead-capture', description: 'Capture topology, attribution continuity, and activation readiness.' },
     ],
   },
 ];

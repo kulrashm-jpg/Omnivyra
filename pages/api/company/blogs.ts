@@ -107,5 +107,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
+  if (req.method === 'DELETE') {
+    // BETA-010 (RULE 3/7): the articles/blogs UI already calls DELETE here, but the verb
+    // was unimplemented (405 → silent no-op). Implement an ownership-scoped delete so the
+    // existing action actually works. enforceCompanyAccess above already verified the
+    // caller belongs to company_id; deleting only a row that ALSO matches company_id means
+    // a caller can never remove another company's content.
+    const id = (req.query.id || req.body?.id) as string | undefined;
+    if (!id) {
+      return res.status(400).json({ error: 'id is required' });
+    }
+    const { error } = await supabase
+      .from('blogs')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', company_id);
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+    return res.status(200).json({ success: true });
+  }
+
   return res.status(405).json({ error: 'Method not allowed' });
 }

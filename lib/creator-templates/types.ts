@@ -24,6 +24,7 @@
 import type { InfographicStyleSchema } from './infographicStyle';
 import type { ImageStyleSchema } from './imageStyle';
 import type { CarouselStyleSchema } from './carouselStyle';
+import type { SemanticBlock, InfographicComposition } from './styleVariants';
 
 export type TemplateAssetFamily = 'image' | 'carousel' | 'infographic';
 
@@ -221,6 +222,32 @@ export interface TemplatePreview {
   };
 }
 
+/**
+ * CREATOR-123 — structured generation instructions migrated from
+ * `marketingSample.GenerationDNA`. Carried ON the template so the renderer and
+ * prompt-assembler can read design intelligence from the TEMPLATE rather than
+ * deriving it through a `blueprint_id` lookup. The fields mirror the existing
+ * `GenerationDNA` exactly so a seeded SYSTEM template reproduces the curated
+ * sample byte-for-byte. Optional + additive: nothing reads it until the runtime
+ * read-switch lands, so the model extension is inert by itself.
+ */
+export interface TemplateGenerationDNA {
+  composition: string;
+  hierarchy: string;
+  typography: string;
+  colorLanguage: { primary: string; surface: string; contrast: 'high' | 'soft' };
+  photography: string;
+  illustration: string;
+  spacing: string;
+  lighting: string;
+  camera: string;
+  contrast: 'high' | 'soft';
+  renderingStyle: string;
+  shapeLanguage: string;
+  promptModifiers: string;
+  negativePromptModifiers: string;
+}
+
 /** A first-class Creator Template. */
 export interface CreatorTemplate {
   id: string;
@@ -250,6 +277,28 @@ export interface CreatorTemplate {
   ownership: TemplateOwnership;
   tags: string[];
   metadata: Record<string, unknown>;
+  /**
+   * CREATOR-123 — canonical DESIGN INTELLIGENCE, migrated from the
+   * `marketingSample`/`blueprint_id` facade so that every selectable design
+   * (curated SYSTEM, AI, user) carries it on ONE model. All optional + additive:
+   * the runtime still reads `blueprint_id` today and only consults these once the
+   * read-switch lands (a separate, gated phase), so existing behavior is
+   * byte-identical. Populated for curated SYSTEM templates by the seeder.
+   */
+  /** Visual category (`marketingSample.designSystem` / blueprint `visualCategory`). */
+  designFamily?: string;
+  /** Structured generation DNA (was `marketingSample.generationDNA`). */
+  generationDNA?: TemplateGenerationDNA;
+  /** Declared semantic block structure (was `semanticStructureForBlueprint`). */
+  semanticStructure?: SemanticBlock[];
+  /** Layout/columns/density/hero geometry (was `infographicCompositionForBlueprint`). */
+  composition?: InfographicComposition;
+  /** Regions held constant between sample and customer asset (was `lockedRegions`). */
+  lockedRegions?: string[];
+  /** Regions swapped for the customer's content (was `editableRegions`). */
+  editableRegions?: string[];
+  /** Immutable-vs-adaptable adaptation rules (was `generationDNA.adaptation`). */
+  adaptation?: { immutable: string[]; adaptable: string[] };
   /**
    * Optional per-template OVERRIDE of which Creator workflow stages this template
    * REQUIRES. The canonical resolver (`resolveStageRequirements`) layers this on

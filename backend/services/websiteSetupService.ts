@@ -1,6 +1,8 @@
 import { ownedDbTable } from '../db/writeOwner';
-import { createWebsite, getWebsites, type Website } from './websiteService';
+import { createWebsite, getWebsites, updateWebsite, type Website } from './websiteService';
 import { getWebsiteHealthSummary } from './integrationHealthService';
+import { saveDomainRecord } from './domainRecordService';
+import { normalizeDomain } from './domainCanonicalService';
 
 export type WebsiteSetupStep =
   | 'create_website'
@@ -65,7 +67,7 @@ export async function createWebsiteFromSetup(input: {
   canonicalUrl: string;
   cmsProvider?: string | null;
 }): Promise<{ website: Website; progress: Record<string, unknown> }> {
-  const website = await createWebsite({
+  let website = await createWebsite({
     companyId: input.companyId,
     createdBy: input.userId,
     name: input.name,
@@ -73,6 +75,27 @@ export async function createWebsiteFromSetup(input: {
     cmsProvider: input.cmsProvider ?? null,
     settings: { allow_unverified_ingestion: true },
   });
+
+  // Phase 17 Part 2 — auto-register the company_domains record + initialise its
+  // verification state so the tenant never needs to know company_domains exists.
+  // Reuses the canonical domain registrar; best-effort (never blocks creation).
+  try {
+    if (!website.domain_id) {
+      const host = normalizeDomain(new URL(website.canonical_url).hostname);
+      if (host) {
+        const rec = await saveDomainRecord({
+          company_id: input.companyId,
+          input_domain: host,
+          final_domain: host,
+          verification_status: 'unverified',
+          created_via: 'system',
+          is_primary: true,
+        });
+        if (rec.ok && rec.id) website = await updateWebsite(website.id, input.companyId, { domainId: rec.id });
+      }
+    }
+  } catch { /* best-effort — domain can be (re)registered later from the wizard */ }
+
   const progress = await markWebsiteSetupStep({
     companyId: input.companyId,
     websiteId: website.id,

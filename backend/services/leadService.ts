@@ -6,6 +6,8 @@ import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
 import { mergeConnectionConfig } from './integrationCredentialService';
+import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
+import { getLegacyLeads } from './leadIntelligence/legacyLeadCompat';
 
 export type FieldType = 'text' | 'email' | 'phone';
 
@@ -172,9 +174,17 @@ export async function createLead(companyId: string, input: CreateLeadInput): Pro
     .select('*')
     .single();
   if (error) throw new Error(error.message);
+  // Phase 3 — route this lead through the Canonical Lead Intelligence facade
+  // (website/forms/manual/webhook resolved from the row's source). Additive,
+  // fire-and-forget, fail-open: never changes capture behaviour or the response.
+  adoptLead('website', data as unknown as Record<string, unknown>);
   return data as Lead;
 }
 
+// Phase 6B — the legacy lead READ path now flows through the Canonical Lead
+// Intelligence Repository (legacyLeadCompat), which mirrors the exact query +
+// projects canonical → legacy. Byte-identical contract; one query (no duplication).
+// (Reads only; createLead and the other writers below are unchanged.)
 export async function getLeads(
   companyId: string,
   filters?: {
@@ -186,25 +196,7 @@ export async function getLeads(
     is_test?: boolean;
   },
 ): Promise<Lead[]> {
-  let q = ownedDbTable('leads')
-    .select('*')
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: false })
-    .limit(500);
-  if (filters?.form_id) q = q.eq('form_id', filters.form_id);
-  if (filters?.integration_id) q = q.eq('integration_id', filters.integration_id);
-  if (filters?.source) q = q.eq('source', filters.source);
-  if (filters?.since) q = q.gte('created_at', filters.since);
-  if (filters?.is_test !== undefined) q = q.eq('is_test', filters.is_test);
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
-  return (data || []) as Lead[];
-}
-
-export async function getLead(id: string, companyId: string): Promise<Lead | null> {
-  const { data, error } = await ownedDbTable('leads').select('*').eq('id', id).eq('company_id', companyId).single();
-  if (error) return null;
-  return data as Lead;
+  return (await getLegacyLeads(companyId, filters)) as unknown as Lead[];
 }
 
 export async function deleteLead(id: string, companyId: string): Promise<void> {

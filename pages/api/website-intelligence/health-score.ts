@@ -10,6 +10,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const websiteId = String(website_id);
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
-  const score = await computeWebsiteHealthScore({ companyId, websiteId });
-  return res.status(200).json({ score });
+  // BETA-012 (RULE 4): guard the throwing service call so a DB failure returns JSON, not a raw 500.
+  try {
+    const score = await computeWebsiteHealthScore({ companyId, websiteId });
+    return res.status(200).json({ score });
+  } catch (err: any) {
+    console.error('[website-intelligence/health-score] error:', err?.message);
+    return res.status(500).json({ error: 'Failed to compute website health score', code: 'HEALTH_SCORE_FAILED' });
+  }
 }

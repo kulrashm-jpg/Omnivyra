@@ -18,6 +18,7 @@ export type ActionType =
   | 'campaign_deleted'
   | 'post_scheduled'
   | 'post_published'
+  | 'post_publish_failed'
   | 'post_updated'
   | 'post_deleted'
   | 'content_edited'

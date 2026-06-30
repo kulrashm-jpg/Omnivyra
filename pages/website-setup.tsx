@@ -75,6 +75,7 @@ const PROVIDER_FIELDS: Record<ProviderId, Array<{ key: string; label: string; pa
 const WIZARD: Array<{ key: string; title: string; subtitle: string; contractStep: string | null }> = [
   { key: 'url', title: 'Your website', subtitle: 'Where should Omnivyra publish and track?', contractStep: 'create_website' },
   { key: 'platform', title: 'Confirm platform', subtitle: 'Tell us how your site is built so we show the right steps.', contractStep: 'select_cms' },
+  { key: 'verify', title: 'Verify your domain', subtitle: 'Prove you own the domain to unlock verified attribution. Optional — capture still works while pending.', contractStep: 'verify_domain' },
   { key: 'connect', title: 'Connect it', subtitle: 'Enter the credentials for your platform.', contractStep: null },
   { key: 'validate', title: 'Check publishing', subtitle: 'We verify we can actually publish before you rely on it.', contractStep: 'connect_cms' },
   { key: 'analytics', title: 'Connect Google Analytics (GA4)', subtitle: 'Optional — lets us show per-blog views and traffic sources.', contractStep: null },
@@ -114,7 +115,22 @@ export default function WebsiteSetupPage() {
   const [error, setError] = useState('');
   const [showDiag, setShowDiag] = useState(false);
 
+  // Phase 17 — domain verification, WordPress self-service token, activation readiness.
+  const [domainStatus, setDomainStatus] = useState<any>(null);
+  const [domainToken, setDomainToken] = useState('');
+  const [domainBusy, setDomainBusy] = useState(false);
+  const [domainMsg, setDomainMsg] = useState('');
+  const [wpToken, setWpToken] = useState<{ token: string; expiresAt: string } | null>(null);
+  const [readiness, setReadiness] = useState<any>(null);
+  const [settingsForm, setSettingsForm] = useState<{ allowUnverified: boolean; allowedDomains: string } | null>(null);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsMsg, setSettingsMsg] = useState('');
+
   const completed = useMemo(() => new Set<string>(progress?.completed_steps ?? []), [progress]);
+  const domainHost = useMemo(() => {
+    try { return canonicalUrl ? new URL(canonicalUrl.startsWith('http') ? canonicalUrl : `https://${canonicalUrl}`).hostname : ''; } catch { return ''; }
+  }, [canonicalUrl]);
+  const copy = (text: string) => { navigator.clipboard?.writeText(text).catch(() => undefined); };
 
   const load = useCallback(async () => {
     if (!companyId) return;
@@ -164,7 +180,101 @@ export default function WebsiteSetupPage() {
     if (res.ok) setProgress(data.progress);
   }
 
+  // ── Phase 17 reused-API handlers (no backend changes) ──
+  const loadDomainStatus = useCallback(async () => {
+    if (!companyId) return;
+    setDomainMsg('');
+    try {
+      const res = await fetch(`/api/domain/verification-status?company_id=${encodeURIComponent(companyId)}`, { credentials: 'include' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setDomainStatus(data);
+      else { setDomainStatus(null); setDomainMsg(data.error === 'DOMAIN_NOT_FOUND' ? 'No domain record yet for this company.' : (data.details || data.error || 'Could not load verification status.')); }
+    } catch { setDomainMsg('Could not load verification status.'); }
+  }, [companyId]);
+
+  async function regenDomainToken() {
+    setDomainBusy(true); setDomainMsg('');
+    try {
+      const res = await fetch('/api/domain/regenerate-token', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(domainStatus?.final_domain ? { domain: domainStatus.final_domain } : {}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.token) { setDomainToken(data.token); await loadDomainStatus(); }
+      else setDomainMsg(data.details || data.error || 'Could not generate a verification token.');
+    } finally { setDomainBusy(false); }
+  }
+
+  async function verifyDomain() {
+    setDomainBusy(true); setDomainMsg('');
+    try {
+      const domain = domainStatus?.final_domain || domainHost;
+      const res = await fetch('/api/domain/verify', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.status === 'verified') {
+        await loadDomainStatus();
+        if (!completed.has('verify_domain')) await markStep('verify_domain', { method: data.method });
+      } else {
+        setDomainMsg(data.details || data.code || 'Not verified yet — add the record below, then refresh.');
+      }
+    } finally { setDomainBusy(false); }
+  }
+
+  async function genWpToken() {
+    if (!companyId) return;
+    setDomainBusy(true);
+    try {
+      const res = await fetch('/api/wordpress-plugin/setup-session', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, website_id: website?.id ?? null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.setupToken) setWpToken({ token: data.setupToken, expiresAt: data.expiresAt });
+      else setError(data.error || 'Could not generate a WordPress setup token.');
+    } finally { setDomainBusy(false); }
+  }
+
+  async function saveSettings() {
+    if (!website?.id || !companyId || !settingsForm) return;
+    setSettingsBusy(true); setSettingsMsg('');
+    try {
+      const allowed_tracking_domains = settingsForm.allowedDomains.split(',').map((s) => s.trim()).filter(Boolean);
+      const res = await fetch(`/api/websites/${website.id}?company_id=${encodeURIComponent(companyId)}`, {
+        method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: { allow_unverified_ingestion: settingsForm.allowUnverified, allowed_tracking_domains } }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.website) { setWebsite(data.website); setSettingsMsg('Saved.'); }
+      else setSettingsMsg(data.error || 'Could not save settings.');
+    } finally { setSettingsBusy(false); }
+  }
+
+  const loadReadiness = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      const [r, i] = await Promise.all([
+        fetch(`/api/activation/readiness?company_id=${encodeURIComponent(companyId)}`, { credentials: 'include' }).then((x) => (x.ok ? x.json() : null)).catch(() => null),
+        fetch(`/api/integrations?company_id=${encodeURIComponent(companyId)}`, { credentials: 'include' }).then((x) => (x.ok ? x.json() : null)).catch(() => null),
+      ]);
+      setReadiness({ checks: r?.checks ?? [], activated: !!r?.activated, hasWebhook: ((i?.integrations) || []).some((x: any) => x.type === 'lead_webhook') });
+    } catch { /* review still renders */ }
+  }, [companyId]);
+
   const step = WIZARD[stepIndex];
+
+  useEffect(() => { if (step.key === 'verify') void loadDomainStatus(); }, [step.key, loadDomainStatus]);
+  useEffect(() => { if (step.key === 'review') { void loadReadiness(); void loadDomainStatus(); } }, [step.key, loadReadiness, loadDomainStatus]);
+  useEffect(() => {
+    if (website && settingsForm === null) {
+      setSettingsForm({
+        allowUnverified: website.settings?.allow_unverified_ingestion !== false,
+        allowedDomains: Array.isArray(website.settings?.allowed_tracking_domains) ? website.settings.allowed_tracking_domains.join(', ') : '',
+      });
+    }
+  }, [website, settingsForm]);
 
   const goNext = () => setStepIndex((i) => Math.min(i + 1, WIZARD.length - 1));
   // Going back to edit invalidates any stale validation result so Step 4
@@ -214,7 +324,7 @@ export default function WebsiteSetupPage() {
     setError('');
     setBusy(true);
     try {
-      if (!completed.has('verify_domain')) await markStep('verify_domain', { verification: 'linked_to_domain_record' });
+      // verify_domain is now owned by the dedicated "Verify your domain" step.
       await markStep('select_cms', { provider });
       goNext();
     } finally {
@@ -406,6 +516,46 @@ export default function WebsiteSetupPage() {
               </div>
             )}
 
+            {step.key === 'verify' && (() => {
+              const st = domainStatus?.verification_status as string | undefined;
+              const verified = st === 'verified' || st === 'admin_override';
+              return (
+                <div className="space-y-3 text-sm text-gray-700">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>Domain:</span>
+                    <code className="rounded bg-gray-100 px-1.5 py-0.5">{domainStatus?.final_domain || domainHost || '—'}</code>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${verified ? 'bg-emerald-100 text-emerald-700' : st === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
+                      {verified ? 'Verified' : (st || 'unverified')}
+                    </span>
+                  </div>
+                  {domainMsg && <p className="text-xs text-amber-700">{domainMsg}</p>}
+                  {verified ? (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-800">
+                      Domain verified{domainStatus?.verification_method ? ` via ${domainStatus.verification_method}` : ''}. Secure attribution is enabled.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={verifyDomain} disabled={domainBusy} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{domainBusy ? 'Checking…' : 'Verify now'}</button>
+                        <button onClick={() => void loadDomainStatus()} disabled={domainBusy} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 disabled:opacity-50">Refresh status</button>
+                        <button onClick={regenDomainToken} disabled={domainBusy} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 disabled:opacity-50">{domainStatus?.token_issued ? 'Regenerate token' : 'Generate token'}</button>
+                      </div>
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs">
+                        <p className="font-medium text-gray-800">Add ONE of these, then click “Verify now”:</p>
+                        <p className="mt-2 font-semibold">DNS TXT record</p>
+                        <pre className="mt-1 overflow-x-auto rounded bg-white p-2">{`omnivira-verification=${domainToken || '<generate a token above>'}`}</pre>
+                        {domainToken && <button onClick={() => copy(`omnivira-verification=${domainToken}`)} className="mt-1 text-indigo-600 underline">Copy DNS value</button>}
+                        <p className="mt-3 font-semibold">— or — Hosted file</p>
+                        <p className="mt-1">Serve the token at <code className="rounded bg-white px-1">{domainStatus?.instructions?.http || '/.well-known/omnivira.txt'}</code></p>
+                        {domainToken && <button onClick={() => copy(domainToken)} className="mt-1 text-indigo-600 underline">Copy token</button>}
+                      </div>
+                    </>
+                  )}
+                  <p className="text-xs text-gray-500">Verification is optional to continue — leads are captured in compatibility mode until the domain is verified.</p>
+                </div>
+              );
+            })()}
+
             {step.key === 'connect' && provider && (
               <div className="space-y-3">
                 {PROVIDER_FIELDS[provider].map((f) => (
@@ -529,11 +679,51 @@ export default function WebsiteSetupPage() {
                 </p>
                 <pre className="overflow-x-auto rounded-lg bg-gray-950 p-3 text-[11px] leading-relaxed text-emerald-300">{trackerSnippet}</pre>
                 <button
-                  onClick={() => navigator.clipboard?.writeText(trackerSnippet).catch(() => undefined)}
+                  onClick={() => copy(trackerSnippet)}
                   className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700"
                 >
                   Copy snippet
                 </button>
+
+                {provider === 'wordpress' && (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs">
+                    <p className="font-medium text-gray-800">Prefer the WordPress plugin?</p>
+                    <p className="mt-1 text-gray-600">Generate a one-time setup token yourself and paste it into the OmniVyra WordPress plugin — no code editing needed.</p>
+                    <button onClick={genWpToken} disabled={domainBusy} className="mt-2 rounded-lg border border-gray-300 px-3 py-1.5 font-medium text-gray-700 disabled:opacity-50">{domainBusy ? 'Generating…' : 'Generate setup token'}</button>
+                    {wpToken && (
+                      <div className="mt-2 space-y-1">
+                        <pre className="overflow-x-auto rounded bg-white p-2">{wpToken.token}</pre>
+                        <div className="flex flex-wrap gap-3">
+                          <button onClick={() => copy(wpToken.token)} className="text-indigo-600 underline">Copy token</button>
+                          <span className="text-gray-500">Expires {new Date(wpToken.expiresAt).toLocaleString()}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {settingsForm && (
+                  <div className="rounded-lg border border-gray-200 p-3 text-xs text-gray-600">
+                    <p className="font-medium text-gray-800">Tracking settings</p>
+                    <label className="mt-2 flex items-center gap-2">
+                      <input type="checkbox" checked={settingsForm.allowUnverified} onChange={(e) => setSettingsForm((s) => s && { ...s, allowUnverified: e.target.checked })} />
+                      <span>Accept traffic before domain verification (compatibility mode)</span>
+                    </label>
+                    <label className="mt-3 block font-medium text-gray-700">
+                      Allowed tracking domains <span className="font-normal text-gray-400">(comma-separated; blank = your website domain)</span>
+                      <input
+                        value={settingsForm.allowedDomains}
+                        onChange={(e) => setSettingsForm((s) => s && { ...s, allowedDomains: e.target.value })}
+                        placeholder="example.com, blog.example.com"
+                        className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <div className="mt-2 flex items-center gap-3">
+                      <button onClick={saveSettings} disabled={settingsBusy} className="rounded-lg border border-gray-300 px-3 py-1.5 font-medium text-gray-700 disabled:opacity-50">{settingsBusy ? 'Saving…' : 'Save settings'}</button>
+                      {settingsMsg && <span className={settingsMsg === 'Saved.' ? 'text-emerald-600' : 'text-amber-700'}>{settingsMsg}</span>}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -570,6 +760,33 @@ export default function WebsiteSetupPage() {
 
             {step.key === 'review' && (
               <div className="space-y-3">
+                {(() => {
+                  const checkBy = (id: string) => !!readiness?.checks?.find((c: any) => c.id === id)?.done;
+                  const st = domainStatus?.verification_status as string | undefined;
+                  const leadsReady = checkBy('leads');
+                  const rows: Array<{ label: string; ok: boolean; note?: string }> = [
+                    { label: 'Domain Verified', ok: st === 'verified' || st === 'admin_override' || completed.has('verify_domain') },
+                    { label: 'Tracking Installed', ok: completed.has('install_tracking') },
+                    { label: 'Forms Ready', ok: completed.has('connect_forms') || leadsReady },
+                    { label: 'Lead Capture Ready', ok: leadsReady },
+                    { label: 'Webhook Ready', ok: !!readiness?.hasWebhook },
+                    { label: 'Repository Connected', ok: leadsReady, note: 'Receives leads once a source is live' },
+                    { label: 'Lead Intelligence Connected', ok: leadsReady, note: 'Leads flow into the workspace automatically' },
+                  ];
+                  return (
+                    <div className="rounded-lg border border-gray-200 p-3">
+                      <p className="text-sm font-semibold text-gray-900">Activation checklist</p>
+                      <ul className="mt-2 space-y-1.5 text-sm">
+                        {rows.map((r) => (
+                          <li key={r.label} className="flex items-center justify-between gap-3">
+                            <span className="text-gray-700">{r.label}{r.note && <span className="ml-1 text-xs text-gray-400">· {r.note}</span>}</span>
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${r.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{r.ok ? 'Ready' : 'Pending'}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })()}
                 <ReadinessSummary beta={beta} validation={validation} provider={provider} />
                 <p className="text-xs text-gray-500">Activating finishes onboarding. You can revisit any step later from Integrations.</p>
               </div>
@@ -630,6 +847,14 @@ export default function WebsiteSetupPage() {
                   disabled={!validation?.success}
                   title={validation?.success ? '' : 'Run a successful check to continue'}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  Continue
+                </button>
+              ) : step.key === 'verify' ? (
+                <button
+                  type="button"
+                  onClick={goNext}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
                 >
                   Continue
                 </button>

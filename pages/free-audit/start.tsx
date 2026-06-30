@@ -5,6 +5,8 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
 import { trackWebsiteEvent } from '../../lib/websiteAnalytics';
+import { safeFetchJson } from '../../lib/utils/safeFetchJson';
+import { captureAttribution } from '../../lib/website/attributionCapture';
 
 const GOALS = ['Generate leads', 'Drive sales', 'Build awareness', 'Book demos', 'Other'];
 const TRAFFIC_SOURCES = ['Organic search', 'Paid ads', 'Social media', 'Email', 'Referral', 'Direct'];
@@ -21,6 +23,7 @@ export default function FreeAuditStart() {
   const [trafficSource, setTrafficSource] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [consent, setConsent] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   useEffect(() => {
@@ -40,13 +43,38 @@ export default function FreeAuditStart() {
 
   const handleStep3Submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!email.trim() || !consent) return;
     trackWebsiteEvent('lead_created', {
       lead_source: 'free_audit',
       lead_surface: '/free-audit/start',
     });
     setIsAnalyzing(true);
-    // Simulate analysis delay
+
+    // Phase 9 — route the audit lead through the CANONICAL pipeline (no parallel
+    // persistence, no duplicated form). Fail-open so the report always renders.
+    let company = '';
+    try { company = url ? new URL(url.startsWith('http') ? url : `https://${url}`).hostname : ''; } catch { company = ''; }
+    const message = `Free audit request. URL: ${url || '—'}. Goal: ${primaryGoal || '—'}. Product: ${productType || '—'}. Price: ${priceRange || '—'}. Audience: ${targetAudience || '—'}. Traffic: ${trafficSource || '—'}.`;
+    try {
+      await safeFetchJson('/api/website/lead-capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          intent: 'free_audit',
+          email,
+          phone,
+          company,
+          message,
+          primaryInterest: 'Website audit',
+          consent,
+          ...captureAttribution(),
+        }),
+      });
+    } catch {
+      // best-effort — never block the audit report
+    }
+
+    // Simulate analysis delay (existing UX preserved)
     await new Promise((r) => setTimeout(r, 2500));
     router.push({
       pathname: '/free-audit/report',
@@ -242,6 +270,16 @@ export default function FreeAuditStart() {
                     placeholder="+1 (555) 000-0000"
                     className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 focus:border-[#0B5ED7] focus:outline-none focus:ring-2 focus:ring-[#0B5ED7]/20"
                   />
+                  <label className="mt-6 flex items-start gap-2 text-sm text-gray-600">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={consent}
+                      onChange={(e) => setConsent(e.target.checked)}
+                      required
+                    />
+                    <span>I agree to be contacted by Omnivyra about my audit and accept the privacy policy. <span className="text-red-500">*</span></span>
+                  </label>
                   <div className="mt-6 flex gap-3">
                     <button
                       type="button"

@@ -427,8 +427,8 @@ export const DEFAULT_INFOGRAPHIC_STYLE: InfographicStyleSchema = {
     statsConcept: {
       iconDiscRatio: 0.08, iconInset: 36, glyphSizeRatio: 0.5,
       contentLeftInset: 28, contentRightPad: 28, contentRightPadWithRail: 20,
-      railWidthRatio: 0.24,
-      titleSize: 20, titleIconGap: 18, titleZoneIconGap: 36, titleZoneTailInset: 36, titleMaxLines: 2, titleLineHeightMul: 1.2,
+      railWidthRatio: 0.20,
+      titleSize: 20, titleIconGap: 14, titleZoneIconGap: 16, titleZoneTailInset: 16, titleMaxLines: 2, titleLineHeightMul: 1.2,
       charWidthFactor: 0.58,
       headerBottomPad: 12, titleBlockPad: 4, leadGap: 18,
       leadSize: 14, leadMaxLines: 3, leadLineHeightMul: 1.45,

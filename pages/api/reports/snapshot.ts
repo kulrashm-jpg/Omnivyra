@@ -2,6 +2,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { composeSnapshotReport } from '../../../backend/services/snapshotReportService';
+import { getWebsiteReportSafe } from '../../../backend/services/websiteIntelligence/websiteIntelligenceRepository';
+import { getLeadReportSafe } from '../../../backend/services/leadIntelligence/leadIntelligenceSnapshotAdapter';
+import { getPluginsForReport, composePluginSnapshotMemoized, createCompositionContext } from '../../../backend/services/platformIntelligence/registry';
+import '../../../backend/services/platformIntelligence/plugins'; // auto-register every plugin
 
 type SnapshotReportApiResponse = {
   report_type?: 'snapshot';
@@ -31,6 +35,10 @@ type SnapshotReportApiResponse = {
     opportunities: unknown[];
     actions: unknown[];
   }>;
+  // Phase 18 — additive intelligence projections (fail-open; typed from their source fns).
+  website_intelligence?: Awaited<ReturnType<typeof getWebsiteReportSafe>>;
+  lead_intelligence?: Awaited<ReturnType<typeof getLeadReportSafe>>;
+  platform_intelligence?: Record<string, unknown>;
   error?: string;
   code?: string;
 };
@@ -92,7 +100,16 @@ export default async function handler(
     }
 
     const snapshotReport = await composeSnapshotReport(companyId);
-    return res.status(200).json(snapshotReport);
+    // Phase 18 — additively project the canonical Website Intelligence report (fail-open,
+    // no existing field touched, no report-specific calculation).
+    const website_intelligence = await getWebsiteReportSafe(companyId);
+    const lead_intelligence = await getLeadReportSafe(companyId);
+    // Phase 21E — auto-discovery: every registered plugin for this report, zero per-plugin code.
+    const ctx = createCompositionContext(); const nowMs = Date.now(); // request-scoped: each plugin composes once
+    const platform_intelligence = Object.fromEntries(
+      await Promise.all(getPluginsForReport('snapshot').map(async (p) => [p.id, await composePluginSnapshotMemoized(p, companyId, nowMs, ctx).catch(() => null)] as const)),
+    );
+    return res.status(200).json({ ...snapshotReport, website_intelligence, lead_intelligence, platform_intelligence });
   } catch (error) {
     console.error('[reports/snapshot] error:', error);
     return res.status(500).json({

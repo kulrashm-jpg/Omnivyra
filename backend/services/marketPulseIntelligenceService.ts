@@ -5,6 +5,7 @@ import {
   type CompanyProfileLike,
 } from './companyContextIntelligenceService';
 import { calculateContextQualityMetadata, type CompanyContextQualityMetadata } from './companyContextEnrichmentService';
+import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 
 export type MarketPulseSignalCategory =
   | 'regulation'
@@ -437,6 +438,9 @@ export async function persistMarketPulseSignalForCompany(params: {
     throw new Error(insertSignal.error?.message || 'Failed to persist MarketPulse signal');
   }
   const signal = insertSignal.data as MarketPulseSignal & { id: string };
+  // Phase 3 — route every persisted MarketPulse buying signal through the canonical
+  // facade (additive; existing MarketPulse behaviour is unchanged). Fail-open.
+  adoptLead('marketpulse', { ...(signal as unknown as Record<string, unknown>), company_id: params.companyId });
 
   const existingImpacts = await ownedDbTable('marketpulse_signal_impacts').select('id').eq('signal_id', signal.id).limit(1);
   if (!existingImpacts.data?.length && params.impacts.length > 0) {

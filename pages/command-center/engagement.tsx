@@ -82,26 +82,8 @@ const ENGAGEMENT_CARDS: EngagementCard[] = [
     borderColor: 'border-purple-200',
     ctaColor: 'bg-purple-600 hover:bg-purple-700',
   },
-  {
-    id: 'intelligence',
-    icon: 'I',
-    category: 'Insights',
-    effortBand: 'Strategic View',
-    outcome: 'AI-led insights for better marketing decisions and action',
-    title: 'Intelligence',
-    description: 'Access deeper marketing intelligence, strategic gaps, and AI-led recommendations that support ongoing decision-making.',
-    bullets: [
-      'Best for strategic review and visibility',
-      'Highlights gaps and growth opportunities',
-      'Supports stronger planning decisions',
-    ],
-    cta: 'Open Intelligence',
-    route: '/intelligence',
-    accentFrom: 'from-indigo-50',
-    accentTo: 'to-slate-50',
-    borderColor: 'border-indigo-200',
-    ctaColor: 'bg-indigo-600 hover:bg-indigo-700',
-  },
+  // BETA-008 (RULE 8): the "Intelligence" hub card (→ /intelligence) was removed for Beta —
+  // that page is an admin-gated shell. Market Pulse + Active Leads cover the real surfaces.
 ];
 
 export default function EngagementSubPage() {

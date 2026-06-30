@@ -98,3 +98,7 @@ memurai-log.txt
 # runtime-simulation debug artifacts (not shipped)
 runtime-*.png
 runtime-report.json
+
+# BETA-002: full materialized store is a regenerable build artifact (not runtime-imported);
+# the lean gallery.json IS committed. Regenerate via scripts/bootstrap-system-templates.ts
+content/creator-templates/system-templates.json

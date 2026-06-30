@@ -21,6 +21,7 @@ export default function WebsiteIntelligencePage() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
   const query = useMemo(() => {
     const params = new URLSearchParams();
@@ -62,6 +63,35 @@ export default function WebsiteIntelligencePage() {
       body: JSON.stringify({ company_id: companyId, website_id: websiteId || undefined }),
     });
     await loadDashboard();
+  }
+
+  // BETA-005 — run the actual website crawl so the intelligence engines + reports have
+  // live page data. This is the customer-facing analysis trigger (was background-only).
+  async function analyzeWebsite() {
+    if (!companyId || !websiteId) {
+      setError('Select a website (company_id + website_id in the URL) to run analysis.');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    setNotice('Analyzing your website — crawling pages and scoring content, technical, accessibility and brand…');
+    try {
+      const res = await fetch(`/api/websites/${encodeURIComponent(websiteId)}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId }),
+      });
+      const json = await res.json();
+      // 202 = partial (large site, still useful); both surface a message (RULE 7).
+      if (!res.ok && res.status !== 202) throw new Error(json.error || 'Analysis failed');
+      setNotice(json.message || `Analysis ${json.status}.`);
+      await loadDashboard();
+    } catch (err) {
+      setNotice('');
+      setError(err instanceof Error ? err.message : 'Analysis failed');
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function createSetupToken() {
@@ -116,12 +146,14 @@ export default function WebsiteIntelligencePage() {
           <input value={websiteId} onChange={(event) => setWebsiteId(event.target.value)} placeholder="optional website uuid" />
         </label>
         <button onClick={loadDashboard} disabled={loading}>{loading ? 'Loading...' : 'Load'}</button>
+        <button onClick={analyzeWebsite} disabled={!companyId || !websiteId || loading}>Analyze website</button>
         <button onClick={generateSignals} disabled={!companyId || loading}>Generate signals</button>
         <button onClick={createSetupToken} disabled={!companyId || loading}>Setup token</button>
         <button onClick={runQueueMetrics} disabled={!companyId || loading}>Refresh ops</button>
       </section>
 
       {error && <div className="wi-error">{error}</div>}
+      {notice && <div className="wi-muted">{notice}</div>}
 
       {!dashboard && !loading && (
         <section className="wi-empty">

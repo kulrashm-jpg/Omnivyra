@@ -51,6 +51,21 @@ const nextConfig = {
   ],
   headers: async () => [
     {
+      // BETA-011 (RULE 6): baseline production security headers applied to every route.
+      // HSTS is ignored by browsers over http (so it's a no-op in local dev) and enforces
+      // HTTPS in prod. Framing headers (X-Frame-Options / CSP frame-ancestors) are
+      // intentionally NOT set globally — the lead-capture form is embedded cross-origin on
+      // customer sites and a blanket frame policy would break it. A tuned CSP is a
+      // documented production prerequisite, not set here to avoid breaking inline assets.
+      source: '/:path*',
+      headers: [
+        { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains' },
+        { key: 'X-Content-Type-Options', value: 'nosniff' },
+        { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        { key: 'X-DNS-Prefetch-Control', value: 'on' },
+      ],
+    },
+    {
       source: '/content-creation',
       headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
     },

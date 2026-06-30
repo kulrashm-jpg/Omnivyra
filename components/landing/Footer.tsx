@@ -19,6 +19,15 @@ const COLUMNS = [
     ],
   },
   {
+    heading: 'Talk to us',
+    links: [
+      { label: 'Request a Demo', href: '/request-demo' },
+      { label: 'Contact Sales', href: '/contact-sales' },
+      { label: 'Book a Consultation', href: '/book-consultation' },
+      { label: 'Talk to an Expert', href: '/talk-to-expert' },
+    ],
+  },
+  {
     heading: 'Legal',
     links: [
       { label: 'Privacy Policy', href: '/privacy' },

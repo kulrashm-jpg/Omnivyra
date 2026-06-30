@@ -11,7 +11,6 @@ import {
   Receipt,
   Rocket,
   Sparkles,
-  TestTube2,
   Users,
   Wallet,
 } from 'lucide-react';
@@ -58,7 +57,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
     children: [
       {
         label: 'Writer Content',
-        description: 'Open the writer lane with 9 text-first content types.',
+        description: 'Open the writer lane with 5 text-first content types.',
         href: '/command-center/writer-content',
         icon: PenTool,
       },
@@ -112,12 +111,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
         href: '/command-center/intelligent-mix-strategy',
         icon: Rocket,
       },
-      {
-        label: 'Variant Experience',
-        description: 'Plan V1 / V2 / V3, view winners, manage experiments and operator controls.',
-        href: '/command-center/variant-experience',
-        icon: TestTube2,
-      },
+      // BETA-008 (RULE 8): "Variant Experience" hidden for Beta — operator/dev-only tooling.
     ],
   },
   {
@@ -133,12 +127,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
         href: '/command-center/engagement',
         icon: MessageSquare,
       },
-      {
-        label: 'Intelligence',
-        description: 'Review the broader operating intelligence page.',
-        href: '/intelligence',
-        icon: Lightbulb,
-      },
+      // BETA-008 (RULE 8): "Intelligence" (→ /intelligence) hidden for Beta — admin-gated shell.
       {
         label: 'Market Pulse',
         description: 'Open the executive MarketPulse intelligence room.',

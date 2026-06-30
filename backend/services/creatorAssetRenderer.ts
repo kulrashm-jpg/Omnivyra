@@ -39,6 +39,7 @@ import { persistCreatorValidationManifest } from './creatorRenderPersistence';
 import { resolvePlatformGeometryProfile, platformTextBoxY } from './creatorPlatformGeometry';
 import { getCreatorRendererRegistration } from './creatorRendererRegistry';
 import { composeInfographicCopy } from './creator/infographicCopyComposer';
+import { roleMaxCardHeight } from './creator/infographicSemanticContract';
 import {
   infographicChartsEnabled,
   infographicTablesEnabled,
@@ -57,6 +58,10 @@ import {
 import {
   resolveTemplate,
   infographicStyleForBlueprint,
+  infographicLayoutForBlueprint,
+  infographicCompositionForBlueprint,
+  semanticStructureForBlueprint,
+  semanticSlotCountForBlueprint,
   DEFAULT_IMAGE_STYLE,
   DEFAULT_INFOGRAPHIC_STYLE,
   type InfographicStyleSchema,
@@ -64,7 +69,9 @@ import {
   type ImageStyleSchema,
   type CarouselStyleSchema,
   type PresetVariant,
+  type CreatorTemplate,
 } from '../../lib/creator-templates';
+import { registerCuratedSystemTemplates } from '../../lib/creator-outcomes/curatedSystemTemplatesFull';
 import { ensureRenderFonts } from './creatorRenderFonts';
 
 // FONT PARITY (PHASE 14J): configure fontconfig to discover the vendored fonts
@@ -82,6 +89,9 @@ type RenderedMediaBundle = {
   url?: string;
   files?: string[];
   metadata?: Record<string, unknown>;
+  /** CREATOR-110: the raw PNG buffer, returned in previewBufferOnly mode so the Sample
+   *  Gallery preview is produced by the SAME production renderer (no storage upload). */
+  buffer?: Buffer;
 };
 
 type CreatorReviewPreviewInput = {
@@ -114,6 +124,10 @@ type RenderOptions = {
   campaignId?: string | null;
   userId?: string | null;
   companyId?: string | null;
+  /** CREATOR-110: skip the Storage upload + return the raw PNG buffer instead. Used by
+   *  the Sample Gallery preview population so the preview is a REAL output of this
+   *  production renderer — one renderer for preview + customer generation. */
+  previewBufferOnly?: boolean;
 };
 
 type OverlayQualityReport = {
@@ -296,6 +310,23 @@ function blueprintIdForRender(metadata: Record<string, unknown>): string | null 
   const raw = metadata.blueprint_id ?? card.blueprint_id;
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
+/**
+ * CREATOR-127 — a REGISTERED curated SYSTEM template carrying its own design
+ * intelligence (composition + semantic structure, materialized from the blueprint).
+ * When a `template_id` resolves to one, the renderer reads layout / composition /
+ * semantic / style straight from the TEMPLATE — no blueprint lookup. Returns null
+ * otherwise, so the caller falls back to the existing blueprint path unchanged.
+ * Registration is lazy + idempotent and only triggers when a `template_id` is present,
+ * so current blueprint-only traffic is completely unaffected (no curated id in flight).
+ */
+function curatedDesignTemplate(metadata: Record<string, unknown>): CreatorTemplate | null {
+  const tid = templateIdForRender(metadata);
+  if (!tid) return null;
+  registerCuratedSystemTemplates();
+  const t = resolveTemplate(tid, { family: 'infographic' }).template;
+  return t && t.composition && Array.isArray(t.semanticStructure) && t.semanticStructure.length > 0 ? t : null;
+}
+
 function resolveInfographicRenderStyle(metadata: Record<string, unknown>): InfographicStyleSchema {
   // A system template_id (e.g. sys-infographic-statistics) wins — explicit choice.
   const tid = templateIdForRender(metadata);
@@ -4038,6 +4069,27 @@ type InfographicSection = {
   icon: string;
 };
 
+/**
+ * CREATOR-114 — canonical content planner. The SAMPLE's semantic structure decides WHICH
+ * and HOW MANY slots exist (3 KPIs for stats, 4 steps for process, 2 sides for
+ * comparison…). The brief fills the slots in order; missing slots degrade to a neutral
+ * placeholder (never a different block type). The renderer renders EXACTLY these slots —
+ * it never invents extra generic sections. The LLM (composeInfographicCopy) enriches the
+ * slot text downstream; it does not change the count or the structure.
+ */
+function planInfographicContent(briefSections: InfographicSection[], slotCount: number, topic: string): InfographicSection[] {
+  const out: InfographicSection[] = [];
+  for (let i = 0; i < slotCount; i++) {
+    const src = briefSections[i];
+    out.push({
+      title: (src?.title || '').trim() || `${topic} — point ${i + 1}`,
+      body: src?.body || '',
+      icon: ['01', '02', '03', '04', '05', '06', '07', '08'][i] ?? String(i + 1).padStart(2, '0'),
+    });
+  }
+  return out;
+}
+
 function resolveInfographicSections(assetPayload: Record<string, unknown>, metadata: Record<string, unknown>): InfographicSection[] {
   const overlay = normalizeOverlayText({
     assetPayload,
@@ -4077,6 +4129,15 @@ function resolveInfographicSections(assetPayload: Record<string, unknown>, metad
 }
 
 function resolveInfographicLayout(metadata: Record<string, unknown>): string {
+  // CREATOR-127: a resolved curated TEMPLATE drives the layout directly (no blueprint).
+  const dt = curatedDesignTemplate(metadata);
+  if (dt?.renderingContract.infographicLayout) return dt.renderingContract.infographicLayout;
+  // CREATOR-106 (RULE 4): once a Marketing Sample is chosen, the SAMPLE determines the
+  // layout structure — different samples produce genuinely different layout engines,
+  // never the same generic grid. No fallback generator runs while a blueprint is set.
+  const bp = blueprintIdForRender(metadata);
+  if (bp) return infographicLayoutForBlueprint(bp);
+  // RULE 7: blueprint_id == null → existing generic behavior unchanged.
   const requested = String(metadata.infographic_layout || safeObject(metadata.creator_card).infographic_layout || '').trim().toLowerCase();
   return ['stats', 'comparison', 'process', 'framework', 'hierarchy', 'timeline'].includes(requested) ? requested : 'framework';
 }
@@ -4114,6 +4175,15 @@ function resolveInfographicEngine(input: {
   bottomMargin?: number;
   /** Per-layout engine geometry (gaps / minimums / offsets). Default == prior literals. */
   geometry?: InfographicEngineGeometry;
+  /** CREATOR-107: sample-composition geometry. When a blueprint is selected the grid
+   *  columns + spacing come from the SAMPLE, so same-engine samples still differ.
+   *  Both undefined (blueprint_id == null) → prior generic geometry, byte-identical. */
+  columnsOverride?: number;
+  gapScale?: number;
+  /** CREATOR-116: role-derived max card height. Cards are capped at this and the grid is
+   *  centered in the available area, so a concise role (a KPI) renders compact instead of
+   *  stretching to legacy paragraph height. undefined → fill the canvas (prior behavior). */
+  maxCardHeight?: number;
 }): {
   engineId: string;
   cardWidth: number;
@@ -4125,38 +4195,46 @@ function resolveInfographicEngine(input: {
   const bottomMargin = input.bottomMargin ?? 90;
   const sideMargin = input.sideMargin ?? 80;
   const geom = input.geometry ?? DEFAULT_INFOGRAPHIC_STYLE.geometry.engine;
+  const gs = typeof input.gapScale === 'number' && input.gapScale > 0 ? input.gapScale : 1; // CREATOR-107
   const availableH = input.height - headerH - bottomMargin;
   const availableW = input.width - sideMargin * 2;
+  // CREATOR-116: cap the filled card height at the role's preferred max and vertically
+  // center the grid (extra space becomes balanced margin, not stretched cards).
+  const capCenter = (rawCardH: number, rows: number, gap: number): { cardH: number; vOff: number } => {
+    const cardH = input.maxCardHeight && input.maxCardHeight > 0 ? Math.min(rawCardH, input.maxCardHeight) : rawCardH;
+    const vOff = Math.max(0, Math.floor((availableH - (rows * cardH + gap * Math.max(0, rows - 1))) / 2));
+    return { cardH, vOff };
+  };
 
   if (input.layout === 'timeline') {
     const g = geom.timeline;
     const rows = count;
-    const gap = g.gap;
-    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows));
+    const gap = g.gap * gs;
+    const { cardH, vOff } = capCenter(Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows)), rows, gap);
     return {
       engineId: 'infographic-timeline-engine-v2',
       cardWidth: availableW - g.railOffset,
       cardHeight: cardH,
-      position: (index) => ({ x: sideMargin + g.railOffset, y: headerH + index * (cardH + gap), iconZone: 'left' }),
+      position: (index) => ({ x: sideMargin + g.railOffset, y: headerH + vOff + index * (cardH + gap), iconZone: 'left' }),
     };
   }
   if (input.layout === 'process') {
     const g = geom.process;
     const rows = count;
-    const gap = g.gap; // bigger gap so the arrow connectors have room to breathe
-    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows));
+    const gap = g.gap * gs; // bigger gap so the arrow connectors have room to breathe
+    const { cardH, vOff } = capCenter(Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows)), rows, gap);
     return {
       engineId: 'infographic-process-engine-v2',
       cardWidth: availableW,
       cardHeight: cardH,
-      position: (index) => ({ x: sideMargin, y: headerH + index * (cardH + gap), iconZone: 'left' }),
+      position: (index) => ({ x: sideMargin, y: headerH + vOff + index * (cardH + gap), iconZone: 'left' }),
     };
   }
   if (input.layout === 'comparison') {
     const g = geom.comparison;
     const rows = Math.max(1, Math.ceil(count / 2));
-    const gap = g.gap;
-    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows));
+    const gap = g.gap * gs;
+    const { cardH, vOff } = capCenter(Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows)), rows, gap);
     const colW = Math.floor((availableW - g.columnGap) / 2);
     return {
       engineId: 'infographic-comparison-engine-v2',
@@ -4164,7 +4242,7 @@ function resolveInfographicEngine(input: {
       cardHeight: cardH,
       position: (index) => ({
         x: sideMargin + (index % 2) * (colW + g.columnGap),
-        y: headerH + Math.floor(index / 2) * (cardH + gap),
+        y: headerH + vOff + Math.floor(index / 2) * (cardH + gap),
         iconZone: 'top',
       }),
     };
@@ -4172,19 +4250,22 @@ function resolveInfographicEngine(input: {
   if (input.layout === 'stats') {
     const g = geom.stats;
     // 1-2 sections → single row; 3 → 3-col row; 4 → 2×2; 5-6 → 3×2.
-    const cols = count <= 2 ? count : count === 3 ? 3 : count === 4 ? 2 : 3;
+    // CREATOR-107: the sample's composition column count overrides the generic grid.
+    const cols = input.columnsOverride && count > 1
+      ? Math.max(1, Math.min(input.columnsOverride, count))
+      : (count <= 2 ? count : count === 3 ? 3 : count === 4 ? 2 : 3);
     const rows = Math.max(1, Math.ceil(count / cols));
-    const gapX = g.gapX;
-    const gapY = g.gapY;
+    const gapX = g.gapX * gs;
+    const gapY = g.gapY * gs;
     const colW = Math.floor((availableW - gapX * (cols - 1)) / cols);
-    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gapY * (rows - 1)) / rows));
+    const { cardH, vOff } = capCenter(Math.max(g.minCardHeight, Math.floor((availableH - gapY * (rows - 1)) / rows)), rows, gapY);
     return {
       engineId: 'infographic-stats-engine-v2',
       cardWidth: colW,
       cardHeight: cardH,
       position: (index) => ({
         x: sideMargin + (index % cols) * (colW + gapX),
-        y: headerH + Math.floor(index / cols) * (cardH + gapY),
+        y: headerH + vOff + Math.floor(index / cols) * (cardH + gapY),
         iconZone: 'center',
       }),
     };
@@ -4192,8 +4273,8 @@ function resolveInfographicEngine(input: {
   if (input.layout === 'hierarchy') {
     const g = geom.hierarchy;
     const rows = count;
-    const gap = g.gap;
-    const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows));
+    const gap = g.gap * gs;
+    const { cardH, vOff } = capCenter(Math.max(g.minCardHeight, Math.floor((availableH - gap * (rows - 1)) / rows)), rows, gap);
     return {
       engineId: 'infographic-hierarchy-engine-v2',
       cardWidth: availableW - g.widthInset,
@@ -4201,32 +4282,33 @@ function resolveInfographicEngine(input: {
       // Subtle right-indent per step communicates downward flow.
       position: (index) => ({
         x: sideMargin + Math.min(index, g.maxIndentSteps) * g.indentStep,
-        y: headerH + index * (cardH + gap),
+        y: headerH + vOff + index * (cardH + gap),
         iconZone: 'left',
       }),
     };
   }
-  // framework (default) — 2-column pillar grid filling the canvas.
+  // framework (default) — pillar grid filling the canvas.
   const g = geom.framework;
-  const cols = count === 1 ? 1 : 2;
+  // CREATOR-107: the sample's composition column count overrides the generic 2-col grid.
+  const cols = count === 1 ? 1 : (input.columnsOverride ? Math.max(1, Math.min(input.columnsOverride, count)) : 2);
   const rows = Math.max(1, Math.ceil(count / cols));
-  const gapX = g.gapX;
-  const gapY = g.gapY;
+  const gapX = g.gapX * gs;
+  const gapY = g.gapY * gs;
   const colW = Math.floor((availableW - gapX * (cols - 1)) / cols);
-  const cardH = Math.max(g.minCardHeight, Math.floor((availableH - gapY * (rows - 1)) / rows));
+  const { cardH, vOff } = capCenter(Math.max(g.minCardHeight, Math.floor((availableH - gapY * (rows - 1)) / rows)), rows, gapY);
   return {
     engineId: 'infographic-framework-engine-v2',
     cardWidth: colW,
     cardHeight: cardH,
     position: (index) => ({
       x: sideMargin + (index % cols) * (colW + gapX),
-      y: headerH + Math.floor(index / cols) * (cardH + gapY),
+      y: headerH + vOff + Math.floor(index / cols) * (cardH + gapY),
       iconZone: 'left',
     }),
   };
 }
 
-async function renderInfographicAsset(
+export async function renderInfographicAsset(
   assetPayload: Record<string, unknown>,
   options: RenderOptions,
 ): Promise<RenderedMediaBundle> {
@@ -4252,7 +4334,28 @@ async function renderInfographicAsset(
         platform,
         assetType: 'infographic',
       });
-  const rawSectionsPreFilter = resolveInfographicSections(assetPayload, metadata);
+  // CREATOR-106: the chosen Marketing Sample drives the infographic accent so the output
+  // visibly aligns with the picked template (technology→indigo, healthcare→green, …).
+  // `accent = brandKit.accentColor || …` downstream, so overriding it re-tints the
+  // stat chips, accent stripes, chart bars, and icon wells to the sample's colour.
+  const sampleAccent = typeof metadata.blueprint_color_primary === 'string' && /^#[0-9a-f]{6}$/i.test(metadata.blueprint_color_primary)
+    ? metadata.blueprint_color_primary
+    : null;
+  if (sampleAccent) (brandKit as { accentColor?: string }).accentColor = sampleAccent;
+  // CREATOR-114: when a sample is selected, the SAMPLE's semantic structure decides the
+  // slot count (3 KPIs / 4 steps / 2 columns …) — the content planner produces exactly
+  // that many. No blueprint → the generic section extractor runs unchanged (RULE 7).
+  // CREATOR-127: a resolved curated TEMPLATE provides the slot count from its own
+  // semantic structure; otherwise fall back to the blueprint's (RULE 7 generic path
+  // when neither is present).
+  const designTemplate = curatedDesignTemplate(metadata);
+  const semanticSlotBlueprint = blueprintIdForRender(metadata);
+  const semanticSlotCount = designTemplate
+    ? (designTemplate.semanticStructure!.find((b) => b.blockId !== 'hero')?.count ?? null)
+    : (semanticSlotBlueprint ? semanticSlotCountForBlueprint(semanticSlotBlueprint) : null);
+  const rawSectionsPreFilter = semanticSlotCount != null
+    ? planInfographicContent(resolveInfographicSections(assetPayload, metadata), semanticSlotCount, String(metadata.topic || 'Infographic'))
+    : resolveInfographicSections(assetPayload, metadata);
   // Operator parity with carousel: strip leaked LLM design directives
   // (e.g., "Use a modern font for the headline with a clean...") from
   // every section's title + body BEFORE auto-correction. The carousel
@@ -4263,7 +4366,16 @@ async function renderInfographicAsset(
     title: stripPromptDirectives(section.title) || section.title,
     body: stripPromptDirectives(section.body),
   }));
-  const layout = resolveInfographicLayout(metadata);
+  // CREATOR-108: ONE canonical composition per blueprint is the single source of layout
+  // + geometry. When a sample is selected the renderer reads layout/columns/density/hero
+  // from this composition; only when blueprint_id == null does it fall back to the
+  // generic layout resolver + engine inference (RULE 3/7 — generic path unchanged).
+  const infographicComposition = (() => {
+    if (designTemplate?.composition) return designTemplate.composition;
+    const bp = blueprintIdForRender(metadata);
+    return bp ? infographicCompositionForBlueprint(bp) : null;
+  })();
+  const layout = infographicComposition?.layout ?? resolveInfographicLayout(metadata);
   // autoCorrectVisualCopy ends in `.filter(Boolean)`, dropping empty blocks.
   // Correcting a FLAT [title, body, title, body, …] array therefore shifts
   // the title/body pairing the moment any body is empty — which is the
@@ -4308,7 +4420,7 @@ async function renderInfographicAsset(
     ? 'independent'
     : (composerCompanyContext ? 'company-context' : 'independent');
   const desiredCta = String(metadata.cta || safeObject(metadata.overlay_text).cta || '').trim();
-  const layoutForComposer = resolveInfographicLayout(metadata);
+  const layoutForComposer = infographicComposition?.layout ?? resolveInfographicLayout(metadata);
   const composedCopy = await composeInfographicCopy({
     topic: String(metadata.topic || 'Infographic'),
     layout: layoutForComposer,
@@ -4318,6 +4430,7 @@ async function renderInfographicAsset(
     mode: composerMode,
     companyContext: composerCompanyContext,
     companyId: options.companyId ?? undefined,
+    staticOnly: options.previewBufferOnly, // CREATOR-110: previews use static copy (no LLM)
   });
   // Rich-content merge. The composer now returns lead + bullets +
   // stat + example + take per section. The renderer (below) lays
@@ -4399,12 +4512,25 @@ async function renderInfographicAsset(
   // Default (no template) == prior hardcoded constants → byte-identical.
   const infographicStyle = resolveInfographicRenderStyle(metadata);
   const headerSubtitle = composerNarrative || String(metadata.summary || '').trim();
-  const headerH = headerSubtitle ? infographicStyle.spacing.headerHeightWithSubtitle : infographicStyle.spacing.headerHeight;
+  // CREATOR-107/108: the single canonical composition (computed above) drives the
+  // geometry — columns + density + hero come from the SAMPLE, so two samples on the same
+  // layout engine still differ. blueprint_id == null → composition null → generic (RULE 7).
+  const headerBase = headerSubtitle ? infographicStyle.spacing.headerHeightWithSubtitle : infographicStyle.spacing.headerHeight;
+  // CREATOR-116 (RULE 4): measure the headline so a long/wrapping title does not overlap
+  // the subtitle or the first card — add a line of headroom per wrapped headline line.
+  const headlineText = String(metadata.topic || 'Infographic');
+  const headlineLines = Math.max(1, Math.min(3, Math.ceil(headlineText.length / 26)));
+  const headerH = Math.round(headerBase * (infographicComposition?.heroScale ?? 1)) + (headlineLines - 1) * 76;
   const engine = resolveInfographicEngine({
     layout, width, height, sectionCount: sections.length, headerH,
     sideMargin: infographicStyle.spacing.sideMargin,
     bottomMargin: infographicStyle.spacing.bottomMargin,
     geometry: infographicStyle.geometry.engine,
+    columnsOverride: infographicComposition?.columns,
+    gapScale: infographicComposition?.densityScale,
+    // CREATOR-116: cap card height at the role's preferred max (KPI compact, comparison
+    // wide…) so concise roles don't stretch to paragraph height. Generic path unchanged.
+    maxCardHeight: infographicComposition ? roleMaxCardHeight(layout) : undefined,
   });
   const geometry = validateLayoutGeometry({
     width,
@@ -5514,6 +5640,9 @@ async function renderInfographicAsset(
     renderer_pipeline: 'dedicated_infographic_svg_v1',
     infographic_engine: engine.engineId,
     infographic_layout: layout,
+    // CREATOR-113: the sample's declared semantic block structure (roles per block),
+    // so every block's purpose is sample-driven and auditable (null = generic path).
+    infographic_semantic_structure: curatedDesignTemplate(metadata)?.semanticStructure ?? ((bp) => (bp ? semanticStructureForBlueprint(bp) : null))(blueprintIdForRender(metadata)),
     infographic_sections: sections,
     infographic_density: density,
     icon_zone_allocation: sections.map((section, index) => ({ icon: section.icon, section: index + 1, safeZone: engine.position(index).iconZone })),
@@ -5534,6 +5663,11 @@ async function renderInfographicAsset(
       exportCapabilities: ['preview', 'download', 'save_as_asset'],
     }),
   };
+  // CREATOR-110: preview population takes the raw buffer from THIS renderer (no upload),
+  // so the gallery preview is literally a production-renderer output.
+  if (options.previewBufferOnly) {
+    return { buffer: fileBuffer, metadata: { ...rendererMetadata, generated_by: 'infographicRenderer' } };
+  }
   const url = await uploadRenderedPng({
     fileBuffer,
     campaignId: options.campaignId,

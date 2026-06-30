@@ -33,6 +33,7 @@
  */
 
 import { runCompletionWithOperation } from '../aiGateway';
+import { promptSchemaFor, validateRoleResponse, staticRoleContent, type ContractResult } from './infographicSemanticContract';
 
 export type InfographicCopyMode = 'company-context' | 'independent';
 
@@ -88,6 +89,10 @@ export type InfographicCopyInput = {
   mode: InfographicCopyMode;
   companyContext?: InfographicCopyCompanyContext;
   companyId?: string | null;
+  /** CREATOR-110: skip the AI call and use the deterministic static builder. Used by
+   *  Sample Gallery preview population (no AI provider) so the production renderer runs
+   *  locally without hanging on an unconfigured LLM gateway. */
+  staticOnly?: boolean;
 };
 
 function buildSystemPrompt(input: InfographicCopyInput): string {
@@ -328,36 +333,31 @@ function buildStaticSectionContent(input: {
 export async function composeInfographicCopy(
   input: InfographicCopyInput,
 ): Promise<InfographicCopyResult> {
-  // Fail-open path: produce REAL content via the static builder so
-  // every card has full text, not just title + icon. Operator-typed
-  // body still wins (lead) when supplied.
-  const passthrough = (): InfographicCopyResult => ({
-    sections: input.sectionTitles.map((title, idx) => {
-      const built = buildStaticSectionContent({
-        topic: input.topic,
-        title,
-        iconIndex: idx,
-      });
-      const operatorBody = String(input.sectionBodies[idx] ?? '').trim();
-      return {
-        title,
-        lead: clamp(operatorBody || built.lead, 200),
-        bullets: built.bullets.map((b) => clamp(b, 80)),
-        stat: null,
-        example: clamp(built.example, 140),
-        take: clamp(built.take, 90),
-        impact: clamp(built.impact, 80),
-        risk: clamp(built.risk, 80),
-        generated: true,
-      };
-    }),
-    narrative: clamp(`A practical look at ${input.topic}: what works, what to watch out for, and how to act on it.`, 200),
-    cta: input.cta || 'Take the next step',
-    ok: false,
+  // CREATOR-115: ROLE-AWARE structured generation. The sample's layout defines the
+  // semantic role of each slot; the LLM returns role-typed JSON validated against the
+  // contract; the renderer paints validated objects — never inferred-from-prose.
+  const slotCount = Array.isArray(input.sectionTitles) ? input.sectionTitles.length : 0;
+  const toResult = (c: ContractResult): InfographicCopyResult => ({
+    sections: c.sections.map((sec) => ({
+      title: clamp(sec.title, 60),
+      lead: clamp(sec.lead || sec.body, 200),
+      bullets: (sec.bullets ?? []).map((b) => clamp(b, 80)),
+      stat: sec.stat ?? null,
+      example: sec.example ?? null,
+      take: sec.take ?? null,
+      impact: sec.impact ?? null,
+      risk: sec.risk ?? null,
+      generated: true,
+    })),
+    narrative: clamp(c.summary, 200),
+    cta: c.cta || input.cta || 'Take the next step',
+    ok: c.sections.length > 0,
   });
+  // Deterministic role-typed fallback (no LLM): previews + rejected model output.
+  const roleFallback = (): InfographicCopyResult => toResult(staticRoleContent(input.layout, slotCount, input.topic, input.sectionTitles));
 
-  if (!Array.isArray(input.sectionTitles) || input.sectionTitles.length === 0) {
-    return passthrough();
+  if (input.staticOnly || slotCount === 0) {
+    return roleFallback();
   }
 
   try {
@@ -366,71 +366,46 @@ export async function composeInfographicCopy(
       companyId: input.companyId ?? null,
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: buildSystemPrompt(input) },
-        { role: 'user', content: buildUserPayload(input) },
+        { role: 'system', content: buildRoleSystemPrompt(input, slotCount) },
+        { role: 'user', content: buildRoleUserPayload(input, slotCount) },
       ],
-      // Up from 600 — the new schema (lead + 3–5 bullets + stat +
-      // example + take per section, plus narrative + cta) is roughly
-      // 4× the output volume of the previous one-liner schema. 1800
-      // gives ~7 sections worth of room with headroom.
       max_tokens: 1800,
-      temperature: 0.55,
+      temperature: 0.5,
       response_format: { type: 'json_object' },
     });
-    const parsed = parseLlmResponse(String(response?.output || ''));
-    if (!parsed) return passthrough();
-
-    const sections: InfographicSectionCopy[] = input.sectionTitles.map((title, idx) => {
-      const operatorBody = String(input.sectionBodies[idx] ?? '').trim();
-      const llmEntry = parsed.sections.find((s) => s.index === idx);
-      // Backstop: ALWAYS build a static section as the floor. The LLM
-      // overrides field-by-field when its values are non-empty. This
-      // guarantees every card renders with full text even when the
-      // LLM returns a partial response (or none at all).
-      const built = buildStaticSectionContent({ topic: input.topic, title, iconIndex: idx });
-
-      const llmBullets = (llmEntry?.bullets ?? [])
-        .slice(0, 5)
-        .map((b) => clamp(b, 80))
-        .filter((b) => b.length >= 4);
-      const bullets = llmBullets.length > 0 ? llmBullets : built.bullets.map((b) => clamp(b, 80));
-
-      const stat = llmEntry?.stat
-        ? {
-            value: clamp(llmEntry.stat.value, 12),
-            label: clamp(llmEntry.stat.label, 60),
-          }
-        : null;
-
-      const lead = llmEntry?.lead
-        ? clamp(llmEntry.lead, 200)
-        : clamp(operatorBody || built.lead, 200);
-      const example = llmEntry?.example ? clamp(llmEntry.example, 140) : clamp(built.example, 140);
-      const take = llmEntry?.take ? clamp(llmEntry.take, 90) : clamp(built.take, 90);
-      const impact = llmEntry?.impact ? clamp(llmEntry.impact, 80) : clamp(built.impact, 80);
-      const risk = llmEntry?.risk ? clamp(llmEntry.risk, 80) : clamp(built.risk, 80);
-
-      return {
-        title,
-        lead,
-        bullets,
-        stat,
-        example,
-        take,
-        impact,
-        risk,
-        generated: true,
-      };
-    });
-
-    const generatedCount = sections.filter((s) => s.generated).length;
-    return {
-      sections,
-      narrative: clamp(parsed.narrative, 200),
-      cta: parsed.cta || input.cta || '',
-      ok: generatedCount > 0,
-    };
+    let parsed: unknown = null;
+    try { parsed = JSON.parse(String(response?.output || '')); } catch { parsed = null; }
+    // RULE 3: STRICT validation against the sample's semantic structure. A response that
+    // is the wrong shape / count / role is REJECTED and degrades to the role fallback —
+    // never silently repaired into a different structure.
+    const validation = validateRoleResponse(input.layout, parsed, slotCount);
+    if (!validation.ok || !validation.result) return roleFallback();
+    return toResult(validation.result);
   } catch {
-    return passthrough();
+    return roleFallback();
   }
+}
+
+/** CREATOR-115: role-aware system prompt — the LLM fills the sample's semantic slots. */
+function buildRoleSystemPrompt(input: InfographicCopyInput, slotCount: number): string {
+  return [
+    'You FILL predefined semantic slots for an infographic. Return VALID JSON ONLY — no prose, no markdown, no commentary, no extra fields.',
+    `The infographic uses the "${input.layout}" structure. Return EXACTLY this JSON shape and nothing else:`,
+    promptSchemaFor(input.layout, slotCount),
+    'Rules: every field is required and non-empty; arrays must contain EXACTLY the stated number of items; do NOT add, remove, or rename any field; do NOT change the structure.',
+    'Write content specific to each slot\'s ROLE — a KPI is a metric {label, value, explanation}; a process step is a sequential action {title, body, outcome}; a comparison side is {name, advantages, limitations}. Do not fabricate precise statistics you cannot justify.',
+    input.mode === 'company-context' && input.companyContext
+      ? 'Ground the copy in the supplied company context; reference the company by name at most once.'
+      : 'Independent mode — do not invent or use any company name; address a generic operator-level reader in second person.',
+  ].join('\n');
+}
+
+/** CREATOR-115: role-aware user payload — the brief + slot hints, no structure to invent. */
+function buildRoleUserPayload(input: InfographicCopyInput, slotCount: number): string {
+  return JSON.stringify({
+    topic: input.topic,
+    cta: input.cta || '(generate one)',
+    slot_hints: (input.sectionTitles ?? []).slice(0, slotCount),
+    company: input.mode === 'company-context' ? (input.companyContext ?? null) : null,
+  });
 }

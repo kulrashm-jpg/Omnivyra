@@ -3,6 +3,10 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { composeGrowthReport } from '../../../backend/services/growthReportService';
 import { resolveAnalyticsReportInput } from '../../../backend/services/analyticsInputResolver';
+import { getWebsiteReportSafe } from '../../../backend/services/websiteIntelligence/websiteIntelligenceRepository';
+import { getLeadReportSafe } from '../../../backend/services/leadIntelligence/leadIntelligenceSnapshotAdapter';
+import { getPluginsForReport, composePluginSnapshotMemoized, createCompositionContext } from '../../../backend/services/platformIntelligence/registry';
+import '../../../backend/services/platformIntelligence/plugins'; // auto-register every plugin
 
 type GrowthReportApiResponse = {
   report_type?: 'growth';
@@ -24,6 +28,10 @@ type GrowthReportApiResponse = {
     opportunities: unknown[];
     actions: unknown[];
   }>;
+  // Phase 18 — additive intelligence projections (fail-open; typed from their source fns).
+  website_intelligence?: Awaited<ReturnType<typeof getWebsiteReportSafe>>;
+  lead_intelligence?: Awaited<ReturnType<typeof getLeadReportSafe>>;
+  platform_intelligence?: Record<string, unknown>;
   error?: string;
   code?: string;
 };
@@ -89,7 +97,14 @@ export default async function handler(
       reportCategory: 'growth',
     });
     const growthReport = await composeGrowthReport(companyId, { resolvedInput });
-    return res.status(200).json(growthReport);
+    // Phase 18 — Website Intelligence becomes the foundation projection of this report (fail-open).
+    const website_intelligence = await getWebsiteReportSafe(companyId);
+    const lead_intelligence = await getLeadReportSafe(companyId);
+    const ctx = createCompositionContext(); const nowMs = Date.now(); // request-scoped: each plugin composes once
+    const platform_intelligence = Object.fromEntries(
+      await Promise.all(getPluginsForReport('growth').map(async (p) => [p.id, await composePluginSnapshotMemoized(p, companyId, nowMs, ctx).catch(() => null)] as const)),
+    );
+    return res.status(200).json({ ...growthReport, website_intelligence, lead_intelligence, platform_intelligence });
   } catch (error) {
     console.error('[reports/growth] error:', error);
     return res.status(500).json({

@@ -41,6 +41,7 @@ interface PostFormData {
 export default function SchedulerPage() {
   const router = useRouter();
   const [scheduledPosts, setScheduledPosts] = useState<ScheduledPost[]>([]);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -140,6 +141,29 @@ export default function SchedulerPage() {
       setScheduledPosts(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error loading scheduled posts:', error);
+    }
+  };
+
+  // BETA-007 (RULE 3): manually retry a FAILED post after automatic retries are exhausted.
+  const handleRetryPost = async (postId: string) => {
+    setRetryingId(postId);
+    try {
+      const res = await apiFetch('/api/scheduler/retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduled_post_id: postId }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) {
+        notify('success', j.message || 'Post re-queued for publishing.');
+        await loadScheduledPosts();
+      } else {
+        notify('error', j.error || 'Retry failed. Please try again.');
+      }
+    } catch {
+      notify('error', 'Retry failed. Please try again.');
+    } finally {
+      setRetryingId(null);
     }
   };
 
@@ -644,6 +668,16 @@ export default function SchedulerPage() {
                           <div className="mt-3 text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">
                             <strong>Error:</strong> {post.error_message}
                           </div>
+                        )}
+
+                        {post.status === 'failed' && (
+                          <button
+                            onClick={() => handleRetryPost(post.id)}
+                            disabled={retryingId === post.id}
+                            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                          >
+                            {retryingId === post.id ? 'Retrying…' : 'Retry'}
+                          </button>
                         )}
                         
                         {post.platform_post_id && (
