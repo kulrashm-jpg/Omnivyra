@@ -12,6 +12,7 @@ import { brandRuntimeToCreatorBrandKit } from './brand/brandRuntimeAdapter';
 import { captureImageProviderCost } from './billing/blackHoleCostCapture';
 import { recordAssetCredits } from './aiUsageCollector';
 import { resolveCostProfile } from './creator/costProfiles';
+import { isBetaAiRenderMode, createBetaMockImage, BETA_MOCK_MODEL } from './creator/rendering/providers/betaMockRenderProvider';
 import { creatorEvent } from './creatorObservation';
 import { recordCreatorDuration } from './creatorRuntimeMetrics';
 import { validateProviderImageTextSafety } from './creatorImageTextValidation';
@@ -2097,6 +2098,11 @@ async function generateProviderImage(input: {
     userId?:         string | null;
   };
 }): Promise<ProviderImageResult> {
+  // BETA-020 RULE 4 — Beta AI render mode: deterministic fixture image, zero OpenAI cost. Off by
+  // default (BETA_AI_MODE unset) so production is byte-identical; enabled only in the Beta env.
+  if (isBetaAiRenderMode()) {
+    return { image: { buffer: await createBetaMockImage(input.prompt), model: BETA_MOCK_MODEL } };
+  }
   const apiKey = await resolveOpenAiImageKey();
   if (!apiKey) {
     return { image: null, fallbackReason: 'OpenAI API key unavailable' };
