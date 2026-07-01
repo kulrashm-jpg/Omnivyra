@@ -7,6 +7,7 @@ import { launchSocialPostingFromContent } from '../../../lib/content/socialPosti
 import { buildCreatorContentBlocks, launchBlogFromCreator } from '../../../lib/content/creatorContentBridge';
 import { buildCreatorFlowContext, serializeCreatorFlowContext, type CreatorFlowContext } from '../../../lib/content/creatorFlowContext';
 import { appendCreatorVisualReviewCandidate } from '../../../lib/content/creatorVisualReview';
+import { openCreatorEditor } from '../../../lib/content/openCreatorEditor';
 import {
   type CreatorAssetLaunchType,
   type WriterOverlayText,
@@ -4815,7 +4816,7 @@ export default function CreatorTypeWorkflowPage() {
                         model={review}
                         onRegenerate={handleGenerate}
                         onDownload={handleDownloadBrief}
-                        onOpenInEditor={() => { if (typeof document !== 'undefined') document.getElementById('creator-template-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                        onOpenInEditor={() => openCreatorEditor({ assetId: selectedAsset?.id ?? null, attachmentMode: selectedAsset?.attachment_mode ?? null })}
                         downloadBusy={actionInProgress === 'download'}
                         regenerateBusy={isGenerating}
                       />
@@ -4851,7 +4852,7 @@ export default function CreatorTypeWorkflowPage() {
                         edited={edited}
                         regenerations={regenCount}
                         onDownload={handleDownloadBrief}
-                        onOpenEditor={() => { if (typeof document !== 'undefined') document.getElementById('creator-template-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                        onOpenEditor={() => openCreatorEditor({ assetId: selectedAsset?.id ?? null, attachmentMode: selectedAsset?.attachment_mode ?? null })}
                         onRegenerate={handleGenerate}
                         onDuplicate={handleSaveAsBlock}
                         downloadBusy={actionInProgress === 'download'}
@@ -4883,7 +4884,7 @@ export default function CreatorTypeWorkflowPage() {
                     return (
                       <CampaignPackagePanel
                         pkg={pkg}
-                        onOpenAsset={() => { if (typeof document !== 'undefined') document.getElementById('creator-template-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                        onOpenAsset={() => openCreatorEditor({ assetId: selectedAsset?.id ?? null, attachmentMode: selectedAsset?.attachment_mode ?? null })}
                         onRegenerate={handleGenerate}
                         onDuplicate={handleSaveAsBlock}
                         regenerateBusy={isGenerating}
