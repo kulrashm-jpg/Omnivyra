@@ -2375,6 +2375,35 @@ function resolveAttachmentRenderMode(input: {
   return 'embedded_copy';
 }
 
+/**
+ * BETA-015 RULE 1/2/10 — the ONE canonical render-policy resolver.
+ *
+ * `attachment_mode` is the authoritative runtime truth: when the writer supplied an explicit
+ * mode it wins over EVERY legacy asset-type assumption. So even if an asset arrives with
+ * `enforcedAssetType === 'banner'`, a `supporting_visual` mode forces the clean-photograph
+ * policy (renderer then skips overlay/typography/decorative SVG). The enforced-asset-type
+ * branch is a COMPATIBILITY fallback used only when no explicit mode is present. No banner
+ * assumption may override an explicit attachment_mode again.
+ */
+export function resolveCanonicalRenderPolicy(input: {
+  attachmentMode?: string | null;
+  enforcedAssetType?: 'supporting_image' | 'banner';
+  fileNamePrefix: string;
+  assetPayload:   Record<string, unknown>;
+  metadata:       Record<string, unknown>;
+}): AttachmentRenderPolicy {
+  if (input.attachmentMode === 'supporting_visual') return 'supporting_visual';
+  if (input.attachmentMode === 'embedded_copy') return 'embedded_copy';
+  // Compatibility fallback (no explicit writer mode) — legacy asset-type mapping.
+  if (input.enforcedAssetType === 'supporting_image') return 'supporting_visual';
+  if (input.enforcedAssetType === 'banner') return 'embedded_copy';
+  return resolveAttachmentRenderMode({
+    fileNamePrefix: input.fileNamePrefix,
+    assetPayload: input.assetPayload,
+    metadata: input.metadata,
+  });
+}
+
 async function composeSingleVisualAsset(
   assetPayload: Record<string, unknown>,
   options: RenderOptions,
@@ -2408,15 +2437,19 @@ async function composeSingleVisualAsset(
         assetType: fileNamePrefix,
       });
   const brandColors = brandKit.normalizedPalette;
-  // supporting_image asset normally suppresses overlay text (post text
-  // stays separate from the image). HOWEVER when the writer / direct
-  // route explicitly opts into `embedded_copy`, the operator's typed
-  // hook/headline/insight MUST flow through to the renderer — otherwise
-  // the SVG composer falls back to the platform name (e.g. "INSTAGRAM")
-  // and produces a nonsense overlay.
-  const supportingImageWithoutEmbeddedCopy =
-    enforcedAssetType === 'supporting_image' && metadata.attachment_mode !== 'embedded_copy';
-  const overlay = supportingImageWithoutEmbeddedCopy
+  // BETA-015 RULE 1/2 — derive the ONE canonical render policy from attachment_mode FIRST.
+  // supporting_visual (POST + IMAGE) is a clean photograph: it suppresses overlay text here and
+  // skips the decorative SVG composite below (skipOverlayComposite). embedded_copy flows the
+  // operator's typed hook/headline/insight through to the deterministic overlay composer.
+  // attachment_mode wins over any enforced asset type — no banner payload can override it.
+  const attachmentRenderPolicy: AttachmentRenderPolicy = resolveCanonicalRenderPolicy({
+    attachmentMode: typeof metadata.attachment_mode === 'string' ? metadata.attachment_mode : null,
+    enforcedAssetType,
+    fileNamePrefix,
+    assetPayload,
+    metadata,
+  });
+  const overlay = attachmentRenderPolicy === 'supporting_visual'
     ? { hook: '', headline: '', keyInsight: '', cta: '', supportingText: '' }
     : normalizeOverlayText({ assetPayload, metadata, title, body });
   const writerGoverned = Boolean(metadata.writer_asset_type || metadata.creator_content_asset_type || metadata.attachment_mode);
@@ -2471,11 +2504,9 @@ async function composeSingleVisualAsset(
     validation: visualGovernance,
     quality: creatorQuality,
   });
-  const attachmentRenderPolicy = enforcedAssetType === 'supporting_image'
-    ? 'supporting_visual'
-    : enforcedAssetType === 'banner'
-      ? 'embedded_copy'
-      : resolveAttachmentRenderMode({ fileNamePrefix, assetPayload, metadata });
+  // `attachmentRenderPolicy` is resolved once, canonically, above (BETA-015) — it is the
+  // single source of truth for overlay suppression, the AI prompt policy, and
+  // skipOverlayComposite. No second, asset-type-keyed derivation exists.
   // ── Phase 7 runtime wiring — semantic vs render-policy attachment mode.
   // `attachmentRenderPolicy` above is the RENDERER-INTERNAL composition
   // policy (drives overlay-vs-no-overlay, prompt text-bans, etc.) and
