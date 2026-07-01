@@ -17,12 +17,18 @@ const nextConfig = {
     // via the orchestrator), so the vendored fonts must be traced into THIS
     // function too — otherwise generate-inline renders text-less on Vercel.
     '/api/command-center/creator-content/generate': ['./assets/fonts/**'],
+    // Report PDF export runs @sparticuz/chromium in the Vercel Lambda. The Chromium
+    // binary (bin/*.br) is read via fs at runtime (not require()'d), so Next's tracer
+    // misses it without this explicit include — without it PDF export fails on Vercel.
+    '/api/reports/[reportId]': ['./node_modules/@sparticuz/chromium/bin/**'],
   },
   turbopack: {},
   // Don't bundle server-only packages - they use Node built-ins or are API-route-only.
   serverExternalPackages: [
     'bullmq', 'ioredis',
     'pdfkit',       // PDF generation - API routes only
+    '@sparticuz/chromium', // Serverless Chromium for report PDF export (Vercel Lambda)
+    'puppeteer-core',      // Drives @sparticuz/chromium (API routes only)
     'openai',       // AI provider SDK - API routes only
     'sharp',        // Image rendering - API routes only
     'axios',        // Used only in backend adapters / API routes

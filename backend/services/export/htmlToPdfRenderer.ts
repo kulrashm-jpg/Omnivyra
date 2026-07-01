@@ -112,8 +112,60 @@ async function renderPdfWithChromeCli(html: string): Promise<Buffer> {
   }
 }
 
+function isServerlessRuntime(): boolean {
+  return Boolean(
+    process.env.VERCEL ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.AWS_EXECUTION_ENV,
+  );
+}
+
+// Serverless (Vercel/Lambda) has no bundled Playwright browser and no system Chrome,
+// so the previous renderer always failed there ("Failed to generate PDF export").
+// @sparticuz/chromium ships a Lambda-packaged Chromium (extracted to /tmp at runtime)
+// driven by puppeteer-core — this is the path that makes report PDF export work on Vercel.
+async function renderPdfWithServerlessChromium(html: string): Promise<Buffer> {
+  const chromium = (await import('@sparticuz/chromium')).default;
+  const puppeteer = (await import('puppeteer-core')).default;
+
+  const browser = await puppeteer.launch({
+    args: [...chromium.args, '--no-sandbox', '--disable-dev-shm-usage'],
+    executablePath: await chromium.executablePath(),
+    headless: true,
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1240, height: 1754 });
+    // setContent (unlike goto) only supports load/domcontentloaded in puppeteer-core.
+    await page.setContent(html, { waitUntil: 'load', timeout: 60000 });
+    await page.emulateMediaType('print');
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+    });
+    return Buffer.from(pdf);
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
 export async function renderPdfFromHtml(html: string): Promise<Buffer> {
   const failures: string[] = [];
+  const serverless = isServerlessRuntime();
+
+  // On serverless, the bundled Chromium is the only browser available — try it first.
+  if (serverless) {
+    try {
+      return await renderPdfWithServerlessChromium(html);
+    } catch (error) {
+      failures.push(
+        `serverless-chromium: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 
   try {
     return await renderPdfWithPlaywright(html);
@@ -129,6 +181,17 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
     failures.push(
       `chrome-cli: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+
+  // Last resort for local/dev with no Playwright browser or system Chrome installed.
+  if (!serverless) {
+    try {
+      return await renderPdfWithServerlessChromium(html);
+    } catch (error) {
+      failures.push(
+        `serverless-chromium: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   throw new Error(`Unable to render PDF from HTML. ${failures.join(' | ')}`);

@@ -229,6 +229,13 @@ function renderCurrentPerformanceHtml(composed: {
   );
 }
 
+// PDF export spawns a serverless Chromium (@sparticuz/chromium): allow cold-start +
+// render time, and don't cap the binary PDF response at the default 4MB.
+export const config = {
+  maxDuration: 60,
+  api: { responseLimit: false },
+};
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ReportViewPayload | { error: string; code: string }>,

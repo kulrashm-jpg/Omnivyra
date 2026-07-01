@@ -175,7 +175,9 @@ export default function ReportViewPage() {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (error) {
-      setFetchError(error instanceof Error ? error.message : 'Failed to download PDF.');
+      // A download hiccup must NOT replace the whole report view (was setFetchError →
+      // full-page "Report Unavailable"). Surface it inline; the report stays visible.
+      alert(error instanceof Error ? error.message : 'Failed to download PDF. Please try again.');
     } finally {
       setIsDownloading(false);
     }
