@@ -1,5 +1,5 @@
 /**
- * CREATOR-106 — compose carousel.png decks from the AI-generated preview.png. Reads
+ * CREATOR-106 — compose carousel.webp decks from the AI-generated preview.webp. Reads
  * each carousel blueprint's AI preview and composes a 3-slide peeking deck with page
  * dots, so the carousel gallery shows asset-shaped previews built on the real AI image.
  * Pure compositing (sharp) — no AI, no extra cost. Run AFTER generate-ai-previews.ts.
@@ -43,7 +43,7 @@ async function deck(srcPng: Buffer): Promise<Buffer> {
       { input: framed, top: 135, left: Math.round((S - fc) / 2) },
       { input: front, top: 175, left: 70 },
       { input: Buffer.from(dots), top: 0, left: 0 },
-    ]).png().toBuffer();
+    ]).webp({ quality: 82, alphaQuality: 100, effort: 4 }).toBuffer();
 }
 
 void (async () => {
@@ -52,11 +52,11 @@ void (async () => {
   let ok = 0; const failures: Array<{ id: string; error: string }> = [];
   for (const s of samples) {
     const dir = path.join(process.cwd(), 'public', 'creator-showcases', s.sampleId);
-    const src = path.join(dir, 'preview.png');
-    if (!existsSync(src)) { failures.push({ id: s.sampleId, error: 'no preview.png' }); continue; }
+    const src = path.join(dir, 'preview.webp');
+    if (!existsSync(src)) { failures.push({ id: s.sampleId, error: 'no preview.webp' }); continue; }
     try {
       mkdirSync(dir, { recursive: true });
-      writeFileSync(path.join(dir, 'carousel.png'), await deck(readFileSync(src)));
+      writeFileSync(path.join(dir, 'carousel.webp'), await deck(readFileSync(src)));
       ok += 1;
     } catch (e) { failures.push({ id: s.sampleId, error: e instanceof Error ? e.message : String(e) }); }
   }

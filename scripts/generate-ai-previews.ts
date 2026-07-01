@@ -4,11 +4,12 @@
  * own style prompt, producing a genuinely style-distinct preview. Writes
  * public/creator-showcases/<id>/<OUT>. Spends real OpenAI credits (user-authorized).
  *
- *   SAMPLE_ID=real-photography OUT=preview_ai.png npx tsx scripts/generate-ai-previews.ts   # test one
+ *   SAMPLE_ID=real-photography OUT=preview_ai.webp npx tsx scripts/generate-ai-previews.ts   # test one
  *   FAMILY=image LIMIT=5 npx tsx scripts/generate-ai-previews.ts                            # batch
  */
 import { readFileSync, mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 import { listSamples, getSample } from '../lib/creator-outcomes/marketingSample';
 import type { MarketingSample } from '../lib/creator-outcomes/marketingSample';
 
@@ -39,14 +40,17 @@ async function genOne(key: string, s: MarketingSample, out: string): Promise<{ o
     if (!b64) return { ok: false, error: 'no b64_json in response' };
     const dir = path.join(process.cwd(), 'public', 'creator-showcases', s.sampleId);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, out), Buffer.from(b64, 'base64'));
+    const raw = Buffer.from(b64, 'base64');
+    // Runtime serves WebP; transcode when the output is .webp, otherwise write raw (OUT override).
+    const data = out.endsWith('.webp') ? await sharp(raw).webp({ quality: 82, alphaQuality: 100, effort: 4 }).toBuffer() : raw;
+    writeFileSync(path.join(dir, out), data);
     return { ok: true };
   } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
 }
 
 void (async () => {
   const key = loadKey();
-  const out = process.env.OUT || 'preview.png';
+  const out = process.env.OUT || 'preview.webp';
   const single = process.env.SAMPLE_ID;
   const family = process.env.FAMILY as 'image' | 'carousel' | 'infographic' | undefined;
   const limit = process.env.LIMIT ? Number(process.env.LIMIT) : undefined;

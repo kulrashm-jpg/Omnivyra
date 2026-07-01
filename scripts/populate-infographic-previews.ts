@@ -3,7 +3,7 @@
  * (renderInfographicAsset), the SAME one customer generation uses. No bespoke composer.
  * For each infographic sample it builds a demo asset_payload (identical demo brief, only
  * blueprint_id changes), renders via renderInfographicAsset({ previewBufferOnly:true }),
- * and writes public/creator-showcases/<id>/infographic.png. Local-only: no AI (the copy
+ * and writes public/creator-showcases/<id>/infographic.webp. Local-only: no AI (the copy
  * composer falls back to static content), no Storage upload, no DB.
  *
  *   npx tsx scripts/populate-infographic-previews.ts
@@ -31,6 +31,7 @@ const DEMO = {
 void (async () => {
   const path = await import('path');
   const { mkdirSync, writeFileSync } = await import('fs');
+  const sharp = (await import('sharp')).default;
   const { listSamples, getSample } = await import('../lib/creator-outcomes/marketingSample');
   const { renderInfographicAsset } = await import('../backend/services/creatorAssetRenderer');
 
@@ -62,7 +63,8 @@ void (async () => {
       if (!buffer) throw new Error('renderInfographicAsset returned no buffer');
       const dir = path.join(DIR, s.sampleId);
       mkdirSync(dir, { recursive: true });
-      writeFileSync(path.join(dir, 'infographic.png'), buffer);
+      const webp = await sharp(buffer).webp({ quality: 82, alphaQuality: 100, effort: 4 }).toBuffer();
+      writeFileSync(path.join(dir, 'infographic.webp'), webp);
       ok += 1;
       if (ok % 10 === 0) console.error(`[ig] ${ok}/${samples.length}…`);
     } catch (e) {

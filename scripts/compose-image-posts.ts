@@ -1,7 +1,7 @@
 /**
- * CREATOR-106 — compose finished IMAGE-post previews from the AI preview.png: the real
+ * CREATOR-106 — compose finished IMAGE-post previews from the AI preview.webp: the real
  * AI visual + a clean marketing text overlay (headline + subhead + CTA on a bottom
- * scrim) so the image gallery shows finished, text-formatted posts. Writes image.png.
+ * scrim) so the image gallery shows finished, text-formatted posts. Writes image.webp.
  * Pure compositing (sharp) — no AI cost. Run AFTER generate-ai-previews.ts.
  *
  *   npx tsx scripts/compose-image-posts.ts            # all image blueprints
@@ -33,7 +33,7 @@ async function post(src: Buffer): Promise<Buffer> {
     <rect x="64" y="${H - 82}" width="196" height="50" rx="25" fill="#2563eb"/>
     <text x="162" y="${H - 49}" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="bold" fill="#ffffff" text-anchor="middle">${esc(CTA)}</text>
   </svg>`;
-  return sharp(base).composite([{ input: Buffer.from(svg), top: 0, left: 0 }]).png().toBuffer();
+  return sharp(base).composite([{ input: Buffer.from(svg), top: 0, left: 0 }]).webp({ quality: 82, alphaQuality: 100, effort: 4 }).toBuffer();
 }
 
 void (async () => {
@@ -43,9 +43,9 @@ void (async () => {
   let ok = 0; const failures: Array<{ id: string; error: string }> = [];
   for (const s of samples) {
     const dir = path.join(process.cwd(), 'public', 'creator-showcases', s.sampleId);
-    const src = path.join(dir, 'preview.png');
-    if (!existsSync(src)) { failures.push({ id: s.sampleId, error: 'no preview.png' }); continue; }
-    try { mkdirSync(dir, { recursive: true }); writeFileSync(path.join(dir, 'image.png'), await post(readFileSync(src))); ok += 1; }
+    const src = path.join(dir, 'preview.webp');
+    if (!existsSync(src)) { failures.push({ id: s.sampleId, error: 'no preview.webp' }); continue; }
+    try { mkdirSync(dir, { recursive: true }); writeFileSync(path.join(dir, 'image.webp'), await post(readFileSync(src))); ok += 1; }
     catch (e) { failures.push({ id: s.sampleId, error: e instanceof Error ? e.message : String(e) }); }
   }
   console.log(JSON.stringify({ total: samples.length, succeeded: ok, failed: failures.length, failures: failures.slice(0, 8) }, null, 2));

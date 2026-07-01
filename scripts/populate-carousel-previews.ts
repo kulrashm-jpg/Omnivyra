@@ -2,7 +2,7 @@
  * CREATOR-106 — generate carousel-SHAPED previews so carousel samples stop reusing the
  * flat image previews. For every carousel-supporting blueprint it renders a multi-slide
  * deck (renderCreatorCarouselReviewPreview) and writes public/creator-showcases/<id>/
- * carousel.png. Local-only, no AI, no Storage, no credits (same as the image populate).
+ * carousel.webp. Local-only, no AI, no Storage, no credits (same as the image populate).
  *
  *   npx tsx scripts/populate-carousel-previews.ts
  */
@@ -22,6 +22,7 @@ const DEMO = { company: 'Acme Technologies', product: 'CRM Platform', audience: 
 void (async () => {
   const path = await import('path');
   const { mkdirSync, writeFileSync } = await import('fs');
+  const sharp = (await import('sharp')).default;
   const { listSamples } = await import('../lib/creator-outcomes/marketingSample');
   const { renderCreatorCarouselReviewPreview } = await import('../backend/services/creatorAssetRenderer');
 
@@ -51,7 +52,8 @@ void (async () => {
       });
       const dir = path.join(DIR, s.sampleId);
       mkdirSync(dir, { recursive: true });
-      writeFileSync(path.join(dir, 'carousel.png'), buffer);
+      const webp = await sharp(buffer).webp({ quality: 82, alphaQuality: 100, effort: 4 }).toBuffer();
+      writeFileSync(path.join(dir, 'carousel.webp'), webp);
       ok += 1;
       if (ok % 10 === 0) console.error(`[run] ${ok}/${samples.length}…`);
     } catch (e) {
