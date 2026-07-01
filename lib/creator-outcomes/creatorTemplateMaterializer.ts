@@ -133,9 +133,9 @@ export function materializeCuratedTemplate(blueprintId: string, family: Template
   const { imageStyle } = family === 'image' ? styleFieldsForTemplate(blueprintId, 'image') : { imageStyle: undefined };
   const { carouselStyle } = family === 'carousel' ? styleFieldsForTemplate(blueprintId, 'carousel') : { carouselStyle: undefined };
 
-  const previewImage = family === 'carousel' ? `/creator-showcases/${blueprintId}/carousel.png`
-    : family === 'infographic' ? `/creator-showcases/${blueprintId}/infographic.png`
-      : `/creator-showcases/${blueprintId}/image.png`;
+  const previewImage = family === 'carousel' ? `/creator-showcases/${blueprintId}/carousel.webp`
+    : family === 'infographic' ? `/creator-showcases/${blueprintId}/infographic.webp`
+      : `/creator-showcases/${blueprintId}/image.webp`;
 
   return {
     id: materializedTemplateId(blueprintId, family),

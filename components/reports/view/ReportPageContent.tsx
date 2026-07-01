@@ -1,10 +1,13 @@
 import Head from 'next/head';
-import OpportunityCoverageMatrix from '@/components/reports/seo/OpportunityCoverageMatrix';
-import SearchVisibilityFunnel from '@/components/reports/seo/SearchVisibilityFunnel';
-import CrawlHealthBreakdown from '@/components/reports/seo/CrawlHealthBreakdown';
+import dynamic from 'next/dynamic';
+// BUILD-OPT-002: recharts-backed report charts are lazy-loaded so recharts loads only when a
+// report view renders them (identical appearance; client-rendered as before).
+const OpportunityCoverageMatrix = dynamic(() => import('@/components/reports/seo/OpportunityCoverageMatrix'), { ssr: false });
+const SearchVisibilityFunnel = dynamic(() => import('@/components/reports/seo/SearchVisibilityFunnel'), { ssr: false });
+const CrawlHealthBreakdown = dynamic(() => import('@/components/reports/seo/CrawlHealthBreakdown'), { ssr: false });
 import QueryAnswerCoverageMap from '@/components/reports/geo-aeo/QueryAnswerCoverageMap';
-import AnswerExtractionFunnel from '@/components/reports/geo-aeo/AnswerExtractionFunnel';
-import EntityAuthorityMap from '@/components/reports/geo-aeo/EntityAuthorityMap';
+const AnswerExtractionFunnel = dynamic(() => import('@/components/reports/geo-aeo/AnswerExtractionFunnel'), { ssr: false });
+const EntityAuthorityMap = dynamic(() => import('@/components/reports/geo-aeo/EntityAuthorityMap'), { ssr: false });
 import KeywordGapAnalysis from '@/components/reports/competitor/KeywordGapAnalysis';
 import AiAnswerGapAnalysis from '@/components/reports/competitor/AiAnswerGapAnalysis';
 import CanonicalReportSections from '@/components/reports/canonical/CanonicalReportSections';

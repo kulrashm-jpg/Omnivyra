@@ -1,118 +1,119 @@
 /**
  * Global platform icon registry.
- * Uses react-icons (no image URLs) so icons never break.
+ *
+ * CREATOR/BUILD-OPT-002: previously backed by react-icons (~84 MB installed). Now the exact
+ * SVG path data for the ~18 brand icons is inlined (extracted verbatim from react-icons via
+ * renderToStaticMarkup), so appearance/sizing/theme/accessibility are byte-identical while the
+ * react-icons dependency is removed. The public API (PLATFORM_ICONS, FALLBACK_ICON, IconType,
+ * getPlatformIcon, normalizePlatform, getPlatformLabel) is unchanged.
  */
+import React from 'react';
 
-import {
-  FaLinkedin,
-  FaFacebook,
-  FaInstagram,
-  FaYoutube,
-  FaPinterest,
-  FaReddit,
-  FaShareAlt,
-  FaWhatsapp,
-  FaGithub,
-  FaDiscord,
-  FaStackOverflow,
-} from 'react-icons/fa';
-import { FaXTwitter } from 'react-icons/fa6';
-import { SiDevdotto, SiMedium, SiQuora, SiTiktok, SiThreads, SiYcombinator } from 'react-icons/si';
-import type { IconType } from 'react-icons';
+/** react-icons-compatible props (size / color / title + any SVG attribute). */
+export interface IconBaseProps extends Omit<React.SVGAttributes<SVGElement>, 'children'> {
+  size?: string | number;
+  color?: string;
+  title?: string;
+}
+export type IconType = (props: IconBaseProps) => React.ReactElement;
+
+/** Exact viewBox + inner SVG markup for each brand icon (verbatim from react-icons). */
+const ICON_DATA: Record<string, { viewBox: string; inner: string }> = {
+  "FaLinkedin": { viewBox: "0 0 448 512", inner: "<path d=\"M416 32H31.9C14.3 32 0 46.5 0 64.3v383.4C0 465.5 14.3 480 31.9 480H416c17.6 0 32-14.5 32-32.3V64.3c0-17.8-14.4-32.3-32-32.3zM135.4 416H69V202.2h66.5V416zm-33.2-243c-21.3 0-38.5-17.3-38.5-38.5S80.9 96 102.2 96c21.2 0 38.5 17.3 38.5 38.5 0 21.3-17.2 38.5-38.5 38.5zm282.1 243h-66.4V312c0-24.8-.5-56.7-34.5-56.7-34.6 0-39.9 27-39.9 54.9V416h-66.4V202.2h63.7v29.2h.9c8.9-16.8 30.6-34.5 62.9-34.5 67.2 0 79.7 44.3 79.7 101.9V416z\"></path>" },
+  "FaFacebook": { viewBox: "0 0 512 512", inner: "<path d=\"M504 256C504 119 393 8 256 8S8 119 8 256c0 123.78 90.69 226.38 209.25 245V327.69h-63V256h63v-54.64c0-62.15 37-96.48 93.67-96.48 27.14 0 55.52 4.84 55.52 4.84v61h-31.28c-30.8 0-40.41 19.12-40.41 38.73V256h68.78l-11 71.69h-57.78V501C413.31 482.38 504 379.78 504 256z\"></path>" },
+  "FaXTwitter": { viewBox: "0 0 512 512", inner: "<path d=\"M389.2 48h70.6L305.6 224.2 487 464H345L233.7 318.6 106.5 464H35.8L200.7 275.5 26.8 48H172.4L272.9 180.9 389.2 48zM364.4 421.8h39.1L151.1 88h-42L364.4 421.8z\"></path>" },
+  "FaInstagram": { viewBox: "0 0 448 512", inner: "<path d=\"M224.1 141c-63.6 0-114.9 51.3-114.9 114.9s51.3 114.9 114.9 114.9S339 319.5 339 255.9 287.7 141 224.1 141zm0 189.6c-41.1 0-74.7-33.5-74.7-74.7s33.5-74.7 74.7-74.7 74.7 33.5 74.7 74.7-33.6 74.7-74.7 74.7zm146.4-194.3c0 14.9-12 26.8-26.8 26.8-14.9 0-26.8-12-26.8-26.8s12-26.8 26.8-26.8 26.8 12 26.8 26.8zm76.1 27.2c-1.7-35.9-9.9-67.7-36.2-93.9-26.2-26.2-58-34.4-93.9-36.2-37-2.1-147.9-2.1-184.9 0-35.8 1.7-67.6 9.9-93.9 36.1s-34.4 58-36.2 93.9c-2.1 37-2.1 147.9 0 184.9 1.7 35.9 9.9 67.7 36.2 93.9s58 34.4 93.9 36.2c37 2.1 147.9 2.1 184.9 0 35.9-1.7 67.7-9.9 93.9-36.2 26.2-26.2 34.4-58 36.2-93.9 2.1-37 2.1-147.8 0-184.8zM398.8 388c-7.8 19.6-22.9 34.7-42.6 42.6-29.5 11.7-99.5 9-132.1 9s-102.7 2.6-132.1-9c-19.6-7.8-34.7-22.9-42.6-42.6-11.7-29.5-9-99.5-9-132.1s-2.6-102.7 9-132.1c7.8-19.6 22.9-34.7 42.6-42.6 29.5-11.7 99.5-9 132.1-9s102.7-2.6 132.1 9c19.6 7.8 34.7 22.9 42.6 42.6 11.7 29.5 9 99.5 9 132.1s2.7 102.7-9 132.1z\"></path>" },
+  "FaYoutube": { viewBox: "0 0 576 512", inner: "<path d=\"M549.655 124.083c-6.281-23.65-24.787-42.276-48.284-48.597C458.781 64 288 64 288 64S117.22 64 74.629 75.486c-23.497 6.322-42.003 24.947-48.284 48.597-11.412 42.867-11.412 132.305-11.412 132.305s0 89.438 11.412 132.305c6.281 23.65 24.787 41.5 48.284 47.821C117.22 448 288 448 288 448s170.78 0 213.371-11.486c23.497-6.321 42.003-24.171 48.284-47.821 11.412-42.867 11.412-132.305 11.412-132.305s0-89.438-11.412-132.305zm-317.51 213.508V175.185l142.739 81.205-142.739 81.201z\"></path>" },
+  "SiTiktok": { viewBox: "0 0 24 24", inner: "<path d=\"M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z\"></path>" },
+  "FaPinterest": { viewBox: "0 0 496 512", inner: "<path d=\"M496 256c0 137-111 248-248 248-25.6 0-50.2-3.9-73.4-11.1 10.1-16.5 25.2-43.5 30.8-65 3-11.6 15.4-59 15.4-59 8.1 15.4 31.7 28.5 56.8 28.5 74.8 0 128.7-68.8 128.7-154.3 0-81.9-66.9-143.2-152.9-143.2-107 0-163.9 71.8-163.9 150.1 0 36.4 19.4 81.7 50.3 96.1 4.7 2.2 7.2 1.2 8.3-3.3.8-3.4 5-20.3 6.9-28.1.6-2.5.3-4.7-1.7-7.1-10.1-12.5-18.3-35.3-18.3-56.6 0-54.7 41.4-107.6 112-107.6 60.9 0 103.6 41.5 103.6 100.9 0 67.1-33.9 113.6-78 113.6-24.3 0-42.6-20.1-36.7-44.8 7-29.5 20.5-61.3 20.5-82.6 0-19-10.2-34.9-31.4-34.9-24.9 0-44.9 25.7-44.9 60.2 0 22 7.4 36.8 7.4 36.8s-24.5 103.8-29 123.2c-5 21.4-3 51.6-.9 71.2C65.4 450.9 0 361.1 0 256 0 119 111 8 248 8s248 111 248 248z\"></path>" },
+  "FaReddit": { viewBox: "0 0 512 512", inner: "<path d=\"M201.5 305.5c-13.8 0-24.9-11.1-24.9-24.6 0-13.8 11.1-24.9 24.9-24.9 13.6 0 24.6 11.1 24.6 24.9 0 13.6-11.1 24.6-24.6 24.6zM504 256c0 137-111 248-248 248S8 393 8 256 119 8 256 8s248 111 248 248zm-132.3-41.2c-9.4 0-17.7 3.9-23.8 10-22.4-15.5-52.6-25.5-86.1-26.6l17.4-78.3 55.4 12.5c0 13.6 11.1 24.6 24.6 24.6 13.8 0 24.9-11.3 24.9-24.9s-11.1-24.9-24.9-24.9c-9.7 0-18 5.8-22.1 13.8l-61.2-13.6c-3-.8-6.1 1.4-6.9 4.4l-19.1 86.4c-33.2 1.4-63.1 11.3-85.5 26.8-6.1-6.4-14.7-10.2-24.1-10.2-34.9 0-46.3 46.9-14.4 62.8-1.1 5-1.7 10.2-1.7 15.5 0 52.6 59.2 95.2 132 95.2 73.1 0 132.3-42.6 132.3-95.2 0-5.3-.6-10.8-1.9-15.8 31.3-16 19.8-62.5-14.9-62.5zM302.8 331c-18.2 18.2-76.1 17.9-93.6 0-2.2-2.2-6.1-2.2-8.3 0-2.5 2.5-2.5 6.4 0 8.6 22.8 22.8 87.3 22.8 110.2 0 2.5-2.2 2.5-6.1 0-8.6-2.2-2.2-6.1-2.2-8.3 0zm7.7-75c-13.6 0-24.6 11.1-24.6 24.9 0 13.6 11.1 24.6 24.6 24.6 13.8 0 24.9-11.1 24.9-24.6 0-13.8-11-24.9-24.9-24.9z\"></path>" },
+  "SiThreads": { viewBox: "0 0 24 24", inner: "<path d=\"M12.186 24h-.007c-3.581-.024-6.334-1.205-8.184-3.509C2.35 18.44 1.5 15.586 1.472 12.01v-.017c.03-3.579.879-6.43 2.525-8.482C5.845 1.205 8.6.024 12.18 0h.014c2.746.02 5.043.725 6.826 2.098 1.677 1.29 2.858 3.13 3.509 5.467l-2.04.569c-1.104-3.96-3.898-5.984-8.304-6.015-2.91.022-5.11.936-6.54 2.717C4.307 6.504 3.616 8.914 3.589 12c.027 3.086.718 5.496 2.057 7.164 1.43 1.783 3.631 2.698 6.54 2.717 2.623-.02 4.358-.631 5.8-2.045 1.647-1.613 1.618-3.593 1.09-4.798-.31-.71-.873-1.3-1.634-1.75-.192 1.352-.622 2.446-1.284 3.272-.886 1.102-2.14 1.704-3.73 1.79-1.202.065-2.361-.218-3.259-.801-1.063-.689-1.685-1.74-1.752-2.964-.065-1.19.408-2.285 1.33-3.082.88-.76 2.119-1.207 3.583-1.291a13.853 13.853 0 0 1 3.02.142c-.126-.742-.375-1.332-.75-1.757-.513-.586-1.308-.883-2.359-.89h-.029c-.844 0-1.992.232-2.721 1.32L7.734 7.847c.98-1.454 2.568-2.256 4.478-2.256h.044c3.194.02 5.097 1.975 5.287 5.388.108.046.216.094.321.142 1.49.7 2.58 1.761 3.154 3.07.797 1.82.871 4.79-1.548 7.158-1.85 1.81-4.094 2.628-7.277 2.65Zm1.003-11.69c-.242 0-.487.007-.739.021-1.836.103-2.98.946-2.916 2.143.067 1.256 1.452 1.839 2.784 1.767 1.224-.065 2.818-.543 3.086-3.71a10.5 10.5 0 0 0-2.215-.221z\"></path>" },
+  "FaWhatsapp": { viewBox: "0 0 448 512", inner: "<path d=\"M380.9 97.1C339 55.1 283.2 32 223.9 32c-122.4 0-222 99.6-222 222 0 39.1 10.2 77.3 29.6 111L0 480l117.7-30.9c32.4 17.7 68.9 27 106.1 27h.1c122.3 0 224.1-99.6 224.1-222 0-59.3-25.2-115-67.1-157zm-157 341.6c-33.2 0-65.7-8.9-94-25.7l-6.7-4-69.8 18.3L72 359.2l-4.4-7c-18.5-29.4-28.2-63.3-28.2-98.2 0-101.7 82.8-184.5 184.6-184.5 49.3 0 95.6 19.2 130.4 54.1 34.8 34.9 56.2 81.2 56.1 130.5 0 101.8-84.9 184.6-186.6 184.6zm101.2-138.2c-5.5-2.8-32.8-16.2-37.9-18-5.1-1.9-8.8-2.8-12.5 2.8-3.7 5.6-14.3 18-17.6 21.8-3.2 3.7-6.5 4.2-12 1.4-32.6-16.3-54-29.1-75.5-66-5.7-9.8 5.7-9.1 16.3-30.3 1.8-3.7.9-6.9-.5-9.7-1.4-2.8-12.5-30.1-17.1-41.2-4.5-10.8-9.1-9.3-12.5-9.5-3.2-.2-6.9-.2-10.6-.2-3.7 0-9.7 1.4-14.8 6.9-5.1 5.6-19.4 19-19.4 46.3 0 27.3 19.9 53.7 22.6 57.4 2.8 3.7 39.1 59.7 94.8 83.8 35.2 15.2 49 16.5 66.6 13.9 10.7-1.6 32.8-13.4 37.4-26.4 4.6-13 4.6-24.1 3.2-26.4-1.3-2.5-5-3.9-10.5-6.6z\"></path>" },
+  "FaGithub": { viewBox: "0 0 496 512", inner: "<path d=\"M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z\"></path>" },
+  "SiYcombinator": { viewBox: "0 0 24 24", inner: "<path d=\"M0 24V0h24v24H0zM6.951 5.896l4.112 7.708v5.064h1.583v-4.972l4.148-7.799h-1.749l-2.457 4.875c-.372.745-.688 1.434-.688 1.434s-.297-.708-.651-1.434L8.831 5.896h-1.88z\"></path>" },
+  "FaDiscord": { viewBox: "0 0 640 512", inner: "<path d=\"M524.531,69.836a1.5,1.5,0,0,0-.764-.7A485.065,485.065,0,0,0,404.081,32.03a1.816,1.816,0,0,0-1.923.91,337.461,337.461,0,0,0-14.9,30.6,447.848,447.848,0,0,0-134.426,0,309.541,309.541,0,0,0-15.135-30.6,1.89,1.89,0,0,0-1.924-.91A483.689,483.689,0,0,0,116.085,69.137a1.712,1.712,0,0,0-.788.676C39.068,183.651,18.186,294.69,28.43,404.354a2.016,2.016,0,0,0,.765,1.375A487.666,487.666,0,0,0,176.02,479.918a1.9,1.9,0,0,0,2.063-.676A348.2,348.2,0,0,0,208.12,430.4a1.86,1.86,0,0,0-1.019-2.588,321.173,321.173,0,0,1-45.868-21.853,1.885,1.885,0,0,1-.185-3.126c3.082-2.309,6.166-4.711,9.109-7.137a1.819,1.819,0,0,1,1.9-.256c96.229,43.917,200.41,43.917,295.5,0a1.812,1.812,0,0,1,1.924.233c2.944,2.426,6.027,4.851,9.132,7.16a1.884,1.884,0,0,1-.162,3.126,301.407,301.407,0,0,1-45.89,21.83,1.875,1.875,0,0,0-1,2.611,391.055,391.055,0,0,0,30.014,48.815,1.864,1.864,0,0,0,2.063.7A486.048,486.048,0,0,0,610.7,405.729a1.882,1.882,0,0,0,.765-1.352C623.729,277.594,590.933,167.465,524.531,69.836ZM222.491,337.58c-28.972,0-52.844-26.587-52.844-59.239S193.056,219.1,222.491,219.1c29.665,0,53.306,26.82,52.843,59.239C275.334,310.993,251.924,337.58,222.491,337.58Zm195.38,0c-28.971,0-52.843-26.587-52.843-59.239S388.437,219.1,417.871,219.1c29.667,0,53.307,26.82,52.844,59.239C470.715,310.993,447.538,337.58,417.871,337.58Z\"></path>" },
+  "SiDevdotto": { viewBox: "0 0 24 24", inner: "<path d=\"M7.42 10.05c-.18-.16-.46-.23-.84-.23H6l.02 2.44.04 2.45.56-.02c.41 0 .63-.07.83-.26.24-.24.26-.36.26-2.2 0-1.91-.02-1.96-.29-2.18zM0 4.94v14.12h24V4.94H0zM8.56 15.3c-.44.58-1.06.77-2.53.77H4.71V8.53h1.4c1.67 0 2.16.18 2.6.9.27.43.29.6.32 2.57.05 2.23-.02 2.73-.47 3.3zm5.09-5.47h-2.47v1.77h1.52v1.28l-.72.04-.75.03v1.77l1.22.03 1.2.04v1.28h-1.6c-1.53 0-1.6-.01-1.87-.3l-.3-.28v-3.16c0-3.02.01-3.18.25-3.48.23-.31.25-.31 1.88-.31h1.64v1.3zm4.68 5.45c-.17.43-.64.79-1 .79-.18 0-.45-.15-.67-.39-.32-.32-.45-.63-.82-2.08l-.9-3.39-.45-1.67h.76c.4 0 .75.02.75.05 0 .06 1.16 4.54 1.26 4.83.04.15.32-.7.73-2.3l.66-2.52.74-.04c.4-.02.73 0 .73.04 0 .14-1.67 6.38-1.8 6.68z\"></path>" },
+  "SiMedium": { viewBox: "0 0 24 24", inner: "<path d=\"M4.21 0A4.201 4.201 0 0 0 0 4.21v15.58A4.201 4.201 0 0 0 4.21 24h15.58A4.201 4.201 0 0 0 24 19.79v-1.093c-.137.013-.278.02-.422.02-2.577 0-4.027-2.146-4.09-4.832a7.592 7.592 0 0 1 .022-.708c.093-1.186.475-2.241 1.105-3.022a3.885 3.885 0 0 1 1.395-1.1c.468-.237 1.127-.367 1.664-.367h.023c.101 0 .202.004.303.01V4.211A4.201 4.201 0 0 0 19.79 0Zm.198 5.583h4.165l3.588 8.435 3.59-8.435h3.864v.146l-.019.004c-.705.16-1.063.397-1.063 1.254h-.003l.003 10.274c.06.676.424.885 1.063 1.03l.02.004v.145h-4.923v-.145l.019-.005c.639-.144.994-.353 1.054-1.03V7.267l-4.745 11.15h-.261L6.15 7.569v9.445c0 .857.358 1.094 1.063 1.253l.02.004v.147H4.405v-.147l.019-.004c.705-.16 1.065-.397 1.065-1.253V6.987c0-.857-.358-1.094-1.064-1.254l-.018-.004zm19.25 3.668c-1.086.023-1.733 1.323-1.813 3.124H24V9.298a1.378 1.378 0 0 0-.342-.047Zm-1.862 3.632c-.1 1.756.86 3.239 2.204 3.634v-3.634z\"></path>" },
+  "FaStackOverflow": { viewBox: "0 0 384 512", inner: "<path d=\"M290.7 311L95 269.7 86.8 309l195.7 41zm51-87L188.2 95.7l-25.5 30.8 153.5 128.3zm-31.2 39.7L129.2 179l-16.7 36.5L293.7 300zM262 32l-32 24 119.3 160.3 32-24zm20.5 328h-200v39.7h200zm39.7 80H42.7V320h-40v160h359.5V320h-40z\"></path>" },
+  "SiQuora": { viewBox: "0 0 24 24", inner: "<path d=\"M7.3799.9483A11.9628 11.9628 0 0 1 21.248 19.5397l2.4096 2.4225c.7322.7362.21 1.9905-.8272 1.9905l-10.7105.01a12.52 12.52 0 0 1-.304 0h-.02A11.9628 11.9628 0 0 1 7.3818.9503Zm7.3217 4.428a7.1717 7.1717 0 1 0-5.4873 13.2512 7.1717 7.1717 0 0 0 5.4883-13.2511Z\"></path>" },
+  "FaShareAlt": { viewBox: "0 0 448 512", inner: "<path d=\"M352 320c-22.608 0-43.387 7.819-59.79 20.895l-102.486-64.054a96.551 96.551 0 0 0 0-41.683l102.486-64.054C308.613 184.181 329.392 192 352 192c53.019 0 96-42.981 96-96S405.019 0 352 0s-96 42.981-96 96c0 7.158.79 14.13 2.276 20.841L155.79 180.895C139.387 167.819 118.608 160 96 160c-53.019 0-96 42.981-96 96s42.981 96 96 96c22.608 0 43.387-7.819 59.79-20.895l102.486 64.054A96.301 96.301 0 0 0 256 416c0 53.019 42.981 96 96 96s96-42.981 96-96-42.981-96-96-96z\"></path>" },
+};
+
+/** Builds a react-icons-IconBase-equivalent component from inlined SVG data. */
+function makeIcon(name: string): IconType {
+  const def = ICON_DATA[name];
+  const Icon: IconType = ({ size, color, title, ...rest }) => {
+    const html = (title ? '<title>' + String(title).replace(/</g, '&lt;') + '</title>' : '') + def.inner;
+    return React.createElement('svg', {
+      stroke: 'currentColor',
+      fill: 'currentColor',
+      strokeWidth: 0,
+      viewBox: def.viewBox,
+      height: size ?? '1em',
+      width: size ?? '1em',
+      xmlns: 'http://www.w3.org/2000/svg',
+      'aria-hidden': title ? undefined : true,
+      role: title ? 'img' : undefined,
+      ...(color ? { color } : {}),
+      ...rest,
+      dangerouslySetInnerHTML: { __html: html },
+    });
+  };
+  return Icon;
+}
 
 export const PLATFORM_ICONS: Record<string, IconType> = {
-  linkedin: FaLinkedin,
-  facebook: FaFacebook,
-  twitter: FaXTwitter,
-  x: FaXTwitter,
-  instagram: FaInstagram,
-  youtube: FaYoutube,
-  tiktok: SiTiktok,
-  pinterest: FaPinterest,
-  reddit: FaReddit,
-  threads: SiThreads,
-  whatsapp: FaWhatsapp,
-  github: FaGithub,
-  hackernews: SiYcombinator,
-  discord: FaDiscord,
-  devto: SiDevdotto,
-  medium: SiMedium,
-  stackoverflow: FaStackOverflow,
-  quora: SiQuora,
+  linkedin: makeIcon("FaLinkedin"),
+  facebook: makeIcon("FaFacebook"),
+  twitter: makeIcon("FaXTwitter"),
+  x: makeIcon("FaXTwitter"),
+  instagram: makeIcon("FaInstagram"),
+  youtube: makeIcon("FaYoutube"),
+  tiktok: makeIcon("SiTiktok"),
+  pinterest: makeIcon("FaPinterest"),
+  reddit: makeIcon("FaReddit"),
+  threads: makeIcon("SiThreads"),
+  whatsapp: makeIcon("FaWhatsapp"),
+  github: makeIcon("FaGithub"),
+  hackernews: makeIcon("SiYcombinator"),
+  discord: makeIcon("FaDiscord"),
+  devto: makeIcon("SiDevdotto"),
+  medium: makeIcon("SiMedium"),
+  stackoverflow: makeIcon("FaStackOverflow"),
+  quora: makeIcon("SiQuora"),
 };
 
-export const FALLBACK_ICON = FaShareAlt;
+export const FALLBACK_ICON: IconType = makeIcon('FaShareAlt');
 
 const ALIASES: Record<string, string> = {
-  li: 'linkedin',
-  linkedin: 'linkedin',
-  fb: 'facebook',
-  facebook: 'facebook',
-  ig: 'instagram',
-  insta: 'instagram',
-  instagram: 'instagram',
-  yt: 'youtube',
-  youtube: 'youtube',
-  x: 'twitter',
-  twitter: 'twitter',
-  tt: 'tiktok',
-  tiktok: 'tiktok',
-  pinterest: 'pinterest',
-  reddit: 'reddit',
-  threads: 'threads',
-  whatsapp: 'whatsapp',
-  wa: 'whatsapp',
-  github: 'github',
-  hackernews: 'hackernews',
-  hn: 'hackernews',
-  discord: 'discord',
-  devto: 'devto',
-  'dev.to': 'devto',
-  medium: 'medium',
-  stackoverflow: 'stackoverflow',
-  'stack overflow': 'stackoverflow',
-  quora: 'quora',
+  li: 'linkedin', linkedin: 'linkedin', fb: 'facebook', facebook: 'facebook',
+  ig: 'instagram', insta: 'instagram', instagram: 'instagram', yt: 'youtube', youtube: 'youtube',
+  x: 'twitter', twitter: 'twitter', tt: 'tiktok', tiktok: 'tiktok', pinterest: 'pinterest',
+  reddit: 'reddit', threads: 'threads', whatsapp: 'whatsapp', wa: 'whatsapp', github: 'github',
+  hackernews: 'hackernews', hn: 'hackernews', discord: 'discord', devto: 'devto', 'dev.to': 'devto',
+  medium: 'medium', stackoverflow: 'stackoverflow', 'stack overflow': 'stackoverflow', quora: 'quora',
 };
 
-/**
- * Normalize platform input to canonical key (handles LinkedIn, LI, fb, X, etc.).
- */
+/** Normalize platform input to canonical key (handles LinkedIn, LI, fb, X, etc.). */
 export function normalizePlatform(platform?: string): string {
   const key = (platform || '').toLowerCase().trim();
   return ALIASES[key] ?? key;
 }
 
-/**
- * Returns the icon component for a platform. Uses FALLBACK_ICON when not found.
- */
+/** Returns the icon component for a platform. Uses FALLBACK_ICON when not found. */
 export function getPlatformIcon(platform: string): IconType {
   const key = normalizePlatform(platform);
   return PLATFORM_ICONS[key] ?? FALLBACK_ICON;
 }
 
 const PLATFORM_LABELS: Record<string, string> = {
-  linkedin: 'LinkedIn',
-  facebook: 'Facebook',
-  instagram: 'Instagram',
-  youtube: 'YouTube',
-  twitter: 'X',
-  tiktok: 'TikTok',
-  pinterest: 'Pinterest',
-  reddit: 'Reddit',
-  threads: 'Threads',
-  whatsapp: 'WhatsApp',
-  github: 'GitHub',
-  hackernews: 'Hacker News',
-  discord: 'Discord',
-  devto: 'Dev.to',
-  medium: 'Medium',
-  stackoverflow: 'Stack Overflow',
-  quora: 'Quora',
+  linkedin: 'LinkedIn', facebook: 'Facebook', instagram: 'Instagram', youtube: 'YouTube',
+  twitter: 'X', tiktok: 'TikTok', pinterest: 'Pinterest', reddit: 'Reddit', threads: 'Threads',
+  whatsapp: 'WhatsApp', github: 'GitHub', hackernews: 'Hacker News', discord: 'Discord',
+  devto: 'Dev.to', medium: 'Medium', stackoverflow: 'Stack Overflow', quora: 'Quora',
 };
 
-/**
- * Human-readable label for display next to icon (e.g. "X" for twitter/x).
- */
+/** Human-readable label for display next to icon (e.g. "X" for twitter/x). */
 export function getPlatformLabel(platform: string): string {
   const key = normalizePlatform(platform);
   return PLATFORM_LABELS[key] ?? (key ? key.charAt(0).toUpperCase() + key.slice(1) : '');

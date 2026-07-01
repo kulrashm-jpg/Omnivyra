@@ -17,7 +17,9 @@ import {
 } from 'lucide-react';
 import { useCompanyContext } from '../../../components/CompanyContext';
 import { fetchWithAuth } from '../../../components/community-ai/fetchWithAuth';
-import CreditAdvisorDashboard from '../../../components/credit-advisor/CreditAdvisorDashboard';
+import dynamic from 'next/dynamic';
+// BUILD-OPT-002: lazy-load the recharts-backed dashboard so recharts is not in the billing bundle.
+const CreditAdvisorDashboard = dynamic(() => import('../../../components/credit-advisor/CreditAdvisorDashboard'), { ssr: false });
 import OptimizationPanel from '../../../components/credit-advisor/OptimizationPanel';
 import TopUpPanel from '../../../components/billing/TopUpPanel';
 import ActivityCostRange from '../../../components/billing/ActivityCostRange';

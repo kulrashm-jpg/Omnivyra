@@ -1,7 +1,9 @@
 import React from 'react';
 import Head from 'next/head';
+import dynamic from 'next/dynamic';
 import { useCompanyContext } from '@/components/CompanyContext';
-import CreditAdvisorDashboard from '@/components/credit-advisor/CreditAdvisorDashboard';
+// BUILD-OPT-002: lazy-load the recharts-backed dashboard so the chart chunk loads only here.
+const CreditAdvisorDashboard = dynamic(() => import('@/components/credit-advisor/CreditAdvisorDashboard'), { ssr: false });
 import OptimizationPanel from '@/components/credit-advisor/OptimizationPanel';
 
 /**

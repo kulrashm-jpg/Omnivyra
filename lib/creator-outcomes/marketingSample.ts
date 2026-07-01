@@ -124,9 +124,9 @@ function toSample(blueprintId: string, family?: TemplateAssetFamily): MarketingS
     // CREATOR-106: each asset family shows its OWN asset-shaped, text-formatted preview
     // (all built on the same AI visual): image = finished post, carousel = multi-slide
     // deck, infographic = data layout. Default/getSample uses the clean AI base.
-    previewImage: family === 'carousel' ? `/creator-showcases/${b.id}/carousel.png`
-      : family === 'infographic' ? `/creator-showcases/${b.id}/infographic.png`
-        : family === 'image' ? `/creator-showcases/${b.id}/image.png`
+    previewImage: family === 'carousel' ? `/creator-showcases/${b.id}/carousel.webp`
+      : family === 'infographic' ? `/creator-showcases/${b.id}/infographic.webp`
+        : family === 'image' ? `/creator-showcases/${b.id}/image.webp`
           : (pv?.coverImage ?? ''),
     designSystem: b.visualCategory,
     generationDNA: dna,

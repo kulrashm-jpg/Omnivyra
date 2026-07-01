@@ -12,6 +12,7 @@
 
 import { promises as fsp, mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 import { listSamples } from '../../../lib/creator-outcomes/marketingSample';
 import { renderCreatorAssetReviewPreview } from '../creatorAssetRenderer';
 
@@ -81,8 +82,10 @@ export async function populateMarketingSamples(opts: PopulateOptions): Promise<P
       });
       const dir = path.join(PUBLIC_SHOWCASES_DIR, sample.sampleId);
       mkdirSync(dir, { recursive: true });
-      writeFileSync(path.join(dir, 'preview.png'), buffer);
-      const url = `/creator-showcases/${sample.sampleId}/preview.png`;
+      // BUILD-OPT-002: showcase previews are served as WebP (~95% smaller than PNG).
+      const webp = await sharp(buffer).webp({ quality: 82, alphaQuality: 100, effort: 4 }).toBuffer();
+      writeFileSync(path.join(dir, 'preview.webp'), webp);
+      const url = `/creator-showcases/${sample.sampleId}/preview.webp`;
       const entry: ShowcaseEntry = {
         id: `${sample.sampleId}-1`, templateId: sample.sampleId, title: sample.title,
         description: sample.description, industry: DEMO.industry, audience: DEMO.audience,
