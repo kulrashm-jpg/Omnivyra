@@ -123,8 +123,18 @@ function normalizeCreatorCardForAttachment(input: {
     Object.entries(rawOverlayForType).some(
       ([key, value]) => key !== '__template_authoritative' && typeof value === 'string' && value.trim().length > 0,
     );
+  // BETA-013 — an EXPLICIT POST + IMAGE selection (supporting_visual) is authoritative: it must
+  // stay a clean supporting_image and NOT be coerced into a text-bearing banner, even when a
+  // template supplies authoritative overlay copy. Without this guard, choosing POST + IMAGE while
+  // a text template is attached silently produced a banner → embedded_copy → the overlay renderer
+  // baked headline/CTA/decoration onto what the user asked to be a clean photograph. The
+  // template-wins→banner coercion still applies when the user did NOT explicitly pick POST + IMAGE.
+  const explicitSupportingVisual =
+    (rawIntent.attachmentMode ?? input.creatorCard.attachment_mode) === 'supporting_visual';
   const assetType =
-    rawAssetType === 'supporting_image' && templateAuthoritativeText ? 'banner' : rawAssetType;
+    rawAssetType === 'supporting_image' && templateAuthoritativeText && !explicitSupportingVisual
+      ? 'banner'
+      : rawAssetType;
   const requestedMode = normalizeAttachmentMode(rawIntent.attachmentMode ?? input.creatorCard.attachment_mode);
   // Phase 2 fix — resolve attachment_mode from payload signals BEFORE
   // validation. The validator is correct; the writer's mode default
