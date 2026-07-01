@@ -43,5 +43,7 @@
     "**/tmp_chrome_profile_strong": true,
     "**/tmp_report_inspection": true
   },
-  "typescript.disableAutomaticTypeAcquisition": true
+  "typescript.disableAutomaticTypeAcquisition": true,
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true
 }
