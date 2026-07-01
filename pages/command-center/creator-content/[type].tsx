@@ -4816,7 +4816,7 @@ export default function CreatorTypeWorkflowPage() {
                         model={review}
                         onRegenerate={handleGenerate}
                         onDownload={handleDownloadBrief}
-                        onOpenInEditor={() => openCreatorEditor({ assetId: selectedAsset?.id ?? null, attachmentMode: selectedAsset?.attachment_mode ?? null })}
+                        onOpenInEditor={() => openCreatorEditor({ assetId: selectedAsset?.id ?? null })}
                         downloadBusy={actionInProgress === 'download'}
                         regenerateBusy={isGenerating}
                       />
@@ -4852,7 +4852,7 @@ export default function CreatorTypeWorkflowPage() {
                         edited={edited}
                         regenerations={regenCount}
                         onDownload={handleDownloadBrief}
-                        onOpenEditor={() => openCreatorEditor({ assetId: selectedAsset?.id ?? null, attachmentMode: selectedAsset?.attachment_mode ?? null })}
+                        onOpenEditor={() => openCreatorEditor({ assetId: selectedAsset?.id ?? null })}
                         onRegenerate={handleGenerate}
                         onDuplicate={handleSaveAsBlock}
                         downloadBusy={actionInProgress === 'download'}
@@ -4884,7 +4884,7 @@ export default function CreatorTypeWorkflowPage() {
                     return (
                       <CampaignPackagePanel
                         pkg={pkg}
-                        onOpenAsset={() => openCreatorEditor({ assetId: selectedAsset?.id ?? null, attachmentMode: selectedAsset?.attachment_mode ?? null })}
+                        onOpenAsset={() => openCreatorEditor({ assetId: selectedAsset?.id ?? null })}
                         onRegenerate={handleGenerate}
                         onDuplicate={handleSaveAsBlock}
                         regenerateBusy={isGenerating}
