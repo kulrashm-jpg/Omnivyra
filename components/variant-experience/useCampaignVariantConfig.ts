@@ -53,6 +53,7 @@ export function useCampaignVariantConfig(input: {
       setState((s) => ({ ...s, loading: true, error: null }));
       try {
         const params = new URLSearchParams({
+          companyId: input.companyId,
           type: 'campaign',
           campaignId: input.campaignId,
         });
@@ -63,7 +64,8 @@ export function useCampaignVariantConfig(input: {
           setState((s) => ({
             ...s,
             loading: false,
-            error: (payload && typeof payload === 'object' && (payload as any).error) || `Request failed (${response.status})`,
+            // Never surface raw API/validation text to customers.
+            error: "We couldn't load this campaign's configuration. Refresh to try again.",
             config: null,
             campaignSnapshot: null,
           }));
@@ -77,12 +79,12 @@ export function useCampaignVariantConfig(input: {
           config,
           campaignSnapshot: payload as Record<string, unknown>,
         });
-      } catch (err) {
+      } catch {
         if (cancelled) return;
         setState({
           loading: false,
           saving: false,
-          error: err instanceof Error ? err.message : 'Unknown error',
+          error: "We couldn't load this campaign's configuration. Refresh to try again.",
           config: null,
           campaignSnapshot: null,
         });
@@ -139,7 +141,7 @@ export function useCampaignVariantConfig(input: {
           setState((s) => ({
             ...s,
             saving: false,
-            error: (payload && typeof payload === 'object' && (payload as any).error) || `Save failed (${response.status})`,
+            error: "We couldn't save your changes. Please try again.",
           }));
           return null;
         }
@@ -147,11 +149,11 @@ export function useCampaignVariantConfig(input: {
         setTick((t) => t + 1);
         setState((s) => ({ ...s, saving: false, config: next ?? null, error: null }));
         return next ?? null;
-      } catch (err) {
+      } catch {
         setState((s) => ({
           ...s,
           saving: false,
-          error: err instanceof Error ? err.message : 'Unknown error',
+          error: "We couldn't save your changes. Please try again.",
         }));
         return null;
       }

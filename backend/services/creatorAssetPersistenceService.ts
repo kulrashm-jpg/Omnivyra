@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
+import { trackEvent } from './telemetry/telemetryDispatcher';
 
 type IntegritySeverity = 'ok' | 'warning' | 'error';
 
@@ -448,7 +449,17 @@ export async function upsertCreatorAssetRecord(input: CreatorAssetRecordInput): 
     .select()
     .single();
   if (error) throw new Error(`Failed to persist creator asset: ${error.message}`);
-  return data as Record<string, unknown>;
+  const asset = data as Record<string, unknown>;
+  // Adoption telemetry (append-only, fail-soft): an AI-produced creator asset
+  // was persisted. Deduped per asset id (upsert is idempotent).
+  trackEvent({
+    type: 'ai.generated',
+    organizationId: input.companyId,
+    actorId: input.userId ?? null,
+    entityId: typeof asset.id === 'string' ? asset.id : null,
+    metadata: { creatorType: input.creatorType ?? '', assetType: input.sourceType ?? '' },
+  });
+  return asset;
 }
 
 export async function attachCreatorAsset(input: CreatorAttachmentInput): Promise<Record<string, unknown>> {

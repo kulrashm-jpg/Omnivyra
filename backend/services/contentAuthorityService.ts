@@ -7,6 +7,8 @@ import {
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { clamp, normalizeText, roundNumber, safeAverage, stableUuid } from './intelligenceEngineUtils';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
 
 type PageRow = {
   id: string;
@@ -122,6 +124,10 @@ export async function generateContentAuthorityDecisions(companyId: string): Prom
 
   if (pages.length === 0) return [];
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.81/0.78/0.8/0.76/0.8/0.77). MEASURED crawl;
+  // confidence scales with the crawled-page sample size.
+  const contentAuthorityConfidence = deriveDecisionConfidence({ maturity: 'MEASURED', sampleSize: pages.length, dataPresent: pages.length > 0 });
+
   const contentByPageId = new Map<string, PageContentRow[]>();
   for (const row of pageContent) {
     const current = contentByPageId.get(row.page_id) ?? [];
@@ -193,7 +199,7 @@ export async function generateContentAuthorityDecisions(companyId: string): Prom
         impact_revenue: 26,
         priority_score: 60,
         effort_score: 24,
-        confidence_score: 0.81,
+        confidence_score: contentAuthorityConfidence.confidenceScore,
         recommendation: 'Expand this topic into supporting pages, FAQs, and intent-specific subpages so it can become an authority cluster.',
         action_type: 'improve_content',
         action_payload: {
@@ -229,7 +235,7 @@ export async function generateContentAuthorityDecisions(companyId: string): Prom
         impact_revenue: 20,
         priority_score: clamp(44 + Math.round((3 - Math.min(avgHeadings, 3)) * 10), 0, 100),
         effort_score: 18,
-        confidence_score: 0.78,
+        confidence_score: contentAuthorityConfidence.confidenceScore,
         recommendation: 'Increase topical coverage with stronger section depth, supporting headings, and evidence-rich content blocks.',
         action_type: 'improve_content',
         action_payload: {
@@ -264,7 +270,7 @@ export async function generateContentAuthorityDecisions(companyId: string): Prom
         impact_revenue: 22,
         priority_score: 46,
         effort_score: 20,
-        confidence_score: 0.8,
+        confidence_score: contentAuthorityConfidence.confidenceScore,
         recommendation: 'Create linked supporting pages inside this topic so authority and conversion intent reinforce each other.',
         action_type: 'improve_content',
         action_payload: {
@@ -302,7 +308,7 @@ export async function generateContentAuthorityDecisions(companyId: string): Prom
           impact_revenue: 24,
           priority_score: clamp(50 + Math.round((5 - Math.min(avgHeadings, 5)) * 10), 0, 100),
           effort_score: 22,
-          confidence_score: 0.76,
+          confidence_score: contentAuthorityConfidence.confidenceScore,
           recommendation: 'Increase depth on each page in the cluster: add more substantive sections, evidence, and expert-level detail.',
           action_type: 'improve_content',
           action_payload: {
@@ -350,7 +356,7 @@ export async function generateContentAuthorityDecisions(companyId: string): Prom
           impact_revenue: 28,
           priority_score: clamp(48 + Math.round(missingTypes.length * 12), 0, 100),
           effort_score: 20,
-          confidence_score: 0.8,
+          confidence_score: contentAuthorityConfidence.confidenceScore,
           recommendation: `Create the following pages within the "${bucket.topic}" cluster: ${missingTypes.join(', ')}. Link them internally to strengthen the cluster.`,
           action_type: 'improve_content',
           action_payload: {
@@ -411,7 +417,7 @@ export async function generateContentAuthorityDecisions(companyId: string): Prom
             impact_revenue: 28,
             priority_score: clamp(60 + Math.round(count * 3), 0, 100),
             effort_score: 30,
-            confidence_score: 0.77,
+            confidence_score: contentAuthorityConfidence.confidenceScore,
             recommendation: `Build a new content cluster around "${theme}" with 3-5 interlinked pages to capture the existing keyword demand.`,
             action_type: 'improve_content',
             action_payload: {

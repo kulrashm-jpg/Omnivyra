@@ -28,6 +28,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 import {
   getAutomationConfig,
   upsertAutomationConfig,
@@ -106,6 +107,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const outcome = await upsertAutomationConfig(organizationId, patch);
     if (!outcome.ok || !outcome.config) {
       return res.status(500).json({ error: outcome.error || 'UPSERT_FAILED' });
+    }
+    // Adoption telemetry (append-only, fail-soft): a workflow was enabled/disabled.
+    // Toggles are distinct actions → not deduped.
+    if (Object.prototype.hasOwnProperty.call(body, 'enabled')) {
+      trackEvent({
+        type: patch.enabled ? 'automation.enabled' : 'automation.disabled',
+        organizationId,
+        entityId: organizationId,
+        dedupKey: null,
+        metadata: { workflow: 'engagement_automation' },
+      });
     }
     return res.status(200).json({ success: true, ...serialize(outcome.config) });
   } catch (err) {

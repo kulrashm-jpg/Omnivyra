@@ -4,6 +4,7 @@ import { config as appConfig } from '@/config';
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 import { getRequestContext } from './requestContext';
+import { isBetaTextMockMode, createBetaMockCompletion } from './betaMockTextProvider';
 import {
   acquire as distSemaphoreAcquire,
   release as distSemaphoreRelease,
@@ -1419,6 +1420,15 @@ const buildMetadata = (
 const executeGatewayCompletion = async (
   request: GatewayRequest & { operation: string }
 ): Promise<GatewayResponse<string>> => {
+  // ── BETA-022 / EXEC-001: zero-cost deterministic completion ────────────────
+  // When BETA_AI_MODE is on, return a deterministic fixture completion instead of
+  // calling OpenAI — the whole Writer/Creator generation workflow runs with zero
+  // external spend. Off by default → production is unchanged. Parallels the image
+  // mock gate in generateProviderImage (creatorAssetRenderer).
+  if (isBetaTextMockMode()) {
+    return createBetaMockCompletion(request);
+  }
+
   // ── GAP 6: Resolve effective model based on plan tier + usage budget ────────
   const effectiveModel = await resolveEffectiveModel(
     request.model,

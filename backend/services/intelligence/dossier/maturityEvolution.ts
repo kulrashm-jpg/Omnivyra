@@ -80,6 +80,8 @@ const DIMENSION_FRICTION: Record<CanonicalDimensionKey, string> = {
     'Foundational integrity gaps — crawl health and indexability are blocking the substrate every other pillar relies on. Discoverability friction here cascades into every retrieval surface downstream.',
   extraction_readiness:
     'Structural extractability is the bottleneck — even strong content does not surface where evaluators look. Without machine-readable structure, AI surfaces cannot reliably extract answers, and authority propagation stalls at the page level.',
+  accessibility:
+    'Accessibility gaps weaken the foundation — non-semantic structure, missing WCAG conformance, and inaccessible markup reduce how reliably crawlers, assistive technology, and AI surfaces can parse the site.',
   authority_inflow:
     'Insufficient external corroboration — the authority footprint outside the brand\'s own surfaces is too thin to anchor the next stage. Corroboration density, not on-site assertion, is what evaluators verify against.',
   entity_graph_strength:

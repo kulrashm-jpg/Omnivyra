@@ -1,3 +1,6 @@
+// BETA-EXEC-003: system-maturity thresholds from the scoring-governance registry.
+import { MATURITY_THRESHOLDS } from '../canonicalReport/scoringGovernance';
+
 export type ScoreState = 'measured' | 'inferred' | 'insufficient_signal' | 'unavailable';
 
 export type ConfidenceBand = 'high' | 'medium' | 'low';
@@ -108,9 +111,9 @@ export function classifySystemMaturity(params: {
     ? measuredAuthority.reduce((sum, env) => sum + (env.value ?? 0), 0) / measuredAuthority.length
     : null;
 
-  const strongFoundation = foundationAvg != null && foundationAvg >= 65;
-  const weakAuthority = authorityAvg == null || authorityAvg < 40;
-  const strongAuthority = authorityAvg != null && authorityAvg >= 60;
+  const strongFoundation = foundationAvg != null && foundationAvg >= MATURITY_THRESHOLDS.strongFoundation;
+  const weakAuthority = authorityAvg == null || authorityAvg < MATURITY_THRESHOLDS.weakAuthority;
+  const strongAuthority = authorityAvg != null && authorityAvg >= MATURITY_THRESHOLDS.strongAuthority;
 
   if (strongFoundation && weakAuthority) return 'early_stage';
   if (!strongFoundation && weakAuthority) return 'structurally_weak';

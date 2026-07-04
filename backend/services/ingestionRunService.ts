@@ -3,7 +3,7 @@ import { supabase } from '../db/supabaseClient';
 import type { UnifiedSource } from './sourceNormalizationService';
 import { ownedDbTable } from '../db/writeOwner';
 
-export type IngestionSource = 'crawler' | 'ga4' | 'gsc' | 'crm' | 'ads';
+export type IngestionSource = 'crawler' | 'ga4' | 'gsc' | 'crm' | 'ads' | 'reviews';
 export type IngestionRunStatus = 'running' | 'completed' | 'failed' | 'partial' | 'skipped';
 
 export interface IngestionRunCounts {
@@ -124,7 +124,7 @@ export async function completeIngestionRun(params: {
 
 export async function setDataSourceStatus(params: {
   companyId: string;
-  source: 'crawler' | 'ga' | 'gsc' | 'crm' | 'ads';
+  source: 'crawler' | 'ga' | 'gsc' | 'crm' | 'ads' | 'reviews';
   status: 'connected' | 'syncing' | 'error' | 'missing';
   lastSyncedAt?: string | null;
   errorMessage?: string | null;

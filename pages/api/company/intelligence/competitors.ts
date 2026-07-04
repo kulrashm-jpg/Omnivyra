@@ -15,6 +15,7 @@ import {
   setCompetitorEnabled,
   PLAN_LIMIT_EXCEEDED,
 } from '../../../../backend/services/companyIntelligenceConfigService';
+import { trackEvent } from '../../../../backend/services/telemetry/telemetryDispatcher';
 
 const ALLOWED_ROLES = [
   Role.COMPANY_ADMIN,
@@ -45,6 +46,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           return res.status(400).json({ error: 'competitor_name is required' });
         }
         const competitor = await createCompetitor(companyContext.companyId, body.competitor_name);
+        // Canonical telemetry (append-only, fail-soft): a competitor was tracked.
+        // Deduped per competitor id.
+        trackEvent({
+          type: 'market.competitor_tracked',
+          organizationId: companyContext.companyId,
+          entityId: (competitor as { id?: string }).id ?? null,
+          metadata: { competitorName: body.competitor_name },
+        });
         return res.status(201).json({ competitor });
       }
       case 'PUT': {

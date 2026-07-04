@@ -3,6 +3,11 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { insertActivity, updateActivity, deleteActivity } from '../../../backend/services/executionPlannerService';
+import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import {
   DEFAULT_BUILD_MODE_SCRATCH,
@@ -116,8 +121,159 @@ const mapCampaignPlaybook = (campaign: any) => ({
     : null,
 });
 
+// Marker written into daily_content_plans.format_notes so the FormatSelectionPage
+// list reads back exactly the plans it created (and not week-structured planner
+// rows for the same campaign), preserving the existing panel contract.
+const CONTENT_PLAN_MARKER = 'content_plan_panel:true';
+const CONTENT_PLAN_DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+function contentPlanDateFor(day: unknown): string {
+  const now = new Date();
+  const target = CONTENT_PLAN_DAY_NAMES.indexOf(String(day ?? '').toLowerCase());
+  if (target < 0) return now.toISOString().split('T')[0];
+  const d = new Date(now);
+  d.setDate(now.getDate() + ((target - now.getDay() + 7) % 7));
+  return d.toISOString().split('T')[0];
+}
+
+function mapRowToContentPlan(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    campaignId: row.campaign_id,
+    dayOfWeek: row.day_of_week,
+    date: row.date,
+    platform: row.platform,
+    contentType: row.content_type,
+    topic: row.topic ?? undefined,
+    content: row.content ?? '',
+    hashtags: Array.isArray(row.hashtags) ? row.hashtags : [],
+    status: row.status ?? 'planned',
+    aiGenerated: Boolean(row.ai_generated),
+  };
+}
+
+async function handleContentPlan(req: NextApiRequest, res: NextApiResponse): Promise<void> {
+  const method = req.method || 'GET';
+  const data: Record<string, unknown> =
+    req.body?.data && typeof req.body.data === 'object' ? req.body.data : {};
+
+  let campaignId =
+    method === 'GET'
+      ? String(req.query.campaignId ?? '').trim()
+      : String(data.campaignId ?? '').trim();
+  const existingRowId =
+    method === 'DELETE'
+      ? String(req.body?.id ?? '').trim()
+      : String(data.id ?? '').trim();
+
+  // Row-keyed ops (update/delete) may omit campaignId — resolve it from the row.
+  if (!campaignId && existingRowId) {
+    const { data: row } = await supabase
+      .from('daily_content_plans')
+      .select('campaign_id')
+      .eq('id', existingRowId)
+      .maybeSingle();
+    campaignId = row?.campaign_id ? String(row.campaign_id) : '';
+  }
+  if (!campaignId) {
+    res.status(400).json({ error: 'campaignId required' });
+    return;
+  }
+
+  // Resolve the owning company from the campaign and enforce access server-side.
+  const { data: companyRow } = await supabase
+    .from('campaign_versions')
+    .select('company_id')
+    .eq('campaign_id', campaignId)
+    .limit(1)
+    .maybeSingle();
+  const company_id = companyRow?.company_id ? String(companyRow.company_id) : '';
+  if (!company_id) {
+    res.status(404).json({ error: 'Campaign company not found' });
+    return;
+  }
+  const access = await enforceCompanyAccess({ req, res, companyId: company_id });
+  if (!access) return;
+
+  if (method === 'GET') {
+    const { data: rows, error } = await supabase
+      .from('daily_content_plans')
+      .select('*')
+      .eq('campaign_id', campaignId)
+      .ilike('format_notes', `%${CONTENT_PLAN_MARKER}%`)
+      .order('created_at', { ascending: true });
+    if (error) {
+      res.status(500).json({ error: 'Failed to load content plans' });
+      return;
+    }
+    res.status(200).json({ plans: (rows || []).map((r) => mapRowToContentPlan(r as Record<string, unknown>)) });
+    return;
+  }
+
+  if (method === 'DELETE') {
+    if (!existingRowId) {
+      res.status(400).json({ error: 'id required' });
+      return;
+    }
+    await deleteActivity(existingRowId);
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  if (method === 'PUT') {
+    if (!existingRowId) {
+      res.status(400).json({ error: 'id required' });
+      return;
+    }
+    const updates: Record<string, unknown> = {};
+    if (data.content != null) updates.content = String(data.content);
+    if (data.topic != null) {
+      updates.topic = String(data.topic);
+      updates.title = String(data.topic);
+    }
+    if (data.platform != null) updates.platform = String(data.platform);
+    if (data.contentType != null) updates.content_type = String(data.contentType);
+    if (Array.isArray(data.hashtags)) updates.hashtags = data.hashtags;
+    if (data.status != null) updates.status = String(data.status);
+    if (data.dayOfWeek != null) updates.day_of_week = String(data.dayOfWeek);
+    await updateActivity(existingRowId, updates, 'board');
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  // POST — create a new content plan via the canonical single-row writer.
+  const dayOfWeek = String(data.dayOfWeek ?? 'monday');
+  const row = {
+    campaign_id: campaignId,
+    week_number: 1,
+    day_of_week: dayOfWeek,
+    date: contentPlanDateFor(dayOfWeek),
+    platform: String(data.platform ?? 'linkedin'),
+    content_type: String(data.contentType ?? 'post'),
+    title: String(data.topic ?? `${dayOfWeek} content`),
+    content: String(data.content ?? ''),
+    topic: data.topic != null ? String(data.topic) : null,
+    hashtags: Array.isArray(data.hashtags) ? data.hashtags : [],
+    status: String(data.status ?? 'planned'),
+    ai_generated: Boolean(data.aiGenerated),
+    format_notes: CONTENT_PLAN_MARKER,
+  };
+  const { id } = await insertActivity(row, 'AI');
+  res.status(200).json({ plan: mapRowToContentPlan({ ...row, id }) });
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    // Campaign content-plan CRUD (FormatSelectionPage). Campaign-scoped; the
+    // owning company is resolved server-side so the caller carries no company
+    // context, and all writes go through the canonical daily_content_plans
+    // writer (executionPlannerService).
+    const requestType =
+      (req.query.type as string | undefined) ?? (req.body?.type as string | undefined);
+    if (requestType === 'content-plan') {
+      return await handleContentPlan(req, res);
+    }
+
     const companyIdRaw =
       (req.query.companyId as string | undefined) ||
       (req.body?.companyId as string | undefined) ||
@@ -353,7 +509,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       console.log('CAMPAIGN_CREATED', { companyId, campaignId: campaign.id });
-      return res.status(201).json({ 
+      // Canonical telemetry (append-only, fail-soft): a campaign was created.
+      trackEvent({
+        type: 'campaign.created',
+        organizationId: companyId,
+        actorId: UUID_RE.test(requester.id) ? requester.id : null,
+        entityId: (campaign as { id: string }).id,
+        metadata: typeof campaignData.mode === 'string' ? { mode: campaignData.mode } : {},
+      });
+      return res.status(201).json({
         success: true,
         campaign,
         message: 'Campaign created successfully'

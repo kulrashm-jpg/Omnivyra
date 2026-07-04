@@ -40,6 +40,7 @@ import {
   type NoteVisibility,
 } from '../../../backend/types/opportunityWorkflow';
 import { publishRealtime } from '../../../backend/services/realtimePublisherService';
+import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
@@ -104,6 +105,16 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         assignedByUserId: ctx.userId,
         role: r,
       });
+      // Canonical telemetry (append-only, fail-soft): a lead/opportunity was
+      // assigned. Not deduped — reassignment is a distinct action.
+      trackEvent({
+        type: 'lead.assigned',
+        organizationId: companyId,
+        actorId: ctx.userId,
+        entityId: opportunityId,
+        metadata: { role: r },
+        dedupKey: null,
+      });
     } else if (kind === 'note') {
       const bodyText = String(body.body ?? '');
       const vis = (body.visibility ?? 'internal') as NoteVisibility;
@@ -141,6 +152,17 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       topic: 'workflow',
       eventName: kind === 'note' ? 'analyst.note_added' : kind === 'assignment' ? 'opportunity.assigned' : `workflow.${kind}_added`,
       payload: { opportunity_feed_item_id: opportunityId, kind, actor_user_id: ctx.userId },
+    });
+    // Canonical telemetry (append-only, fail-soft): a lead workflow action was
+    // triggered (assignment / note / tag / disposition). Not deduped — each
+    // workflow action is a distinct event. (assignment also emits lead.assigned.)
+    trackEvent({
+      type: 'lead.workflow_triggered',
+      organizationId: companyId,
+      actorId: ctx.userId,
+      entityId: opportunityId,
+      metadata: { workflow: kind },
+      dedupKey: null,
     });
     return res.status(200).json({ ok: true, [kind]: result });
   } catch (err: any) {

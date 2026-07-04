@@ -6,6 +6,10 @@ import {
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { clamp, normalizeText } from './intelligenceEngineUtils';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
+// BETA-PROVIDER-003: canonical GA4 provider reliability lifts confidence on already-MEASURED session data.
+import { isGa4ProviderAvailable, ga4ProviderReliability } from './ga4ProviderBridge';
 
 type SessionRow = {
   id: string;
@@ -143,6 +147,18 @@ export async function generateTrafficIntelligenceDecisions(companyId: string): P
 
   if (sessions.length === 0) return [];
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.83/0.74/0.81). MEASURED session analytics;
+  // confidence scales with the session sample size backing the traffic signal.
+  // BETA-PROVIDER-003: canonical_sessions is first-party GA4 data (already MEASURED). Add the GA4
+  // provider's reliability factor when connected (no scoring redesign); null (unchanged) otherwise.
+  const ga4ProviderLive = isGa4ProviderAvailable();
+  const trafficConfidence = deriveDecisionConfidence({
+    maturity: 'MEASURED',
+    providerReliability: ga4ProviderLive ? ga4ProviderReliability() : null,
+    sampleSize: sessions.length,
+    dataPresent: sessions.length > 0,
+  });
+
   const viewsBySessionId = new Map<string, PageViewRow[]>();
   for (const view of pageViews) {
     const current = viewsBySessionId.get(view.session_id) ?? [];
@@ -184,7 +200,7 @@ export async function generateTrafficIntelligenceDecisions(companyId: string): P
         impact_revenue: clamp(48 + Math.round((45 - trafficQuality) * 0.7), 0, 100),
         priority_score: clamp(54 + Math.round((45 - trafficQuality) * 0.85), 0, 100),
         effort_score: 18,
-        confidence_score: 0.83,
+        confidence_score: trafficConfidence.confidenceScore,
         recommendation: 'Tighten landing-page relevance and acquisition targeting so low-intent sessions stop diluting the funnel.',
         action_type: 'improve_content',
         action_payload: {
@@ -225,7 +241,7 @@ export async function generateTrafficIntelligenceDecisions(companyId: string): P
         impact_revenue: 54,
         priority_score: 52,
         effort_score: 22,
-        confidence_score: 0.74,
+        confidence_score: trafficConfidence.confidenceScore,
         recommendation: 'Constrain targeting and geo routing so spend is concentrated in regions that actually engage.',
         action_type: 'improve_content',
         action_payload: {
@@ -273,7 +289,7 @@ export async function generateTrafficIntelligenceDecisions(companyId: string): P
         impact_revenue: 62,
         priority_score: 63,
         effort_score: 20,
-        confidence_score: 0.81,
+        confidence_score: trafficConfidence.confidenceScore,
         recommendation: 'Route paid traffic into pages with explicit CTA coverage and stronger offer alignment.',
         action_type: 'improve_content',
         action_payload: {

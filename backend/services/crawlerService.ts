@@ -3,6 +3,42 @@ import { supabase } from '../db/supabaseClient';
 import { ensureCanonicalDomain, hashKey, normalizeHost, normalizeUrl, resolveCompanyWebsite } from './ingestionUtils';
 import { ownedDbTable } from '../db/writeOwner';
 
+/**
+ * BETA-ROADMAP-EXEC-002 — static-parser evidence depth. Signals recovered from the SAME regex/static
+ * parse (no headless): structured data, canonical, i18n/pagination/feeds, image alt coverage, forms/tables,
+ * publication date + author, and HTTP response metadata (security/compression headers). Persisted into the
+ * existing `crawl_metadata` JSONB (no schema change) and read by the existing engines' placeholder checks.
+ */
+export interface PageSignals {
+  canonical: boolean;
+  jsonld_count: number;
+  jsonld_types: string[];
+  hreflang_count: number;
+  has_pagination: boolean;
+  feed_links: number;
+  lang: string | null;
+  img_count: number;
+  img_with_alt: number;
+  form_count: number;
+  table_count: number;
+  published_time: string | null;
+  author: string | null;
+  /**
+   * BETA-AUTHORITY-EXEC-002 (Wave-1) — declared entity identity + credentials parsed from the already-fetched
+   * JSON-LD. Evidence-only: never scored, never verified, never a recommendation. Optional/additive.
+   */
+  same_as?: string[];
+  declared_credentials?: string[];
+  response: {
+    content_encoding: string | null;
+    cache_control: string | null;
+    security: { hsts: boolean; csp: boolean; x_frame_options: boolean; x_content_type_options: boolean };
+    security_header_count: number;
+  } | null;
+  /** Domain-level signals attached to the root page only (robots.txt / sitemap.xml). */
+  site?: { robots_txt: boolean; sitemap_xml: boolean; sitemap_url_count: number };
+}
+
 export interface CrawlPageResult {
   url: string;
   pageType: string;
@@ -14,6 +50,7 @@ export interface CrawlPageResult {
   ctas: Array<{ text: string; href: string | null }>;
   internalLinks: Array<{ url: string; anchorText: string }>;
   metaTags: Record<string, string>;
+  signals: PageSignals;
   httpStatus: number;
   crawlDepth: number;
 }
@@ -128,13 +165,113 @@ function inferPageType(url: string): string {
   if (pathname.includes('/feature')) return 'feature';
   if (pathname.includes('/docs') || pathname.includes('/documentation')) return 'docs';
   if (pathname.includes('/contact')) return 'contact';
+  // BETA-AUTHORITY-EXEC-002 (Wave-1) — legal-transparency page recognition via the existing classifier.
+  if (/(?:^|\/)(?:privacy|terms|terms-of-service|tos|cookie|cookies|imprint|impressum|legal|legal-notice|disclosure|disclaimer)(?:[-/]|$)/.test(pathname)) return 'legal';
   if (pathname.split('/').filter(Boolean).length <= 1) return 'landing';
   return 'other';
 }
 
-function parsePage(html: string, url: string, depth: number): CrawlPageResult {
+/**
+ * BETA-ROADMAP-EXEC-002 — recover static signals from the RAW html (JSON-LD lives in <script> which
+ * cleanHtml strips, so this reads the raw markup) + HTTP response headers. No headless, no new requests.
+ */
+function extractPageSignals(rawHtml: string, metaTags: Record<string, string>, headers: Record<string, string> | null): PageSignals {
+  const count = (re: RegExp) => (rawHtml.match(re) || []).length;
+
+  // Structured data (JSON-LD) — count blocks + collect @type values.
+  const jsonldTypes: string[] = [];
+  const ldRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let ld: RegExpExecArray | null;
+  let jsonldCount = 0;
+  while ((ld = ldRegex.exec(rawHtml)) != null) {
+    jsonldCount += 1;
+    for (const t of ld[1].matchAll(/"@type"\s*:\s*"([^"]+)"/g)) if (!jsonldTypes.includes(t[1])) jsonldTypes.push(t[1]);
+  }
+  const ldDatePublished = /"datePublished"\s*:\s*"([^"]+)"/i.exec(rawHtml)?.[1] ?? null;
+  const ldAuthor = /"author"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"/i.exec(rawHtml)?.[1] ?? null;
+
+  // BETA-AUTHORITY-EXEC-002 (Wave-1) — declared entity identity (sameAs) + declared credentials, parsed from
+  // the already-fetched JSON-LD. Evidence-only; no additional fetch, no scoring, no verification.
+  const sameAs: string[] = [];
+  for (const m of rawHtml.matchAll(/"sameAs"\s*:\s*(\[[^\]]*\]|"[^"]*")/gi)) {
+    for (const u of m[1].matchAll(/"(https?:\/\/[^"\s]+)"/g)) sameAs.push(u[1]);
+  }
+  const declaredCredentials: string[] = [];
+  for (const key of ['award', 'hasCredential', 'certification', 'memberOf', 'professionalQualification']) {
+    const strRe = new RegExp(`"${key}"\\s*:\\s*"([^"]+)"`, 'gi');
+    let matched = false;
+    for (const m of rawHtml.matchAll(strRe)) { declaredCredentials.push(`${key}: ${m[1]}`); matched = true; }
+    if (!matched && new RegExp(`"${key}"\\s*:`, 'i').test(rawHtml)) declaredCredentials.push(key);
+  }
+
+  const imgCount = count(/<img\b/gi);
+  const imgWithAlt = count(/<img\b[^>]*\balt=/gi);
+
+  const h = headers || {};
+  const hv = (k: string) => (typeof h[k] === 'string' ? h[k] : (typeof h[k.toLowerCase()] === 'string' ? h[k.toLowerCase()] : null));
+  const security = {
+    hsts: Boolean(hv('strict-transport-security')),
+    csp: Boolean(hv('content-security-policy')),
+    x_frame_options: Boolean(hv('x-frame-options')),
+    x_content_type_options: Boolean(hv('x-content-type-options')),
+  };
+  const response = headers
+    ? {
+        content_encoding: hv('content-encoding'),
+        cache_control: hv('cache-control'),
+        security,
+        security_header_count: Object.values(security).filter(Boolean).length,
+      }
+    : null;
+
+  return {
+    canonical: /<link[^>]+rel=["']canonical["']/i.test(rawHtml),
+    jsonld_count: jsonldCount,
+    jsonld_types: jsonldTypes.slice(0, 12),
+    hreflang_count: count(/<link[^>]+rel=["']alternate["'][^>]+hreflang=/gi),
+    has_pagination: /<link[^>]+rel=["'](?:prev|next)["']/i.test(rawHtml),
+    feed_links: count(/<link[^>]+type=["']application\/(?:rss|atom)\+xml["']/gi),
+    lang: /<html[^>]+\blang=["']([^"']+)["']/i.exec(rawHtml)?.[1]?.trim() ?? null,
+    img_count: imgCount,
+    img_with_alt: imgWithAlt,
+    form_count: count(/<form\b/gi),
+    table_count: count(/<table\b/gi),
+    published_time: metaTags['article:published_time'] ?? ldDatePublished ?? /<time[^>]+datetime=["']([^"']+)["']/i.exec(rawHtml)?.[1] ?? null,
+    author: metaTags['author'] ?? ldAuthor ?? null,
+    same_as: [...new Set(sameAs)].slice(0, 25),
+    declared_credentials: [...new Set(declaredCredentials)].slice(0, 25),
+    response,
+  };
+}
+
+/** BETA-ROADMAP-EXEC-002 — fetch robots.txt + sitemap.xml once per domain (2 cheap GETs; degrades to absent). */
+async function fetchSiteFiles(rootUrl: string, timeoutMs: number): Promise<PageSignals['site']> {
+  const origin = new URL(rootUrl).origin;
+  const get = async (path: string) => {
+    try {
+      const r = await axios.get<string>(`${origin}${path}`, { timeout: timeoutMs, responseType: 'text', headers: { 'User-Agent': 'OmnivyraBot/1.0 (+https://omnivyra.com)' }, validateStatus: (s) => s >= 200 && s < 400 });
+      return typeof r.data === 'string' ? r.data : '';
+    } catch { return null; }
+  };
+  const robots = await get('/robots.txt');
+  let sitemap = await get('/sitemap.xml');
+  // robots.txt may point at a differently-named sitemap.
+  if (sitemap == null && robots) {
+    const declared = /Sitemap:\s*(\S+)/i.exec(robots)?.[1];
+    if (declared) { try { sitemap = (await axios.get<string>(declared, { timeout: timeoutMs, responseType: 'text', validateStatus: (s) => s >= 200 && s < 400 })).data as string; } catch { /* absent */ } }
+  }
+  return {
+    robots_txt: robots != null && robots.trim().length > 0,
+    sitemap_xml: sitemap != null && /<(?:urlset|sitemapindex)\b/i.test(sitemap),
+    sitemap_url_count: sitemap ? (sitemap.match(/<loc>/gi) || []).length : 0,
+  };
+}
+
+function parsePage(html: string, url: string, depth: number, headers: Record<string, string> | null = null): CrawlPageResult {
   const cleaned = cleanHtml(html);
   const metaTags = extractMetaTags(cleaned);
+  // BETA-ROADMAP-EXEC-002: recover the additional static signals from the RAW html + response headers.
+  const signals = extractPageSignals(html, metaTags, headers);
   const title = stripTags(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(cleaned)?.[1] ?? '');
   const headings = [1, 2, 3].flatMap((level) =>
     extractTagContents(cleaned, `h${level}`).map((text) => ({ level: level as 1 | 2 | 3, text }))
@@ -180,12 +317,13 @@ function parsePage(html: string, url: string, depth: number): CrawlPageResult {
     ctas,
     internalLinks: links.filter((link) => link.isInternal).map((link) => ({ url: link.url, anchorText: link.anchorText })),
     metaTags,
+    signals,
     httpStatus: 200,
     crawlDepth: depth,
   };
 }
 
-async function fetchHtml(url: string, timeoutMs: number): Promise<{ html: string; status: number }> {
+async function fetchHtml(url: string, timeoutMs: number): Promise<{ html: string; status: number; headers: Record<string, string> }> {
   const response = await axios.get<string>(url, {
     timeout: timeoutMs,
     maxRedirects: 5,
@@ -197,9 +335,17 @@ async function fetchHtml(url: string, timeoutMs: number): Promise<{ html: string
     validateStatus: (status) => status >= 200 && status < 400,
   });
 
+  // BETA-ROADMAP-EXEC-002: retain the HTTP response headers (previously discarded) so security /
+  // compression / caching metadata can be recovered without any extra request.
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(response.headers ?? {})) {
+    if (typeof v === 'string') headers[k.toLowerCase()] = v;
+    else if (Array.isArray(v)) headers[k.toLowerCase()] = v.join(', ');
+  }
   return {
     html: String(response.data ?? ''),
     status: response.status,
+    headers,
   };
 }
 
@@ -228,6 +374,8 @@ async function persistCrawledPage(companyId: string, domainId: string, page: Cra
         crawl_metadata: {
           meta_tags: page.metaTags,
           cta_count: page.ctas.length,
+          // BETA-ROADMAP-EXEC-002: recovered static + response-header signals (single representation).
+          signals: page.signals,
         },
       },
       { onConflict: 'company_id,url' }
@@ -304,6 +452,8 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
   const timeoutMs = Math.max(2000, input.timeoutMs ?? 10000);
   const rootHost = normalizeHost(rootUrl);
   const domain = await ensureCanonicalDomain(input.companyId, rootUrl);
+  // BETA-ROADMAP-EXEC-002: one-time domain-level fetch of robots.txt + sitemap.xml (2 cheap GETs).
+  const siteFiles = await fetchSiteFiles(rootUrl, timeoutMs).catch(() => undefined);
 
   const visited = new Set<string>();
   const queue: QueueItem[] = [{ url: rootUrl, depth: 0 }];
@@ -340,8 +490,10 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
       continue;
     }
 
-    const parsed = parsePage(fetched.html, current.url, current.depth);
+    const parsed = parsePage(fetched.html, current.url, current.depth, fetched.headers);
     parsed.httpStatus = fetched.status;
+    // Attach the one-time domain-level robots/sitemap signals to the root page.
+    if (current.depth === 0 && siteFiles) parsed.signals.site = siteFiles;
 
     const persisted = await persistCrawledPage(input.companyId, domain.id, parsed);
     pagesProcessed += 1;

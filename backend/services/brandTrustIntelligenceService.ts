@@ -5,7 +5,12 @@ import {
   type PersistedDecisionObject,
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
 import { clamp, normalizeText, roundNumber } from './intelligenceEngineUtils';
+// BETA-PROVIDER-005: authenticated reputation evidence lifts brand-trust confidence from INFERRED community
+// sentiment to MEASURED when a real reviews/reputation provider is connected.
+import { isReputationProviderAvailable, reputationProviderReliability } from './reputationProviderBridge';
 
 type CommunityActionRow = {
   id: string;
@@ -63,6 +68,20 @@ export async function generateBrandTrustIntelligenceDecisions(companyId: string)
   const rows = (data ?? []) as CommunityActionRow[];
   if (rows.length === 0) return [];
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.83/0.77/0.8). Community sentiment is INFERRED;
+  // confidence scales with the community-signal sample size.
+  // BETA-PROVIDER-005: brand trust is BETA-AUDIT-004's #1 trust gap (INFERRED from sparse community
+  // sentiment). When a real reputation provider (Google/Trustpilot/G2/…) is connected, trust becomes
+  // MEASURED (with the provider's reliability) — confidence rises from evidence quality alone, no scoring
+  // redesign. With no provider configured this is INFERRED, exactly as before (backward compatible).
+  const reputationProviderLive = isReputationProviderAvailable();
+  const brandTrustConfidence = deriveDecisionConfidence({
+    maturity: reputationProviderLive ? 'MEASURED' : 'INFERRED',
+    providerReliability: reputationProviderLive ? reputationProviderReliability() : null,
+    sampleSize: rows.length,
+    dataPresent: rows.length > 0,
+  });
+
   let negative = 0;
   let positive = 0;
   let neutral = 0;
@@ -112,7 +131,7 @@ export async function generateBrandTrustIntelligenceDecisions(companyId: string)
       impact_revenue: clamp(42 + Math.round(negativeRate * 90), 0, 100),
       priority_score: clamp(55 + Math.round(negativeRate * 85), 0, 100),
       effort_score: 24,
-      confidence_score: 0.83,
+      confidence_score: brandTrustConfidence.confidenceScore,
       recommendation: 'Deploy trust-repair messaging and rapid support responses for high-risk sentiment threads.',
       action_type: 'adjust_strategy',
       action_payload: {
@@ -145,7 +164,7 @@ export async function generateBrandTrustIntelligenceDecisions(companyId: string)
       impact_revenue: clamp(36 + Math.round((1 - positiveRate) * 58), 0, 100),
       priority_score: clamp(48 + Math.round((1 - positiveRate) * 52), 0, 100),
       effort_score: 30,
-      confidence_score: 0.77,
+      confidence_score: brandTrustConfidence.confidenceScore,
       recommendation: 'Expand active brand participation across additional channels with trust-forward proof content.',
       action_type: 'fix_distribution',
       action_payload: {
@@ -177,7 +196,7 @@ export async function generateBrandTrustIntelligenceDecisions(companyId: string)
       impact_revenue: clamp(46 + Math.round(trustGapRate * 125), 0, 100),
       priority_score: clamp(58 + Math.round(trustGapRate * 110), 0, 100),
       effort_score: 20,
-      confidence_score: 0.8,
+      confidence_score: brandTrustConfidence.confidenceScore,
       recommendation: 'Publish trust artifacts (proof, case evidence, response SLAs) and respond to concern clusters quickly.',
       action_type: 'improve_content',
       action_payload: {

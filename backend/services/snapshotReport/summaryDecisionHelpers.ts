@@ -2,6 +2,10 @@ import {
   classifyPriorityType,
   comparePriorityType,
 } from '../actionPriorityService';
+// BETA-EXEC-003: action-ranking weights + executive impact-scale thresholds from the registry.
+import { PRIORITY_RANK_WEIGHTS, IMPACT_SCALE } from '../canonicalReport/scoringGovernance';
+// BETA-EXEC-004: deterministic measured-evidence clause for the executive summary.
+import { type EngineEvidenceInput, formatPrimaryConstraint } from './engineEvidenceNarrative';
 import type { CompetitorIntelligenceResult } from '../reportCompetitorIntelligenceService';
 import type { ReportReadinessResult } from '../reportReadinessService';
 import type { PrimaryNarrative } from '../primaryNarrativeService';
@@ -67,6 +71,7 @@ export function buildSummary(params: {
   topPriorityTitle?: string | null;
   coreProblem?: string | null;
   companyContext?: CompanyNarrativeContext;
+  engineEvidence?: EngineEvidenceInput | null;
 }): string {
   const insightCount = params.sections.reduce((sum, section) => sum + section.insights.length, 0);
   const actionCount = params.sections.reduce((sum, section) => sum + section.actions.length, 0);
@@ -97,26 +102,32 @@ export function buildSummary(params: {
   const baseSummary =
     `Signal coverage currently supports ${insightCount} insights and ${actionCount} prioritized actions focused on ${coreProblem}.`;
   const priorityLine = params.topPriorityTitle ? ` Priority now: ${params.topPriorityTitle}.` : '';
+  // BETA-EXEC-004: name the weakest MEASURED domain + its drivers (deterministic; null → omitted).
+  const measuredConstraint = params.engineEvidence ? formatPrimaryConstraint(params.engineEvidence) : null;
+  const evidenceLine = measuredConstraint ? ` ${measuredConstraint}` : '';
+  // When a measured-evidence clause is present the summary is allowed to run longer so the
+  // explanation is not truncated; otherwise the prior 420-char envelope is preserved.
+  const cap = evidenceLine ? 620 : 420;
 
   if (missingSignals.length > 0) {
     return clampNarrativeLength(
       dedupeSentences(
-        `${baseSummary}${supportingProblems} Weaker areas include ${missingSignals.slice(0, 2).join(' and ')}.${competitorNote}${readinessNote}${priorityLine}`,
+        `${baseSummary}${evidenceLine}${supportingProblems} Weaker areas include ${missingSignals.slice(0, 2).join(' and ')}.${competitorNote}${readinessNote}${priorityLine}`,
       ).replace(/\s+/g, ' ').trim(),
-      420,
+      cap,
     );
   }
 
   return clampNarrativeLength(
     dedupeSentences(
-      `${baseSummary}${supportingProblems} Evidence is anchored in visibility, content, and authority signals.${competitorNote}${priorityLine}`,
+      `${baseSummary}${evidenceLine}${supportingProblems} Evidence is anchored in visibility, content, and authority signals.${competitorNote}${priorityLine}`,
     ).replace(/\s+/g, ' ').trim(),
-    420,
+    cap,
   );
 }
 
 function topPriorityScore(action: SnapshotAction): number {
-  return action.impact_score * 0.58 + action.confidence_score * 100 * 0.42;
+  return action.impact_score * PRIORITY_RANK_WEIGHTS.impact + action.confidence_score * 100 * PRIORITY_RANK_WEIGHTS.confidence;
 }
 
 export function sortSectionActions(actions: SnapshotAction[]): SnapshotAction[] {
@@ -233,9 +244,9 @@ export function buildDecisionSnapshot(params: {
       ];
 
   const impactScale: 'high_impact' | 'medium_impact' | 'foundational_impact' =
-    firstPriorityImpact >= 72 || params.unifiedSummary.primary_constraint.severity === 'critical'
+    firstPriorityImpact >= IMPACT_SCALE.high || params.unifiedSummary.primary_constraint.severity === 'critical'
       ? 'high_impact'
-      : firstPriorityImpact >= 48 || params.unifiedSummary.primary_constraint.severity === 'moderate'
+      : firstPriorityImpact >= IMPACT_SCALE.medium || params.unifiedSummary.primary_constraint.severity === 'moderate'
         ? 'medium_impact'
         : 'foundational_impact';
 

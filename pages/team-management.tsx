@@ -4,6 +4,7 @@ import { ArrowLeft, Shield, UserPlus, Users, RefreshCw } from 'lucide-react';
 import { getAuthToken } from '../utils/getAuthToken';
 import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { emitSetupChanged } from '../lib/setup/setupEvents';
 
 type TeamMember = {
   user_id?: string;
@@ -80,6 +81,9 @@ export default function TeamManagement() {
         created_at: row.created_at,
       }));
       setTeamMembers(users);
+      // Canonical Setup event — the roster changed (invite / role / remove /
+      // deactivate all refresh via loadUsers). Setup's Team category re-evaluates.
+      emitSetupChanged('team-changed');
     } catch (error: any) {
       console.error('Error loading users:', error);
       setToastMessage(error?.message || 'Failed to load users');

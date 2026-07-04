@@ -1,6 +1,104 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { refineLanguageOutput } from '@/backend/services/languageRefinementService';
 import { generateDailyPlanDemo } from '@/backend/services/dailyPlanAiGenerator';
+import { supabase } from '@/backend/db/supabaseClient';
+import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { enforceRole, Role } from '@/backend/services/rbacService';
+import { runPostGeneration } from '@/lib/post/runPostGeneration';
+
+/**
+ * Canonical single-post generation for the campaign content creator (used by
+ * FormatSelectionPage and ContentCreationPanel). Resolves the owning company
+ * from the campaign server-side, enforces access + role, then reuses the
+ * project's canonical generator (runPostGeneration → contentGenerationPipeline
+ * → aiGateway). Returns the { topic, content: { text, hashtags, aiGenerated } }
+ * shape the callers already render.
+ */
+async function generateCampaignContent(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  context: Record<string, unknown>,
+): Promise<void> {
+  const campaignId = String(context.campaignId || '').trim();
+  if (!campaignId) {
+    res.status(400).json({ error: 'campaignId required' });
+    return;
+  }
+
+  // Resolve the owning company from the campaign (campaign_versions is the
+  // canonical campaign→company mapping) so callers never pass company_id.
+  const { data: companyRow } = await supabase
+    .from('campaign_versions')
+    .select('company_id')
+    .eq('campaign_id', campaignId)
+    .limit(1)
+    .maybeSingle();
+  const company_id = companyRow?.company_id ? String(companyRow.company_id) : '';
+  if (!company_id) {
+    res.status(404).json({ error: 'Campaign company not found' });
+    return;
+  }
+
+  const access = await enforceCompanyAccess({ req, res, companyId: company_id });
+  if (!access) return;
+  const roleGate = await enforceRole({
+    req,
+    res,
+    companyId: company_id,
+    allowedRoles: [
+      Role.COMPANY_ADMIN,
+      Role.CONTENT_CREATOR,
+      Role.CONTENT_REVIEWER,
+      Role.CONTENT_PUBLISHER,
+      Role.SUPER_ADMIN,
+    ],
+  });
+  if (!roleGate) return;
+
+  // Derive a topic from campaign context; the generator self-loads brand voice
+  // from the company profile.
+  const campaignData = (context.campaignData && typeof context.campaignData === 'object'
+    ? context.campaignData
+    : {}) as Record<string, unknown>;
+  const goals = Array.isArray(context.campaignGoals) ? context.campaignGoals : [];
+  const firstGoal = (goals[0] && typeof goals[0] === 'object' ? goals[0] : {}) as Record<string, unknown>;
+  const contentType = typeof context.contentType === 'string' ? context.contentType : undefined;
+  const topic =
+    String(
+      campaignData.name ||
+        campaignData.title ||
+        campaignData.theme ||
+        firstGoal.title ||
+        firstGoal.goal ||
+        contentType ||
+        'Company update',
+    ).trim() || 'Company update';
+
+  const result = await runPostGeneration({
+    company_id,
+    topic,
+    platform: typeof context.platform === 'string' ? context.platform : undefined,
+    template_name: contentType,
+    extra_instruction:
+      typeof context.brandVoice === 'string' && context.brandVoice.trim()
+        ? context.brandVoice.trim()
+        : undefined,
+  });
+
+  const text = result.platform_variant?.generated_content || result.master_content?.content || '';
+  const hashtags = result.platform_variant?.discoverability_meta?.hashtags ?? [];
+  res.status(200).json({
+    success: true,
+    topic,
+    content: {
+      text,
+      hashtags,
+      aiGenerated: result.master_content?.generation_source === 'ai',
+    },
+    provider: 'canonical',
+    timestamp: new Date().toISOString(),
+  });
+}
 
 async function refineFields(obj: unknown): Promise<unknown> {
   if (obj == null) return obj;
@@ -34,6 +132,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { type, context, provider = 'demo', campaignId, skipRefine } = req.body;
+
+    // Canonical single-post generation for the campaign content creator.
+    if (type === 'campaign_content') {
+      return await generateCampaignContent(
+        req,
+        res,
+        context && typeof context === 'object' ? (context as Record<string, unknown>) : {},
+      );
+    }
 
     if (!type || !context) {
       return res.status(400).json({ error: 'Type and context are required' });

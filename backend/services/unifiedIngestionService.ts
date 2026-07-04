@@ -52,7 +52,11 @@ export interface UnifiedIngestionOptions {
   context?: Record<string, any>;
 }
 
-type DataSourceStatusSource = 'crawler' | 'ga' | 'gsc' | 'crm' | 'ads';
+// Mirrors data_source_status.source (post-20260904 migration includes 'reviews'). NOTE: the unified
+// ingestion path deliberately does NOT accept 'reviews' at runtime (see SUPPORTED_RUN_SOURCES) — reviews
+// flow through the canonical ingestionScheduler dispatch. This union only keeps the status-mapper's
+// return type consistent with the widened IngestionSource.
+type DataSourceStatusSource = 'crawler' | 'ga' | 'gsc' | 'crm' | 'ads' | 'reviews';
 
 const DEFAULT_ADAPTERS: SourceAdapter[] = [csvSourceAdapter];
 const SUPPORTED_RUN_SOURCES = new Set(['crawler', 'ga4', 'gsc', 'crm', 'ads']);

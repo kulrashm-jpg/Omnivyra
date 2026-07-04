@@ -49,6 +49,7 @@ import {
   type ContentNavSection,
 } from './contentNavigationConfig';
 import { creatorOutcomeFirstEnabled } from '../../lib/creator-outcomes/outcomeRegistry';
+import { roleCanAccessArea } from '../../config/commandCenterCards';
 
 type HeaderChildItem = {
   label: string;
@@ -902,6 +903,18 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
       ) ?? null,
     [router.pathname]
   );
+  // Hide the Content and Campaigns clusters for view-only roles so the nav
+  // matches the dashboard (which already hides those work areas). Single
+  // source of truth: roleCanAccessArea / ROLE_ACCESS_MAP.
+  const visibleNavItems = useMemo(
+    () =>
+      HEADER_NAV_ITEMS.filter((item) => {
+        if (item.label === 'Content') return roleCanAccessArea(userRole, 'blogs');
+        if (item.label === 'Campaigns') return roleCanAccessArea(userRole, 'campaigns');
+        return true;
+      }),
+    [userRole]
+  );
 
   return (
     <>
@@ -926,7 +939,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
               Home
             </Link>
 
-            {HEADER_NAV_ITEMS.map((item) => (
+            {visibleNavItems.map((item) => (
               <NavDropdown
                 key={item.label}
                 item={item}
@@ -976,7 +989,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
                 Home
               </Link>
 
-              {HEADER_NAV_ITEMS.map((item) => (
+              {visibleNavItems.map((item) => (
                 <div key={item.label} className="rounded-2xl border border-slate-100 bg-slate-50/70 p-2">
                   <div className="flex items-center gap-2 px-2 py-1">
                     <item.icon className="h-4 w-4 text-slate-500" />

@@ -10,6 +10,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 import {
   renderCanonicalReportHtml,
   renderCanonicalReportPdf,
@@ -340,6 +341,21 @@ export default async function handler(
 
   if (report.status === 'failed') {
     return res.status(500).json({ error: 'Report generation failed', code: 'REPORT_FAILED' });
+  }
+
+  // Canonical telemetry (append-only, fail-soft): a completed report is being
+  // exported to a file. Only html/pdf render requests are exports — json views
+  // are not. Single emit covers all downstream render branches. Not deduped:
+  // each export is a distinct action.
+  if (format === 'html' || format === 'pdf') {
+    trackEvent({
+      type: 'reports.exported',
+      organizationId: report.company_id,
+      actorId: user.id,
+      entityId: report.id,
+      metadata: { format },
+      dedupKey: null,
+    });
   }
 
   // Extract the stored intelligence snapshot

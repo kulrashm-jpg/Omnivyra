@@ -36,6 +36,7 @@ import { estimateLlmCostUsd } from '../../services/pricingService';
 import { runUnifiedLongFormGeneration } from '../../../lib/content/unifiedLongFormEngine';
 import { buildContentContext } from '../../../lib/content/buildContentContext';
 import { isLongFormContentType } from '../../../lib/content/longFormContentTypeConfig';
+import { renderPlatformVariantsFromBlueprint } from '../../services/contentGeneration/platformVariantGenerator';
 
 // Stubs for services not yet implemented
 const feedbackIntelligenceEngine = {
@@ -692,9 +693,20 @@ async function buildPlatformVariantsFromMaster(
   platforms: string[],
   options: Record<string, unknown>
 ): Promise<any[]> {
-  // TODO: Implement platform variant generation
-  // For now, return empty array (handled by contentGenerationPipeline)
-  return [];
+  if (!blueprint || !Array.isArray(platforms) || platforms.length === 0) return [];
+  // Reuse the canonical platform-adaptation logic (deterministic rules + AI
+  // fallback) rather than a second formatter. `renderPlatformVariantsFromBlueprint`
+  // reads the target platforms from the item's `selected_platforms`.
+  const item = {
+    execution_id: String((options as { execution_id?: unknown }).execution_id
+      || (options as { company_id?: unknown }).company_id
+      || 'content-job'),
+    content_type: String((blueprint as { content_type?: unknown }).content_type
+      || (options as { content_type?: unknown }).content_type
+      || 'post'),
+    selected_platforms: platforms,
+  };
+  return renderPlatformVariantsFromBlueprint(blueprint, item as never);
 }
 
 async function recordGenerationOperation(data: Record<string, unknown>): Promise<void> {

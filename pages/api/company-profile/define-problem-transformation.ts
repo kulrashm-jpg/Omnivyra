@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import OpenAI from 'openai';
+import { runCompletion } from '../../../backend/services/aiGateway';
 import {
   getProfile,
   buildProblemTransformationStrategicPrompt,
@@ -95,11 +95,6 @@ const deterministicRefineFallback = (
   return updates;
 };
 
-function getOpenAiClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
-  return new OpenAI({ apiKey });
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -198,14 +193,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .filter(Boolean)
       .join('\n\n');
 
-    const messages: OpenAI.ChatCompletionMessageParam[] = [
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: fullSystemPrompt },
       { role: 'user', content: userContent },
     ];
 
-    const client = getOpenAiClient();
-    const callLLM = (retryStrict = false) =>
-      client.chat.completions.create({
+    const callLLM = async (retryStrict = false): Promise<string> => {
+      const completion = await runCompletion({
+        companyId,
+        operation: 'defineProblemTransformation',
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
         temperature: 0.3,
         response_format: { type: 'json_object' },
@@ -216,11 +212,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ]
           : messages,
       });
+      return (completion.output ?? '').trim() || '{}';
+    };
 
     let raw = '';
     try {
-      const completion = await callLLM(false);
-      raw = completion.choices[0]?.message?.content?.trim() || '{}';
+      raw = await callLLM(false);
     } catch {
       return res.status(500).json({ error: 'Failed to run refinement' });
     }
@@ -239,8 +236,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       parsed = JSON.parse(raw);
     } catch {
       try {
-        const retry = await callLLM(true);
-        raw = retry.choices[0]?.message?.content?.trim() || '{}';
+        raw = await callLLM(true);
         parsed = JSON.parse(raw);
       } catch {
         return res.status(500).json({ error: 'Invalid AI response' });

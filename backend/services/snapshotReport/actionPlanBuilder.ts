@@ -75,6 +75,20 @@ export function buildActionPlan(
     decision.title,
     companyContext,
   );
+  // VD-02: title slots must use a SHORT keyword/theme, never the decision title (a full sentence), which
+  // produced run-on titles like "Strengthen positioning proof around <whole sentence> to recover trust".
+  // When no keyword/theme exists, titles fall back to a clean generic phrasing. Reasoning/steps are unchanged.
+  const rawKeyword =
+    (typeof payload.keyword === 'string' && payload.keyword) ||
+    (typeof payload.keyword_theme === 'string' && payload.keyword_theme) ||
+    '';
+  const scrubbedKeyword = rawKeyword ? scrubActionCompanyReferences(rawKeyword, companyContext).trim() : '';
+  // Only embed as a title fragment when it is genuinely a SHORT keyword/theme (not a sentence) — this guards
+  // titles against run-ons regardless of whether the long text came from keyword_theme or the decision title.
+  const focusKeyword =
+    scrubbedKeyword && scrubbedKeyword.split(/\s+/).length <= 6 && scrubbedKeyword.length <= 48
+      ? scrubbedKeyword
+      : null;
   const effortLevel = inferEffortLevel(decision);
   const alignmentStep = strategicContext?.positioningStrength === 'weak'
     ? 'Ensure each buyer-stage page reinforces your differentiation with proof before scaling broader distribution.'
@@ -103,7 +117,9 @@ export function buildActionPlan(
 
   if (decision.action_type === 'fix_cta') {
     return {
-      title: `Rebuild the CTA flow on ${focus} for high-intent conversion`,
+      title: focusKeyword
+        ? `Rebuild the CTA flow on ${focusKeyword} for high-intent conversion`
+        : 'Rebuild the CTA flow on the highest-intent page for conversion',
       reasoning,
       recommendation: decision.recommendation,
       steps: [
@@ -153,7 +169,9 @@ export function buildActionPlan(
     return {
       title: companyContext?.positioning
         ? `Strengthen proof for ${companyContext.positioning} around the core focus area to recover trust`
-        : `Strengthen positioning proof around ${focus} to recover trust`,
+        : focusKeyword
+          ? `Strengthen positioning proof around ${focusKeyword} to recover trust`
+          : 'Strengthen positioning proof to recover buyer trust',
       reasoning,
       recommendation: decision.recommendation,
       steps: [
@@ -177,7 +195,9 @@ export function buildActionPlan(
   return {
     title: companyContext?.companyName && companyContext.marketContext
       ? `Build comparison and decision pages aligned with the current positioning in ${companyContext.marketContext}`
-      : `Build comparison and decision pages targeting ${focus} intent gaps`,
+      : focusKeyword
+        ? `Build comparison and decision pages targeting ${focusKeyword} intent gaps`
+        : 'Build comparison and decision pages for the key buyer-intent gaps',
     reasoning,
     recommendation: decision.recommendation,
     steps: [

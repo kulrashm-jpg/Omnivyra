@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { emitSetupChanged } from '../lib/setup/setupEvents';
 
 type IntegrationType =
   | 'lead_webhook'
@@ -2145,6 +2146,10 @@ export default function IntegrationsPage() {
       }
       setGscNotice('Search Console disconnected.');
       setSelectedGscPropertyId('');
+      // Canonical Setup-changed emit: disconnecting an integration changes Setup
+      // state, so notify the single canonical channel (the command center /
+      // Setup consumers subscribe) instead of relying on focus recovery.
+      emitSetupChanged('integration-removed', { capability: 'google_search_console' });
       await loadGoogleAnalyticsStatus();
     } catch (err: any) {
       setGscError(err?.message || 'Failed to disconnect Search Console');
@@ -2171,6 +2176,7 @@ export default function IntegrationsPage() {
         throw new Error(data?.message || 'Failed to connect Google Analytics');
       }
       setGaNotice('Google Analytics property selected.');
+      emitSetupChanged('integration-configured', { capability: 'google_analytics' });
       await loadGoogleAnalyticsStatus();
     } catch (err: any) {
       setGaError(err?.message || 'Failed to connect Google Analytics');
@@ -2198,6 +2204,7 @@ export default function IntegrationsPage() {
         throw new Error(data?.message || 'Failed to connect Search Console');
       }
       setGscNotice('Search Console property selected.');
+      emitSetupChanged('integration-configured', { capability: 'google_search_console' });
       await loadGoogleAnalyticsStatus();
     } catch (err: any) {
       setGscError(err?.message || 'Failed to connect Search Console');
@@ -2247,6 +2254,7 @@ export default function IntegrationsPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Failed to create website');
       setWebsiteDraft({ name: '', canonical_url: '' });
+      emitSetupChanged('website-connected');
       await load();
     } catch (err: any) {
       setError(err.message || 'Failed to create website');
@@ -2286,6 +2294,7 @@ export default function IntegrationsPage() {
     }
 
     setModal(null);
+    emitSetupChanged('integration-configured', { type: payload.type });
     await load();
   };
 
@@ -2321,6 +2330,7 @@ export default function IntegrationsPage() {
       method: 'DELETE',
       credentials: 'include',
     });
+    emitSetupChanged('integration-removed');
     await load();
   };
 

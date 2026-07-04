@@ -42,6 +42,7 @@ import { canPerform, type CreativeReviewRole } from './creativeReviewRoles';
 import { mirrorReviewRecord, mirrorEscalation } from './enterpriseGovernanceRedisPersistence';
 import { withIdempotency, withDistributedLock, LockBusyError } from './enterpriseGovernanceLocking';
 import { emitGovernanceEvent } from './enterpriseGovernanceEvents';
+import { trackEvent } from '../telemetry/telemetryDispatcher';
 
 function isRuntimeEnabled(): boolean {
   return String(process.env.ENTERPRISE_GOVERNANCE_RUNTIME_ENABLED ?? 'false').toLowerCase() === 'true';
@@ -461,6 +462,19 @@ export async function onApprovalDecision(input: {
         companyId: updated.companyId,
         campaignId: updated.campaignId,
         context: { reason: input.reason ?? null, actorRole: input.actorRole },
+      });
+    }
+    // Canonical telemetry (append-only, fail-soft): an approval/review reached a
+    // terminal decision (approved or rejected). Not deduped — a re-review of the
+    // same asset is a distinct completed decision.
+    if (input.to === 'approved' || input.to === 'rejected') {
+      trackEvent({
+        type: 'collaboration.approval_completed',
+        organizationId: updated.companyId,
+        actorId: input.actorUserId,
+        entityId: updated.assetId,
+        metadata: { entityType: 'creative_asset', decision: input.to },
+        dedupKey: null,
       });
     }
     return { skipped: false, result: updated };

@@ -137,7 +137,10 @@ describe('reportPdfRenderer', () => {
     const htmlArg = (renderPdfFromHtml as jest.Mock).mock.calls[0][0] as string;
     expect(htmlArg).toContain('id="pdf-report"');
     expect(htmlArg).toContain('class="report-page"');
-    expect(htmlArg).toContain('#pdf-report { width: 186mm;');
+    // BETA-FIX-001: the PDF wrapper width evolved from a fixed 186mm to responsive
+    // 100% / max-width 196mm (reportHtmlSnapshotMasterDocument.ts). Production behaviour is
+    // correct (robust PDF sizing); the fixed-186mm expectation was stale.
+    expect(htmlArg).toContain('#pdf-report { width: 100%; max-width: 196mm;');
     expect(htmlArg).toContain('page-hero-header');
   });
 });

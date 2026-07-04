@@ -5,6 +5,7 @@ import {
 } from './externalCompetitiveIntelligenceService';
 import { assertAnalyticsMutationAllowed } from './analyticsEnvironmentGuardService';
 import { ownedDbTable } from '../db/writeOwner';
+import { authorizeProviderCall, recordProviderUsage } from './providers/providerCostGovernor';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
 
 export type SerpProviderId = 'manual_import' | 'compliant_api' | 'dataforseo' | 'serpapi' | 'scaleserp';
@@ -506,6 +507,12 @@ export async function runSerpAcquisition(params: {
     return { status: 'skipped', attempted_queries: 0, snapshots_written: 0, results_written: 0, estimated_cost_usd: 0, errors: [] };
   }
 
+  // Canonical governor gate (no provider bypass): kill-switch / dry-run / budget.
+  const gov = authorizeProviderCall({ providerId: params.provider.id, organizationId: params.companyId });
+  if (!gov.allowed) {
+    return { status: 'skipped', attempted_queries: 0, snapshots_written: 0, results_written: 0, estimated_cost_usd: 0, errors: [`provider_governor_blocked:${params.provider.id}:${gov.reason}`] };
+  }
+
   let snapshots = 0;
   let results = 0;
   let competitors = 0;
@@ -514,6 +521,7 @@ export async function runSerpAcquisition(params: {
   for (const query of queries) {
     try {
       const payload = await params.provider.fetch(query);
+      void recordProviderUsage({ providerId: params.provider.id, organizationId: params.companyId, units: 1, operation: 'serp_query' });
       if (!payload || payload.results.length === 0) continue;
       const written = await ingestSerpSnapshot({
         companyId: params.companyId,
@@ -583,6 +591,12 @@ export async function runQueuedSerpAcquisition(params: {
     return { status: 'skipped', attempted_queries: 0, snapshots_written: 0, results_written: 0, estimated_cost_usd: 0, errors: [] };
   }
 
+  // Canonical governor gate (no provider bypass): kill-switch / dry-run / budget.
+  const gov = authorizeProviderCall({ providerId: params.provider.id, organizationId: params.companyId });
+  if (!gov.allowed) {
+    return { status: 'skipped', attempted_queries: 0, snapshots_written: 0, results_written: 0, estimated_cost_usd: 0, errors: [`provider_governor_blocked:${params.provider.id}:${gov.reason}`] };
+  }
+
   const runInsert = await ownedDbTable('analytics_serp_acquisition_runs')
     .insert({
       company_id: params.companyId,
@@ -606,6 +620,7 @@ export async function runQueuedSerpAcquisition(params: {
   for (const query of queries) {
     try {
       const payload = await params.provider.fetch(query);
+      void recordProviderUsage({ providerId: params.provider.id, organizationId: params.companyId, units: 1, operation: 'serp_query' });
       if (!payload || payload.results.length === 0) {
         await ownedDbTable('analytics_serp_query_queue')
           .update({

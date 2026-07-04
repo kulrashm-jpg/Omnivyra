@@ -5,6 +5,8 @@ import {
   type PersistedDecisionObject,
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
 
 type KeywordRow = {
   id: string;
@@ -104,6 +106,9 @@ export async function generateKeywordIntelligenceDecisions(companyId: string): P
   }
 
   const signalMap = new Map(companySignals.map((row) => [row.signal_id, row]));
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.81/0.76/0.74/0.83). Keyword intelligence is
+  // DERIVED from tracked keywords + signals; confidence scales with the tracked-keyword sample size.
+  const keywordConfidence = deriveDecisionConfidence({ maturity: 'DERIVED', sampleSize: keywords.length, dataPresent: keywords.length > 0 });
   const decisions = [];
 
   for (const keyword of keywords) {
@@ -146,7 +151,7 @@ export async function generateKeywordIntelligenceDecisions(companyId: string): P
         impact_revenue: 28,
         priority_score: 58,
         effort_score: 24,
-        confidence_score: 0.81,
+        confidence_score: keywordConfidence.confidenceScore,
         recommendation: 'Create SEO-targeted content and capture pages around this keyword before demand shifts elsewhere.',
         action_type: 'improve_content',
         action_payload: {
@@ -180,7 +185,7 @@ export async function generateKeywordIntelligenceDecisions(companyId: string): P
         impact_revenue: 32,
         priority_score: 54,
         effort_score: 26,
-        confidence_score: 0.76,
+        confidence_score: keywordConfidence.confidenceScore,
         recommendation: 'Tighten intent alignment for this keyword instead of just increasing surface-level mentions.',
         action_type: 'improve_content',
         action_payload: {
@@ -214,7 +219,7 @@ export async function generateKeywordIntelligenceDecisions(companyId: string): P
         impact_revenue: 46,
         priority_score: 57,
         effort_score: 28,
-        confidence_score: 0.74,
+        confidence_score: keywordConfidence.confidenceScore,
         recommendation: 'Improve SERP messaging and CTA relevance so keyword visibility turns into action.',
         action_type: 'fix_cta',
         action_payload: {
@@ -248,7 +253,7 @@ export async function generateKeywordIntelligenceDecisions(companyId: string): P
         impact_revenue: clamp(30 + mentionCount * 5, 0, 100),
         priority_score: clamp(48 + mentionCount * 5, 0, 100),
         effort_score: 20,
-        confidence_score: 0.83,
+        confidence_score: keywordConfidence.confidenceScore,
         recommendation: 'Promote this keyword into active SEO and content production before demand decays.',
         action_type: 'improve_content',
         action_payload: {

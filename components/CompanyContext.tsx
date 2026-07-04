@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { useRouter } from 'next/router';
 import { getAuthToken } from '../utils/getAuthToken';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
+import { emitSetupChanged } from '../lib/setup/setupEvents';
 import {
   AUTH_ERROR_CODE,
   getAuthErrorCode,
@@ -261,6 +262,8 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setUserScopedLocalStorage('selected_company_id', user?.userId ?? null, companyId);
       setUserScopedLocalStorage('company_id', user?.userId ?? null, companyId);
       window.localStorage.removeItem('selected_campaign_id');
+      // Canonical Setup event — the active organization changed.
+      emitSetupChanged('organization-changed', { companyId });
     }
     if (process.env.NODE_ENV === 'development') {
       const match = companies.find((company) => company.company_id === companyId);

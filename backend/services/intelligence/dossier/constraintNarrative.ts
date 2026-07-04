@@ -78,7 +78,7 @@ export function authorityPositionConstraint(report: CanonicalReport): Constraint
   const constraint =
     weakLabel === strongLabel
       ? `${weakLabel} reads ${weakest.score.value}/100 — no single pillar yet pulls authority forward.`
-      : `${weakLabel} sits at ${weakest.score.value}/100 — the lowest pillar in the canonical structure and the rate-limiter on every other pillar's contribution.`;
+      : `${weakLabel} sits at ${weakest.score.value}/100 — the lowest pillar in the report and the rate-limiter on every other pillar's contribution.`;
 
   const why_matters =
     weakBand === 'foundational' || weakBand === 'developing'

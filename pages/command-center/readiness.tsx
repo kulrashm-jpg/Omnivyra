@@ -9,6 +9,7 @@ import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 import PageLoader from '../../components/PageLoader';
+import ReportJourneyGuide from '../../components/ReportJourneyGuide';
 
 interface ReportCard {
   id: string;
@@ -84,14 +85,14 @@ const REPORT_CARDS: ReportCard[] = [
 
 export default function ReadinessSubPage() {
   const router = useRouter();
-  const { user, authChecked, isLoading } = useCompanyContext();
+  const { user, authChecked, isLoading, selectedCompanyId } = useCompanyContext();
 
   // Auth guard
   React.useEffect(() => {
-    if (authChecked && !user?.userId) {
+    if (authChecked && !isLoading && !user?.userId) {
       router.replace('/login');
     }
-  }, [authChecked, user?.userId, router]);
+  }, [authChecked, isLoading, user?.userId, router]);
 
   if (!authChecked || isLoading) {
     return <PageLoader message="Loading your workspace…" />;
@@ -123,6 +124,10 @@ export default function ReadinessSubPage() {
             actionable insights to grow faster.
           </p>
         </div>
+
+        {/* Report readiness journey — the one canonical "what to do next" before choosing a report,
+            so the customer scans first and never lands on a surprise preliminary report. */}
+        <ReportJourneyGuide companyId={selectedCompanyId} className="mb-8" />
 
         {/* Cards — 3-column responsive grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">

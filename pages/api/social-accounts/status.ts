@@ -77,7 +77,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const inactiveAccountMap: Record<string, any> = {};
 
   if (userId) {
-    const baseSelect = 'id, platform, account_name, username, is_active, token_expires_at, platform_user_id, company_id, access_token';
+    const baseSelect = 'id, platform, account_name, username, is_active, token_expires_at, platform_user_id, company_id, access_token, refresh_status';
 
     if (companyId && isValidUuid(companyId)) {
       // Company-scoped accounts — two typed queries to avoid text=uuid cast error
@@ -212,6 +212,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       connected,
       connection_status: connected ? 'connected' : inactiveAcc ? 'disconnected' : 'not_connected',
       expired: !!isExpired,
+      // Canonical token-refresh health for publishing-permission evaluation:
+      // 'success' | 'failed' | 'requires_reconnect' | null (unknown).
+      refresh_status: (acc?.refresh_status ?? null) as string | null,
       account_name: acc?.account_name ?? inactiveAcc?.account_name ?? null,
       username: acc?.username ?? inactiveAcc?.username ?? null,
       token_expires_at: acc?.token_expires_at ?? inactiveAcc?.token_expires_at ?? null,

@@ -2,6 +2,8 @@ import { supabase } from '../db/supabaseClient';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { archiveDecisionSourceEntityType, createDecisionObjects, type PersistedDecisionObject } from './decisionObjectService';
 import { clamp } from './intelligenceEngineUtils';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
 
 type DecisionRow = {
   id: string;
@@ -40,6 +42,10 @@ export async function generateVelocityIntelligenceDecisions(companyId: string): 
   const rows = (data ?? []) as DecisionRow[];
   if (rows.length === 0) return [];
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.82/0.8/0.74). Velocity is DERIVED from the
+  // decision-history sample; confidence scales with how many prior decisions inform the trend.
+  const velocityConfidence = deriveDecisionConfidence({ maturity: 'DERIVED', sampleSize: rows.length, dataPresent: rows.length > 0 });
+
   const aged = rows.filter((row) => ageDays(row.created_at) >= 5);
   const highPriorityAged = aged.filter((row) => Number(row.priority_score ?? 0) >= 70);
   const avgAge = aged.length > 0
@@ -67,7 +73,7 @@ export async function generateVelocityIntelligenceDecisions(companyId: string): 
       impact_revenue: 48,
       priority_score: 65,
       effort_score: 18,
-      confidence_score: 0.82,
+      confidence_score: velocityConfidence.confidenceScore,
       recommendation: 'Introduce response SLA enforcement for open strategic decisions.',
       action_type: 'adjust_strategy',
       action_payload: { optimization_focus: 'velocity_sla' },
@@ -95,7 +101,7 @@ export async function generateVelocityIntelligenceDecisions(companyId: string): 
       impact_revenue: 56,
       priority_score: clamp(62 + highPriorityAged.length, 0, 100),
       effort_score: 22,
-      confidence_score: 0.8,
+      confidence_score: velocityConfidence.confidenceScore,
       recommendation: 'Escalate delayed high-priority actions into an execution sprint lane.',
       action_type: 'adjust_strategy',
       action_payload: { optimization_focus: 'execution_delay' },
@@ -123,7 +129,7 @@ export async function generateVelocityIntelligenceDecisions(companyId: string): 
       impact_revenue: 62,
       priority_score: 72,
       effort_score: 20,
-      confidence_score: 0.74,
+      confidence_score: velocityConfidence.confidenceScore,
       recommendation: 'Apply expiration-aware prioritization to prevent high-value opportunities from timing out.',
       action_type: 'adjust_strategy',
       action_payload: { optimization_focus: 'opportunity_decay' },

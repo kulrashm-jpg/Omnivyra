@@ -1051,6 +1051,47 @@ export async function disconnectSearchConsole(companyId: string): Promise<{ disc
   return { disconnected: true };
 }
 
+/**
+ * Disconnect GA4 for a tenant — canonical mirror of disconnectSearchConsole
+ * (deactivate properties, remove tokens, mark integration disconnected). Tokens
+ * are removed; reconnect re-runs the OAuth flow. Idempotent when not connected.
+ */
+export async function disconnectGoogleAnalytics(companyId: string): Promise<{ disconnected: boolean }> {
+  const integration = await getAnalyticsIntegrationForProvider(companyId, GA4_PROVIDER);
+  if (!integration) {
+    return { disconnected: false };
+  }
+
+  const timestamp = new Date().toISOString();
+
+  const { error: propertyError } = await ownedDbTable('analytics_properties')
+    .update({ is_active: false, updated_at: timestamp })
+    .eq('integration_id', integration.id)
+    .eq('is_active', true);
+
+  if (propertyError) {
+    throw new Error(`Failed to deactivate Analytics properties: ${propertyError.message}`);
+  }
+
+  const { error: tokenError } = await ownedDbTable('analytics_tokens')
+    .delete()
+    .eq('integration_id', integration.id);
+
+  if (tokenError) {
+    throw new Error(`Failed to remove Analytics token: ${tokenError.message}`);
+  }
+
+  const { error: integrationError } = await ownedDbTable('analytics_integrations')
+    .update({ status: 'disconnected', updated_at: timestamp })
+    .eq('id', integration.id);
+
+  if (integrationError) {
+    throw new Error(`Failed to disconnect Analytics integration: ${integrationError.message}`);
+  }
+
+  return { disconnected: true };
+}
+
 export async function getActiveProperty(companyId: string): Promise<AnalyticsPropertyRecord | null> {
   const integration = await getAnalyticsIntegration(companyId);
   if (!integration) return null;

@@ -6,6 +6,10 @@ import {
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { clamp, normalizeText, roundNumber } from './intelligenceEngineUtils';
+// BETA-ENGINE-002: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence, decisionConfidenceExplainability } from './evidencePlatform';
+// BETA-PROVIDER-001: real backlink provider availability lifts backlink confidence to MEASURED.
+import { isBacklinkProviderAvailable, backlinkProviderReliability } from './backlinkAuthorityProviderBridge';
 
 type BacklinkRow = {
   target_url: string;
@@ -67,6 +71,20 @@ export async function generateBacklinkAuthorityDecisions(companyId: string): Pro
   const anchorDiversity = anchorSet.size;
   const dofollowRatio = rows.length > 0 ? dofollowCount / rows.length : 0;
   const avgAuthority = authorityCount > 0 ? totalAuthority / authorityCount : 0;
+
+  // BETA-ENGINE-002: evidence-derived confidence (was hardcoded 0.82/0.78). INFERRED maturity (no
+  // backlink API); scales with the backlink sample size and the share of signals carrying authority.
+  // BETA-PROVIDER-001: MEASURED (with provider reliability) when a real backlink provider is connected;
+  // INFERRED otherwise (unchanged — backward compatible).
+  const backlinkProviderLive = isBacklinkProviderAvailable();
+  const backlinkConfidence = deriveDecisionConfidence({
+    maturity: backlinkProviderLive ? 'MEASURED' : 'INFERRED',
+    providerReliability: backlinkProviderLive ? backlinkProviderReliability() : null,
+    sampleSize: rows.length,
+    completeness: rows.length > 0 ? authorityCount / rows.length : 0,
+    dataPresent: rows.length > 0,
+  });
+  const backlinkConfExplain = decisionConfidenceExplainability(backlinkConfidence);
   const decisions = [];
 
   if (rows.length > 0 && (uniqueRefDomains < 20 || avgAuthority < 30 || dofollowRatio < 0.55)) {
@@ -85,13 +103,14 @@ export async function generateBacklinkAuthorityDecisions(companyId: string): Pro
         avg_domain_authority: roundNumber(avgAuthority, 2),
         dofollow_ratio: roundNumber(dofollowRatio, 4),
         anchor_diversity: anchorDiversity,
+        confidence: backlinkConfExplain,
       },
       impact_traffic: clamp(42 + Math.round((1 - dofollowRatio) * 30), 0, 100),
       impact_conversion: 24,
       impact_revenue: clamp(34 + Math.round((30 - Math.min(avgAuthority, 30)) * 1.2), 0, 100),
       priority_score: clamp(56 + Math.round((20 - Math.min(uniqueRefDomains, 20)) * 1.2), 0, 100),
       effort_score: 30,
-      confidence_score: 0.82,
+      confidence_score: backlinkConfidence.confidenceScore,
       recommendation: 'Prioritize high-authority referring domain outreach and diversify anchor usage by topic intent.',
       action_type: 'improve_content',
       action_payload: {
@@ -117,13 +136,14 @@ export async function generateBacklinkAuthorityDecisions(companyId: string): Pro
         avg_domain_authority: roundNumber(avgAuthority, 2),
         anchor_diversity: anchorDiversity,
         referring_domains: uniqueRefDomains,
+        confidence: backlinkConfExplain,
       },
       impact_traffic: 48,
       impact_conversion: 18,
       impact_revenue: 46,
       priority_score: clamp(58 + Math.round((35 - Math.min(avgAuthority, 35)) * 1.3), 0, 100),
       effort_score: 34,
-      confidence_score: 0.78,
+      confidence_score: backlinkConfidence.confidenceScore,
       recommendation: 'Build authority-focused asset hubs and earn links from higher-authority publications in target niches.',
       action_type: 'adjust_strategy',
       action_payload: {

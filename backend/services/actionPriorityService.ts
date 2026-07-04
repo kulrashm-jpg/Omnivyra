@@ -1,3 +1,6 @@
+// BETA-EXEC-003: action priority-type thresholds from the scoring-governance registry.
+import { ACTION_PRIORITY } from './canonicalReport/scoringGovernance';
+
 type EffortLevel = 'low' | 'medium' | 'high';
 
 export type PriorityType = 'quick_win' | 'high_impact' | 'strategic';
@@ -15,8 +18,8 @@ export function classifyPriorityType(params: {
   const impact = Number(params.impactScore ?? 0);
   const effort = params.effortLevel ?? 'medium';
 
-  if (effort === 'low' && impact >= 45) return 'quick_win';
-  if (impact >= 70 || (impact >= 60 && effort !== 'high')) return 'high_impact';
+  if (effort === 'low' && impact >= ACTION_PRIORITY.quick_win_impact) return 'quick_win';
+  if (impact >= ACTION_PRIORITY.high_impact || (impact >= ACTION_PRIORITY.mid_impact && effort !== 'high')) return 'high_impact';
   return 'strategic';
 }
 
@@ -65,13 +68,13 @@ export function buildExpectedUpside(params: {
   }
 
   if (/(conversion|cta|lead|pricing|contact|demo|signup)/.test(actionType)) {
-    return impactScore >= 70
+    return impactScore >= ACTION_PRIORITY.high_impact
       ? 'Expected upside: higher conversion from high-intent visitors and stronger pipeline efficiency.'
       : 'Expected upside: less funnel friction and better lead progression.';
   }
 
   if (/(content|seo|authority|aeo|geo)/.test(actionType)) {
-    return impactScore >= 70
+    return impactScore >= ACTION_PRIORITY.high_impact
       ? 'Expected upside: more qualified discovery, stronger trust, and better demand capture.'
       : 'Expected upside: stronger discoverability and a more credible path to conversion.';
   }

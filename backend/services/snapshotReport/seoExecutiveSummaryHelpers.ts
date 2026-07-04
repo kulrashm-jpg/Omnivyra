@@ -3,6 +3,8 @@ import { impactScore } from '../reportDecisionUtils';
 import type { CompetitorIntelligenceResult } from '../reportCompetitorIntelligenceService';
 import type { PublicAuditResult } from '../publicDomainAuditService';
 import type { buildReportScoreModel } from '../reportScoreModelService';
+// BETA-EXEC-003: SEO capability-radar axis weights from the scoring-governance registry.
+import { SEO_AXIS_WEIGHTS } from '../canonicalReport/scoringGovernance';
 import type {
   CompanyNarrativeContext,
   ScoreState,
@@ -70,9 +72,9 @@ export function buildSeoExecutiveSummary(params: {
   const overallHealthScore: number | null = healthComponents.length > 0
     ? Math.round(
         healthComponents.reduce((sum, value, index) => {
-          const weight = [0.28, 0.3, 0.24, 0.18][index] ?? 0.25;
+          const weight = SEO_AXIS_WEIGHTS[index] ?? 0.25;
           return sum + value * weight;
-        }, 0) / ([0.28, 0.3, 0.24, 0.18].slice(0, healthComponents.length).reduce((sum, value) => sum + value, 0))
+        }, 0) / (SEO_AXIS_WEIGHTS.slice(0, healthComponents.length).reduce((sum, value) => sum + value, 0))
       )
     : null;
   const overallHealthScoreState: ScoreState = healthComponents.length === 0

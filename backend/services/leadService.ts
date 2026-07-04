@@ -7,6 +7,7 @@ import { supabase } from '../db/supabaseClient';
 import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
 import { mergeConnectionConfig } from './integrationCredentialService';
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
+import { trackEvent } from './telemetry/telemetryDispatcher';
 import { getLegacyLeads } from './leadIntelligence/legacyLeadCompat';
 
 export type FieldType = 'text' | 'email' | 'phone';
@@ -174,6 +175,15 @@ export async function createLead(companyId: string, input: CreateLeadInput): Pro
     .select('*')
     .single();
   if (error) throw new Error(error.message);
+  // Canonical telemetry (append-only, fail-soft): a lead was captured. Deduped
+  // per lead id.
+  trackEvent({
+    type: 'lead.captured',
+    organizationId: companyId,
+    actorId: input.created_by ?? null,
+    entityId: (data as { id?: string }).id ?? null,
+    metadata: { source: input.source ?? 'direct' },
+  });
   // Phase 3 — route this lead through the Canonical Lead Intelligence facade
   // (website/forms/manual/webhook resolved from the row's source). Additive,
   // fire-and-forget, fail-open: never changes capture behaviour or the response.

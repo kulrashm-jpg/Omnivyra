@@ -2,6 +2,10 @@ import { supabase } from '../db/supabaseClient';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { archiveDecisionSourceEntityType, createDecisionObjects, type PersistedDecisionObject } from './decisionObjectService';
 import { clamp, normalizeText } from './intelligenceEngineUtils';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
+// BETA-PROVIDER-003: canonical GA4 provider reliability lifts confidence on already-MEASURED session data.
+import { isGa4ProviderAvailable, ga4ProviderReliability } from './ga4ProviderBridge';
 
 type SessionRow = {
   source: string;
@@ -79,6 +83,18 @@ export async function generateDistributionIntelligenceDecisions(companyId: strin
   const topEngagement = topChannel[1].engaged / Math.max(1, topChannel[1].sessions);
   const topDepth = topChannel[1].deep / Math.max(1, topChannel[1].sessions);
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.82/0.78/0.8). MEASURED session + lead
+  // analytics; confidence scales with the combined session + lead sample size.
+  // BETA-PROVIDER-003: the session half of this signal is first-party GA4 data. Add the GA4 provider's
+  // reliability factor when connected (no scoring redesign); null (unchanged) otherwise.
+  const ga4ProviderLive = isGa4ProviderAvailable();
+  const distributionConfidence = deriveDecisionConfidence({
+    maturity: 'MEASURED',
+    providerReliability: ga4ProviderLive ? ga4ProviderReliability() : null,
+    sampleSize: sessionRows.length + leadRows.length,
+    dataPresent: sessionRows.length > 0,
+  });
+
   const decisions = [];
 
   if (topShare >= 0.45 && topEngagement < 0.32) {
@@ -101,7 +117,7 @@ export async function generateDistributionIntelligenceDecisions(companyId: strin
       impact_revenue: 46,
       priority_score: 64,
       effort_score: 20,
-      confidence_score: 0.82,
+      confidence_score: distributionConfidence.confidenceScore,
       recommendation: 'Rebalance distribution into higher-intent channels and tune message-channel fit.',
       action_type: 'fix_distribution',
       action_payload: { optimization_focus: 'channel_rebalance', channel: topChannel[0] },
@@ -129,7 +145,7 @@ export async function generateDistributionIntelligenceDecisions(companyId: strin
       impact_revenue: 50,
       priority_score: 62,
       effort_score: 18,
-      confidence_score: 0.78,
+      confidence_score: distributionConfidence.confidenceScore,
       recommendation: 'Improve destination relevance and sequencing so distributed traffic advances deeper in-session.',
       action_type: 'fix_distribution',
       action_payload: { optimization_focus: 'depth_recovery' },
@@ -159,7 +175,7 @@ export async function generateDistributionIntelligenceDecisions(companyId: strin
       impact_revenue: 56,
       priority_score: 68,
       effort_score: 24,
-      confidence_score: 0.8,
+      confidence_score: distributionConfidence.confidenceScore,
       recommendation: 'Shift channel investment toward sources with higher qualified lead yield.',
       action_type: 'adjust_strategy',
       action_payload: { optimization_focus: 'platform_fit' },

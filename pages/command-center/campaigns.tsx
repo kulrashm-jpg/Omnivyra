@@ -2,6 +2,8 @@ import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 import PageLoader from '../../components/PageLoader';
+import AccessRestricted from '../../components/access/AccessRestricted';
+import { roleCanAccessArea } from '../../config/commandCenterCards';
 import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
 // Variant Experience Embedding (PHASE 5 + 8) — campaign creation
 // surfaces the variant mode picker + experiment dashboard so
@@ -114,7 +116,7 @@ const CAMPAIGN_CARDS: CampaignCard[] = [
 
 export default function CampaignsSubPage() {
   const router = useRouter();
-  const { user, authChecked, isLoading } = useCompanyContext();
+  const { user, authChecked, isLoading, userRole } = useCompanyContext();
   const sourceContentToken = typeof router.query.sourceContentToken === 'string' ? router.query.sourceContentToken : null;
   const sourcePayload = React.useMemo(() => readCampaignSourcePayload(sourceContentToken), [sourceContentToken]);
 
@@ -134,14 +136,20 @@ export default function CampaignsSubPage() {
   }, [router, sourceContentToken]);
 
   React.useEffect(() => {
-    if (authChecked && !user?.userId) router.replace('/login');
-  }, [authChecked, user?.userId, router]);
+    if (authChecked && !isLoading && !user?.userId) router.replace('/login');
+  }, [authChecked, isLoading, user?.userId, router]);
 
   if (!authChecked || isLoading) {
     return <PageLoader message="Loading your campaigns…" />;
   }
 
   if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
+
+  // Campaigns are not part of a view-only role's workspace. Show a
+  // professional permission state instead of the campaign chooser.
+  if (!roleCanAccessArea(userRole, 'campaigns')) {
+    return <AccessRestricted area="campaigns" />;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">
@@ -304,11 +312,15 @@ function CampaignVariantHubSection({ companyId }: { companyId: string }) {
     setCampaignListError(null);
     (async () => {
       try {
-        const response = await fetch('/api/campaigns?limit=50', { credentials: 'include' });
+        const response = await fetch(
+          `/api/campaigns?companyId=${encodeURIComponent(companyId)}&limit=50`,
+          { credentials: 'include' },
+        );
         const payload = await response.json().catch(() => ({}));
         if (cancelled) return;
         if (!response.ok || !payload?.success) {
-          setCampaignListError(payload?.error || `Request failed (${response.status})`);
+          // Never surface the raw API/validation message to customers.
+          setCampaignListError("We couldn't load your campaigns just now. Refresh to try again.");
           return;
         }
         // P3-3 — annotate each campaign with whether it already has

@@ -314,12 +314,16 @@ export async function fetchReadinessData(
       );
       if (scoreRes.ok) {
         const scoreData = await scoreRes.json() as any;
-        const derived = deriveReadinessFromFeatures(features);
+        // Consume the CANONICAL weighted readiness directly (readinessScoreService
+        // via /api/readiness-score); the endpoint always returns score/level/
+        // completedFeatures/totalFeatures on a 200, so NO local derivation runs
+        // on the success path. The local fallback lives only in the else/catch
+        // branches below (i.e. only when the canonical producer is unavailable).
         readiness = {
-          score: derived.score,
+          score: typeof scoreData.data?.score === 'number' ? scoreData.data.score : 0,
           level: scoreData.data?.level || '',
-          completedFeatures: derived.completedFeatures,
-          totalFeatures: derived.totalFeatures,
+          completedFeatures: typeof scoreData.data?.completedFeatures === 'number' ? scoreData.data.completedFeatures : 0,
+          totalFeatures: typeof scoreData.data?.totalFeatures === 'number' ? scoreData.data.totalFeatures : 0,
           features,
         };
       } else {

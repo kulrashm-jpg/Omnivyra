@@ -6,6 +6,8 @@ import {
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { clamp, normalizeText, roundNumber } from './intelligenceEngineUtils';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
 
 type CanonicalLeadRow = {
   id: string;
@@ -103,6 +105,10 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
       .map(([source]) => source)
   );
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.84/0.79/0.82/0.81/0.83/0.78). MEASURED lead
+  // records; confidence scales with the lead sample size.
+  const leadConfidence = deriveDecisionConfidence({ maturity: 'MEASURED', sampleSize: canonicalLeads.length, dataPresent: canonicalLeads.length > 0 });
+
   const decisions = [];
   for (const lead of canonicalLeads) {
     const quality = inferLeadQuality(lead);
@@ -130,7 +136,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
         impact_revenue: clamp(60 - Math.round(quality / 2), 0, 100),
         priority_score: clamp(65 - Math.round(quality / 3), 0, 100),
         effort_score: 18,
-        confidence_score: 0.84,
+        confidence_score: leadConfidence.confidenceScore,
         recommendation: 'Tighten qualification rules and route weak leads into a lower-intent nurture path.',
         action_type: 'capture_leads',
         action_payload: {
@@ -164,7 +170,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
         impact_revenue: clamp(45 + Math.round(leadAgeDays / 2), 0, 100),
         priority_score: clamp(42 + Math.round(leadAgeDays / 2), 0, 100),
         effort_score: 22,
-        confidence_score: 0.79,
+        confidence_score: leadConfidence.confidenceScore,
         recommendation: 'Escalate or recycle aging leads before they decay into pipeline noise.',
         action_type: 'capture_leads',
         action_payload: {
@@ -199,7 +205,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
         impact_revenue: 63,
         priority_score: 61,
         effort_score: 26,
-        confidence_score: 0.82,
+        confidence_score: leadConfidence.confidenceScore,
         recommendation: 'Refine targeting or form qualification for this source before adding more volume.',
         action_type: 'capture_leads',
         action_payload: {
@@ -280,7 +286,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
         impact_revenue: clamp(58 + Math.round(revenuePerLead / 25), 0, 100),
         priority_score: clamp(54 + Math.round(revenuePerLead / 30), 0, 100),
         effort_score: 14,
-        confidence_score: 0.81,
+        confidence_score: leadConfidence.confidenceScore,
         recommendation: 'Scale this source deliberately while preserving the qualification signals that are producing revenue.',
         action_type: 'capture_leads',
         action_payload: {
@@ -315,7 +321,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
         impact_revenue: 66,
         priority_score: 64,
         effort_score: 20,
-        confidence_score: 0.83,
+        confidence_score: leadConfidence.confidenceScore,
         recommendation: 'Reduce low-fit volume from this source until conversion quality is back under control.',
         action_type: 'capture_leads',
         action_payload: {
@@ -350,7 +356,7 @@ export async function generateLeadIntelligenceDecisions(companyId: string): Prom
         impact_revenue: 72,
         priority_score: 69,
         effort_score: 24,
-        confidence_score: 0.78,
+        confidence_score: leadConfidence.confidenceScore,
         recommendation: 'Audit the handoff from lead to deal so qualified demand is not disappearing between capture and revenue.',
         action_type: 'capture_leads',
         action_payload: {

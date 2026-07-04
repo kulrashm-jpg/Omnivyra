@@ -1,13 +1,23 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getPrimaryNavForPath, getSecondaryNavForPath, isPathActive } from './navigationConfig';
+import { useCompanyContext } from '../CompanyContext';
+import { roleCanAccessArea } from '../../config/commandCenterCards';
 
 export default function SectionNav() {
   const router = useRouter();
+  const { userRole } = useCompanyContext();
   const items = getSecondaryNavForPath(router.pathname);
   const section = getPrimaryNavForPath(router.pathname);
 
   if (!section || items.length === 0) return null;
+
+  // Don't surface a section's sub-tabs (e.g. "Create Quick Posts") to roles
+  // that can't access that section — matches the header + dashboard gating so
+  // a view-only user never sees actions they can't perform.
+  const areaCardId =
+    section.label === 'Content' ? 'blogs' : section.label === 'Campaigns' ? 'campaigns' : null;
+  if (areaCardId && !roleCanAccessArea(userRole, areaCardId)) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-2">

@@ -22,6 +22,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getContextualIntelligence } from '../../../backend/services/intelligence/intelligenceService';
 import { recordRecommendationShown } from '../../../backend/services/intelligence/intelligenceRecommendationService';
+import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 
 type Body = {
   organization_id?: string;
@@ -91,7 +92,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         pattern_type: patternType,
         label: response.recommendation.label,
         confidence_score: response.confidence?.score ?? null,
-      }).catch(() => {});
+      })
+        .then((r) => {
+          // Canonical telemetry (append-only, fail-soft): emit only when a NEW
+          // shown row was recorded (idempotent per day) → no duplicate impressions.
+          if (r?.recorded) {
+            trackEvent({
+              type: 'recommendations.shown',
+              organizationId,
+              actorId: user?.userId ?? null,
+              entityId: r.shown_id,
+              metadata: { recommendationType: patternType },
+            });
+          }
+        })
+        .catch(() => {});
     }
 
     return res.status(200).json({ success: true, ...response });

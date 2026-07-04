@@ -1,6 +1,10 @@
 import { supabase } from '../db/supabaseClient';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { archiveDecisionSourceEntityType, createDecisionObjects, type PersistedDecisionObject } from './decisionObjectService';
+// BETA-ENGINE-002: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence, decisionConfidenceExplainability } from './evidencePlatform';
+// BETA-PROVIDER-003: canonical GA4 provider reliability lifts confidence on already-MEASURED session data.
+import { isGa4ProviderAvailable, ga4ProviderReliability } from './ga4ProviderBridge';
 
 type SessionRow = {
   geo_country: string | null;
@@ -50,6 +54,19 @@ export async function generateGeoIntelligenceDecisions(companyId: string): Promi
   const secondary = ranked[1];
   const totalSessions = rows.length;
 
+  // BETA-ENGINE-002: evidence-derived confidence (was hardcoded 0.77-0.82). MEASURED session
+  // analytics; scales with the session sample size backing the geo split.
+  // BETA-PROVIDER-003: session analytics is first-party GA4 data. Add the GA4 provider's reliability
+  // factor when connected (no scoring redesign); null (unchanged) otherwise.
+  const ga4ProviderLive = isGa4ProviderAvailable();
+  const geoConfidence = deriveDecisionConfidence({
+    maturity: 'MEASURED',
+    providerReliability: ga4ProviderLive ? ga4ProviderReliability() : null,
+    sampleSize: totalSessions,
+    dataPresent: totalSessions > 0,
+  });
+  const geoConfExplain = decisionConfidenceExplainability(geoConfidence);
+
   const decisions = [];
   if (primary && secondary) {
     const primaryShare = primary[1].sessions / totalSessions;
@@ -74,13 +91,14 @@ export async function generateGeoIntelligenceDecisions(companyId: string): Promi
           secondary_share: secondaryShare,
           primary_engagement_rate: primaryEng,
           secondary_engagement_rate: secondaryEng,
+          confidence: geoConfExplain,
         },
         impact_traffic: 34,
         impact_conversion: 46,
         impact_revenue: 44,
         priority_score: 65,
         effort_score: 26,
-        confidence_score: 0.8,
+        confidence_score: geoConfidence.confidenceScore,
         recommendation: 'Expand localized distribution in the high-efficiency secondary geography.',
         action_type: 'fix_distribution',
         action_payload: { target_geo: secondary[0], optimization_focus: 'geo_opportunity' },
@@ -103,13 +121,14 @@ export async function generateGeoIntelligenceDecisions(companyId: string): Promi
           primary_geo: primary[0],
           primary_share: primaryShare,
           primary_engagement_rate: primaryEng,
+          confidence: geoConfExplain,
         },
         impact_traffic: 24,
         impact_conversion: 56,
         impact_revenue: 54,
         priority_score: 68,
         effort_score: 22,
-        confidence_score: 0.82,
+        confidence_score: geoConfidence.confidenceScore,
         recommendation: 'Adjust geo targeting and localization for the dominant underperforming region.',
         action_type: 'adjust_strategy',
         action_payload: { optimization_focus: 'geo_gap', geo: primary[0] },
@@ -138,13 +157,14 @@ export async function generateGeoIntelligenceDecisions(companyId: string): Promi
           sessions: entry[1].sessions,
           deep_rate: entry[1].deep / Math.max(1, entry[1].sessions),
         })),
+        confidence: geoConfExplain,
       },
       impact_traffic: 20,
       impact_conversion: 48,
       impact_revenue: 46,
       priority_score: 62,
       effort_score: 24,
-      confidence_score: 0.77,
+      confidence_score: geoConfidence.confidenceScore,
       recommendation: 'Tune regional landing and message variants to improve depth and downstream intent.',
       action_type: 'improve_content',
       action_payload: { optimization_focus: 'regional_fit' },

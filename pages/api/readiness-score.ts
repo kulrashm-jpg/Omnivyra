@@ -7,7 +7,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createServerClient } from '@supabase/ssr';
+import { getSupabaseUserFromRequest } from '../../backend/services/supabaseAuthService';
+import { supabase } from '../../backend/db/supabaseClient';
 import { getFeatureCompletionStatus } from '../../backend/services/featureCompletionSyncService';
 import {
   computeReadinessScore,
@@ -90,36 +91,15 @@ export default async function handler(
   }
 
   try {
-    // Authenticate user
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll: () => Object.entries(req.cookies).map(([name, value]) => ({ name, value: value ?? '' })),
-          setAll: () => {},
-        },
-      }
-    );
-    const { data: { session } } = await supabase.auth.getSession();
-
-    if (!session) {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized',
-      });
+    // Authenticate via the canonical resolver (Authorization: Bearer OR the Supabase
+    // auth-cookie envelope) — the same path every other authenticated API uses. The
+    // prior createServerClient + getSession(req.cookies) guard could not read this
+    // app's auth cookie and returned 401 on every call (SIM-004 / EXEC-002 defect).
+    const { user } = await getSupabaseUserFromRequest(req);
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
-
-    // Resolve internal user ID (user_company_roles.user_id references public.users.id)
-    const { data: userRow } = await supabase
-      .from('users')
-      .select('id')
-      .eq('supabase_uid', session.user.id)
-      .maybeSingle();
-
-    if (!userRow) {
-      return res.status(401).json({ success: false, error: 'User not found' });
-    }
+    const userId = user.id; // public.users.id — user_company_roles.user_id references this
 
     // Get user's company
     const requestedCompanyId =
@@ -128,7 +108,7 @@ export default async function handler(
     const { data: activeRoles } = await supabase
       .from('user_company_roles')
       .select('company_id')
-      .eq('user_id', userRow.id)
+      .eq('user_id', userId)
       .eq('status', 'active')
       .order('created_at', { ascending: false });
 

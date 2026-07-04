@@ -4,6 +4,7 @@ import Head from 'next/head';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import { apiFetch } from '../lib/apiFetch';
+import { emitSetupChanged } from '../lib/setup/setupEvents';
 import {
   CheckCircle2,
   AlertCircle,
@@ -346,7 +347,12 @@ export function useSocialPlatforms() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ api_source_id: api.id, enabled: enable }),
       });
-      if (r.ok) await loadCompanyConfigs();
+      if (r.ok) {
+        await loadCompanyConfigs();
+        // Canonical Setup event — external-API integration configured / removed.
+        emitSetupChanged(enable ? 'integration-configured' : 'integration-removed', { api_source_id: api.id });
+        emitSetupChanged('api-key-updated', { api_source_id: api.id });
+      }
     } catch { /* non-fatal */ }
     finally { setTogglingApiId(null); }
   };
@@ -448,6 +454,7 @@ export function useSocialPlatforms() {
       });
       notify('success', `${platformKey} account connected successfully!`);
       loadStatus();
+      emitSetupChanged('social-connected', { platform: platformKey });
       router.replace('/social-platforms', undefined, { shallow: true });
     } else if (error) {
       notify('error', `Connection failed: ${decodeURIComponent(String(error))}`);
@@ -462,6 +469,7 @@ export function useSocialPlatforms() {
         loadStatus();
         const platform = e.newValue?.split(':')[0] || 'account';
         notify('success', `${platform} connected successfully!`);
+        emitSetupChanged('social-connected', { platform });
       }
     };
     window.addEventListener('storage', onStorage);
@@ -512,6 +520,7 @@ export function useSocialPlatforms() {
       if (r.ok) {
         notify('success', `${p.platform_label} disconnected.`);
         loadStatus();
+        emitSetupChanged('social-disconnected', { platform: p.platform_key });
       } else {
         const err = await r.json().catch(() => ({}));
         notify('error', err.error || 'Failed to disconnect');

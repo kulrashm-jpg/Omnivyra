@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { ingestUnifiedData } from './unifiedIngestionService';
+import { authorizeProviderCall, recordProviderUsage } from './providers/providerCostGovernor';
 import {
   hashKey,
   lowerCaseKeys,
@@ -417,6 +418,10 @@ async function ingestCrmRows(
 }
 
 export async function ingestCrmData(input: CrmIngestionInput): Promise<CrmIngestionResult> {
+  // Canonical governor gate (no provider bypass): honors kill-switch / dry-run.
+  const gov = authorizeProviderCall({ providerId: 'commercial', organizationId: input.companyId });
+  if (!gov.allowed) throw new Error(`provider_governor_blocked:commercial:${gov.reason}`);
+  void recordProviderUsage({ providerId: 'commercial', organizationId: input.companyId, units: 1, operation: 'ingest' });
   const rows = await loadRows(input);
 
   if (isCsvContentInput(input)) {

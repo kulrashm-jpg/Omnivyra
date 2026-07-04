@@ -28,6 +28,10 @@ import {
 import { extractCitation } from '../citationExtractor';
 import { formatQueryForProvider } from '../queryOrchestrator';
 import type { EvidenceTrace } from '../../canonicalReport/canonicalReportTypes';
+// BETA-PHASE1-EXEC-001: canonical cost governance — gate paid calls + record usage against the active scan budget.
+import { withinBudget, recordUsage, estimateCost } from '../costGovernance';
+import { getActiveScanId } from '../scanBudgetContext';
+import { extractProbeTokenUsage } from '../probeCostCapture';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const DEFAULT_MODEL = 'gpt-4o-mini';
@@ -86,6 +90,8 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
 
     const mentions: CitationMention[] = [];
     let firstFailureReason: string | null = null;
+    // BETA-PHASE1-EXEC-001: the active scan budget (null outside a scan-budget context → no gating, prior behaviour).
+    const scanId = getActiveScanId();
 
     for (const query of probe.queries) {
       const cacheKey = `${probe.query_class}|${query}`;
@@ -104,6 +110,16 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
       if (!this.limiter.tryAcquire()) {
         firstFailureReason = firstFailureReason ?? `rate_limited:${this.id}`;
         continue;
+      }
+
+      // Canonical budget gate: never exceed the scan's request/cost ceiling. Abort remaining paid calls
+      // safely when exhausted (cost unknown pre-call → request-count enforcement). No budget ⇒ no gating.
+      if (scanId) {
+        const gate = withinBudget(scanId, { requests: 1, cost_usd: null });
+        if (!gate.ok) {
+          firstFailureReason = firstFailureReason ?? gate.reason ?? `budget_exceeded:${this.id}`;
+          break;
+        }
       }
 
       const startedAt = Date.now();
@@ -134,8 +150,23 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
           ),
         );
         const json = (await envelope.json()) as OpenAIChatResponse;
-        // Phase 8G-B — platform cost capture (no customer org; fire-and-forget).
+        // Phase 8G-B — platform cost capture (no customer org; fire-and-forget). Separate billing ledger.
         void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
+        // BETA-PHASE1-EXEC-001: record the paid call against the canonical scan budget (sole writer to the
+        // scan ledger — no duplicate accounting; cost null when pricing is unknown).
+        if (scanId) {
+          const usage = extractProbeTokenUsage(this.id, json);
+          recordUsage(scanId, {
+            provider_id: this.id,
+            operation: 'probe',
+            request_count: 1,
+            prompt_tokens: usage.inputTokens,
+            completion_tokens: usage.outputTokens,
+            cost_usd: estimateCost({ providerId: this.id, promptTokens: usage.inputTokens, completionTokens: usage.outputTokens }),
+            cache_hit: false,
+            observed_at: new Date().toISOString(),
+          });
+        }
         const answer = json.choices?.[0]?.message?.content ?? '';
         const observedAt = new Date().toISOString();
         const mention = extractCitation({

@@ -5,6 +5,7 @@ import { ownedDbTable } from '../db/writeOwner';
  * Supports full content_blocks + SEO + category/tag metadata.
  */
 import { getIntegration, getActiveIntegration, type Integration } from './integrationService';
+import { trackEvent } from './telemetry/telemetryDispatcher';
 import { extractBlogContext } from '../../lib/blog/blockExtractor';
 import { createPublishingJob, executePublishingJob } from './publishingJobService';
 import { isCmsProvider } from './cms/registry';
@@ -559,7 +560,16 @@ export async function createBlog(
     .select('*')
     .single();
   if (error) throw new Error(error.message);
-  return data as Blog;
+  const created = data as Blog;
+  // Adoption telemetry (append-only, fail-soft): a content asset was created.
+  trackEvent({
+    type: 'content.created',
+    organizationId: companyId,
+    actorId: userId,
+    entityId: (created as { id?: string }).id ?? null,
+    metadata: { contentType: input.content_type ?? 'blog', title: input.title },
+  });
+  return created;
 }
 
 export async function getBlog(id: string, companyId: string): Promise<Blog | null> {
@@ -725,6 +735,18 @@ export async function publishBlogPost(
     integration_id: usedIntegrationId,
     updated_at:     new Date().toISOString(),
   }).eq('id', id).eq('company_id', companyId);
+
+  // Adoption telemetry (append-only, fail-soft): content actually published
+  // (not merely scheduled). Deduped per blog id.
+  if (result.success && !blog.scheduled_publish_at) {
+    trackEvent({
+      type: 'content.published',
+      organizationId: companyId,
+      actorId: (blog as { created_by?: string }).created_by ?? null,
+      entityId: id,
+      metadata: { contentType: (blog as { content_type?: string }).content_type ?? 'blog', channel: integration?.type ?? '' },
+    });
+  }
 
   // Non-executing publish-snapshot capture at the scheduling/finalization
   // boundary. Off by default; gated behind PUBLISH_SNAPSHOT_CAPTURE_ENABLED.

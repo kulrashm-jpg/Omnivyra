@@ -20,14 +20,21 @@ import {
   logCardClicked,
   logCommandCenterDismissed,
 } from '../lib/analytics/commandCenterEvents';
-import {
-  buildMasterySections,
-  buildReadinessSections,
-  buildSetupSections,
-  scoreSections,
-  summarizeSections,
-} from './commandCenterScoreModel';
 import { getCardHoverMessage } from '../components/command-center/preflightHelpers';
+import { buildSetupSignals } from '../lib/setup/buildSetupSignals';
+import { SETUP_REGISTRY, type SetupSignals } from '../config/setupRegistry';
+import { onSetupChanged } from '../lib/setup/setupEvents';
+import { buildReadinessSignals } from '../lib/readiness/buildReadinessSignals';
+import { READINESS_REGISTRY, type ReadinessSignals } from '../config/readinessRegistry';
+import { buildMasterySignals } from '../lib/mastery/buildMasterySignals';
+import { MASTERY_REGISTRY, type MasterySignals } from '../config/masteryRegistry';
+import { evaluateCapabilityRegistry, type CapabilityEvaluation } from '../lib/shared/capabilityRegistry';
+
+const EMPTY_CAPABILITY_EVALUATION: CapabilityEvaluation = {
+  categories: [],
+  overallPercent: 0,
+  summary: { completedCount: 0, inProgressCount: 0, totalCount: 0 },
+};
 
 type EnhancedCardProps = Omit<CommandCenterCard, 'state' | 'requirements' | 'badge'> & {
   state: CardState;
@@ -65,42 +72,71 @@ export function useCommandCenter() {
     hasFreeReportUsed: boolean;
   } | null>(null);
 
-  const setupSections = useMemo(() => buildSetupSections(features), [features]);
-  const readinessSections = useMemo(() => buildReadinessSections(features), [features]);
-  const masterySections = useMemo(() => buildMasterySections(features), [features]);
-  const setupPct = useMemo(() => scoreSections(setupSections), [setupSections]);
-  const masteryPct = useMemo(() => scoreSections(masterySections), [masterySections]);
-  const setupSummary = useMemo(() => summarizeSections(setupSections), [setupSections]);
-  const readinessSummary = useMemo(
-    () =>
-      readinessData
-        ? {
-            completedCount: readinessData.completedFeatures,
-            inProgressCount: Math.max(readinessData.totalFeatures - readinessData.completedFeatures, 0),
-            totalCount: readinessData.totalFeatures,
-          }
-        : summarizeSections(readinessSections),
-    [readinessData, readinessSections],
+  const [setupSignals, setSetupSignals] = useState<SetupSignals | null>(null);
+  const setupEvaluation = useMemo(
+    () => (setupSignals ? evaluateCapabilityRegistry(SETUP_REGISTRY, setupSignals) : EMPTY_CAPABILITY_EVALUATION),
+    [setupSignals],
   );
-  const masterySummary = useMemo(() => summarizeSections(masterySections), [masterySections]);
+  const [readinessSignals, setReadinessSignals] = useState<ReadinessSignals | null>(null);
+  const readinessEvaluation = useMemo(
+    () => (readinessSignals ? evaluateCapabilityRegistry(READINESS_REGISTRY, readinessSignals) : EMPTY_CAPABILITY_EVALUATION),
+    [readinessSignals],
+  );
+  const [masterySignals, setMasterySignals] = useState<MasterySignals | null>(null);
+  const masteryEvaluation = useMemo(
+    () => (masterySignals ? evaluateCapabilityRegistry(MASTERY_REGISTRY, masterySignals) : EMPTY_CAPABILITY_EVALUATION),
+    [masterySignals],
+  );
+  const setupPct = setupEvaluation.overallPercent;
+  const setupSummary = setupEvaluation.summary;
+  // Readiness + Mastery both derive from canonical registries via the shared
+  // engine (adoption-based Mastery, no feature-usage). Rings + summaries use the
+  // evaluations, not legacy feature-weighted sections / backend score.
+  const readinessPct = readinessEvaluation.overallPercent;
+  const readinessSummary = readinessEvaluation.summary;
+  const masteryPct = masteryEvaluation.overallPercent;
+  const masterySummary = masteryEvaluation.summary;
   const loadReadiness = useCallback(async () => {
     if (!authChecked || !user?.userId || !selectedCompanyId) return;
 
     try {
-      const [data, profileResponse, companyApiConfigResponse, externalApisResponse] = await Promise.all([
+      const getJson = (path: string) =>
+        fetch(path, { method: 'GET', headers: { 'Content-Type': 'application/json' } }).catch(() => null);
+      const cid = encodeURIComponent(selectedCompanyId);
+      const [
+        data,
+        profileResponse,
+        companyApiConfigResponse,
+        externalApisResponse,
+        socialStatusResponse,
+        teamSummaryResponse,
+        subscriptionResponse,
+        websiteSnapshotResponse,
+        blogsResponse,
+        creatorAssetsResponse,
+        templateCollectionsResponse,
+        automationConfigResponse,
+        campaignsResponse,
+        reportsResponse,
+        telemetryProvidersResponse,
+      ] = await Promise.all([
         fetchReadinessData(selectedCompanyId),
-        fetch(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}&includeCompleteness=1`, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-        }).catch(() => null),
-        fetch(`/api/external-apis/company-config?companyId=${encodeURIComponent(selectedCompanyId)}`, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-        }).catch(() => null),
-        fetch(`/api/external-apis?companyId=${encodeURIComponent(selectedCompanyId)}`, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-        }).catch(() => null),
+        getJson(`/api/company-profile?companyId=${cid}&includeCompleteness=1`),
+        getJson(`/api/external-apis/company-config?companyId=${cid}`),
+        getJson(`/api/external-apis?companyId=${cid}`),
+        getJson(`/api/social-accounts/status?companyId=${cid}`),
+        getJson(`/api/company/team-summary?companyId=${cid}`),
+        getJson(`/api/user/subscription?company_id=${cid}`),
+        getJson(`/api/website-intelligence/canonical?company_id=${cid}`),
+        getJson(`/api/blogs?company_id=${cid}`),
+        getJson(`/api/creator-assets?company_id=${cid}`),
+        getJson(`/api/creator-templates/collections?company_id=${cid}`),
+        getJson(`/api/automation/config?organization_id=${cid}`),
+        getJson(`/api/campaigns?companyId=${cid}`),
+        getJson(`/api/reports?company_id=${cid}`),
+        // Canonical telemetry provider results — Mastery prefers these over the
+        // proxy counts when telemetry is live; falls back to proxies while dark.
+        getJson(`/api/telemetry/providers?companyId=${cid}&scope=mastery`),
       ]);
       if (!data) {
         console.warn('[command-center] Readiness data unavailable — defaulting to 0%');
@@ -112,23 +148,122 @@ export function useCommandCenter() {
       setReadinessScore(data.readiness.score);
       if (profileResponse?.ok) {
         const profileData = await profileResponse.json();
-        const [companyApiConfigData, externalApisData] = await Promise.all([
+        const [companyApiConfigData, externalApisData, socialStatusData, teamSummaryData, subscriptionData, websiteSnapshotData, blogsData, creatorAssetsData, templateCollectionsData, automationConfigData, campaignsData, reportsData, telemetryProvidersData] = await Promise.all([
           companyApiConfigResponse?.ok ? companyApiConfigResponse.json() : Promise.resolve(null),
           externalApisResponse?.ok ? externalApisResponse.json() : Promise.resolve(null),
+          socialStatusResponse?.ok ? socialStatusResponse.json() : Promise.resolve(null),
+          teamSummaryResponse?.ok ? teamSummaryResponse.json() : Promise.resolve(null),
+          subscriptionResponse?.ok ? subscriptionResponse.json() : Promise.resolve(null),
+          websiteSnapshotResponse?.ok ? websiteSnapshotResponse.json() : Promise.resolve(null),
+          blogsResponse?.ok ? blogsResponse.json() : Promise.resolve(null),
+          creatorAssetsResponse?.ok ? creatorAssetsResponse.json() : Promise.resolve(null),
+          templateCollectionsResponse?.ok ? templateCollectionsResponse.json() : Promise.resolve(null),
+          automationConfigResponse?.ok ? automationConfigResponse.json() : Promise.resolve(null),
+          campaignsResponse?.ok ? campaignsResponse.json() : Promise.resolve(null),
+          reportsResponse?.ok ? reportsResponse.json() : Promise.resolve(null),
+          telemetryProvidersResponse?.ok ? telemetryProvidersResponse.json() : Promise.resolve(null),
         ]);
-        const apiNameById = new Map<string, string>();
-        (externalApisData?.apis || []).forEach((api: any) => {
-          if (api?.id) {
-            apiNameById.set(api.id, api.name || api.display_name || api.source_name || api.platform_name || api.id);
-          }
-        });
-        const configuredApis = (companyApiConfigData?.configs || []).filter((row: any) => row?.enabled !== false).map((row: any) => apiNameById.get(row.api_source_id) || row.api_source_id).filter(Boolean);
+        const apiCatalog = (externalApisData?.apis || [])
+          .filter((api: any) => api?.id)
+          .map((api: any) => ({
+            id: api.id as string,
+            name: (api.name || api.display_name || api.source_name || api.platform_name || api.id) as string,
+          }));
+        const apiNameById = new Map<string, string>(apiCatalog.map((a: { id: string; name: string }) => [a.id, a.name]));
+        const configuredApiIds = new Set<string>(
+          (companyApiConfigData?.configs || [])
+            .filter((row: any) => row?.enabled !== false)
+            .map((row: any) => row.api_source_id)
+            .filter(Boolean),
+        );
+        const configuredApis = [...configuredApiIds].map((id) => apiNameById.get(id) || id);
+        // NOTE: profile-URL connected list is retained ONLY for profileStatus,
+        // which feeds Readiness/Mastery + preflight (unchanged). Setup channels
+        // now use the canonical social-accounts connection endpoint below.
+        const connectedPlatforms = [
+          profileData?.profile?.linkedin_url ? 'LinkedIn' : null,
+          profileData?.profile?.facebook_url ? 'Facebook' : null,
+          profileData?.profile?.instagram_url ? 'Instagram' : null,
+          profileData?.profile?.x_url ? 'X' : null,
+          profileData?.profile?.youtube_url ? 'YouTube' : null,
+          profileData?.profile?.tiktok_url ? 'TikTok' : null,
+          profileData?.profile?.reddit_url ? 'Reddit' : null,
+          profileData?.profile?.pinterest_url ? 'Pinterest' : null,
+          profileData?.profile?.whatsapp_url ? 'WhatsApp' : null,
+        ].filter(Boolean) as string[];
         setProfileStatus({
           missingSections: profileData?.completeness?.missing_sections ?? null,
           score: typeof profileData?.overall_profile_completion === 'number' ? profileData.overall_profile_completion : null,
-          connectedPlatforms: [profileData?.profile?.linkedin_url ? 'LinkedIn' : null, profileData?.profile?.facebook_url ? 'Facebook' : null, profileData?.profile?.instagram_url ? 'Instagram' : null, profileData?.profile?.x_url ? 'X' : null, profileData?.profile?.youtube_url ? 'YouTube' : null, profileData?.profile?.tiktok_url ? 'TikTok' : null, profileData?.profile?.reddit_url ? 'Reddit' : null, profileData?.profile?.pinterest_url ? 'Pinterest' : null, profileData?.profile?.whatsapp_url ? 'WhatsApp' : null].filter(Boolean),
+          connectedPlatforms,
           configuredApis,
         });
+        // Assemble canonical, capability-aware Setup signals (no scoring here —
+        // that lives in the engine). Channels come from social_accounts; Team
+        // from the membership-summary endpoint readable by every member.
+        setSetupSignals(
+          buildSetupSignals({
+            profile: profileData?.profile ?? null,
+            features: data.features,
+            socialAccounts: Array.isArray(socialStatusData?.accounts) ? socialStatusData.accounts : null,
+            teamSummary:
+              teamSummaryData && typeof teamSummaryData.memberCount === 'number'
+                ? { ownerExists: Boolean(teamSummaryData.ownerExists), memberCount: teamSummaryData.memberCount }
+                : null,
+            apiCatalog,
+            configuredApiIds,
+            apiCatalogAvailable: Boolean(externalApisResponse?.ok),
+            subscriptionTier:
+              subscriptionData?.data?.tier ?? subscriptionData?.data?.plan_key ?? null,
+          }),
+        );
+        // Canonical, capability-aware Readiness signals (client-side engine,
+        // Setup architecture). Channels from social_accounts; profile audience.
+        setReadinessSignals(
+          buildReadinessSignals({
+            profile: profileData?.profile ?? null,
+            features: data.features,
+            socialAccounts: Array.isArray(socialStatusData?.accounts) ? socialStatusData.accounts : null,
+            websiteSnapshot: websiteSnapshotData?.snapshot ?? null,
+            blogsCount: Array.isArray(blogsData?.blogs) ? blogsData.blogs.length : null,
+            mediaCount: Array.isArray(creatorAssetsData?.assets) ? creatorAssetsData.assets.length : null,
+            templatesCount: Array.isArray(templateCollectionsData?.collections) ? templateCollectionsData.collections.length : null,
+            automation:
+              automationConfigData && typeof automationConfigData.enabled === 'boolean'
+                ? {
+                    enabled: Boolean(automationConfigData.enabled),
+                    autoReply: Boolean(automationConfigData.auto_reply_enabled),
+                    autoDm: Boolean(automationConfigData.auto_dm_enabled),
+                  }
+                : null,
+          }),
+        );
+        // Canonical, adoption-based Mastery signals (client-side shared engine).
+        // Real artifacts only (published content, campaigns, reports, assets,
+        // templates, team, automation) — no feature-usage.
+        setMasterySignals(
+          buildMasterySignals({
+            profile: profileData?.profile ?? null,
+            blogsCount: Array.isArray(blogsData?.blogs) ? blogsData.blogs.length : null,
+            campaignsCount: Array.isArray(campaignsData?.campaigns) ? campaignsData.campaigns.length : null,
+            reportsCount: Array.isArray(reportsData?.reports) ? reportsData.reports.length : null,
+            mediaCount: Array.isArray(creatorAssetsData?.assets) ? creatorAssetsData.assets.length : null,
+            templatesCount: Array.isArray(templateCollectionsData?.collections) ? templateCollectionsData.collections.length : null,
+            teamSummary:
+              teamSummaryData && typeof teamSummaryData.memberCount === 'number'
+                ? { memberCount: teamSummaryData.memberCount }
+                : null,
+            automation:
+              automationConfigData && typeof automationConfigData.enabled === 'boolean'
+                ? {
+                    enabled: Boolean(automationConfigData.enabled),
+                    autoReply: Boolean(automationConfigData.auto_reply_enabled),
+                    autoDm: Boolean(automationConfigData.auto_dm_enabled),
+                  }
+                : null,
+            websiteSnapshot: websiteSnapshotData?.snapshot ?? null,
+            telemetry: telemetryProvidersData?.signals ?? null,
+          }),
+        );
       } else {
         setProfileStatus(null);
       }
@@ -177,16 +312,22 @@ export function useCommandCenter() {
       }
     };
 
+    // PRIMARY sync: canonical Setup events (immediate refresh on any Setup-
+    // changing action). onSetupChanged also bridges the legacy
+    // 'company-profile-updated' event, so it is the single subscription point.
+    const unsubscribe = onSetupChanged(refresh);
+
+    // FALLBACK ONLY: focus + visibility recover state after events missed while
+    // the tab was backgrounded. They are not the primary synchronization path.
     if (typeof window !== 'undefined') {
       window.addEventListener('focus', refresh);
-      window.addEventListener('company-profile-updated', refresh as EventListener);
       document.addEventListener('visibilitychange', refreshOnVisible);
     }
 
     return () => {
+      unsubscribe();
       if (typeof window !== 'undefined') {
         window.removeEventListener('focus', refresh);
-        window.removeEventListener('company-profile-updated', refresh as EventListener);
         document.removeEventListener('visibilitychange', refreshOnVisible);
       }
     };
@@ -456,13 +597,13 @@ export function useCommandCenter() {
     isSaving,
     loadingError,
     masteryPct,
-    masterySections,
+    masteryEvaluation,
     masterySummary,
     profileStatus,
     rawName,
     readinessData,
-    readinessScore,
-    readinessSections,
+    readinessScore: readinessPct,
+    readinessEvaluation,
     readinessSummary,
     reportCardStatus,
     router,
@@ -480,7 +621,7 @@ export function useCommandCenter() {
     setUserTier,
     setVisibleCards,
     setupPct,
-    setupSections,
+    setupEvaluation,
     setupSummary,
     showAgain,
     user,

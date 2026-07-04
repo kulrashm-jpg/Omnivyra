@@ -249,14 +249,15 @@ export default function ContentCreationPanel({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          context,
-          campaignId,
-          weekNumber,
-          dayNumber,
-          platform: selectedPlatform,
-          contentType: selectedContentType,
-          provider: 'demo',
-          requestType: 'content-generation'
+          type: 'campaign_content',
+          context: {
+            campaignId,
+            weekNumber,
+            dayNumber,
+            platform: selectedPlatform,
+            contentType: selectedContentType,
+            scope: context,
+          },
         })
       });
 

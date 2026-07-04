@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { supabase } from '../db/supabaseClient';
+import { authorizeProviderCall, recordProviderUsage } from './providers/providerCostGovernor';
 import { isConversionEvent } from './conversionRegistry';
 import { ensureCanonicalDomain, hashKey, normalizeUrl, resolveCompanyWebsite, safeInteger, safeNumber, todayIsoDate } from './ingestionUtils';
 import { resolveGa4IngestionContext } from './analyticsIntegrationService';
@@ -607,6 +608,11 @@ async function persistBehavioralBatch(input: {
 }
 
 export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4IngestionResult> {
+  // Canonical governor gate (no provider bypass): honors kill-switch / dry-run.
+  // GA4 is free → normally a pass-through; records the run for usage visibility.
+  const gov = authorizeProviderCall({ providerId: 'ga4', organizationId: input.companyId });
+  if (!gov.allowed) throw new Error(`provider_governor_blocked:ga4:${gov.reason}`);
+  void recordProviderUsage({ providerId: 'ga4', organizationId: input.companyId, units: 1, operation: 'ingest' });
   let propertyId = input.propertyId;
   let accessToken = input.accessToken;
 

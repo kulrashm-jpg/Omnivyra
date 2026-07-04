@@ -1,17 +1,11 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import OpenAI from 'openai';
+import { runCompletion } from '../../../backend/services/aiGateway';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import {
   getCompanyContextIntelligence,
   type CompanyContextIntelligence,
 } from '../../../backend/services/companyContextIntelligenceService';
 import { getProfile } from '../../../backend/services/companyProfileService';
-
-function getOpenAiClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
-  return new OpenAI({ apiKey });
-}
 
 function summarizeContext(context: CompanyContextIntelligence | null): string {
   if (!context) return 'No context intelligence is saved yet.';
@@ -62,8 +56,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       '{ "done": true, "structuredContext": { "revenue_segments": [], "geographic_exposures": [], "dependencies": [], "workforce_profile": null, "regulatory_exposures": [], "technology_dependencies": [] } }\n' +
       'Use arrays of plain objects with obvious keys matching the section names. Include review_status: "inferred" and entity_state: "inferred" on inferred rows. Keep values concise. If more information is needed, return { "nextQuestion": "..." }.';
 
-    const client = getOpenAiClient();
-    const completion = await client.chat.completions.create({
+    const completion = await runCompletion({
+      companyId,
+      operation: 'defineContextIntelligence',
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.2,
       response_format: { type: 'json_object' },
@@ -85,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ],
     });
 
-    const raw = completion.choices[0]?.message?.content?.trim() || '{}';
+    const raw = (completion.output ?? '').trim() || '{}';
     let parsed: { nextQuestion?: string; done?: boolean; structuredContext?: Partial<CompanyContextIntelligence> };
     try {
       parsed = JSON.parse(raw);

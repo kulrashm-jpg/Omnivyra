@@ -56,7 +56,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       query = query.eq('signal_type', signalType);
     }
     if (dateFrom) query = query.gte('detected_at', dateFrom);
-    if (dateTo) query = query.lte('detected_at', dateTo + 'T23:59:59.999Z');
+    if (dateTo) {
+      // dateTo may be a full ISO timestamp (e.g. 2026-07-02T03:46:52.884Z from the inbox)
+      // or a bare date (2026-07-02). Only append end-of-day to a bare date — appending it
+      // to a full timestamp produced "...ZT23:59:59.999Z" → Postgres "time zone not
+      // recognized" → 500 (the inbox never loaded signals).
+      const dateToBound = dateTo.includes('T') ? dateTo : `${dateTo}T23:59:59.999Z`;
+      query = query.lte('detected_at', dateToBound);
+    }
 
     if (!campaignId && !activityId) {
       const { data: versions } = await supabase

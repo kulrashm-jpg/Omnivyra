@@ -52,6 +52,25 @@ export interface OAuthLogFields {
  */
 export function logOAuthEvent(fields: OAuthLogFields): void {
   try {
+    // Canonical telemetry (append-only, fail-soft): a successful OAuth callback
+    // is an integration connection. This shared hook is the single chokepoint
+    // for every provider's callback, so one emit covers them all. Only tenant-
+    // scoped connections (company_id present) are business events.
+    if (fields.event === 'oauth_success' && fields.company_id) {
+      // Lazy import avoids a load-order cycle in the auth bootstrap path.
+      void import('../services/telemetry/telemetryDispatcher')
+        .then(({ trackEvent }) =>
+          trackEvent({
+            type: 'integration.connected',
+            organizationId: fields.company_id as string,
+            actorId: fields.user_id ?? null,
+            entityId: null,
+            metadata: { provider: fields.provider, type: fields.state_flow ?? 'social_account' },
+            dedupKey: null,
+          }),
+        )
+        .catch(() => undefined);
+    }
     const sanitized: Record<string, unknown> = { ...fields };
     // Belt-and-suspenders: scrub well-known secret-bearing keys if any
     // future caller accidentally passes them.

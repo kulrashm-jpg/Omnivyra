@@ -104,8 +104,18 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (typeof window === 'undefined') return;
     const seen = localStorage.getItem(STORAGE_KEY);
     if (!seen) {
-      // Auto-start for new users after a short delay for the page to settle
-      const t = setTimeout(() => setIsActive(true), 1400);
+      // Auto-start for new users after a short delay for the page to settle.
+      const t = setTimeout(() => {
+        setIsActive(true);
+        // Persist "shown" the MOMENT the tour first auto-appears — not only on
+        // explicit dismiss. Previously the flag was written solely by skip/complete,
+        // so any full page load or provider remount BEFORE the user dismissed it
+        // re-fired this auto-start and the tour re-blocked every page (SIM-004).
+        // Marking it here makes the tour appear exactly once; Skip/Complete work as
+        // before, and Restart via the header "Start Help" button (startTour) still
+        // re-runs it because startTour ignores this flag.
+        try { localStorage.setItem(STORAGE_KEY, '1'); } catch { /* storage unavailable — non-fatal */ }
+      }, 1400);
       return () => clearTimeout(t);
     }
   }, []);

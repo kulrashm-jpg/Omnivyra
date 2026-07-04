@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware';
-import { disconnectSearchConsole } from '../../../backend/services/analyticsIntegrationService';
+import { disconnectSearchConsole, disconnectGoogleAnalytics } from '../../../backend/services/analyticsIntegrationService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -18,21 +18,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const companyId = typeof req.body?.companyId === 'string' ? req.body.companyId : '';
-  const capability = req.body?.capability === 'google_search_console' || req.body?.capability === 'gsc'
-    ? 'google_search_console'
-    : null;
+  const rawCap = req.body?.capability;
+  const capability =
+    rawCap === 'google_search_console' || rawCap === 'gsc'
+      ? 'google_search_console'
+      : rawCap === 'google_analytics' || rawCap === 'ga4' || rawCap === 'ga'
+        ? 'google_analytics'
+        : null;
 
   if (!(await requireCompanyAccess(user.id, companyId, res))) return;
 
-  if (capability !== 'google_search_console') {
+  if (!capability) {
     return res.status(400).json({
       status: 'error',
-      message: 'Only Search Console disconnect is supported here.',
+      message: 'capability must be google_search_console or google_analytics.',
     });
   }
 
   try {
-    const result = await disconnectSearchConsole(companyId);
+    const result =
+      capability === 'google_search_console'
+        ? await disconnectSearchConsole(companyId)
+        : await disconnectGoogleAnalytics(companyId);
     return res.status(200).json({
       status: 'disconnected',
       ...result,
@@ -40,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (error) {
     return res.status(500).json({
       status: 'error',
-      message: error instanceof Error ? error.message : 'Failed to disconnect Search Console',
+      message: error instanceof Error ? error.message : `Failed to disconnect ${capability}`,
     });
   }
 }

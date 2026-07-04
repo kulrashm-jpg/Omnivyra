@@ -4,6 +4,8 @@ import { useCompanyContext } from '../../components/CompanyContext';
 import PageLoader from '../../components/PageLoader';
 import { MarketingCreationWorkspace } from '../../components/creator/MarketingCreationWorkspace';
 import { creatorOutcomeFirstEnabled } from '../../lib/creator-outcomes/outcomeRegistry';
+import AccessRestricted from '../../components/access/AccessRestricted';
+import { roleCanAccessArea } from '../../config/commandCenterCards';
 
 /**
  * Unified Marketing Creation Workspace entry (CREATOR-058). One starting point
@@ -13,17 +15,19 @@ import { creatorOutcomeFirstEnabled } from '../../lib/creator-outcomes/outcomeRe
  */
 export default function MarketingCreatePage() {
   const router = useRouter();
-  const { user, authChecked, isLoading } = useCompanyContext();
+  const { user, authChecked, isLoading, userRole } = useCompanyContext();
 
   React.useEffect(() => {
-    if (authChecked && !user?.userId) { router.replace('/login'); return; }
-    if (authChecked && user?.userId && !creatorOutcomeFirstEnabled()) {
+    if (authChecked && !isLoading && !user?.userId) { router.replace('/login'); return; }
+    if (authChecked && user?.userId && roleCanAccessArea(userRole, 'blogs') && !creatorOutcomeFirstEnabled()) {
       router.replace('/command-center/creator-content'); // legacy entry until cutover
     }
-  }, [authChecked, user?.userId, router]);
+  }, [authChecked, isLoading, user?.userId, userRole, router]);
 
   if (!authChecked || isLoading) return <PageLoader message="Loading your workspace…" />;
   if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
+  // Marketing creation is not part of a view-only role's workspace.
+  if (!roleCanAccessArea(userRole, 'blogs')) return <AccessRestricted area="marketing creation" />;
   if (!creatorOutcomeFirstEnabled()) return <PageLoader message="Opening creator…" statuses={[]} />;
 
   return (

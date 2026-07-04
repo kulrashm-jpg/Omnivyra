@@ -3,6 +3,8 @@ import type {
   ScoreState,
   SystemMaturityClass,
 } from '../snapshotReport/canonicalScoreState';
+// BETA-EXEC-003: canonical band cutoffs from the scoring-governance registry.
+import { CANONICAL_SCORE_BANDS } from './scoringGovernance';
 
 export type {
   ConfidenceBand,
@@ -48,19 +50,19 @@ export const PILLAR_META: Record<PillarKey, PillarMeta> = {
   authority: {
     key: 'authority',
     label: 'Authority',
-    purpose: 'Market authority and corroboration — backlinks, mentions, entity strength.',
+    purpose: 'Off-site corroboration — backlinks, mentions, entity strength. Estimated from on-site signals until external authority providers are connected; not a verified market-authority ranking.',
     accent: 'indigo',
   },
   discoverability: {
     key: 'discoverability',
     label: 'Discoverability',
-    purpose: 'Search and AI discoverability — visibility, conversational coverage, answer extraction.',
+    purpose: 'Search and AI discoverability — structure, visibility, answer extraction. AI-surface presence is measured only when AI providers are connected; otherwise based on on-site extractability.',
     accent: 'emerald',
   },
   trust: {
     key: 'trust',
     label: 'Trust',
-    purpose: 'Consistency, expertise, and reputation signals across the open web.',
+    purpose: 'Consistency, expertise, and reputation signals. Measured from on-site brand-health evidence until review and reputation sources are connected.',
     accent: 'amber',
   },
   momentum: {
@@ -149,9 +151,9 @@ export function canonicalBandFromValue(
   state: ScoreState,
 ): CanonicalScore['band'] {
   if (state === 'insufficient_signal' || state === 'unavailable' || value == null) return 'insufficient';
-  if (value >= 75) return 'leading';
-  if (value >= 50) return 'operational';
-  if (value >= 25) return 'developing';
+  if (value >= CANONICAL_SCORE_BANDS.leading) return 'leading';
+  if (value >= CANONICAL_SCORE_BANDS.operational) return 'operational';
+  if (value >= CANONICAL_SCORE_BANDS.developing) return 'developing';
   return 'foundational';
 }
 
@@ -164,6 +166,7 @@ export type CanonicalDimensionKey =
   // Foundation
   | 'index_integrity'
   | 'extraction_readiness'
+  | 'accessibility'
   // Authority
   | 'authority_inflow'
   | 'entity_graph_strength'
@@ -202,6 +205,13 @@ export const CANONICAL_DIMENSIONS: ReadonlyArray<{
     rationale: 'Page structure, summary blocks, and schema density that make answers extractable.',
   },
   {
+    // BETA-EXEC-002: Accessibility Intelligence engine surfaced as a Foundation dimension.
+    key: 'accessibility',
+    label: 'Accessibility',
+    pillar: 'foundation',
+    rationale: 'WCAG conformance, semantic structure, and accessible markup that underpin a healthy foundation.',
+  },
+  {
     key: 'authority_inflow',
     label: 'Authority Inflow',
     pillar: 'authority',
@@ -232,10 +242,13 @@ export const CANONICAL_DIMENSIONS: ReadonlyArray<{
     rationale: 'Consistency of brand description, proof, and reputation signals across sources.',
   },
   {
+    // BR-C-001 truth correction: this dimension's value is a content-freshness signal, NOT a measured
+    // authority growth rate. Labeled for what it actually measures. Real velocity (rate + classification)
+    // is exposed separately in the authority trajectory when snapshot history exists.
     key: 'authority_velocity',
-    label: 'Authority Velocity',
+    label: 'Content Freshness',
     pillar: 'momentum',
-    rationale: 'Rate of change in authority signals — publishing cadence, freshness, growth.',
+    rationale: 'How recently the site\'s content was published or updated — a publishing-momentum proxy. This is not a measured authority growth rate; see the authority trajectory when snapshot history exists.',
   },
 ];
 
@@ -379,6 +392,30 @@ export type CanonicalNarrative = {
 // geo_aeo_executive_summary, competitor_intelligence_summary,
 // unified_intelligence_summary, decision_snapshot, and top_priorities fields.
 
+// ── Declared (non-scored) evidence ────────────────────────────────────────────
+//
+// BETA-EVIDENCE-EXEC-003: a presentation-only evidence surface. Carries measured on-site evidence
+// that INTENTIONALLY has NO score, NO band, NO confidence, NO maturity, and NO recommendation — it
+// exists solely to make already-extracted evidence visible to customers with honest provenance.
+export type CanonicalDeclaredEvidence = {
+  same_as: {
+    count: number;
+    domains: string[];
+    destination_types: Record<string, number>;
+    source: EvidenceSourceKind;
+  };
+  declared_certifications: {
+    count: number;
+    items: string[];
+    source: EvidenceSourceKind;
+  };
+  legal_transparency: {
+    items: Array<{ key: string; label: string; present: boolean }>;
+    present_count: number;
+    source: EvidenceSourceKind;
+  };
+};
+
 export type CanonicalReport = {
   // Section 1 — Authority Overview (the single executive surface).
   authority_overview: {
@@ -388,6 +425,10 @@ export type CanonicalReport = {
     primary_constraint: CanonicalNarrative;
     next_unlock: CanonicalNarrative;
   };
+
+  // Section 1b — Declared Evidence (BETA-EVIDENCE-EXEC-003): non-scored, presentation-only.
+  // Optional/additive; null when no crawl evidence is available. Never feeds any score/aggregation.
+  declared_evidence?: CanonicalDeclaredEvidence | null;
 
   // Section 2 — Discoverability Authority Radar (single canonical radar).
   // 8 axes mapped one-to-one to CANONICAL_DIMENSIONS, each carrying its own state.
@@ -470,6 +511,9 @@ export type CanonicalReport = {
     }>;
     confidence: ConfidenceBand;
     summary: CanonicalNarrative;
+    /** BR-H-003 — honest provenance of competitor observations (crawl-derived, not a market panel).
+     *  Optional for backward compatibility. */
+    provenance?: import('./reportProvenance').CompetitorProvenance;
   };
 
   // Section 7 — Authority Trajectory (architecture only — populated in Phase 3+).
@@ -481,6 +525,9 @@ export type CanonicalReport = {
     }>;
     forecast: { horizon_days: number; projected_score: CanonicalScore } | null;
     available: boolean;
+    /** BR-H-002 — explicit distinction of measured history vs projected forecast vs unavailable (reuses the
+     *  provider's own state + velocity classification). Optional for backward compatibility. */
+    provenance?: import('./reportProvenance').TrajectoryProvenance;
   };
 
   // Section 8 — Action Playbook (the single canonical recommendation surface).
@@ -577,6 +624,11 @@ export type CanonicalReport = {
     } | null;
   };
 
+  /** BR-H-004 — honest ROI determinability (reuses the ENGINE-012 ROIStatus vocabulary). `not_determinable`
+   *  ("Not Quantifiable") when no commercial evidence is connected — the current live state, since Pipeline A
+   *  has no commercial provider. Never a fabricated revenue figure. Optional for backward compatibility. */
+  commercial_roi?: import('./reportRoiDeterminability').ReportRoiDeterminability;
+
   // ── Phase 6 governance / explainability / collaboration sections ────────────
   governance: {
     tenant_id: string;
@@ -596,6 +648,14 @@ export type CanonicalReport = {
     created_at: string;
     created_by: { id: string; kind: string; label: string };
   }>;
+
+  /** BR-H-005 — executive disclosure of any MATERIAL analyst/governance override that changed customer-visible
+   *  output (reuses `active_overrides` + `governance`). Empty when none. Optional for backward compatibility. */
+  override_disclosure?: import('./reportOverrideTransparency').OverrideTransparency;
+
+  /** BETA-EVIDENCE-EXEC-002 — governance readiness ("have we measured enough?"), composed from existing
+   *  signals; distinct from the Authority Index. Optional for backward compatibility. */
+  evidence_readiness?: import('./reportEvidenceReadiness').EvidenceReadiness;
 
   explanations: {
     authority_overall: import('../intelligence/explainabilityEngine').Explanation;

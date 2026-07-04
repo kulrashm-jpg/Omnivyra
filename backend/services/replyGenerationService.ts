@@ -24,18 +24,15 @@
  * runtime certification against the now-live path.
  */
 
-import OpenAI from 'openai';
+import { runCompletion } from './aiGateway';
 import { createHash } from 'crypto';
 import type { SentimentLabel } from './engagementIngestService';
 import { wirePhase2Route } from './billing/phase2RouteWiring';
 import { PaymentRequiredError } from './billing/phase2EnforcementGate';
-import { captureTokenProviderCost } from './billing/blackHoleCostCapture';
 import {
   formatContentForPlatform,
   getPlatformLimits,
 } from '../utils/contentFormatter';
-
-const getClient = (): OpenAI => new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 function normalizePlatform(platform: string): string {
   const normalized = String(platform ?? '').toLowerCase().trim();
@@ -150,8 +147,14 @@ Respond with JSON: {"reply":"<text>","confidence":<0-1>}`;
   // The provider call + parse + cost-visibility telemetry. Pure work unit
   // wrapped by the gate as the executeWithCredits executor (HOLD-first).
   const doGenerate = async (): Promise<ReplyOutput> => {
-    const response = await getClient().chat.completions.create({
+    // Routed through the canonical aiGateway — cost accounting, usage
+    // enforcement, governor and telemetry are inherited (former direct call +
+    // separate captureTokenProviderCost removed; no duplicate accounting).
+    const response = await runCompletion({
+      companyId: input.company_id ?? null,
+      operation: 'replyGeneration',
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 1,
       max_tokens: 200,
       response_format: { type: 'json_object' },
       messages: [
@@ -160,7 +163,7 @@ Respond with JSON: {"reply":"<text>","confidence":<0-1>}`;
       ],
     });
 
-    const raw = response.choices[0]?.message?.content?.trim() ?? '{}';
+    const raw = (response.output ?? '').trim() || '{}';
     const parsed = JSON.parse(raw);
     const formatted = formatContentForPlatform(String(parsed.reply ?? ''), platform, {
       hashtags: [],
@@ -168,20 +171,6 @@ Respond with JSON: {"reply":"<text>","confidence":<0-1>}`;
       links: [],
     });
     const reply = formatted.text.trim().slice(0, replyBudget).trim();
-    // Cost VISIBILITY only (source_type:'system', NOT a credit settlement —
-    // not a duplicate charge; the credit HOLD/CONFIRM is owned by
-    // executeWithCredits via the gate). Best-effort, never throws.
-    if (input.company_id) {
-      await captureTokenProviderCost({
-        organizationId: input.company_id,
-        processType:    'reply_generation',
-        provider:       'openai',
-        model:          process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        inputTokens:    response.usage?.prompt_tokens ?? null,
-        outputTokens:   response.usage?.completion_tokens ?? null,
-        activity:       'engagement_reply_generation',
-      });
-    }
     return {
       reply,
       confidence: Number(parsed.confidence) || 0.7,

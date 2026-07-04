@@ -19,6 +19,9 @@ import { generateSeoIntelligenceDecisions } from './seoIntelligenceService';
 import { generateTrafficIntelligenceDecisions } from './trafficIntelligenceService';
 import { generateTrustIntelligenceDecisions } from './trustIntelligenceService';
 import { generateVelocityIntelligenceDecisions } from './velocityIntelligenceService';
+// BETA-ENGINE-007: ingest authenticated provider Evidence ONCE per run, then feed the persisted Evidence to
+// the evidence-aware engines (one fetch, many consumers). Decision engines never call providers directly.
+import { activateProviderEvidence } from './evidenceActivationService';
 
 export type DataDrivenIntelligenceRunSummary = {
   traffic: number;
@@ -44,6 +47,10 @@ export type DataDrivenIntelligenceRunSummary = {
 };
 
 export async function runDataDrivenIntelligenceForCompany(companyId: string): Promise<DataDrivenIntelligenceRunSummary> {
+  // BETA-ENGINE-007: single canonical ingestion pass → persisted Evidence → evidence-aware contexts. With no
+  // provider credentials every provider is skipped and the contexts are empty (engines fall back).
+  const evidenceContexts = await activateProviderEvidence(companyId, new Date().toISOString());
+
   const [
     traffic,
     funnel,
@@ -100,13 +107,13 @@ export async function runDataDrivenIntelligenceForCompany(companyId: string): Pr
       generateDistributionIntelligenceDecisions(companyId)
     ),
     runInBackgroundJobContext('data_driven_intelligence:authority', async () =>
-      generateAuthorityIntelligenceDecisions(companyId)
+      generateAuthorityIntelligenceDecisions(companyId, evidenceContexts.authority)
     ),
     runInBackgroundJobContext('data_driven_intelligence:geo', async () =>
       generateGeoIntelligenceDecisions(companyId)
     ),
     runInBackgroundJobContext('data_driven_intelligence:trust', async () =>
-      generateTrustIntelligenceDecisions(companyId)
+      generateTrustIntelligenceDecisions(companyId, evidenceContexts.trust)
     ),
     runInBackgroundJobContext('data_driven_intelligence:intent', async () =>
       generateIntentIntelligenceDecisions(companyId)

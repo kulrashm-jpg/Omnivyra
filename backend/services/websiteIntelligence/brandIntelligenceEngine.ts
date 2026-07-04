@@ -8,6 +8,8 @@
 import { supabase } from '../../db/supabaseClient';
 import { CheckResult, Freshness, Provenance, aggregate, clamp, freshnessFrom, healthFromScore, norm } from './engineCommon';
 import type { IntelHealth } from './engineCommon';
+// BETA-ARCH-001: optional canonical-evidence metadata (read-only mapping of existing output).
+import { buildWebsiteEngineEvidence, type Evidence } from '../evidencePlatform';
 
 interface BrandIdentity { colors?: unknown; typography?: unknown; logo_assets?: unknown; voice?: unknown; vocabulary?: unknown; compliance?: unknown; design_language?: unknown; tagline?: string | null; completeness?: number | null; status?: string | null; version?: number | null; published_at?: string | null; updated_at?: string | null }
 interface ProfileRow { logo_url?: string | null; favicon_url?: string | null }
@@ -28,6 +30,8 @@ export interface BrandIntelligence {
   confidence: number;
   freshness: Freshness;
   provenance: Provenance;
+  /** BETA-ARCH-001: optional canonical evidence (additive; unused by existing consumers). */
+  platformEvidence?: Evidence[];
 }
 
 const defined = (v: unknown): boolean => {
@@ -113,13 +117,18 @@ export function scoreBrandIntelligence(identity: BrandIdentity | null, profile: 
   };
   const recommendations = checks.filter((c) => typeof c.score === 'number' && (c.score as number) < 60).map((c) => ({ key: c.key, recommendation: recMap[c.key] || `Improve ${c.label.toLowerCase()}.` }));
 
+  const freshness = freshnessFrom(identity?.published_at ?? identity?.updated_at ?? null, nowMs, 24 * 90);
   return {
     brandScore: agg.score, brandHealth: healthFromScore(agg.score), brandConsistency, brandTrust: trust, brandAuthority: authority, brandMaturity: maturity,
     brandStrengths: checks.filter((c) => typeof c.score === 'number' && (c.score as number) >= 80).map((c) => c.label),
     brandWeaknesses: checks.filter((c) => typeof c.score === 'number' && (c.score as number) < 50).map((c) => c.label),
     recommendations, checks, confidence: agg.confidence,
-    freshness: freshnessFrom(identity?.published_at ?? identity?.updated_at ?? null, nowMs, 24 * 90),
+    freshness,
     provenance: { sources: ['company_brand_identity', 'company_profiles', 'community_ai_actions', 'canonical_pages'], checksEvaluated: agg.evaluated, checksTotal: agg.total, deterministic: true },
+    platformEvidence: buildWebsiteEngineEvidence({
+      engineId: 'website.brand', version: '1.0.0', sourceSystem: 'brand_identity+community+crawl', origin: 'company_brand_identity', collector: 'brand_ingestion',
+      checks, aggregate: { key: 'brand_score', label: 'Brand score', score: agg.score, confidence: agg.confidence }, freshness,
+    }),
   };
 }
 

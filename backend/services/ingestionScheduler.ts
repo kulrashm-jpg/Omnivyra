@@ -15,6 +15,7 @@ import {
   type IngestionSource,
 } from './ingestionRunService';
 import { resolveCompanyWebsite } from './ingestionUtils';
+import { runReviewIngestion, resolveReviewSubject } from './reviews/reviewIngestionOrchestrator';
 import { supabase } from '../db/supabaseClient';
 
 type CompanyIntegrationRow = {
@@ -184,7 +185,7 @@ function buildRunKey(source: IngestionSource, companyId: string, overrides: Sche
   }
 }
 
-function statusSourceForTable(source: IngestionSource): 'crawler' | 'ga' | 'gsc' | 'crm' | 'ads' {
+function statusSourceForTable(source: IngestionSource): 'crawler' | 'ga' | 'gsc' | 'crm' | 'ads' | 'reviews' {
   return source === 'ga4' ? 'ga' : source;
 }
 
@@ -269,7 +270,7 @@ export async function runIngestionForCompany(params: {
         !integration &&
         (!gscStatus?.integration || gscStatus.integration.status !== 'connected' || !gscStatus.activeProperty || !gscStatus.tokenValid);
 
-      if ((!integration && source !== 'crawler' && source !== 'ga4' && source !== 'gsc' && !overrides[source]) || missingGa4Integration || missingGscIntegration) {
+      if ((!integration && source !== 'crawler' && source !== 'ga4' && source !== 'gsc' && source !== 'reviews' && !overrides[source]) || missingGa4Integration || missingGscIntegration) {
         const readinessError =
           source === 'ga4'
             ? 'GA4 integration is not ready'
@@ -327,6 +328,14 @@ export async function runIngestionForCompany(params: {
           case 'ads':
             payload = await runAdsSource(companyId, integration, overrides.ads);
             break;
+          case 'reviews': {
+            // BETA-PHASE5-EXEC-002: reviews participate canonically through the ONE scheduler.
+            // Resolve the subject from company data, then run the existing orchestrator — all
+            // env/credential gating + graceful degradation live inside runReviewIngestion.
+            const subject = await resolveReviewSubject(companyId);
+            payload = (await runReviewIngestion(subject)) as unknown as Record<string, unknown>;
+            break;
+          }
           default:
             payload = {};
         }

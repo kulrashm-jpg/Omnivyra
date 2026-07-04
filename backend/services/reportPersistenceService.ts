@@ -2,6 +2,7 @@ import { supabase } from '../db/supabaseClient';
 import type { OrchestratedReport } from './ReportOrchestrator';
 import { ownedDbTable } from '../db/writeOwner';
 import { assertNotGeneratingOnInsert } from './reportCardService';
+import { trackEvent } from './telemetry/telemetryDispatcher';
 
 /**
  * LIFECYCLE EXCEPTION — POST-ORCHESTRATION SHORTCUT
@@ -97,5 +98,14 @@ export async function persistOrchestratedReport(params: {
     throw new Error(`Failed to persist report (${reportType}): ${error.message}`);
   }
 
-  return data as PersistedReportRow;
+  const persisted = data as PersistedReportRow;
+  // Adoption telemetry (append-only, fail-soft): a report was generated.
+  trackEvent({
+    type: 'reports.generated',
+    organizationId: params.companyId,
+    actorId: params.userId,
+    entityId: (persisted as { id?: string }).id ?? null,
+    metadata: { reportType },
+  });
+  return persisted;
 }

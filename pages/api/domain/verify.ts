@@ -30,6 +30,7 @@ import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { normalizeDomain } from '../../../backend/services/domainCanonicalService';
 import { verifyDomain } from '../../../backend/services/domainVerificationService';
 import { logDomainEvent } from '../../../backend/services/domainEventLogger';
+import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 
 const VERIFY_RATE_LIMIT = {
   keyPrefix: 'rl:domain_verify',
@@ -240,6 +241,15 @@ export default async function handler(
     final_domain: domain,
     user_id:      internalUserId,
     metadata:     { method: outcome.method },
+  });
+  // Canonical telemetry (append-only, fail-soft): domain verification completed.
+  // Deduped per domain row (verification is terminal/idempotent).
+  trackEvent({
+    type: 'website.verification_completed',
+    organizationId: row.company_id,
+    actorId: internalUserId,
+    entityId: row.id,
+    metadata: { method: outcome.method },
   });
   return res.status(200).json({
     status: 'verified',

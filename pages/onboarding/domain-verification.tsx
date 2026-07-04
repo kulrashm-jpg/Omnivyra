@@ -31,6 +31,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getAuthToken } from '../../utils/getAuthToken';
 import { apiFetch } from '../../lib/apiFetch';
+import { emitSetupChanged } from '../../lib/setup/setupEvents';
 
 const DOMAIN_TOKEN_KEY = 'domain_verification_token_v1';
 const RETRY_INTERVALS_MS = [30_000, 60_000, 120_000];
@@ -194,6 +195,10 @@ export default function DomainVerificationPage() {
           verified_at: new Date().toISOString(),
         });
         setPhase('verified');
+        // Canonical Setup-changed emit: domain verification is a Readiness
+        // foundation input, so propagate immediately instead of relying on the
+        // next mount/focus of a Setup consumer.
+        emitSetupChanged('website-connected', { domain_verified: true });
         try { window.sessionStorage.removeItem(DOMAIN_TOKEN_KEY); } catch { /* ignore */ }
         void trackEvent('VERIFICATION_SUCCESS', {
           final_domain: status.final_domain,

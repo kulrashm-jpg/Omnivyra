@@ -1,6 +1,4 @@
-import OpenAI from 'openai';
-import { logUsageEvent, resolveLlmCost } from '../usageLedgerService';
-import { trackLlmTokens } from '../../../lib/redis/usageProtection';
+import { runCompletion } from '../aiGateway';
 
 const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
@@ -11,17 +9,6 @@ export interface LlmJsonResponse<T> {
 }
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-
-// Singleton — reuses HTTP connection pool across calls
-let _client: OpenAI | null = null;
-function getClient(): OpenAI {
-  if (!_client) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
-    _client = new OpenAI({ apiKey });
-  }
-  return _client;
-}
 
 export interface DiagnosticPromptOptions {
   organizationId?: string | null;
@@ -40,103 +27,36 @@ export interface DiagnosticPromptOptions {
   parentActivityId?: string | null;
 }
 
+/**
+ * Canonical JSON diagnostic prompt. Routes through aiGateway so it inherits the
+ * single canonical execution path — provider selection, retry, fallback, usage
+ * enforcement, cost governance, and telemetry. It no longer holds its own OpenAI
+ * client or usage-ledger writes (that accounting is aiGateway's, avoiding
+ * double-counting). The {data,raw,model} contract is unchanged for callers.
+ */
 export async function runDiagnosticPrompt<T>(
   systemPrompt: string,
   userPrompt: string,
   options: DiagnosticPromptOptions = {}
 ): Promise<LlmJsonResponse<T>> {
   const organizationId = options.organizationId?.trim() || UNKNOWN_ORG;
-  const isSystemOrg = organizationId === UNKNOWN_ORG;
-  const processType = options.processType || 'runDiagnosticPrompt';
-  const client = getClient();
-  const start = Date.now();
-  let response: Awaited<ReturnType<typeof client.chat.completions.create>>;
-  try {
-    response = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
-      temperature: 0,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    });
-  } catch (error: any) {
-    const latency = Date.now() - start;
-    void logUsageEvent({
-      organization_id: organizationId,
-      campaign_id: options.campaignId ?? null,
-      user_id: options.userId ?? null,
-      source_type: 'llm',
-      provider_name: 'openai',
-      model_name: DEFAULT_MODEL,
-      model_version: null,
-      source_name: `openai:${DEFAULT_MODEL}`,
-      process_type: processType,
-      reference_type: options.referenceType ?? null,
-      reference_id: options.referenceId ?? null,
-      metadata: options.parentActivityId ? { parent_activity_id: options.parentActivityId } : undefined,
-      latency_ms: latency,
-      error_flag: true,
-      error_type: error?.response?.status?.toString() ?? error?.message ?? 'unknown',
-      pricing_snapshot: null,
-      retry_attempt: 1,
-      final_attempt: true,
-    });
-    throw error;
-  }
-  const latency = Date.now() - start;
-  const usage = response.usage;
-  const inputTokens = usage?.prompt_tokens ?? 0;
-  const outputTokens = usage?.completion_tokens ?? 0;
-  const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
-  // BUG#8 fix: advisory LLM token tracking
-  trackLlmTokens(totalTokens);
-
-  let cost: Awaited<ReturnType<typeof resolveLlmCost>> | null = null;
-  if (!isSystemOrg) {
-    try {
-      cost = await resolveLlmCost({
-        providerName: 'openai',
-        modelName: DEFAULT_MODEL,
-        inputTokens,
-        outputTokens,
-        processType,
-        organizationId,
-      });
-    } catch (err) {
-      console.warn('[openaiAdapter] resolveLlmCost failed; logging without cost:', err);
-    }
-  }
-
-  void logUsageEvent({
-    organization_id: organizationId,
-    campaign_id: options.campaignId ?? null,
-    user_id: options.userId ?? null,
-    source_type: 'llm',
-    provider_name: 'openai',
-    model_name: DEFAULT_MODEL,
-    model_version: null,
-    source_name: `openai:${DEFAULT_MODEL}`,
-    process_type: processType,
-    reference_type: options.referenceType ?? null,
-    reference_id: options.referenceId ?? null,
-    metadata: options.parentActivityId ? { parent_activity_id: options.parentActivityId } : undefined,
-    input_tokens: inputTokens || null,
-    output_tokens: outputTokens || null,
-    total_tokens: totalTokens || null,
-    latency_ms: latency,
-    error_flag: false,
-    unit_cost: cost && totalTokens > 0 ? cost.total_cost_usd / totalTokens : null,
-    total_cost: cost?.total_cost_usd ?? null,
-    total_cost_usd: cost?.total_cost_usd ?? null,
-    final_price_usd: cost?.final_price_usd ?? null,
-    pricing_snapshot: cost?.pricing_snapshot ?? null,
-    retry_attempt: 1,
-    final_attempt: true,
+  const result = await runCompletion({
+    companyId: organizationId === UNKNOWN_ORG ? null : organizationId,
+    campaignId: options.campaignId ?? null,
+    referenceType: options.referenceType ?? null,
+    referenceId: options.referenceId ?? null,
+    parentActivityId: options.parentActivityId ?? null,
+    model: DEFAULT_MODEL,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    operation: options.processType || 'runDiagnosticPrompt',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
   });
 
-  const raw = response.choices[0]?.message?.content?.trim() || '';
+  const raw = (result.output ?? '').trim();
   if (!raw) {
     throw new Error('LLM returned empty response');
   }
@@ -151,6 +71,6 @@ export async function runDiagnosticPrompt<T>(
   return {
     data: parsed,
     raw,
-    model: response.model || DEFAULT_MODEL,
+    model: result.metadata?.model || DEFAULT_MODEL,
   };
 }

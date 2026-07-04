@@ -4,6 +4,10 @@ import type { ResolvedReportInput } from './reportInputResolver';
 import type { CompetitorIntelligenceResult } from './reportCompetitorIntelligenceService';
 import type { ConfidenceBand, ScoreState } from './snapshotReport/canonicalScoreState';
 import { bandFromEvidence } from './snapshotReport/canonicalScoreState';
+// BETA-EXEC-003: canonical scoring-governance registry (single source of truth for the
+// aggregation formula, band cutoffs, and weights). Values identical to the prior inline
+// literals — consolidation only, behaviour-preserving.
+import { geometricMean, SEVERITY_WEIGHTS, MARKET_POSITION_BANDS, COVERAGE_GAP_PENALTY, SOCIAL_SATURATION_LINKS } from './canonicalReport/scoringGovernance';
 
 export type ScoreDimensionKey =
   | 'content_quality'
@@ -65,31 +69,26 @@ function severity(decision: PersistedDecisionObject): number {
     Number(decision.impact_revenue ?? 0),
   );
   const confidence = Number(decision.confidence_score ?? 0) * 100;
-  return clamp((impact * 0.65) + (confidence * 0.35), 0, 100);
+  return clamp((impact * SEVERITY_WEIGHTS.impact) + (confidence * SEVERITY_WEIGHTS.confidence), 0, 100);
 }
 
-function geometricMean(values: number[]): number {
-  if (values.length === 0) return 0;
-  const normalized = values.map((value) => Math.max(1, value));
-  const logSum = normalized.reduce((sum, value) => sum + Math.log(value), 0);
-  return Math.exp(logSum / normalized.length);
-}
+// geometricMean is now the canonical implementation from scoringGovernance (imported above).
 
 function levelLabel(score: number | null): string {
   if (score == null) return 'Insufficient signal';
-  if (score >= 75) return 'Strong market position';
-  if (score >= 60) return 'Competitive but uneven';
-  if (score >= 45) return 'Developing baseline';
-  if (score >= 25) return 'Foundational work required';
+  if (score >= MARKET_POSITION_BANDS.strong) return 'Strong market position';
+  if (score >= MARKET_POSITION_BANDS.competitive) return 'Competitive but uneven';
+  if (score >= MARKET_POSITION_BANDS.developing) return 'Developing baseline';
+  if (score >= MARKET_POSITION_BANDS.foundational) return 'Foundational work required';
   return 'Critical structural gap';
 }
 
 function nextLevel(currentScore: number | null): string | null {
   if (currentScore == null) return 'Developing baseline';
-  if (currentScore < 25) return 'Foundational work required';
-  if (currentScore < 45) return 'Developing baseline';
-  if (currentScore < 60) return 'Competitive but uneven';
-  if (currentScore < 75) return 'Strong market position';
+  if (currentScore < MARKET_POSITION_BANDS.foundational) return 'Foundational work required';
+  if (currentScore < MARKET_POSITION_BANDS.developing) return 'Developing baseline';
+  if (currentScore < MARKET_POSITION_BANDS.competitive) return 'Competitive but uneven';
+  if (currentScore < MARKET_POSITION_BANDS.strong) return 'Strong market position';
   return null;
 }
 
@@ -218,7 +217,7 @@ export function buildReportScoreModel(params: {
       label: 'Publishing Frequency',
       explanation: 'Reflects whether the brand appears active enough to sustain momentum.',
       decisions: contentDecisions.length > 0 ? contentDecisions : [],
-      supportingSignal: socialCount > 0 ? Math.min(socialCount / 6, 1) : null,
+      supportingSignal: socialCount > 0 ? Math.min(socialCount / SOCIAL_SATURATION_LINKS, 1) : null,
       supportingSources: socialCount > 0 ? ['social_links'] : [],
     }),
     dimensionFromDecisions({
@@ -250,7 +249,7 @@ export function buildReportScoreModel(params: {
       label: 'Coverage',
       explanation: 'Represents how well the business covers demand across topics and buyer stages.',
       decisions: contentDecisions,
-      supportingSignal: competitorGapCount > 0 ? Math.max(0, 1 - competitorGapCount * 0.12) : null,
+      supportingSignal: competitorGapCount > 0 ? Math.max(0, 1 - competitorGapCount * COVERAGE_GAP_PENALTY) : null,
       supportingSources: competitorGapCount > 0 ? ['competitor_intelligence'] : [],
     }),
     dimensionFromDecisions({
@@ -258,7 +257,7 @@ export function buildReportScoreModel(params: {
       label: 'Platforms',
       explanation: 'Tracks whether the business is present on enough credible channels to support growth.',
       decisions: platformDecisions,
-      supportingSignal: socialCount > 0 ? Math.min(socialCount / 6, 1) : null,
+      supportingSignal: socialCount > 0 ? Math.min(socialCount / SOCIAL_SATURATION_LINKS, 1) : null,
       supportingSources: socialCount > 0 ? ['social_links'] : [],
       hasStrongSource: false,
     }),

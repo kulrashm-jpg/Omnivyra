@@ -1,5 +1,6 @@
 import { WORKER_PROVENANCE } from '../../observability/runtime/workerProvenance';
 import { ownedDbTable } from '../db/writeOwner';
+import { trackEvent } from './telemetry/telemetryDispatcher';
 /**
  * BOLT Pipeline Service
  *
@@ -1903,6 +1904,15 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       await ownedDbTable('campaigns')
         .update({ status: 'active', current_stage: finalStage, updated_at: new Date().toISOString() })
         .eq('id', campaignId);
+      // Canonical telemetry (append-only, fail-soft): a campaign was launched
+      // (pipeline completed → status active). Deduped per campaign id.
+      trackEvent({
+        type: 'campaign.launched',
+        organizationId: companyId,
+        actorId: payload.userId ?? null,
+        entityId: campaignId,
+        metadata: eligiblePlatforms.length > 0 ? { platforms: eligiblePlatforms } : {},
+      });
     }
     await updateRun(runId, {
       status: 'completed',

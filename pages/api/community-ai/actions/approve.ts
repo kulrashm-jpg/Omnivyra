@@ -4,6 +4,7 @@ import { getCommunityAiActionById } from '../../../../backend/db/communityAiActi
 import { enforceActionRole, requireTenantScope } from '../utils';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
 import { logCommunityAiActionEvent } from '../../../../backend/services/communityAiActionLogService';
+import { trackEvent } from '../../../../backend/services/telemetry/telemetryDispatcher';
 
 type ApproveRequest = {
   tenant_id?: string;
@@ -112,6 +113,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     return res.status(409).json({ error: 'ACTION_NOT_PENDING' });
   }
+
+  // Canonical telemetry (append-only, fail-soft): an AI-generated action was
+  // accepted (approved). Deduped per action id (the CAS makes this idempotent).
+  trackEvent({
+    type: 'ai.accepted',
+    organizationId: scope.organizationId,
+    actorId: roleGate.userId,
+    entityId: actionId,
+    metadata: { surface: 'community_ai' },
+  });
 
   try {
     await logCommunityAiActionEvent({

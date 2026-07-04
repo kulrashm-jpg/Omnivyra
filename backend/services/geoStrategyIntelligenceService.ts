@@ -6,6 +6,12 @@ import {
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { clamp, normalizeText, roundNumber } from './intelligenceEngineUtils';
+// BETA-ENGINE-002: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence, decisionConfidenceExplainability } from './evidencePlatform';
+// BETA-PROVIDER-002: canonical GSC provider reliability lifts confidence on already-MEASURED GSC keyword data.
+import { isSearchConsoleProviderAvailable, searchConsoleProviderReliability } from './searchConsoleProviderBridge';
+// BETA-PROVIDER-003: this signal ALSO draws on first-party GA4 sessions — blend both live providers.
+import { isGa4ProviderAvailable, ga4ProviderReliability, combinedProviderReliability } from './ga4ProviderBridge';
 
 type SessionGeoRow = {
   id: string;
@@ -83,6 +89,24 @@ export async function generateGeoStrategyIntelligenceDecisions(companyId: string
   const totalClicks = keywordRows.reduce((sum, row) => sum + Number(row.clicks ?? 0), 0);
   const ctr = totalImpressions > 0 ? totalClicks / totalImpressions : 0;
 
+  // BETA-ENGINE-002: evidence-derived confidence (was hardcoded 0.74-0.82). MEASURED analytics + GSC;
+  // scales with the combined session + keyword-metric sample backing the geo-strategy signal.
+  // BETA-PROVIDER-002/003: this signal draws on BOTH first-party GSC keyword metrics and first-party GA4
+  // sessions. Blend the reliabilities of whichever providers are connected (no scoring redesign); null
+  // (unchanged) when neither is configured.
+  const gscProviderLive = isSearchConsoleProviderAvailable();
+  const ga4ProviderLive = isGa4ProviderAvailable();
+  const geoStrategyConfidence = deriveDecisionConfidence({
+    maturity: 'MEASURED',
+    providerReliability: combinedProviderReliability(
+      gscProviderLive ? searchConsoleProviderReliability() : null,
+      ga4ProviderLive ? ga4ProviderReliability() : null,
+    ),
+    sampleSize: sessionRows.length + keywordRows.length,
+    dataPresent: sessionRows.length > 0,
+  });
+  const geoStrategyConfExplain = decisionConfidenceExplainability(geoStrategyConfidence);
+
   const decisions = [];
 
   if (topGeo && secondGeo) {
@@ -108,13 +132,14 @@ export async function generateGeoStrategyIntelligenceDecisions(companyId: string
           secondary_share: roundNumber(secondShare, 4),
           primary_engagement_rate: roundNumber(topEngagement, 4),
           secondary_engagement_rate: roundNumber(secondEngagement, 4),
+          confidence: geoStrategyConfExplain,
         },
         impact_traffic: clamp(32 + Math.round(secondShare * 120), 0, 100),
         impact_conversion: clamp(38 + Math.round(secondEngagement * 90), 0, 100),
         impact_revenue: clamp(40 + Math.round(secondEngagement * 88), 0, 100),
         priority_score: clamp(58 + Math.round(secondShare * 50), 0, 100),
         effort_score: 28,
-        confidence_score: 0.8,
+        confidence_score: geoStrategyConfidence.confidenceScore,
         recommendation: 'Expand localized acquisition and tailored landing content in the high-efficiency secondary geo.',
         action_type: 'fix_distribution',
         action_payload: {
@@ -140,13 +165,14 @@ export async function generateGeoStrategyIntelligenceDecisions(companyId: string
           primary_geo: topGeo[0],
           primary_geo_share: roundNumber(topShare, 4),
           primary_geo_engagement_rate: roundNumber(topEngagement, 4),
+          confidence: geoStrategyConfExplain,
         },
         impact_traffic: 24,
         impact_conversion: clamp(46 + Math.round((0.3 - topEngagement) * 120), 0, 100),
         impact_revenue: clamp(48 + Math.round((0.3 - topEngagement) * 110), 0, 100),
         priority_score: clamp(62 + Math.round((topShare - 0.6) * 80), 0, 100),
         effort_score: 22,
-        confidence_score: 0.82,
+        confidence_score: geoStrategyConfidence.confidenceScore,
         recommendation: 'Rebalance targeting and adapt messaging/localization in the dominant low-engagement geo.',
         action_type: 'adjust_strategy',
         action_payload: {
@@ -174,13 +200,14 @@ export async function generateGeoStrategyIntelligenceDecisions(companyId: string
         keyword_clicks: totalClicks,
         ctr: roundNumber(ctr, 4),
         observed_geo_count: orderedGeos.length,
+        confidence: geoStrategyConfExplain,
       },
       impact_traffic: 44,
       impact_conversion: 28,
       impact_revenue: 34,
       priority_score: clamp(56 + Math.round((0.03 - ctr) * 600), 0, 100),
       effort_score: 26,
-      confidence_score: 0.74,
+      confidence_score: geoStrategyConfidence.confidenceScore,
       recommendation: 'Create geo-specific content variants and localized SERP assets for high-demand regions.',
       action_type: 'improve_content',
       action_payload: {

@@ -162,7 +162,7 @@ export function buildScoreDrivers(report: CanonicalReport): ScoreDrivers {
       drivers: [],
       rate_limiters: [],
       compounders: [],
-      read: 'Score drivers cannot yet be isolated — measurement across the canonical dimensions is still forming.',
+      read: 'Score drivers cannot yet be isolated — measurement across the dimensions is still forming.',
     };
   }
   const sortedDesc = [...measuredAxes].sort((a, b) => b.value - a.value);
@@ -210,7 +210,7 @@ export function buildScoreDrivers(report: CanonicalReport): ScoreDrivers {
     if (driverWord) {
       return `Authority is currently driven by ${driverWord}. The supporting dimensions need to catch up before the driver compounds.`;
     }
-    return 'Authority drivers are not yet isolated. Measurement across the canonical dimensions is still forming.';
+    return 'Authority drivers are not yet isolated. Measurement across the dimensions is still forming.';
   })();
   return { state: 'measured', drivers, rate_limiters, compounders, read };
 }
@@ -555,7 +555,7 @@ export function buildMarketContext(report: CanonicalReport): MarketContext {
   if (competitorCount > 0) {
     entries.push({
       label: 'Competitor Texture',
-      reading: `${competitorCount} competitor${competitorCount === 1 ? '' : 's'} measured on the same canonical dimensions. The competitive shape — not the score gap — is what evaluators read in side-by-side comparison.`,
+      reading: `${competitorCount} competitor${competitorCount === 1 ? '' : 's'} measured on the same dimensions. The competitive shape — not the score gap — is what evaluators read in side-by-side comparison.`,
     });
   }
 
@@ -1042,7 +1042,7 @@ export function buildAITrustCoherence(report: CanonicalReport): AITrustCoherence
       return 'AI systems encounter signals that disagree with each other — strong on one axis, weak on another. Fragmentation is detectable; AI systems penalise it by hedging citations rather than confidently surfacing the brand.';
     }
     if (kind === 'sparse') {
-      return 'AI systems encounter sparse evidence about the brand across the canonical signals. The work is not yet about coherence — it is about generating signal at all. Baseline trust corroboration is the first investment.';
+      return 'AI systems encounter sparse evidence about the brand across the measured signals. The work is not yet about coherence — it is about generating signal at all. Baseline trust corroboration is the first investment.';
     }
     return 'AI systems encounter weak corroboration — signals exist but none reinforce the others strongly. The strategic question is which axis to strengthen first; trust coherence usually compounds fastest at this stage.';
   })();
@@ -1213,7 +1213,7 @@ export function buildAIStrategicUnlock(report: CanonicalReport): AIStrategicUnlo
       concept: 'entity_reinforcement',
       concept_label: 'Entity Reinforcement',
       headline: 'Make the brand a recognised entity, then let citations follow.',
-      why: 'AI retrieval depends on the structured entity surface — a Wikidata anchor, sameAs corroboration, schema density. Without it, citations stay incidental rather than canonical.',
+      why: 'AI retrieval depends on a clear, structured brand identity — a recognised knowledge-graph entry, links to authoritative profiles, and complete structured data. Without it, citations stay incidental rather than consistent.',
     };
   }
 
@@ -1256,7 +1256,7 @@ export function buildAIStrategicUnlock(report: CanonicalReport): AIStrategicUnlo
 //
 // Recovers the legacy Digital Snapshot's competitor matrix as a
 // canonical-data-only editorial table. Rows = competitors, columns =
-// the canonical dimensions where overlap is observable. NOT a SaaS
+// the dimensions where overlap is observable. NOT a SaaS
 // admin grid — restrained editorial composition with hairline rules.
 
 export type CompetitorMatrixRow = {
@@ -1322,7 +1322,7 @@ export function buildCompetitorMatrix(report: CanonicalReport): CompetitorMatrix
   const peerAvg = competitorAvgs.length > 0 ? Math.round(competitorAvgs.reduce((a, b) => a + b, 0) / competitorAvgs.length) : null;
   const read = (() => {
     if (userOverall == null || peerAvg == null) {
-      return `${competitorRows.length} competitor${competitorRows.length === 1 ? '' : 's'} measured on the canonical dimensions where overlap is observable.`;
+      return `${competitorRows.length} competitor${competitorRows.length === 1 ? '' : 's'} measured on the dimensions where overlap is observable.`;
     }
     const gap = userOverall - peerAvg;
     if (gap >= 5) return `Brand reads ${gap} points above peer average across the measurable dimensions. The position is the asset to defend.`;
@@ -1568,7 +1568,7 @@ export function buildFastestLever(report: CanonicalReport): FastestLever {
       dimension_label: null,
       pillar: null,
       current_value: null,
-      reading: 'The fastest improvement lever cannot yet be isolated — measurement across the canonical dimensions is still forming.',
+      reading: 'The fastest improvement lever cannot yet be isolated — measurement across the dimensions is still forming.',
     };
   }
   const lever = drivers.rate_limiters[0];
@@ -1642,7 +1642,7 @@ export function buildStrategicPositionFourState(report: CanonicalReport): Strate
     return {
       state: 'insufficient_signal',
       whats_broken: 'Authority signals are still forming — the dominant break cannot yet be isolated.',
-      fix_first: 'Establish baseline measurement across the canonical dimensions before optimising.',
+      fix_first: 'Establish baseline measurement across the dimensions before optimising.',
       delay: 'Distribution and amplification work — until the substrate measures, every push runs blind.',
       if_ignored: 'The brand will keep producing signal that is not registering anywhere measurable.',
     };
@@ -1756,7 +1756,7 @@ export function buildDataSourceStatusPanels(report: CanonicalReport): DataSource
       status_label: '',
       current_state: extractionReadiness && extractionReadiness.state === 'measured'
         ? `Extraction readiness reads ${extractionReadiness.value}/100 across structured surfaces.`
-        : 'Content extraction adapter has not yet produced measured signal.',
+        : 'Content structure and extractability have not yet been measured.',
       impact: extractionReadiness && extractionReadiness.state === 'measured'
         ? 'Discoverability + AI Surface Presence depend on this dimension.'
         : 'Coverage gaps are directional, not exhaustive.',
@@ -1769,8 +1769,8 @@ export function buildDataSourceStatusPanels(report: CanonicalReport): DataSource
       current_state: authorityInflow.state === 'measured'
         ? `Authority inflow reads ${authorityInflow.value}/100 across measurable sources.`
         : authorityInflow.state === 'inferred'
-          ? 'Authority is inferred from heuristic signals only.'
-          : 'No backlink adapter is connected.',
+          ? 'Authority is currently estimated from on-site signals only.'
+          : 'No backlink data source is connected.',
       impact: authorityInflow.state === 'measured'
         ? 'Authority score reflects measured external corroboration.'
         : 'Authority score may not reflect true strength.',
@@ -1782,18 +1782,18 @@ export function buildDataSourceStatusPanels(report: CanonicalReport): DataSource
       status_label: '',
       current_state: aiSurface.state === 'measured'
         ? `AI surface presence reads ${aiSurface.value}/100 with a live citation matrix.`
-        : 'Live LLM citation probe has not yet returned measurable signal.',
+        : 'AI answer-engine citations have not yet been measured.',
       impact: aiSurface.state === 'measured'
         ? 'AI Discoverability section reads from the live citation matrix.'
         : 'Cannot measure actual AI answer presence.',
-      what_unlocks: 'Provider × query-class citation rates · entity readiness',
+      what_unlocks: 'AI-engine × query-type citation rates · entity readiness',
     },
     {
       source_label: 'Competitor Intelligence',
       status: competitorCount > 0 ? 'connected' : 'missing',
       status_label: '',
       current_state: competitorCount > 0
-        ? `${competitorCount} measured competitor${competitorCount === 1 ? '' : 's'} on the canonical dimensions.`
+        ? `${competitorCount} competitor${competitorCount === 1 ? '' : 's'} observed from public-web analysis.`
         : 'No competitor scan has resolved yet.',
       impact: competitorCount > 0
         ? 'Market Position section reads peer benchmarks directly.'
@@ -1808,7 +1808,7 @@ export function buildDataSourceStatusPanels(report: CanonicalReport): DataSource
         ? `Trust coherence reads ${trustCoherence.value}/100 across consistency, review, and expertise signals.`
         : trustCoherence.state === 'inferred'
           ? 'Trust signals are inferred from public-facing surfaces only.'
-          : 'No trust aggregator or expertise extractor is configured.',
+          : 'No review or reputation source is connected yet.',
       impact: trustCoherence.state === 'measured'
         ? 'Trust & Consistency section reads measured signals.'
         : 'Trust coherence is held open until measurement begins.',
@@ -1916,7 +1916,7 @@ export function buildExecutionChannelMix(report: CanonicalReport): ExecutionChan
   const dominant = areas[0];
   const read = dominant
     ? `${dominant.label} carries the heaviest share of execution this cycle (${dominant.action_count} of ${total} actions). The mix below names which teams own which moves so the playbook can be staffed without ambiguity.`
-    : 'Execution capacity is distributed evenly across the canonical owner areas.';
+    : 'Execution capacity is distributed evenly across the owner areas.';
   return {
     state: 'measured',
     total_actions: total,

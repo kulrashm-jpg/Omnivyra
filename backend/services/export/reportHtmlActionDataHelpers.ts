@@ -25,70 +25,12 @@ export type MasterAction = {
   effort: string;
 };
 
-export function ensureActionCoverage(actions: MasterAction[]): MasterAction[] {
-  const defaults: MasterAction[] = [
-    {
-      title: 'Build comparison pages',
-      reasoning: 'Capture decision-stage demand and compete directly with alternatives.',
-      focusPage: '',
-      tactics: ['Create /vs/ pages', 'Add proof blocks', 'Handle pricing and switching objections'],
-      priority: 'HIGH',
-      impact: 'HIGH',
-      effort: 'MEDIUM',
-      timeline: { short: '2-4 weeks', mid: '1-3 months', long: '3-6 months' },
-    },
-    {
-      title: 'Strengthen authority signals',
-      reasoning: 'Improve trust, rankings, and competitive visibility.',
-      focusPage: '',
-      tactics: ['Earn relevant backlinks', 'Publish proof-led assets', 'Reinforce trust indicators'],
-      priority: 'HIGH',
-      impact: 'HIGH',
-      effort: 'MEDIUM',
-      timeline: { short: '2-4 weeks', mid: '1-3 months', long: '3-6 months' },
-    },
-    {
-      title: 'Expand content depth',
-      reasoning: 'Cover buyer-stage topics more completely.',
-      focusPage: '',
-      tactics: ['Build decision pages', 'Expand core service content', 'Add use-case coverage'],
-      priority: 'MEDIUM',
-      impact: 'MEDIUM',
-      effort: 'MEDIUM',
-      timeline: { short: '2-4 weeks', mid: '1-3 months', long: '3-6 months' },
-    },
-    {
-      title: 'Add structured answers (FAQs)',
-      reasoning: 'Improve AI retrieval and search visibility.',
-      focusPage: '',
-      tactics: ['Add FAQ blocks', 'Strengthen summaries', 'Make answers retrieval-ready'],
-      priority: 'MEDIUM',
-      impact: 'MEDIUM',
-      effort: 'LOW',
-      timeline: { short: '1-2 weeks', mid: '1-2 months', long: '3-6 months' },
-    },
-    {
-      title: 'Track keyword and performance data',
-      reasoning: 'Enable data-driven prioritization and measurement.',
-      focusPage: '',
-      tactics: ['Connect GSC', 'Track keywords', 'Review performance monthly'],
-      priority: 'LOW',
-      impact: 'MEDIUM',
-      effort: 'LOW',
-      timeline: { short: '1-2 weeks', mid: '1-2 months', long: '3-6 months' },
-    },
-  ];
-
-  const seen = new Set<string>();
-  const merged = [...actions, ...defaults].filter((action) => {
-    const key = safeText(action.title, 1).trim().toLowerCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  return merged.slice(0, 5);
-}
+// BETA-FIX-001: the former `ensureActionCoverage` helper padded the export action list with 5
+// hardcoded best-practice recommendations. It was verified to have ZERO callers repo-wide (dead
+// code) — the live export path (collectMasterActions) builds actions only from real payload data
+// (top3Actions / nextSteps). It is removed here to guarantee no synthetic recommendation can ever
+// be injected into an exported report, keeping exports identical to the core report's evidence-only
+// action set (BETA-VERIFY-001 DEF-2).
 
 export function toUpperStrength(value: string | null | undefined): 'STRONG' | 'INFERRED' | 'WEAK' | 'MISSING' {
   const normalized = safeText(value, 1).toUpperCase();

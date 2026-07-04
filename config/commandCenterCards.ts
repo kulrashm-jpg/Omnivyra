@@ -167,3 +167,25 @@ export function getVisibleCards(userRole: string | undefined): CommandCenterCard
 export function getCardById(id: string): CommandCenterCard | undefined {
   return COMMAND_CENTER_CARDS.find((card) => card.id === id);
 }
+
+/**
+ * Single source of truth for whether a role may access a work-area.
+ * Mirrors the dashboard's card gating exactly so nav, deep-linked pages,
+ * and the dashboard never disagree. `cardId` is one of the
+ * COMMAND_CENTER_CARDS ids: 'reports' | 'blogs' | 'campaigns' | 'engagement'.
+ *
+ * Uses ROLE_ACCESS_MAP (NOT the stricter permissionMatrix) so that
+ * CONTENT_REVIEWER / CONTENT_PUBLISHER keep the content + campaign access
+ * the dashboard already grants them. Only VIEW_ONLY (and its aliases) is
+ * limited to reports + engagement.
+ */
+export function roleCanAccessArea(userRole: string | null | undefined, cardId: string): boolean {
+  if (!userRole) return false;
+  const allowed = ROLE_ACCESS_MAP[userRole];
+  // Unknown/unmapped roles are treated permissively to avoid locking out
+  // legitimate roles the map hasn't enumerated (fail-open matches how the
+  // rest of the app treats non-VIEW_ONLY roles); VIEW_ONLY is explicitly
+  // enumerated and therefore correctly restricted.
+  if (!allowed) return true;
+  return allowed.includes(cardId);
+}

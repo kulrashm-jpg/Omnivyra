@@ -2,6 +2,8 @@ import React from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '@/components/CompanyContext';
+import { apiFetch } from '@/lib/apiFetch';
+import ReportJourneyGuide from '@/components/ReportJourneyGuide';
 
 interface ReportHubCard {
   id: string;
@@ -134,10 +136,75 @@ const SAMPLE_INSIGHTS = [
   { value: '+340', tone: 'text-green-600', desc: 'Estimated ranking opportunities available with focused execution.' },
 ];
 
+type ExistingReport = {
+  id: string;
+  report_id?: string;
+  report_type?: string;
+  status?: string;
+  domain?: string;
+  created_at?: string;
+  completed_at?: string | null;
+};
+
+// Map a stored report_type to the viewer's renderer category (snapshot|performance|growth).
+function viewerType(rt?: string): 'snapshot' | 'performance' | 'growth' {
+  const t = (rt || '').toLowerCase();
+  if (t.includes('performance') || t.includes('competitor')) return 'performance';
+  if (t.includes('growth') || t.includes('strategic') || t.includes('market') || t.includes('gap')) return 'growth';
+  return 'snapshot';
+}
+function reportLabel(rt?: string): string {
+  const t = (rt || '').toLowerCase();
+  if (t === 'snapshot') return 'Digital Authority Snapshot';
+  if (t === 'content_readiness') return 'Content Readiness';
+  if (t.includes('performance')) return 'Performance Intelligence';
+  if (t.includes('growth') || t.includes('market')) return 'Market & Growth Intelligence';
+  return (rt || 'Report').replace(/_/g, ' ');
+}
+
 export default function ReportsHubPage() {
   const router = useRouter();
-  const { selectedCompanyName } = useCompanyContext();
+  const { selectedCompanyName, selectedCompanyId, userRole } = useCompanyContext();
   const visibleCards = REPORT_CARDS.filter((card) => !card.hidden);
+  // View-only roles may open + export reports, but never delete them.
+  // Deleting is destructive and outside a viewer's workspace.
+  const canDeleteReports = (() => {
+    const r = (userRole || '').toUpperCase();
+    return r !== 'VIEW_ONLY' && r !== 'VIEWER' && r !== 'CONTENT_ENGAGER';
+  })();
+
+  // Existing reports — surfaced so customers see their work instead of only a creation chooser.
+  const [reports, setReports] = React.useState<ExistingReport[] | null>(null);
+  const [reportsLoading, setReportsLoading] = React.useState(true);
+  const [deletingId, setDeletingId] = React.useState<string | null>(null);
+
+  const loadReports = React.useCallback(async () => {
+    if (!selectedCompanyId) { setReports([]); setReportsLoading(false); return; }
+    setReportsLoading(true);
+    try {
+      const res = await apiFetch(`/api/reports?company_id=${encodeURIComponent(selectedCompanyId)}`);
+      const data = await res.json().catch(() => ({}));
+      setReports(Array.isArray(data?.reports) ? (data.reports as ExistingReport[]) : []);
+    } catch {
+      setReports([]);
+    } finally {
+      setReportsLoading(false);
+    }
+  }, [selectedCompanyId]);
+
+  React.useEffect(() => { void loadReports(); }, [loadReports]);
+
+  const openReport = (r: ExistingReport) => { void router.push(`/reports/view/${r.id}?type=${viewerType(r.report_type)}`); };
+  const exportReport = (r: ExistingReport) => {
+    if (typeof window !== 'undefined') window.open(`/api/reports/${r.id}?type=${viewerType(r.report_type)}&format=pdf`, '_blank', 'noopener');
+  };
+  const deleteReport = async (r: ExistingReport) => {
+    setDeletingId(r.id);
+    try { await apiFetch(`/api/reports/${r.id}`, { method: 'DELETE' }); await loadReports(); }
+    catch { /* non-destructive on failure — list is reloaded */ }
+    finally { setDeletingId(null); }
+  };
+  const hasReports = !!reports && reports.length > 0;
 
   return (
     <>
@@ -160,6 +227,56 @@ export default function ReportsHubPage() {
             </svg>
             Back to Command Center
           </button>
+
+          {/* Report readiness journey — one canonical "what do I do next?" so a customer reaches a
+              complete report without needing to know the scan → evidence → report architecture. */}
+          <ReportJourneyGuide companyId={selectedCompanyId} className="mb-8" />
+
+          {/* Your reports — existing work surfaced FIRST so creation never hides it. */}
+          {reportsLoading ? (
+            <div className="mb-8 rounded-[24px] border border-gray-100 bg-white/80 p-6 text-sm text-gray-500">
+              Loading your reports…
+            </div>
+          ) : hasReports ? (
+            <div className="mb-8 rounded-[24px] border border-gray-100 bg-white p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Your Reports</p>
+                  <h2 className="mt-1 text-xl font-semibold text-gray-900">
+                    {reports!.length} report{reports!.length === 1 ? '' : 's'}
+                  </h2>
+                </div>
+                <p className="text-sm text-gray-500">{canDeleteReports ? 'Open, export, or delete — or create a new report below.' : 'Open or export your reports below.'}</p>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {reports!.map((r) => {
+                  const when = r.completed_at || r.created_at;
+                  return (
+                    <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                      <button onClick={() => openReport(r)} className="min-w-0 flex-1 text-left">
+                        <p className="truncate text-sm font-semibold text-gray-900">{reportLabel(r.report_type)}</p>
+                        <p className="mt-0.5 text-xs text-gray-500">
+                          {(r.domain || '—')} · {when ? new Date(when).toLocaleDateString() : ''} ·{' '}
+                          <span className={r.status === 'completed' ? 'text-green-600' : r.status === 'failed' ? 'text-red-600' : 'text-amber-600'}>
+                            {r.status || 'unknown'}
+                          </span>
+                        </p>
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => openReport(r)} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700">Open</button>
+                        <button onClick={() => exportReport(r)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50">Export</button>
+                        {canDeleteReports ? (
+                          <button onClick={() => deleteReport(r)} disabled={deletingId === r.id} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50">
+                            {deletingId === r.id ? 'Deleting…' : 'Delete'}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           <div className="mb-8 rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px] lg:items-end">

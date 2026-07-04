@@ -1,5 +1,6 @@
 // AI Content Analysis and Topic Uniqueness Assessment
 import { bearerAuthorization } from './httpAuthHeaders';
+import { runCompletion } from '../backend/services/aiGateway';
 export interface TopicAnalysis {
   topic: string;
   platforms: PlatformScore[];
@@ -36,42 +37,33 @@ export interface ContentAssessmentRequest {
 export class ContentAnalyzer {
   private static async analyzeWithOpenAI(content: string, platforms: string[]): Promise<any> {
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': bearerAuthorization(process.env.OPENAI_API_KEY ?? ''),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-4',
-          messages: [
-            {
-              role: 'system',
-              content: `You are a social media content analyst. Analyze the given content for:
+      // Routed through the canonical aiGateway (was a direct OpenAI fetch).
+      const response = await runCompletion({
+        companyId: null,
+        operation: 'contentAnalysis',
+        model: 'gpt-4',
+        temperature: 0.3,
+        max_tokens: 1000,
+        messages: [
+          {
+            role: 'system',
+            content: `You are a social media content analyst. Analyze the given content for:
               1. Topic uniqueness across platforms
               2. Repetition risk assessment
               3. Platform-specific optimization scores
               4. Engagement potential
               5. Trending relevance
-              
+
               Return detailed analysis with percentage scores for each platform.`
-            },
-            {
-              role: 'user',
-              content: `Analyze this content for platforms ${platforms.join(', ')}: "${content}"`
-            }
-          ],
-          temperature: 0.3,
-          max_tokens: 1000
-        })
+          },
+          {
+            role: 'user',
+            content: `Analyze this content for platforms ${platforms.join(', ')}: "${content}"`
+          }
+        ],
       });
 
-      if (!response.ok) {
-        throw new Error('OpenAI API failed');
-      }
-
-      const data = await response.json();
-      return JSON.parse(data.choices[0].message.content);
+      return JSON.parse(response.output);
     } catch (error) {
       console.error('OpenAI analysis failed:', error);
       return null;

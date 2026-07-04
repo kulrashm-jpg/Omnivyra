@@ -24,6 +24,9 @@ import {
   withRetry,
 } from '../productionPrimitives';
 import type { EvidenceTrace } from '../../canonicalReport/canonicalReportTypes';
+// BETA-PHASE1-EXEC-001: canonical cost governance — gate the paid call + record usage against the active scan budget.
+import { withinBudget, recordUsage } from '../costGovernance';
+import { getActiveScanId } from '../scanBudgetContext';
 
 const AHREFS_BASE = 'https://api.ahrefs.com';
 const TIMEOUT_MS = 20_000;
@@ -103,6 +106,23 @@ export class AhrefsAdapter implements AuthorityInflowProvider {
       };
     }
 
+    // BETA-PHASE1-EXEC-001: canonical budget gate before the paid call. No scan budget ⇒ no gating (prior behaviour).
+    const scanId = getActiveScanId();
+    if (scanId) {
+      const gate = withinBudget(scanId, { requests: 1, cost_usd: null });
+      if (!gate.ok) {
+        const reason = gate.reason ?? `budget_exceeded:${this.id}`;
+        logProviderCall({ providerId: this.id, operation: 'lookup', status: 'unavailable', reason });
+        return {
+          state: 'unavailable',
+          profile: null,
+          score: null,
+          evidence: unavailableEvidence(reason),
+          reason_unavailable: 'Scan budget exhausted for this report.',
+        };
+      }
+    }
+
     const startedAt = Date.now();
     const url = `${AHREFS_BASE}/v3/site-explorer/metrics-extended?target=${encodeURIComponent(params.domain)}&date_to=now&mode=domain`;
     try {
@@ -121,6 +141,18 @@ export class AhrefsAdapter implements AuthorityInflowProvider {
         ),
       );
       const json = (await envelope.json()) as AhrefsMetricsResponse;
+      // BETA-PHASE1-EXEC-001: record the paid call against the canonical scan budget (cost null — Ahrefs
+      // pricing is not derivable from the response; the ledger enforces the request ceiling).
+      if (scanId) {
+        recordUsage(scanId, {
+          provider_id: this.id,
+          operation: 'lookup',
+          request_count: 1,
+          cost_usd: null,
+          cache_hit: false,
+          observed_at: new Date().toISOString(),
+        });
+      }
       const observedAt = new Date().toISOString();
       const profile: BacklinkProfile = {
         referring_domains: json.metrics?.refdomains ?? 0,

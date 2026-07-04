@@ -10,9 +10,8 @@ import { ownedDbTable } from '../db/writeOwner';
  * Uses Claude Haiku for cost-efficient real-time classification.
  */
 
-import OpenAI from 'openai';
 import { supabase } from '../db/supabaseClient';
-import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
+import { runCompletion } from './aiGateway';
 
 export type SentimentLabel = 'positive' | 'neutral' | 'negative' | 'intent';
 
@@ -21,8 +20,6 @@ export type SentimentResult = {
   confidence: number;
   reasoning: string;
 };
-
-const getClient = (): OpenAI => new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /** Rule-based fast-path for obvious cases (avoids API cost). */
 function fastClassify(text: string): SentimentLabel | null {
@@ -54,11 +51,16 @@ export async function classifySentiment(
   }
 
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  const startedAt = Date.now();
 
   try {
-    const response = await getClient().chat.completions.create({
+    // Routed through the canonical aiGateway — cost accounting, usage
+    // enforcement, governor and telemetry are inherited (the former direct
+    // OpenAI call + local usage-ledger writes are gone; no duplicate accounting).
+    const response = await runCompletion({
+      companyId: opts.companyId,
+      operation: 'sentimentClassification',
       model,
+      temperature: 1,
       max_tokens: 60,
       response_format: { type: 'json_object' },
       messages: [
@@ -69,58 +71,14 @@ export async function classifySentiment(
       ],
     });
 
-    const promptTokens     = Number(response.usage?.prompt_tokens ?? 0);
-    const completionTokens = Number(response.usage?.completion_tokens ?? 0);
-    const totalTokens      = Number(response.usage?.total_tokens ?? promptTokens + completionTokens);
-    const cost = await resolveLlmCost({
-      providerName: 'openai',
-      modelName: model,
-      inputTokens: promptTokens,
-      outputTokens: completionTokens,
-      processType: 'sentiment_classification',
-      organizationId: opts.companyId,
-    });
-    void logUsageEvent({
-      organization_id: opts.companyId,
-      user_id:         opts.userId ?? null,
-      source_type:     'system',
-      provider_name:   'openai',
-      model_name:      model,
-      source_name:     'openai',
-      process_type:    'sentiment_classification',
-      feature_area:    'engagement_ingest',
-      input_tokens:    promptTokens,
-      output_tokens:   completionTokens,
-      total_tokens:    totalTokens,
-      latency_ms:      Date.now() - startedAt,
-      unit_cost:       totalTokens > 0 ? cost.total_cost_usd / totalTokens : null,
-      total_cost:      cost.total_cost_usd,
-      total_cost_usd:  cost.total_cost_usd,
-      final_price_usd: cost.final_price_usd,
-      pricing_snapshot: cost.pricing_snapshot,
-    });
-
-    const raw = response.choices[0]?.message?.content?.trim() ?? '{}';
+    const raw = (response.output ?? '').trim() || '{}';
     const parsed = JSON.parse(raw);
     return {
       label: (['positive', 'neutral', 'negative', 'intent'].includes(parsed.label) ? parsed.label : 'neutral') as SentimentLabel,
       confidence: Number(parsed.confidence) || 0.7,
       reasoning: String(parsed.reasoning ?? ''),
     };
-  } catch (err: any) {
-    void logUsageEvent({
-      organization_id: opts.companyId,
-      user_id:         opts.userId ?? null,
-      source_type:     'system',
-      provider_name:   'openai',
-      model_name:      model,
-      source_name:     'openai',
-      process_type:    'sentiment_classification',
-      feature_area:    'engagement_ingest',
-      latency_ms:      Date.now() - startedAt,
-      error_flag:      true,
-      error_type:      err?.message?.slice(0, 200) ?? 'unknown',
-    });
+  } catch {
     return { label: 'neutral', confidence: 0.5, reasoning: 'classification failed' };
   }
 }

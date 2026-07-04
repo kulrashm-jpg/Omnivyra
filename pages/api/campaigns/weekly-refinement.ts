@@ -25,9 +25,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         break;
 
       case 'POST':
-        if (action === 'enhance-with-ai') {
-          return await enhanceWithAI(req.body, res);
-        } else if (action === 'manual-edit') {
+        if (action === 'manual-edit') {
           return await manualEdit(req.body, res);
         } else if (action === 'finalize-week') {
           return await finalizeWeek(req.body, res);
@@ -154,68 +152,6 @@ async function getDailyPlans(campaignId: string, weekNumber: string, res: NextAp
   } catch (error) {
     console.error('Error getting daily plans:', error);
     res.status(500).json({ error: 'Failed to get daily plans' });
-  }
-}
-
-// Enhance weekly content with AI
-async function enhanceWithAI(body: any, res: NextApiResponse) {
-  try {
-    const { campaignId, weekNumber, enhancementPrompt, userId } = body;
-
-    // Call AI enhancement API
-    const aiResponse = await fetch('/api/ai/generate-content', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        campaignId,
-        weekNumber,
-        enhancementPrompt: enhancementPrompt || 'Enhance this weekly content with better engagement, clearer messaging, and platform-specific optimizations',
-        type: 'weekly_enhancement'
-      })
-    });
-
-    if (!aiResponse.ok) {
-      throw new Error('AI enhancement failed');
-    }
-
-    const aiData = await aiResponse.json();
-
-    // Use database function to apply AI enhancement
-    const { data: result, error } = await supabase
-      .rpc('enhance_weekly_content_with_ai', {
-        campaign_uuid: campaignId,
-        week_num: weekNumber,
-        enhancement_prompt: enhancementPrompt
-      });
-
-    if (error) throw error;
-
-    // Update content_plans with AI suggestions
-    if (aiData.enhancedContent) {
-      for (const enhancedItem of aiData.enhancedContent) {
-        await supabase
-          .from('content_plans')
-          .update({
-            content: enhancedItem.content,
-            topic: enhancedItem.topic,
-            hashtags: enhancedItem.hashtags,
-            ai_suggestions: enhancedItem.ai_suggestions,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', enhancedItem.id);
-      }
-    }
-
-    res.status(200).json({
-      success: true,
-      result,
-      aiData,
-      message: 'Weekly content enhanced with AI suggestions'
-    });
-
-  } catch (error) {
-    console.error('Error enhancing with AI:', error);
-    res.status(500).json({ error: 'Failed to enhance with AI' });
   }
 }
 

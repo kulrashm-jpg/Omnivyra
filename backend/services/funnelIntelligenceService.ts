@@ -6,6 +6,10 @@ import {
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { clamp, roundNumber, safeAverage } from './intelligenceEngineUtils';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
+// BETA-PROVIDER-003: canonical GA4 provider reliability lifts confidence on already-MEASURED page-view data.
+import { isGa4ProviderAvailable, ga4ProviderReliability } from './ga4ProviderBridge';
 
 type PageViewRow = {
   session_id: string;
@@ -129,6 +133,18 @@ export async function generateFunnelIntelligenceDecisions(companyId: string): Pr
     }
   }
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.82/0.79/0.84). MEASURED page-view analytics;
+  // confidence scales with the page-view sample size backing the funnel signal.
+  // BETA-PROVIDER-003: canonical_page_views is first-party GA4 data (already MEASURED). Add the GA4
+  // provider's reliability factor when connected (no scoring redesign); null (unchanged) otherwise.
+  const ga4ProviderLive = isGa4ProviderAvailable();
+  const funnelConfidence = deriveDecisionConfidence({
+    maturity: 'MEASURED',
+    providerReliability: ga4ProviderLive ? ga4ProviderReliability() : null,
+    sampleSize: pageViews.length,
+    dataPresent: pageViews.length > 0,
+  });
+
   const decisions = [];
   for (const [pageId, stats] of statsByPageId.entries()) {
     const exitRate = safeAverage(stats.exitCount, Math.max(stats.entryCount, stats.exitCount));
@@ -159,7 +175,7 @@ export async function generateFunnelIntelligenceDecisions(companyId: string): Pr
         impact_revenue: clamp(36 + Math.round(singlePageRate * 34), 0, 100),
         priority_score: clamp(42 + Math.round(singlePageRate * 40), 0, 100),
         effort_score: 18,
-        confidence_score: 0.82,
+        confidence_score: funnelConfidence.confidenceScore,
         recommendation: 'Strengthen the above-the-fold path so the landing page earns the next click instead of acting like an exit.',
         action_type: 'fix_cta',
         action_payload: {
@@ -195,7 +211,7 @@ export async function generateFunnelIntelligenceDecisions(companyId: string): Pr
         impact_revenue: clamp(42 + Math.round(exitRate * 30), 0, 100),
         priority_score: clamp(46 + Math.round(exitRate * 30), 0, 100),
         effort_score: 20,
-        confidence_score: 0.79,
+        confidence_score: funnelConfidence.confidenceScore,
         recommendation: 'Add a clearer next-step path from this page into pricing, contact, or lead capture experiences.',
         action_type: 'fix_cta',
         action_payload: {
@@ -229,7 +245,7 @@ export async function generateFunnelIntelligenceDecisions(companyId: string): Pr
         impact_revenue: 46,
         priority_score: 49,
         effort_score: 16,
-        confidence_score: 0.84,
+        confidence_score: funnelConfidence.confidenceScore,
         recommendation: 'Connect this page into the site graph with internal links or a conversion CTA so traffic does not stall.',
         action_type: 'improve_content',
         action_payload: {

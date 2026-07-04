@@ -1,5 +1,8 @@
 import { attachGenerationPipelineToDailyItems, isMediaDependentContentType } from './contentGenerationPipeline';
 import { getRulesForPlatform } from './platformRulesService';
+import { supabase } from '../db/supabaseClient';
+import { updateActivity } from './executionPlannerService';
+import { parseDailyExecutionMetadata } from '../../lib/dailyExecutionMetadata';
 
 type AutopilotOptions = {
   timezone?: string;
@@ -214,6 +217,69 @@ export async function runAutopilotForWeek(
     console.warn('[autopilot][run-week-failed]', { error: String(error) });
     return { week, summary };
   }
+}
+
+/**
+ * Persists the autopilot scheduling decision (status='scheduled' + scheduled_time)
+ * onto the existing daily_content_plans rows via the canonical write boundary
+ * (executionPlannerService.updateActivity). Idempotent: re-running writes the
+ * same two columns for the same rows (no delete, no duplicate insert).
+ *
+ * Autopilot items carry `execution_id`, not the row `id`. Rows are resolved by
+ * matching `execution_id` against either the real column or the value embedded in
+ * `format_notes` metadata (both population paths exist in the codebase). Items with
+ * no matching persisted row (e.g. unsaved manual placeholders) are skipped.
+ */
+export async function persistAutopilotSchedule(
+  items: DailyExecutionItemLike[],
+  ctx: { campaignId?: string | null; weekNumber?: number | null }
+): Promise<{ persisted: number }> {
+  const campaignId = String(ctx.campaignId || '').trim();
+  const weekNumber = Number(ctx.weekNumber);
+  const scheduled = items.filter(
+    (item) =>
+      String(item?.status || '').toLowerCase() === 'scheduled' &&
+      String(item?.scheduled_time || '').trim() &&
+      String(item?.execution_id || '').trim(),
+  );
+  if (!campaignId || !Number.isFinite(weekNumber) || scheduled.length === 0) {
+    return { persisted: 0 };
+  }
+
+  let query = supabase
+    .from('daily_content_plans')
+    .select('id, execution_id, format_notes')
+    .eq('campaign_id', campaignId);
+  query = query.eq('week_number', weekNumber);
+  const { data: rows, error } = await query;
+  if (error || !Array.isArray(rows)) {
+    console.warn('[autopilot][persist-fetch-failed]', { campaignId, weekNumber, error: error?.message });
+    return { persisted: 0 };
+  }
+
+  const idByExecutionId = new Map<string, string>();
+  for (const row of rows as Array<{ id?: string; execution_id?: string | null; format_notes?: unknown }>) {
+    const rowId = String(row?.id || '').trim();
+    if (!rowId) continue;
+    const columnExecId = String(row?.execution_id || '').trim();
+    if (columnExecId && !idByExecutionId.has(columnExecId)) idByExecutionId.set(columnExecId, rowId);
+    const metaExecId = String(parseDailyExecutionMetadata(row?.format_notes).execution_id || '').trim();
+    if (metaExecId && !idByExecutionId.has(metaExecId)) idByExecutionId.set(metaExecId, rowId);
+  }
+
+  let persisted = 0;
+  for (const item of scheduled) {
+    const executionId = String(item.execution_id || '').trim();
+    const rowId = idByExecutionId.get(executionId);
+    if (!rowId) continue;
+    try {
+      await updateActivity(rowId, { status: 'scheduled', scheduled_time: item.scheduled_time }, 'board');
+      persisted += 1;
+    } catch (err) {
+      console.warn('[autopilot][persist-item-failed]', { rowId, executionId, error: String(err) });
+    }
+  }
+  return { persisted };
 }
 
 export async function runAutopilotForPlan(

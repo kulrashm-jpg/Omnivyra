@@ -50,7 +50,11 @@ export async function buildActivationReadiness(companyId: string): Promise<Activ
       ownedDbTable('analytics_integrations')
         .select('id')
         .eq('company_id', companyId)
-        .eq('provider', 'google_analytics')
+        // Canonical analytics_integrations.provider value for GA4 is 'GA4' (see
+        // analyticsIntegrationService GA4_PROVIDER). 'google_analytics' belongs
+        // to analytics_provider_config (a different table), so it never matched
+        // here and ga4Done was always false even when GA4 was connected.
+        .eq('provider', 'GA4')
         .limit(1) as unknown as Promise<{ data: unknown }>,
     ),
     safeCount(

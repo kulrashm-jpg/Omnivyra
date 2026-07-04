@@ -3,6 +3,7 @@ import { regenerateContentAsset } from '../../../backend/services/contentAssetSe
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -18,6 +19,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'assetId and instruction are required' });
     }
     const updated = await regenerateContentAsset({ assetId, instruction });
+    // Canonical telemetry (append-only, fail-soft): an AI asset was regenerated.
+    // Not deduped — each regenerate is a distinct action.
+    trackEvent({
+      type: 'ai.regenerated',
+      organizationId: companyId,
+      actorId: access.userId,
+      entityId: assetId,
+      metadata: { surface: 'content' },
+      dedupKey: null,
+    });
     return res.status(200).json(updated);
   } catch (error: any) {
     return res.status(500).json({ error: error?.message || 'Failed to regenerate content' });

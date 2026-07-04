@@ -5,6 +5,12 @@ import { impactScore } from './reportDecisionUtils';
 import { supabase } from '../db/supabaseClient';
 import axios from 'axios';
 import { config } from '@/config';
+// BETA-PHASE1-EXEC-002: bring SERP under the SAME canonical scan-budget governance as the paid LLM/Ahrefs
+// adapters — reuse only the existing helpers (no new context, budget service, ledger, or interface).
+import { withinBudget, recordUsage } from './intelligence/costGovernance';
+import { getActiveScanId } from './intelligence/scanBudgetContext';
+// BETA-PHASE3-EXEC-001: structured provider-call telemetry parity with the LLM/Ahrefs adapters.
+import { logProviderCall } from './intelligence/productionPrimitives';
 import {
   buildCompetitorFitRationale,
   buildCompetitorFitSignals,
@@ -545,6 +551,19 @@ export async function fetchSerpDomainsForKeyword(keyword: string, geography: str
   const serpApiKey = config.SERPAPI_API_KEY || config.SERP_API_KEY || config.SERPAPI_KEY || '';
   if (!serpApiKey) return [];
 
+  // BETA-PHASE1-EXEC-002: canonical budget gate BEFORE the paid SERP request — identical ordering to the
+  // LLM/Ahrefs adapters. No active scan-budget context ⇒ no gating (prior behaviour, deterministic empty on abort).
+  const scanId = getActiveScanId();
+  if (scanId) {
+    const gate = withinBudget(scanId, { requests: 1, cost_usd: null });
+    if (!gate.ok) {
+      // BETA-PHASE3-EXEC-001: telemetry parity — observability only (console.info; no report/score/store effect).
+      logProviderCall({ providerId: 'serp', operation: 'search', status: 'unavailable', reason: gate.reason ?? 'budget_exceeded:serp' });
+      return [];
+    }
+  }
+
+  const startedAt = Date.now();
   try {
     const query = geography ? `${keyword} ${geography}` : keyword;
     const response = await axios.get('https://serpapi.com/search.json', {
@@ -556,17 +575,32 @@ export async function fetchSerpDomainsForKeyword(keyword: string, geography: str
       },
       timeout: 8000,
     });
+    // Record the paid SERP call against the canonical scan budget exactly once, only on success (a throw
+    // skips this via the catch). Cost null — SERP per-search pricing is not response-derivable → request ceiling.
+    if (scanId) {
+      recordUsage(scanId, {
+        provider_id: 'serp',
+        operation: 'search',
+        request_count: 1,
+        cost_usd: null,
+        cache_hit: false,
+        observed_at: new Date().toISOString(),
+      });
+    }
     const organic = Array.isArray(response.data?.organic_results) ? response.data.organic_results : [];
     const domains = organic
       .slice(0, 5)
       .map((item: { link?: string }) => normalizeDomain(item.link))
       .filter((domain): domain is string => Boolean(domain));
+    logProviderCall({ providerId: 'serp', operation: 'search', status: 'ok', duration_ms: Date.now() - startedAt });
     return Array.from(new Set<string>(domains));
   } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    logProviderCall({ providerId: 'serp', operation: 'search', status: 'unavailable', reason, duration_ms: Date.now() - startedAt });
     console.warn('[competitor-discovery][serp-keyword-failed]', {
       keyword,
       geography,
-      error: error instanceof Error ? error.message : String(error),
+      error: reason,
     });
     return [];
   }

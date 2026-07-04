@@ -12,6 +12,7 @@
 //  - 5xx after retries  → unavailable, reason="upstream_error:<provider>"
 
 import type { EvidenceSourceKind } from '../canonicalReport/canonicalReportTypes';
+import { authorizeProviderCall, recordProviderUsage, recordProviderOutcome } from '../providers/providerCostGovernor';
 
 // ── Rate limiter (token bucket) ───────────────────────────────────────────────
 //
@@ -112,7 +113,8 @@ export class HardFailureError extends Error {
       | 'quota_exceeded'
       | 'rate_limited'
       | 'invalid_request'
-      | 'upstream_error',
+      | 'upstream_error'
+      | 'governor_blocked',
     message: string,
   ) {
     super(`${reason}:${providerId} ${message}`);
@@ -207,9 +209,19 @@ export async function fetchProduction(
   init: RequestInit,
   timeoutMs: number,
 ): Promise<FetchEnvelope> {
-  return withTimeout(providerId, timeoutMs, async (signal) => {
+  // Canonical cost governor — the single no-bypass gate for every provider HTTP
+  // call routed through this primitive. Kill-switch / dry-run / over-budget →
+  // block before the paid request fires (surfaced as an unavailable reason).
+  const decision = authorizeProviderCall({ providerId });
+  if (!decision.allowed) {
+    throw new HardFailureError(providerId, 'governor_blocked', decision.reason);
+  }
+  try {
+    const envelope = await withTimeout(providerId, timeoutMs, async (signal) => {
     const response = await fetch(url, { ...init, signal });
     const text = await response.text();
+    // Usage accounting (fire-and-forget; never blocks the response).
+    void recordProviderUsage({ providerId, units: 1, operation: 'http' });
     if (response.status === 401 || response.status === 403) {
       throw new HardFailureError(providerId, 'auth_failure', `HTTP ${response.status}`);
     }
@@ -237,7 +249,15 @@ export async function fetchProduction(
         }
       },
     };
-  });
+    });
+    // Canonical outcome tracking (last success) for provider health.
+    recordProviderOutcome(providerId, true);
+    return envelope;
+  } catch (err) {
+    // Canonical outcome tracking (last failure) — record then rethrow unchanged.
+    recordProviderOutcome(providerId, false, reasonFromError(providerId, err));
+    throw err;
+  }
 }
 
 // ── Failure → unavailable reason mapping ──────────────────────────────────────

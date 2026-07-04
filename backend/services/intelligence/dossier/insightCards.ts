@@ -113,7 +113,7 @@ function pillarThrottleCard(report: CanonicalReport): InsightCard | null {
     kind: 'pillar_throttle',
     tone: 'risk',
     pillar: weakest.pillar,
-    observation: `${PILLAR_LABEL[weakest.pillar]}: ${value}/100. The lowest-measured pillar in the canonical structure.`,
+    observation: `${PILLAR_LABEL[weakest.pillar]}: ${value}/100. The lowest-measured pillar in the report.`,
     interpretation:
       weakest.primary_signal ?? `${PILLAR_LABEL[weakest.pillar]} is the rate-limiter on the rest of the system.`,
     business_impact:

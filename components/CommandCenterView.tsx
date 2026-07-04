@@ -1,9 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import Link from 'next/link';
 import {
-  AlertCircle,
   BarChart3,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   MessageSquare,
@@ -13,6 +10,8 @@ import {
 import type { useCommandCenter } from '../hooks/useCommandCenter';
 import CommandCenterPreflightModal from './command-center/CommandCenterPreflightModal';
 import { getCardHoverMessage, toPreflightItems, withCompanyId } from './command-center/preflightHelpers';
+import CategoryFactorsPanel from './command-center/CategoryFactorsPanel';
+import { masteryLevel } from '../lib/mastery/masteryLevels';
 
 type S = ReturnType<typeof useCommandCenter>;
 
@@ -34,18 +33,6 @@ const CARD_ACTION_LABELS: Record<string, string> = {
   engagement: 'Engage',
 };
 
-type ScoreSectionLike = {
-  title: string;
-  color: string;
-  items: Array<{
-    key: string;
-    label: string;
-    points: number;
-    score: number;
-    status: 'done' | 'in_progress' | 'missing';
-    href: string;
-  }>;
-};
 
 const CARD_ICONS: Record<string, React.ElementType> = {
   reports: BarChart3,
@@ -130,73 +117,6 @@ function ProgressRing({
   );
 }
 
-function ScoreDetailsPanel({
-  title,
-  sections,
-  companyId,
-  integrationStatus,
-}: {
-  title: string;
-  sections: ScoreSectionLike[];
-  companyId?: string;
-  integrationStatus?: {
-    connectedPlatforms?: string[] | null;
-    configuredApis?: string[] | null;
-  } | null;
-}) {
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-      <div className="mb-4">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">{title} factors</p>
-      </div>
-      <div className="grid gap-4 md:grid-cols-3">
-        {sections.map((section) => (
-          <div key={section.title} className="rounded-2xl border border-slate-200 bg-white p-4">
-            <p className="text-sm font-semibold text-slate-900">{section.title}</p>
-            <div className="mt-3 space-y-3">
-              {section.items.map((item) => (
-                <div key={item.key} className="flex items-start gap-2.5">
-                  {item.status === 'done' ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-                  ) : item.status === 'in_progress' ? (
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-                  ) : (
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />
-                  )}
-                  <div className="min-w-0">
-                    <Link
-                      href={withCompanyId(item.href, companyId)}
-                      className={`text-sm font-medium underline-offset-2 hover:underline ${
-                        item.status === 'done'
-                          ? 'text-slate-400 line-through decoration-slate-300'
-                          : 'text-slate-800'
-                      }`}
-                    >
-                      {item.label}
-                    </Link>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {Math.round(item.score * 100)}% of {item.points} pts
-                    </p>
-                    {item.key === 'social_accounts_connected' && integrationStatus?.connectedPlatforms?.length ? (
-                      <p className="mt-1 text-xs text-slate-500">
-                        Connected: {integrationStatus.connectedPlatforms.join(', ')}
-                      </p>
-                    ) : null}
-                    {item.key === 'api_configured' && integrationStatus?.configuredApis?.length ? (
-                      <p className="mt-1 text-xs text-slate-500">
-                        APIs: {integrationStatus.configuredApis.join(', ')}
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function ActionCard({
   card,
@@ -290,12 +210,12 @@ export default function CommandCenterView({ d }: { d: S }) {
     handleCardClick,
     readinessScore,
     setupPct,
-    setupSections,
+    setupEvaluation,
     setupSummary,
-    readinessSections,
+    readinessEvaluation,
     readinessSummary,
     masteryPct,
-    masterySections,
+    masteryEvaluation,
     masterySummary,
     selectedCompanyId,
     features,
@@ -306,11 +226,11 @@ export default function CommandCenterView({ d }: { d: S }) {
     : [];
   const topProgressItems = useMemo(
     () => [
-      { id: 'setup', label: 'Setup', value: setupPct, tone: 'blue' as const, summary: setupSummary, sections: setupSections },
-      { id: 'readiness', label: 'Readiness', value: readinessScore, tone: 'violet' as const, summary: readinessSummary, sections: readinessSections },
-      { id: 'mastery', label: 'Mastery', value: masteryPct, tone: 'emerald' as const, summary: masterySummary, sections: masterySections },
+      { id: 'setup', label: 'Setup', value: setupPct, tone: 'blue' as const, summary: setupSummary },
+      { id: 'readiness', label: 'Readiness', value: readinessScore, tone: 'violet' as const, summary: readinessSummary },
+      { id: 'mastery', label: 'Mastery', value: masteryPct, tone: 'emerald' as const, summary: masterySummary },
     ],
-    [masteryPct, masterySections, masterySummary, readinessScore, readinessSections, readinessSummary, setupPct, setupSections, setupSummary],
+    [masteryPct, masterySummary, readinessScore, readinessSummary, setupPct, setupSummary],
   );
   const [activeProgressId, setActiveProgressId] = useState<'setup' | 'readiness' | 'mastery' | null>(null);
   const [preflightCardId, setPreflightCardId] = useState<string | null>(null);
@@ -376,12 +296,20 @@ export default function CommandCenterView({ d }: { d: S }) {
         </section>
 
         {activeProgress ? (
-          <ScoreDetailsPanel
-            title={activeProgress.label}
-            sections={activeProgress.sections as ScoreSectionLike[]}
-            companyId={selectedCompanyId}
-            integrationStatus={d.profileStatus ?? null}
-          />
+          activeProgressId === 'setup' ? (
+            <CategoryFactorsPanel evaluation={setupEvaluation} companyId={selectedCompanyId} title="Setup factors" metricWord="complete" />
+          ) : activeProgressId === 'readiness' ? (
+            <CategoryFactorsPanel evaluation={readinessEvaluation} companyId={selectedCompanyId} title="Readiness factors" metricWord="ready" />
+          ) : (
+            <CategoryFactorsPanel
+              evaluation={masteryEvaluation}
+              companyId={selectedCompanyId}
+              title="Mastery factors"
+              metricWord="mastery"
+              categoryBadge={(c) => masteryLevel(c.percent).label}
+              overallBadge={masteryLevel(masteryEvaluation.overallPercent).label}
+            />
+          )
         ) : null}
 
         <section>

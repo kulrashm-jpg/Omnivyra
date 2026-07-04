@@ -1,5 +1,7 @@
 import { impactScore } from '../reportDecisionUtils';
 import type { CompetitorIntelligenceResult } from '../reportCompetitorIntelligenceService';
+// BETA-EXEC-003: competitor-standing constants (parity + slope) from the governance registry.
+import { COMPETITOR_STANDING } from '../canonicalReport/scoringGovernance';
 import type { buildPublicDomainAuditDecisions } from '../publicDomainAuditService';
 import type { buildReportScoreModel } from '../reportScoreModelService';
 import type { ScoreState } from './canonicalScoreState';
@@ -54,6 +56,14 @@ export function buildSnapshotVisualIntelligence(params: {
   competitorIntelligence: CompetitorIntelligenceResult;
   publicAudit?: Awaited<ReturnType<typeof buildPublicDomainAuditDecisions>> | null;
   narrativeContext?: NarrativeContext;
+  // BETA-EXEC-001: measured evidence from the existing Website Intelligence engines
+  // (Technical/Content). When present (non-null score), these REPLACE the prior
+  // decision/penalty-derived radar axes with the real engine score; otherwise the
+  // existing computation is used unchanged (fully backward compatible).
+  websiteIntelligence?: {
+    technical?: { score: number | null; confidence: number; evaluatedAt: string | null } | null;
+    content?: { score: number | null; confidence: number; evaluatedAt: string | null } | null;
+  } | null;
 }): SnapshotReport['visual_intelligence'] {
   const scoreByKey = new Map<string, number>(
     params.score.dimensions
@@ -215,9 +225,12 @@ export function buildSnapshotVisualIntelligence(params: {
       Number(deltas.aeo_readiness ?? 0),
     ].filter((value) => Number.isFinite(value)));
     if (avgDelta == null) return null;
-    if (avgDelta >= 8) return 35;
-    if (avgDelta <= -6) return 80;
-    return 60;
+    // BETA-EXEC-001 (audit E): delta-derived CONTINUOUS standing, replacing the former fixed
+    // 35/80/60 buckets. avgDelta = the competitor's average lead over us across the 5 measured
+    // comparison axes; parity (0) → 60. Slope 3.2 preserves the prior anchor points
+    // (avgDelta +8 → ~35 behind, -6 → ~80 ahead) while making the score proportional to the
+    // real evidence instead of collapsing to three constants.
+    return clamp(Math.round(COMPETITOR_STANDING.parity - avgDelta * COMPETITOR_STANDING.slope), 0, 100);
   }).filter((value) => value != null) as number[];
 
   const technicalPenalty = metadataIssues != null || structureIssues != null || internalLinkIssues != null || crawlDepthIssues != null
@@ -226,10 +239,17 @@ export function buildSnapshotVisualIntelligence(params: {
 
   // Canonical Trust Foundation: each axis is computed only from its own evidence — no
   // baseline-substituted defaults, no derivation from other dimensions, no fake completeness.
-  const technicalSeoScore = technicalPenalty != null
-    ? clamp(Math.round(100 - technicalPenalty), 0, 100)
-    : null;
-  const technicalState: ScoreState = technicalPenalty != null ? 'measured' : 'insufficient_signal';
+  // BETA-EXEC-001: prefer the Technical Intelligence engine's measured score over the
+  // penalty heuristic when the engine has real evidence; else fall back to the heuristic;
+  // else null (NOT_MEASURED). No synthetic default.
+  const wiTechnical = params.websiteIntelligence?.technical ?? null;
+  const wiTechnicalUsable = wiTechnical != null && typeof wiTechnical.score === 'number';
+  const technicalSeoScore = wiTechnicalUsable
+    ? clamp(Math.round(wiTechnical!.score as number), 0, 100)
+    : technicalPenalty != null
+      ? clamp(Math.round(100 - technicalPenalty), 0, 100)
+      : null;
+  const technicalState: ScoreState = (wiTechnicalUsable || technicalPenalty != null) ? 'measured' : 'insufficient_signal';
 
   const measuredCoverageOpportunities = opportunityCoverage.filter((item) => item.confidence === 'high' || item.confidence === 'medium');
   const keywordResearchScore = opportunityCoverage.length > 0
@@ -266,10 +286,18 @@ export function buildSnapshotVisualIntelligence(params: {
     : 'insufficient_signal';
 
   const contentQualityValue = scoreByKey.get('content_quality');
-  const contentState = stateByKey.get('content_quality') ?? 'insufficient_signal';
-  const contentQualityScore = contentState === 'insufficient_signal' || contentState === 'unavailable'
+  const decisionContentState = stateByKey.get('content_quality') ?? 'insufficient_signal';
+  const decisionContentScore = decisionContentState === 'insufficient_signal' || decisionContentState === 'unavailable'
     ? null
     : contentQualityValue ?? null;
+  // BETA-EXEC-001: prefer the Content Intelligence engine's measured score when available;
+  // else the decision-derived value; else null. No synthetic default.
+  const wiContent = params.websiteIntelligence?.content ?? null;
+  const wiContentUsable = wiContent != null && typeof wiContent.score === 'number';
+  const contentQualityScore = wiContentUsable
+    ? clamp(Math.round(wiContent!.score as number), 0, 100)
+    : decisionContentScore;
+  const contentState: ScoreState = wiContentUsable ? 'measured' : decisionContentState;
 
   const radarConfidence: 'high' | 'medium' | 'low' =
     technicalSeoScore != null && rankTrackingScore != null ? 'high' :
@@ -279,16 +307,18 @@ export function buildSnapshotVisualIntelligence(params: {
     opportunityCoverage.length > 0 ? 'medium' : 'low';
   const crawlConfidence: 'high' | 'medium' | 'low' =
     technicalPenalty != null ? 'high' : 'low';
-  const technicalSourceTags = technicalPenalty != null ? ['crawler'] : null;
+  const technicalSourceTags = wiTechnicalUsable ? ['website_intelligence:technical', 'crawler'] : technicalPenalty != null ? ['crawler'] : null;
   const keywordSourceTags = opportunityCoverage.length > 0 ? ['GSC', 'heuristic'] : null;
   const rankSourceTags = searchKeywordRows.length > 0 ? ['GSC'] : null;
   const backlinksSourceTags = backlinksScore != null
     ? params.decisions.some((decision) => isAuthorityDecision(decision)) ? ['backlink_signals', 'heuristic'] : ['heuristic']
     : null;
   const competitorSourceTags = competitorStandingValues.length > 0 ? ['competitor_intelligence', 'heuristic'] : null;
-  const contentSourceTags = contentQualityScore != null
-    ? params.publicAudit?.decisions?.length ? ['crawler', 'heuristic'] : ['heuristic']
-    : null;
+  const contentSourceTags = wiContentUsable
+    ? ['website_intelligence:content', 'crawler']
+    : contentQualityScore != null
+      ? params.publicAudit?.decisions?.length ? ['crawler', 'heuristic'] : ['heuristic']
+      : null;
   const searchRowCount = searchKeywordRows.length;
   const rankingIssueWeight = searchKeywordRows.reduce((sum, row) => {
     if (row.avgPosition == null) return sum;

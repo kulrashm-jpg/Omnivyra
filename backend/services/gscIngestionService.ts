@@ -2,6 +2,7 @@ import axios from 'axios';
 import { supabase } from '../db/supabaseClient';
 import { ensureCanonicalDomain, hashKey, normalizeUrl, resolveCompanyWebsite, safeNumber, slugifyKeyword, todayIsoDate } from './ingestionUtils';
 import { ownedDbTable } from '../db/writeOwner';
+import { authorizeProviderCall, recordProviderUsage } from './providers/providerCostGovernor';
 
 export interface GscKeywordRow {
   date?: string | null;
@@ -142,6 +143,11 @@ async function ensureKeyword(companyId: string, keyword: string, pageUrl: string
 }
 
 export async function ingestGscData(input: GscIngestionInput): Promise<GscIngestionResult> {
+  // Canonical governor gate (no provider bypass): honors kill-switch / dry-run.
+  // GSC is free → normally a pass-through; records the run for usage visibility.
+  const gov = authorizeProviderCall({ providerId: 'search_console', organizationId: input.companyId });
+  if (!gov.allowed) throw new Error(`provider_governor_blocked:search_console:${gov.reason}`);
+  void recordProviderUsage({ providerId: 'search_console', organizationId: input.companyId, units: 1, operation: 'ingest' });
   const window = resolveGscIngestionWindow(input);
   const rows = await fetchGscRows(input);
   const website = input.siteUrl || (await resolveCompanyWebsite(input.companyId));

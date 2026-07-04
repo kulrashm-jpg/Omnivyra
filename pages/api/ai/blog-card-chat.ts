@@ -1,8 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import OpenAI from 'openai';
+import { runCompletion } from '../../../backend/services/aiGateway';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
-import { captureTokenProviderCost } from '../../../backend/services/billing/blackHoleCostCapture';
 
 type CardContentType =
   | 'blog'
@@ -15,11 +14,6 @@ type CardContentType =
   | 'whitepaper'
   | 'case-study';
 
-function getOpenAiClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
-  return new OpenAI({ apiKey });
-}
 
 function normalizeCardContentType(contentType?: string): CardContentType {
   const normalized = String(contentType || '').trim().toLowerCase();
@@ -416,44 +410,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       currentPhase: typeof metadata?.currentPhase === 'string' ? metadata.currentPhase : undefined,
     });
 
-    const messages: OpenAI.ChatCompletionMessageParam[] = [
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
       // Include previous conversation turns
       ...(Array.isArray(conversation)
         ? conversation.map((m: unknown) => {
             const turn = typeof m === 'object' && m !== null ? m as Record<string, unknown> : {};
             return {
-              role: turn.role === 'assistant' ? 'assistant' : 'user',
+              role: (turn.role === 'assistant' ? 'assistant' : 'user') as 'assistant' | 'user',
               content: String(turn.content || turn.message || ''),
-            } satisfies OpenAI.ChatCompletionMessageParam;
+            };
           })
         : []),
       // Add the current message
       { role: 'user', content: String(message) },
     ];
 
-    const client = getOpenAiClient();
-    const completion = await client.chat.completions.create({
+    // Routed through the canonical aiGateway — cost accounting, usage
+    // enforcement, governor, retry/fallback and telemetry are inherited (the
+    // former direct call + separate captureTokenProviderCost are gone).
+    const completion = await runCompletion({
+      companyId: String(companyId),
+      referenceType: 'blog_card_chat',
+      operation: 'blogCardChat',
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.7,
       response_format: { type: 'json_object' },
       messages,
     });
 
-    // Phase 2 Task 2: previously a direct OpenAI call with zero cost capture.
-    // Telemetry only — best-effort, never throws, no billing change.
-    await captureTokenProviderCost({
-      organizationId: String(companyId),
-      processType:    'ai_reply',
-      provider:       'openai',
-      model:          process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      inputTokens:    completion.usage?.prompt_tokens ?? null,
-      outputTokens:   completion.usage?.completion_tokens ?? null,
-      userId:         user.id,
-      activity:       'blog_card_chat',
-    });
-
-    const raw = completion.choices[0]?.message?.content?.trim() || '{}';
+    const raw = (completion.output ?? '').trim() || '{}';
 
     let parsed: {
       done?: boolean;

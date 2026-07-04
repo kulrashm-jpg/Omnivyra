@@ -14,6 +14,7 @@ import type {
   KnowledgeGraphProvider,
 } from '../providerInterfaces';
 import { unavailableEvidence } from '../providerInterfaces';
+import { logProviderCall } from '../productionPrimitives';
 
 const WIKIDATA_SEARCH_URL = 'https://www.wikidata.org/w/api.php';
 const WIKIDATA_ENTITY_URL = 'https://www.wikidata.org/wiki/Special:EntityData';
@@ -148,10 +149,25 @@ export class WikidataAdapter implements KnowledgeGraphProvider {
   private cache: Map<string, EntityIntelligenceResult> = new Map();
 
   async isAvailable(): Promise<boolean> {
-    return process.env.WIKIDATA_ENABLED === 'true';
+    // Phase 0A: Wikidata is a free, keyless provider — activated by default.
+    // Set WIKIDATA_ENABLED=false to disable (kill switch).
+    return process.env.WIKIDATA_ENABLED !== 'false';
   }
 
   async lookup(params: { brandName: string; domain: string | null }): Promise<EntityIntelligenceResult> {
+    // BETA-PHASE0-EXEC-001: telemetry parity — emit one structured provider-call line through the existing
+    // observability hook (logProviderCall). Covers every resolution branch in one place; no behaviour/score change.
+    const result = await this.resolveEntity(params);
+    logProviderCall({
+      providerId: this.id,
+      operation: 'lookup',
+      status: result.state === 'measured' ? 'ok' : 'unavailable',
+      reason: result.reason_unavailable ?? undefined,
+    });
+    return result;
+  }
+
+  private async resolveEntity(params: { brandName: string; domain: string | null }): Promise<EntityIntelligenceResult> {
     const cacheKey = `${params.brandName}|${params.domain ?? ''}`;
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;

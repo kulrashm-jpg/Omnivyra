@@ -7,8 +7,12 @@
  */
 import { supabase } from '../../db/supabaseClient';
 import { CheckResult, Freshness, Provenance, aggregate, clamp, freshnessFrom, norm } from './engineCommon';
+// BETA-ARCH-001: optional canonical-evidence metadata (read-only mapping of existing output).
+import { buildWebsiteEngineEvidence, type Evidence } from '../evidencePlatform';
+// BETA-ROADMAP-EXEC-002: static-parser signals recovered into crawl_metadata (type-only import).
+import type { PageSignals } from '../crawlerService';
 
-interface PageRow { id: string; url: string; headings: Array<{ level: number; text: string }> | null; last_crawled_at: string | null; crawl_metadata: { meta_tags?: Record<string, string> } | null }
+interface PageRow { id: string; url: string; headings: Array<{ level: number; text: string }> | null; last_crawled_at: string | null; crawl_metadata: { meta_tags?: Record<string, string>; signals?: PageSignals } | null }
 interface ContentBlock { page_id: string; block_type: string; heading_level: number | null }
 interface LinkRow { from_page_id: string; anchor_text: string | null }
 
@@ -24,6 +28,8 @@ export interface AccessibilityIntelligence {
   confidence: number;
   freshness: Freshness;
   provenance: Provenance;
+  /** BETA-ARCH-001: optional canonical evidence (additive; unused by existing consumers). */
+  platformEvidence?: Evidence[];
 }
 
 const GENERIC_LINK = ['click here', 'read more', 'here', 'more', 'link', 'this', 'learn more', 'click'];
@@ -34,6 +40,8 @@ export function scoreAccessibilityIntelligence(pages: PageRow[], blocks: Content
   const pct = (n: number, d: number) => (d > 0 ? clamp((n / d) * 100) : 0);
   const metaTags = (p: PageRow) => p.crawl_metadata?.meta_tags || {};
   const anyMeta = pages.some((p) => Object.keys(metaTags(p)).length > 0);
+  // BETA-ROADMAP-EXEC-002: recovered static-parser signals (present only on post-upgrade crawls).
+  const sig = (p: PageRow) => p.crawl_metadata?.signals;
 
   if (pages.length === 0) {
     C('crawl', 'Crawl coverage', 'not_evaluable', null, 'No crawled pages — run the website scan');
@@ -57,11 +65,18 @@ export function scoreAccessibilityIntelligence(pages: PageRow[], blocks: Content
     C('lists', 'List markup', blocks.length ? 'pass' : 'not_evaluable', blocks.length ? (blocks.some((b) => b.block_type === 'list') ? 80 : 50) : null);
     // Meta-derived.
     C('viewport', 'Viewport meta', anyMeta ? 'pass' : 'not_evaluable', anyMeta ? pct(pages.filter((p) => 'viewport' in metaTags(p)).length, n) : null);
-    const langPages = pages.filter((p) => Object.keys(metaTags(p)).some((k) => k === 'lang' || k.includes('language'))).length;
-    C('language_declaration', 'Language declaration', langPages > 0 ? 'pass' : 'not_evaluable', langPages > 0 ? pct(langPages, n) : null, langPages > 0 ? undefined : 'html lang not captured by crawler');
-    // Not captured by the regex crawler — honest gaps (need rendered DOM / images / CSS).
-    for (const [k, l] of [['alt_text', 'Image alt text'], ['aria', 'ARIA attributes'], ['label_association', 'Form label association'], ['keyboard_navigation', 'Keyboard navigation'], ['focus_visibility', 'Focus visibility'], ['contrast', 'Colour contrast'], ['button_accessibility', 'Button accessibility'], ['forms', 'Form accessibility'], ['tables', 'Table accessibility']] as const) {
-      C(k, l, 'not_evaluable', null, 'Requires rendered DOM (not captured by crawler)');
+    // BETA-ROADMAP-EXEC-002: `html lang` is now recovered by the static parser (crawl_metadata.signals.lang),
+    // augmenting the meta-derived language check.
+    const langPages = pages.filter((p) => sig(p)?.lang || Object.keys(metaTags(p)).some((k) => k === 'lang' || k.includes('language'))).length;
+    C('language_declaration', 'Language declaration', langPages > 0 ? 'pass' : 'not_evaluable', langPages > 0 ? pct(langPages, n) : null, langPages > 0 ? undefined : 'No <html lang> or language meta found');
+    // BETA-ROADMAP-EXEC-002: image alt-text coverage is now recovered from the static parse (img with alt / total img).
+    const imgPages = pages.filter((p) => (sig(p)?.img_count ?? 0) > 0);
+    const totalImg = imgPages.reduce((a, p) => a + (sig(p)!.img_count || 0), 0);
+    const altImg = imgPages.reduce((a, p) => a + (sig(p)!.img_with_alt || 0), 0);
+    C('alt_text', 'Image alt text', imgPages.length ? 'pass' : 'not_evaluable', imgPages.length ? pct(altImg, totalImg) : null, imgPages.length ? `${altImg}/${totalImg} images have alt text` : 'No images found');
+    // Genuinely need rendered DOM / CSS / interaction — remain honest not_evaluable (headless only; IMPACT-AUDIT-001).
+    for (const [k, l] of [['aria', 'ARIA attributes'], ['label_association', 'Form label association'], ['keyboard_navigation', 'Keyboard navigation'], ['focus_visibility', 'Focus visibility'], ['contrast', 'Colour contrast'], ['button_accessibility', 'Button accessibility'], ['forms', 'Form accessibility'], ['tables', 'Table accessibility']] as const) {
+      C(k, l, 'not_evaluable', null, 'Requires rendered DOM / CSS (not captured by a static crawl)');
     }
   }
 
@@ -76,14 +91,20 @@ export function scoreAccessibilityIntelligence(pages: PageRow[], blocks: Content
     semantic_html: 'Use semantic headings, lists and paragraphs.',
     viewport: 'Add a responsive viewport meta tag.',
     language_declaration: 'Declare the page language with html lang.',
+    alt_text: 'Add descriptive alt text to every meaningful image.',
   };
   const recommendations = checks.filter((c) => typeof c.score === 'number' && (c.score as number) < 70).map((c) => ({ key: c.key, recommendation: recMap[c.key] || `Improve ${c.label.toLowerCase()}.` }));
 
+  const freshness = freshnessFrom(pages.map((p) => p.last_crawled_at).filter(Boolean).sort().reverse()[0] ?? null, nowMs);
   return {
     accessibilityScore: agg.score, wcagLevel, criticalIssues, warnings, recommendations, checks,
     confidence: agg.confidence,
-    freshness: freshnessFrom(pages.map((p) => p.last_crawled_at).filter(Boolean).sort().reverse()[0] ?? null, nowMs),
+    freshness,
     provenance: { sources: ['canonical_pages', 'page_content', 'page_links'], checksEvaluated: agg.evaluated, checksTotal: agg.total, deterministic: true },
+    platformEvidence: buildWebsiteEngineEvidence({
+      engineId: 'website.accessibility', version: '1.0.0', sourceSystem: 'website_crawl', origin: 'canonical_pages', collector: 'regex_crawler',
+      checks, aggregate: { key: 'accessibility_score', label: 'Accessibility score', score: agg.score, confidence: agg.confidence }, freshness,
+    }),
   };
 }
 

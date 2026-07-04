@@ -129,7 +129,7 @@ export const CampaignVariantConfigPanel: React.FC<Props> = ({
         <p className="mt-2 text-xs text-rose-700">{persisted.error}</p>
       ) : null}
       <p className="mt-2 text-[11px] text-gray-500">
-        Persisted on <code className="rounded bg-gray-100 px-1">campaign_snapshot.execution_config.variant_strategy</code>.
+        Saved with this campaign and applied automatically the next time it runs.
       </p>
       {/* Fan-Out Completion — Phase 4 + 5. Pre-execution billing
           estimate. Refreshes whenever the persisted config changes

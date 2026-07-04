@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { trackEvent } from './telemetry/telemetryDispatcher';
 /**
  * Auto Completion Trigger.
  * When all scheduled posts for a campaign are published and no future posts exist,
@@ -79,6 +80,9 @@ export async function checkAndCompleteCampaignIfEligible(campaignId: string | nu
 
     const companyId = (cv as any)?.company_id ?? null;
     if (companyId) {
+      // Adoption telemetry (append-only, fail-soft): a campaign completed.
+      // Deduped per campaign id.
+      trackEvent({ type: 'campaign.completed', organizationId: companyId, entityId: campaignId });
       markThemeConsumedForCampaign(campaignId).catch((err) =>
         console.warn('CampaignCompletionService: markThemeConsumedForCampaign failed', err)
       );

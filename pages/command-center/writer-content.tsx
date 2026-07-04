@@ -8,6 +8,8 @@ import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 import PageLoader from '../../components/PageLoader';
+import AccessRestricted from '../../components/access/AccessRestricted';
+import { roleCanAccessArea } from '../../config/commandCenterCards';
 
 interface ContentCard {
   id: string;
@@ -215,19 +217,25 @@ const VISIBLE_CONTENT_CARDS = CONTENT_CARDS.filter((card) => !HIDDEN_CARD_IDS.ha
 
 export default function WriterContentPage() {
   const router = useRouter();
-  const { user, authChecked, isLoading } = useCompanyContext();
+  const { user, authChecked, isLoading, userRole } = useCompanyContext();
 
   React.useEffect(() => {
-    if (authChecked && !user?.userId) {
+    if (authChecked && !isLoading && !user?.userId) {
       router.replace('/login');
     }
-  }, [authChecked, user?.userId, router]);
+  }, [authChecked, isLoading, user?.userId, router]);
 
   if (!authChecked || isLoading) {
     return <PageLoader message="Loading your workspace…" />;
   }
 
   if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
+
+  // View-only roles do not have a content-creation workspace. Show a
+  // professional permission state rather than the writer chooser.
+  if (!roleCanAccessArea(userRole, 'blogs')) {
+    return <AccessRestricted area="content creation" />;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">

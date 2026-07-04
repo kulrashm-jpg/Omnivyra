@@ -6,6 +6,13 @@ import {
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { clamp, roundNumber, safeAverage } from './intelligenceEngineUtils';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
+// BETA-PROVIDER-002: canonical GSC provider reliability lifts confidence on already-MEASURED search data.
+import { isSearchConsoleProviderAvailable, searchConsoleProviderReliability } from './searchConsoleProviderBridge';
+// BETA-PROVIDER-004: Bing Webmaster complements GSC as a first-party search provider — blend both when live.
+import { isBingProviderAvailable, bingProviderReliability } from './bingWebmasterProviderBridge';
+import { combinedProviderReliability } from './ga4ProviderBridge';
 
 type KeywordRow = {
   id: string;
@@ -91,6 +98,26 @@ export async function generateSeoIntelligenceDecisions(companyId: string): Promi
 
   if (keywords.length === 0 || metrics.length === 0) return [];
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.85/0.8/0.77/0.79/0.81/0.78). MEASURED GSC
+  // keyword metrics; confidence scales with the keyword-metric sample size.
+  // BETA-PROVIDER-002/004: keyword_metrics is first-party GSC data (already MEASURED). Search evidence is
+  // provider-backed by Google Search Console (Google search) and — complementarily — Bing Webmaster (Bing
+  // search). When either/both canonical search providers are connected, blend their reliabilities
+  // deterministically (mean of the live set) as the single providerReliability factor — confidence rises
+  // from provenance alone, no scoring redesign. Without credentials this is null, so confidence is
+  // unchanged (backward compatible).
+  const gscProviderLive = isSearchConsoleProviderAvailable();
+  const bingProviderLive = isBingProviderAvailable();
+  const seoConfidence = deriveDecisionConfidence({
+    maturity: 'MEASURED',
+    providerReliability: combinedProviderReliability(
+      gscProviderLive ? searchConsoleProviderReliability() : null,
+      bingProviderLive ? bingProviderReliability() : null,
+    ),
+    sampleSize: metrics.length,
+    dataPresent: metrics.length > 0,
+  });
+
   const metricsByKeywordId = new Map<string, KeywordMetricRow[]>();
   for (const row of metrics) {
     const current = metricsByKeywordId.get(row.keyword_id) ?? [];
@@ -132,7 +159,7 @@ export async function generateSeoIntelligenceDecisions(companyId: string): Promi
         impact_revenue: 30,
         priority_score: clamp(52 + Math.round(recentSummary.impressions / 8), 0, 100),
         effort_score: 16,
-        confidence_score: 0.85,
+        confidence_score: seoConfidence.confidenceScore,
         recommendation: 'Rewrite title, meta description, and SERP promise so search visibility turns into visits.',
         action_type: 'improve_content',
         action_payload: {
@@ -168,7 +195,7 @@ export async function generateSeoIntelligenceDecisions(companyId: string): Promi
         impact_revenue: 24,
         priority_score: clamp(50 + Math.round((21 - recentSummary.avgPosition) * 1.8), 0, 100),
         effort_score: 22,
-        confidence_score: 0.8,
+        confidence_score: seoConfidence.confidenceScore,
         recommendation: 'Improve topical relevance and supporting depth so this keyword can move from visibility into material traffic.',
         action_type: 'improve_content',
         action_payload: {
@@ -209,7 +236,7 @@ export async function generateSeoIntelligenceDecisions(companyId: string): Promi
         impact_revenue: 24,
         priority_score: clamp(40 + Math.round(decayRatio * 55), 0, 100),
         effort_score: 24,
-        confidence_score: 0.77,
+        confidence_score: seoConfidence.confidenceScore,
         recommendation: 'Refresh the target page and supporting content before the keyword slips out of the reachable set.',
         action_type: 'improve_content',
         action_payload: {
@@ -245,7 +272,7 @@ export async function generateSeoIntelligenceDecisions(companyId: string): Promi
         impact_revenue: 18,
         priority_score: clamp(48 + Math.round((100 - recentSummary.avgPosition) / 3), 0, 100),
         effort_score: 28,
-        confidence_score: 0.79,
+        confidence_score: seoConfidence.confidenceScore,
         recommendation: 'Create comprehensive supporting content and strengthen topical relevance to move this keyword into the top-20 search zone.',
         action_type: 'improve_content',
         action_payload: {
@@ -288,7 +315,7 @@ export async function generateSeoIntelligenceDecisions(companyId: string): Promi
           impact_revenue: 22,
           priority_score: clamp(54 + Math.round(Math.min(trendGain - 1, 1) * 30), 0, 100),
           effort_score: 18,
-          confidence_score: 0.81,
+          confidence_score: seoConfidence.confidenceScore,
           recommendation: 'Invest in ranking improvement now while this keyword is gaining traction — early movers capture the volume spike.',
           action_type: 'improve_content',
           action_payload: {
@@ -353,7 +380,7 @@ export async function generateSeoIntelligenceDecisions(companyId: string): Promi
           impact_revenue: 24,
           priority_score: clamp(58 + Math.round(Math.min(stats.impressions / 150, 30)), 0, 100),
           effort_score: 26,
-          confidence_score: 0.78,
+          confidence_score: seoConfidence.confidenceScore,
           recommendation: `Build dedicated landing pages and supporting content for the "${rootWord}" topic cluster to capture the full search demand.`,
           action_type: 'improve_content',
           action_payload: {

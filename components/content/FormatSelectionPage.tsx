@@ -209,14 +209,16 @@ export default function FormatSelectionPage({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          campaignId,
-          day: selectedDay,
-          platform: selectedPlatform,
-          contentType: selectedContentType,
-          campaignData,
-          campaignGoals,
-          brandVoice: 'Use the current company brand voice and campaign context.',
-          useAI: true,
+          type: 'campaign_content',
+          context: {
+            campaignId,
+            day: selectedDay,
+            platform: selectedPlatform,
+            contentType: selectedContentType,
+            campaignData,
+            campaignGoals,
+            brandVoice: 'Use the current company brand voice and campaign context.',
+          },
         }),
       });
 

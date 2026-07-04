@@ -80,6 +80,11 @@ import {
 } from './snapshotReport/canonicalScoreState';
 import { buildCanonicalReport } from './canonicalReport/canonicalReportBuilder';
 import type { CanonicalReport } from './canonicalReport/canonicalReportTypes';
+// BETA-PHASE1-AUDIT-005: composeSnapshotReport owns the report scan-budget lifecycle.
+import { startScanBudget, endScanBudget } from './intelligence/costGovernance';
+import { runWithScanBudget } from './intelligence/scanBudgetContext';
+import { policyFor } from './intelligence/executionPolicies';
+import { randomUUID } from 'crypto';
 import {
   buildGeoAeoExecutiveSummary,
   buildGeoAeoVisuals,
@@ -92,6 +97,15 @@ import {
 import { buildCompetitiveSnapshotReport } from './reportCompetitorStrategyService';
 import { buildUnifiedIntelligenceSummary } from './snapshotReport/unifiedSummaryHelpers';
 import { buildSnapshotVisualIntelligence } from './snapshotReport/visualIntelligenceHelpers';
+// BETA-EXEC-001: reuse the existing Website Intelligence engines (Technical/Content) as
+// measured evidence for the Authority radar — fully implemented but previously wired only
+// into the separate Website Health report. Consumed directly (no recomputation).
+import {
+  getWebsiteTechnicalIntelligence,
+  getWebsiteContentIntelligence,
+  getWebsiteAccessibilityIntelligence,
+  getWebsiteBrandIntelligence,
+} from './websiteIntelligence/websiteIntelligenceRepository';
 import {
   SIGNAL_BUCKETS,
   type CompanyNarrativeContext,
@@ -191,12 +205,38 @@ export async function composeSnapshotReportFromDecisions(params: {
     competitorIntelligence,
   });
   const narrativeContext = createNarrativeContext();
+  // BETA-EXEC-001: fetch the Technical + Content engines once (parallel, best-effort — a
+  // failure degrades to the prior behaviour, never blocks the report). Their measured scores
+  // replace the heuristic/decision-derived radar axes when the engine has real evidence.
+  // BETA-EXEC-001 (Technical/Content → radar) + BETA-EXEC-002 (Accessibility → Foundation,
+  // Brand → Trust): fetch all four engines once (parallel, best-effort).
+  // BETA-EXEC-003 (robustness): defer each call into a microtask so a SYNCHRONOUS throw from an
+  // engine (e.g. an admin-client/env-isolation guard that runs before the first await) is also
+  // converted to a rejection and swallowed by .catch — honouring the "never blocks the report"
+  // contract above. A bare `.catch()` on a sync-throwing call would not catch it.
+  const [wiTechnical, wiContent, wiAccessibility, wiBrand] = await Promise.all([
+    Promise.resolve().then(() => getWebsiteTechnicalIntelligence(params.companyId)).catch(() => null),
+    Promise.resolve().then(() => getWebsiteContentIntelligence(params.companyId)).catch(() => null),
+    Promise.resolve().then(() => getWebsiteAccessibilityIntelligence(params.companyId)).catch(() => null),
+    Promise.resolve().then(() => getWebsiteBrandIntelligence(params.companyId)).catch(() => null),
+  ]);
+  // BETA-EXEC-004: single deterministic engine-evidence digest, reused by insights, the executive
+  // summary, and the canonical dimension rationales (read-only — no scoring/recalculation).
+  const engineEvidenceDigest = { technical: wiTechnical, content: wiContent, accessibility: wiAccessibility, brand: wiBrand };
   const visualIntelligence = buildSnapshotVisualIntelligence({
     decisions: finalDecisions,
     score,
     competitorIntelligence,
     publicAudit: params.publicAudit ?? null,
     narrativeContext,
+    websiteIntelligence: {
+      technical: wiTechnical
+        ? { score: wiTechnical.technicalScore, confidence: wiTechnical.confidence, evaluatedAt: wiTechnical.freshness?.lastEvaluatedAt ?? null }
+        : null,
+      content: wiContent
+        ? { score: wiContent.contentScore, confidence: wiContent.confidence, evaluatedAt: wiContent.freshness?.lastEvaluatedAt ?? null }
+        : null,
+    },
   });
   const geoAeoVisuals = buildGeoAeoVisuals({
     publicAudit: params.publicAudit ?? null,
@@ -220,7 +260,7 @@ export async function composeSnapshotReportFromDecisions(params: {
     return {
       section_name: definition.section_name,
       IU_ids: definition.IU_ids,
-      insights: sectionDecisions.slice(0, 4).map((decision) => toInsight(decision, companyContext)),
+      insights: sectionDecisions.slice(0, 4).map((decision) => toInsight(decision, companyContext, engineEvidenceDigest)),
       opportunities: sectionDecisions.filter(isOpportunityCandidate).slice(0, 2).map(toOpportunity),
       actions: sortSectionActions(sectionDecisions.slice(0, 3).map((decision) => toAction(decision, companyContext, strategicContext, recommendationContext))),
     } satisfies SnapshotReportSection;
@@ -260,6 +300,8 @@ export async function composeSnapshotReportFromDecisions(params: {
     topPriorityTitle: topPriorities[0]?.title ?? null,
     coreProblem,
     companyContext,
+    // BETA-EXEC-004: measured engine evidence for an evidence-driven summary clause.
+    engineEvidence: engineEvidenceDigest,
   });
   const seoExecutiveSummary = buildSeoExecutiveSummary({
     decisions: finalDecisions,
@@ -410,6 +452,20 @@ export async function composeSnapshotReportFromDecisions(params: {
     competitors: (params.resolvedInput?.resolved.competitors ?? []).map((c) => String(c)),
     productServices: companyContext.productServices,
     companyId: params.companyId,
+    // BETA-EVIDENCE-EXEC-003: non-scored declared evidence, aggregated by the public audit from crawl signals.
+    declaredEvidence: params.publicAudit?.declared_evidence ?? null,
+    // BETA-EXEC-002: Brand → Trust pillar, Accessibility → Foundation pillar (consumed
+    // directly from the engines; unavailable when the engine has no evidence).
+    websiteIntelligence: {
+      brand: wiBrand
+        ? { score: wiBrand.brandScore, brandTrust: wiBrand.brandTrust, confidence: wiBrand.confidence, evaluatedAt: wiBrand.freshness?.lastEvaluatedAt ?? null }
+        : null,
+      accessibility: wiAccessibility
+        ? { score: wiAccessibility.accessibilityScore, wcagLevel: wiAccessibility.wcagLevel, criticalIssues: (wiAccessibility.criticalIssues ?? []).length, confidence: wiAccessibility.confidence, evaluatedAt: wiAccessibility.freshness?.lastEvaluatedAt ?? null }
+        : null,
+      // BETA-EXEC-004: full engine outputs for evidence-driven dimension rationales (read-only).
+      engineEvidence: engineEvidenceDigest,
+    },
   });
   return canonicalSnapshotShape;
 }
@@ -440,21 +496,62 @@ export async function composeSnapshotReport(
     reportTier: 'snapshot',
     resolvedInput: options?.resolvedInput ?? null,
   });
-  const activeCompetitorIntelligence = await buildCompetitorIntelligenceActive({
-    companyId,
-    decisions: uniqueById([...snapshotComposition.decisions, ...growthSupplement, ...publicAudit.decisions]),
-    resolvedInput: options?.resolvedInput ?? null,
-  });
+  // BETA-PHASE1-AUDIT-005: this is the SINGLE owner of the report scan-budget
+  // lifecycle. One ALS scope + one ledger enclose EVERY paid provider — SERP
+  // (competitor intelligence) AND the report providers (LLM/Ahrefs, inside
+  // buildCanonicalReport via composeSnapshotReportFromDecisions). Inner code
+  // reuses the active scan through getActiveScanId(); no inner lifecycle exists.
+  // Report-side providers historically resolved a 'standard' policy budget; that
+  // is preserved here.
+  const scanId = randomUUID();
+  startScanBudget({ scan_id: scanId, ...policyFor('standard').budget });
+  let report: SnapshotReport | null = null;
+  try {
+    report = await runWithScanBudget(scanId, async () => {
+      const activeCompetitorIntelligence = await buildCompetitorIntelligenceActive({
+        companyId,
+        decisions: uniqueById([...snapshotComposition.decisions, ...growthSupplement, ...publicAudit.decisions]),
+        resolvedInput: options?.resolvedInput ?? null,
+      });
 
-  return composeSnapshotReportFromDecisions({
-    companyId,
-    snapshotDecisions: [...snapshotComposition.decisions, ...publicAudit.decisions],
-    supplementalGrowthDecisions: growthSupplement,
-    resolvedInput: options?.resolvedInput ?? null,
-    readiness: options?.readiness ?? null,
-    publicAudit,
-    competitorIntelligenceOverride: activeCompetitorIntelligence,
-  });
+      return composeSnapshotReportFromDecisions({
+        companyId,
+        snapshotDecisions: [...snapshotComposition.decisions, ...publicAudit.decisions],
+        supplementalGrowthDecisions: growthSupplement,
+        resolvedInput: options?.resolvedInput ?? null,
+        readiness: options?.readiness ?? null,
+        publicAudit,
+        competitorIntelligenceOverride: activeCompetitorIntelligence,
+      });
+    });
+  } finally {
+    // Single close of the module-level ledger (always released, even on throw —
+    // the previous owner leaked the entry on failure). On success, attach
+    // cost_summary (execution metadata) at the lifecycle boundary; the value is
+    // identical to what the builder produced — only its producer moved.
+    const ledger = endScanBudget(scanId);
+    if (ledger && report?.canonical) {
+      report.canonical.scan_metadata.cost_summary = {
+        total_requests: ledger.totals.requests,
+        total_cost_usd: Number(ledger.totals.cost_usd.toFixed(4)),
+        cost_known_count: ledger.totals.cost_known_count,
+        cost_unknown_count: ledger.totals.cost_unknown_count,
+        per_provider: Object.fromEntries(
+          Object.entries(ledger.per_provider).map(([key, slot]) => [
+            key,
+            {
+              requests: slot.requests,
+              cost_usd: Number(slot.cost_usd.toFixed(4)),
+              cache_hit_ratio: slot.cache_hit_ratio,
+            },
+          ]),
+        ),
+      };
+    }
+  }
+
+  // Reachable only when the try completed without throwing (report is set).
+  return report as SnapshotReport;
 }
 
 // Phase 2 deletion: createSnapshotInsightsFromComposition was dead code (no callers).

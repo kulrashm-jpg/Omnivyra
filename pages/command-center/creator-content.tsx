@@ -2,6 +2,8 @@ import React from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 import PageLoader from '../../components/PageLoader';
+import AccessRestricted from '../../components/access/AccessRestricted';
+import { roleCanAccessArea } from '../../config/commandCenterCards';
 
 // Taxonomy consolidation — user-facing creator types reduced to 3.
 // Banner is now a Wide Banner layout under Image. Slider is now a
@@ -82,19 +84,26 @@ const CREATOR_CARDS: CreatorCard[] = [
 
 export default function CreatorContentPage() {
   const router = useRouter();
-  const { user, authChecked, isLoading } = useCompanyContext();
+  const { user, authChecked, isLoading, userRole } = useCompanyContext();
 
   React.useEffect(() => {
-    if (authChecked && !user?.userId) {
+    if (authChecked && !isLoading && !user?.userId) {
       router.replace('/login');
     }
-  }, [authChecked, user?.userId, router]);
+  }, [authChecked, isLoading, user?.userId, router]);
 
   if (!authChecked || isLoading) {
     return <PageLoader message="Loading your workspace…" />;
   }
 
   if (!user?.userId) return <PageLoader message="Redirecting…" statuses={[]} />;
+
+  // Content creation is not part of a view-only role's workspace. Show a
+  // professional permission state (never a redirect to Login or a raw error)
+  // if such a user reaches this page directly. Mirrors the dashboard gating.
+  if (!roleCanAccessArea(userRole, 'blogs')) {
+    return <AccessRestricted area="content creation" />;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">

@@ -5,6 +5,8 @@ import {
   type PersistedDecisionObject,
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
 
 type CompanySignalRow = {
   signal_id: string;
@@ -177,6 +179,10 @@ export async function generateContentClusterDecisions(companyId: string): Promis
     clusterBuckets.set(signal.cluster_id, current);
   }
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.82/0.73/0.8). Cluster signals are DERIVED
+  // from an external aggregator; confidence scales with the intelligence-signal sample size.
+  const clusterConfidence = deriveDecisionConfidence({ maturity: 'DERIVED', sampleSize: context.intelligenceSignals.length, dataPresent: context.intelligenceSignals.length > 0 });
+
   const decisions = [];
   for (const [clusterId, bucket] of clusterBuckets.entries()) {
     const avgRelevance = bucket.signalCount > 0 ? bucket.totalRelevance / bucket.signalCount : 0;
@@ -206,7 +212,7 @@ export async function generateContentClusterDecisions(companyId: string): Promis
         impact_revenue: clamp(20 + bucket.signalCount * 4, 0, 100),
         priority_score: clamp(42 + bucket.signalCount * 5, 0, 100),
         effort_score: 24,
-        confidence_score: 0.82,
+        confidence_score: clusterConfidence.confidenceScore,
         recommendation: 'Add this cluster into the content roadmap before adjacent topics absorb the demand.',
         action_type: 'improve_content',
         action_payload: {
@@ -240,7 +246,7 @@ export async function generateContentClusterDecisions(companyId: string): Promis
         impact_revenue: 18,
         priority_score: 34,
         effort_score: 18,
-        confidence_score: 0.73,
+        confidence_score: clusterConfidence.confidenceScore,
         recommendation: 'Build supporting examples, FAQs, and subtopics before scaling this cluster.',
         action_type: 'improve_content',
         action_payload: {
@@ -275,7 +281,7 @@ export async function generateContentClusterDecisions(companyId: string): Promis
         impact_revenue: clamp(32 + bucket.signalCount * 5, 0, 100),
         priority_score: clamp(44 + bucket.signalCount * 5, 0, 100),
         effort_score: 26,
-        confidence_score: 0.8,
+        confidence_score: clusterConfidence.confidenceScore,
         recommendation: 'Produce supporting pages and conversion-oriented assets around this cluster before it fragments.',
         action_type: 'improve_content',
         action_payload: {

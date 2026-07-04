@@ -91,10 +91,10 @@ export default function EngagementSubPage() {
   const { user, authChecked, isLoading } = useCompanyContext();
 
   React.useEffect(() => {
-    if (authChecked && !user?.userId) {
+    if (authChecked && !isLoading && !user?.userId) {
       router.replace('/login');
     }
-  }, [authChecked, user?.userId, router]);
+  }, [authChecked, isLoading, user?.userId, router]);
 
   if (!authChecked || isLoading) {
     return <PageLoader message="Loading your workspace…" />;

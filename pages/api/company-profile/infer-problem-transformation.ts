@@ -1,13 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import OpenAI from 'openai';
+import { runCompletion } from '../../../backend/services/aiGateway';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
-
-function getOpenAiClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
-  return new OpenAI({ apiKey });
-}
 
 const OUTPUT_SCHEMA = `{
   core_problem_statement: string | null,
@@ -95,8 +89,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       '- Return valid JSON only. No markdown.\n\n' +
       `Output schema: ${OUTPUT_SCHEMA}`;
 
-    const client = getOpenAiClient();
-    const completion = await client.chat.completions.create({
+    const completion = await runCompletion({
+      companyId,
+      operation: 'inferProblemTransformation',
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.2,
       response_format: { type: 'json_object' },
@@ -106,7 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ],
     });
 
-    const raw = completion.choices[0]?.message?.content?.trim() || '{}';
+    const raw = (completion.output ?? '').trim() || '{}';
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(raw);

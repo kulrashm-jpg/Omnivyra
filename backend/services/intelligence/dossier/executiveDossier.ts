@@ -291,7 +291,7 @@ function topAction(report: CanonicalReport): CanonicalAction | null {
 function buildRealityBrief(report: CanonicalReport): string {
   const overall = report.authority_overview.overall_score;
   if (!isMeasured(overall)) {
-    return 'Authority cannot yet be measured. Evidence is insufficient across the canonical pillars; the dossier renders the structure honestly until measurement begins.';
+    return 'Authority cannot yet be measured. Evidence is insufficient across the pillars; the dossier renders the structure honestly until measurement begins.';
   }
   const strongest = findStrongest(report);
   const weakest = findWeakest(report);

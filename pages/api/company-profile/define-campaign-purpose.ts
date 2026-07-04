@@ -6,15 +6,9 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import OpenAI from 'openai';
+import { runCompletion } from '../../../backend/services/aiGateway';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
-
-function getOpenAiClient(): OpenAI {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
-  return new OpenAI({ apiKey });
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -55,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       '- When you have enough: { "done": true, "campaign_purpose_intent": { "primary_objective": "...", "campaign_intent": "...", "monetization_intent": "...", "dominant_problem_domains": ["...", "..."], "brand_positioning_angle": "...", "reader_emotion_target": "...", "narrative_flow_seed": { "pattern": "...", "steps": ["...", "...", "..."] }, "recommended_cta_style": "..." } }\n' +
       'Map answers: primary_objective=why social media; campaign_intent=what to achieve; monetization_intent=how campaigns support revenue; dominant_problem_domains=array of problems to solve; brand_positioning_angle=how to be perceived. Always valid JSON.';
 
-    const messages: OpenAI.ChatCompletionMessageParam[] = [
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
       { role: 'system', content: systemPrompt },
       {
         role: 'user',
@@ -70,15 +64,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     ];
 
-    const client = getOpenAiClient();
-    const completion = await client.chat.completions.create({
+    const completion = await runCompletion({
+      companyId,
+      operation: 'defineCampaignPurpose',
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.3,
       response_format: { type: 'json_object' },
       messages,
     });
 
-    const raw = completion.choices[0]?.message?.content?.trim() || '{}';
+    const raw = (completion.output ?? '').trim() || '{}';
     let parsed: {
       nextQuestion?: string;
       done?: boolean;

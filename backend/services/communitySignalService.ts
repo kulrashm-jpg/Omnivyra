@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { trackEvent } from './telemetry/telemetryDispatcher';
 /**
  * Community Signal Service
  *
@@ -113,7 +114,18 @@ export async function storeOpportunity(input: {
     console.warn('[communitySignalService] storeOpportunity error:', error.message);
     return null;
   }
-  return data?.id ?? null;
+  const opportunityId = data?.id ?? null;
+  if (opportunityId) {
+    // Canonical telemetry (append-only, fail-soft): a community signal was
+    // detected. Deduped per opportunity id.
+    trackEvent({
+      type: 'community.signal_detected',
+      organizationId: input.organization_id,
+      entityId: opportunityId,
+      metadata: { platform: input.platform },
+    });
+  }
+  return opportunityId;
 }
 
 /**

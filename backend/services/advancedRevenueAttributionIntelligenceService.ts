@@ -6,6 +6,8 @@ import {
 } from './decisionObjectService';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { clamp, normalizeText, roundNumber } from './intelligenceEngineUtils';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
 
 type RevenueEventRow = {
   id: string;
@@ -133,6 +135,10 @@ export async function generateAdvancedRevenueAttributionDecisions(companyId: str
     revenueBySource.set(source, sourceAgg);
   }
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.84/0.79/0.76). MEASURED revenue + lead
+  // records; confidence scales with the combined revenue-event + lead sample size.
+  const revenueConfidence = deriveDecisionConfidence({ maturity: 'MEASURED', sampleSize: revenueEvents.length + leads.length, dataPresent: revenueEvents.length > 0 });
+
   const decisions = [];
 
   for (const [campaignId, agg] of revenueByCampaign.entries()) {
@@ -163,7 +169,7 @@ export async function generateAdvancedRevenueAttributionDecisions(companyId: str
         impact_revenue: clamp(64 + Math.round(agg.totalRevenue / 1000), 0, 100),
         priority_score: clamp(62 + Math.round(agg.totalRevenue / 1200), 0, 100),
         effort_score: 16,
-        confidence_score: 0.84,
+        confidence_score: revenueConfidence.confidenceScore,
         recommendation: 'Scale this campaign carefully and replicate its path characteristics across adjacent campaigns.',
         action_type: 'reallocate_budget',
         action_payload: {
@@ -197,7 +203,7 @@ export async function generateAdvancedRevenueAttributionDecisions(companyId: str
         impact_revenue: clamp(50 + Math.round(((budget - agg.totalRevenue) / Math.max(1, budget)) * 40), 0, 100),
         priority_score: clamp(58 + Math.round(((budget - agg.totalRevenue) / Math.max(1, budget)) * 35), 0, 100),
         effort_score: 20,
-        confidence_score: 0.79,
+        confidence_score: revenueConfidence.confidenceScore,
         recommendation: 'Rebalance spend from low-return channel paths and tighten qualification for this campaign.',
         action_type: 'reallocate_budget',
         action_payload: {
@@ -237,7 +243,7 @@ export async function generateAdvancedRevenueAttributionDecisions(companyId: str
       impact_revenue: 68,
       priority_score: clamp(62 + Math.round((sessions.length / Math.max(1, leads.length)) * 2), 0, 100),
       effort_score: 28,
-      confidence_score: 0.76,
+      confidence_score: revenueConfidence.confidenceScore,
       recommendation: 'Audit handoffs from engagement to qualified lead and tighten attribution breakpoints to stop revenue leakage.',
       action_type: 'improve_tracking',
       action_payload: {

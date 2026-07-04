@@ -1,6 +1,7 @@
 import { supabase } from '../../db/supabaseClient';
 import { createHash } from 'crypto';
 import { ownedDbTable } from '../../db/writeOwner';
+import { trackEvent } from '../telemetry/telemetryDispatcher';
 
 /**
  * Recommendation tracking service.
@@ -124,6 +125,14 @@ export async function recordRecommendationOutcome(input: {
       .update(patch)
       .eq('id', (row as any).id);
     if (error) return { updated: false, error: error.message };
+    // Canonical telemetry (append-only, fail-soft): a recommendation outcome was
+    // recorded. Deduped per recommendation row (the outcome is terminal/one-way).
+    trackEvent({
+      type: input.outcome === 'accepted' ? 'recommendations.accepted' : 'recommendations.dismissed',
+      organizationId: input.organization_id,
+      entityId: (row as any).id,
+      metadata: { recommendationType: input.pattern_type },
+    });
     return { updated: true, row_id: (row as any).id };
   } catch (err: any) {
     return { updated: false, error: err?.message || 'OUTCOME_RECORD_FAILED' };

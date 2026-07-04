@@ -236,6 +236,25 @@ export interface AuthorityTrajectoryProvider {
   lookup(params: { companyId: string }): Promise<AuthorityTrajectoryResult>;
 }
 
+// ── Commercial Outcomes (revenue, conversions) ────────────────────────────────
+
+export type CommercialResult = {
+  state: ScoreState;
+  /** A deterministic commercial quantity for ROI determinability — measured revenue or native units
+   *  (conversions). NEVER a fabricated figure. Null when nothing is measured. */
+  quantified: { value: number; unit: string } | null;
+  /** True when the quantity is backed by MEASURED revenue / conversion-value evidence. */
+  measuredRevenue: boolean;
+  evidence: EvidenceTrace;
+  reason_unavailable: string | null;
+};
+
+export interface CommercialProvider {
+  readonly id: 'commercial' | string;
+  isAvailable(): Promise<boolean>;
+  lookup(params: { companyId: string }): Promise<CommercialResult>;
+}
+
 // ── Shared unavailable-result helpers ─────────────────────────────────────────
 
 export function unavailableEvidence(reason: string): EvidenceTrace {

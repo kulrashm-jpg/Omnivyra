@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { trackEvent } from './telemetry/telemetryDispatcher';
 
 type MarketPulseEntityType = 'pressure' | 'impact' | 'narrative' | 'consequence' | 'escalation' | 'digest_item' | 'investigation';
 type InvestigationStatus = 'open' | 'investigating' | 'monitoring' | 'blocked' | 'resolved' | 'archived';
@@ -371,6 +372,15 @@ export async function addMarketPulseInvestigationComment(params: {
     entityId: thread.data.entity_id,
     actorUserId: params.authorId,
     newState: { comment_id: result.data.id, thread_id: params.threadId },
+  });
+  // Canonical telemetry (append-only, fail-soft): a collaboration comment was
+  // added. Deduped per comment id (each insert is unique).
+  trackEvent({
+    type: 'collaboration.comment_added',
+    organizationId: params.companyId,
+    actorId: params.authorId ?? null,
+    entityId: result.data.id,
+    metadata: { entityType: thread.data.entity_type },
   });
   return result.data;
 }

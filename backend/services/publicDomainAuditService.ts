@@ -2,6 +2,58 @@ import { supabase } from '../db/supabaseClient';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { clamp } from './intelligenceEngineUtils';
+import type { CanonicalDeclaredEvidence } from './canonicalReport/canonicalReportTypes';
+
+// ── BETA-EVIDENCE-EXEC-003 — declared (non-scored) evidence aggregation ────────
+// Reuses signals already extracted by the crawler (crawl_metadata.signals) + the existing legal-page
+// classification. Pure aggregation: no scoring, no verification, no recommendation.
+const LEGAL_TRANSPARENCY_DEFS: Array<{ key: string; label: string; re: RegExp }> = [
+  { key: 'privacy', label: 'Privacy Policy', re: /privacy/i },
+  { key: 'terms', label: 'Terms', re: /terms|tos/i },
+  { key: 'cookie', label: 'Cookie Policy', re: /cookie/i },
+  { key: 'legal_notice', label: 'Legal Notice', re: /legal[-_/ ]?notice|\blegal\b/i },
+  { key: 'disclosure', label: 'Disclosure', re: /disclosure|disclaimer/i },
+  { key: 'imprint', label: 'Imprint', re: /imprint|impressum/i },
+];
+
+function declaredHost(u: string): string {
+  try { return new URL(u).host.replace(/^www\./, ''); } catch { return ''; }
+}
+
+function classifySameAs(urls: string[]): Record<string, number> {
+  const types: Record<string, number> = {};
+  for (const u of urls) {
+    const h = declaredHost(u);
+    const t = /twitter|x\.com|facebook|instagram|youtube|tiktok|pinterest|threads|mastodon/.test(h) ? 'social'
+      : /linkedin|crunchbase|github|angel|producthunt|glassdoor/.test(h) ? 'professional'
+      : /wikipedia|wikidata|dbpedia|google\.com\/maps|g\.page/.test(h) ? 'knowledge'
+      : 'other';
+    types[t] = (types[t] ?? 0) + 1;
+  }
+  return types;
+}
+
+function buildDeclaredEvidence(pages: CanonicalPageRow[], legalPages: string[]): CanonicalDeclaredEvidence {
+  const sameAsSet = new Set<string>();
+  const credSet = new Set<string>();
+  for (const p of pages) {
+    const signals = (p.crawl_metadata as { signals?: { same_as?: string[]; declared_credentials?: string[] } } | null)?.signals;
+    for (const u of signals?.same_as ?? []) sameAsSet.add(u);
+    for (const c of signals?.declared_credentials ?? []) credSet.add(c);
+  }
+  const sameAs = [...sameAsSet];
+  const domains = [...new Set(sameAs.map(declaredHost).filter(Boolean))];
+  const legalItems = LEGAL_TRANSPARENCY_DEFS.map((d) => ({
+    key: d.key,
+    label: d.label,
+    present: legalPages.some((u) => d.re.test(u)),
+  }));
+  return {
+    same_as: { count: sameAs.length, domains, destination_types: classifySameAs(sameAs), source: 'schema_org' },
+    declared_certifications: { count: credSet.size, items: [...credSet].slice(0, 25), source: 'schema_org' },
+    legal_transparency: { items: legalItems, present_count: legalItems.filter((i) => i.present).length, source: 'crawler' },
+  };
+}
 
 type AuditReportTier = 'snapshot' | 'deep';
 
@@ -51,7 +103,11 @@ export type PublicAuditResult = {
     blog_pages: string[];
     contact_pages: string[];
     geo_pages: string[];
+    /** BETA-AUTHORITY-EXEC-002 (Wave-1) — legal-transparency pages (privacy/terms/cookie/imprint/legal/disclosure). Optional/additive. */
+    legal_pages?: string[];
   };
+  /** BETA-EVIDENCE-EXEC-003 — non-scored declared evidence (sameAs / declared certifications / legal transparency). Optional/additive. */
+  declared_evidence?: CanonicalDeclaredEvidence;
   geo_aeo_context: {
     queries: Array<{
       query: string;
@@ -252,7 +308,12 @@ export async function buildPublicDomainAuditDecisions(params: {
     blog_pages: pages.filter((page) => /blog/i.test(`${page.page_type ?? ''} ${page.url}`)).map((page) => page.url),
     contact_pages: pages.filter((page) => /contact|get-in-touch|book/i.test(`${page.page_type ?? ''} ${page.url}`)).map((page) => page.url),
     geo_pages: inferGeoPages(pages, params.resolvedInput),
+    // BETA-AUTHORITY-EXEC-002 (Wave-1) — legal-transparency pages via the existing page-classification pipeline.
+    legal_pages: pages.filter((page) => /\blegal\b|privacy|terms|cookie|imprint|impressum|disclosure|disclaimer/i.test(`${page.page_type ?? ''} ${page.url}`)).map((page) => page.url),
   };
+
+  // BETA-EVIDENCE-EXEC-003 — non-scored declared evidence, aggregated from already-extracted crawl signals.
+  const declaredEvidence = buildDeclaredEvidence(pages, structure.legal_pages);
 
   if (pages.length === 0) {
     return {
@@ -270,6 +331,7 @@ export async function buildPublicDomainAuditDecisions(params: {
         content_structure_score: null,
         freshness_score: null,
       },
+      declared_evidence: declaredEvidence,
       decisions: [],
     };
   }
@@ -422,10 +484,19 @@ export async function buildPublicDomainAuditDecisions(params: {
     topical_authority_score: Math.round(clamp((trustMentions * 6) + (comparisonMentions * 4) + Math.min(productPageWordAvg / 4, 35), 0, 100)),
     citation_readiness_score: citationReadyPct,
     content_structure_score: structuredContentPct,
+    // BETA-ROADMAP-EXEC-005: a page counts as "dated" if it exposes a recency signal in its URL/title OR a
+    // recovered publication date (article:published_time / JSON-LD datePublished / <time datetime>, captured
+    // in crawl_metadata.signals by BETA-ROADMAP-EXEC-002). Reuses already-collected evidence — no new crawl,
+    // no new formula (same (datedPages/pages)*100 + blog bonus), deterministic. When NO page carries any
+    // recency signal the score is still 0 → insufficient_signal (BETA-ROADMAP-EXEC-001 graceful degradation).
     freshness_score: pages.length > 0
       ? Math.round(
           clamp(
-            pages.filter((page) => /\/20\d{2}\//.test(page.url) || /20\d{2}/.test(`${page.title ?? ''} ${page.meta_title ?? ''}`)).length / pages.length * 100 +
+            pages.filter((page) => {
+              if (/\/20\d{2}\//.test(page.url) || /20\d{2}/.test(`${page.title ?? ''} ${page.meta_title ?? ''}`)) return true;
+              const pt = (page.crawl_metadata as { signals?: { published_time?: unknown } } | null)?.signals?.published_time;
+              return typeof pt === 'string' && pt.trim().length > 0 && !Number.isNaN(Date.parse(pt));
+            }).length / pages.length * 100 +
             (blogExists ? 18 : 0),
             0,
             100,
@@ -718,7 +789,9 @@ export async function buildPublicDomainAuditDecisions(params: {
       blog_pages: dedupe(structure.blog_pages).slice(0, 12),
       contact_pages: dedupe(structure.contact_pages).slice(0, 12),
       geo_pages: dedupe(structure.geo_pages).slice(0, 12),
+      legal_pages: dedupe(structure.legal_pages ?? []).slice(0, 12),
     },
+    declared_evidence: declaredEvidence,
     geo_aeo_context: geoAeoContext,
     decisions,
   };

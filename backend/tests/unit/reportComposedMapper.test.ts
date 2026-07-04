@@ -46,6 +46,18 @@ const baseCompetitor = {
     confidence_score: 0.86,
     sources: ['known_category_dataset'],
   },
+  // BETA-FIX-001: hasPassedFinalCompetitorGate now requires a scored competitor
+  // (score_card.dimensions + overallScore >= 40 + primary-dominance >= 40). Real detected
+  // competitors always carry this from the engine's scoring pass; the fixture was stale.
+  score_card: {
+    overallScore: 74,
+    dimensions: {
+      productServiceFit: 70,
+      workflowFit: 62,
+      useCaseFit: 66,
+      customerEvaluationFit: 58,
+    },
+  },
   rationale: 'Relevant final-gated competitor.',
 } as const;
 

@@ -5,8 +5,12 @@
  */
 import { supabase } from '../../db/supabaseClient';
 import { CheckResult, Freshness, Provenance, IntelHealth, Readiness, aggregate, clamp, fleschReadingEase, freshnessFrom, healthFromScore, matchesPage, norm, readinessFromScore, wordCount } from './engineCommon';
+// BETA-ARCH-001: optional canonical-evidence metadata (read-only mapping of existing output).
+import { buildWebsiteEngineEvidence, type Evidence } from '../evidencePlatform';
+// BETA-ROADMAP-EXEC-008: static-parser signals recovered into crawl_metadata (type-only import).
+import type { PageSignals } from '../crawlerService';
 
-interface PageRow { id: string; url: string; title: string | null; meta_title: string | null; meta_description: string | null; page_type: string | null; headings: Array<{ level: number; text: string }> | null; ctas: Array<{ text: string; href?: string | null }> | null; internal_link_count: number | null; http_status: number | null; last_crawled_at: string | null }
+interface PageRow { id: string; url: string; title: string | null; meta_title: string | null; meta_description: string | null; page_type: string | null; headings: Array<{ level: number; text: string }> | null; ctas: Array<{ text: string; href?: string | null }> | null; internal_link_count: number | null; http_status: number | null; last_crawled_at: string | null; crawl_metadata?: { signals?: PageSignals } | null }
 interface ContentBlock { page_id: string; block_type: string; content_text: string | null; heading_level: number | null }
 
 export interface ContentIntelligence {
@@ -23,6 +27,8 @@ export interface ContentIntelligence {
   confidence: number;
   freshness: Freshness;
   provenance: Provenance;
+  /** BETA-ARCH-001: optional canonical evidence (additive; unused by existing consumers). */
+  platformEvidence?: Evidence[];
 }
 
 const ACTION_VERBS = ['get', 'start', 'try', 'book', 'request', 'buy', 'subscribe', 'sign up', 'download', 'contact', 'schedule', 'demo', 'free'];
@@ -86,6 +92,19 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
     const common = tokenSets.length > 1 ? tokenSets.reduce((acc, s) => new Set([...acc].filter((x) => s.has(x)))).size : 0;
     C('messaging_consistency', 'Messaging consistency', titles.length > 1 ? 'pass' : 'not_evaluable', titles.length > 1 ? clamp(common > 0 ? 75 : 45) : null, 'Shared brand terms across page titles');
     C('icp_alignment', 'ICP alignment', 'not_evaluable', null, 'No stored ICP profile to compare against');
+    // BETA-ROADMAP-EXEC-008 (Tier 1) — authorship-presence only (NO E-E-A-T semantics, NO trust weighting).
+    // Reads crawl_metadata.signals.author (recovered EXEC-002). Absence is not_evaluable (not a defect for
+    // non-editorial sites — no false penalty); when present, byline coverage is measured.
+    const hasAuthor = (p: PageRow) => { const a = p.crawl_metadata?.signals?.author; return typeof a === 'string' && a.trim().length > 0; };
+    const withSig = pages.filter((p) => p.crawl_metadata?.signals);
+    const anyAuthor = withSig.some(hasAuthor);
+    C('authorship', 'Authorship signals', anyAuthor ? 'pass' : 'not_evaluable', anyAuthor ? pct(withSig.filter(hasAuthor).length, withSig.length) : null, anyAuthor ? 'Pages exposing an author / byline' : 'No authorship metadata detected');
+    // BETA-ROADMAP-EXEC-008 Tier 2 — presence-only signals (NO accessibility/quality judgement, NO headless).
+    // Absence → not_evaluable (not a defect: many sites convert off-site, or have no tabular data).
+    const anyForm = withSig.some((p) => (p.crawl_metadata?.signals?.form_count || 0) > 0);
+    C('forms_present', 'Forms (conversion mechanism)', anyForm ? 'pass' : 'not_evaluable', anyForm ? 100 : null, anyForm ? 'At least one on-page form (lead / contact / signup) is present' : 'No forms detected');
+    const anyTable = withSig.some((p) => (p.crawl_metadata?.signals?.table_count || 0) > 0);
+    C('tables_present', 'Data tables', anyTable ? 'pass' : 'not_evaluable', anyTable ? 100 : null, anyTable ? 'Structured data tables are present' : 'No data tables detected');
   }
 
   const agg = aggregate(checks);
@@ -108,9 +127,11 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
     company_information: 'Add an About / company page.', legal_pages: 'Add privacy policy and terms pages.',
     testimonials: 'Add customer testimonials.', social_proof: 'Add social proof (customer logos / press).',
     case_studies: 'Publish case studies.', faq: 'Add an FAQ / help section.', resources: 'Add a resources / guides section.',
+    authorship: 'Add author bylines / authorship metadata to editorial and blog content.',
   };
   const recommendations = failing.map((c) => ({ key: c.key, recommendation: recMap[c.key] || `Improve ${c.label.toLowerCase()}.` }));
 
+  const freshness = freshnessFrom(pages.map((p) => p.last_crawled_at).filter(Boolean).sort().reverse()[0] ?? null, nowMs);
   return {
     contentScore: agg.score,
     contentHealth: healthFromScore(agg.score),
@@ -119,15 +140,19 @@ export function scoreContentIntelligence(pages: PageRow[], blocks: ContentBlock[
     contentWeaknesses: failing.map((c) => c.label),
     missingContent, conversionIssues, trustIssues, recommendations, checks,
     confidence: agg.confidence,
-    freshness: freshnessFrom(pages.map((p) => p.last_crawled_at).filter(Boolean).sort().reverse()[0] ?? null, nowMs),
+    freshness,
     provenance: { sources: ['canonical_pages', 'page_content', 'page_links'], checksEvaluated: agg.evaluated, checksTotal: agg.total, deterministic: true },
+    platformEvidence: buildWebsiteEngineEvidence({
+      engineId: 'website.content', version: '1.0.0', sourceSystem: 'website_crawl', origin: 'canonical_pages', collector: 'regex_crawler',
+      checks, aggregate: { key: 'content_score', label: 'Content score', score: agg.score, confidence: agg.confidence }, freshness,
+    }),
   };
 }
 
 export async function evaluateContentIntelligence(companyId: string, nowMs = Date.now()): Promise<ContentIntelligence> {
   try {
     const { data: pages } = await supabase.from('canonical_pages')
-      .select('id, url, title, meta_title, meta_description, page_type, headings, ctas, internal_link_count, http_status, last_crawled_at')
+      .select('id, url, title, meta_title, meta_description, page_type, headings, ctas, internal_link_count, http_status, last_crawled_at, crawl_metadata')
       .eq('company_id', companyId).order('last_crawled_at', { ascending: false }).limit(500);
     const list = (pages || []) as PageRow[];
     const ids = list.map((p) => p.id);

@@ -61,6 +61,12 @@ export type CanonicalReportView = {
     primary_constraint: CanonicalNarrative;
     next_unlock: CanonicalNarrative;
   };
+  // BETA-EVIDENCE-EXEC-003 — non-scored, presentation-only declared evidence. Optional/additive.
+  declared_evidence?: {
+    same_as: { count: number; domains: string[]; destination_types: Record<string, number>; source: string };
+    declared_certifications: { count: number; items: string[]; source: string };
+    legal_transparency: { items: Array<{ key: string; label: string; present: boolean }>; present_count: number; source: string };
+  } | null;
   discoverability_authority_radar: {
     axes: CanonicalDimensionView[];
     overall_confidence: ConfidenceBand;
@@ -302,6 +308,104 @@ export function KnowledgeGraphSection({
   );
 }
 
+// ── Section: Declared Evidence (BETA-EVIDENCE-EXEC-003) ───────────────────────
+//
+// Presentation-only. Surfaces measured on-site evidence that intentionally carries NO score, NO band,
+// NO confidence, and NO recommendation — declared by the organization, not independently verified.
+
+function provenanceLabel(source: string): string {
+  if (source === 'schema_org') return 'Structured Data (JSON-LD)';
+  if (source === 'crawler') return 'Crawler (HTML)';
+  if (source === 'html') return 'HTML';
+  if (source === 'metadata') return 'Metadata';
+  return source;
+}
+
+export function DeclaredEvidenceSection({
+  data,
+}: {
+  data: NonNullable<CanonicalReportView['declared_evidence']>;
+}) {
+  const sameAs = data.same_as;
+  const certs = data.declared_certifications;
+  const legal = data.legal_transparency;
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Declared Evidence</p>
+      <h3 className="mt-1 text-xl font-bold text-slate-900">What the site declares about itself</h3>
+      <p className="mt-2 max-w-2xl text-sm text-slate-600">
+        Measured on-site evidence, <strong>declared by the organization and not independently verified</strong>.
+        This section is informational — it carries no score and does not affect any pillar or the Authority Index.
+      </p>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+        {/* Declared identity links (sameAs) */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Declared identity links</p>
+            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-700">{sameAs.count}</span>
+          </div>
+          {sameAs.count === 0 ? (
+            <p className="mt-2 text-sm text-slate-500">No sameAs identity links declared.</p>
+          ) : (
+            <>
+              {Object.keys(sameAs.destination_types).length > 0 ? (
+                <p className="mt-2 text-xs text-slate-600">
+                  {Object.entries(sameAs.destination_types).map(([t, n]) => `${t}: ${n}`).join(' · ')}
+                </p>
+              ) : null}
+              <ul className="mt-2 space-y-1 text-xs text-slate-700">
+                {sameAs.domains.slice(0, 8).map((d) => (
+                  <li key={d} className="truncate">{d}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          <p className="mt-3 text-[11px] uppercase tracking-wide text-slate-400">Source: {provenanceLabel(sameAs.source)}</p>
+        </div>
+
+        {/* Declared certifications / awards */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Declared certifications</p>
+            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-700">{certs.count}</span>
+          </div>
+          <p className="mt-1 text-[11px] italic text-slate-500">Declared by organization · not independently verified</p>
+          {certs.count === 0 ? (
+            <p className="mt-2 text-sm text-slate-500">No certifications or awards declared in structured data.</p>
+          ) : (
+            <ul className="mt-2 space-y-1 text-xs text-slate-700">
+              {certs.items.slice(0, 8).map((c) => (
+                <li key={c} className="truncate">{c}</li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 text-[11px] uppercase tracking-wide text-slate-400">Source: {provenanceLabel(certs.source)}</p>
+        </div>
+
+        {/* Legal transparency */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Legal transparency</p>
+            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-700">{legal.present_count}/{legal.items.length}</span>
+          </div>
+          <ul className="mt-2 space-y-1 text-xs">
+            {legal.items.map((item) => (
+              <li key={item.key} className="flex items-center justify-between">
+                <span className="text-slate-700">{item.label}</span>
+                <span className={item.present ? 'font-semibold text-emerald-700' : 'text-slate-400'}>
+                  {item.present ? 'Present' : 'Missing'}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-[11px] uppercase tracking-wide text-slate-400">Source: {provenanceLabel(legal.source)}</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // ── Section: Competitive Surface Share ────────────────────────────────────────
 
 export function CompetitiveSurfaceShareSection({
@@ -457,6 +561,7 @@ export default function CanonicalReportSections({ report }: { report: CanonicalR
         <AiSurfacePresenceSection data={report.ai_surface_presence} />
       )}
       <KnowledgeGraphSection data={report.knowledge_graph} />
+      {report.declared_evidence ? <DeclaredEvidenceSection data={report.declared_evidence} /> : null}
       {report.authority_inflow ? <AuthorityInflowSection data={report.authority_inflow} /> : null}
       {report.trust_coherence ? <TrustCoherenceSection data={report.trust_coherence} /> : null}
       {report.benchmark ? <BenchmarkOverlaySection data={report.benchmark} /> : null}

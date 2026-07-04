@@ -6,6 +6,8 @@ import { classifyDecisionType } from '../decisionTypeRegistry';
 import { impactScore } from '../reportDecisionUtils';
 import { buildDecisionBusinessImpact } from '../businessImpactFormatter';
 import { average, clamp } from '../snapshotReportNarrativeHelpers';
+// BETA-EXEC-004: deterministic measured-evidence tail for why-it-matters (Phase 2/6).
+import { type EngineEvidenceInput, evidenceTailForDecision } from './engineEvidenceNarrative';
 import type {
   CompanyNarrativeContext,
   SnapshotInsight,
@@ -53,12 +55,13 @@ export function uniqueById(decisions: PersistedDecisionObject[]): PersistedDecis
 export function toInsight(
   decision: PersistedDecisionObject,
   companyContext?: CompanyNarrativeContext,
+  engineEvidence?: EngineEvidenceInput | null,
 ): SnapshotInsight {
   return {
     decision_id: decision.id,
     title: personalizeEntityReferences(decision.title, companyContext),
     description: personalizeEntityReferences(decision.description, companyContext),
-    why_it_matters: personalizeEntityReferences(buildWhyItMatters(decision), companyContext),
+    why_it_matters: personalizeEntityReferences(buildWhyItMatters(decision, engineEvidence), companyContext),
     business_impact: personalizeEntityReferences(buildDecisionBusinessImpact(decision), companyContext),
     issue_type: decision.issue_type,
     confidence_score: Number(decision.confidence_score ?? 0),
@@ -284,37 +287,28 @@ export function withEvidence(text: string, signal: string): string {
   return `${compact} This is supported by ${signal}.`;
 }
 
-export function buildWhyItMatters(decision: PersistedDecisionObject): string {
+export function buildWhyItMatters(
+  decision: PersistedDecisionObject,
+  engineEvidence?: EngineEvidenceInput | null,
+): string {
   const category = classifyDecisionType(decision.issue_type);
   const evidenceSignal = evidenceSignalFromDecision(decision);
-  if (category === 'authority' || category === 'trust') {
-    return withEvidence(
-      'This directly affects whether buyers trust the brand enough to continue toward action.',
-      evidenceSignal,
-    );
-  }
-  if (category === 'content_strategy' || category === 'market') {
-    return withEvidence(
-      'This limits how often the business shows up for high-intent questions and comparison moments.',
-      evidenceSignal,
-    );
-  }
-  if (category === 'geo' || category === 'distribution') {
-    return withEvidence(
-      'This can cause the right audience to miss the offer or see it in the wrong context.',
-      evidenceSignal,
-    );
-  }
-  if (category === 'opportunity') {
-    return withEvidence(
-      'This is one of the clearest near-term gains available without requiring a full strategy reset.',
-      evidenceSignal,
-    );
-  }
-  return withEvidence(
-    'This is shaping discoverability, buyer confidence, or conversion quality in the near term.',
-    evidenceSignal,
-  );
+  const base =
+    category === 'authority' || category === 'trust'
+      ? withEvidence('This directly affects whether buyers trust the brand enough to continue toward action.', evidenceSignal)
+      : category === 'content_strategy' || category === 'market'
+        ? withEvidence('This limits how often the business shows up for high-intent questions and comparison moments.', evidenceSignal)
+        : category === 'geo' || category === 'distribution'
+          ? withEvidence('This can cause the right audience to miss the offer or see it in the wrong context.', evidenceSignal)
+          : category === 'opportunity'
+            ? withEvidence('This is one of the clearest near-term gains available without requiring a full strategy reset.', evidenceSignal)
+            : withEvidence('This is shaping discoverability, buyer confidence, or conversion quality in the near term.', evidenceSignal);
+  // BETA-EXEC-004: append the measured driver from the mapped engine domain, when available.
+  // Deterministic; returns null (no tail) when the decision does not map to a measured domain.
+  const tail = engineEvidence
+    ? evidenceTailForDecision(`${decision.issue_type} ${decision.action_type}`, engineEvidence)
+    : null;
+  return tail ? `${base} ${tail}` : base;
 }
 
 export function inferEffortLevel(decision: PersistedDecisionObject): 'low' | 'medium' | 'high' {

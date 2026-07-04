@@ -2,6 +2,12 @@ import { supabase } from '../db/supabaseClient';
 import { assertBackgroundJobContext } from './intelligenceExecutionContext';
 import { archiveDecisionSourceEntityType, createDecisionObjects, type PersistedDecisionObject } from './decisionObjectService';
 import { clamp } from './intelligenceEngineUtils';
+// BETA-ENGINE-003: evidence-derived confidence from the canonical Confidence Engine.
+import { deriveDecisionConfidence } from './evidencePlatform';
+// BETA-PROVIDER-002: canonical GSC provider reliability lifts confidence on already-MEASURED GSC keyword data.
+import { isSearchConsoleProviderAvailable, searchConsoleProviderReliability } from './searchConsoleProviderBridge';
+// BETA-PROVIDER-003: the intent signal ALSO draws on first-party GA4 sessions — blend both live providers.
+import { isGa4ProviderAvailable, ga4ProviderReliability, combinedProviderReliability } from './ga4ProviderBridge';
 
 type KeywordMetric = {
   keyword_id: string;
@@ -66,6 +72,23 @@ export async function generateIntentIntelligenceDecisions(companyId: string): Pr
   const engagementRate = totalSessions > 0 ? engagedSessions / totalSessions : 0;
   const deepRate = totalSessions > 0 ? deepSessions / totalSessions : 0;
 
+  // BETA-ENGINE-003: evidence-derived confidence (was 0.81/0.77/0.79). MEASURED GSC + session
+  // analytics; confidence scales with the combined keyword-metric + session sample size.
+  // BETA-PROVIDER-002/003: the intent signal draws on BOTH first-party GSC keyword metrics and first-party
+  // GA4 sessions. Blend the reliabilities of whichever providers are connected (no scoring redesign);
+  // null (unchanged) when neither is configured.
+  const gscProviderLive = isSearchConsoleProviderAvailable();
+  const ga4ProviderLive = isGa4ProviderAvailable();
+  const intentConfidence = deriveDecisionConfidence({
+    maturity: 'MEASURED',
+    providerReliability: combinedProviderReliability(
+      gscProviderLive ? searchConsoleProviderReliability() : null,
+      ga4ProviderLive ? ga4ProviderReliability() : null,
+    ),
+    sampleSize: metricRows.length + sessionRows.length,
+    dataPresent: metricRows.length + sessionRows.length > 0,
+  });
+
   const decisions = [];
 
   if (impressions >= 300 && ctr < 0.03) {
@@ -88,7 +111,7 @@ export async function generateIntentIntelligenceDecisions(companyId: string): Pr
       impact_revenue: 34,
       priority_score: 62,
       effort_score: 22,
-      confidence_score: 0.81,
+      confidence_score: intentConfidence.confidenceScore,
       recommendation: 'Re-align page messaging and SERP assets to explicit problem-intent language.',
       action_type: 'improve_content',
       action_payload: { optimization_focus: 'intent_capture' },
@@ -116,7 +139,7 @@ export async function generateIntentIntelligenceDecisions(companyId: string): Pr
       impact_revenue: 36,
       priority_score: 68,
       effort_score: 24,
-      confidence_score: 0.77,
+      confidence_score: intentConfidence.confidenceScore,
       recommendation: 'Prioritize intent-cluster pages that can move from position 10-30 into top traffic bands.',
       action_type: 'improve_content',
       action_payload: { optimization_focus: 'demand_capture' },
@@ -145,7 +168,7 @@ export async function generateIntentIntelligenceDecisions(companyId: string): Pr
       impact_revenue: 52,
       priority_score: 66,
       effort_score: 20,
-      confidence_score: 0.79,
+      confidence_score: intentConfidence.confidenceScore,
       recommendation: 'Tighten intent-to-conversion handoff using clearer offer framing and next-step CTA paths.',
       action_type: 'fix_cta',
       action_payload: { optimization_focus: 'conversion_intent' },

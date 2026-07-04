@@ -7,7 +7,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createServerClient } from '@supabase/ssr';
+import { getSupabaseUserFromRequest } from '../../backend/services/supabaseAuthService';
+import { supabase } from '../../backend/db/supabaseClient';
 import { getFeatureCompletionStatus, getFeatureCompletionSummary, syncFeatureCompletion } from '../../backend/services/featureCompletionSyncService';
 import { FeatureKey, FeatureCompletionResponse } from '../../backend/types/featureCompletion';
 
@@ -41,40 +42,15 @@ export default async function handler(
   }
 
   try {
-    // Authenticate user
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll: () => Object.entries(req.cookies).map(([name, value]) => ({ name, value: value ?? '' })),
-          setAll: () => {},
-        },
-      }
-    );
-    const { data: { session } } = await supabase.auth.getSession();
-
-    if (!session) {
-      return res.status(401).json({
-        success: false,
-        error: 'Unauthorized',
-      });
+    // Authenticate via the canonical resolver (Authorization: Bearer OR the Supabase
+    // auth-cookie envelope) — the same path every other authenticated API uses. The
+    // prior createServerClient + getSession(req.cookies) guard could not read this
+    // app's auth cookie and returned 401 on every call (SIM-004 / EXEC-002 defect).
+    const { user } = await getSupabaseUserFromRequest(req);
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
-
-    const supabaseUid = session.user.id;
-
-    // Resolve internal user ID (user_company_roles.user_id references public.users.id)
-    const { data: userRow } = await supabase
-      .from('users')
-      .select('id')
-      .eq('supabase_uid', supabaseUid)
-      .maybeSingle();
-
-    if (!userRow) {
-      return res.status(401).json({ success: false, error: 'User not found' });
-    }
-
-    const userId = userRow.id;
+    const userId = user.id; // public.users.id — user_company_roles.user_id references this
 
     const requestedCompanyId =
       typeof req.query.company_id === 'string' ? req.query.company_id.trim() : '';

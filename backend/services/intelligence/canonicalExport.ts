@@ -47,6 +47,15 @@ export type CanonicalExportPayload = {
   competitive_surface_share: CanonicalReport['competitive_surface_share'];
   change_intelligence: CanonicalReport['change_intelligence'];
   forecast: CanonicalReport['forecast'];
+  /** BETA-REPORT-EXEC-010: carry the payload-truth fields (EXEC-005/007/009) so the dossier can render them.
+   *  Optional for backward compatibility; the renderer shows them only when present/material. */
+  authority_trajectory?: CanonicalReport['authority_trajectory'];
+  commercial_roi?: CanonicalReport['commercial_roi'];
+  override_disclosure?: CanonicalReport['override_disclosure'];
+  evidence_readiness?: CanonicalReport['evidence_readiness'];
+  /** BETA-PHASE0-EXEC-001: carry the non-scored Declared Evidence section (EVIDENCE-EXEC-003) into the
+   *  HTML/PDF export so it is no longer in-app-only. Optional/additive; rendered only when present + material. */
+  declared_evidence?: CanonicalReport['declared_evidence'];
 
   // ── Analyst-only: evidence appendix + per-axis explanations ──────────────
   evidence_appendix?: {
@@ -101,6 +110,13 @@ export function buildCanonicalExport(params: {
     competitive_surface_share: report.competitive_surface_share,
     change_intelligence: report.change_intelligence,
     forecast: report.forecast,
+    // BETA-REPORT-EXEC-010: pass-through of payload truth (no recompute, no derivation).
+    authority_trajectory: report.authority_trajectory,
+    commercial_roi: report.commercial_roi,
+    override_disclosure: report.override_disclosure,
+    evidence_readiness: report.evidence_readiness,
+    // BETA-PHASE0-EXEC-001: non-scored Declared Evidence pass-through (no recompute, no derivation).
+    declared_evidence: report.declared_evidence,
   };
 
   if (shape === 'snapshot') {

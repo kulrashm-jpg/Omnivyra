@@ -1318,7 +1318,7 @@ function renderMomentumShape(shape: MomentumShape): string {
 
 function renderDimensionBreakdown(breakdown: DimensionBreakdown): string {
   if (breakdown.state === 'insufficient_signal' && breakdown.groups.length === 0) {
-    return `<p class="ds-vinsufficient">Dimension breakdown will resolve as canonical measurement accumulates.</p>`;
+    return `<p class="ds-vinsufficient">This breakdown will appear as more measurement accumulates for this brand.</p>`;
   }
   return `
     <div class="ds-isurface">
@@ -1683,7 +1683,7 @@ function renderDataSourceStatusPanels(panels: DataSourceStatusPanels): string {
   return `
     <div class="ds-isurface">
       <p class="ds-isurface-eyebrow">Data Source Status · ${panels.connected_count} of ${panels.total} connected</p>
-      <p class="ds-isurface-read">Each panel below shows how a canonical signal currently feeds the dossier. Connected sources increase precision; missing or partial sources flag where insights remain directional.</p>
+      <p class="ds-isurface-read">Each panel below shows how a signal currently feeds this report. Connected sources increase precision; missing or partial sources flag where insights remain directional.</p>
       <div class="ds-dsource-grid">
         ${panels.panels
           .map(
@@ -1720,7 +1720,7 @@ function renderCompetitorPressure(pressure: CompetitorPressure): string {
   return `
     <div class="ds-isurface">
       <p class="ds-isurface-eyebrow">Competitor Pressure</p>
-      <p class="ds-isurface-read">Each measured competitor creates a different shape of pressure depending on where they outscore the brand. The cards below identify the dominant pressure type per competitor.</p>
+      <p class="ds-isurface-read">Each competitor creates a different shape of pressure depending on where they outscore the brand. The cards below identify the dominant pressure type per competitor.</p>
       <div class="ds-cpressure-grid">
         ${pressure.cards
           .map(
@@ -1897,6 +1897,136 @@ function renderGrowthPathDirectives(growth: GrowthPathDirectives): string {
   `;
 }
 
+function renderExecutiveReadinessSummary(payload: CanonicalExportPayload): string {
+  // BETA-EVIDENCE-EXEC-002: governance readiness ("have we measured enough?") — presented BEFORE the authority
+  // read and explicitly framed as report completeness, NOT authority. Reads payload.evidence_readiness only.
+  const r = payload.evidence_readiness;
+  if (!r) return '';
+  const STATE_LABEL: Record<string, string> = {
+    not_started: 'Not started', discovering: 'Discovering', partially_measured: 'Partially measured',
+    measurement_ready: 'Measurement ready', fully_measured: 'Fully measured',
+  };
+  const gapRows = r.gaps
+    .map((g) => `
+      <div class="ds-methodology-row">
+        <dt class="ds-methodology-label">${escape(g.area)}</dt>
+        <dd class="ds-methodology-body"><strong>Why:</strong> ${escape(g.why)} <strong>Impact:</strong> ${escape(g.impact)} <strong>Next step:</strong> ${escape(g.next_step)} <strong>Benefit:</strong> ${escape(g.expected_benefit)}</dd>
+      </div>`)
+    .join('');
+  const aiPart = r.ai_coverage_percentage != null ? ` · AI coverage ${r.ai_coverage_percentage}%` : '';
+  return `
+    <section class="ds-methodology no-break">
+      <p class="ds-methodology-eyebrow">Report Readiness — Before You Read the Scores</p>
+      <h2 class="ds-methodology-title">How much of your digital presence we have measured so far</h2>
+      <p class="ds-methodology-lead">${escape(r.headline)} This is a measure of report completeness, not of your authority — a low reading here means "not yet measured", not "weak".</p>
+      <dl class="ds-methodology-list">
+        <div class="ds-methodology-row">
+          <dt class="ds-methodology-label">Measurement readiness</dt>
+          <dd class="ds-methodology-body">${escape(STATE_LABEL[r.state] ?? r.state)} · ${r.connected_sources} of ${r.total_sources} evidence sources connected · ${r.coverage_percentage}% of measures resolved${escape(aiPart)}</dd>
+        </div>
+        ${gapRows}
+      </dl>
+      ${r.next_moves.length ? `<p class="ds-methodology-foot">To make this report more complete: ${escape(r.next_moves.join('; '))}.</p>` : ''}
+    </section>
+  `;
+}
+
+export function renderDeclaredEvidence(payload: CanonicalExportPayload): string {
+  // BETA-PHASE0-EXEC-001: render the non-scored Declared Evidence (EVIDENCE-EXEC-003) faithfully into the
+  // export — declared by the organization, NOT independently verified, and never scored. Renders only when
+  // present + material; empty ⇒ nothing. Reuses the existing ds-methodology section styling (no new pipeline).
+  const de = payload.declared_evidence;
+  if (!de) return '';
+  const rows: Array<[string, string]> = [];
+
+  if (de.same_as.count > 0) {
+    const types = Object.entries(de.same_as.destination_types).map(([t, n]) => `${t}: ${n}`).join(', ');
+    const domains = de.same_as.domains.slice(0, 8).join(', ');
+    rows.push(['Declared identity links', `${de.same_as.count} sameAs link${de.same_as.count === 1 ? '' : 's'}${types ? ` (${types})` : ''}${domains ? `. ${domains}` : ''}.`]);
+  }
+  if (de.declared_certifications.count > 0) {
+    rows.push(['Declared certifications', `${de.declared_certifications.count} declared (not independently verified): ${de.declared_certifications.items.slice(0, 8).join(', ')}.`]);
+  }
+  const legalPresent = de.legal_transparency.items.filter((i) => i.present).map((i) => i.label);
+  const legalMissing = de.legal_transparency.items.filter((i) => !i.present).map((i) => i.label);
+  if (de.legal_transparency.items.length > 0) {
+    rows.push(['Legal transparency', `${de.legal_transparency.present_count}/${de.legal_transparency.items.length} present.${legalPresent.length ? ` Present: ${legalPresent.join(', ')}.` : ''}${legalMissing.length ? ` Missing: ${legalMissing.join(', ')}.` : ''}`]);
+  }
+
+  if (rows.length === 0) return ''; // nothing material → render nothing
+
+  return `
+    <section class="ds-methodology no-break">
+      <p class="ds-methodology-eyebrow">Declared Evidence</p>
+      <h2 class="ds-methodology-title">What the site declares about itself</h2>
+      <p class="ds-methodology-lead">Measured on-site evidence, declared by the organization and not independently verified. This section carries no score and does not affect any pillar or the Authority Index.</p>
+      <dl class="ds-methodology-list">
+        ${rows
+          .map(
+            ([label, body]) => `
+              <div class="ds-methodology-row">
+                <dt class="ds-methodology-label">${escape(label)}</dt>
+                <dd class="ds-methodology-body">${escape(body)}</dd>
+              </div>
+            `,
+          )
+          .join('')}
+      </dl>
+    </section>
+  `;
+}
+
+export function renderReportDisclosures(payload: CanonicalExportPayload): string {
+  // BETA-REPORT-EXEC-010: render the payload truth (EXEC-005/007/008/009) faithfully — no recompute, no
+  // derivation. Executive language only; renders ONLY elements that are present/material; empty ⇒ nothing.
+  const rows: Array<[string, string]> = [];
+
+  const roi = payload.commercial_roi;
+  if (roi) {
+    rows.push(['Commercial ROI', `${roi.label}. ${roi.basis}${roi.unlock ? ` ${roi.unlock}` : ''}`]);
+  }
+
+  const traj = payload.authority_trajectory?.provenance;
+  if (traj) {
+    const hist = traj.history === 'measured' ? 'Measured history'
+      : traj.history === 'insufficient' ? 'Insufficient history' : 'History unavailable';
+    const projected = traj.forecast === 'projected'
+      ? ' The forward value is a projection, not measured future performance.' : '';
+    rows.push(['Authority trajectory', `${hist}. ${traj.basis}${projected}`]);
+  }
+
+  const comp = payload.competitive_surface_share?.provenance;
+  if (comp) {
+    rows.push(['Competitor comparison', `${comp.measured ? 'Public-web analysis' : 'No observations'}. ${comp.basis}`]);
+  }
+
+  for (const d of payload.override_disclosure?.disclosures ?? []) {
+    rows.push([d.override_type, `${d.affected} Reason: ${d.reason}`]);
+  }
+
+  if (rows.length === 0) return ''; // nothing material to disclose → render nothing
+
+  return `
+    <section class="ds-methodology no-break">
+      <p class="ds-methodology-eyebrow">How To Read This Report</p>
+      <h2 class="ds-methodology-title">Disclosures — what is measured, estimated, projected, or adjusted</h2>
+      <p class="ds-methodology-lead">These notes make explicit which parts of this report are directly measured, which are estimated or projected, which are unavailable, and whether any analyst or governance adjustment was applied to what you see.</p>
+      <dl class="ds-methodology-list">
+        ${rows
+          .map(
+            ([label, body]) => `
+              <div class="ds-methodology-row">
+                <dt class="ds-methodology-label">${escape(label)}</dt>
+                <dd class="ds-methodology-body">${escape(body)}</dd>
+              </div>
+            `,
+          )
+          .join('')}
+      </dl>
+    </section>
+  `;
+}
+
 function renderMethodology(): string {
   // Methodology block — a final transparency page that explains, in
   // plain language, where every number on the dossier comes from. The
@@ -1907,11 +2037,11 @@ function renderMethodology(): string {
   const rows: Array<[string, string]> = [
     [
       'Authority Index',
-      'A composite of the five canonical pillar scores. Computed as a geometric mean so that one weak pillar drags the overall down — preventing any single high score from masking a foundation gap.',
+      'A composite of the five pillar scores. Computed as a geometric mean so that one weak pillar drags the overall down — preventing any single high score from masking a foundation gap.',
     ],
     [
       'Pillar scores',
-      'Each pillar is scored from the dimensions that compose it (Foundation = Index Integrity + Extraction Readiness, Authority = Authority Inflow + Entity Graph Strength, etc.). Dimensions come from the domain crawl, schema scan, citation probe, backlink adapter, and trust adapters — only what is actually measured for this brand. Where data is unavailable, the dimension is honestly marked unmeasured rather than estimated.',
+      'Each pillar is scored from the dimensions that compose it (Foundation = Index Integrity + Extraction Readiness, Authority = Authority Inflow + Entity Graph Strength, etc.). Those dimensions come from the brand’s own site scan, structured-data check, AI citation check, backlink data source, and reputation data sources — only what is actually measured for this brand. Where data is unavailable, the area is honestly marked unmeasured rather than estimated.',
     ],
     [
       'Maturity stage',
@@ -1919,15 +2049,15 @@ function renderMethodology(): string {
     ],
     [
       'AI Visibility',
-      'Derived from a real LLM citation probe: each cell of the provider × query-class matrix is the live citation rate for the brand on that combination. Cells that were not measured in this scan show "—" rather than an estimate.',
+      'Derived from a real AI citation check: each cell of the AI-engine × query-type grid is the live citation rate for the brand on that combination. Cells that were not measured in this scan show "—" rather than an estimate.',
     ],
     [
       'Competitor scores',
-      'Sourced directly from the competitor scan output for each named peer. The brand row uses the brand\'s own canonical scores. The peer average is a straight arithmetic mean of the measured competitors. No synthetic peers, no industry-default benchmarks.',
+      'Sourced directly from the competitor scan output for each named peer. The brand row uses the brand\'s own scores. The peer average is a straight arithmetic mean of the measured competitors. No synthetic peers, no industry-default benchmarks.',
     ],
     [
       'Strongest Peer Gap',
-      'Computed as the largest arithmetic difference between the brand\'s value and the peer average on the same canonical dimension. The "gap in points" chip is exact subtraction. Confidence is the canonical confidence band of the competitive scan.',
+      'Computed as the largest arithmetic difference between the brand\'s value and the peer average on the same dimension. The "gap in points" chip is exact subtraction. Confidence is the evidence-coverage band of the competitive scan.',
     ],
     [
       'Movement / Trajectory',
@@ -1935,11 +2065,11 @@ function renderMethodology(): string {
     ],
     [
       'Action sequencing',
-      'Actions are ordered by their canonical dependency graph: foundational blockers clear first because their resolution unlocks every downstream pillar. The horizon labels (Within 90 days, etc.) come from each action\'s canonical timeline field.',
+      'Actions are ordered by their dependency map: foundational blockers clear first because their resolution unlocks every downstream pillar. The horizon labels (Within 90 days, etc.) come from each action\'s own timeline.',
     ],
     [
       'Data confidence',
-      'Counts how many canonical fields resolved as measured / inferred / insufficient / unavailable in this scan. The freshness label is the actual age of the most recent observation in the evidence trace.',
+      'A measure of how much evidence was available for this brand — how many report areas resolved as measured, inferred, insufficient, or unavailable. It reflects evidence coverage, not a statistical confidence level or a guarantee of accuracy. The freshness label is the actual age of the most recent observation.',
     ],
   ];
 
@@ -1947,7 +2077,7 @@ function renderMethodology(): string {
     <section class="ds-methodology">
       <p class="ds-methodology-eyebrow">How These Numbers Are Calculated</p>
       <h2 class="ds-methodology-title">Where every value in this report comes from</h2>
-      <p class="ds-methodology-lead">Every number here is computed from this brand\'s own canonical scan — the crawl, the schema check, the citation probe, the backlink adapter, the trust adapter, and the competitor scan. The rules that turn those raw signals into scores and stages are the same for every brand, regardless of industry, market, or region.</p>
+      <p class="ds-methodology-lead">Every number here is computed from this brand\'s own scan — the site scan, the structured-data check, the AI citation check, the backlink data source, the reputation data source, and the competitor scan. The rules that turn those signals into scores and stages are the same for every brand, regardless of industry, market, or region.</p>
       <dl class="ds-methodology-list">
         ${rows
           .map(
@@ -2008,6 +2138,14 @@ function renderExecutiveRealitySnapshot(
   const weakest = sections.authority_position.dominant_weakness;
   const aiScore = sections.ai_discoverability.surface_score;
   const confidence = payload.authority_overview.overall_score.confidence;
+  // VD-01: never present "high confidence" when the overall authority is unmeasured. The confidence band is
+  // unchanged; the presentation is reconciled with the overall score state (evidence coverage, not certainty).
+  const overallMeasured =
+    payload.authority_overview.overall_score.value != null &&
+    payload.authority_overview.overall_score.state !== 'insufficient_signal' &&
+    payload.authority_overview.overall_score.state !== 'unavailable';
+  const heroConfidence = overallMeasured ? confidence : 'Insufficient evidence';
+  const barConfidence = overallMeasured ? `${confidence} · evidence coverage` : 'Insufficient evidence';
   const generated = payload.snapshot_observed_at ?? payload.generated_at;
 
   const strongestLabel = strongest ? PILLAR_LABEL[strongest.pillar] : 'Not yet measured';
@@ -2089,7 +2227,7 @@ function renderExecutiveRealitySnapshot(
             </div>
             <div class="ds-herohead-cell">
               <span class="ds-herohead-cell-label">Confidence</span>
-              <span class="ds-herohead-cell-value">${escape(confidence)}</span>
+              <span class="ds-herohead-cell-value">${escape(heroConfidence)}</span>
             </div>
             <div class="ds-herohead-cell">
               <span class="ds-herohead-cell-label">Authority Shape</span>
@@ -2132,7 +2270,7 @@ function renderExecutiveRealitySnapshot(
       <footer class="ds-evidence-bar">
         <div>
           <span class="ds-evidence-label">Confidence</span>
-          <span class="ds-evidence-value">${escape(confidence)} confidence</span>
+          <span class="ds-evidence-value">${escape(barConfidence)}</span>
         </div>
         <div>
           <span class="ds-evidence-label">Evidence</span>
@@ -2318,7 +2456,7 @@ function renderChannelStrategySection(
   return `
     <section class="ds-section">
       ${renderSectionHeader('Execution Channel Mix', 'Which teams own the moves that change the trajectory?', sectionNumber)}
-      ${renderFraming('A strategy without an owner does not land. The mix below names which canonical team carries which moves so the playbook can be staffed without ambiguity.')}
+      ${renderFraming('A strategy without an owner does not land. The mix below names which team carries which moves so the playbook can be staffed without ambiguity.')}
       <p class="ds-isurface-read">${escape(mix.read)}</p>
       <div class="ds-channelmix-grid">
         ${mix.areas
@@ -2672,7 +2810,9 @@ function renderMomentumMaturity(
         ${
           section.current_stage.next_stage
             ? `<p class="ds-maturity-next">Next stage: <strong>${escape(section.current_stage.next_stage)}</strong></p>`
-            : `<p class="ds-maturity-next">At the leading stage — strategic challenge inverts to defence.</p>`
+            : section.current_stage.stage === 'leading'
+              ? `<p class="ds-maturity-next">At the leading stage — the strategic challenge inverts to defence.</p>`
+              : `<p class="ds-maturity-next">The maturity stage cannot yet be classified — measurement is still forming.</p>`
         }
       </div>
       ${renderMaturityEvolution(section.maturity_evolution)}
@@ -2796,10 +2936,9 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
       competitive_surface_share: payload.competitive_surface_share,
       change_intelligence: payload.change_intelligence,
       forecast: payload.forecast,
-      // CanonicalExportPayload deliberately does not carry authority_trajectory
-      // — the export shape projects only the surfaces the dossier renders.
-      // Provide an empty trajectory so the composer's optional read resolves.
-      authority_trajectory: { snapshots: [], forecast: null, available: false },
+      // BETA-REPORT-EXEC-010: the export payload now carries authority_trajectory (with provenance) — render
+      // it faithfully; fall back to an empty trajectory only for legacy payloads that omit it.
+      authority_trajectory: payload.authority_trajectory ?? { snapshots: [], forecast: null, available: false },
       // The dossier composer reads the fields below from the payload too,
       // so they're spread through.
       discoverability_authority_radar: { axes: [], overall_confidence: 'low', benchmark_label: null, competitor_overlay: [] },
@@ -2905,6 +3044,7 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
             </div>
           </header>
 
+          ${renderExecutiveReadinessSummary(payload)}
           ${renderExecutiveRealitySnapshot(dossier, payload, surfaces)}
           ${renderAuthorityPosition(sections.authority_position, dossier.authority_shape, surfaces, '01')}
           ${renderScoreDriversAndLimitersSection(surfaces, '02')}
@@ -2917,6 +3057,8 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
           ${renderDataConfidenceCoverageSection(surfaces, '09')}
           ${renderChannelStrategySection(surfaces, '10')}
           ${renderStrategicActionPlan(sections.strategic_action_plan, surfaces, '11')}
+          ${renderDeclaredEvidence(payload)}
+          ${renderReportDisclosures(payload)}
           ${renderMethodology()}
           ${renderClosingInterpretation(dossier.closing_interpretation)}
 

@@ -17,6 +17,8 @@ import type {
   AuthorityTrajectoryResult,
   BenchmarkProvider,
   BenchmarkResult,
+  CommercialProvider,
+  CommercialResult,
   EntityIntelligenceResult,
   KnowledgeGraphProvider,
   LLMVisibilityProvider,
@@ -71,7 +73,7 @@ class UnavailableTrustCoherenceProvider implements TrustCoherenceProvider {
     return unavailableResult<TrustCoherenceResult>({
       signals: null,
       score: null,
-      reason: 'No trust-coherence adapter is configured. Review aggregator + expertise extractor activate when their env flags are set.',
+      reason: 'No review or reputation source is connected yet. Trust signals become measured once one is connected.',
     });
   }
 }
@@ -84,6 +86,18 @@ class UnavailableBenchmarkProvider implements BenchmarkProvider {
       band: null,
       percentile: null,
       reason: 'No benchmark dataset is loaded. Architecture-only in Phase 3 — fabricated benchmarks are explicitly disallowed.',
+    });
+  }
+}
+
+class UnavailableCommercialProvider implements CommercialProvider {
+  public readonly id = 'unavailable';
+  async isAvailable(): Promise<boolean> { return false; }
+  async lookup(): Promise<CommercialResult> {
+    return unavailableResult<CommercialResult>({
+      quantified: null,
+      measuredRevenue: false,
+      reason: 'No commercial provider is configured. Set CRM_ENABLED / COMMERCIAL_EVIDENCE_ENABLED and connect a commercial source to enable.',
     });
   }
 }
@@ -110,6 +124,7 @@ type RegistryShape = {
   trustCoherence: TrustCoherenceProvider;
   benchmark: BenchmarkProvider;
   trajectory: AuthorityTrajectoryProvider;
+  commercial: CommercialProvider;
 };
 
 function defaultRegistry(): RegistryShape {
@@ -122,6 +137,7 @@ function defaultRegistry(): RegistryShape {
     trustCoherence: new UnavailableTrustCoherenceProvider(),
     benchmark: new UnavailableBenchmarkProvider(),
     trajectory: new UnavailableTrajectoryProvider(),
+    commercial: new UnavailableCommercialProvider(),
   };
 }
 
@@ -150,6 +166,10 @@ export function registerBenchmarkProvider(provider: BenchmarkProvider): void {
 
 export function registerTrajectoryProvider(provider: AuthorityTrajectoryProvider): void {
   _registry.trajectory = provider;
+}
+
+export function registerCommercialProvider(provider: CommercialProvider): void {
+  _registry.commercial = provider;
 }
 
 export function getLLMProvider(id: AIProviderId): LLMVisibilityProvider {
@@ -187,6 +207,11 @@ export function getTrajectoryProvider(): AuthorityTrajectoryProvider {
   return _registry.trajectory;
 }
 
+export function getCommercialProvider(): CommercialProvider {
+  ensureBootstrapped();
+  return _registry.commercial;
+}
+
 // ── Test helper ───────────────────────────────────────────────────────────────
 
 /** Reset the registry to all-unavailable. Test-only. */
@@ -202,7 +227,9 @@ function ensureBootstrapped(): void {
   _bootstrapped = true;
 
   // ── Knowledge graph ─────────────────────────────────────────────────────────
-  if (process.env.WIKIDATA_ENABLED === 'true') {
+  // Phase 0A: Wikidata is free + keyless → activated by default (disable with
+  // WIKIDATA_ENABLED=false). Google KG still requires GOOGLE_KG_API_KEY.
+  if (process.env.WIKIDATA_ENABLED !== 'false') {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/wikidataAdapter');
@@ -217,7 +244,15 @@ function ensureBootstrapped(): void {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/reportScoreHistoryAdapter');
-      registerTrajectoryProvider(new mod.ReportScoreHistoryAdapter());
+      // BETA-PHASE2-EXEC-001: back the adapter with the canonical historical
+      // store (`getHistoricalStore()`) instead of the default NoopHistoryStore,
+      // so trajectory reads the SAME persisted snapshots as change-intelligence
+      // and forecast. Honest-empty until real snapshots exist; no synthesis.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const storeMod = require('./adapters/trajectoryHistoryStore');
+      registerTrajectoryProvider(
+        new mod.ReportScoreHistoryAdapter(new storeMod.CanonicalTrajectoryHistoryStore()),
+      );
     } catch (error) {
       // Adapter not present yet; remain unavailable.
     }
@@ -296,6 +331,19 @@ function ensureBootstrapped(): void {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const mod = require('./adapters/trustCoherenceAdapter');
       registerTrustCoherenceProvider(new mod.TrustCoherenceAdapter());
+      // BETA-REPORT-EXEC-002 (Wave 1, Phase 4): wire the canonical reviews provider into the empty
+      // ReviewAggregator slot — the one clean Evidence-Platform integration per BETA-REPORT-AUDIT-002.
+      // Inert until REVIEWS_API_KEY is set AND a review-source loader is registered by an ingestion layer;
+      // otherwise it returns null and trust_coherence falls back to today's behavior (zero regression).
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const agg = require('./adapters/reputationReviewAggregator');
+      mod.registerReviewAggregator(agg.createReputationReviewAggregator());
+      // BETA-REPORT-EXEC-003: supply the ReviewAggregator with the canonical review-ingestion loader.
+      // Durable/guarded persistence; returns null (trust unchanged) until reviews are ingested + the
+      // review_sources migration is applied — zero regression otherwise.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const ing = require('../reviewIngestionService');
+      agg.registerReviewSourceLoader(ing.createCanonicalReviewSourceLoader());
     } catch (error) {
       /* unavailable */
     }
@@ -309,6 +357,46 @@ function ensureBootstrapped(): void {
       registerBenchmarkProvider(new mod.BenchmarkDatasetAdapter(process.env.BENCHMARK_DATASET_PATH));
     } catch (error) {
       /* unavailable */
+    }
+  }
+
+  // ── Commercial outcomes (revenue / conversions) ─────────────────────────────
+  // BETA-REPORT-EXEC-006: wire the canonical Commercial Adapter into Pipeline A so measured commercial
+  // evidence can drive ROI determinability. Reuses the BETA-PROVIDER-008 commercial bridge; the default
+  // loader reads the EXISTING `canonical_revenue_events` table (no new ingestion). Inert until CRM_ENABLED /
+  // COMMERCIAL_EVIDENCE_ENABLED is set AND real commercial rows exist — ROI stays Not Quantifiable otherwise.
+  if (process.env.CRM_ENABLED || process.env.COMMERCIAL_EVIDENCE_ENABLED) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require('./adapters/commercialAdapter');
+      registerCommercialProvider(new mod.CommercialAdapter());
+      mod.registerCommercialSourceLoader(mod.createCanonicalRevenueLoader());
+    } catch (error) {
+      /* unavailable */
+    }
+  }
+
+  // ── Durable historical store (Authority Trajectory + change-intelligence + forecast) ──
+  // BETA-PHASE2-EXEC-002: register the canonical Supabase-backed HistoricalStore so
+  // trajectory / change-intelligence / forecast read+write DURABLE rows in
+  // `report_score_history` (schema: migration 20260601000000_canonical_intelligence_platform.sql)
+  // instead of the in-process `InMemoryHistoryStore` (which resets on every cold start).
+  // Inert by default — activates ONLY when `SUPABASE_HISTORY_ENABLED=true` AND the admin
+  // client resolves. Reuses the existing `SupabaseHistoryStore` + `registerHistoricalStore`
+  // (exactly one store, no duplicate, no alternate implementation, no interface change).
+  // No fabrication: an empty/absent table degrades to `insufficient_history` via the
+  // adapter's own try/catch; the report post-processing already guards store failures.
+  if (process.env.SUPABASE_HISTORY_ENABLED === 'true') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const clientMod = require('../../db/supabaseClient');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const storeMod = require('./supabaseHistoryStore');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const histMod = require('./historicalPersistence');
+      histMod.registerHistoricalStore(new storeMod.SupabaseHistoryStore(clientMod.supabase));
+    } catch (error) {
+      // Supabase unavailable in this env; retain the in-memory store.
     }
   }
 }

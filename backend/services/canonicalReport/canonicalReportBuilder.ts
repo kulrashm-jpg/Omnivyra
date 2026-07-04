@@ -7,6 +7,7 @@ import {
   type CanonicalAction,
   type CanonicalDimension,
   type CanonicalDimensionKey,
+  type CanonicalDeclaredEvidence,
   type CanonicalNarrative,
   type CanonicalPillarScore,
   type CanonicalReport,
@@ -24,6 +25,22 @@ import {
   emptyCanonicalScore,
   emptyEvidenceTrace,
 } from './canonicalReportTypes';
+// BETA-EXEC-003: canonical scoring-governance registry (aggregation formula + confidence
+// thresholds). Consolidation only — identical behaviour.
+import { geometricMean, confidenceBandFromCount, CONFIDENCE_EVIDENCE } from './scoringGovernance';
+import { resolveReportRoiDeterminability } from './reportRoiDeterminability';
+import { resolveTrajectoryProvenance, resolveCompetitorProvenance } from './reportProvenance';
+import { resolveOverrideTransparency } from './reportOverrideTransparency';
+import { resolveEvidenceReadiness } from './reportEvidenceReadiness';
+// BETA-EXEC-004: deterministic engine-evidence contract for evidence-driven dimension rationales.
+import {
+  type EngineEvidenceInput,
+  readTechnical,
+  readContent,
+  readAccessibility,
+  readBrand,
+  enrichRationale,
+} from '../snapshotReport/engineEvidenceNarrative';
 import {
   maturityNarrativeAdjective,
 } from '../snapshotReport/canonicalScoreState';
@@ -35,6 +52,7 @@ import {
   getTrustCoherenceProvider,
   getBenchmarkProvider,
   getTrajectoryProvider,
+  getCommercialProvider,
 } from '../intelligence/providerRegistry';
 import { classifyMaturity, legacyClassFromStage } from '../intelligence/authorityMaturityModel';
 import { buildExecutiveInsights } from '../intelligence/executiveInsightEngine';
@@ -53,12 +71,6 @@ import { logAuditEvent } from '../intelligence/auditLog';
 import { buildExplanationIndex } from '../intelligence/explainabilityEngine';
 import { buildComparisonView } from '../intelligence/comparisonEngine';
 import { getCollaborationStore } from '../intelligence/collaboration';
-import {
-  endScanBudget,
-  startScanBudget,
-  type ScanLedgerSummary,
-} from '../intelligence/costGovernance';
-import { randomUUID } from 'crypto';
 import type {
   AuthorityInflowResult,
   AuthorityTrajectoryResult,
@@ -70,8 +82,8 @@ import type {
 // ── Score-state helpers ───────────────────────────────────────────────────────
 
 function bandFromCount(count: number, hasStrongSource: boolean): ConfidenceBand {
-  if (count >= 4 && hasStrongSource) return 'high';
-  if (count >= 2) return 'medium';
+  if (count >= CONFIDENCE_EVIDENCE.HIGH_COUNT && hasStrongSource) return 'high';
+  if (count >= CONFIDENCE_EVIDENCE.MEDIUM_COUNT) return 'medium';
   return 'low';
 }
 
@@ -81,6 +93,19 @@ function clamp(value: number, min: number, max: number): number {
 
 function isMeasured(value: number | null | undefined, state: ScoreState | undefined): boolean {
   return typeof value === 'number' && state !== 'insufficient_signal' && state !== 'unavailable';
+}
+
+/**
+ * BR-H-001 truth restoration for authority inflow. The snapshot's `backlinks_score` is a HEURISTIC authority
+ * proxy (its source_tags include 'heuristic' and never a real backlink provider 'backlink_api'), yet the axis
+ * state stamps it 'measured'. A heuristic value must never be presented as `measured` — real MEASURED
+ * authority inflow comes ONLY from a wired backlink provider (applied by `mergeAuthorityInflowDimension`). So
+ * a 'measured' state without a real backlink-provider source is downgraded to the honest 'inferred'. This
+ * changes NO value: `inferred` aggregates exactly like `measured` (isMeasured) with the same band/confidence.
+ */
+export function resolveAuthorityInflowState(rawState: ScoreState, sourceTags: readonly string[]): ScoreState {
+  const isRealBacklinkProvider = sourceTags.includes('backlink_api');
+  return rawState === 'measured' && !isRealBacklinkProvider ? 'inferred' : rawState;
 }
 
 function buildEvidence(params: {
@@ -144,9 +169,7 @@ function aggregateOverallScore(pillars: CanonicalPillarScore[]): CanonicalScore 
     .map((p) => p.score.value as number);
   if (measured.length === 0) return emptyCanonicalScore('insufficient_signal');
   // Geometric mean — a single weak pillar drags the total. Honest signal, no clamp.
-  const logs = measured.map((v) => Math.log(Math.max(1, v)));
-  const geoMean = Math.exp(logs.reduce((a, b) => a + b, 0) / logs.length);
-  const value = Math.round(clamp(geoMean, 0, 100));
+  const value = Math.round(clamp(geometricMean(measured), 0, 100));
   const totalEvidence = pillars.reduce((sum, p) => sum + p.score.evidence.count, 0);
   const allSources = new Set<EvidenceSourceKind>();
   for (const p of pillars) for (const s of p.score.evidence.sources) allSources.add(s);
@@ -169,8 +192,18 @@ function aggregateOverallScore(pillars: CanonicalPillarScore[]): CanonicalScore 
 // Each canonical dimension is derived from existing snapshot signals. No new data
 // sources are introduced in Phase 2 — only architectural consolidation.
 
+// BETA-EXEC-002: measured evidence from the Website Intelligence Brand + Accessibility
+// engines, consumed directly (no recomputation). Optional — when absent, the dependent
+// dimensions render `unavailable` exactly as before (fully backward compatible).
+type WebsiteBrandEvidence = { score: number | null; brandTrust: number | null; confidence: number; evaluatedAt: string | null };
+type WebsiteAccessibilityEvidence = { score: number | null; wcagLevel: string; criticalIssues: number; confidence: number; evaluatedAt: string | null };
+
 type DimensionContext = {
   snapshot: SnapshotReport;
+  brand?: WebsiteBrandEvidence | null;
+  accessibility?: WebsiteAccessibilityEvidence | null;
+  // BETA-EXEC-004: full engine outputs for evidence-driven rationales (read-only, narrative only).
+  engineEvidence?: EngineEvidenceInput | null;
 };
 
 function dimIndexIntegrity(ctx: DimensionContext): CanonicalDimension {
@@ -187,7 +220,7 @@ function dimIndexIntegrity(ctx: DimensionContext): CanonicalDimension {
     label: 'Index Integrity',
     pillar: 'foundation',
     score: scoreFromAxis({ value: typeof value === 'number' ? value : null, state, evidence: buildEvidence({ observations: sources }) }),
-    rationale: 'Crawl health, indexability, metadata coverage, internal-link support.',
+    rationale: enrichRationale('Crawl health, indexability, metadata coverage, internal-link support.', readTechnical(ctx.engineEvidence?.technical)),
   };
 }
 
@@ -218,7 +251,7 @@ function dimExtractionReadiness(ctx: DimensionContext): CanonicalDimension {
     label: 'Extraction Readiness',
     pillar: 'foundation',
     score: scoreFromAxis({ value, state, evidence: buildEvidence({ observations }) }),
-    rationale: 'Page structure, summary blocks, and schema density that make answers extractable.',
+    rationale: enrichRationale('Page structure, summary blocks, and schema density that make answers extractable.', readContent(ctx.engineEvidence?.content)),
   };
 }
 
@@ -226,9 +259,11 @@ function dimAuthorityInflow(ctx: DimensionContext): CanonicalDimension {
   const radar = ctx.snapshot.visual_intelligence.seo_capability_radar;
   const value = radar.backlinks_score;
   const stateHint = radar.axis_states?.backlinks_score;
-  // Phase 1 already marks this as `unavailable` until a real backlink data source is wired.
-  const state: ScoreState = stateHint ?? (typeof value === 'number' ? 'measured' : 'unavailable');
-  const observations: EvidenceObservation[] = (radar.source_tags?.backlinks_score ?? []).map((tag) => ({
+  const sourceTags = radar.source_tags?.backlinks_score ?? [];
+  const rawState: ScoreState = stateHint ?? (typeof value === 'number' ? 'measured' : 'unavailable');
+  // BR-H-001: never present a heuristic backlinks proxy as `measured` (see resolveAuthorityInflowState).
+  const state: ScoreState = resolveAuthorityInflowState(rawState, sourceTags);
+  const observations: EvidenceObservation[] = sourceTags.map((tag) => ({
     signal: `authority_inflow:${tag}`,
     source: 'decisions' as EvidenceSourceKind,
     observed_at: null,
@@ -238,7 +273,7 @@ function dimAuthorityInflow(ctx: DimensionContext): CanonicalDimension {
     label: 'Authority Inflow',
     pillar: 'authority',
     score: scoreFromAxis({ value: typeof value === 'number' ? value : null, state, evidence: buildEvidence({ observations }) }),
-    rationale: 'Inbound authority signals — backlinks and brand mention reinforcement.',
+    rationale: 'Inbound authority signals — backlinks and brand-mention reinforcement. Heuristic (inferred from on-site authority signals) until a backlink provider is connected, at which point it becomes measured.',
   };
 }
 
@@ -310,16 +345,53 @@ function dimAiSurfacePresence(ctx: DimensionContext): CanonicalDimension {
 }
 
 function dimTrustCoherence(ctx: DimensionContext): CanonicalDimension {
-  // Phase 2 architecture note: real trust-coherence measurement (review parity, NAP,
-  // E-E-A-T) lands in Phase 3 with the corresponding data sources. Until then this
-  // dimension renders as `unavailable` so the radar is honest about the gap.
+  // BETA-EXEC-002: consume the Brand Intelligence engine directly. Brand Trust (community
+  // sentiment / reputation) is the most trust-specific brand signal; when it is unmeasured
+  // we fall back to the engine's overall brand-health score. No trust-specific score is
+  // invented — the value is the engine's own output. When the engine has no evidence the
+  // dimension stays `unavailable`, exactly as before (honest gap).
+  const brand = ctx.brand ?? null;
+  const usesBrandTrust = brand != null && typeof brand.brandTrust === 'number';
+  const trustValue = usesBrandTrust
+    ? (brand!.brandTrust as number)
+    : brand != null && typeof brand.score === 'number'
+      ? (brand.score as number)
+      : null;
   const observations: EvidenceObservation[] = [];
+  if (typeof trustValue === 'number') {
+    observations.push({ signal: usesBrandTrust ? 'brand_trust' : 'brand_health', source: 'crawler', observed_at: brand?.evaluatedAt ?? null });
+  }
+  const state: ScoreState = typeof trustValue === 'number' ? 'measured' : 'unavailable';
   return {
     key: 'trust_coherence',
     label: 'Trust Coherence',
     pillar: 'trust',
-    score: scoreFromAxis({ value: null, state: 'unavailable', evidence: buildEvidence({ observations }) }),
-    rationale: 'Consistency of brand description, proof, and reputation signals across sources.',
+    score: scoreFromAxis({
+      value: typeof trustValue === 'number' ? clamp(Math.round(trustValue), 0, 100) : null,
+      state,
+      evidence: buildEvidence({ observations }),
+    }),
+    rationale: enrichRationale('Consistency of brand description, proof, and reputation signals. On-site brand-health proxy (Brand Intelligence engine) until review/reputation sources are connected, at which point it becomes review-based trust.', readBrand(ctx.engineEvidence?.brand)),
+  };
+}
+
+function dimAccessibility(ctx: DimensionContext): CanonicalDimension {
+  // BETA-EXEC-002: Accessibility Intelligence engine surfaced as a Foundation dimension.
+  // Consumes the engine's accessibilityScore directly (WCAG conformance + semantic
+  // structure). `unavailable` when the engine has no crawl evidence — no synthetic default.
+  const a11y = ctx.accessibility ?? null;
+  const value = a11y != null && typeof a11y.score === 'number' ? clamp(Math.round(a11y.score), 0, 100) : null;
+  const state: ScoreState = typeof value === 'number' ? 'measured' : 'unavailable';
+  const observations: EvidenceObservation[] = [];
+  if (typeof value === 'number') {
+    observations.push({ signal: `accessibility:wcag_${a11y!.wcagLevel}`, source: 'crawler', observed_at: a11y?.evaluatedAt ?? null });
+  }
+  return {
+    key: 'accessibility',
+    label: 'Accessibility',
+    pillar: 'foundation',
+    score: scoreFromAxis({ value, state, evidence: buildEvidence({ observations }) }),
+    rationale: enrichRationale('WCAG conformance, semantic structure, and accessible markup (Accessibility Intelligence engine).', readAccessibility(ctx.engineEvidence?.accessibility)),
   };
 }
 
@@ -327,23 +399,34 @@ function dimAuthorityVelocity(ctx: DimensionContext): CanonicalDimension {
   const radar = ctx.snapshot.geo_aeo_visuals.ai_answer_presence_radar;
   const value = radar.freshness_score;
   const stateHint = radar.axis_states?.freshness_score;
-  const state: ScoreState = stateHint ?? (typeof value === 'number' ? 'measured' : 'insufficient_signal');
+  const baseState: ScoreState = stateHint ?? (typeof value === 'number' ? 'measured' : 'insufficient_signal');
+  // BETA-ROADMAP-EXEC-001 — honest state classification (STATE ONLY; value + formula unchanged).
+  // `freshness_score` is 0 ONLY when the crawler detected NO recency signal at all — zero dated
+  // pages AND no blog (see publicDomainAuditService `freshness_score`: (datedPages/pages)*100 +
+  // (blogExists?18:0)). That is an ABSENCE of signal, not a measured "zero momentum". Classifying it
+  // `insufficient_signal` lets it be honestly excluded (isMeasured=false) rather than entering the
+  // pillar/geometric mean as a phantom measured 0 that drags Momentum and the Authority Index down.
+  // A detected recency signal (value > 0, e.g. a blog or dated pages) stays `measured`, even if low.
+  const state: ScoreState = value === 0 ? 'insufficient_signal' : baseState;
   const observations: EvidenceObservation[] = [];
   if (typeof radar.freshness_score === 'number') {
     observations.push({ signal: 'freshness', source: 'crawler', observed_at: null });
   }
   return {
+    // BR-C-001 truth correction: the value is `freshness_score` (content recency), not a growth rate.
+    // Labeled + explained for what it genuinely measures; no rate→score mapping invented, value unchanged.
     key: 'authority_velocity',
-    label: 'Authority Velocity',
+    label: 'Content Freshness',
     pillar: 'momentum',
     score: scoreFromAxis({ value: typeof value === 'number' ? value : null, state, evidence: buildEvidence({ observations }) }),
-    rationale: 'Rate of change in authority signals — publishing cadence, freshness, growth.',
+    rationale: 'How recently the site\'s content was published or updated — a publishing-momentum proxy. This is not a measured authority growth rate; see the authority trajectory when snapshot history exists.',
   };
 }
 
 const DIMENSION_BUILDERS: Record<CanonicalDimensionKey, (ctx: DimensionContext) => CanonicalDimension> = {
   index_integrity: dimIndexIntegrity,
   extraction_readiness: dimExtractionReadiness,
+  accessibility: dimAccessibility,
   authority_inflow: dimAuthorityInflow,
   entity_graph_strength: dimEntityGraphStrength,
   topical_authority: dimTopicalAuthority,
@@ -596,11 +679,16 @@ function buildHeadlineNarrative(params: {
     (a, b) => (a.score.value ?? 0) - (b.score.value ?? 0),
   )[0];
 
+  // BETA-ROADMAP-EXEC-014: honesty-of-interpretation clause. The Authority Index is a measure of
+  // digital *evidence*, not verified market authority — external authority/reputation/AI-visibility
+  // providers deepen it only once connected. Presentation only; reads the already-computed states.
+  const evidenceBasis =
+    ' This index reflects measured digital evidence — primarily on-site; external authority, reputation, and AI-visibility signals read as inferred or pending until those providers are connected, so it is not a verified market-authority ranking.';
   const text = params.overall.state === 'insufficient_signal'
     ? `Authority cannot yet be measured — insufficient signal across all five pillars. The brand reads as ${maturityNarrativeAdjective(params.maturity)} on the maturity curve until evidence is observed.`
     : weakestPillar
-      ? `${PILLAR_META[weakestPillar.pillar].label} is the throttling pillar at ${weakestPillar.score.value}/100. The brand reads as ${maturityNarrativeAdjective(params.maturity)} on the authority maturity curve.`
-      : `All measured pillars are balanced. The brand reads as ${maturityNarrativeAdjective(params.maturity)} on the authority maturity curve.`;
+      ? `${PILLAR_META[weakestPillar.pillar].label} is the throttling pillar at ${weakestPillar.score.value}/100. The brand reads as ${maturityNarrativeAdjective(params.maturity)} on the authority maturity curve.${evidenceBasis}`
+      : `All measured pillars are balanced. The brand reads as ${maturityNarrativeAdjective(params.maturity)} on the authority maturity curve.${evidenceBasis}`;
 
   return {
     text,
@@ -709,7 +797,7 @@ function buildCompetitiveSurfaceShare(snapshot: SnapshotReport, dimensions: Cano
   const summary: CanonicalNarrative = {
     text: competitors.length === 0
       ? 'No competitor evidence has been observed for this snapshot — competitive surface share cannot be measured yet.'
-      : `Competitive surface compared across ${competitors.length} peer${competitors.length === 1 ? '' : 's'} on the canonical dimensions where overlap is observable.`,
+      : `Competitive surface compared across ${competitors.length} peer${competitors.length === 1 ? '' : 's'} on the dimensions where overlap is observable.`,
     confidence,
     evidence: emptyEvidenceTrace(),
     maturity: snapshot.system_maturity,
@@ -721,6 +809,10 @@ function buildCompetitiveSurfaceShare(snapshot: SnapshotReport, dimensions: Cano
     competitors,
     confidence,
     summary,
+    // BR-H-003: surface that competitor values are crawl-derived (not a market panel) and blanks are
+    // unavailable, not zero. Per-competitor state is not carried upstream (the snapshot radar has no
+    // per-competitor provenance), so this is a truthful surface-level disclosure — no provenance invented.
+    provenance: resolveCompetitorProvenance({ confidence, competitorCount: competitors.length }),
   };
 }
 
@@ -760,7 +852,7 @@ function mergeEntityDimension(
       score: {
         value: result.score,
         state: 'measured',
-        confidence: result.evidence.count >= 4 ? 'high' : result.evidence.count >= 2 ? 'medium' : 'low',
+        confidence: confidenceBandFromCount(result.evidence.count),
         band: canonicalBandFromValue(result.score, 'measured'),
         evidence: result.evidence,
         benchmark: { value: null, label: null },
@@ -780,7 +872,7 @@ function mergeAuthorityInflowDimension(
       score: {
         value: result.score,
         state: 'measured',
-        confidence: result.evidence.count >= 4 ? 'high' : result.evidence.count >= 2 ? 'medium' : 'low',
+        confidence: confidenceBandFromCount(result.evidence.count),
         band: canonicalBandFromValue(result.score, 'measured'),
         evidence: result.evidence,
         benchmark: { value: null, label: null },
@@ -874,7 +966,7 @@ function trustScoreFromSignals(result: TrustCoherenceResult): CanonicalScore {
   return {
     value: result.score,
     state: 'measured',
-    confidence: result.evidence.count >= 4 ? 'high' : result.evidence.count >= 2 ? 'medium' : 'low',
+    confidence: confidenceBandFromCount(result.evidence.count),
     band: canonicalBandFromValue(result.score, 'measured'),
     evidence: result.evidence,
     benchmark: { value: null, label: null },
@@ -893,6 +985,17 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   scanProfile?: ScanProfile;
   engineVersion?: string;
   tenantContext?: TenantContext;
+  // BETA-EVIDENCE-EXEC-003: non-scored declared evidence (sameAs / certifications / legal transparency),
+  // aggregated upstream from crawl signals. Pure passthrough into the presentation-only section — never scored.
+  declaredEvidence?: CanonicalDeclaredEvidence | null;
+  // BETA-EXEC-002: measured evidence from the Website Intelligence Brand + Accessibility
+  // engines. Optional + additive — omitting it reproduces the prior behaviour exactly.
+  websiteIntelligence?: {
+    brand?: WebsiteBrandEvidence | null;
+    accessibility?: WebsiteAccessibilityEvidence | null;
+    // BETA-EXEC-004: full engine outputs for evidence-driven rationales (read-only, additive).
+    engineEvidence?: EngineEvidenceInput | null;
+  } | null;
 }): Promise<CanonicalReport> {
   // Phase 6: tenant context is the governance anchor. When omitted (legacy
   // callers), we synthesize a default-tenant context so the rest of the
@@ -910,9 +1013,12 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   // `unavailable` (handled inside individual adapters).
   const scanProfile: ScanProfile = options?.scanProfile ?? 'standard';
   const policy = policyFor(scanProfile);
-  const scanId = randomUUID();
-  startScanBudget({ scan_id: scanId, ...policy.budget });
-  const ctx: DimensionContext = { snapshot };
+  const ctx: DimensionContext = {
+    snapshot,
+    brand: options?.websiteIntelligence?.brand ?? null,
+    accessibility: options?.websiteIntelligence?.accessibility ?? null,
+    engineEvidence: options?.websiteIntelligence?.engineEvidence ?? null,
+  };
 
   const baselineDimensions: CanonicalDimension[] = CANONICAL_DIMENSIONS.map(
     (entry) => DIMENSION_BUILDERS[entry.key](ctx),
@@ -922,38 +1028,68 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   // — adapters return measured results only when their env flags are on.
   const brandName = options?.brandName ?? snapshot.company_context.company_name;
   const domain = options?.domain ?? snapshot.company_context.domain;
+  // BETA-EVIDENCE-EXEC-001: maximise AI query coverage from ALREADY-AVAILABLE evidence. The competitor engine
+  // has already detected named peers onto the snapshot; reuse them for the `competitive` query class instead
+  // of relying only on user-supplied competitors. Reuse only — no fabrication, no new detection, no scoring
+  // change; deriveCitationQueries still owns the query text and de-duplication is applied here.
+  const detectedCompetitors = (snapshot.competitor_visuals?.competitor_positioning_radar?.competitors ?? [])
+    .map((c) => (typeof c?.name === 'string' ? c.name.trim() : ''))
+    .filter((n) => n.length > 0);
+  const competitorsForQueries = [...new Set([...(options?.competitors ?? []), ...detectedCompetitors])].slice(0, 5);
   const queries = deriveCitationQueries({
     brandName,
     domain,
     category: options?.category ?? null,
-    competitors: options?.competitors ?? [],
+    competitors: competitorsForQueries,
     productServices: options?.productServices ?? [],
   });
-  const matrix = await buildAICitationMatrix({ brandName, domain, queries });
+  // BETA-PHASE1-AUDIT-005: the scan-budget lifecycle (ALS scope + ledger) is owned
+  // by composeSnapshotReport. This builder is reuse-only: nested paid-provider
+  // adapters read the active scan via getActiveScanId(). When entered directly
+  // (test harnesses) with no active scan, providers run ungoverned. No lifecycle
+  // is created here.
+  const {
+    matrix,
+    entityResult,
+    authorityResult,
+    trustResult,
+    benchmarkResult,
+    trajectoryResult,
+    commercialResult,
+  } = await (async () => {
+    const matrix = await buildAICitationMatrix({ brandName, domain, queries });
 
-  const knowledgeGraphProvider = getKnowledgeGraphProvider();
-  const entityResult = await knowledgeGraphProvider.lookup({
-    brandName: brandName ?? '',
-    domain,
-  });
+    const knowledgeGraphProvider = getKnowledgeGraphProvider();
+    const entityResult = await knowledgeGraphProvider.lookup({
+      brandName: brandName ?? '',
+      domain,
+    });
 
-  const authorityProvider = getAuthorityInflowProvider();
-  const authorityResult = await authorityProvider.lookup({ domain: domain ?? '' });
+    const authorityProvider = getAuthorityInflowProvider();
+    const authorityResult = await authorityProvider.lookup({ domain: domain ?? '' });
 
-  const trustProvider = getTrustCoherenceProvider();
-  const trustResult = await trustProvider.lookup({ brandName: brandName ?? '', domain });
+    const trustProvider = getTrustCoherenceProvider();
+    const trustResult = await trustProvider.lookup({ brandName: brandName ?? '', domain });
 
-  const benchmarkProvider = getBenchmarkProvider();
-  const benchmarkResult = await benchmarkProvider.lookup({
-    vertical: options?.category ?? null,
-    sizeHint: 'unspecified',
-    userScore: null, // populated downstream once overall is computed.
-  });
+    const benchmarkProvider = getBenchmarkProvider();
+    const benchmarkResult = await benchmarkProvider.lookup({
+      vertical: options?.category ?? null,
+      sizeHint: 'unspecified',
+      userScore: null, // populated downstream once overall is computed.
+    });
 
-  const trajectoryProvider = getTrajectoryProvider();
-  const trajectoryResult = await trajectoryProvider.lookup({
-    companyId: options?.companyId ?? '',
-  });
+    const trajectoryProvider = getTrajectoryProvider();
+    const trajectoryResult = await trajectoryProvider.lookup({
+      companyId: options?.companyId ?? '',
+    });
+
+    // BETA-REPORT-EXEC-006: canonical commercial evidence for ROI determinability. Unavailable (Not
+    // Quantifiable) unless the commercial provider is configured AND real revenue/conversion rows exist.
+    const commercialProvider = getCommercialProvider();
+    const commercialResult = await commercialProvider.lookup({ companyId: options?.companyId ?? '' });
+
+    return { matrix, entityResult, authorityResult, trustResult, benchmarkResult, trajectoryResult, commercialResult };
+  })();
 
   // Merge real adapter results into the canonical dimensions.
   const dimensions = baselineDimensions.map((dim) => {
@@ -961,8 +1097,12 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
     if (dim.key === 'entity_graph_strength') return mergeEntityDimension(dim, entityResult);
     if (dim.key === 'authority_inflow') return mergeAuthorityInflowDimension(dim, authorityResult);
     if (dim.key === 'trust_coherence') {
-      const trustScore = trustScoreFromSignals(trustResult);
-      return { ...dim, score: trustScore };
+      // BETA-ROADMAP-EXEC-012: graceful degradation. The review/reputation provider is AUTHORITATIVE when it
+      // returns measured signals; otherwise it must NOT overwrite the Brand-engine Trust baseline (`dim`) with
+      // an unavailable provider result. Reviews still win when measured; Brand Trust is the fallback. No scoring,
+      // aggregation, weighting, provider, or review change — only which of two already-computed scores survives.
+      if (trustResult.state === 'measured') return { ...dim, score: trustScoreFromSignals(trustResult) };
+      return dim; // retain the Brand-engine baseline (measured brand-trust, else honest unavailable)
     }
     return dim;
   });
@@ -1031,6 +1171,9 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
       primary_constraint: primaryConstraint,
       next_unlock: nextUnlock,
     },
+    // BETA-EVIDENCE-EXEC-003: non-scored presentation-only evidence. Pure passthrough — no score,
+    // no band, no confidence, no aggregation input.
+    declared_evidence: options?.declaredEvidence ?? null,
     discoverability_authority_radar: {
       axes: dimensions,
       overall_confidence: overall.confidence,
@@ -1121,6 +1264,15 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
       })),
       forecast: trajectoryResult.forecast,
       available: trajectoryResult.state === 'measured' && trajectoryResult.snapshots.length > 0,
+      // BR-H-002: propagate the provider's own state + velocity classification (previously dropped) so
+      // measured history, projected forecast, and unavailable history are explicitly distinguished.
+      provenance: resolveTrajectoryProvenance({
+        state: trajectoryResult.state,
+        snapshotCount: trajectoryResult.snapshots.length,
+        classification: trajectoryResult.velocity.classification,
+        forecastPresent: trajectoryResult.forecast != null,
+        reasonUnavailable: trajectoryResult.reason_unavailable,
+      }),
     },
     action_playbook: {
       actions,
@@ -1172,6 +1324,14 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
       persisted_at: null,
       cost_summary: null,
     },
+    // BR-H-004 / BETA-REPORT-EXEC-006: honest ROI determinability, now driven by the canonical Commercial
+    // Adapter. `not_determinable` ("Not Quantifiable") when no commercial evidence is connected; upgrades to
+    // `estimated` (native units) or `measured` (revenue) ONLY from real evidence. No ROI is ever fabricated.
+    commercial_roi: resolveReportRoiDeterminability({
+      hasCommercialEvidence: commercialResult.state === 'measured',
+      quantified: commercialResult.quantified,
+      measuredRevenue: commercialResult.measuredRevenue,
+    }),
     governance: {
       tenant_id: tenantPolicy.tenant_id,
       plan_tier: tenantPolicy.plan_tier,
@@ -1317,6 +1477,10 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
         };
       }
 
+      // BR-H-005: after overrides are applied, disclose the MATERIAL ones in executive language so nothing
+      // silently modified the report. Reuses active_overrides + governance; empty when none.
+      reportShape.override_disclosure = resolveOverrideTransparency(reportShape.active_overrides, reportShape.governance);
+
       // Comparison view (current vs historical / benchmark median).
       reportShape.comparison = await buildComparisonView({ companyId, current: reportShape });
 
@@ -1357,26 +1521,13 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
     }
   }
 
-  // Close the cost ledger and surface the summary on scan_metadata.
-  const ledger = endScanBudget(scanId);
-  if (ledger) {
-    reportShape.scan_metadata.cost_summary = {
-      total_requests: ledger.totals.requests,
-      total_cost_usd: Number(ledger.totals.cost_usd.toFixed(4)),
-      cost_known_count: ledger.totals.cost_known_count,
-      cost_unknown_count: ledger.totals.cost_unknown_count,
-      per_provider: Object.fromEntries(
-        Object.entries(ledger.per_provider).map(([key, slot]) => [
-          key,
-          {
-            requests: slot.requests,
-            cost_usd: Number(slot.cost_usd.toFixed(4)),
-            cache_hit_ratio: slot.cache_hit_ratio,
-          },
-        ]),
-      ),
-    };
-  }
+  // The cost ledger is closed by the lifecycle owner (composeSnapshotReport),
+  // which attaches scan_metadata.cost_summary after this builder returns.
+  // When entered directly (tests) without an active scan, cost_summary stays null.
+
+  // BETA-EVIDENCE-EXEC-002: compose the evidence-readiness governance summary from already-computed signals
+  // (dimension states, AI coverage, scan metadata, maturity). Reads only — no scoring/evidence change.
+  reportShape.evidence_readiness = resolveEvidenceReadiness(reportShape);
 
   return reportShape;
 }

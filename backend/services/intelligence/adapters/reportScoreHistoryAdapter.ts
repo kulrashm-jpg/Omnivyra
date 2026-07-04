@@ -13,6 +13,7 @@ import type {
   TrajectorySnapshot,
 } from '../providerInterfaces';
 import { unavailableEvidence } from '../providerInterfaces';
+import { logProviderCall } from '../productionPrimitives';
 
 // ── Persistence interface ─────────────────────────────────────────────────────
 //
@@ -86,6 +87,18 @@ export class ReportScoreHistoryAdapter implements AuthorityTrajectoryProvider {
   }
 
   async lookup(params: { companyId: string }): Promise<AuthorityTrajectoryResult> {
+    // BETA-PHASE0-EXEC-001: telemetry parity via the existing observability hook; no behaviour/score change.
+    const result = await this.resolveTrajectory(params);
+    logProviderCall({
+      providerId: this.id,
+      operation: 'lookup',
+      status: result.state === 'measured' ? 'ok' : 'unavailable',
+      reason: result.reason_unavailable ?? undefined,
+    });
+    return result;
+  }
+
+  private async resolveTrajectory(params: { companyId: string }): Promise<AuthorityTrajectoryResult> {
     if (!params.companyId) {
       return {
         state: 'unavailable',
