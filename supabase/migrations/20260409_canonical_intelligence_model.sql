@@ -438,15 +438,30 @@ CREATE TRIGGER trg_decision_objects_updated_at
 -- 5. Compatibility / mapping layer
 -- ---------------------------------------------------------------------------
 
-INSERT INTO canonical_domains (company_id, primary_domain, verified)
-SELECT DISTINCT
-  cd.company_id,
-  LOWER(BTRIM(cd.domain)),
-  COALESCE(cd.verified, FALSE)
-FROM company_domains cd
-WHERE cd.domain IS NOT NULL
-  AND BTRIM(cd.domain) <> ''
-ON CONFLICT (company_id, primary_domain) DO NOTHING;
+-- Legacy backfill from company_domains. Guarded: some deployments predate the
+-- 20260406 company_domains(domain) shape (migration-ledger desync), so run this
+-- ONLY when the column exists. The IF ensures the INSERT is never planned on a
+-- DB lacking the column. canonical_domains still populates from
+-- companies.website_domain (below) and from live crawl.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'company_domains'
+      AND column_name = 'domain'
+  ) THEN
+    INSERT INTO canonical_domains (company_id, primary_domain, verified)
+    SELECT DISTINCT
+      cd.company_id,
+      LOWER(BTRIM(cd.domain)),
+      COALESCE(cd.verified, FALSE)
+    FROM company_domains cd
+    WHERE cd.domain IS NOT NULL
+      AND BTRIM(cd.domain) <> ''
+    ON CONFLICT (company_id, primary_domain) DO NOTHING;
+  END IF;
+END $$;
 
 INSERT INTO canonical_domains (company_id, primary_domain, verified)
 SELECT
