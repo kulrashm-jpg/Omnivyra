@@ -2914,6 +2914,52 @@ function renderStrategicActionPlan(
   `;
 }
 
+// ── Quantified improvement plan ───────────────────────────────────────────────
+//
+// Score-anchored to-dos: one per measurably weak dimension, each with WHAT to do,
+// HOW to do it, and the exact projected point gain (recomputed from the report's own
+// aggregation, so the number is the real lift — never an inflated estimate).
+
+function renderImprovementPlan(
+  todos: CanonicalExportPayload['improvement_todos'],
+  sectionNumber: string,
+): string {
+  if (!todos || todos.length === 0) return '';
+  const titleCase = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
+  return `
+    <section class="ds-section">
+      ${renderSectionHeader(
+        'Quantified Improvement Plan',
+        'For each weak score: what to do, how to do it, and how much it lifts the number.',
+        sectionNumber,
+      )}
+      <p class="ds-framing">Each item targets a dimension that is measurably below a healthy level. The projected gain is recomputed from the report's own scoring formula — the weak dimension is raised to its target, then the pillar average and the overall geometric mean are re-run — so the points reflect the true lift, not an approximation. Items are ordered by overall impact.</p>
+      ${todos
+        .map(
+          (todo, index) => `
+            <div class="ds-playbook-group">
+              <div class="ds-playbook-group-header">
+                <p class="ds-playbook-group-label">${escape(`${index + 1}. ${todo.dimension_label}`)} <span class="ds-pill">${escape(todo.pillar_label)}</span></p>
+                <p class="ds-playbook-group-desc">${escape(todo.what)}</p>
+              </div>
+              <div style="display:flex; gap:5mm; flex-wrap:wrap; margin:0 0 3mm; font-family:'Inter',system-ui,sans-serif; font-size:9pt; color:#334155;">
+                <span><strong style="color:#0f172a;">Now</strong> ${todo.current_score}/100</span>
+                <span><strong style="color:#0f172a;">Target</strong> ${todo.target_score}/100</span>
+                <span><strong style="color:#0f4c6b;">Overall +${todo.projected_overall_gain} pts</strong></span>
+                <span><strong style="color:#0f172a;">${escape(todo.pillar_label)} +${todo.projected_pillar_gain} pts</strong></span>
+                <span class="ds-pill">${escape(titleCase(todo.effort))} effort</span>
+              </div>
+              <ol style="margin:0; padding-left:6mm; font-size:10.5pt; line-height:1.6; color:#1a2332;">
+                ${todo.how.map((step) => `<li style="margin:0 0 1.5mm;">${escape(step)}</li>`).join('')}
+              </ol>
+            </div>
+          `,
+        )
+        .join('')}
+    </section>
+  `;
+}
+
 // ── Top-level renderer ───────────────────────────────────────────────────────
 
 export function renderExportHtml(payload: CanonicalExportPayload, branding?: ReportBranding): string {
@@ -2927,6 +2973,7 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
       pillars: payload.pillars,
       executive_insights: payload.executive_insights,
       action_playbook: payload.action_playbook,
+      improvement_todos: payload.improvement_todos,
       strategic_playbook: payload.strategic_playbook,
       ai_surface_presence: payload.ai_surface_presence,
       knowledge_graph: payload.knowledge_graph,
@@ -3057,6 +3104,7 @@ export function renderExportHtml(payload: CanonicalExportPayload, branding?: Rep
           ${renderDataConfidenceCoverageSection(surfaces, '09')}
           ${renderChannelStrategySection(surfaces, '10')}
           ${renderStrategicActionPlan(sections.strategic_action_plan, surfaces, '11')}
+          ${renderImprovementPlan(payload.improvement_todos, '12')}
           ${renderDeclaredEvidence(payload)}
           ${renderReportDisclosures(payload)}
           ${renderMethodology()}

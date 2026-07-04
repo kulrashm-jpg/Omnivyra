@@ -38,6 +38,7 @@ export type CanonicalExportPayload = {
 
   // ── Executive + analyst ───────────────────────────────────────────────────
   action_playbook: CanonicalReport['action_playbook'];
+  improvement_todos: CanonicalReport['improvement_todos'];
   strategic_playbook: CanonicalReport['strategic_playbook'];
   ai_surface_presence: CanonicalReport['ai_surface_presence'];
   knowledge_graph: CanonicalReport['knowledge_graph'];
@@ -101,6 +102,7 @@ export function buildCanonicalExport(params: {
     scan_metadata: report.scan_metadata,
 
     action_playbook: report.action_playbook,
+    improvement_todos: report.improvement_todos,
     strategic_playbook: report.strategic_playbook,
     ai_surface_presence: report.ai_surface_presence,
     knowledge_graph: report.knowledge_graph,

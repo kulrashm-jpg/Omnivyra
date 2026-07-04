@@ -298,6 +298,35 @@ export type CanonicalAction = {
   expected_outcome: string;
 };
 
+// ── Quantified improvement to-do ──────────────────────────────────────────────
+//
+// For each measurably weak dimension, a concrete WHAT/HOW to-do plus the EXACT
+// projected point gain — computed by re-running the real aggregation (pillar =
+// average of its measured dimensions; overall = geometric mean of the pillars)
+// with the dimension raised to its target. Not a linear estimate: the gain is
+// the true delta the scoring engine would produce, so it never overstates.
+
+export type CanonicalDimensionTodo = {
+  dimension: CanonicalDimensionKey;
+  dimension_label: string;
+  pillar: PillarKey;
+  pillar_label: string;
+  // Current measured dimension value and the realistic target this to-do aims for.
+  current_score: number;
+  target_score: number;
+  // WHAT to do (one-line objective) and HOW (ordered, concrete steps).
+  what: string;
+  how: string[];
+  // Projected gains from lifting this one dimension to target, recomputed from the
+  // real aggregation. pillar gain = its pillar's new average − current; overall gain
+  // = new overall geometric mean − current. Rounded to whole points.
+  projected_pillar_gain: number;
+  projected_overall_gain: number;
+  effort: CanonicalActionEffort;
+  confidence: ConfidenceBand;
+  owner_area: CanonicalAction['owner_area'];
+};
+
 // ── Phase 3 intelligence summary shapes ───────────────────────────────────────
 //
 // Compact projections of the AI / KG / authority / trust / benchmark adapter
@@ -535,6 +564,12 @@ export type CanonicalReport = {
     actions: CanonicalAction[];
     summary: CanonicalNarrative;
   };
+
+  // Section 8c — Quantified Improvement Plan: score-anchored to-do list. One entry
+  // per measurably weak dimension, each with a concrete WHAT/HOW and the exact
+  // projected point gain (recomputed from the real aggregation). Ordered by
+  // projected overall gain, highest-leverage first. Empty when nothing is weak.
+  improvement_todos: CanonicalDimensionTodo[];
 
   // Section 8b — Strategic Playbook (Phase 4): sequenced authority playbook with
   // dependency resolution and per-pillar impact projection.

@@ -28,6 +28,7 @@ import {
 // BETA-EXEC-003: canonical scoring-governance registry (aggregation formula + confidence
 // thresholds). Consolidation only — identical behaviour.
 import { geometricMean, confidenceBandFromCount, CONFIDENCE_EVIDENCE } from './scoringGovernance';
+import { buildImprovementTodos } from './improvementTodoBuilder';
 import { resolveReportRoiDeterminability } from './reportRoiDeterminability';
 import { resolveTrajectoryProvenance, resolveCompetitorProvenance } from './reportProvenance';
 import { resolveOverrideTransparency } from './reportOverrideTransparency';
@@ -1134,6 +1135,9 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
   const nextUnlock = buildNextUnlockNarrative({ actions, maturity: legacyMaturity });
   const playbookSummary = buildPlaybookSummary({ actions, maturity: legacyMaturity });
 
+  // Quantified improvement plan: score-anchored to-dos with exact projected point gains.
+  const improvementTodos = buildImprovementTodos(pillars, overall);
+
   const aiSurfaceDim = dimensions.find((d) => d.key === 'ai_surface_presence');
   const entityDim = dimensions.find((d) => d.key === 'entity_graph_strength');
   const authorityDim = dimensions.find((d) => d.key === 'authority_inflow');
@@ -1278,6 +1282,7 @@ export async function buildCanonicalReport(snapshot: SnapshotReport, options?: {
       actions,
       summary: playbookSummary,
     },
+    improvement_todos: improvementTodos,
     strategic_playbook: {
       actions: strategicPlaybook.actions,
       critical_path_ids: strategicPlaybook.critical_path.map((a) => a.id),
