@@ -47,8 +47,8 @@ export function normalizeCompetitorCategory(
   if (/\b(ai companion|companion)\b/.test(raw)) return 'ai_companion';
   if (/\b(coaching|consulting|coach|consultant|advisor)\b/.test(raw)) return 'coaching_consulting';
   if (/\b(mental wellness|mental wellbeing|mental health|wellness|ai clarity|clarity platform|guided clarity)\b/.test(raw)) return 'mental_wellness_ai';
-  if (/\b(crm|marketing automation|sales automation|customer operations|campaign automation)\b/.test(raw)) return 'crm_marketing_automation';
-  if (/\b(seo|content marketing|digital marketing|competitive research|marketing intelligence)\b/.test(raw)) return 'marketing_seo_software';
+  if (/\b(crm|marketing automation|sales automation|customer operations|campaign automation|social media management|social scheduling)\b/.test(raw)) return 'crm_marketing_automation';
+  if (/\b(seo|content marketing|content generation|copywriting|ai writing|digital marketing|competitive research|marketing intelligence)\b/.test(raw)) return 'marketing_seo_software';
   if (/\b(ai platform|developer api|general-purpose ai|general purpose ai|foundation model)\b/.test(raw)) return 'ai_platform';
   if (/\b(virtual staffing|outsourcing|productivity|self improvement|self-improvement)\b/.test(raw)) return 'productivity_self_improvement';
 
@@ -72,10 +72,10 @@ export function normalizeCompetitorCategory(
   if (/\b(mental wellness|mental wellbeing|mental health|wellness chatbot|wellbeing chatbot|ai chatbot therapy|emotional wellbeing|emotional support|cbt|anxiety|stress|clarity ai|ai clarity|guided clarity)\b/.test(text)) {
     return 'mental_wellness_ai';
   }
-  if (/\b(crm|marketing automation|sales automation|customer operations|campaign orchestration|lead nurturing|account-based marketing|revenue operations)\b/.test(text)) {
+  if (/\b(crm|marketing automation|sales automation|customer operations|campaign orchestration|lead nurturing|account-based marketing|revenue operations|social media management|social media scheduling)\b/.test(text)) {
     return 'crm_marketing_automation';
   }
-  if (/\b(seo|content marketing|digital marketing|competitive research|search visibility|marketing intelligence|growth software)\b/.test(text)) {
+  if (/\b(seo|content marketing|content generation|copywriting|ai writing|digital marketing|competitive research|search visibility|marketing intelligence|growth software)\b/.test(text)) {
     return 'marketing_seo_software';
   }
   if (/\b(ai platform|developer api|general-purpose ai|general purpose ai|foundation model|chatgpt|models)\b/.test(text)) {
@@ -85,7 +85,9 @@ export function normalizeCompetitorCategory(
     return 'productivity_self_improvement';
   }
 
-  return 'productivity_self_improvement';
+  // Default for Omnivyra (a marketing platform). Was 'productivity_self_improvement' (Drishiq/wellness legacy).
+  // Only affects inputs that match NO category above — order preserved so classified inputs are unchanged.
+  return 'marketing_seo_software';
 }
 
 export function normalizeCompetitorTags(params: {
