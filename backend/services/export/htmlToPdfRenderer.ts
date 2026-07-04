@@ -128,6 +128,11 @@ async function renderPdfWithServerlessChromium(html: string): Promise<Buffer> {
   const chromium = (await import('@sparticuz/chromium')).default;
   const puppeteer = (await import('puppeteer-core')).default;
 
+  // PDF rendering needs no GPU/WebGL. Disabling graphics mode skips loading the
+  // GL/graphics libs and materially cuts the Lambda's memory footprint — the usual
+  // cause of Chromium failing to launch under Vercel's default function memory.
+  chromium.setGraphicsMode = false;
+
   const browser = await puppeteer.launch({
     args: [...chromium.args, '--no-sandbox', '--disable-dev-shm-usage'],
     executablePath: await chromium.executablePath(),
@@ -161,6 +166,13 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
     try {
       return await renderPdfWithServerlessChromium(html);
     } catch (error) {
+      // Log the full error (stack included) so the actual Chromium failure is
+      // visible in Vercel function logs — otherwise the client only ever sees a
+      // generic "Failed to generate PDF export" and the real cause is invisible.
+      console.error(
+        '[htmlToPdfRenderer] serverless-chromium render failed:',
+        error instanceof Error ? error.stack || error.message : String(error),
+      );
       failures.push(
         `serverless-chromium: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -194,5 +206,7 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
     }
   }
 
-  throw new Error(`Unable to render PDF from HTML. ${failures.join(' | ')}`);
+  const message = `Unable to render PDF from HTML. ${failures.join(' | ')}`;
+  console.error('[htmlToPdfRenderer]', message);
+  throw new Error(message);
 }
