@@ -181,7 +181,7 @@ describe('reportCompetitorStrategyService', () => {
 
     const growth = buildCompetitiveStrategyMap(intelligence);
     expect(growth.competitive_strategy_map.tier_breakdown.tier_1.map((item) => item.name)).toEqual(
-      expect.arrayContaining(['HubSpot', 'Salesforce']),
+      expect.arrayContaining(['HubSpot', 'Adobe Marketo Engage']),
     );
     expect(growth.competitive_strategy_map.strategic_actions.how_to_beat_tier_1).toContain('HubSpot');
     expect(growth.competitive_strategy_map.opportunity_map.weak_competitor_areas.length).toBeGreaterThan(0);

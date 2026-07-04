@@ -340,7 +340,7 @@ describe('reportCompetitorIntelligenceService', () => {
     expect(pressure.summary.next_action.length).toBeGreaterThan(20);
 
     const strategy = buildCompetitiveStrategyMap(omnivyra);
-    expect(strategy.competitive_strategy_map.tier_breakdown.tier_1.map((item) => item.name)).toEqual(expect.arrayContaining(['HubSpot', 'Salesforce']));
+    expect(strategy.competitive_strategy_map.tier_breakdown.tier_1.map((item) => item.name)).toEqual(expect.arrayContaining(['HubSpot', 'Adobe Marketo Engage']));
     expect(strategy.competitive_strategy_map.opportunity_map.whitespace_opportunities.length).toBeGreaterThan(0);
     expect(strategy.competitive_strategy_map.strategic_actions.how_to_beat_tier_1).toContain('Beat');
     expect(strategy.strategic_position.primary_battlefield).toContain('crm marketing automation');

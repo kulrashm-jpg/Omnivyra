@@ -634,6 +634,46 @@ const KNOWN_COMPETITOR_PROFILES: Record<string, CompetitorEnrichmentProfile> = {
     confidence_score: 0.84,
     sources: ['known_category_dataset'],
   }),
+  // ── Marketing platform competitors (Omnivyra's real Tier-1 space) ──────────
+  ...(() => {
+    const p = (name: string, domain: string, category: string, description: string, icp: CompetitorEnrichmentProfile['icp'], productType: CompetitorProductType, notes: string, confidence: number): [string, string, CompetitorEnrichmentProfile] => {
+      const built = profile({
+        name, domain, category, description, icp,
+        business_model: 'B2B SaaS', geography: 'global',
+        product_type: productType,
+        scale_signals: { notes }, confidence_score: confidence,
+        sources: ['known_category_dataset'],
+      });
+      return [name.toLowerCase(), domain, built];
+    };
+    const entries: Array<[string, string, CompetitorEnrichmentProfile]> = [
+      p('Buffer', 'buffer.com', 'social media management and marketing automation',
+        'Social media scheduling and management platform with AI-assisted content creation for teams and creators.',
+        { age_group: 'SMB and marketing teams', use_case: 'social scheduling, publishing, content creation, analytics', user_intent: 'plan, create and schedule marketing content across channels' },
+        'software platform', 'established social media marketing product', 0.85),
+      p('Hootsuite', 'hootsuite.com', 'social media management and marketing automation',
+        'Enterprise social media management platform for scheduling, monitoring, engagement and analytics.',
+        { age_group: 'SMB to enterprise marketing teams', use_case: 'social scheduling, engagement, monitoring, analytics', user_intent: 'manage and measure social marketing at scale' },
+        'software platform', 'category-leading social media management platform', 0.85),
+      p('Sprout Social', 'sproutsocial.com', 'social media management and marketing automation',
+        'Social media management and intelligence platform with publishing, engagement, and analytics.',
+        { age_group: 'mid-market and enterprise marketing teams', use_case: 'social publishing, engagement, listening, analytics', user_intent: 'run and report on social marketing programs' },
+        'software platform', 'public social media marketing SaaS', 0.83),
+      p('Jasper', 'jasper.ai', 'ai content generation and marketing intelligence',
+        'AI marketing content platform generating on-brand copy, campaigns, and creative for marketing teams.',
+        { age_group: 'marketing teams and content marketers', use_case: 'AI content generation, campaign copy, brand voice', user_intent: 'generate marketing content and campaigns with AI' },
+        'software platform', 'leading AI marketing content platform', 0.85),
+      p('Copy.ai', 'copy.ai', 'ai content generation and copywriting',
+        'AI copywriting and go-to-market content platform for marketing and sales teams.',
+        { age_group: 'marketing and sales teams', use_case: 'AI copywriting, content, GTM workflows', user_intent: 'automate marketing/sales content with AI' },
+        'software platform', 'AI content generation product', 0.82),
+      p('Surfer', 'surferseo.com', 'seo content marketing software',
+        'SEO content optimization and creation platform for planning, writing, and ranking marketing content.',
+        { age_group: 'SEO and content marketers', use_case: 'SEO content optimization, content planning, SERP analysis', user_intent: 'create content that ranks in search' },
+        'software platform', 'SEO content optimization product', 0.82),
+    ];
+    return Object.fromEntries(entries.flatMap(([nameKey, domainKey, built]) => [[nameKey, built], [domainKey, built]]));
+  })(),
 };
 
 export function findKnownCompetitorProfile(name: string | null | undefined, domain?: string | null): CompetitorEnrichmentProfile | null {
