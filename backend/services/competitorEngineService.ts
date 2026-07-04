@@ -598,6 +598,44 @@ function classifyNormalizedCompetitorCategory(params: {
   return 'workflow-alternative';
 }
 
+// ── Product-first competition gate (3-part) ──────────────────────────────────
+// A candidate is a real competitor ONLY when: (1) it is the same KIND of product
+// (not a facilitated outcome/service, nor a media/content producer), (2) it covers
+// >= ~70% of our functional surface, and (3) it targets the same segment/positioning.
+// Rationale: Omnivyra is a PRODUCT. It generates content, but that does NOT make
+// newsletters/creators/news competitors — those are FACILITATED (customers we
+// empower). Service agencies are SECONDARY (adjacent market, shown after primary).
+// A product with narrow overlap (e.g. a design tool sharing ~15-20%) or a different
+// customer segment is EXCLUDED. Mirrors the "we generate content != we compete with
+// content creators" and "same category but different segment != competitor" rules.
+export const COMPETITOR_FUNCTIONAL_OVERLAP_MIN = 0.7; // >=70% functional/vision overlap
+export const COMPETITOR_SEGMENT_ALIGN_MIN = 0.4; // segment/ICP/market alignment floor
+export type ProductFirstCompetitionTier = 'primary' | 'secondary' | 'facilitated' | 'excluded';
+
+// Unambiguous media/content-brand signals (newsletters, publications, podcasts, creators).
+const MEDIA_CONTENT_BRAND_SIGNALS =
+  /\b(newsletter|substack|publication|magazine|podcast|youtuber|editorial|digest|the hustle|morning brew|creator economy)\b/i;
+
+export function classifyProductFirstCompetition(params: {
+  productType: CompetitorProductType | null;
+  functionalOverlap: number; // 0..1 problem/capability overlap with our product
+  segmentOverlap: number; // 0..1 = max(icp_overlap, market_overlap)
+  isMediaContent: boolean; // discovered as a media/audience/content brand
+  trustedProduct: boolean; // manual/known product competitor — bypass soft gates
+}): ProductFirstCompetitionTier {
+  const pt = params.productType;
+  // Tier 3 — FACILITATED: media/content producers are customers we empower, never competitors.
+  if (pt === 'content-based' || params.isMediaContent) return 'facilitated';
+  // Tier 2 — SECONDARY: human-led service agencies (adjacent market).
+  if (pt === 'human-led') return 'secondary';
+  // Explicitly known/manual product competitors always qualify (curated truth).
+  if (params.trustedProduct) return 'primary';
+  // PRODUCTS (incl. un-enriched SERP hits): require >=70% functional overlap AND segment alignment.
+  if (params.functionalOverlap < COMPETITOR_FUNCTIONAL_OVERLAP_MIN) return 'excluded';
+  if (params.segmentOverlap < COMPETITOR_SEGMENT_ALIGN_MIN) return 'excluded';
+  return 'primary';
+}
+
 function competitorReasoning(params: {
   dimensions: CompetitorDimensionScores;
   category: NormalizedCompetitorCategory;
@@ -1719,6 +1757,33 @@ export function rankCompetitorCandidates(params: {
       if (!name) return null;
       const breakdown = evaluateCompetitorCandidate(enrichedCandidate, params.context);
       if (isAuthorityDominatedMismatch(breakdown)) return null;
+      // Product-first competition gate — applies ONLY to product/business-first companies
+      // (e.g. Omnivyra). For a PRODUCT company, media/content producers (newsletters,
+      // creators, publications) are FACILITATED customers, not competitors; narrow-overlap
+      // (<70% functional) and off-segment products are EXCLUDED. Audience-led companies keep
+      // their peer competitors (unchanged), since for them those peers ARE the competition.
+      if (businessFirstOnly) {
+        const gateProductType = enrichedCandidate.enrichment?.product_type ?? enrichedCandidate.productType ?? null;
+        const gateText = [
+          enrichedCandidate.name,
+          enrichedCandidate.domain,
+          enrichedCandidate.category,
+          enrichedCandidate.description,
+          enrichedCandidate.businessModel,
+          enrichedCandidate.enrichment?.description,
+          enrichedCandidate.enrichment?.category,
+        ].filter(Boolean).join(' ');
+        const competitionTier = classifyProductFirstCompetition({
+          productType: gateProductType,
+          functionalOverlap: breakdown.problem_overlap,
+          segmentOverlap: Math.max(breakdown.icp_overlap, breakdown.market_overlap),
+          isMediaContent:
+            MEDIA_CONTENT_BRAND_SIGNALS.test(gateText) ||
+            enrichedCandidate.source === 'archetype_native_peer',
+          trustedProduct: TRUSTED_SOURCES.has(enrichedCandidate.source),
+        });
+        if (competitionTier === 'facilitated' || competitionTier === 'excluded') return null;
+      }
       const positioning = buildCompetitorPositioning(enrichedCandidate, breakdown, params.context);
       const score = scoreCompetitorCandidate(enrichedCandidate, params.context);
       const trusted = TRUSTED_SOURCES.has(enrichedCandidate.source);
