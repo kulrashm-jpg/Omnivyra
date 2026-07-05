@@ -51,13 +51,38 @@ describe('Readiness registry — capability + latch rules', () => {
     expect(lang?.status).toBe('done');
   });
 
-  it('Automation surfaces a blog/website integration factor', () => {
-    const s = baseSignals();
-    s.automation.blog = flag(true);
+  it('Automation blog publishing is credited by a connected website (native blog, no external CMS)', () => {
+    const s = baseSignals(); // websiteUrl present, automation.blog NOT configured (no external CMS)
+    s.automation.blog = flag(false);
     const cat = evalReadiness('automation', s);
-    const blog = cat.factors.find((f) => f.id === 'automation.blog');
-    expect(blog?.status).toBe('done');
-    expect(cat.factors.some((f) => f.id === 'automation.notifications')).toBe(false); // dead no-signal removed
+    expect(cat.factors.find((f) => f.id === 'automation.blog')?.status).toBe('done');
+    expect(cat.factors.some((f) => f.id === 'automation.notifications')).toBe(false);
+    expect(cat.factors.some((f) => f.id === 'automation.workflows')).toBe(false);
+  });
+
+  it('Automation credits social publishing + engagement once a channel is connected', () => {
+    const s = baseSignals();
+    s.channels.connectedCount = 1;
+    const cat = evalReadiness('automation', s);
+    expect(cat.factors.find((f) => f.id === 'automation.social_publishing')?.status).toBe('done');
+    expect(cat.factors.find((f) => f.id === 'automation.engagement')?.status).toBe('done');
+  });
+
+  it('Automation social publishing reads incomplete when no channel is connected', () => {
+    const cat = evalReadiness('automation', baseSignals()); // channels 0
+    expect(cat.factors.find((f) => f.id === 'automation.social_publishing')?.status).not.toBe('done');
+  });
+
+  it('Automation email delivery is always available (platform capability, non-scoring)', () => {
+    const cat = evalReadiness('automation', baseSignals());
+    const email = cat.factors.find((f) => f.id === 'automation.email');
+    expect(email?.status).toBe('done');
+  });
+
+  it('Automation CRM is optional — not a penalizing gap when absent', () => {
+    const cat = evalReadiness('automation', baseSignals()); // crm not configured
+    const crm = cat.factors.find((f) => f.id === 'automation.crm');
+    expect(crm?.available).toBe(false); // renders as an optional note, not an incomplete task
   });
 
   it('Personas reads satisfied when derivable from the profile, incomplete otherwise', () => {

@@ -420,52 +420,80 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
     title: 'Automation',
     weight: 5,
     capability: () => ALWAYS,
-    factors: () => [
-      {
-        id: 'automation.blog',
-        title: 'Blog / website integration',
-        description: 'A connected CMS/website automates blog publishing and distribution.',
-        weight: 2,
-        evaluate: (s) =>
-          fromFlag(s.automation.blog, 'No website/blog integration connected', 'Connect your CMS or website so blog publishing can be automated.', {
-            label: 'Connect website',
-            actionId: 'website.setup',
-          }),
-      },
-      {
-        id: 'automation.lead_capture',
-        title: 'Lead capture',
-        description: 'Active lead capture turns engagement into pipeline.',
-        weight: 2,
-        evaluate: (s) =>
-          fromFlag(s.automation.leadCapture, 'Lead capture not configured', 'Configure a lead source (form, landing page, webhook, or capture SDK).', {
-            label: 'Set up lead capture',
-            actionId: 'leads.setup',
-          }),
-      },
-      {
-        id: 'automation.crm',
-        title: 'CRM',
-        description: 'A connected CRM syncs leads to your pipeline.',
-        weight: 1,
-        evaluate: (s) =>
-          fromFlag(s.automation.crm, 'No CRM connected', 'Connect a CRM to sync captured leads to your pipeline.', {
-            label: 'Connect CRM',
-            actionId: 'integrations.manage',
-          }),
-      },
-      {
-        id: 'automation.workflows',
-        title: 'Workflows',
-        description: 'Automation workflows reduce manual steps.',
-        weight: 1,
-        evaluate: (s) =>
-          fromFlag(s.automation.workflows, 'No automation workflow enabled', 'Enable an automation workflow to reduce manual steps.', {
-            label: 'Configure automation',
-            actionId: 'engagement.open',
-          }),
-      },
-    ],
+    // Automation reflects Omnivyra's integrated flows: blogs published to the
+    // connected website, posts published to connected social platforms, social
+    // engagement handled in-app, and email sent by the platform — plus lead capture
+    // and (optional) CRM.
+    factors: (s) => {
+      // Blog publishing target = the connected website (Omnivyra's native blog
+      // publishes there; an external CMS integration also satisfies it).
+      const websiteConnected = Boolean(s.profile.websiteUrl) || feat(s, 'website_connected') >= 1;
+      const blogIntegrated = websiteConnected || (s.automation.blog.available && s.automation.blog.configured);
+      // One connected channel (now or ever) enables both publishing and engagement.
+      const channelsConnected =
+        (s.channels.available && s.channels.connectedCount > 0) || feat(s, 'social_accounts_connected') >= 1;
+      const crmConnected = s.automation.crm.available && s.automation.crm.configured;
+      return [
+        {
+          id: 'automation.blog',
+          title: 'Blog / website publishing',
+          description: 'Blogs are published to your connected website.',
+          weight: 2,
+          evaluate: (): FactorEvalResult =>
+            blogIntegrated
+              ? { score: 1 }
+              : { score: 0, missing: ['No website connected for blog publishing'], recommendation: 'Connect your website so blogs can be published to it.', nextAction: { label: 'Connect website', actionId: 'website.setup' } },
+        },
+        {
+          id: 'automation.social_publishing',
+          title: 'Social publishing',
+          description: 'Posts are published to your connected social platforms.',
+          weight: 1,
+          evaluate: (): FactorEvalResult =>
+            channelsConnected
+              ? { score: 1 }
+              : { score: 0, missing: ['No channels connected'], recommendation: 'Connect a channel so posts can be published to social platforms.', nextAction: { label: 'Connect channels', actionId: 'channels.connect' } },
+        },
+        {
+          id: 'automation.engagement',
+          title: 'Social engagement',
+          description: 'Reply to and engage with social activity from within Omnivyra.',
+          weight: 1,
+          evaluate: (): FactorEvalResult =>
+            channelsConnected
+              ? { score: 1 }
+              : { score: 0, missing: ['Connect a channel to engage'], recommendation: 'Connect channels to engage with social activity from Omnivyra.', nextAction: { label: 'Connect channels', actionId: 'channels.connect' } },
+        },
+        {
+          id: 'automation.lead_capture',
+          title: 'Lead capture',
+          description: 'Active lead capture turns engagement into pipeline.',
+          weight: 1,
+          evaluate: (): FactorEvalResult =>
+            fromFlag(s.automation.leadCapture, 'Lead capture not configured', 'Configure a lead source (form, landing page, webhook, or capture SDK).', {
+              label: 'Set up lead capture',
+              actionId: 'leads.setup',
+            }),
+        },
+        {
+          id: 'automation.email',
+          title: 'Email delivery',
+          description: 'Notifications and updates are sent through Omnivyra.',
+          // Platform capability, always provided — informational, non-scoring.
+          weight: 0,
+          evaluate: (): FactorEvalResult => ({ score: 1 }),
+        },
+        {
+          id: 'automation.crm',
+          title: 'CRM',
+          description: 'Optional: connect a CRM to sync captured leads to your pipeline.',
+          // Optional integration — informational, non-penalizing.
+          weight: 0,
+          evaluate: (): FactorEvalResult =>
+            crmConnected ? { score: 1 } : { available: false, reason: 'Optional — connect a CRM to sync captured leads.' },
+        },
+      ];
+    },
   },
   {
     id: 'trust',
