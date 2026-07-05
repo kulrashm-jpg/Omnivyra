@@ -271,6 +271,44 @@ function applyMaturityFrequencyAdjustment(
   }));
 }
 
+/** Max platforms a single content piece may be re-shared to (throttled cross-post). */
+export const MAX_SHARE_PLATFORMS = 2;
+
+/**
+ * THROTTLED-TOTAL cross-platform sharing.
+ *
+ * `totalPosts` is the per-type frequency the user set — the TOTAL number of posts for
+ * this content type across ALL selected platforms (NOT a per-platform count). We:
+ *   1. distribute those posts across the selected platforms as evenly as possible, then
+ *   2. group them into pieces that reach AT MOST MAX_SHARE_PLATFORMS platforms
+ *      (throttled cross-post — a piece is never blasted to every platform).
+ * Returns `slot_platforms`: one entry per UNIQUE piece, each an array of ≤2 platforms.
+ * Total posts = sum of the inner lengths = `totalPosts` exactly.
+ *
+ * e.g. 3 posts over [linkedin, facebook, instagram] → [[facebook, instagram], [linkedin]]
+ * (3 posts, 2 unique pieces, one re-shared) — NOT 3 pieces × 3 platforms = 9.
+ */
+export function buildThrottledSlotPlatforms(totalPosts: number, selectedPlatforms: string[]): string[][] {
+  const T = Math.max(0, Math.floor(totalPosts));
+  const platforms = selectedPlatforms.filter(Boolean);
+  const P = platforms.length;
+  if (T <= 0 || P === 0) return [];
+  const remaining: Record<string, number> = {};
+  platforms.forEach((p, i) => { remaining[p] = Math.floor(T / P) + (i < (T % P) ? 1 : 0); });
+  const slots: string[][] = [];
+  let guard = 0;
+  while (platforms.some((p) => (remaining[p] ?? 0) > 0) && guard++ < 5000) {
+    const picks = platforms
+      .filter((p) => (remaining[p] ?? 0) > 0)
+      .sort((a, b) => (remaining[b] ?? 0) - (remaining[a] ?? 0) || a.localeCompare(b))
+      .slice(0, MAX_SHARE_PLATFORMS);
+    if (picks.length === 0) break;
+    slots.push(picks);
+    for (const p of picks) remaining[p] = Math.max(0, (remaining[p] ?? 0) - 1);
+  }
+  return slots;
+}
+
 export async function buildDeterministicWeeklySkeleton(
   planningContext: DeterministicPlanningContext
 ): Promise<DeterministicWeeklySkeleton> {
@@ -358,32 +396,22 @@ export async function buildDeterministicWeeklySkeleton(
       if (n > 0) platform_counts[p] = n;
     }
 
-    const slot_platforms: string[][] = [];
-    if (sharingEnabled) {
-      const remaining: Record<string, number> = { ...platform_counts };
-      for (let i = 0; i < unique; i += 1) {
-        const platformsForSlot = selected_platforms
-          .filter((p) => (remaining[p] ?? 0) > 0)
-          .sort((a, b) => (remaining[b] ?? 0) - (remaining[a] ?? 0) || a.localeCompare(b));
-        if (platformsForSlot.length === 0) break;
-        slot_platforms.push(platformsForSlot);
-        for (const p of platformsForSlot) remaining[p] = Math.max(0, (remaining[p] ?? 0) - 1);
-      }
-    } else {
-      for (const p of selected_platforms) {
-        const count = platform_counts[p] ?? 0;
-        for (let i = 0; i < count; i += 1) slot_platforms.push([p]);
-      }
-    }
+    const slot_platforms: string[][] = sharingEnabled
+      ? buildThrottledSlotPlatforms(unique, selected_platforms)
+      : selected_platforms.flatMap((p) => Array.from({ length: platform_counts[p] ?? 0 }, () => [p]));
+    // The number of UNIQUE content pieces is the number of slots produced (a re-shared
+    // piece is ONE unique piece spanning ≤2 platforms). count_per_week + topic_slots must
+    // match this, or buildDeterministicWeeks flags a slot/count mismatch.
+    const uniquePieces = slot_platforms.length;
 
     execution_items.push({
       content_type,
       platform_options,
       selected_platforms,
-      count_per_week: unique,
+      count_per_week: uniquePieces,
       platform_counts,
       slot_platforms,
-      topic_slots: Array.from({ length: unique }, () => ({
+      topic_slots: Array.from({ length: uniquePieces }, () => ({
         topic: null,
         intent: {
           objective: null,
