@@ -89,6 +89,18 @@ export type BlockScheduleResult = {
 // ---------------------------------------------------------------------------
 
 /** Long-form types are processed first so post-repurposing can reference them */
+/**
+ * Content-dedup key for the "unique per (platform, week)" rule. The platform is
+ * part of the key but the day/date is NOT — so identical content on the same
+ * platform on different days collides (dropped), while the SAME message on a
+ * DIFFERENT platform (cross-posting, same day or not) never collides. Content is
+ * normalized (lowercased, whitespace-collapsed, trimmed) so trivial formatting
+ * differences don't defeat the match.
+ */
+export function contentDedupKey(platform: string, text: string): string {
+  return `${String(platform || '').toLowerCase()}::${String(text || '').toLowerCase().replace(/\s+/g, ' ').trim()}`;
+}
+
 const CONTENT_TYPE_PRIORITY: string[] = [
   'blog', 'article', 'white_paper', 'newsletter', 'short_story',
   'thread', 'post', 'carousel', 'image', 'story', 'reel', 'short', 'video', 'poll',
@@ -425,6 +437,17 @@ async function executeBlockScheduleRuntime(
     scheduledCount: number;
   };
   const activityResults: ActivityResult[] = [];
+
+  // ── DEDUP: no duplicate content on the SAME platform across the week ────────
+  // The key includes the platform but NOT the day/date, so two posts with
+  // identical content on the same platform on different days collide (and the
+  // later one is dropped), while the SAME message cross-posted to different
+  // platforms on the same day never collides (different platform prefix) — exactly
+  // the rule: unique per (platform, week); shareable per (day, across platforms).
+  // Spans the whole activityQueue so both intra-card (one topic, many days) and
+  // inter-card (two topics that generate near-identical text) repeats are caught.
+  const seenContentByPlatform = new Set<string>();
+
   for (let cardIdx = 0; cardIdx < activityQueue.length; cardIdx++) {
     const card = activityQueue[cardIdx]!;
     const contentType = card.contentType;
@@ -657,6 +680,20 @@ async function executeBlockScheduleRuntime(
             originalLen: content.length, truncatedLen: finalContent.length, limit: charLimit,
           });
         }
+
+        // ── DEDUP enforcement — never schedule the same content twice on one
+        //    platform in the week. Same content on a different platform (same day
+        //    or not) is allowed, so this only skips true same-platform repeats.
+        const dedupKey = contentDedupKey(platform, finalContent);
+        if (seenContentByPlatform.has(dedupKey)) {
+          console.warn('[block-processor] DEDUP-skip — duplicate content already scheduled on this platform this week', {
+            platform, topic: topic.slice(0, 60), date: row.date,
+          });
+          if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
+          blockSkipped++;
+          continue;
+        }
+        seenContentByPlatform.add(dedupKey);
 
         // ── Insert scheduled_post immediately ───────────────────────────────
         // The deterministic idempotency_key + partial unique index makes
