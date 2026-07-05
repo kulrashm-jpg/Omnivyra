@@ -60,63 +60,69 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const capturedSections = Object.entries(sectionState).filter(([, filled]) => filled).map(([name]) => name);
     const missingSections = Object.entries(sectionState).filter(([, filled]) => !filled).map(([name]) => name);
 
+    const companyName = profile?.name || 'the company';
+    // Deterministic question flow: the SERVER decides the next question from which
+    // section is still uncovered, so the model can never loop or repeat. Each user
+    // answer advances to the next uncovered section. `missingSections` is already
+    // in canonical section order.
+    const SECTION_QUESTIONS: Record<string, string> = {
+      revenue_segments: `What are the main revenue segments for ${companyName}? (e.g. subscriptions, services, one-time)`,
+      geographic_exposures: `Which geographic markets does ${companyName} depend on for revenue, customers, or operations?`,
+      dependencies: `What key operational dependencies could disrupt ${companyName} — vendors, suppliers, logistics, channels, or partners?`,
+      workforce_profile: `What does ${companyName}'s workforce look like — hiring markets, contractor/immigration reliance, or key skills?`,
+      regulatory_exposures: `Which regulations or jurisdictions materially affect ${companyName} (e.g. data privacy, financial, industry rules)?`,
+      technology_dependencies: `Which technology providers is ${companyName} dependent on — cloud, AI/model, payments, analytics, or security?`,
+    };
+    const answersGiven = conversation.filter((m: { role?: string }) => m.role === 'user').length;
+    if (missingSections.length > 0 && answersGiven < missingSections.length) {
+      const nextSection = missingSections[answersGiven];
+      return res.status(200).json({
+        nextQuestion:
+          SECTION_QUESTIONS[nextSection] ??
+          `Tell me about ${nextSection.replace(/_/g, ' ')} for ${companyName}.`,
+      });
+    }
+
+    // Every uncovered section now has an answer (or none were missing) — the model
+    // is used ONLY to parse the conversation into structured context, never to pick
+    // or repeat a question.
     const systemPrompt =
-      'You are a company context intelligence assistant. Through a short guided conversation, capture these six sections, asking ONE simple question at a time:\n' +
-      'revenue_segments, geographic_exposures, dependencies, workforce_profile, regulatory_exposures, technology_dependencies.\n' +
-      '- A section is COVERED if it appears under ALREADY CAPTURED (saved data) OR the user has already answered it anywhere in the conversation below.\n' +
-      '- NEVER ask about a COVERED section. NEVER repeat or rephrase a question the user already answered — move on to the next UNCOVERED section.\n' +
-      '- The "no saved data yet" list reflects SAVED data only; if the user answered one of those topics in the conversation, treat it as COVERED and skip it.\n' +
-      '- When every section is covered, immediately return done.\n' +
-      'Response format (JSON only, no markdown):\n' +
-      '- If a section is still uncovered: { "nextQuestion": "..." }\n' +
-      '- When all sections are covered: { "done": true, "structuredContext": { "revenue_segments": [], "geographic_exposures": [], "dependencies": [], "workforce_profile": null, "regulatory_exposures": [], "technology_dependencies": [] } } built from the conversation + saved data.\n' +
-      'Use arrays of plain objects with obvious keys matching the section names. Include review_status: "inferred" and entity_state: "inferred" on inferred rows. Keep values concise.';
+      'You extract structured company context from a Q&A conversation. Return JSON ONLY in this shape:\n' +
+      '{ "done": true, "structuredContext": { "revenue_segments": [], "geographic_exposures": [], "dependencies": [], "workforce_profile": null, "regulatory_exposures": [], "technology_dependencies": [] } }\n' +
+      'Fill each section from the matching user answers using arrays of plain objects with obvious keys (e.g. geographic_exposures: [{ "geography": "India", "exposure_type": "revenue" }]). ' +
+      'Include review_status: "inferred" and entity_state: "inferred" on every row. Leave a section empty ([] or null) when the conversation has no information for it. Keep values concise. Always set done: true.';
 
     const completion = await runCompletion({
       companyId,
       operation: 'defineContextIntelligence',
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      temperature: 0.2,
+      temperature: 0,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
         {
           role: 'user',
-          content: [
-            `Company profile:\n${companyContext}`,
-            `Current context intelligence:\n${summarizeContext(currentContext)}`,
-            `ALREADY CAPTURED (saved) sections — do NOT ask about these: ${capturedSections.length ? capturedSections.join(', ') : 'none'}`,
-            `Sections with no saved data yet: ${missingSections.length ? missingSections.join(', ') : 'none — return done'}. Ask about one of these ONLY if the user has not already answered that topic in the conversation below; a topic answered in the conversation is COVERED — do not re-ask it.`,
-            conversation.length === 0
-              ? missingSections.length === 0
-                ? 'All sections are already captured. Return done immediately.'
-                : 'Start the guided capture. Ask the simplest question about an uncovered section only.'
-              : 'Conversation so far (treat every topic the user has answered here as COVERED — ask only about a section that is neither saved nor answered here, or return done):\n' +
-                conversation
-                  .map((m: { role?: string; content?: string }) => `${m.role}: ${m.content}`)
-                  .join('\n'),
-          ].join('\n\n'),
+          content:
+            `Company: ${companyName}\n\n` +
+            `Sections to fill (only those without saved data): ${missingSections.length ? missingSections.join(', ') : 'none'}\n\n` +
+            'Conversation:\n' +
+            conversation
+              .map((m: { role?: string; content?: string }) => `${m.role}: ${m.content}`)
+              .join('\n'),
         },
       ],
     });
 
     const raw = (completion.output ?? '').trim() || '{}';
-    let parsed: { nextQuestion?: string; done?: boolean; structuredContext?: Partial<CompanyContextIntelligence> };
+    let structuredContext: Partial<CompanyContextIntelligence> = {};
     try {
-      parsed = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as { structuredContext?: Partial<CompanyContextIntelligence> } & Partial<CompanyContextIntelligence>;
+      structuredContext = (parsed.structuredContext ?? parsed) as Partial<CompanyContextIntelligence>;
     } catch {
       return res.status(500).json({ error: 'Invalid AI response' });
     }
 
-    if (parsed.done && parsed.structuredContext) {
-      return res.status(200).json({ done: true, structuredContext: parsed.structuredContext });
-    }
-
-    return res.status(200).json({
-      nextQuestion:
-        parsed.nextQuestion ||
-        'Which customer segment, market, dependency, workforce constraint, or regulation should we capture first?',
-    });
+    return res.status(200).json({ done: true, structuredContext });
   } catch (err: any) {
     console.error('Define context intelligence failed:', err);
     return res.status(500).json({
