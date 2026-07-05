@@ -111,6 +111,11 @@ export function useCompanyProfileState() {
   // Set when the chat is done with its questions: holds the merged context that
   // is saved only when the user confirms via the "Save context" action.
   const [contextIntelligencePendingSave, setContextIntelligencePendingSave] = useState<CompanyContextIntelligence | null>(null);
+  // Set when a guided-capture chat finishes: the fields are staged into the
+  // profile draft and a "Save" action persists them so the panel never closes
+  // silently before the user knows it was recorded.
+  const [targetCustomerPendingSave, setTargetCustomerPendingSave] = useState(false);
+  const [marketingIntelligencePendingSave, setMarketingIntelligencePendingSave] = useState(false);
   const [problemTransformationPanelOpen, setProblemTransformationPanelOpen] = useState(false);
   const [problemTransformationQuestions, setProblemTransformationQuestions] = useState<string[]>([]);
   const [problemTransformationAnswers, setProblemTransformationAnswers] = useState<string[]>([]);
@@ -754,7 +759,7 @@ export function useCompanyProfileState() {
     updateActiveProfile(updated);
   };
 
-  const saveProfile = async () => {
+  const saveProfile = async (override?: CompanyProfile) => {
     try {
       setIsSaving(true);
       setErrorMessage(null);
@@ -763,29 +768,32 @@ export function useCompanyProfileState() {
         setErrorMessage('Select a company to continue.');
         return;
       }
+      // `override` lets a guided-capture flow persist the exact fields it just
+      // staged without waiting for the activeProfile state to settle.
+      const source = override ?? activeProfile;
       const payload = {
-        ...activeProfile,
-        companyId: companyId || activeProfile.company_id,
-        company_id: companyId || activeProfile.company_id,
-        industry_list: activeProfile.industry_list ?? splitToList(activeProfile.industry),
-        category_list: activeProfile.category_list ?? splitToList(activeProfile.category),
-        geography_list: activeProfile.geography_list ?? splitToList(activeProfile.geography),
-        competitors_list: activeProfile.competitors_list ?? splitToList(activeProfile.competitors),
-        content_themes_list: activeProfile.content_themes_list ?? splitToList(activeProfile.content_themes),
-        products_services_list: activeProfile.products_services_list ?? splitToList(activeProfile.products_services),
-        target_audience_list: activeProfile.target_audience_list ?? splitToList(activeProfile.target_audience),
-        goals_list: activeProfile.goals_list ?? splitToList(activeProfile.goals),
-        brand_voice_list: activeProfile.brand_voice_list ?? splitToList(activeProfile.brand_voice),
-        social_profiles: buildSocialProfilesFromScalars(activeProfile),
-        core_problem_statement: activeProfile.core_problem_statement ?? null,
-        pain_symptoms: Array.isArray(activeProfile.pain_symptoms) ? activeProfile.pain_symptoms : splitToList(String(activeProfile.pain_symptoms || '')),
-        awareness_gap: activeProfile.awareness_gap ?? null,
-        problem_impact: activeProfile.problem_impact ?? null,
-        life_with_problem: activeProfile.life_with_problem ?? null,
-        life_after_solution: activeProfile.life_after_solution ?? null,
-        desired_transformation: activeProfile.desired_transformation ?? null,
-        transformation_mechanism: activeProfile.transformation_mechanism ?? null,
-        authority_domains: Array.isArray(activeProfile.authority_domains) ? activeProfile.authority_domains : splitToList(String(activeProfile.authority_domains || '')),
+        ...source,
+        companyId: companyId || source.company_id,
+        company_id: companyId || source.company_id,
+        industry_list: source.industry_list ?? splitToList(source.industry),
+        category_list: source.category_list ?? splitToList(source.category),
+        geography_list: source.geography_list ?? splitToList(source.geography),
+        competitors_list: source.competitors_list ?? splitToList(source.competitors),
+        content_themes_list: source.content_themes_list ?? splitToList(source.content_themes),
+        products_services_list: source.products_services_list ?? splitToList(source.products_services),
+        target_audience_list: source.target_audience_list ?? splitToList(source.target_audience),
+        goals_list: source.goals_list ?? splitToList(source.goals),
+        brand_voice_list: source.brand_voice_list ?? splitToList(source.brand_voice),
+        social_profiles: buildSocialProfilesFromScalars(source),
+        core_problem_statement: source.core_problem_statement ?? null,
+        pain_symptoms: Array.isArray(source.pain_symptoms) ? source.pain_symptoms : splitToList(String(source.pain_symptoms || '')),
+        awareness_gap: source.awareness_gap ?? null,
+        problem_impact: source.problem_impact ?? null,
+        life_with_problem: source.life_with_problem ?? null,
+        life_after_solution: source.life_after_solution ?? null,
+        desired_transformation: source.desired_transformation ?? null,
+        transformation_mechanism: source.transformation_mechanism ?? null,
+        authority_domains: Array.isArray(source.authority_domains) ? source.authority_domains : splitToList(String(source.authority_domains || '')),
       };
       const response = await fetchWithAuth('/api/company-profile', {
         method: 'POST',
@@ -797,17 +805,17 @@ export function useCompanyProfileState() {
         throw new Error(errorBody?.error || errorBody?.details || 'Failed to save profile');
       }
       const data = await response.json();
-      setProfile(data.profile || activeProfile);
-      setDraftProfile(data.profile || activeProfile);
+      setProfile(data.profile || source);
+      setDraftProfile(data.profile || source);
       setOverallProfileCompletion(
         data.overall_profile_completion ??
           data.profile?.overall_profile_completion ??
-          calculateProfileCompletion(data.profile || activeProfile)
+          calculateProfileCompletion(data.profile || source)
       );
       setProblemTransformationCompletion(
         data.problem_transformation_completion ??
           data.profile?.problem_transformation_completion ??
-          calculateProblemTransformationCompletion(data.profile || activeProfile)
+          calculateProblemTransformationCompletion(data.profile || source)
       );
       if (data.profile?.company_id) {
         setCompanyId(data.profile.company_id);
@@ -1241,9 +1249,11 @@ export function useCompanyProfileState() {
           ...(data.campaign_purpose_intent != null ? { campaign_purpose_intent: data.campaign_purpose_intent } : {}),
         };
         updateActiveProfile(updated);
-        setTargetCustomerPanelOpen(false);
-        setTargetCustomerMessages([]);
-        setSuccessMessage('Target customer fields updated. Click Save Profile to lock them.');
+        setTargetCustomerPendingSave(true);
+        setTargetCustomerMessages((prev) => [
+          ...prev,
+          { role: 'assistant' as const, content: 'That’s everything I need. Click “Save” below to record these customer details to your profile.' },
+        ]);
       } else if (data.nextQuestion) {
         setTargetCustomerMessages((prev) =>
           isInitial ? [{ role: 'assistant' as const, content: data.nextQuestion }] : [...prev, { role: 'assistant' as const, content: data.nextQuestion }]
@@ -1256,9 +1266,17 @@ export function useCompanyProfileState() {
     }
   };
 
+  const confirmSaveTargetCustomer = async () => {
+    await saveProfile();
+    setTargetCustomerPendingSave(false);
+    setTargetCustomerPanelOpen(false);
+    setTargetCustomerMessages([]);
+  };
+
   const openTargetCustomerPanel = () => {
     setTargetCustomerMessages([]);
     setTargetCustomerInput('');
+    setTargetCustomerPendingSave(false);
     setTargetCustomerPanelOpen(true);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -1368,9 +1386,11 @@ export function useCompanyProfileState() {
       if (data.done && data.structuredFields) {
         const updated = { ...activeProfile, ...data.structuredFields };
         updateActiveProfile(updated);
-        setMarketingIntelligencePanelOpen(false);
-        setMarketingIntelligenceMessages([]);
-        setSuccessMessage('Marketing intelligence updated. Click Save Profile to lock these fields.');
+        setMarketingIntelligencePendingSave(true);
+        setMarketingIntelligenceMessages((prev) => [
+          ...prev,
+          { role: 'assistant' as const, content: 'That’s everything — click “Save” below to record these marketing fields to your profile.' },
+        ]);
       } else if (data.nextQuestion) {
         setMarketingIntelligenceMessages((prev) =>
           isInitial
@@ -1385,9 +1405,17 @@ export function useCompanyProfileState() {
     }
   };
 
+  const confirmSaveMarketingIntelligence = async () => {
+    await saveProfile();
+    setMarketingIntelligencePendingSave(false);
+    setMarketingIntelligencePanelOpen(false);
+    setMarketingIntelligenceMessages([]);
+  };
+
   const openMarketingIntelligencePanel = () => {
     setMarketingIntelligenceMessages([]);
     setMarketingIntelligenceInput('');
+    setMarketingIntelligencePendingSave(false);
     setMarketingIntelligencePanelOpen(true);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -1635,7 +1663,7 @@ export function useCompanyProfileState() {
     isInitial = false,
     inferredFields?: Record<string, unknown>
   ) => {
-    const applyPendingProblemTransformationUpdates = (
+    const applyPendingProblemTransformationUpdates = async (
       updates: NonNullable<typeof pendingProblemTransformationUpdates>
     ) => {
       const applied = {
@@ -1677,7 +1705,9 @@ export function useCompanyProfileState() {
       setProblemTransformationCompletion(calculateProblemTransformationCompletion(applied));
       setOverallProfileCompletion(calculateProfileCompletion(applied));
       setPendingProblemTransformationUpdates(null);
-      setSuccessMessage('Applied suggested updates. Click Save Profile to persist these changes.');
+      // Persist the applied fields immediately — a real save, not just staged.
+      await saveProfile(applied);
+      setProblemTransformationInferPanelOpen(false);
     };
 
     const content = (userContent ?? problemTransformationInferInput).trim();
@@ -1687,15 +1717,7 @@ export function useCompanyProfileState() {
       );
     if (!isInitial && pendingProblemTransformationUpdates && isAgreement) {
       const updates = pendingProblemTransformationUpdates;
-      applyPendingProblemTransformationUpdates(updates);
-      setProblemTransformationInferMessages((prev) => [
-        ...prev,
-        { role: 'user' as const, content },
-        {
-          role: 'assistant' as const,
-          content: 'Approved. I applied the suggested updates. Continue if you want deeper refinement.',
-        },
-      ]);
+      await applyPendingProblemTransformationUpdates(updates);
       setProblemTransformationInferInput('');
       return;
     }
@@ -2018,6 +2040,10 @@ export function useCompanyProfileState() {
     contextIntelligencePanelOpen,
     contextIntelligencePendingSave,
     confirmSaveContextIntelligence,
+    targetCustomerPendingSave,
+    confirmSaveTargetCustomer,
+    marketingIntelligencePendingSave,
+    confirmSaveMarketingIntelligence,
     contextQuality,
     draftProfile,
     enrichmentLoading,

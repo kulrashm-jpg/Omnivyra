@@ -1068,6 +1068,10 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     contextIntelligenceMessages,
     contextIntelligencePendingSave,
     confirmSaveContextIntelligence,
+    targetCustomerPendingSave,
+    confirmSaveTargetCustomer,
+    marketingIntelligencePendingSave,
+    confirmSaveMarketingIntelligence,
     contextIntelligencePanelOpen,
     contextQuality,
     draftProfile,
@@ -3313,7 +3317,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               {isEditing ? (
                 <>
                   <button
-                    onClick={saveProfile}
+                    onClick={() => { void saveProfile(); }}
                     disabled={isSaving || isRefining}
                     className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
                   >
@@ -3360,6 +3364,16 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           setTargetCustomerLoading(false);
         }}
         renderAssistantMessage={renderProblemTransformationAssistantMessage}
+        extraActions={targetCustomerPendingSave ? (
+          <button
+            type="button"
+            onClick={() => { void confirmSaveTargetCustomer(); }}
+            disabled={isSaving}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {isSaving ? 'Saving…' : 'Save'}
+          </button>
+        ) : null}
       />
       <GuidedChatPanel
         title="Campaign purpose"
@@ -3388,6 +3402,16 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           setMarketingIntelligencePanelOpen(false);
           setMarketingIntelligenceChatLoading(false);
         }}
+        extraActions={marketingIntelligencePendingSave ? (
+          <button
+            type="button"
+            onClick={() => { void confirmSaveMarketingIntelligence(); }}
+            disabled={isSaving}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {isSaving ? 'Saving…' : 'Save'}
+          </button>
+        ) : null}
       />
       <GuidedChatPanel
         title="Context intelligence"
@@ -3430,10 +3454,10 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           <button
             type="button"
             onClick={() => { void sendProblemTransformationRefineMessage('apply'); }}
-            disabled={problemTransformationInferLoading}
+            disabled={problemTransformationInferLoading || isSaving}
             className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            Apply updates
+            {isSaving ? 'Saving…' : 'Apply & save'}
           </button>
         ) : null}
       />
