@@ -145,6 +145,13 @@ function weightedMean(items: Array<{ score: number; weight: number }>): number {
 export function evaluateCapabilityRegistry<S>(
   registry: CapabilityCategoryDef<S>[],
   signals: S,
+  /**
+   * Monotonic ratchet: the highest score each factor has ever reached, by factor id.
+   * An available factor's score is floored at its prior max, so a capability that has
+   * been set up / used / mastered can never compute a LOWER score afterward. Omit for
+   * a raw (non-ratcheted) evaluation.
+   */
+  priorFactorScores?: Record<string, number>,
 ): CapabilityEvaluation {
   const categories: EvaluatedCategory[] = [];
 
@@ -170,7 +177,8 @@ export function evaluateCapabilityRegistry<S>(
               reason: result.reason,
             };
           }
-          const score = clamp01(result.score);
+          // Ratchet: never below the highest this factor has ever scored.
+          const score = Math.max(clamp01(result.score), priorFactorScores?.[def.id] ?? 0);
           return {
             id: def.id,
             title: def.title,

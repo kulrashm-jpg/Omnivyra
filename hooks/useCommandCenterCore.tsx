@@ -74,6 +74,49 @@ function stabiliseInputs(companyId: string, fresh: Record<string, unknown>): Rec
   return stable;
 }
 
+// ── Monotonic score ratchet ────────────────────────────────────────────────────
+//
+// Once a capability is set up / used / a skill acquired, its score must never go
+// DOWN. Per-factor maxima are cached per company + registry; each evaluation floors
+// factors at their prior max and persists the new maxima. Fail-soft.
+function readRatchet(companyId: string, key: string): Record<string, number> {
+  try {
+    if (typeof window === 'undefined') return {};
+    const raw = window.localStorage.getItem(`cc-ratchet:${key}:${companyId}`);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+function writeRatchet(companyId: string, key: string, maxes: Record<string, number>): void {
+  try {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(`cc-ratchet:${key}:${companyId}`, JSON.stringify(maxes));
+  } catch {
+    /* non-fatal */
+  }
+}
+function evaluateWithRatchet<S>(
+  registry: Parameters<typeof evaluateCapabilityRegistry<S>>[0],
+  signals: S,
+  companyId: string,
+  key: string,
+): CapabilityEvaluation {
+  const prior = readRatchet(companyId, key);
+  const evaluation = evaluateCapabilityRegistry(registry, signals, prior);
+  // Persist the new per-factor maxima (available factors only — a transient
+  // unavailable never lowers a stored max).
+  const next: Record<string, number> = { ...prior };
+  for (const cat of evaluation.categories) {
+    for (const f of cat.factors) {
+      if (f.available) next[f.id] = Math.max(next[f.id] ?? 0, f.score);
+    }
+  }
+  writeRatchet(companyId, key, next);
+  return evaluation;
+}
+
 type EnhancedCardProps = Omit<CommandCenterCard, 'state' | 'requirements' | 'badge'> & {
   state: CardState;
   badge?: 'FREE_AVAILABLE' | 'GENERATING' | 'USED';
@@ -112,18 +155,27 @@ export function useCommandCenter() {
 
   const [setupSignals, setSetupSignals] = useState<SetupSignals | null>(null);
   const setupEvaluation = useMemo(
-    () => (setupSignals ? evaluateCapabilityRegistry(SETUP_REGISTRY, setupSignals) : EMPTY_CAPABILITY_EVALUATION),
-    [setupSignals],
+    () =>
+      setupSignals && selectedCompanyId
+        ? evaluateWithRatchet(SETUP_REGISTRY, setupSignals, selectedCompanyId, 'setup')
+        : EMPTY_CAPABILITY_EVALUATION,
+    [setupSignals, selectedCompanyId],
   );
   const [readinessSignals, setReadinessSignals] = useState<ReadinessSignals | null>(null);
   const readinessEvaluation = useMemo(
-    () => (readinessSignals ? evaluateCapabilityRegistry(READINESS_REGISTRY, readinessSignals) : EMPTY_CAPABILITY_EVALUATION),
-    [readinessSignals],
+    () =>
+      readinessSignals && selectedCompanyId
+        ? evaluateWithRatchet(READINESS_REGISTRY, readinessSignals, selectedCompanyId, 'readiness')
+        : EMPTY_CAPABILITY_EVALUATION,
+    [readinessSignals, selectedCompanyId],
   );
   const [masterySignals, setMasterySignals] = useState<MasterySignals | null>(null);
   const masteryEvaluation = useMemo(
-    () => (masterySignals ? evaluateCapabilityRegistry(MASTERY_REGISTRY, masterySignals) : EMPTY_CAPABILITY_EVALUATION),
-    [masterySignals],
+    () =>
+      masterySignals && selectedCompanyId
+        ? evaluateWithRatchet(MASTERY_REGISTRY, masterySignals, selectedCompanyId, 'mastery')
+        : EMPTY_CAPABILITY_EVALUATION,
+    [masterySignals, selectedCompanyId],
   );
   const setupPct = setupEvaluation.overallPercent;
   const setupSummary = setupEvaluation.summary;
