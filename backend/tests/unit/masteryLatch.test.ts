@@ -86,6 +86,12 @@ describe('Mastery breadth — latched usage features wired in', () => {
     const cat = evaluateCapabilityRegistry([def], signals).categories[0];
     expect(cat.factors.find((f) => f.id === 'ai.generation_used')?.status).toBe('done');
   });
+
+  it('AI generation used is credited by AI content too (not free-credit-only)', () => {
+    // Paid-credit user with published content — no free_credits_used feature.
+    const sig = buildMasterySignals({ ...rawBase, features: [feature('blog_created')] } as any);
+    expect(sig.ai.generationUsed).toBe(1);
+  });
 });
 
 describe('Mastery Automation — integrated flows (latched)', () => {

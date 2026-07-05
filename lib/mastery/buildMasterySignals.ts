@@ -171,8 +171,13 @@ export function buildMasterySignals(input: RawMasteryInputs): MasterySignals {
       // Creator assets are produced with AI assistance — the canonical
       // AI-generated-artifact count.
       assets: aiAssetsSignal,
-      // Latched: real credit-consuming AI generation actions ever run.
-      generationUsed: featureScore(features, 'free_credits_used'),
+      // AI generation used = ANY real AI generation ever run: free-credit actions
+      // OR any AI-produced content/campaign (all consume AI generation). Not
+      // free-credit-only, which wrongly showed paid-credit users as "not started".
+      generationUsed: Math.max(
+        featureScore(features, 'free_credits_used'),
+        everUsed(features, 'blog_created', 'content_writer', 'content_short_format', 'content_creator', 'content_writer_asset', 'campaign_created') ? 1 : 0,
+      ),
     },
     intelligence: {
       competitors: competitorCount(input.profile),

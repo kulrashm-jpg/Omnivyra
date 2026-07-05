@@ -36,6 +36,44 @@ const EMPTY_CAPABILITY_EVALUATION: CapabilityEvaluation = {
   summary: { completedCount: 0, inProgressCount: 0, totalCount: 0 },
 };
 
+// ── Retain-last-good input cache ───────────────────────────────────────────────
+//
+// Setup / Readiness / Mastery are recomputed on the client from ~14 parallel live
+// fetches (mount, setup events, window focus, tab-visible). When any fetch is slow
+// or errors it returns null, its factor drops out, and the score visibly moves.
+// To keep scores STABLE, the last successfully-loaded value for each input is cached
+// per company; a transient null keeps the previous value instead of dropping it.
+// Fully fail-soft — any storage error just falls back to the fresh value.
+function readStableInputs(companyId: string): Record<string, unknown> {
+  try {
+    if (typeof window === 'undefined') return {};
+    const raw = window.localStorage.getItem(`cc-stable-inputs:${companyId}`);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+function writeStableInputs(companyId: string, inputs: Record<string, unknown>): void {
+  try {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(`cc-stable-inputs:${companyId}`, JSON.stringify(inputs));
+  } catch {
+    /* quota / disabled storage — non-fatal */
+  }
+}
+/** Merge fresh over cached: a non-null fresh value wins and is remembered; a null
+ *  (failed fetch) retains the last-good cached value. Returns the stabilised set. */
+function stabiliseInputs(companyId: string, fresh: Record<string, unknown>): Record<string, any> {
+  const cached = readStableInputs(companyId);
+  const stable: Record<string, any> = {};
+  for (const key of Object.keys(fresh)) {
+    stable[key] = fresh[key] != null ? fresh[key] : cached[key] ?? null;
+  }
+  writeStableInputs(companyId, stable);
+  return stable;
+}
+
 type EnhancedCardProps = Omit<CommandCenterCard, 'state' | 'requirements' | 'badge'> & {
   state: CardState;
   badge?: 'FREE_AVAILABLE' | 'GENERATING' | 'USED';
@@ -197,6 +235,38 @@ export function useCommandCenter() {
           connectedPlatforms,
           configuredApis,
         });
+        // Retain-last-good: stabilise every flaky input against transient fetch
+        // failures. A null from a slow/errored endpoint keeps the previously loaded
+        // value, so the score never drops on a hiccup (see stabiliseInputs).
+        const freshAutomation =
+          automationConfigData && typeof automationConfigData.enabled === 'boolean'
+            ? {
+                enabled: Boolean(automationConfigData.enabled),
+                autoReply: Boolean(automationConfigData.auto_reply_enabled),
+                autoDm: Boolean(automationConfigData.auto_dm_enabled),
+              }
+            : null;
+        const stable = stabiliseInputs(selectedCompanyId, {
+          socialAccounts: Array.isArray(socialStatusData?.accounts) ? socialStatusData.accounts : null,
+          blogsCount: Array.isArray(blogsData?.blogs) ? blogsData.blogs.length : null,
+          campaignsCount: Array.isArray(campaignsData?.campaigns) ? campaignsData.campaigns.length : null,
+          reportsCount: Array.isArray(reportsData?.reports) ? reportsData.reports.length : null,
+          mediaCount: Array.isArray(creatorAssetsData?.assets) ? creatorAssetsData.assets.length : null,
+          templatesCount: Array.isArray(templateCollectionsData?.collections) ? templateCollectionsData.collections.length : null,
+          websiteSnapshot: websiteSnapshotData?.snapshot ?? null,
+          automation: freshAutomation,
+          teamSummary:
+            teamSummaryData && typeof teamSummaryData.memberCount === 'number'
+              ? { ownerExists: Boolean(teamSummaryData.ownerExists), memberCount: teamSummaryData.memberCount }
+              : null,
+          telemetry: telemetryProvidersData?.signals ?? null,
+        });
+        const sSocialAccounts = (stable.socialAccounts as any[] | null) ?? null;
+        const sWebsiteSnapshot = (stable.websiteSnapshot as any) ?? null;
+        const sAutomation = (stable.automation as { enabled: boolean; autoReply: boolean; autoDm: boolean } | null) ?? null;
+        const sTeam = (stable.teamSummary as { ownerExists: boolean; memberCount: number } | null) ?? null;
+        const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+
         // Assemble canonical, capability-aware Setup signals (no scoring here —
         // that lives in the engine). Channels come from social_accounts; Team
         // from the membership-summary endpoint readable by every member.
@@ -204,11 +274,8 @@ export function useCommandCenter() {
           buildSetupSignals({
             profile: profileData?.profile ?? null,
             features: data.features,
-            socialAccounts: Array.isArray(socialStatusData?.accounts) ? socialStatusData.accounts : null,
-            teamSummary:
-              teamSummaryData && typeof teamSummaryData.memberCount === 'number'
-                ? { ownerExists: Boolean(teamSummaryData.ownerExists), memberCount: teamSummaryData.memberCount }
-                : null,
+            socialAccounts: sSocialAccounts,
+            teamSummary: sTeam,
             apiCatalog,
             configuredApiIds,
             apiCatalogAvailable: Boolean(externalApisResponse?.ok),
@@ -222,19 +289,12 @@ export function useCommandCenter() {
           buildReadinessSignals({
             profile: profileData?.profile ?? null,
             features: data.features,
-            socialAccounts: Array.isArray(socialStatusData?.accounts) ? socialStatusData.accounts : null,
-            websiteSnapshot: websiteSnapshotData?.snapshot ?? null,
-            blogsCount: Array.isArray(blogsData?.blogs) ? blogsData.blogs.length : null,
-            mediaCount: Array.isArray(creatorAssetsData?.assets) ? creatorAssetsData.assets.length : null,
-            templatesCount: Array.isArray(templateCollectionsData?.collections) ? templateCollectionsData.collections.length : null,
-            automation:
-              automationConfigData && typeof automationConfigData.enabled === 'boolean'
-                ? {
-                    enabled: Boolean(automationConfigData.enabled),
-                    autoReply: Boolean(automationConfigData.auto_reply_enabled),
-                    autoDm: Boolean(automationConfigData.auto_dm_enabled),
-                  }
-                : null,
+            socialAccounts: sSocialAccounts,
+            websiteSnapshot: sWebsiteSnapshot,
+            blogsCount: num(stable.blogsCount),
+            mediaCount: num(stable.mediaCount),
+            templatesCount: num(stable.templatesCount),
+            automation: sAutomation,
           }),
         );
         // Canonical, adoption-based Mastery signals (client-side shared engine).
@@ -246,24 +306,14 @@ export function useCommandCenter() {
             // Latched feature-completion flags — mastery credits ever-used
             // capabilities forever, independent of current artifact counts.
             features: data.features,
-            blogsCount: Array.isArray(blogsData?.blogs) ? blogsData.blogs.length : null,
-            campaignsCount: Array.isArray(campaignsData?.campaigns) ? campaignsData.campaigns.length : null,
-            reportsCount: Array.isArray(reportsData?.reports) ? reportsData.reports.length : null,
-            mediaCount: Array.isArray(creatorAssetsData?.assets) ? creatorAssetsData.assets.length : null,
-            templatesCount: Array.isArray(templateCollectionsData?.collections) ? templateCollectionsData.collections.length : null,
-            teamSummary:
-              teamSummaryData && typeof teamSummaryData.memberCount === 'number'
-                ? { memberCount: teamSummaryData.memberCount }
-                : null,
-            automation:
-              automationConfigData && typeof automationConfigData.enabled === 'boolean'
-                ? {
-                    enabled: Boolean(automationConfigData.enabled),
-                    autoReply: Boolean(automationConfigData.auto_reply_enabled),
-                    autoDm: Boolean(automationConfigData.auto_dm_enabled),
-                  }
-                : null,
-            websiteSnapshot: websiteSnapshotData?.snapshot ?? null,
+            blogsCount: num(stable.blogsCount),
+            campaignsCount: num(stable.campaignsCount),
+            reportsCount: num(stable.reportsCount),
+            mediaCount: num(stable.mediaCount),
+            templatesCount: num(stable.templatesCount),
+            teamSummary: sTeam ? { memberCount: sTeam.memberCount } : null,
+            automation: sAutomation,
+            websiteSnapshot: sWebsiteSnapshot,
             telemetry: telemetryProvidersData?.signals ?? null,
           }),
         );
