@@ -442,12 +442,14 @@ function StatCard({
 }: {
   label: string;
   value: React.ReactNode;
-  tone?: 'slate' | 'indigo';
+  tone?: 'slate' | 'indigo' | 'amber';
 }) {
   const toneClasses =
     tone === 'indigo'
       ? 'border-indigo-200 bg-indigo-50 text-indigo-900'
-      : 'border-slate-200 bg-slate-50 text-slate-900';
+      : tone === 'amber'
+        ? 'border-amber-200 bg-amber-50 text-amber-900'
+        : 'border-slate-200 bg-slate-50 text-slate-900';
 
   return (
     <div className={`rounded-xl border px-4 py-3 ${toneClasses}`}>
@@ -1717,7 +1719,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <StatCard
               label="Profile confidence"
               value={`${completionPercent(uiConfidence)}%`}
@@ -1728,6 +1730,11 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               value={`${completionPercent(
                 overallProfileCompletion ?? uiOverallProfileCompletion
               )}%`}
+            />
+            <StatCard
+              label="Intelligence readiness"
+              value={`${completionPercent(intelligenceReadiness?.score ?? 0)}%`}
+              tone="amber"
             />
             {canViewStrategicSections && (
               <StatCard
