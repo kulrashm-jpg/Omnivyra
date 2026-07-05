@@ -330,6 +330,25 @@ function hasMeaningfulRow(row: Record<string, unknown>, keys: string[]): boolean
   });
 }
 
+// The workforce section is a single object whose level fields default to
+// 'unknown'. Treat an object with no real signal (blank text, empty arrays, and
+// only 'unknown'/'none' levels) as NOT captured — otherwise it persists and scores
+// readiness (~30%) while showing nothing.
+function workforceHasSignal(profile: Record<string, unknown> | null | undefined): boolean {
+  if (!profile) return false;
+  const nonEmptyStr = (v: unknown) => typeof v === 'string' && v.trim() !== '';
+  const nonEmptyArr = (v: unknown) => Array.isArray(v) && v.length > 0;
+  const meaningfulLevel = (v: unknown) =>
+    nonEmptyStr(v) && !['unknown', 'none', 'n/a', 'na'].includes(String(v).toLowerCase().trim());
+  return (
+    nonEmptyStr(profile.workforce_model) ||
+    nonEmptyArr(profile.hiring_markets) ||
+    nonEmptyArr(profile.key_skill_dependencies) ||
+    ['contractor_dependency_level', 'immigration_dependency_level', 'labor_sensitivity_level', 'remote_dependency_level']
+      .some((key) => meaningfulLevel(profile[key]))
+  );
+}
+
 function readinessFromState(state: IntelligenceState, hasExplicitData: boolean): number {
   if (!hasExplicitData) return 0;
   if (state === 'user_confirmed') return 100;
@@ -785,15 +804,7 @@ export async function saveCompanyContextIntelligence(
     replaceRows('company_technology_dependencies', companyId, normalizedContext.technology_dependencies),
   ]);
 
-  if (normalizedContext.workforce_profile && hasMeaningfulRow(normalizedContext.workforce_profile as Record<string, unknown>, [
-    'workforce_model',
-    'hiring_markets',
-    'contractor_dependency_level',
-    'immigration_dependency_level',
-    'key_skill_dependencies',
-    'labor_sensitivity_level',
-    'remote_dependency_level',
-  ])) {
+  if (normalizedContext.workforce_profile && workforceHasSignal(normalizedContext.workforce_profile as Record<string, unknown>)) {
     const upsertResult = await ownedDbTable('company_workforce_profile').upsert(normalizedContext.workforce_profile, { onConflict: 'company_id' });
     if (upsertResult.error) throw new Error(`Failed to save workforce profile: ${upsertResult.error.message}`);
   } else {
@@ -856,7 +867,7 @@ export function calculateIntelligenceReadiness(params: {
       readinessFromState(state?.dependencies ?? 'missing', (intelligence?.dependencies.length ?? 0) > 0) +
       readinessFromState(state?.technology_dependencies ?? 'missing', (intelligence?.technology_dependencies.length ?? 0) > 0)
     ) / 2),
-    workforce: readinessFromState(state?.workforce_profile ?? 'missing', Boolean(intelligence?.workforce_profile)),
+    workforce: readinessFromState(state?.workforce_profile ?? 'missing', workforceHasSignal(intelligence?.workforce_profile as Record<string, unknown> | null)),
     regulatory: readinessFromState(state?.regulatory_exposures ?? 'missing', (intelligence?.regulatory_exposures.length ?? 0) > 0),
     geographic: readinessFromState(state?.geographic_exposures ?? 'missing', (intelligence?.geographic_exposures.length ?? 0) > 0),
     strategic_state: hasStrategicState ? 70 : 0,
