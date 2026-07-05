@@ -1577,6 +1577,27 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   Type the answer directly in this field.
                 </div>
               )}
+              {options.length > 0 && selected.length > 0 && (
+                <div className="mt-1 flex flex-wrap items-center gap-1">
+                  <span className="text-[11px] text-slate-500">Selected:</span>
+                  {selected.map((value) => (
+                    <span
+                      key={value}
+                      className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-0.5 text-[11px] font-medium text-white"
+                    >
+                      {value}
+                      <button
+                        type="button"
+                        onClick={() => handleMissingAnswer(question.field, selected.filter((v) => v !== value))}
+                        className="leading-none text-indigo-100 hover:text-white"
+                        aria-label={`Remove ${value}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
