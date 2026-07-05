@@ -40,7 +40,6 @@ import { persistCreatorValidationManifest } from './creatorRenderPersistence';
 import { resolvePlatformGeometryProfile, platformTextBoxY } from './creatorPlatformGeometry';
 import { getCreatorRendererRegistration } from './creatorRendererRegistry';
 import { composeInfographicCopy } from './creator/infographicCopyComposer';
-import { roleMaxCardHeight } from './creator/infographicSemanticContract';
 import {
   infographicChartsEnabled,
   infographicTablesEnabled,
@@ -4262,6 +4261,11 @@ function resolveInfographicEngine(input: {
   engineId: string;
   cardWidth: number;
   cardHeight: number;
+  /** Grid rows + the vertical gap between them + the layout's card-height floor —
+   *  exposed so the caller can derive a content-fit canvas height (≈10% white space). */
+  rows: number;
+  rowGap: number;
+  minCardHeight: number;
   position: (index: number) => { x: number; y: number; iconZone: 'left' | 'top' | 'center' };
 } {
   const count = Math.max(1, input.sectionCount);
@@ -4289,6 +4293,7 @@ function resolveInfographicEngine(input: {
       engineId: 'infographic-timeline-engine-v2',
       cardWidth: availableW - g.railOffset,
       cardHeight: cardH,
+      rows, rowGap: gap, minCardHeight: g.minCardHeight,
       position: (index) => ({ x: sideMargin + g.railOffset, y: headerH + vOff + index * (cardH + gap), iconZone: 'left' }),
     };
   }
@@ -4301,6 +4306,7 @@ function resolveInfographicEngine(input: {
       engineId: 'infographic-process-engine-v2',
       cardWidth: availableW,
       cardHeight: cardH,
+      rows, rowGap: gap, minCardHeight: g.minCardHeight,
       position: (index) => ({ x: sideMargin, y: headerH + vOff + index * (cardH + gap), iconZone: 'left' }),
     };
   }
@@ -4314,6 +4320,7 @@ function resolveInfographicEngine(input: {
       engineId: 'infographic-comparison-engine-v2',
       cardWidth: colW,
       cardHeight: cardH,
+      rows, rowGap: gap, minCardHeight: g.minCardHeight,
       position: (index) => ({
         x: sideMargin + (index % 2) * (colW + g.columnGap),
         y: headerH + vOff + Math.floor(index / 2) * (cardH + gap),
@@ -4337,6 +4344,7 @@ function resolveInfographicEngine(input: {
       engineId: 'infographic-stats-engine-v2',
       cardWidth: colW,
       cardHeight: cardH,
+      rows, rowGap: gapY, minCardHeight: g.minCardHeight,
       position: (index) => ({
         x: sideMargin + (index % cols) * (colW + gapX),
         y: headerH + vOff + Math.floor(index / cols) * (cardH + gapY),
@@ -4353,6 +4361,7 @@ function resolveInfographicEngine(input: {
       engineId: 'infographic-hierarchy-engine-v2',
       cardWidth: availableW - g.widthInset,
       cardHeight: cardH,
+      rows, rowGap: gap, minCardHeight: g.minCardHeight,
       // Subtle right-indent per step communicates downward flow.
       position: (index) => ({
         x: sideMargin + Math.min(index, g.maxIndentSteps) * g.indentStep,
@@ -4374,6 +4383,7 @@ function resolveInfographicEngine(input: {
     engineId: 'infographic-framework-engine-v2',
     cardWidth: colW,
     cardHeight: cardH,
+    rows, rowGap: gapY, minCardHeight: g.minCardHeight,
     position: (index) => ({
       x: sideMargin + (index % cols) * (colW + gapX),
       y: headerH + vOff + Math.floor(index / cols) * (cardH + gapY),
@@ -4382,13 +4392,71 @@ function resolveInfographicEngine(input: {
   };
 }
 
+/**
+ * Deterministically estimate the pixel height `renderDenseBody` will consume for a
+ * section's composed content (lead + bullets + impact/risk + example/take), at the
+ * given content width. Mirrors the block-by-block flow in renderDenseBody so the
+ * caller can size cards + canvas to the content (≈10% white-space target) instead of
+ * stretching a fixed grid. Approximate line-wrap (ceil(len/cpl)); the padding margin
+ * absorbs the small error, biased toward slight over-estimate (breathing room, not
+ * truncation).
+ */
+export function estimateDenseBodyHeight(
+  s: Record<string, unknown>,
+  contentWidth: number,
+  style: InfographicStyleSchema,
+  fontMul: number,
+): number {
+  const db = style.geometry.denseBody;
+  const r = Math.round;
+  const leadSize = r(db.leadSize * fontMul);
+  const bulletSize = r(db.bulletSize * fontMul);
+  const valSize = r(db.valueSize * fontMul);
+  const cpl = (fontPx: number, w: number): number => Math.max(8, Math.floor(w / (fontPx * db.charWidthFactor)));
+  const wrap = (text: unknown, fontPx: number, w: number, maxLines: number): number => {
+    const t = String(text ?? '').trim();
+    if (!t) return 0;
+    return Math.min(maxLines, Math.max(1, Math.ceil(t.length / cpl(fontPx, w))));
+  };
+  let h = 0;
+  const stat = s.stat as { value?: unknown } | null | undefined;
+  if (stat && String(stat.value ?? '').trim()) h += r(valSize * db.statChipHeightMul) + db.gapAfterStat;
+  const lead = String((s as { body?: unknown }).body ?? '').trim();
+  if (lead) h += wrap(lead, leadSize, contentWidth, db.leadMaxLines) * r(leadSize * db.leadLineHeightMul) + db.gapAfterLead;
+  const bullets = (Array.isArray(s.bullets) ? s.bullets : []).map((b) => String(b ?? '').trim()).filter((b) => b.length >= 4);
+  const bulletLineH = r(bulletSize * db.bulletLineHeightMul);
+  for (const b of bullets) {
+    h += wrap(b, bulletSize, contentWidth - (db.bulletTextIndent + 2), db.bulletMaxLines) * bulletLineH + db.detail.bulletInterGap;
+  }
+  const impact = String(s.impact ?? '').trim();
+  const risk = String(s.risk ?? '').trim();
+  if (impact || risk) {
+    const twoUp = Boolean(impact && risk && contentWidth > db.panelTwoUpMinWidth);
+    const panelW = twoUp ? Math.floor((contentWidth - db.panelGap) / 2) : contentWidth;
+    const innerW = panelW - db.panelInnerInset;
+    const valLineH = r(valSize * db.panelValueLineHeightMul);
+    const maxLines = Math.max(impact ? wrap(impact, valSize, innerW, db.panelMaxLines) : 0, risk ? wrap(risk, valSize, innerW, db.panelMaxLines) : 0, 1);
+    h += db.gapBeforePanels + db.panelHeightBase + maxLines * valLineH + db.panelHeightPad;
+  }
+  const example = String(s.example ?? '').trim();
+  const take = String(s.take ?? '').trim();
+  if (example || take) {
+    const valLineH = r(valSize * db.footerValueLineHeightMul);
+    const lines = wrap(example || take, valSize, contentWidth - db.footerInnerInset, db.footerMaxLines);
+    h += db.gapBeforeFooter + db.footerHeightBase + lines * valLineH + db.footerHeightPad;
+  }
+  return h;
+}
+
 export async function renderInfographicAsset(
   assetPayload: Record<string, unknown>,
   options: RenderOptions,
 ): Promise<RenderedMediaBundle> {
   const metadata = safeObject(safeObject(assetPayload.media_bundle).metadata);
   const platform = compactText(metadata.platform || metadata.primary_platform, 'social');
-  const { width, height } = resolveRenderSize(platform, 'infographic');
+  // `height` is content-driven below (≈10% white-space target), so it is mutable.
+  const { width } = resolveRenderSize(platform, 'infographic');
+  let height = resolveRenderSize(platform, 'infographic').height;
   // Phase 4A — first visual consumer adoption. When a tenant has a PUBLISHED
   // brand_identity row, the kit is sourced from the BrandRuntime via the 1C
   // adapter (typography + canonical accent + palette). Otherwise the exact
@@ -4595,20 +4663,47 @@ export async function renderInfographicAsset(
   const headlineText = String(metadata.topic || 'Infographic');
   const headlineLines = Math.max(1, Math.min(3, Math.ceil(headlineText.length / 26)));
   const headerH = Math.round(headerBase * (infographicComposition?.heroScale ?? 1)) + (headlineLines - 1) * 76;
-  const engine = resolveInfographicEngine({
-    layout, width, height, sectionCount: sections.length, headerH,
+
+  // Adaptive font multiplier (hoisted here: the content-height estimate below needs it).
+  const maxSectionChars = sections.reduce((max, section) =>
+    Math.max(max, String(section.title || '').length + String(section.body || '').length), 0);
+  const infographicFontMultiplier = (() => {
+    const scale = infographicStyle.typography.fontMultiplierScale;
+    for (const stop of scale) {
+      if (maxSectionChars <= stop.maxSectionChars) return stop.multiplier;
+    }
+    return scale[scale.length - 1]?.multiplier ?? 1;
+  })();
+
+  const engineInput = {
+    layout, width, sectionCount: sections.length, headerH,
     sideMargin: infographicStyle.spacing.sideMargin,
     bottomMargin: infographicStyle.spacing.bottomMargin,
     geometry: infographicStyle.geometry.engine,
     columnsOverride: infographicComposition?.columns,
     gapScale: infographicComposition?.densityScale,
-    // CREATOR-116: cap card height at the role's preferred max (KPI compact, comparison
-    // wide…) so concise roles don't stretch to paragraph height, then vertically center
-    // the grid. Applied on BOTH paths — on the 1500px canvas a 2×2 framework grid was
-    // stretching each card to ~600px while its content filled ~250px, leaving a large
-    // dead band under every card. Capping + centering turns that into balanced padding.
-    maxCardHeight: roleMaxCardHeight(layout),
-  });
+  };
+  // CONTENT-DRIVEN SIZING (~10% white-space target). Operator feedback: cards still had a
+  // large empty lower band. Root cause: a fixed 2×2 grid stretched each card to ~600px on
+  // the 1500px canvas while the composed content filled ~250px. Fix: (1) a prelim pass
+  // (uncapped) learns the grid shape + card width and the full-fill card height (the
+  // ceiling); (2) estimate the content each card holds; (3) size cards to content + ~10%
+  // padding (clamped to [layout floor, full-fill ceiling]); (4) shrink the CANVAS to fit
+  // the resulting grid. A sparse deck no longer sits in a tall half-empty box; a dense
+  // deck still gets the full canvas.
+  const prelim = resolveInfographicEngine({ ...engineInput, height });
+  const bodyContentWidth = Math.max(80, prelim.cardWidth - 64);
+  const estBodyH = sections.reduce((m, s) =>
+    Math.max(m, estimateDenseBodyHeight(s as Record<string, unknown>, bodyContentWidth, infographicStyle, infographicFontMultiplier)), 0);
+  const bodyInset = (infographicStyle.geometry.layouts as Record<string, { bodyHeightInset?: number }>)[layout]?.bodyHeightInset ?? 110;
+  const targetCardH = Math.min(
+    prelim.cardHeight,
+    Math.max(prelim.minCardHeight, Math.round((estBodyH + bodyInset) / 0.90)),
+  );
+  const gridH = prelim.rows * targetCardH + prelim.rowGap * Math.max(0, prelim.rows - 1);
+  const INFOGRAPHIC_MIN_HEIGHT = 900;
+  height = Math.max(INFOGRAPHIC_MIN_HEIGHT, Math.min(height, headerH + gridH + infographicStyle.spacing.bottomMargin));
+  const engine = resolveInfographicEngine({ ...engineInput, height, maxCardHeight: targetCardH });
   const geometry = validateLayoutGeometry({
     width,
     height,
@@ -4678,18 +4773,8 @@ export async function renderInfographicAsset(
   //     every card, removed icon circle's competing focus, increased
   //     internal padding for breathing room.
 
-  const maxSectionChars = sections.reduce((max, section) => {
-    return Math.max(max, String(section.title || '').length + String(section.body || '').length);
-  }, 0);
-  // Adaptive multiplier — resolved from the style's breakpoint table (the
-  // default table is the prior literal ladder 1.40…0.88 → byte-identical).
-  const infographicFontMultiplier = (() => {
-    const scale = infographicStyle.typography.fontMultiplierScale;
-    for (const stop of scale) {
-      if (maxSectionChars <= stop.maxSectionChars) return stop.multiplier;
-    }
-    return scale[scale.length - 1]?.multiplier ?? 1;
-  })();
+  // maxSectionChars + infographicFontMultiplier are computed earlier (hoisted above the
+  // content-driven engine sizing, which needs the multiplier for its height estimate).
   const titleFontSize = Math.round(infographicStyle.typography.baseSizes.headerTitle * infographicFontMultiplier);
   const cardTitleFontSize = Math.round(infographicStyle.typography.baseSizes.cardTitle * infographicFontMultiplier);
 
