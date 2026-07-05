@@ -4169,7 +4169,21 @@ function resolveInfographicSections(assetPayload: Record<string, unknown>, metad
       icon: ['01', '02', '03', '04', '05', '06'][index] ?? String(index + 1).padStart(2, '0'),
     };
   });
-  return clipped.length > 0 ? clipped : [{ title: 'Key idea', body: compactText(metadata.summary, 'Visual framework'), icon: '01' }];
+  // A sparse overlay (hook≈headline≈topic) collapses to 1-2 cards, leaving most of
+  // the canvas empty. Pad to a MINIMUM of 4 sections with standard explainer aspects
+  // so the layout is a full grid; the copy composer fills each with topic-adaptive
+  // content (bullets/impact/example), so these are real cards, not blank padding.
+  const MIN_SECTIONS = 4;
+  const DEFAULT_ASPECTS = ['The core idea', 'Why it matters', 'How to apply it', 'What to watch for'];
+  const base = clipped.length > 0 ? clipped : [{ title: 'The core idea', body: '', icon: '01' }];
+  const usedTitles = new Set(base.map((s) => s.title.toLowerCase().trim()));
+  for (let i = 0; base.length < MIN_SECTIONS && i < DEFAULT_ASPECTS.length; i++) {
+    const title = DEFAULT_ASPECTS[i];
+    if (usedTitles.has(title.toLowerCase())) continue;
+    usedTitles.add(title.toLowerCase());
+    base.push({ title, body: '', icon: ['01', '02', '03', '04', '05', '06'][base.length] ?? String(base.length + 1).padStart(2, '0') });
+  }
+  return base;
 }
 
 function resolveInfographicLayout(metadata: Record<string, unknown>): string {
