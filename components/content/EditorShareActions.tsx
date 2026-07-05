@@ -18,8 +18,8 @@ type Props = {
     mimeType: string;
   }>;
   shareDisabledReason?: string | null;
-  publishDestinations?: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>;
-  repurposeDestinations?: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>;
+  publishDestinations?: Array<{ key: string; label: string; detail?: string; disabled?: boolean; onClick: () => void | Promise<void> }>;
+  repurposeDestinations?: Array<{ key: string; label: string; detail?: string; disabled?: boolean; onClick: () => void | Promise<void> }>;
   markUsedOptions: MarkUsedOption[];
   onMarkUsed: (platform?: string) => Promise<void>;
   onPostToSocial?: () => void;
@@ -86,7 +86,7 @@ export default function EditorShareActions({
   const renderDestinationGroup = (
     title: string,
     icon: React.ReactNode,
-    destinations: Array<{ key: string; label: string; detail?: string; onClick: () => void | Promise<void> }>,
+    destinations: Array<{ key: string; label: string; detail?: string; disabled?: boolean; onClick: () => void | Promise<void> }>,
     description?: string,
   ) => {
     if (destinations.length === 0) return null;
@@ -100,19 +100,24 @@ export default function EditorShareActions({
           <p className="mb-2 text-[11px] font-normal leading-snug text-gray-500">{description}</p>
         ) : null}
         <div className="flex flex-wrap gap-2">
-          {destinations.map((destination) => (
+          {destinations.map((destination) => {
+            // A destination may opt out of the shared gate (e.g. Promote auto-saves
+            // the draft on click, so it does not need to wait for a saved draft).
+            const isDisabled = destination.disabled ?? actionDisabled;
+            return (
             <button
               key={destination.key}
               type="button"
-              disabled={actionDisabled}
-              title={actionDisabled ? shareDisabledReason || undefined : destination.detail}
+              disabled={isDisabled}
+              title={isDisabled ? shareDisabledReason || undefined : destination.detail}
               onClick={() => void destination.onClick()}
               className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <span className="block leading-tight">{destination.label}</span>
               {destination.detail ? <span className="block text-[11px] font-normal text-gray-500">{destination.detail}</span> : null}
             </button>
-          ))}
+            );
+          })}
         </div>
       </div>
     );

@@ -653,16 +653,26 @@ export default function BlogNewPage() {
   // adapt call, no credit usage). Otherwise fall back to the platform-selection
   // modal + generate flow. No creator/asset path.
   const handlePromoteClick = async () => {
-    if (!liveState) {
-      setError('Generate and save a draft before sharing.');
+    if (!liveState || !liveState.title?.trim() || !(liveState.content_markdown?.trim() || liveState.content_blocks.length > 0)) {
+      setError('Add a title and content before promoting.');
       return;
+    }
+    // Auto-save the draft first so promotion has a persisted blog to link to — this
+    // is equivalent to clicking "Create blog" and then promoting, in one step.
+    let blogId = savedId;
+    if (!blogId) {
+      blogId = await saveBlogState({ ...liveState, status: 'draft' });
+      if (!blogId) {
+        setError('Could not save the blog before promoting.');
+        return;
+      }
     }
     if (!selectedCompanyId) {
       setPromoteModalOpen(true);
       return;
     }
     try {
-      const saved = await loadPromotionDrafts(selectedCompanyId, 'blog', promotionContentId);
+      const saved = await loadPromotionDrafts(selectedCompanyId, 'blog', blogId);
       if (saved.length > 0) {
         const seeds: WorkspacePlatformSeed[] = saved.map((d) => {
           const account = connectedSocialByPlatform.get(d.platform);
@@ -814,6 +824,9 @@ export default function BlogNewPage() {
 
   const draftShareReady = Boolean(savedId && liveState?.title?.trim() && (liveState.content_markdown?.trim() || liveState.content_blocks.length > 0));
   const shareDisabledReason = draftShareReady ? null : 'Generate and save a draft before sharing.';
+  // Promotion only needs content — it auto-saves the draft on click, so it is
+  // enabled as soon as there is a title + body (no need to save first).
+  const promoteReady = Boolean(liveState?.title?.trim() && (liveState.content_markdown?.trim() || liveState.content_blocks.length > 0));
   const connectedSocialByPlatform = new Map(
     socialAccounts.map((account) => [account.platform_key === 'twitter' ? 'x' : account.platform_key, account]),
   );
@@ -838,6 +851,9 @@ export default function BlogNewPage() {
         key: 'promote-on-social',
         label: 'Promote on social',
         detail: `${promotePlatforms.length} connected platform${promotePlatforms.length === 1 ? '' : 's'}`,
+        // Enabled as soon as there is content — handlePromoteClick auto-saves the
+        // draft, so it does not depend on the shared "save a draft first" gate.
+        disabled: !promoteReady,
         onClick: () => { void handlePromoteClick(); },
       }]
     : [];
