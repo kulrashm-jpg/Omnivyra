@@ -61,15 +61,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const missingSections = Object.entries(sectionState).filter(([, filled]) => !filled).map(([name]) => name);
 
     const systemPrompt =
-      'You are a company context intelligence assistant. Capture structured business context through a short guided conversation.\n' +
-      'Ask ONE concise question at a time, in the simplest possible form.\n' +
-      '- NEVER ask about a section listed under ALREADY CAPTURED — treat it as final.\n' +
-      '- Ask ONLY about the STILL-MISSING sections, hardest-to-infer first (workforce, specific vendor/dependency, regulatory).\n' +
-      '- NEVER repeat a question the user already answered in the conversation.\n' +
-      '- If there are no missing sections, immediately return done.\n' +
-      'When enough information is available, return JSON only in this shape:\n' +
-      '{ "done": true, "structuredContext": { "revenue_segments": [], "geographic_exposures": [], "dependencies": [], "workforce_profile": null, "regulatory_exposures": [], "technology_dependencies": [] } }\n' +
-      'Use arrays of plain objects with obvious keys matching the section names. Include review_status: "inferred" and entity_state: "inferred" on inferred rows. Keep values concise. If more information is needed, return { "nextQuestion": "..." }.';
+      'You are a company context intelligence assistant. Through a short guided conversation, capture these six sections, asking ONE simple question at a time:\n' +
+      'revenue_segments, geographic_exposures, dependencies, workforce_profile, regulatory_exposures, technology_dependencies.\n' +
+      '- A section is COVERED if it appears under ALREADY CAPTURED (saved data) OR the user has already answered it anywhere in the conversation below.\n' +
+      '- NEVER ask about a COVERED section. NEVER repeat or rephrase a question the user already answered — move on to the next UNCOVERED section.\n' +
+      '- The "no saved data yet" list reflects SAVED data only; if the user answered one of those topics in the conversation, treat it as COVERED and skip it.\n' +
+      '- When every section is covered, immediately return done.\n' +
+      'Response format (JSON only, no markdown):\n' +
+      '- If a section is still uncovered: { "nextQuestion": "..." }\n' +
+      '- When all sections are covered: { "done": true, "structuredContext": { "revenue_segments": [], "geographic_exposures": [], "dependencies": [], "workforce_profile": null, "regulatory_exposures": [], "technology_dependencies": [] } } built from the conversation + saved data.\n' +
+      'Use arrays of plain objects with obvious keys matching the section names. Include review_status: "inferred" and entity_state: "inferred" on inferred rows. Keep values concise.';
 
     const completion = await runCompletion({
       companyId,
@@ -84,13 +85,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           content: [
             `Company profile:\n${companyContext}`,
             `Current context intelligence:\n${summarizeContext(currentContext)}`,
-            `ALREADY CAPTURED sections (do NOT ask about these): ${capturedSections.length ? capturedSections.join(', ') : 'none'}`,
-            `STILL MISSING sections (ask only about these): ${missingSections.length ? missingSections.join(', ') : 'none — return done'}`,
+            `ALREADY CAPTURED (saved) sections — do NOT ask about these: ${capturedSections.length ? capturedSections.join(', ') : 'none'}`,
+            `Sections with no saved data yet: ${missingSections.length ? missingSections.join(', ') : 'none — return done'}. Ask about one of these ONLY if the user has not already answered that topic in the conversation below; a topic answered in the conversation is COVERED — do not re-ask it.`,
             conversation.length === 0
               ? missingSections.length === 0
                 ? 'All sections are already captured. Return done immediately.'
-                : 'Start the guided capture. Ask the simplest question about a STILL-MISSING section only.'
-              : 'Conversation so far:\n' +
+                : 'Start the guided capture. Ask the simplest question about an uncovered section only.'
+              : 'Conversation so far (treat every topic the user has answered here as COVERED — ask only about a section that is neither saved nor answered here, or return done):\n' +
                 conversation
                   .map((m: { role?: string; content?: string }) => `${m.role}: ${m.content}`)
                   .join('\n'),
