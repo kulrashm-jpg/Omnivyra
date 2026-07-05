@@ -2074,10 +2074,9 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 description="Use chat when a section needs business judgment instead of website extraction. Each flow writes back to its own section for review before saving."
                 accent="indigo"
               >
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   {([
                     ['Customer', 'ICP and sales model', openTargetCustomerPanel],
-                    ['Context', 'Markets and dependencies', openContextIntelligencePanel],
                     ['Marketing', 'Positioning and campaigns', openMarketingIntelligencePanel],
                     ['Transformation', 'Problem and authority', openRefineProblemTransformationPanel],
                   ] as Array<[string, string, () => void]>).map(([label, detail, action]) => (
