@@ -20,7 +20,7 @@
  * Readiness (+ future Mastery). Evaluated by evaluateCapabilityRegistry.
  */
 
-import type { CapabilityCategoryDef, CategoryCapability, FactorEvalResult } from '../lib/shared/capabilityRegistry';
+import type { CapabilityCategoryDef, CapabilityFactorDef, CategoryCapability, FactorEvalResult } from '../lib/shared/capabilityRegistry';
 
 /** Canonical, tenant-specific signals the registry evaluates. */
 export interface SetupSignals {
@@ -242,47 +242,50 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
         ? ALWAYS
         : { supported: true, enabled: true, available: false, reason: s.channels.reason ?? 'Channel connection status is temporarily unavailable.' },
     factors: (s) => {
-      const connected = new Set(s.channels.connected.map((p) => p.toLowerCase()));
-      const anyConnected = connected.size > 0;
+      const connectedSet = new Set(s.channels.connected.map((p) => p.toLowerCase()));
+      const connectedPlatforms = s.channels.supported.filter((p) => connectedSet.has(p.toLowerCase()));
+      const anyConnected = connectedPlatforms.length > 0;
       // Capability is proven the moment ONE channel is connected — now (anyConnected)
       // or ever (everConnected, a latched feature that survives disconnection).
       const capabilityProven = anyConnected || s.channels.everConnected;
-      // "Only channels the company uses": a CONNECTED platform is a used channel
-      // and is scored (done). Once the capability is proven, UNCONNECTED platforms
-      // are optional/informational (weight 0) — still shown so the user can add them,
-      // but they never block 100%. Until the capability is proven, every platform is
-      // scored (weight 1) so the category reads incomplete. This makes Setup 100%
-      // reachable without forcing every niche platform.
-      const factors = s.channels.supported.map((platform) => {
-        const isConnected = connected.has(platform.toLowerCase());
-        return {
-          id: `channels.${platform.toLowerCase()}`,
-          title: platform,
-          description: `Publish and engage on ${platform} directly from the app.`,
-          weight: capabilityProven ? (isConnected ? 1 : 0) : 1,
-          evaluate: (): FactorEvalResult =>
-            isConnected
-              ? { score: 1 }
-              : {
-                  score: 0,
-                  missing: [`${platform} is not connected`],
-                  recommendation: `Connect ${platform} to publish and track engagement from one place.`,
-                  nextAction: { label: `Connect ${platform}`, actionId: 'channels.connect' },
-                },
-        };
-      });
 
-      // Sticky credit: the company has connected a channel before but none is live
-      // right now. All platform factors are weight 0 (optional), so add one factor
-      // that carries the proven-capability credit — the historical fact is enough.
-      if (capabilityProven && !anyConnected) {
-        factors.push({
-          id: 'channels.capability_proven',
-          title: 'Channel integration',
-          description: 'You have connected a channel before — the integration capability is proven.',
-          weight: 1,
-          evaluate: (): FactorEvalResult => ({ score: 1 }),
-        });
+      // Show ONLY the channels the company has connected. Which platforms to add is
+      // the company's call, so UNCONNECTED platforms are never listed here as pending
+      // tasks — that keeps the card about what's live, not a nag list.
+      const factors: CapabilityFactorDef<SetupSignals>[] = connectedPlatforms.map((platform) => ({
+        id: `channels.${platform.toLowerCase()}`,
+        title: platform,
+        description: `Publish and engage on ${platform} directly from the app.`,
+        weight: 1,
+        evaluate: (): FactorEvalResult => ({ score: 1 }),
+      }));
+
+      if (!anyConnected) {
+        if (capabilityProven) {
+          // Connected a channel before but none is live now — carry the proven credit.
+          factors.push({
+            id: 'channels.capability_proven',
+            title: 'Channel integration',
+            description: 'You have connected a channel before — the integration capability is proven.',
+            weight: 1,
+            evaluate: (): FactorEvalResult => ({ score: 1 }),
+          });
+        } else {
+          // Never connected — a SINGLE call-to-action to connect the first channel,
+          // not the full list of platforms.
+          factors.push({
+            id: 'channels.connect_first',
+            title: 'Connect a channel',
+            description: 'Connect at least one channel to publish and engage.',
+            weight: 1,
+            evaluate: (): FactorEvalResult => ({
+              score: 0,
+              missing: ['No channel is connected yet'],
+              recommendation: 'Connect a channel to publish and track engagement from one place.',
+              nextAction: { label: 'Connect a channel', actionId: 'channels.connect' },
+            }),
+          });
+        }
       }
 
       return factors;
@@ -356,8 +359,9 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
   {
     id: 'oauth_providers',
     title: 'OAuth providers',
-    // Capability-only (informational): OAuth availability is platform-managed;
-    // the customer-actionable connection lives under Channels. Excluded from score.
+    // Capability-only (informational, excluded from score). Connecting even ONE
+    // account via OAuth proves the user understands the setup — so once any channel
+    // is connected (now or ever), this reads as accomplished rather than a to-do.
     weight: 0,
     capability: (s) =>
       s.oauthProviders.available
@@ -370,42 +374,47 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
               `${s.oauthProviders.availableCount} of ${s.oauthProviders.totalCount} providers are available to connect. Connect accounts under Channels.`,
           }
         : { supported: true, enabled: true, available: false, reason: s.oauthProviders.reason ?? 'Provider availability is temporarily unavailable.' },
-    factors: () => [],
-  },
-  {
-    id: 'webhooks',
-    title: 'Webhooks',
-    // Capability-only (optional/advanced). Excluded from score so a workspace
-    // with no webhooks is not penalized.
-    weight: 0,
-    capability: (s) =>
-      !s.webhooks.supported
-        ? { supported: false, enabled: false, available: false, reason: s.webhooks.reason ?? 'Webhooks are not part of this workspace.' }
-        : s.webhooks.available
-          ? {
-              supported: true,
-              enabled: true,
-              available: true,
-              reason:
-                s.webhooks.configuredCount > 0
-                  ? `${s.webhooks.configuredCount} webhook${s.webhooks.configuredCount === 1 ? '' : 's'} configured.`
-                  : 'No webhooks configured (optional).',
-            }
-          : { supported: true, enabled: true, available: false, reason: s.webhooks.reason ?? 'Webhook status is managed in Integrations.' },
-    factors: () => [],
+    factors: (s) => {
+      const oauthProven = s.channels.connected.length > 0 || s.channels.everConnected;
+      // Only surface an accomplished row once a connection exists; otherwise the
+      // capability note ("N of M providers available to connect") is shown instead.
+      return oauthProven
+        ? [
+            {
+              id: 'oauth_providers.connected',
+              title: 'OAuth connection established',
+              description: 'You have connected an account via OAuth — the setup capability is proven.',
+              weight: 0,
+              evaluate: (): FactorEvalResult => ({ score: 1 }),
+            },
+          ]
+        : [];
+    },
   },
   {
     id: 'ai',
     title: 'AI',
     weight: 0,
-    // Capability-aware placeholder — never permanently omitted.
+    // AI generation is provisioned platform-wide for every workspace — always
+    // available, no per-tenant setup. Surfaced as an accomplished capability.
     capability: (s) => ({
       supported: s.ai.supported,
       enabled: s.ai.supported,
       available: s.ai.supported,
       reason: s.ai.reason,
     }),
-    factors: () => [],
+    factors: (s) =>
+      s.ai.supported
+        ? [
+            {
+              id: 'ai.available',
+              title: 'AI generation available',
+              description: 'AI generation is provisioned at the platform level for every workspace.',
+              weight: 0,
+              evaluate: (): FactorEvalResult => ({ score: 1 }),
+            },
+          ]
+        : [],
   },
   {
     id: 'billing',

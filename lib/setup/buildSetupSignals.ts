@@ -155,10 +155,11 @@ export function buildSetupSignals(input: RawSetupInputs): SetupSignals {
       configuredCount: 0,
     },
     ai: {
-      // No tenant-specific AI-configuration signal is client-readable; AI is
-      // provisioned at the platform level for every workspace.
-      supported: false,
-      reason: 'AI generation is configured at the platform level for every workspace.',
+      // AI generation is provisioned at the platform level for EVERY workspace, so
+      // it is always available — there is no tenant-specific setup step. Marked
+      // supported (not "not available", which contradicted its own subtext).
+      supported: true,
+      reason: 'AI generation is available across every workspace — no setup required.',
     },
     billing: {
       available: tier !== null,

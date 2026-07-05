@@ -1,8 +1,14 @@
 import { SETUP_REGISTRY, type SetupSignals } from '../../../config/setupRegistry';
-import { evaluateCapabilityRegistry } from '../../../lib/shared/capabilityRegistry';
+import { evaluateCapabilityRegistry, type EvaluatedCategory } from '../../../lib/shared/capabilityRegistry';
 
 const channelsDef = SETUP_REGISTRY.find((c) => c.id === 'channels');
 const apisDef = SETUP_REGISTRY.find((c) => c.id === 'external_apis');
+
+function evalCategory(categoryId: string, signals: Partial<SetupSignals>): EvaluatedCategory {
+  const def = SETUP_REGISTRY.find((c) => c.id === categoryId);
+  if (!def) throw new Error(`category ${categoryId} missing`);
+  return evaluateCapabilityRegistry([def], signals as SetupSignals).categories[0];
+}
 
 function channelsScore(channels: SetupSignals['channels']): number {
   if (!channelsDef) throw new Error('channels category missing from SETUP_REGISTRY');
@@ -89,5 +95,49 @@ describe('Setup › External APIs capability scoring', () => {
     expect(
       apisScore({ available: true, reason: null, providers: PROVIDERS, everConfigured: false }),
     ).toBe(0);
+  });
+});
+
+describe('Setup › presentation rules', () => {
+  it('Channels lists ONLY connected platforms — never the unconnected ones', () => {
+    const cat = evalCategory('channels', {
+      channels: { available: true, reason: null, supported: SUPPORTED, connected: ['LinkedIn', 'Instagram'], everConnected: false },
+    });
+    const ids = cat.factors.map((f) => f.id);
+    expect(ids).toEqual(['channels.linkedin', 'channels.instagram']);
+    expect(ids).not.toContain('channels.x'); // unconnected — not listed
+    expect(cat.factors.every((f) => f.status === 'done')).toBe(true);
+  });
+
+  it('Channels shows a single connect CTA (not the full list) when nothing is connected', () => {
+    const cat = evalCategory('channels', {
+      channels: { available: true, reason: null, supported: SUPPORTED, connected: [], everConnected: false },
+    });
+    expect(cat.factors.map((f) => f.id)).toEqual(['channels.connect_first']);
+    expect(cat.factors[0].status).not.toBe('done');
+  });
+
+  it('OAuth providers reads accomplished once any channel is connected', () => {
+    const done = evalCategory('oauth_providers', {
+      channels: { available: true, reason: null, supported: SUPPORTED, connected: ['LinkedIn'], everConnected: false },
+      oauthProviders: { available: true, reason: null, availableCount: 8, totalCount: 16 },
+    });
+    expect(done.factors.some((f) => f.id === 'oauth_providers.connected' && f.status === 'done')).toBe(true);
+
+    const notYet = evalCategory('oauth_providers', {
+      channels: { available: true, reason: null, supported: SUPPORTED, connected: [], everConnected: false },
+      oauthProviders: { available: true, reason: null, availableCount: 8, totalCount: 16 },
+    });
+    expect(notYet.factors).toHaveLength(0); // falls back to the info capability note
+  });
+
+  it('AI reads available/accomplished (not "not available")', () => {
+    const cat = evalCategory('ai', { ai: { supported: true, reason: 'AI generation is available across every workspace — no setup required.' } });
+    expect(cat.capability.available).toBe(true);
+    expect(cat.factors.some((f) => f.id === 'ai.available' && f.status === 'done')).toBe(true);
+  });
+
+  it('Webhooks is removed from the setup grid', () => {
+    expect(SETUP_REGISTRY.find((c) => c.id === 'webhooks')).toBeUndefined();
   });
 });
