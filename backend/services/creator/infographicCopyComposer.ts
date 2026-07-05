@@ -338,17 +338,30 @@ export async function composeInfographicCopy(
   // contract; the renderer paints validated objects — never inferred-from-prose.
   const slotCount = Array.isArray(input.sectionTitles) ? input.sectionTitles.length : 0;
   const toResult = (c: ContractResult): InfographicCopyResult => ({
-    sections: c.sections.map((sec) => ({
-      title: clamp(sec.title, 60),
-      lead: clamp(sec.lead || sec.body, 200),
-      bullets: (sec.bullets ?? []).map((b) => clamp(b, 80)),
-      stat: sec.stat ?? null,
-      example: sec.example ?? null,
-      take: sec.take ?? null,
-      impact: sec.impact ?? null,
-      risk: sec.risk ?? null,
-      generated: true,
-    })),
+    sections: c.sections.map((sec, idx) => {
+      // The role contract returns only a title + one lead line; bullets/impact/example
+      // come back empty, so renderDenseBody's blocks collapse and each card renders as
+      // a title over blank space. Backfill the rich fields the renderer draws from the
+      // deterministic role-tuned generator (title/topic-adaptive) so every card reads
+      // as a full "busy" card. Any content the model DID supply is preserved.
+      const enrich = buildStaticSectionContent({
+        topic: input.topic,
+        title: sec.title || sec.body || '',
+        iconIndex: idx,
+      });
+      const aiBullets = (sec.bullets ?? []).map((b) => clamp(b, 80)).filter(Boolean);
+      return {
+        title: clamp(sec.title, 60),
+        lead: clamp(sec.lead || sec.body || enrich.lead, 200),
+        bullets: aiBullets.length > 0 ? aiBullets : enrich.bullets.map((b) => clamp(b, 80)),
+        stat: sec.stat ?? null,
+        example: sec.example ?? enrich.example ?? null,
+        take: sec.take ?? enrich.take ?? null,
+        impact: sec.impact ?? enrich.impact ?? null,
+        risk: sec.risk ?? enrich.risk ?? null,
+        generated: true,
+      };
+    }),
     narrative: clamp(c.summary, 200),
     cta: c.cta || input.cta || 'Take the next step',
     ok: c.sections.length > 0,
