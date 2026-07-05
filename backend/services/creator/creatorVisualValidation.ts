@@ -45,10 +45,9 @@ const FLAG_FAILURES: Readonly<Record<string, VisualFailureCategory[]>> = {
   // 'missing_content' is NOT in the repairable set below, so shortening can never
   // "fix" it — it forces regeneration / blocks the blank from shipping.
   missing_insight: ['missing_content'],
-  // WATCHDOG: a near-EMPTY infographic (title over mostly-blank canvas). Recorded as
-  // a hard failure ('thin_content', non-repairable) so it is VISIBLE in the verdict,
-  // but a distinct category from 'missing_content' so the render-worker block does
-  // not fire for it yet (enforcement is paired with the generator fix).
+  // WATCHDOG: a near-EMPTY infographic (title over mostly-blank canvas). Hard,
+  // non-repairable 'thin_content' failure — the render worker BLOCKS it (paired with
+  // the generator fix that fills cards, so only genuinely near-empty output fails).
   infographic_content_too_thin: ['thin_content'],
 };
 

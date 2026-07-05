@@ -72,20 +72,25 @@ export async function processCreatorRenderJob(job: Job<CreatorDurableRenderJobDa
 
   const resultRecord = result as unknown as Record<string, unknown>;
 
-  // ── WATCHDOG: never ship a blank-body carousel ────────────────────────────
-  // renderAsset attaches a visual_validation verdict. A `missing_content` failure
-  // means a carousel slide rendered with an EMPTY body (a title over empty space —
-  // "not worth presenting"). It is non-repairable (shortening can't restore a
-  // missing body), so fail the job here rather than completing + scheduling the
-  // blank. Previews are diagnostic and still surface (so the defect is visible in
-  // the editor); only real scheduled renders are blocked.
+  // ── WATCHDOG: never ship "not worth presenting" output ────────────────────
+  // renderAsset attaches a visual_validation verdict. Two non-repairable failures
+  // mean the asset is not worth presenting and must NOT be scheduled:
+  //   • missing_content — a carousel slide rendered with an EMPTY body (title over
+  //     empty space); shortening can't restore a missing body.
+  //   • thin_content    — a near-EMPTY infographic (title over mostly-blank canvas).
+  // Fail the job here rather than completing + scheduling it. Previews are diagnostic
+  // and still surface (so the defect is visible in the editor); only real scheduled
+  // renders are blocked.
   if (!isPreview) {
     const vv = safeObject(safeObject(resultRecord.metadata).visual_validation);
     const failures = Array.isArray(vv.failures) ? vv.failures : [];
-    const blankBody = failures.some((f) => safeObject(f).category === 'missing_content');
-    if (blankBody) {
+    const notWorthPresenting = failures.some((f) => {
+      const category = safeObject(f).category;
+      return category === 'missing_content' || category === 'thin_content';
+    });
+    if (notWorthPresenting) {
       throw new Error(
-        'Render blocked by watchdog: a carousel slide rendered with an empty body (missing_content) — regenerate rather than ship a blank slide.',
+        'Render blocked by watchdog: output is not worth presenting (blank carousel slide or near-empty infographic) — regenerate rather than ship it.',
       );
     }
   }
