@@ -108,6 +108,9 @@ export function useCompanyProfileState() {
   >([]);
   const [contextIntelligenceInput, setContextIntelligenceInput] = useState('');
   const [contextIntelligenceChatLoading, setContextIntelligenceChatLoading] = useState(false);
+  // Set when the chat is done with its questions: holds the merged context that
+  // is saved only when the user confirms via the "Save context" action.
+  const [contextIntelligencePendingSave, setContextIntelligencePendingSave] = useState<CompanyContextIntelligence | null>(null);
   const [problemTransformationPanelOpen, setProblemTransformationPanelOpen] = useState(false);
   const [problemTransformationQuestions, setProblemTransformationQuestions] = useState<string[]>([]);
   const [problemTransformationAnswers, setProblemTransformationAnswers] = useState<string[]>([]);
@@ -1451,13 +1454,17 @@ export function useCompanyProfileState() {
             ? { ...(base.workforce_profile ?? {}), ...(sc.workforce_profile as object) }
             : base.workforce_profile,
         } as CompanyContextIntelligence;
+        // Done with questions: stage the merged context and tell the user, but
+        // don't save until they confirm via the "Save context" button.
         setIntelligenceContext(nextContext);
-        // Persist immediately so the capture isn't lost when the panel closes
-        // (previously it only updated local state and required a manual save).
-        await saveIntelligenceContext(nextContext);
-        setContextIntelligencePanelOpen(false);
-        setContextIntelligenceMessages([]);
-        setSuccessMessage('Captured and saved to Context Intelligence — open that section below to review or refine it.');
+        setContextIntelligencePendingSave(nextContext);
+        setContextIntelligenceMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant' as const,
+            content: 'That’s everything I need. Click “Save context” below to save your answers, or keep typing to add more detail.',
+          },
+        ]);
       } else if (data.nextQuestion) {
         setContextIntelligenceMessages((prev) =>
           isInitial
@@ -1472,9 +1479,20 @@ export function useCompanyProfileState() {
     }
   };
 
+  const confirmSaveContextIntelligence = async () => {
+    const pending = contextIntelligencePendingSave;
+    if (!pending) return;
+    await saveIntelligenceContext(pending);
+    setContextIntelligencePendingSave(null);
+    setContextIntelligencePanelOpen(false);
+    setContextIntelligenceMessages([]);
+    setSuccessMessage('Context intelligence saved.');
+  };
+
   const openContextIntelligencePanel = () => {
     setContextIntelligenceMessages([]);
     setContextIntelligenceInput('');
+    setContextIntelligencePendingSave(null);
     setContextIntelligencePanelOpen(true);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -1983,6 +2001,8 @@ export function useCompanyProfileState() {
     contextIntelligenceInput,
     contextIntelligenceMessages,
     contextIntelligencePanelOpen,
+    contextIntelligencePendingSave,
+    confirmSaveContextIntelligence,
     contextQuality,
     draftProfile,
     enrichmentLoading,

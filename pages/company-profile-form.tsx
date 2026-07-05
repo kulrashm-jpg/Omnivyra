@@ -1064,6 +1064,8 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     contextIntelligenceChatLoading,
     contextIntelligenceInput,
     contextIntelligenceMessages,
+    contextIntelligencePendingSave,
+    confirmSaveContextIntelligence,
     contextIntelligencePanelOpen,
     contextQuality,
     draftProfile,
@@ -3397,6 +3399,16 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           setContextIntelligencePanelOpen(false);
           setContextIntelligenceChatLoading(false);
         }}
+        extraActions={contextIntelligencePendingSave ? (
+          <button
+            type="button"
+            onClick={() => { void confirmSaveContextIntelligence(); }}
+            disabled={intelligenceContextSaving}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {intelligenceContextSaving ? 'Saving…' : 'Save context'}
+          </button>
+        ) : null}
       />
       <GuidedChatPanel
         title="Problem and transformation"
