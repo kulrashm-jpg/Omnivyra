@@ -419,7 +419,10 @@ export function useCompanyProfileState() {
         }
         setOverallProfileCompletion(data.overall_profile_completion ?? null);
         setProblemTransformationCompletion(data.problem_transformation_completion ?? null);
-        setIntelligenceReadiness(data.intelligence_readiness ?? null);
+        // Only set readiness when this response carries it (some profile-load
+        // branches omit it); the intelligence-context load is the authoritative
+        // source, so never null a good value here.
+        if (data.intelligence_readiness != null) setIntelligenceReadiness(data.intelligence_readiness);
         setNotFound(false);
         setErrorMessage(null);
         setLastFetchError(null);
@@ -479,8 +482,11 @@ export function useCompanyProfileState() {
         if (!response.ok) return;
         const data = await response.json();
         setEnrichmentSuggestions(data.suggestions ?? []);
-        setContextQuality(data.context_quality ?? null);
-        setIntelligenceReadiness(data.intelligence_readiness ?? null);
+        // The suggestions-only GET (no run=1) does NOT return readiness/quality.
+        // Never null out the good values the intelligence-context load already set —
+        // only overwrite when this response actually carries a value.
+        if (data.context_quality != null) setContextQuality(data.context_quality);
+        if (data.intelligence_readiness != null) setIntelligenceReadiness(data.intelligence_readiness);
       } catch {
         console.warn('Failed to load intelligence enrichment suggestions');
       } finally {
