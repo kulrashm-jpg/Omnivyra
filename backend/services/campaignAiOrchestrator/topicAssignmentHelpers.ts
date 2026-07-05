@@ -53,6 +53,38 @@ export function deriveTopicWeights(
   });
 }
 
+/**
+ * Sub-angle facets appended to a REPEATED topic so each occurrence becomes a
+ * distinct topic string downstream. The block processor keys on the topic string,
+ * so distinct facets → separate cards → separate masters → genuinely different
+ * content (caption AND baked slides, both derived from the topic). This diversifies
+ * the week at the SOURCE, so the platform-dedup backstop rarely has to drop anything.
+ */
+const REPEAT_ANGLE_FACETS = [
+  'common pitfalls to avoid',
+  'a real-world example',
+  'the metrics that matter',
+  'a step-by-step approach',
+  'what to do next',
+  'a contrarian take',
+  'the biggest risk',
+  'how the best teams do it',
+];
+
+/**
+ * First occurrence of each topic keeps the clean string; every later occurrence
+ * gets a rotating angle facet appended so no two slots carry the identical topic.
+ */
+function differentiateRepeats(slots: string[]): string[] {
+  const seen = new Map<string, number>();
+  return slots.map((topic) => {
+    const n = seen.get(topic) ?? 0;
+    seen.set(topic, n + 1);
+    if (n === 0) return topic;
+    return `${topic} — ${REPEAT_ANGLE_FACETS[(n - 1) % REPEAT_ANGLE_FACETS.length]}`;
+  });
+}
+
 export function weightedAssignment(
   topicsWithWeights: Array<{ topic: string; weight: number }>,
   slotsCount: number
@@ -87,12 +119,12 @@ export function weightedAssignment(
     for (let i = 0; i < remaining; i += 1) {
       slots.push(pool[i % pool.length]!);
     }
-    return slots.slice(0, nSlots);
+    return differentiateRepeats(slots.slice(0, nSlots));
   }
 
   const slots: string[] = [];
   for (let i = 0; i < nSlots; i += 1) {
     slots.push(expanded[i % expanded.length]!);
   }
-  return slots;
+  return differentiateRepeats(slots);
 }
