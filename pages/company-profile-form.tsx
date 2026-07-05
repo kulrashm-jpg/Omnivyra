@@ -1217,6 +1217,40 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     userRole,
   } = d;
 
+  const [factsLookupLoading, setFactsLookupLoading] = React.useState(false);
+  const fillFactsFromWikidata = async () => {
+    if (!companyId) return;
+    setFactsLookupLoading(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const response = await fetchWithAuth(
+        `/api/company-profile/company-facts-lookup?companyId=${encodeURIComponent(companyId)}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+      );
+      const data = (await response.json().catch(() => null)) as
+        | { facts?: { founded_year?: string | null; team_size?: string | null; revenue_range?: string | null }; matched_label?: string | null }
+        | null;
+      if (!response.ok || !data) throw new Error('Lookup failed');
+      const facts = data.facts || {};
+      const filled: string[] = [];
+      // Only fill blanks — never overwrite what the user already entered.
+      if (!companyFacts.founded_year && facts.founded_year) { handleCompanyFactChange('founded_year', facts.founded_year); filled.push('founded year'); }
+      if (!companyFacts.team_size && facts.team_size) { handleCompanyFactChange('team_size', facts.team_size); filled.push('team size'); }
+      if (!companyFacts.revenue_range && facts.revenue_range) { handleCompanyFactChange('revenue_range', facts.revenue_range); filled.push('revenue range'); }
+      setIsEditing(true);
+      setSuccessMessage(
+        filled.length > 0
+          ? `Filled ${filled.join(', ')} from Wikidata${data.matched_label ? ` (${data.matched_label})` : ''}. Review, add anything missing, then Save.`
+          : 'No public firmographics found on Wikidata for this company — please fill these facts in manually, then Save.',
+      );
+    } catch (e) {
+      setErrorMessage((e as Error).message || 'Could not look up company facts.');
+    } finally {
+      setFactsLookupLoading(false);
+    }
+  };
+
   const marketPulseSettings = activeProfile.report_settings?.market_pulse ?? {};
   const marketAlternativeLabels = (marketPulseSettings.market_alternatives ?? [])
     .slice(0, 3)
@@ -2279,6 +2313,17 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => { void fillFactsFromWikidata(); }}
+                  disabled={factsLookupLoading}
+                  className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-800 disabled:opacity-50"
+                >
+                  {factsLookupLoading ? 'Checking Wikidata…' : 'Fill from Wikidata'}
+                </button>
+                <span className="text-[11px] text-gray-500">Pulls founded year / size / revenue from public data where available; fill the rest in yourself.</span>
               </div>
               <div className="mt-3 text-xs text-gray-500">
                 Last confirmed: {profileReview.last_confirmed_at ? new Date(profileReview.last_confirmed_at).toLocaleDateString() : 'Not confirmed yet'}

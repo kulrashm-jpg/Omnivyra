@@ -144,6 +144,66 @@ function scoreFromEntityRecord(record: EntityRecord): number {
   return Math.round(Math.max(0, Math.min(100, completenessComponent + sameAsComponent)));
 }
 
+function firstClaimValue(entity: WikidataEntity, prop: string): unknown {
+  return entity.claims?.[prop]?.[0]?.mainsnak?.datavalue?.value;
+}
+
+function inceptionYear(entity: WikidataEntity): string | null {
+  const value = firstClaimValue(entity, 'P571') as { time?: string } | undefined;
+  const match = typeof value?.time === 'string' ? value.time.match(/^[+-](\d{4})/) : null;
+  return match ? match[1] : null;
+}
+
+function employeeCount(entity: WikidataEntity): string | null {
+  const value = firstClaimValue(entity, 'P1128') as { amount?: string } | undefined;
+  const n = value?.amount ? Number(String(value.amount).replace('+', '')) : NaN;
+  return Number.isFinite(n) && n > 0 ? String(Math.round(n)) : null;
+}
+
+function revenueRange(entity: WikidataEntity): string | null {
+  const value = firstClaimValue(entity, 'P2139') as { amount?: string; unit?: string } | undefined;
+  const n = value?.amount ? Number(String(value.amount).replace('+', '')) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const currency = typeof value?.unit === 'string' && value.unit.includes('Q4917') ? '$' : '';
+  const compact =
+    n >= 1e9 ? `${(n / 1e9).toFixed(1).replace(/\.0$/, '')}B`
+      : n >= 1e6 ? `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`
+        : n >= 1e3 ? `${Math.round(n / 1e3)}K`
+          : String(Math.round(n));
+  return `${currency}${compact}`;
+}
+
+/**
+ * Best-effort public-domain firmographics from Wikidata (keyless, default-on).
+ * Returns nulls when the company isn't on Wikidata (typical for small companies)
+ * — the caller then lets the user fill the fields manually. Fail-soft.
+ */
+export async function lookupCompanyFirmographicsFromWikidata(brandName: string): Promise<{
+  founded_year: string | null;
+  team_size: string | null;
+  revenue_range: string | null;
+  matched_label: string | null;
+}> {
+  const empty = { founded_year: null, team_size: null, revenue_range: null, matched_label: null };
+  if (process.env.WIKIDATA_ENABLED === 'false') return empty;
+  const name = String(brandName || '').trim();
+  if (!name) return empty;
+  try {
+    const hit = await searchEntity(name);
+    if (!hit) return empty;
+    const entity = await fetchEntity(hit.id);
+    if (!entity || !entityIsOrganization(entity)) return empty;
+    return {
+      founded_year: inceptionYear(entity),
+      team_size: employeeCount(entity),
+      revenue_range: revenueRange(entity),
+      matched_label: entity.labels?.['en']?.value ?? hit.label ?? null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 export class WikidataAdapter implements KnowledgeGraphProvider {
   public readonly id = 'wikidata';
   private cache: Map<string, EntityIntelligenceResult> = new Map();
