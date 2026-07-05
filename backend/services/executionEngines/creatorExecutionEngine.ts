@@ -541,13 +541,62 @@ class CarouselQualityRejectedError extends Error {
   }
 }
 
-/** A carousel slide may ship only if it carries real headline + body + visual. */
-function isCarouselSlideComplete(slide: unknown): boolean {
+/** Normalize slide text to alphanumeric word tokens for distinctness scoring. */
+function normalizeSlideText(v: unknown): string {
+  return String(v ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Word-overlap similarity (Jaccard) between two token strings. */
+function slideBodyOverlap(a: string, b: string): number {
+  const sa = new Set(a.split(' ').filter(Boolean));
+  const sb = new Set(b.split(' ').filter(Boolean));
+  if (sa.size === 0 && sb.size === 0) return 1;
+  let inter = 0;
+  for (const t of sa) if (sb.has(t)) inter += 1;
+  const union = sa.size + sb.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+/** Two slides are near-duplicate when their headlines match OR their bodies
+ *  overlap heavily — the generic filler the model emits for a thin brief
+ *  ("Unlock Your Brand's Potential" twice) is caught here. */
+export function slidesAreNearDuplicate(a: unknown, b: unknown): boolean {
+  const sa = safeObject(a);
+  const sb = safeObject(b);
+  const ha = normalizeSlideText(sa.headline);
+  const hb = normalizeSlideText(sb.headline);
+  if (ha && ha === hb) return true;
+  return slideBodyOverlap(normalizeSlideText(sa.body_text), normalizeSlideText(sb.body_text)) >= 0.8;
+}
+
+/** True when any two slides in the deck are near-duplicate. */
+export function deckHasNearDuplicateSlides(slides: unknown[]): boolean {
+  for (let i = 0; i < slides.length; i += 1) {
+    for (let j = i + 1; j < slides.length; j += 1) {
+      if (slidesAreNearDuplicate(slides[i], slides[j])) return true;
+    }
+  }
+  return false;
+}
+
+/** Keep the first of each near-duplicate run; drop the rest. Order preserved. */
+export function dedupeCarouselSlides<T>(slides: T[]): T[] {
+  const kept: T[] = [];
+  for (const slide of slides) {
+    if (!kept.some((k) => slidesAreNearDuplicate(k, slide))) kept.push(slide);
+  }
+  return kept;
+}
+
+/** A carousel slide may ship only if it carries real headline + a substantive
+ *  body (≥ 3 words, not a near-blank card) + visual. */
+export function isCarouselSlideComplete(slide: unknown): boolean {
   const s = safeObject(slide);
   const headline = String(s.headline ?? '').trim();
   const body = String(s.body_text ?? '').trim();
   const visual = String(s.visual_description ?? s.visual ?? '').trim();
-  return Boolean(headline) && Boolean(body) && Boolean(visual);
+  const bodyWords = body.split(/\s+/).filter(Boolean).length;
+  return Boolean(headline) && bodyWords >= 3 && Boolean(visual);
 }
 
 /** Complete when slide count matches the template AND every slide is complete. */
@@ -558,6 +607,10 @@ function carouselBlueprintIsComplete(
   const structure = safeObject(template.structure_schema);
   const expected = structure.frame_count == null ? null : Number(structure.frame_count);
   const slides = toArrayOfObjects(blueprint.slides);
+  // A deck with near-duplicate slides is NOT complete — this routes duped output
+  // back through the completion retry ("Do not duplicate slides"), then the
+  // deduped reduced-deck fallback, so duplicates can never ship.
+  if (deckHasNearDuplicateSlides(slides)) return false;
   if (!expected || expected <= 0) {
     return slides.length > 0 && slides.every(isCarouselSlideComplete);
   }
@@ -590,7 +643,9 @@ function buildReducedCarouselFromCompleteSlides(
   // Require real hook + cta bookends so the reduced deck stays coherent.
   if (!isCarouselSlideComplete(sourceSlides[0])) return null;
   if (!isCarouselSlideComplete(sourceSlides[sourceSlides.length - 1])) return null;
-  const complete = sourceSlides.filter(isCarouselSlideComplete);
+  // Keep only complete AND distinct slides — a duped hero slide is dropped here so
+  // the reduced deck is both real and non-repeating.
+  const complete = dedupeCarouselSlides(sourceSlides.filter(isCarouselSlideComplete));
   if (complete.length < MIN_VIABLE_CAROUSEL_SLIDES) return null;
 
   const reducedRoles = complete.map((s, i) =>

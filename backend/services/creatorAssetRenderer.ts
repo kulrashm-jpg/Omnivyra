@@ -4603,8 +4603,11 @@ export async function renderInfographicAsset(
     columnsOverride: infographicComposition?.columns,
     gapScale: infographicComposition?.densityScale,
     // CREATOR-116: cap card height at the role's preferred max (KPI compact, comparison
-    // wide…) so concise roles don't stretch to paragraph height. Generic path unchanged.
-    maxCardHeight: infographicComposition ? roleMaxCardHeight(layout) : undefined,
+    // wide…) so concise roles don't stretch to paragraph height, then vertically center
+    // the grid. Applied on BOTH paths — on the 1500px canvas a 2×2 framework grid was
+    // stretching each card to ~600px while its content filled ~250px, leaving a large
+    // dead band under every card. Capping + centering turns that into balanced padding.
+    maxCardHeight: roleMaxCardHeight(layout),
   });
   const geometry = validateLayoutGeometry({
     width,
