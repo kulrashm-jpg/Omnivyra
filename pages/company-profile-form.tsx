@@ -709,6 +709,7 @@ function IntelligenceContextSections({
   onRunEnrichment,
   onOpenGuidedCapture,
   onReviewSuggestion,
+  onRequestEdit,
 }: {
   context: CompanyContextIntelligence | null;
   readiness: ProfileState['intelligenceReadiness'];
@@ -724,10 +725,19 @@ function IntelligenceContextSections({
   onRunEnrichment: () => void;
   onOpenGuidedCapture: () => void;
   onReviewSuggestion: (suggestionId: string, action: 'accepted' | 'rejected' | 'snoozed') => void;
+  onRequestEdit: () => void;
 }) {
   const ctx = context ?? emptyIntelligenceContext();
   const updateRows = <K extends keyof CompanyContextIntelligence>(key: K, rows: CompanyContextIntelligence[K]) => {
     onChange({ [key]: rows } as Partial<CompanyContextIntelligence>);
+  };
+  // Adding a row shouldn't require the user to first find the global "Edit" button
+  // (that made these sections look frozen in view mode). Clicking "Add" enters
+  // edit mode and appends the new row in one step.
+  const addRow = <K extends keyof CompanyContextIntelligence>(key: K, row: unknown) => {
+    if (!isEditing) onRequestEdit();
+    const existing = Array.isArray(ctx[key]) ? (ctx[key] as unknown[]) : [];
+    updateRows(key, [...existing, row] as CompanyContextIntelligence[K]);
   };
   const updateRow = <T,>(rows: T[], index: number, patch: Partial<T>) =>
     rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row);
@@ -881,7 +891,7 @@ function IntelligenceContextSections({
                 </div>
               </div>
             ))}
-            <button type="button" disabled={!isEditing} onClick={() => updateRows('revenue_segments', [...ctx.revenue_segments, { ...metadataDefaults() } as CompanyRevenueSegment])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add revenue segment</button>
+            <button type="button" disabled={saving} onClick={() => addRow('revenue_segments', { ...metadataDefaults() } as CompanyRevenueSegment)} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add revenue segment</button>
           </div>
         </details>
 
@@ -903,7 +913,7 @@ function IntelligenceContextSections({
                 </div>
               </div>
             ))}
-            <button type="button" disabled={!isEditing} onClick={() => updateRows('geographic_exposures', [...ctx.geographic_exposures, { exposure_type: 'revenue', ...metadataDefaults() } as CompanyGeographicExposure])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add geography exposure</button>
+            <button type="button" disabled={saving} onClick={() => addRow('geographic_exposures', { exposure_type: 'revenue', ...metadataDefaults() } as CompanyGeographicExposure)} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add geography exposure</button>
           </div>
         </details>
 
@@ -927,7 +937,7 @@ function IntelligenceContextSections({
                 </div>
               </div>
             ))}
-            <button type="button" disabled={!isEditing} onClick={() => updateRows('dependencies', [...ctx.dependencies, { dependency_type: 'vendor', ...metadataDefaults() } as CompanyDependency])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add dependency</button>
+            <button type="button" disabled={saving} onClick={() => addRow('dependencies', { dependency_type: 'vendor', ...metadataDefaults() } as CompanyDependency)} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add dependency</button>
           </div>
         </details>
 
@@ -973,7 +983,7 @@ function IntelligenceContextSections({
                 </div>
               </div>
             ))}
-            <button type="button" disabled={!isEditing} onClick={() => updateRows('regulatory_exposures', [...ctx.regulatory_exposures, { ...metadataDefaults() } as CompanyRegulatoryExposure])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add regulatory exposure</button>
+            <button type="button" disabled={saving} onClick={() => addRow('regulatory_exposures', { ...metadataDefaults() } as CompanyRegulatoryExposure)} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add regulatory exposure</button>
           </div>
         </details>
 
@@ -997,7 +1007,7 @@ function IntelligenceContextSections({
                 </div>
               </div>
             ))}
-            <button type="button" disabled={!isEditing} onClick={() => updateRows('technology_dependencies', [...ctx.technology_dependencies, { ...metadataDefaults() } as CompanyTechnologyDependency])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add technology dependency</button>
+            <button type="button" disabled={saving} onClick={() => addRow('technology_dependencies', { ...metadataDefaults() } as CompanyTechnologyDependency)} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add technology dependency</button>
           </div>
         </details>
       </div>
@@ -2677,6 +2687,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 onRunEnrichment={() => { void runIntelligenceEnrichment(); }}
                 onOpenGuidedCapture={openContextIntelligencePanel}
                 onReviewSuggestion={(suggestionId, action) => { void reviewIntelligenceEnrichment(suggestionId, action); }}
+                onRequestEdit={() => setIsEditing(true)}
               />
             )}
 
