@@ -71,19 +71,23 @@ export function roleMaxCardHeight(layout: string): number {
 
 /** The exact JSON shape the LLM must return for this layout + slot count. */
 export function promptSchemaFor(layout: string, slotCount: number): string {
+  // `points`: 3-4 short, SPECIFIC supporting bullets (each ≤80 chars) drawn on the
+  // card beneath the lead — this is what fills the card. Make them concrete to the
+  // topic, not generic.
+  const POINTS = `"points": string[] (3-4 short specific supporting points, each ≤80 chars)`;
   switch (roleForLayout(layout)) {
     case 'statistic':
-      return `{ "headline": string, "kpis": [ { "label": string, "value": string, "description": string } ] (EXACTLY ${slotCount}), "cta": string }`;
+      return `{ "headline": string, "kpis": [ { "label": string, "value": string, "description": string, ${POINTS} } ] (EXACTLY ${slotCount}), "cta": string }`;
     case 'process_step':
-      return `{ "headline": string, "steps": [ { "title": string, "body": string, "outcome": string } ] (EXACTLY ${slotCount}), "cta": string }`;
+      return `{ "headline": string, "steps": [ { "title": string, "body": string, "outcome": string, ${POINTS} } ] (EXACTLY ${slotCount}), "cta": string }`;
     case 'comparison_side':
       return `{ "headline": string, "comparison": { "left": { "title": string, "advantages": string[], "limitations": string[] }, "right": { "title": string, "advantages": string[], "limitations": string[] } }, "summary": string, "cta": string }`;
     case 'framework_pillar':
-      return `{ "headline": string, "pillars": [ { "pillarName": string, "pillarExplanation": string } ] (EXACTLY ${slotCount}), "cta": string }`;
+      return `{ "headline": string, "pillars": [ { "pillarName": string, "pillarExplanation": string, ${POINTS} } ] (EXACTLY ${slotCount}), "cta": string }`;
     case 'hierarchy_level':
-      return `{ "headline": string, "levels": [ { "title": string, "body": string } ] (EXACTLY ${slotCount}), "cta": string }`;
+      return `{ "headline": string, "levels": [ { "title": string, "body": string, ${POINTS} } ] (EXACTLY ${slotCount}), "cta": string }`;
     case 'timeline_event':
-      return `{ "headline": string, "events": [ { "title": string, "date": string, "body": string } ] (EXACTLY ${slotCount}), "cta": string }`;
+      return `{ "headline": string, "events": [ { "title": string, "date": string, "body": string, ${POINTS} } ] (EXACTLY ${slotCount}), "cta": string }`;
   }
 }
 
@@ -114,31 +118,38 @@ export function validateRoleResponse(layout: string, parsed: unknown, slotCount:
     if (errors.length === 0) sections = (arr as Record<string, unknown>[]).map(map);
   };
 
+  // Optional per-item `points` → topic-specific bullets. Present-but-malformed is an
+  // error; absent is fine (the composer backfills generic bullets). Keeps the AI's
+  // specific bullets when it supplies them.
+  const pointsErr = (it: Record<string, unknown>, key: string, i: number): string[] =>
+    it.points !== undefined && !isStrArr(it.points) ? [`${key}[${i}].points must be string[]`] : [];
+  const bulletsFrom = (it: Record<string, unknown>): string[] => (isStrArr(it.points) ? (it.points as string[]) : []);
+
   if (role === 'statistic') {
     if (onlyKeys(o, ['headline', 'kpis', 'cta']).length) errors.push(`unexpected top-level fields: ${onlyKeys(o, ['headline', 'kpis', 'cta']).join(',')}`);
-    checkArr('kpis', ['label', 'value', 'description'],
-      (it, i) => [!isStr(it.label) && `kpis[${i}].label`, !isStr(it.value) && `kpis[${i}].value`, !isStr(it.description) && `kpis[${i}].description`].filter(Boolean).map((x) => `missing ${x}`),
-      (it) => ({ title: s(it.label), body: s(it.description), lead: s(it.description), stat: { value: s(it.value), label: s(it.label) }, bullets: [], semanticRole: 'statistic' }));
+    checkArr('kpis', ['label', 'value', 'description', 'points'],
+      (it, i) => [!isStr(it.label) && `kpis[${i}].label`, !isStr(it.value) && `kpis[${i}].value`, !isStr(it.description) && `kpis[${i}].description`].filter(Boolean).map((x) => `missing ${x}`).concat(pointsErr(it, 'kpis', i)),
+      (it) => ({ title: s(it.label), body: s(it.description), lead: s(it.description), stat: { value: s(it.value), label: s(it.label) }, bullets: bulletsFrom(it), semanticRole: 'statistic' }));
   } else if (role === 'process_step') {
     if (onlyKeys(o, ['headline', 'steps', 'cta']).length) errors.push(`unexpected top-level fields: ${onlyKeys(o, ['headline', 'steps', 'cta']).join(',')}`);
-    checkArr('steps', ['title', 'body', 'outcome'],
-      (it, i) => [!isStr(it.title) && `steps[${i}].title`, !isStr(it.body) && `steps[${i}].body`, !isStr(it.outcome) && `steps[${i}].outcome`].filter(Boolean).map((x) => `missing ${x}`),
-      (it) => ({ title: s(it.title), body: s(it.body), lead: s(it.body), take: s(it.outcome), bullets: [], semanticRole: 'process_step' }));
+    checkArr('steps', ['title', 'body', 'outcome', 'points'],
+      (it, i) => [!isStr(it.title) && `steps[${i}].title`, !isStr(it.body) && `steps[${i}].body`, !isStr(it.outcome) && `steps[${i}].outcome`].filter(Boolean).map((x) => `missing ${x}`).concat(pointsErr(it, 'steps', i)),
+      (it) => ({ title: s(it.title), body: s(it.body), lead: s(it.body), take: s(it.outcome), bullets: bulletsFrom(it), semanticRole: 'process_step' }));
   } else if (role === 'framework_pillar') {
     if (onlyKeys(o, ['headline', 'pillars', 'cta']).length) errors.push(`unexpected top-level fields: ${onlyKeys(o, ['headline', 'pillars', 'cta']).join(',')}`);
-    checkArr('pillars', ['pillarName', 'pillarExplanation'],
-      (it, i) => [!isStr(it.pillarName) && `pillars[${i}].pillarName`, !isStr(it.pillarExplanation) && `pillars[${i}].pillarExplanation`].filter(Boolean).map((x) => `missing ${x}`),
-      (it) => ({ title: s(it.pillarName), body: s(it.pillarExplanation), lead: s(it.pillarExplanation), bullets: [], semanticRole: 'framework_pillar' }));
+    checkArr('pillars', ['pillarName', 'pillarExplanation', 'points'],
+      (it, i) => [!isStr(it.pillarName) && `pillars[${i}].pillarName`, !isStr(it.pillarExplanation) && `pillars[${i}].pillarExplanation`].filter(Boolean).map((x) => `missing ${x}`).concat(pointsErr(it, 'pillars', i)),
+      (it) => ({ title: s(it.pillarName), body: s(it.pillarExplanation), lead: s(it.pillarExplanation), bullets: bulletsFrom(it), semanticRole: 'framework_pillar' }));
   } else if (role === 'hierarchy_level') {
     if (onlyKeys(o, ['headline', 'levels', 'cta']).length) errors.push(`unexpected top-level fields: ${onlyKeys(o, ['headline', 'levels', 'cta']).join(',')}`);
-    checkArr('levels', ['title', 'body'],
-      (it, i) => [!isStr(it.title) && `levels[${i}].title`, !isStr(it.body) && `levels[${i}].body`].filter(Boolean).map((x) => `missing ${x}`),
-      (it) => ({ title: s(it.title), body: s(it.body), lead: s(it.body), bullets: [], semanticRole: 'hierarchy_level' }));
+    checkArr('levels', ['title', 'body', 'points'],
+      (it, i) => [!isStr(it.title) && `levels[${i}].title`, !isStr(it.body) && `levels[${i}].body`].filter(Boolean).map((x) => `missing ${x}`).concat(pointsErr(it, 'levels', i)),
+      (it) => ({ title: s(it.title), body: s(it.body), lead: s(it.body), bullets: bulletsFrom(it), semanticRole: 'hierarchy_level' }));
   } else if (role === 'timeline_event') {
     if (onlyKeys(o, ['headline', 'events', 'cta']).length) errors.push(`unexpected top-level fields: ${onlyKeys(o, ['headline', 'events', 'cta']).join(',')}`);
-    checkArr('events', ['title', 'date', 'body'],
-      (it, i) => [!isStr(it.title) && `events[${i}].title`, !isStr(it.date) && `events[${i}].date`, !isStr(it.body) && `events[${i}].body`].filter(Boolean).map((x) => `missing ${x}`),
-      (it) => ({ title: s(it.title), body: s(it.body), lead: s(it.body), take: s(it.date), bullets: [], semanticRole: 'timeline_event' }));
+    checkArr('events', ['title', 'date', 'body', 'points'],
+      (it, i) => [!isStr(it.title) && `events[${i}].title`, !isStr(it.date) && `events[${i}].date`, !isStr(it.body) && `events[${i}].body`].filter(Boolean).map((x) => `missing ${x}`).concat(pointsErr(it, 'events', i)),
+      (it) => ({ title: s(it.title), body: s(it.body), lead: s(it.body), take: s(it.date), bullets: bulletsFrom(it), semanticRole: 'timeline_event' }));
   } else { // comparison_side — exactly 2, a {left,right} object (slotCount is 2)
     if (onlyKeys(o, ['headline', 'comparison', 'summary', 'cta']).length) errors.push(`unexpected top-level fields: ${onlyKeys(o, ['headline', 'comparison', 'summary', 'cta']).join(',')}`);
     const cmp = o.comparison;

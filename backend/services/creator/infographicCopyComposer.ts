@@ -407,6 +407,7 @@ function buildRoleSystemPrompt(input: InfographicCopyInput, slotCount: number): 
     promptSchemaFor(input.layout, slotCount),
     'Rules: every field is required and non-empty; arrays must contain EXACTLY the stated number of items; do NOT add, remove, or rename any field; do NOT change the structure.',
     'Write content specific to each slot\'s ROLE — a KPI is a metric {label, value, explanation}; a process step is a sequential action {title, body, outcome}; a comparison side is {name, advantages, limitations}. Do not fabricate precise statistics you cannot justify.',
+    '"points" are 3-4 SHORT, SPECIFIC supporting bullets for that slot (each ≤80 chars) — concrete to the topic, not generic filler. They are what fills the card, so make them substantive.',
     input.mode === 'company-context' && input.companyContext
       ? 'Ground the copy in the supplied company context; reference the company by name at most once.'
       : 'Independent mode — do not invent or use any company name; address a generic operator-level reader in second person.',
