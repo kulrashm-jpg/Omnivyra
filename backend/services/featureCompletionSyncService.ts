@@ -15,6 +15,36 @@ function requireStringConfig(value: unknown, key: string): string {
   throw new Error(`Missing or invalid config value: ${key}`);
 }
 
+export interface LatchedFeatureState {
+  status: string;
+  score: number;
+  completedAt: Date | string | null;
+  retained: boolean;
+}
+
+/**
+ * Monotonic latch: a feature is never written below what the company already earned.
+ * Readiness + mastery are permanent — once a company reaches a score (published a
+ * campaign, created content, used a tool), deleting the underlying entity later does
+ * NOT revoke the credit. Keeps the higher of prior vs freshly-computed score, and
+ * preserves the original completed_at when prior wins.
+ */
+export function resolveLatchedFeatureState(
+  prior: { status: string; score: number; completedAt: Date | string | null } | null | undefined,
+  computed: { status: string; score: number },
+): LatchedFeatureState {
+  const retained = prior != null && prior.score > computed.score;
+  if (retained) {
+    return { status: prior!.status, score: prior!.score, completedAt: prior!.completedAt, retained: true };
+  }
+  return {
+    status: computed.status,
+    score: computed.score,
+    completedAt: computed.status === 'completed' ? new Date() : null,
+    retained: false,
+  };
+}
+
 const supabase = createClient(
   requireStringConfig(config.SUPABASE_URL, 'SUPABASE_URL'),
   requireStringConfig(config.SUPABASE_SERVICE_ROLE_KEY, 'SUPABASE_SERVICE_ROLE_KEY')
@@ -42,21 +72,48 @@ export async function syncFeatureCompletion(
     // Step 1: Compute features
     const computedFeatures = await computeFeatureCompletion(companyId, userId);
 
+    // Step 1b: Read what this company has ALREADY achieved so a fresh recompute can
+    // never revoke earned credit. Readiness + mastery are monotonic: once a feature
+    // reaches a score (a campaign published, content created, a tool used), deleting
+    // the underlying entity later does NOT drop the score back down — the historical
+    // fact that the company did it once is sufficient ("done once = scored forever").
+    const { data: existingRows } = await ownedDbTable('feature_completion')
+      .select('feature_key, status, completed_at, metadata')
+      .eq('company_id', companyId);
+    const priorByKey = new Map<string, { status: string; completedAt: Date | string | null; score: number }>();
+    for (const row of (existingRows as Array<Record<string, any>> | null) ?? []) {
+      const meta = row?.metadata;
+      const storedScore =
+        meta && typeof meta === 'object' && typeof meta.score === 'number'
+          ? meta.score
+          : row?.status === 'completed'
+            ? 1
+            : 0;
+      priorByKey.set(row.feature_key, {
+        status: row.status,
+        completedAt: row.completed_at ?? null,
+        score: storedScore,
+      });
+    }
+
     // Step 2: Upsert each feature
     let changesCount = 0;
 
     for (const feature of computedFeatures) {
+      const latched = resolveLatchedFeatureState(priorByKey.get(feature.key), feature);
+
       const upsertData = {
         company_id: companyId,
         user_id: userId || null,
         feature_key: feature.key,
-        status: feature.status,
+        status: latched.status,
         metadata: {
-          reason: feature.reason,
-          score: feature.score,
+          reason: latched.retained ? `${feature.reason} (retained — previously achieved)` : feature.reason,
+          score: latched.score,
           computedAt: new Date().toISOString(),
+          latched: latched.retained,
         },
-        completed_at: feature.status === 'completed' ? new Date() : null,
+        completed_at: latched.completedAt,
       };
 
       const { error, data } = await ownedDbTable('feature_completion')

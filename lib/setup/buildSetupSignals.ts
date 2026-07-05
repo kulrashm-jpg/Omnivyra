@@ -68,7 +68,16 @@ export function buildSetupSignals(input: RawSetupInputs): SetupSignals {
       .filter((a) => a.connected === true)
       .map((a) => a.platform_label || a.platform_key || '')
       .filter((v) => v.length > 0);
-    channels = { available: true, reason: null, supported, connected };
+    channels = {
+      available: true,
+      reason: null,
+      supported,
+      connected,
+      // Sticky capability: once the company has ever connected a channel, the
+      // integration capability is proven and the category stays credited even if
+      // every live connection is later removed.
+      everConnected: featureDone(input.features, 'social_accounts_connected'),
+    };
     const availableCount = input.socialAccounts.filter((a) => a.oauth_configured === true).length;
     oauthProviders = {
       available: true,
@@ -82,6 +91,7 @@ export function buildSetupSignals(input: RawSetupInputs): SetupSignals {
       reason: 'Channel connection status could not be loaded. It will refresh automatically.',
       supported: [],
       connected: [],
+      everConnected: featureDone(input.features, 'social_accounts_connected'),
     };
     oauthProviders = { available: false, reason: null, availableCount: 0, totalCount: 0 };
   }
@@ -130,6 +140,9 @@ export function buildSetupSignals(input: RawSetupInputs): SetupSignals {
       available: input.apiCatalogAvailable,
       reason: input.apiCatalogAvailable ? null : 'The integration catalog could not be loaded. It will refresh automatically.',
       providers,
+      // Sticky: configuring one external API ever proves the capability, credited
+      // even if the key is later removed.
+      everConfigured: featureDone(input.features, 'api_configured'),
     },
     oauthProviders,
     webhooks: {

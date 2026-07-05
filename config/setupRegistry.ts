@@ -48,6 +48,9 @@ export interface SetupSignals {
     supported: string[];
     /** Canonically connected platforms (display labels), from social_accounts. */
     connected: string[];
+    /** Sticky: the company has connected a channel at least once (latched feature).
+     *  Keeps the capability credited even when no connection is currently live. */
+    everConnected: boolean;
   };
   extension: {
     installed: boolean;
@@ -56,6 +59,8 @@ export interface SetupSignals {
     available: boolean;
     reason: string | null;
     providers: Array<{ id: string; name: string; configured: boolean }>;
+    /** Sticky: the company has configured an external API at least once (latched). */
+    everConfigured: boolean;
   };
   oauthProviders: {
     available: boolean;
@@ -239,19 +244,22 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
     factors: (s) => {
       const connected = new Set(s.channels.connected.map((p) => p.toLowerCase()));
       const anyConnected = connected.size > 0;
+      // Capability is proven the moment ONE channel is connected — now (anyConnected)
+      // or ever (everConnected, a latched feature that survives disconnection).
+      const capabilityProven = anyConnected || s.channels.everConnected;
       // "Only channels the company uses": a CONNECTED platform is a used channel
-      // and is scored (done). UNCONNECTED platforms are optional/informational
-      // (weight 0) — still shown so the user can add them, but they never block
-      // 100%. If NOTHING is connected yet, every platform is scored (weight 1) so
-      // the category reads as incomplete until the company connects at least one.
-      // This makes Setup 100% reachable without forcing every niche platform.
-      return s.channels.supported.map((platform) => {
+      // and is scored (done). Once the capability is proven, UNCONNECTED platforms
+      // are optional/informational (weight 0) — still shown so the user can add them,
+      // but they never block 100%. Until the capability is proven, every platform is
+      // scored (weight 1) so the category reads incomplete. This makes Setup 100%
+      // reachable without forcing every niche platform.
+      const factors = s.channels.supported.map((platform) => {
         const isConnected = connected.has(platform.toLowerCase());
         return {
           id: `channels.${platform.toLowerCase()}`,
           title: platform,
           description: `Publish and engage on ${platform} directly from the app.`,
-          weight: anyConnected ? (isConnected ? 1 : 0) : 1,
+          weight: capabilityProven ? (isConnected ? 1 : 0) : 1,
           evaluate: (): FactorEvalResult =>
             isConnected
               ? { score: 1 }
@@ -263,6 +271,21 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
                 },
         };
       });
+
+      // Sticky credit: the company has connected a channel before but none is live
+      // right now. All platform factors are weight 0 (optional), so add one factor
+      // that carries the proven-capability credit — the historical fact is enough.
+      if (capabilityProven && !anyConnected) {
+        factors.push({
+          id: 'channels.capability_proven',
+          title: 'Channel integration',
+          description: 'You have connected a channel before — the integration capability is proven.',
+          weight: 1,
+          evaluate: (): FactorEvalResult => ({ score: 1 }),
+        });
+      }
+
+      return factors;
     },
   },
   {
@@ -294,12 +317,17 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
           ? ALWAYS
           : { supported: true, enabled: true, available: false, reason: 'No external-API providers are offered for this workspace.' }
         : { supported: true, enabled: true, available: false, reason: s.externalApis.reason ?? 'API catalog is temporarily unavailable.' },
-    factors: (s) =>
-      s.externalApis.providers.map((p) => ({
+    factors: (s) => {
+      const anyConfigured = s.externalApis.providers.some((p) => p.configured);
+      // Capability proven by configuring ONE API — now, or ever (latched).
+      const capabilityProven = anyConfigured || s.externalApis.everConfigured;
+      const factors = s.externalApis.providers.map((p) => ({
         id: `external_apis.${p.id}`,
         title: p.name,
         description: `API key for ${p.name}, powering related automation.`,
-        weight: 1,
+        // One configured API proves the capability; the rest are optional (weight 0)
+        // — still shown so the user can add them, never blocking 100%.
+        weight: capabilityProven ? (p.configured ? 1 : 0) : 1,
         evaluate: (): FactorEvalResult =>
           p.configured
             ? { score: 1 }
@@ -309,7 +337,21 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
                 recommendation: `Add your ${p.name} API key to enable its capabilities.`,
                 nextAction: { label: `Configure ${p.name}`, actionId: 'apis.configure' },
               },
-      })),
+      }));
+
+      // Sticky credit: configured an API before but none is live now.
+      if (capabilityProven && !anyConfigured) {
+        factors.push({
+          id: 'external_apis.capability_proven',
+          title: 'External API integration',
+          description: 'You have configured an external API before — the integration capability is proven.',
+          weight: 1,
+          evaluate: (): FactorEvalResult => ({ score: 1 }),
+        });
+      }
+
+      return factors;
+    },
   },
   {
     id: 'oauth_providers',
