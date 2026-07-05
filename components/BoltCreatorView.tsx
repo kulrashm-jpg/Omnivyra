@@ -463,6 +463,10 @@ export default function BoltCreatorView({ d }: { d: S }) {
     user,
   } = d;
 
+  // Opening a collapsed panel should carry the user TO the revealed actionable
+  // content, not just toggle it out of view below the fold.
+  const chatRef = useRef<HTMLDivElement>(null);
+
     return (
     <>
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-3 sm:px-4 lg:px-6">
@@ -821,8 +825,14 @@ export default function BoltCreatorView({ d }: { d: S }) {
             </div>
 
             {/* AI Chat */}
-            <div className="bg-white rounded-2xl border border-indigo-200 shadow-sm overflow-hidden">
-              <button type="button" onClick={() => setShowChat((v) => !v)}
+            <div ref={chatRef} className="bg-white rounded-2xl border border-indigo-200 shadow-sm overflow-hidden scroll-mt-24">
+              <button type="button" onClick={() => {
+                  const next = !showChat;
+                  setShowChat(next);
+                  // On open, bring the chat window (with its option buttons) into view —
+                  // mirrors the strategy-cards scroll pattern; 150ms lets the panel mount.
+                  if (next) setTimeout(() => chatRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+                }}
                 className="w-full flex items-center justify-between px-4 py-3 hover:bg-indigo-50/50 transition-colors">
                 <div className="flex items-center gap-2">
                   <span className="text-base">💬</span>
