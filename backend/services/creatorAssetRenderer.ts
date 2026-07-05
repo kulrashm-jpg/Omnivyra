@@ -750,6 +750,9 @@ function evaluateOverlayQuality(input: {
   supportLines: string[];
   layoutBottom: number;
   height: number;
+  /** Carousel slides must carry a body; a blank body is a hard defect ("not worth
+   *  presenting"). Single promo images may legitimately be headline-only. */
+  expectBody?: boolean;
 }): OverlayQualityReport {
   const textUnits = [input.overlay.hook, input.overlay.headline, input.overlay.keyInsight, input.overlay.supportingText, input.overlay.cta]
     .join(' ')
@@ -766,6 +769,9 @@ function evaluateOverlayQuality(input: {
   }
   if (!input.overlay.cta) flags.push('missing_cta');
   if (!input.overlay.headline) flags.push('missing_headline');
+  // WATCHDOG: a carousel slide whose body rendered to zero lines is blank — the
+  // defect where a slide ships with only a title and empty space. Hard failure.
+  if (input.expectBody && input.insightLines.length === 0) flags.push('missing_insight');
   if (input.layoutBottom > input.height - 58) flags.push('severe_layout_overflow_risk');
   if (input.headlineLines.some((line) => line.length < 9) && input.headlineLines.length > 1) flags.push('awkward_headline_wrap');
   if (input.preset.headlineSize < 38) flags.push('headline_likely_unreadable_mobile');
@@ -1059,6 +1065,7 @@ function buildOverlaySvg(input: {
     supportLines,
     layoutBottom,
     height: input.height,
+    expectBody: input.fileNamePrefix === 'carousel',
   });
 
   // Bottom scrim — vertical gradient that fades from transparent at

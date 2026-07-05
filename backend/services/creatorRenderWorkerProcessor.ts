@@ -72,6 +72,24 @@ export async function processCreatorRenderJob(job: Job<CreatorDurableRenderJobDa
 
   const resultRecord = result as unknown as Record<string, unknown>;
 
+  // ── WATCHDOG: never ship a blank-body carousel ────────────────────────────
+  // renderAsset attaches a visual_validation verdict. A `missing_content` failure
+  // means a carousel slide rendered with an EMPTY body (a title over empty space —
+  // "not worth presenting"). It is non-repairable (shortening can't restore a
+  // missing body), so fail the job here rather than completing + scheduling the
+  // blank. Previews are diagnostic and still surface (so the defect is visible in
+  // the editor); only real scheduled renders are blocked.
+  if (!isPreview) {
+    const vv = safeObject(safeObject(resultRecord.metadata).visual_validation);
+    const failures = Array.isArray(vv.failures) ? vv.failures : [];
+    const blankBody = failures.some((f) => safeObject(f).category === 'missing_content');
+    if (blankBody) {
+      throw new Error(
+        'Render blocked by watchdog: a carousel slide rendered with an empty body (missing_content) — regenerate rather than ship a blank slide.',
+      );
+    }
+  }
+
   if (isPreview) {
     // Validating state — visual validation + diagnostic come from the SAME
     // pipeline (renderAsset attached visual_validation; the diagnostic is built

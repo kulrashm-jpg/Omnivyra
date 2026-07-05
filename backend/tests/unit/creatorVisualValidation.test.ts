@@ -105,3 +105,33 @@ describe('Visual validation — deterministic layout repair', () => {
     expect(applyVisualRepair(payload, null)).toBe(payload);
   });
 });
+
+describe('Visual validation — blank-body carousel watchdog (missing_content)', () => {
+  it('FAILS a carousel slide whose body rendered blank (missing_insight → missing_content)', () => {
+    const v = validateCreatorVisual({
+      overlay_quality_reports: [
+        { flags: [], score: 88 },
+        { flags: [], score: 85 },
+        { flags: ['missing_insight'], score: 80 }, // slide 3 blank body
+      ],
+    });
+    expect(v.passed).toBe(false);
+    const blank = v.failures.find((f) => f.category === 'missing_content');
+    expect(blank).toBeTruthy();
+    expect(blank?.slide).toBe(3);
+  });
+
+  it('is NON-repairable — cannot be "fixed" by shortening (forces regeneration)', () => {
+    const v = validateCreatorVisual({ overlay_quality_reports: [{ flags: ['missing_insight'], score: 80 }] });
+    expect(v.repairHint).toBeNull();
+    expect(deriveVisualRepairHint(v.failures)).toBeNull();
+  });
+
+  it('does not fire when every slide has a body', () => {
+    const v = validateCreatorVisual({
+      overlay_quality_reports: [{ flags: [], score: 90 }, { flags: [], score: 88 }],
+    });
+    expect(v.passed).toBe(true);
+    expect(v.failures.some((f) => f.category === 'missing_content')).toBe(false);
+  });
+});

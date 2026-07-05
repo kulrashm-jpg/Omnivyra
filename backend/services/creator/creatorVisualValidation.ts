@@ -27,7 +27,8 @@ export type VisualFailureCategory =
   | 'contrast'
   | 'typography'
   | 'dimensions'
-  | 'low_quality';
+  | 'low_quality'
+  | 'missing_content';
 
 /** Quality-report flags that map to a HARD visual failure (deterministic). */
 const FLAG_FAILURES: Readonly<Record<string, VisualFailureCategory[]>> = {
@@ -39,6 +40,10 @@ const FLAG_FAILURES: Readonly<Record<string, VisualFailureCategory[]>> = {
   too_many_sections: ['text_fit'],
   text_density_exceeds_infographic_bounds: ['text_fit'],
   section_body_too_long: ['text_fit'],
+  // WATCHDOG: a slide/section rendered with a blank body (title + empty space).
+  // 'missing_content' is NOT in the repairable set below, so shortening can never
+  // "fix" it — it forces regeneration / blocks the blank from shipping.
+  missing_insight: ['missing_content'],
 };
 
 const MIN_CONTRAST_RATIO = 3.0;
