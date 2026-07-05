@@ -1880,6 +1880,15 @@ export function useCompanyProfileState() {
   };
   const uiProblemTransformationCompletion = calculateProblemTransformationCompletion(activeProfile);
   const uiOverallProfileCompletion = calculateProfileCompletion(activeProfile);
+  // Unified completion: blend the core profile fields (which sit near max once the
+  // profile is set up) with Context Intelligence readiness, so ALL enrichment work
+  // — revenue/geography/workforce/dependencies — moves the headline number. It dips
+  // when context is sparse and climbs to the core level as context is captured.
+  const uiCoreCompletion = overallProfileCompletion ?? uiOverallProfileCompletion;
+  const uiIntelligenceReadinessScore = intelligenceReadiness?.score ?? 0;
+  const uiUnifiedCompletion = Math.round(
+    0.7 * uiCoreCompletion + 0.3 * uiIntelligenceReadinessScore
+  );
   const uiConfidence = Math.max(
     0,
     Math.min(
@@ -1887,7 +1896,7 @@ export function useCompanyProfileState() {
       Number(
         activeProfile.overall_confidence ??
           activeProfile.confidence_score ??
-          Math.round(uiOverallProfileCompletion * 0.85)
+          Math.round(uiUnifiedCompletion * 0.85)
       )
     )
   );
@@ -2154,6 +2163,7 @@ export function useCompanyProfileState() {
     toTitleCase,
     uiConfidence,
     uiOverallProfileCompletion,
+    uiUnifiedCompletion,
     uiProblemTransformationCompletion,
     updateActiveProfile,
     updateIntelligenceContext,

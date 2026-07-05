@@ -1123,7 +1123,6 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     openProblemTransformationPanel,
     openRefineProblemTransformationPanel,
     openTargetCustomerPanel,
-    overallProfileCompletion,
     pendingProblemTransformationUpdates,
     problemTransformationAnswers,
     problemTransformationCompletion,
@@ -1219,7 +1218,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     targetCustomerPanelOpen,
     toTitleCase,
     uiConfidence,
-    uiOverallProfileCompletion,
+    uiUnifiedCompletion,
     uiProblemTransformationCompletion,
     updateActiveProfile,
     updateIntelligenceContext,
@@ -1726,10 +1725,8 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               tone="indigo"
             />
             <StatCard
-              label="Profile completion"
-              value={`${completionPercent(
-                overallProfileCompletion ?? uiOverallProfileCompletion
-              )}%`}
+              label="Overall completion"
+              value={`${completionPercent(uiUnifiedCompletion)}%`}
             />
             <StatCard
               label="Intelligence readiness"
