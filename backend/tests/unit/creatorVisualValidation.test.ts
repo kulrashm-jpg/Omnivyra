@@ -135,3 +135,22 @@ describe('Visual validation — blank-body carousel watchdog (missing_content)',
     expect(v.failures.some((f) => f.category === 'missing_content')).toBe(false);
   });
 });
+
+describe('Visual validation — near-empty infographic watchdog (thin_content)', () => {
+  it('FLAGS a near-empty infographic (detection: recorded failure, non-repairable)', () => {
+    const v = validateCreatorVisual({ overlay_quality: { flags: ['infographic_content_too_thin'], score: 40 } });
+    expect(v.passed).toBe(false);
+    expect(v.failures.some((f) => f.category === 'thin_content')).toBe(true);
+    expect(v.repairHint).toBeNull(); // can't shorten to fix near-empty — needs more content
+  });
+
+  it('is DISTINCT from missing_content, so the render-worker hard-block does not fire for it', () => {
+    const v = validateCreatorVisual({ overlay_quality: { flags: ['infographic_content_too_thin'], score: 40 } });
+    expect(v.failures.some((f) => f.category === 'missing_content')).toBe(false);
+  });
+
+  it('passes a content-rich infographic (no thin flag)', () => {
+    const v = validateCreatorVisual({ overlay_quality: { flags: [], score: 90 } });
+    expect(v.passed).toBe(true);
+  });
+});

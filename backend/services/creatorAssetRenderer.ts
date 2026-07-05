@@ -4186,13 +4186,18 @@ function resolveInfographicLayout(metadata: Record<string, unknown>): string {
   return ['stats', 'comparison', 'process', 'framework', 'hierarchy', 'timeline'].includes(requested) ? requested : 'framework';
 }
 
-function validateInfographicDensity(sections: InfographicSection[]): { ok: boolean; flags: string[] } {
+function validateInfographicDensity(sections: InfographicSection[]): { ok: boolean; flags: string[]; contentTooThin: boolean } {
   const flags: string[] = [];
   const totalChars = sections.reduce((sum, section) => sum + section.title.length + section.body.length, 0);
   if (sections.length > 6) flags.push('too_many_sections');
   if (totalChars > 760) flags.push('text_density_exceeds_infographic_bounds');
   if (sections.some((section) => section.body.length > 140)) flags.push('section_body_too_long');
-  return { ok: flags.length === 0, flags };
+  // WATCHDOG (inverse of density): a near-EMPTY infographic — too few sections or too
+  // little total copy — renders as a title over mostly-blank canvas ("not worth
+  // presenting"). Surfaced to the visual validator so it is caught, not shipped.
+  const contentTooThin = sections.length < 3 || totalChars < 240;
+  if (contentTooThin) flags.push('infographic_content_too_thin');
+  return { ok: flags.length === 0, flags, contentTooThin };
 }
 
 /**
@@ -5689,6 +5694,13 @@ export async function renderInfographicAsset(
     infographic_semantic_structure: curatedDesignTemplate(metadata)?.semanticStructure ?? ((bp) => (bp ? semanticStructureForBlueprint(bp) : null))(blueprintIdForRender(metadata)),
     infographic_sections: sections,
     infographic_density: density,
+    // Surface ONLY the near-empty watchdog flag to the visual validator (which reads
+    // overlay_quality). The other density flags remain in infographic_density as
+    // before, so no previously-dormant check is newly activated.
+    overlay_quality: {
+      flags: density.contentTooThin ? ['infographic_content_too_thin'] : [],
+      score: density.contentTooThin ? 40 : 90,
+    },
     icon_zone_allocation: sections.map((section, index) => ({ icon: section.icon, section: index + 1, safeZone: engine.position(index).iconZone })),
     visual_hierarchy_score: quality.visualHierarchy,
     platform_visual_profile: resolvePlatformVisualProfile(platform),

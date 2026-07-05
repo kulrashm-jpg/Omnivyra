@@ -28,7 +28,8 @@ export type VisualFailureCategory =
   | 'typography'
   | 'dimensions'
   | 'low_quality'
-  | 'missing_content';
+  | 'missing_content'
+  | 'thin_content';
 
 /** Quality-report flags that map to a HARD visual failure (deterministic). */
 const FLAG_FAILURES: Readonly<Record<string, VisualFailureCategory[]>> = {
@@ -44,6 +45,11 @@ const FLAG_FAILURES: Readonly<Record<string, VisualFailureCategory[]>> = {
   // 'missing_content' is NOT in the repairable set below, so shortening can never
   // "fix" it — it forces regeneration / blocks the blank from shipping.
   missing_insight: ['missing_content'],
+  // WATCHDOG: a near-EMPTY infographic (title over mostly-blank canvas). Recorded as
+  // a hard failure ('thin_content', non-repairable) so it is VISIBLE in the verdict,
+  // but a distinct category from 'missing_content' so the render-worker block does
+  // not fire for it yet (enforcement is paired with the generator fix).
+  infographic_content_too_thin: ['thin_content'],
 };
 
 const MIN_CONTRAST_RATIO = 3.0;
