@@ -760,7 +760,14 @@ function IntelligenceContextSections({
       description="Optional enrichment used by future exposure-aware recommendations, AI reasoning, and dependency intelligence. Empty sections are treated as missing, not as not relevant."
       accent="indigo"
       collapsible
-      defaultOpen={false}
+      defaultOpen={
+        ctx.revenue_segments.length > 0 ||
+        ctx.geographic_exposures.length > 0 ||
+        ctx.dependencies.length > 0 ||
+        ctx.regulatory_exposures.length > 0 ||
+        ctx.technology_dependencies.length > 0 ||
+        Boolean(ctx.workforce_profile)
+      }
     >
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-6">
         {[

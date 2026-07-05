@@ -1452,9 +1452,12 @@ export function useCompanyProfileState() {
             : base.workforce_profile,
         } as CompanyContextIntelligence;
         setIntelligenceContext(nextContext);
+        // Persist immediately so the capture isn't lost when the panel closes
+        // (previously it only updated local state and required a manual save).
+        await saveIntelligenceContext(nextContext);
         setContextIntelligencePanelOpen(false);
         setContextIntelligenceMessages([]);
-        setSuccessMessage('Context intelligence captured. Review it, then save context intelligence.');
+        setSuccessMessage('Captured and saved to Context Intelligence — open that section below to review or refine it.');
       } else if (data.nextQuestion) {
         setContextIntelligenceMessages((prev) =>
           isInitial
