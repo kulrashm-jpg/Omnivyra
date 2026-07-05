@@ -137,6 +137,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: 'Invalid AI response' });
     }
 
+    // Deterministic safety net: if the model left an ANSWERED section empty,
+    // capture the raw answer so nothing the user typed is lost (this is what made
+    // workforce / technology appear "not saved").
+    const inferredMeta = { review_status: 'inferred' as const, entity_state: 'inferred' as const };
+    const splitList = (s: string) => String(s).split(/[,;]|\band\b/i).map((x) => x.trim()).filter(Boolean);
+    const sc = structuredContext as Record<string, unknown>;
+    for (const { section, answer } of labeledAnswers) {
+      if (section === 'workforce_profile') {
+        const w = sc.workforce_profile as Record<string, unknown> | null | undefined;
+        const hasContent = Boolean(
+          w && (
+            (typeof w.workforce_model === 'string' && w.workforce_model.trim()) ||
+            (Array.isArray(w.hiring_markets) && w.hiring_markets.length) ||
+            (Array.isArray(w.key_skill_dependencies) && w.key_skill_dependencies.length)
+          ),
+        );
+        if (!hasContent) sc.workforce_profile = { workforce_model: answer, ...inferredMeta };
+        continue;
+      }
+      const current = sc[section];
+      if (Array.isArray(current) && current.length > 0) continue;
+      const parts = splitList(answer);
+      if (parts.length === 0) continue;
+      if (section === 'revenue_segments') sc.revenue_segments = parts.map((v) => ({ customer_segment: v, ...inferredMeta }));
+      else if (section === 'geographic_exposures') sc.geographic_exposures = parts.map((v) => ({ geography: v, exposure_type: 'revenue', ...inferredMeta }));
+      else if (section === 'dependencies') sc.dependencies = parts.map((v) => ({ dependency_type: 'other', dependency_name: v, ...inferredMeta }));
+      else if (section === 'regulatory_exposures') sc.regulatory_exposures = parts.map((v) => ({ regulation_type: v, jurisdiction: '', ...inferredMeta }));
+      else if (section === 'technology_dependencies') sc.technology_dependencies = parts.map((v) => ({ provider_name: v, provider_category: 'other', ...inferredMeta }));
+    }
+
     return res.status(200).json({ done: true, structuredContext });
   } catch (err: any) {
     console.error('Define context intelligence failed:', err);
