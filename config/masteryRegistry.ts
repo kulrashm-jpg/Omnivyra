@@ -62,6 +62,10 @@ export interface MasterySignals {
   automation: {
     workflows: SignalFlag;
     leadAutomation: SignalFlag;
+    /** Latched 0..1: blogs published (auto-posted to the connected website). */
+    blogPublishing: number;
+    /** Latched 0..1: campaigns distributed across social platforms. */
+    socialDistribution: number;
   };
 }
 
@@ -163,13 +167,6 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
             actionId: 'creator.open',
           }),
       },
-      {
-        id: 'content.consistency',
-        title: 'Publishing consistency',
-        description: 'A steady publishing cadence over time.',
-        weight: 1,
-        evaluate: () => noSignal('Publishing cadence is not a canonical adoption signal yet.'),
-      },
     ],
   },
   {
@@ -188,34 +185,6 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
             label: 'Create campaign',
             actionId: 'campaign.create',
           }),
-      },
-      {
-        id: 'campaign.cadence',
-        title: 'Campaign cadence',
-        description: 'A regular campaign rhythm over time.',
-        weight: 1,
-        evaluate: () => noSignal('Campaign cadence is not a canonical adoption signal yet.'),
-      },
-      {
-        id: 'campaign.optimization',
-        title: 'Campaign optimization',
-        description: 'Iterating on campaigns based on results.',
-        weight: 1,
-        evaluate: () => noSignal('Campaign optimization is not a canonical adoption signal yet.'),
-      },
-      {
-        id: 'campaign.ab_testing',
-        title: 'A/B testing',
-        description: 'Running experiments across campaign variants.',
-        weight: 1,
-        evaluate: () => noSignal('A/B testing adoption is not a canonical signal yet.'),
-      },
-      {
-        id: 'campaign.reuse',
-        title: 'Campaign reuse',
-        description: 'Reusing proven campaign structures.',
-        weight: 1,
-        evaluate: () => noSignal('Campaign reuse is not a canonical adoption signal yet.'),
       },
     ],
   },
@@ -247,27 +216,6 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
             label: 'Generate with AI',
             actionId: 'creator.open',
           }),
-      },
-      {
-        id: 'ai.refinement',
-        title: 'AI refinement',
-        description: 'Refining AI drafts before publishing.',
-        weight: 1,
-        evaluate: () => noSignal('AI refinement is not a canonical adoption signal yet.'),
-      },
-      {
-        id: 'ai.publishing',
-        title: 'AI-assisted publishing',
-        description: 'Publishing AI-assisted content end-to-end.',
-        weight: 1,
-        evaluate: () => noSignal('AI-assisted publishing is not a canonical adoption signal yet.'),
-      },
-      {
-        id: 'ai.optimization',
-        title: 'AI optimization usage',
-        description: 'Using AI to optimize existing content.',
-        weight: 1,
-        evaluate: () => noSignal('AI optimization usage is not a canonical adoption signal yet.'),
       },
     ],
   },
@@ -313,13 +261,6 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
             actionId: 'leads.setup',
           }),
       },
-      {
-        id: 'intelligence.alerts',
-        title: 'Alerts configured',
-        description: 'Monitoring alerts set up.',
-        weight: 1,
-        evaluate: () => noSignal('Alert configuration is not a canonical adoption signal yet.'),
-      },
     ],
   },
   {
@@ -338,27 +279,6 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
             label: 'Generate report',
             actionId: 'reports.generate',
           }),
-      },
-      {
-        id: 'analytics.conversions',
-        title: 'Conversions tracked',
-        description: 'Conversion tracking in use.',
-        weight: 1,
-        evaluate: () => noSignal('Conversion tracking is not a canonical adoption signal yet.'),
-      },
-      {
-        id: 'analytics.kpi',
-        title: 'KPI monitoring',
-        description: 'Monitoring KPIs over time.',
-        weight: 1,
-        evaluate: () => noSignal('KPI monitoring is not a canonical adoption signal yet.'),
-      },
-      {
-        id: 'analytics.attribution',
-        title: 'Attribution usage',
-        description: 'Using attribution to connect outcomes to work.',
-        weight: 1,
-        evaluate: () => noSignal('Attribution usage is not a canonical adoption signal yet.'),
       },
     ],
   },
@@ -381,27 +301,6 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
             ? { score: 1 }
             : { score: 0, missing: ['Working solo'], recommendation: 'Invite teammates to collaborate.', nextAction: { label: 'Invite team', actionId: 'team.manage' } },
       },
-      {
-        id: 'collaboration.approvals',
-        title: 'Approvals',
-        description: 'Using review/approval on content.',
-        weight: 1,
-        evaluate: () => noSignal('Approval activity is not a canonical adoption signal yet.'),
-      },
-      {
-        id: 'collaboration.comments',
-        title: 'Comments',
-        description: 'Collaborating through comments.',
-        weight: 1,
-        evaluate: () => noSignal('Comment activity is not a canonical adoption signal yet.'),
-      },
-      {
-        id: 'collaboration.tasks',
-        title: 'Task completion',
-        description: 'Completing assigned work items.',
-        weight: 1,
-        evaluate: () => noSignal('Task completion is not a canonical adoption signal yet.'),
-      },
     ],
   },
   {
@@ -409,14 +308,40 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
     title: 'Automation',
     weight: 10,
     capability: () => ALWAYS,
+    // Adoption of Omnivyra's integrated flows: blog auto-published to the website,
+    // campaigns distributed to social, recurring engagement, and lead automation.
     factors: () => [
       {
-        id: 'automation.recurring',
-        title: 'Recurring automations',
-        description: 'Automation enabled and running.',
+        id: 'automation.blog_publishing',
+        title: 'Blog publishing',
+        description: 'Blogs published — auto-posted to your connected website.',
         weight: 2,
+        // Latched: publishing a blog once stays credited.
         evaluate: (s) =>
-          fromFlag(s.automation.workflows, 'No automation enabled', 'Enable automation to reduce manual work.', {
+          fromScore(s.automation.blogPublishing, 'No blog published yet', 'Publish a blog — it is automatically posted to your connected website.', {
+            label: 'Create content',
+            actionId: 'content.create',
+          }),
+      },
+      {
+        id: 'automation.social_distribution',
+        title: 'Social distribution',
+        description: 'Campaigns distributed across your connected social platforms.',
+        weight: 1,
+        // Latched: distributing a campaign once stays credited.
+        evaluate: (s) =>
+          fromScore(s.automation.socialDistribution, 'No campaign distributed yet', 'Run a campaign to distribute posts across your social platforms.', {
+            label: 'Create campaign',
+            actionId: 'campaign.create',
+          }),
+      },
+      {
+        id: 'automation.recurring',
+        title: 'Recurring engagement',
+        description: 'Auto-reply / auto-DM engagement running.',
+        weight: 1,
+        evaluate: (s) =>
+          fromFlag(s.automation.workflows, 'No recurring engagement enabled', 'Enable recurring engagement (auto-reply / auto-DM) to reduce manual work.', {
             label: 'Configure automation',
             actionId: 'engagement.open',
           }),
@@ -431,20 +356,6 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
             label: 'Set up leads',
             actionId: 'leads.setup',
           }),
-      },
-      {
-        id: 'automation.workflow_adoption',
-        title: 'Workflow adoption',
-        description: 'Adopting multi-step automation workflows.',
-        weight: 1,
-        evaluate: () => noSignal('Multi-step workflow adoption is not a canonical adoption signal yet.'),
-      },
-      {
-        id: 'automation.autonomous',
-        title: 'Autonomous publishing',
-        description: 'Fully autonomous publishing in use.',
-        weight: 1,
-        evaluate: () => noSignal('Autonomous publishing is not a canonical adoption signal yet.'),
       },
     ],
   },

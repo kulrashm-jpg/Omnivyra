@@ -87,3 +87,33 @@ describe('Mastery breadth — latched usage features wired in', () => {
     expect(cat.factors.find((f) => f.id === 'ai.generation_used')?.status).toBe('done');
   });
 });
+
+describe('Mastery Automation — integrated flows (latched)', () => {
+  it('credits blog publishing + social distribution from latched features', () => {
+    const signals = buildMasterySignals({
+      ...rawBase,
+      features: [feature('blog_created'), feature('campaign_created')],
+    } as any) as MasterySignals;
+    const def = MASTERY_REGISTRY.find((c) => c.id === 'automation')!;
+    const cat = evaluateCapabilityRegistry([def], signals).categories[0];
+    expect(cat.factors.find((f) => f.id === 'automation.blog_publishing')?.status).toBe('done');
+    expect(cat.factors.find((f) => f.id === 'automation.social_distribution')?.status).toBe('done');
+    expect(cat.percent).toBeGreaterThan(0); // no longer "Not started" once flows are used
+  });
+});
+
+describe('Mastery decluttered — dead no-signal factors removed', () => {
+  const allFactorIds = MASTERY_REGISTRY.flatMap((c) => c.factors({} as any).map((f) => f.id));
+  const removed = [
+    'content.consistency',
+    'campaign.cadence', 'campaign.optimization', 'campaign.ab_testing', 'campaign.reuse',
+    'ai.refinement', 'ai.publishing', 'ai.optimization',
+    'intelligence.alerts',
+    'analytics.conversions', 'analytics.kpi', 'analytics.attribution',
+    'collaboration.approvals', 'collaboration.comments', 'collaboration.tasks',
+    'automation.workflow_adoption', 'automation.autonomous',
+  ];
+  it.each(removed)('no longer surfaces the dead factor %s', (id) => {
+    expect(allFactorIds).not.toContain(id);
+  });
+});

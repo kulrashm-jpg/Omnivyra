@@ -192,6 +192,10 @@ export function buildMasterySignals(input: RawMasteryInputs): MasterySignals {
       leadAutomation: input.websiteSnapshot
         ? { available: true, reason: null, configured: Boolean(leadsCheck?.done) }
         : { available: false, reason: `Lead status could not be loaded. ${REFRESH_MSG}`, configured: false },
+      // Latched adoption of the integrated flows: blogs auto-published to the
+      // website, campaigns distributed across social platforms.
+      blogPublishing: featureScore(features, 'blog_created'),
+      socialDistribution: Math.max(featureScore(features, 'campaign_published'), featureScore(features, 'campaign_created')),
     },
   };
 }
