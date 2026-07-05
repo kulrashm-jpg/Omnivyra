@@ -25,7 +25,7 @@ const CRM_INTEGRATION_TYPES = new Set(['hubspot', 'salesforce', 'pipedrive', 'cr
 const REFRESH_PROBLEM = new Set(['failed', 'requires_reconnect']);
 
 export interface WebsiteSnapshotInput {
-  domain?: { verified?: boolean } | null;
+  domain?: { verified?: boolean; verifiedAt?: string | null } | null;
   tracking?: { active?: boolean; installed?: boolean } | null;
   readiness?: { checks?: Array<{ id?: string; done?: boolean }> } | null;
   integrations?: Array<{ type?: string; status?: string }> | null;
@@ -102,7 +102,9 @@ export function buildReadinessSignals(input: RawReadinessInputs): ReadinessSigna
     ? {
         available: true,
         reason: null,
-        domainVerified: Boolean(snap.domain?.verified),
+        // Latch: once the domain has ever been verified (verifiedAt is set), it
+        // stays verified — verification is a one-time proof, checked at registration.
+        domainVerified: Boolean(snap.domain?.verified || snap.domain?.verifiedAt),
         analyticsConnected: Boolean(analyticsCheck?.done),
         trackingActive: Boolean(snap.tracking?.active || snap.tracking?.installed),
       }
@@ -119,11 +121,26 @@ export function buildReadinessSignals(input: RawReadinessInputs): ReadinessSigna
       ? { available: false, reason: `Could not be loaded. ${REFRESH_MSG}`, count: 0 }
       : { available: true, reason: null, count: n };
 
-  // Automation — lead capture + CRM from the website snapshot; workflows from config.
+  // Automation — blog (CMS/website integration), lead capture + CRM from the
+  // website snapshot; workflows from config.
   const leadsCheck = snap?.readiness?.checks?.find((c) => c.id === 'leads');
+  const cmsCheck = snap?.readiness?.checks?.find((c) => c.id === 'cms');
   const crmConnected = Array.isArray(snap?.integrations)
     ? snap!.integrations!.some((i) => i.type != null && CRM_INTEGRATION_TYPES.has(String(i.type).toLowerCase()))
     : false;
+  // A blog/website integration = a connected CMS: the cms readiness check, or any
+  // connected non-webhook, non-CRM integration (the publishing surface for blogs).
+  const blogConnected =
+    Boolean(cmsCheck?.done) ||
+    (Array.isArray(snap?.integrations)
+      ? snap!.integrations!.some(
+          (i) =>
+            i.type != null &&
+            i.type !== 'lead_webhook' &&
+            !CRM_INTEGRATION_TYPES.has(String(i.type).toLowerCase()) &&
+            String(i.status ?? '').toLowerCase() === 'connected',
+        )
+      : false);
 
   const websiteUrl =
     typeof p['website_url'] === 'string' && (p['website_url'] as string).trim().length > 0
@@ -147,6 +164,9 @@ export function buildReadinessSignals(input: RawReadinessInputs): ReadinessSigna
       media: count(input.mediaCount),
     },
     automation: {
+      blog: snap
+        ? { available: true, reason: null, configured: blogConnected }
+        : { available: false, reason: `Website intelligence could not be loaded. ${REFRESH_MSG}`, configured: false },
       leadCapture: snap
         ? { available: true, reason: null, configured: Boolean(leadsCheck?.done) }
         : { available: false, reason: `Website intelligence could not be loaded. ${REFRESH_MSG}`, configured: false },

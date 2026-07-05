@@ -66,6 +66,8 @@ export interface ReadinessSignals {
     media: SignalCount;
   };
   automation: {
+    /** Website/blog integration (CMS connected) — the publishing automation source. */
+    blog: SignalFlag;
     leadCapture: SignalFlag;
     crm: SignalFlag;
     workflows: SignalFlag;
@@ -222,9 +224,11 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
       {
         id: 'audience.languages',
         title: 'Languages',
-        description: 'Target languages drive localization and hreflang strategy.',
+        description: 'The platform generates in English, the supported language.',
         weight: 1,
-        evaluate: () => noCanonicalSignal('No canonical target-language signal exists in this workspace yet.'),
+        // English is the only supported language today, so there is no multi-language
+        // setup step for the company to complete — this reads as satisfied.
+        evaluate: (): FactorEvalResult => ({ score: 1 }),
       },
       {
         id: 'audience.personas',
@@ -248,7 +252,10 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
         weight: 3,
         evaluate: (s): FactorEvalResult => {
           if (!s.channels.available) return unavailable(s.channels.reason ?? 'Channel status is temporarily unavailable.');
-          return s.channels.connectedCount > 0
+          // One connected channel proves distribution — now, or ever (latched
+          // social_accounts_connected). Which platforms to add is the company's call,
+          // so this is never gated on connecting all of them.
+          return s.channels.connectedCount > 0 || feat(s, 'social_accounts_connected') >= 1
             ? { score: 1 }
             : {
                 score: 0,
@@ -262,15 +269,17 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
         id: 'distribution.channel_health',
         title: 'Channel health',
         description: 'Connected channels have valid, unexpired credentials.',
-        weight: 2,
+        // Weight 0: informational, non-penalizing. Expired credentials on SOME
+        // channels surface here as an actionable warning, but never drag the section
+        // score — one working channel already proves distribution.
+        weight: 0,
         evaluate: (s): FactorEvalResult => {
           if (!s.channels.available) return unavailable(s.channels.reason ?? 'Channel status is temporarily unavailable.');
           if (s.channels.connectedCount === 0) return unavailable('No channels connected yet.');
-          const healthy = s.channels.connectedCount - s.channels.expiredCount;
           return s.channels.expiredCount === 0
             ? { score: 1 }
             : {
-                score: Math.max(0, healthy / s.channels.connectedCount),
+                score: 0,
                 missing: [`${s.channels.expiredCount} channel connection(s) expired`],
                 recommendation: 'Reconnect expired channels so publishing keeps working.',
                 nextAction: { label: 'Review channels', actionId: 'channels.connect' },
@@ -281,15 +290,15 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
         id: 'distribution.publishing_permissions',
         title: 'Publishing permissions',
         description: 'Connected channels have valid tokens with publishing access.',
-        weight: 1,
+        // Weight 0: informational, non-penalizing (see channel health).
+        weight: 0,
         evaluate: (s): FactorEvalResult => {
           if (!s.channels.available) return unavailable(s.channels.reason ?? 'Channel status is temporarily unavailable.');
           if (s.channels.connectedCount === 0) return unavailable('No channels connected yet.');
-          // Publish-ready = connected, non-expired, refresh not failed/requires-reconnect.
           return s.channels.publishReadyCount >= s.channels.connectedCount
             ? { score: 1 }
             : {
-                score: Math.max(0, s.channels.publishReadyCount / s.channels.connectedCount),
+                score: 0,
                 missing: [`${s.channels.permissionIssueCount || (s.channels.connectedCount - s.channels.publishReadyCount)} channel(s) need re-authorization to publish`],
                 recommendation: 'Reconnect channels whose publishing authorization has lapsed.',
                 nextAction: { label: 'Reconnect channels', actionId: 'channels.connect' },
@@ -399,6 +408,17 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
     capability: () => ALWAYS,
     factors: () => [
       {
+        id: 'automation.blog',
+        title: 'Blog / website integration',
+        description: 'A connected CMS/website automates blog publishing and distribution.',
+        weight: 2,
+        evaluate: (s) =>
+          fromFlag(s.automation.blog, 'No website/blog integration connected', 'Connect your CMS or website so blog publishing can be automated.', {
+            label: 'Connect website',
+            actionId: 'website.setup',
+          }),
+      },
+      {
         id: 'automation.lead_capture',
         title: 'Lead capture',
         description: 'Active lead capture turns engagement into pipeline.',
@@ -419,15 +439,6 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
             label: 'Connect CRM',
             actionId: 'integrations.manage',
           }),
-      },
-      {
-        id: 'automation.notifications',
-        title: 'Notifications',
-        description: 'Notification routing keeps your team responsive.',
-        weight: 1,
-        // Only a read-only notifications feed exists; there is no canonical
-        // notification-configuration signal to evaluate.
-        evaluate: () => noCanonicalSignal('No canonical notification-configuration signal exists in this workspace yet.'),
       },
       {
         id: 'automation.workflows',
