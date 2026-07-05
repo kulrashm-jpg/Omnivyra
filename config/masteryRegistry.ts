@@ -39,11 +39,17 @@ export interface MasterySignals {
   ai: {
     /** AI-generated creator assets actually produced. */
     assets: SignalCount;
+    /** Latched 0..1: real credit-consuming AI generation actions ever run. */
+    generationUsed: number;
   };
   intelligence: {
     /** Competitors declared for monitoring (canonical profile data). */
     competitors: number;
     competitorsAvailable: boolean;
+    /** Latched 0..1: Market Pulse comparative/opportunity signals ever used. */
+    marketInsights: number;
+    /** Latched 0..1: active lead signals ever surfaced. */
+    leadIntelligence: number;
   };
   analytics: {
     reports: SignalCount;
@@ -87,6 +93,19 @@ const fromFlag = (
     ? { available: false, reason: sig.reason ?? 'Adoption signal temporarily unavailable.' }
     : sig.configured
       ? { score: 1 }
+      : { score: 0, missing: [missing], recommendation, nextAction };
+
+/** Score a latched 0..1 adoption score: used-once is credited and never lost. */
+const fromScore = (
+  score: number,
+  missing: string,
+  recommendation: string,
+  nextAction: { actionId: string; label?: string },
+): FactorEvalResult =>
+  score >= 1
+    ? { score: 1 }
+    : score > 0
+      ? { score, recommendation, nextAction }
       : { score: 0, missing: [missing], recommendation, nextAction };
 
 /** No canonical adoption signal exists for this factor (capability provider). */
@@ -218,11 +237,16 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
           }),
       },
       {
-        id: 'ai.acceptance',
-        title: 'AI acceptance',
-        description: 'Accepting AI output into published work.',
+        id: 'ai.generation_used',
+        title: 'AI generation used',
+        description: 'Real credit-consuming AI generation actions you have run.',
         weight: 1,
-        evaluate: () => noSignal('AI acceptance rate is not a canonical adoption signal yet.'),
+        // Latched: credit-consuming AI actions used once stay credited.
+        evaluate: (s) =>
+          fromScore(s.ai.generationUsed, 'No AI generation actions run yet', 'Use AI generation to create content, campaigns, or assets.', {
+            label: 'Generate with AI',
+            actionId: 'creator.open',
+          }),
       },
       {
         id: 'ai.refinement',
@@ -267,19 +291,27 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
       },
       {
         id: 'intelligence.insights_reviewed',
-        title: 'Market insights reviewed',
-        description: 'Engaging with market-pulse insights.',
+        title: 'Market insights used',
+        description: 'Market Pulse comparative / opportunity intelligence generated.',
         weight: 1,
-        // Reviewing an insight is a usage event (forbidden as a metric); no
-        // canonical adoption artifact exists.
-        evaluate: () => noSignal('Insight review depth is not a canonical adoption signal (usage, not adoption).'),
+        // Latched: Market Pulse used once stays credited (once = forever).
+        evaluate: (s) =>
+          fromScore(s.intelligence.marketInsights, 'Market Pulse not used yet', 'Run Market Pulse to surface comparative and opportunity intelligence.', {
+            label: 'Open Market Pulse',
+            actionId: 'engagement.open',
+          }),
       },
       {
-        id: 'intelligence.recommendations_acted',
-        title: 'Recommendations acted upon',
-        description: 'Recommendations turned into action.',
+        id: 'intelligence.lead_intelligence',
+        title: 'Lead intelligence used',
+        description: 'Active lead signals surfaced for the workspace.',
         weight: 1,
-        evaluate: () => noSignal('Recommendation action is not a canonical adoption signal yet.'),
+        // Latched: active-leads usage once stays credited.
+        evaluate: (s) =>
+          fromScore(s.intelligence.leadIntelligence, 'No active-lead signals yet', 'Use Active Leads to surface and act on lead intelligence.', {
+            label: 'Open Active Leads',
+            actionId: 'leads.setup',
+          }),
       },
       {
         id: 'intelligence.alerts',

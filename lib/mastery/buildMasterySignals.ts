@@ -81,13 +81,16 @@ const telCount = (
   return count(proxyN);
 };
 
+/** Latched monotonic score (0..1) for a feature-completion key. */
+const featureScore = (features: FeatureStatus[], key: string): number => {
+  const f = features.find((x) => x.key === key);
+  if (!f) return 0;
+  return typeof f.score === 'number' ? f.score : f.status === 'completed' ? 1 : 0;
+};
+
 /** Latched "ever used at all" from feature-completion (monotonic score > 0). */
 const everUsed = (features: FeatureStatus[], ...keys: string[]): boolean =>
-  keys.some((key) => {
-    const f = features.find((x) => x.key === key);
-    if (!f) return false;
-    return typeof f.score === 'number' ? f.score > 0 : f.status === 'completed';
-  });
+  keys.some((key) => featureScore(features, key) > 0);
 
 /**
  * "Once = forever" floor: if the capability has ever been used (latched feature),
@@ -168,10 +171,15 @@ export function buildMasterySignals(input: RawMasteryInputs): MasterySignals {
       // Creator assets are produced with AI assistance — the canonical
       // AI-generated-artifact count.
       assets: aiAssetsSignal,
+      // Latched: real credit-consuming AI generation actions ever run.
+      generationUsed: featureScore(features, 'free_credits_used'),
     },
     intelligence: {
       competitors: competitorCount(input.profile),
       competitorsAvailable: input.profile !== null,
+      // Latched intelligence-feature usage (market pulse, active leads).
+      marketInsights: featureScore(features, 'market_pulse_used'),
+      leadIntelligence: featureScore(features, 'active_leads_used'),
     },
     analytics: {
       reports: reportsSignal,

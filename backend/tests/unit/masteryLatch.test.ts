@@ -56,3 +56,34 @@ describe('Mastery latch — once used = forever', () => {
     expect(cat.percent).toBeGreaterThan(0);
   });
 });
+
+describe('Mastery breadth — latched usage features wired in', () => {
+  it('exposes market-pulse / active-leads / free-credits latched scores', () => {
+    const sig = buildMasterySignals({
+      ...rawBase,
+      features: [feature('market_pulse_used', 0.75), feature('active_leads_used', 0.5), feature('free_credits_used', 1)],
+    } as any);
+    expect(sig.intelligence.marketInsights).toBe(0.75);
+    expect(sig.intelligence.leadIntelligence).toBe(0.5);
+    expect(sig.ai.generationUsed).toBe(1);
+  });
+
+  it('Intelligence scores from Market Pulse + Active Leads usage', () => {
+    const signals = buildMasterySignals({
+      ...rawBase,
+      profile: {},
+      features: [feature('market_pulse_used'), feature('active_leads_used')],
+    } as any) as MasterySignals;
+    const def = MASTERY_REGISTRY.find((c) => c.id === 'intelligence')!;
+    const cat = evaluateCapabilityRegistry([def], signals).categories[0];
+    expect(cat.factors.find((f) => f.id === 'intelligence.insights_reviewed')?.status).toBe('done');
+    expect(cat.factors.find((f) => f.id === 'intelligence.lead_intelligence')?.status).toBe('done');
+  });
+
+  it('AI Adoption reflects real credit-consuming generation actions', () => {
+    const signals = buildMasterySignals({ ...rawBase, features: [feature('free_credits_used')] } as any) as MasterySignals;
+    const def = MASTERY_REGISTRY.find((c) => c.id === 'ai_adoption')!;
+    const cat = evaluateCapabilityRegistry([def], signals).categories[0];
+    expect(cat.factors.find((f) => f.id === 'ai.generation_used')?.status).toBe('done');
+  });
+});
