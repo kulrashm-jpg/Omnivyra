@@ -83,14 +83,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Every uncovered section now has an answer (or none were missing) — the model
-    // is used ONLY to parse the conversation into structured context, never to pick
-    // or repeat a question.
+    // Every uncovered section now has an answer (or none were missing). Because we
+    // asked ONE question per missing section in order, we know exactly which answer
+    // belongs to which section — so we label them for the model rather than making
+    // it guess. That is what makes structured sections (workforce, technology, etc.)
+    // capture reliably instead of only the obvious ones.
+    const userAnswers = conversation
+      .filter((m: { role?: string }) => m.role === 'user')
+      .map((m: { content?: string }) => String(m.content ?? '').trim());
+    const labeledAnswers = missingSections
+      .map((section, i) => ({ section, answer: userAnswers[i] ?? '' }))
+      .filter((entry) => entry.answer);
+
     const systemPrompt =
-      'You extract structured company context from a Q&A conversation. Return JSON ONLY in this shape:\n' +
-      '{ "done": true, "structuredContext": { "revenue_segments": [], "geographic_exposures": [], "dependencies": [], "workforce_profile": null, "regulatory_exposures": [], "technology_dependencies": [] } }\n' +
-      'Fill each section from the matching user answers using arrays of plain objects with obvious keys (e.g. geographic_exposures: [{ "geography": "India", "exposure_type": "revenue" }]). ' +
-      'Include review_status: "inferred" and entity_state: "inferred" on every row. Leave a section empty ([] or null) when the conversation has no information for it. Keep values concise. Always set done: true.';
+      'You convert a company\'s answers into structured context intelligence. You are given, per section, the exact user answer. ' +
+      'For EVERY section that has a non-empty answer, produce structured rows — NEVER leave an answered section empty. ' +
+      'Split list-style answers (comma / "and"-separated) into separate rows.\n' +
+      'Section schemas:\n' +
+      '- revenue_segments: array of { "customer_segment": string, "customer_industry"?: string, "geography"?: string, "strategic_priority"?: "low"|"medium"|"high"|"critical" }\n' +
+      '- geographic_exposures: array of { "geography": string, "exposure_type": "revenue"|"operations"|"workforce"|"customers"|"vendors" }\n' +
+      '- dependencies: array of { "dependency_type": "cloud"|"vendor"|"supplier"|"logistics"|"labor"|"platform"|"channel"|"regulatory"|"technology"|"other", "dependency_name": string, "criticality"?: "low"|"medium"|"high"|"critical" }\n' +
+      '- workforce_profile: a SINGLE object { "workforce_model"?: string, "hiring_markets"?: string[], "key_skill_dependencies"?: string[], "contractor_dependency_level"?: "none"|"low"|"medium"|"high" } (use null only if there is no workforce answer)\n' +
+      '- regulatory_exposures: array of { "jurisdiction": string, "regulation_type": string, "severity"?: "low"|"medium"|"high"|"critical" }\n' +
+      '- technology_dependencies: array of { "provider_name": string, "provider_category": string, "criticality"?: "low"|"medium"|"high"|"critical" }\n' +
+      'Add "review_status": "inferred" and "entity_state": "inferred" to EVERY row (and to the workforce_profile object).\n' +
+      'Return JSON ONLY: { "done": true, "structuredContext": { "revenue_segments": [], "geographic_exposures": [], "dependencies": [], "workforce_profile": null, "regulatory_exposures": [], "technology_dependencies": [] } }.';
 
     const completion = await runCompletion({
       companyId,
@@ -103,12 +120,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         {
           role: 'user',
           content:
-            `Company: ${companyName}\n\n` +
-            `Sections to fill (only those without saved data): ${missingSections.length ? missingSections.join(', ') : 'none'}\n\n` +
-            'Conversation:\n' +
-            conversation
-              .map((m: { role?: string; content?: string }) => `${m.role}: ${m.content}`)
-              .join('\n'),
+            `Company: ${companyName}\n\nAnswers by section (structure each into its section — do not skip any):\n` +
+            (labeledAnswers.length
+              ? labeledAnswers.map((entry) => `- ${entry.section}: ${entry.answer}`).join('\n')
+              : 'none'),
         },
       ],
     });
