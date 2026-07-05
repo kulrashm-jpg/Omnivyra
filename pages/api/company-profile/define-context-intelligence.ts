@@ -49,9 +49,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ].join('\n')
       : 'Company profile is not available.';
 
+    const sectionState: Record<string, boolean> = {
+      revenue_segments: (currentContext?.revenue_segments?.length ?? 0) > 0,
+      geographic_exposures: (currentContext?.geographic_exposures?.length ?? 0) > 0,
+      dependencies: (currentContext?.dependencies?.length ?? 0) > 0,
+      workforce_profile: Boolean(currentContext?.workforce_profile),
+      regulatory_exposures: (currentContext?.regulatory_exposures?.length ?? 0) > 0,
+      technology_dependencies: (currentContext?.technology_dependencies?.length ?? 0) > 0,
+    };
+    const capturedSections = Object.entries(sectionState).filter(([, filled]) => filled).map(([name]) => name);
+    const missingSections = Object.entries(sectionState).filter(([, filled]) => !filled).map(([name]) => name);
+
     const systemPrompt =
       'You are a company context intelligence assistant. Capture structured business context through a short guided conversation.\n' +
-      'Ask ONE concise question at a time. Prioritize missing or weak sections: revenue_segments, geographic_exposures, dependencies, workforce_profile, regulatory_exposures, technology_dependencies.\n' +
+      'Ask ONE concise question at a time, in the simplest possible form.\n' +
+      '- NEVER ask about a section listed under ALREADY CAPTURED — treat it as final.\n' +
+      '- Ask ONLY about the STILL-MISSING sections, hardest-to-infer first (workforce, specific vendor/dependency, regulatory).\n' +
+      '- NEVER repeat a question the user already answered in the conversation.\n' +
+      '- If there are no missing sections, immediately return done.\n' +
       'When enough information is available, return JSON only in this shape:\n' +
       '{ "done": true, "structuredContext": { "revenue_segments": [], "geographic_exposures": [], "dependencies": [], "workforce_profile": null, "regulatory_exposures": [], "technology_dependencies": [] } }\n' +
       'Use arrays of plain objects with obvious keys matching the section names. Include review_status: "inferred" and entity_state: "inferred" on inferred rows. Keep values concise. If more information is needed, return { "nextQuestion": "..." }.';
@@ -69,8 +84,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           content: [
             `Company profile:\n${companyContext}`,
             `Current context intelligence:\n${summarizeContext(currentContext)}`,
+            `ALREADY CAPTURED sections (do NOT ask about these): ${capturedSections.length ? capturedSections.join(', ') : 'none'}`,
+            `STILL MISSING sections (ask only about these): ${missingSections.length ? missingSections.join(', ') : 'none — return done'}`,
             conversation.length === 0
-              ? 'Start the guided capture. Ask the highest-value first question.'
+              ? missingSections.length === 0
+                ? 'All sections are already captured. Return done immediately.'
+                : 'Start the guided capture. Ask the simplest question about a STILL-MISSING section only.'
               : 'Conversation so far:\n' +
                 conversation
                   .map((m: { role?: string; content?: string }) => `${m.role}: ${m.content}`)

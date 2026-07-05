@@ -62,9 +62,23 @@ export type CompanyContextEnrichmentSuggestion = {
   updated_at?: string;
 };
 
+// Already-collected public-domain signals (website crawl + social links). These
+// are consulted BEFORE profile text so context auto-fills from what we already
+// know about the company, and the AI chat only asks for genuine gaps.
+export type WebsiteSignals = {
+  pageTypes: string[];          // canonical_pages.page_type values present (pricing/product/legal/docs/…)
+  languages: string[];          // distinct crawl_metadata.signals.lang values
+  hreflangCount: number;        // max crawl_metadata.signals.hreflang_count (i18n breadth)
+  sameAs: string[];             // JSON-LD sameAs identity/social URLs
+  declaredCredentials: string[]; // JSON-LD declared awards / certifications / memberOf
+  jsonldTypes: string[];        // JSON-LD @type values
+};
+
 type EnrichmentInput = {
   companyId: string;
   profile?: CompanyProfileLike | null;
+  website?: WebsiteSignals | null;
+  socialLinks?: string[] | null;
   actorUserId?: string | null;
   persist?: boolean;
 };
@@ -101,6 +115,11 @@ function profileText(profile?: CompanyProfileLike | null): string {
     profile?.products_services_list,
     profile?.target_audience_list,
     profile?.geography_list,
+    profile?.pricing_model,
+    profile?.avg_deal_size,
+    profile?.sales_cycle,
+    profile?.key_metrics,
+    profile?.sales_motion,
     profile?.report_settings?.market_pulse,
   ].map(textOf).join(' ').toLowerCase();
 }
@@ -493,9 +512,284 @@ export function calculateContextQualityMetadata(intelligence: CompanyContextInte
   };
 }
 
+function pickSocialPlatform(url: string): string | null {
+  const u = String(url || '').toLowerCase();
+  if (u.includes('linkedin.com')) return 'LinkedIn';
+  if (u.includes('twitter.com') || u.includes('x.com')) return 'X';
+  if (u.includes('youtube.com') || u.includes('youtu.be')) return 'YouTube';
+  if (u.includes('instagram.com')) return 'Instagram';
+  if (u.includes('facebook.com') || u.includes('fb.com')) return 'Facebook';
+  if (u.includes('tiktok.com')) return 'TikTok';
+  if (u.includes('pinterest.')) return 'Pinterest';
+  if (u.includes('reddit.com')) return 'Reddit';
+  return null;
+}
+
+const COMPLIANCE_CREDENTIALS: Array<{ re: RegExp; label: string; jurisdiction: string }> = [
+  { re: /\bgdpr\b/i, label: 'GDPR data protection', jurisdiction: 'European Union' },
+  { re: /\bhipaa\b/i, label: 'HIPAA health-data privacy', jurisdiction: 'United States' },
+  { re: /\bsoc[\s-]?2\b/i, label: 'SOC 2 security controls', jurisdiction: 'Global' },
+  { re: /\biso[\s-]?27001\b/i, label: 'ISO 27001 information security', jurisdiction: 'Global' },
+  { re: /\bpci[\s-]?dss\b/i, label: 'PCI-DSS payment-card security', jurisdiction: 'Global' },
+  { re: /\bccpa\b/i, label: 'CCPA California privacy', jurisdiction: 'United States' },
+];
+
+// Public-domain source #1: signals already collected from the website crawl.
+function buildWebsiteInferences(
+  website: WebsiteSignals | null | undefined,
+  context: CompanyContextIntelligence,
+): CompanyContextEnrichmentSuggestion[] {
+  if (!website) return [];
+  const suggestions: CompanyContextEnrichmentSuggestion[] = [];
+  const credentialText = (website.declaredCredentials ?? []).join(' ');
+
+  for (const cred of COMPLIANCE_CREDENTIALS) {
+    if (!cred.re.test(credentialText)) continue;
+    const firstToken = cred.label.split(' ')[0].toLowerCase();
+    if (hasEntity(context.regulatory_exposures as unknown as Array<Record<string, unknown>>, (row) =>
+      String(row.regulation_type || '').toLowerCase().includes(firstToken))) continue;
+    const confidence = 0.8;
+    const signals = [{ field: 'website.declared_credentials', value: cred.label, weight: 0.85 }];
+    const reason = `Website publicly declares ${cred.label}, indicating a real regulatory/compliance exposure.`;
+    suggestions.push(suggestion({
+      target_section: 'regulatory_exposures',
+      target_entity_type: 'company_regulatory_exposure',
+      payload: {
+        jurisdiction: cred.jurisdiction,
+        jurisdiction_key: normalizeTaxonomyKey('geography', cred.jurisdiction),
+        regulation_type: cred.label,
+        regulation_type_key: normalizeTaxonomyKey('regulation_type', cred.label),
+        applicability: 'Declared on the public website; confirm current scope and certification status.',
+        severity: 'high',
+        severity_key: 'high',
+        ...inferredMetadata({ inferredBy: 'website_credential_regulatory_inference_v1', reason, signals, confidence }),
+      } as CompanyRegulatoryExposure,
+      confidence,
+      inference_strength: scoreStrength(confidence),
+      inference_reason: reason,
+      source_signals: signals,
+      impact_score: SECTION_WEIGHTS.regulatory_exposures,
+      readiness_impact_estimate: context.regulatory_exposures.length === 0 ? 12 : 6,
+    }));
+  }
+
+  const multiLingual = (website.hreflangCount ?? 0) > 1 || (website.languages?.length ?? 0) > 1;
+  if (multiLingual && context.geographic_exposures.length === 0) {
+    const confidence = 0.55;
+    const signals = [
+      { field: 'website.hreflang_count', value: website.hreflangCount, weight: 0.6 },
+      { field: 'website.languages', value: website.languages, weight: 0.5 },
+    ];
+    const reason = 'Website serves multiple languages/locales (hreflang), indicating international customer exposure.';
+    suggestions.push(suggestion({
+      target_section: 'geographic_exposures',
+      target_entity_type: 'company_geographic_exposure',
+      payload: {
+        geography: 'International',
+        geography_key: normalizeTaxonomyKey('geography', 'International'),
+        exposure_type: 'customers',
+        exposure_type_key: 'customers',
+        criticality: 'medium',
+        criticality_key: 'medium',
+        ...inferredMetadata({ inferredBy: 'website_i18n_geography_inference_v1', reason, signals, confidence }),
+      } as CompanyGeographicExposure,
+      confidence,
+      inference_strength: scoreStrength(confidence),
+      inference_reason: reason,
+      source_signals: signals,
+      impact_score: SECTION_WEIGHTS.geographic_exposures,
+      readiness_impact_estimate: 16,
+    }));
+  }
+
+  return suggestions;
+}
+
+// Public-domain source #2: declared social links / URLs → distribution-channel dependency.
+function buildSocialInferences(
+  socialLinks: string[] | null | undefined,
+  context: CompanyContextIntelligence,
+): CompanyContextEnrichmentSuggestion[] {
+  if (!socialLinks || socialLinks.length === 0) return [];
+  const platforms = Array.from(
+    new Set(socialLinks.map(pickSocialPlatform).filter((p): p is string => Boolean(p))),
+  );
+  if (platforms.length === 0) return [];
+  if (hasEntity(context.dependencies as unknown as Array<Record<string, unknown>>, (row) =>
+    String(row.dependency_type_key || row.dependency_type || '') === 'channel')) return [];
+  const confidence = 0.6;
+  const signals = [{ field: 'profile.social_links', value: platforms, weight: 0.7 }];
+  const reason = `Active social presence (${platforms.join(', ')}) indicates a distribution-channel dependency.`;
+  return [suggestion({
+    target_section: 'dependencies',
+    target_entity_type: 'company_dependency',
+    payload: {
+      dependency_type: 'channel',
+      dependency_type_key: 'channel',
+      dependency_name: `Social distribution (${platforms.join(', ')})`,
+      criticality: 'medium',
+      criticality_key: 'medium',
+      operational_sensitivity: 'medium',
+      operational_sensitivity_key: 'medium',
+      notes: 'Inferred from declared social links. Confirm which channels are business-critical.',
+      ...inferredMetadata({ inferredBy: 'social_channel_dependency_inference_v1', reason, signals, confidence }),
+    } as CompanyDependency,
+    confidence,
+    inference_strength: scoreStrength(confidence),
+    inference_reason: reason,
+    source_signals: signals,
+    impact_score: SECTION_WEIGHTS.dependencies,
+    readiness_impact_estimate: context.dependencies.length === 0 ? 16 : 6,
+  })];
+}
+
+// Marketing dynamics source: price / revenue / deal-size → revenue segment.
+function buildCommercialInferences(
+  profile: CompanyProfileLike | null | undefined,
+  context: CompanyContextIntelligence,
+): CompanyContextEnrichmentSuggestion[] {
+  if (!profile) return [];
+  const dealSize = String(profile.avg_deal_size ?? '').toLowerCase().trim();
+  const pricing = String(profile.pricing_model ?? '').toLowerCase().trim();
+  if ((!dealSize && !pricing) || context.revenue_segments.length > 0) return [];
+  const enterprise = /\b(enterprise|\d{1,3}(?:,\d{3})+|million|lakh|crore)\b/.test(dealSize) || /\$\s?[1-9]\d{3,}/.test(dealSize);
+  const segment = enterprise ? 'Enterprise' : 'SMB';
+  const confidence = dealSize ? 0.6 : 0.5;
+  const signals = [
+    { field: 'profile.avg_deal_size', value: profile.avg_deal_size, weight: 0.7 },
+    { field: 'profile.pricing_model', value: profile.pricing_model, weight: 0.5 },
+  ];
+  const reason = `Pricing/deal-size signals (${[profile.avg_deal_size, profile.pricing_model].filter(Boolean).join('; ')}) imply a ${segment} revenue segment.`;
+  return [suggestion({
+    target_section: 'revenue_segments',
+    target_entity_type: 'company_revenue_segment',
+    payload: {
+      customer_industry: profile.industry || 'Unknown',
+      customer_industry_key: normalizeTaxonomyKey('customer_industry', profile.industry || ''),
+      customer_segment: segment,
+      customer_segment_key: normalizeTaxonomyKey('customer_segment', segment),
+      strategic_priority: 'high',
+      strategic_priority_key: 'high',
+      notes: `Inferred from commercial fields (${pricing || 'pricing'} / ${dealSize || 'deal size'}). Confirm the primary revenue segment.`,
+      ...inferredMetadata({ inferredBy: 'commercial_revenue_segment_inference_v1', reason, signals, confidence }),
+    },
+    confidence,
+    inference_strength: scoreStrength(confidence),
+    inference_reason: reason,
+    source_signals: signals,
+    impact_score: SECTION_WEIGHTS.revenue_segments,
+    readiness_impact_estimate: 22,
+  })];
+}
+
+// Cross-source semantic dedup: keep the first (highest-priority) suggestion per
+// logical entity so website/social/commercial win over generic profile guesses
+// and the same fact is never surfaced twice.
+function semanticKey(s: CompanyContextEnrichmentSuggestion): string {
+  const p = (s.payload ?? {}) as Record<string, unknown>;
+  const g = (k: string) => String(p[k] ?? '').toLowerCase().trim();
+  switch (s.target_section) {
+    case 'geographic_exposures': return `geo:${g('geography_key') || g('geography')}:${g('exposure_type_key') || g('exposure_type')}`;
+    case 'revenue_segments': return `rev:${g('customer_segment_key') || g('customer_segment')}`;
+    case 'dependencies': return `dep:${g('dependency_type_key') || g('dependency_type')}`;
+    case 'technology_dependencies': return `tech:${g('provider_category_key') || g('provider_category')}`;
+    case 'regulatory_exposures': return `reg:${g('regulation_type_key') || g('regulation_type')}`;
+    case 'workforce_profile': return 'workforce';
+    default: return `${s.target_section}:${s.inference_reason}`;
+  }
+}
+
+function dedupeBySemantic(list: CompanyContextEnrichmentSuggestion[]): CompanyContextEnrichmentSuggestion[] {
+  const seen = new Set<string>();
+  const out: CompanyContextEnrichmentSuggestion[] = [];
+  for (const item of list) {
+    const key = semanticKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+// Loads the already-collected public-domain signals for a company: website crawl
+// signals (from canonical_pages.crawl_metadata) and declared social links (profile
+// fields + crawl JSON-LD sameAs). Fail-open — returns empty signals if nothing crawled.
+export async function loadCompanyPublicSignals(
+  companyId: string,
+  profile?: Record<string, unknown> | null,
+): Promise<{ website: WebsiteSignals | null; socialLinks: string[] }> {
+  let website: WebsiteSignals | null = null;
+  try {
+    const { data } = await ownedDbTable('canonical_pages')
+      .select('page_type, crawl_metadata')
+      .eq('company_id', companyId)
+      .limit(200);
+    const rows = Array.isArray(data) ? (data as Array<{ page_type?: string; crawl_metadata?: unknown }>) : [];
+    if (rows.length > 0) {
+      const pageTypes = new Set<string>();
+      const languages = new Set<string>();
+      const sameAs = new Set<string>();
+      const declaredCredentials = new Set<string>();
+      const jsonldTypes = new Set<string>();
+      let hreflangCount = 0;
+      for (const row of rows) {
+        if (row.page_type) pageTypes.add(String(row.page_type).toLowerCase());
+        const meta = (row.crawl_metadata ?? {}) as Record<string, unknown>;
+        const sig = (meta.signals ?? {}) as Record<string, unknown>;
+        if (typeof sig.lang === 'string' && sig.lang) languages.add(sig.lang);
+        if (typeof sig.hreflang_count === 'number') hreflangCount = Math.max(hreflangCount, sig.hreflang_count);
+        for (const u of Array.isArray(sig.same_as) ? sig.same_as : []) if (typeof u === 'string') sameAs.add(u);
+        for (const c of Array.isArray(sig.declared_credentials) ? sig.declared_credentials : []) if (typeof c === 'string') declaredCredentials.add(c);
+        for (const t of Array.isArray(sig.jsonld_types) ? sig.jsonld_types : []) if (typeof t === 'string') jsonldTypes.add(t);
+      }
+      website = {
+        pageTypes: [...pageTypes],
+        languages: [...languages],
+        hreflangCount,
+        sameAs: [...sameAs],
+        declaredCredentials: [...declaredCredentials],
+        jsonldTypes: [...jsonldTypes],
+      };
+    }
+  } catch {
+    website = null;
+  }
+
+  const p = (profile ?? {}) as Record<string, unknown>;
+  const social = new Set<string>();
+  for (const key of ['linkedin_url', 'facebook_url', 'instagram_url', 'x_url', 'youtube_url', 'tiktok_url']) {
+    const value = p[key];
+    if (typeof value === 'string' && value.trim()) social.add(value.trim());
+  }
+  for (const arrKey of ['social_profiles', 'other_social_links']) {
+    const arr = p[arrKey];
+    if (Array.isArray(arr)) {
+      for (const entry of arr as Array<Record<string, unknown>>) {
+        if (entry && typeof entry.url === 'string' && entry.url.trim()) social.add(entry.url.trim());
+      }
+    }
+  }
+  for (const u of website?.sameAs ?? []) social.add(u);
+
+  return { website, socialLinks: [...social] };
+}
+
 export async function runCompanyContextEnrichment(input: EnrichmentInput) {
   const context = await getCompanyContextIntelligence(input.companyId, { useCache: false });
-  const suggestions = buildProfileInferences(input.profile, context);
+  // Priority order: already-collected public-domain signals first (website crawl,
+  // then social links), then marketing dynamics (price/revenue), then generic
+  // profile inference. Semantic dedup keeps the highest-priority version.
+  const suggestions = dedupeBySemantic([
+    ...buildWebsiteInferences(input.website, context),
+    ...buildSocialInferences(input.socialLinks, context),
+    ...buildCommercialInferences(input.profile, context),
+    ...buildProfileInferences(input.profile, context),
+  ])
+    .sort((a, b) =>
+      (b.impact_score + b.readiness_impact_estimate + b.confidence * 10) -
+      (a.impact_score + a.readiness_impact_estimate + a.confidence * 10),
+    )
+    .slice(0, 8);
   const quality = calculateContextQualityMetadata(context);
   const readiness = calculateIntelligenceReadiness({ intelligence: context, profile: input.profile });
 

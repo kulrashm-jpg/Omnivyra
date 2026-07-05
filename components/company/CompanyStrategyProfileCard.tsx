@@ -245,6 +245,11 @@ export default function CompanyStrategyProfileCard({
   const [isLoadingExample, setIsLoadingExample] = useState(false);
   const [exampleError, setExampleError] = useState<string | null>(null);
   const [exampleSample, setExampleSample] = useState<ContentSample | null>(null);
+  // Read-only view: sections collapse to a one-line preview so the card stays
+  // scannable; the viewer expands only what they want to read in full.
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
+  const toggleSection = (key: string) =>
+    setExpandedSections((prev) => ({ ...prev, [key]: !(prev[key] ?? false) }));
 
   useEffect(() => {
     setDraft(normalizeStrategyProfile(profile));
@@ -488,56 +493,93 @@ export default function CompanyStrategyProfileCard({
         </div>
       ) : (
         hasStrategy && (
-          <div className="mt-4 grid grid-cols-1 gap-4 rounded-xl border border-gray-200 bg-white p-4">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">Worldview</div>
-              <p className="mt-2 text-sm leading-6 text-gray-800">{draft.worldview || '-'}</p>
-              <FieldGuidance
-                hint={FIELD_HINTS.worldview}
-                warning={getFieldWarning(draft.worldview || '')}
-              />
-            </div>
-            {[
-              { key: 'contrarianBeliefs', label: 'Contrarian Beliefs', values: draft.contrarianBeliefs || [] },
-              { key: 'primaryFocus', label: 'Primary Focus', values: draft.primaryFocus || [] },
-              { key: 'differentiation', label: 'Differentiation', values: draft.differentiation || [] },
-              { key: 'typicalAngles', label: 'Typical Angles', values: draft.typicalAngles || [] },
-            ].map((section) => (
-              <div key={section.label}>
-                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">{section.label}</div>
-                {section.values.length > 0 ? (
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-800">
-                    {section.values.map((item, index) => (
-                      <li key={`${section.label}-${index}`}>{item}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-2 text-sm text-gray-500">-</p>
-                )}
-                <FieldGuidance
-                  hint={FIELD_HINTS[section.key as keyof typeof FIELD_HINTS]}
-                  warning={section.values.map(getFieldWarning).find(Boolean) || null}
-                />
-              </div>
-            ))}
+          <div className="mt-4 divide-y divide-gray-100 rounded-xl border border-gray-200 bg-white">
+            {([
+              { key: 'worldview', label: 'Worldview', kind: 'text' as const, text: (draft.worldview || '').trim(), values: [] as string[] },
+              { key: 'primaryFocus', label: 'Primary Focus', kind: 'list' as const, text: '', values: draft.primaryFocus || [] },
+              { key: 'differentiation', label: 'Differentiation', kind: 'list' as const, text: '', values: draft.differentiation || [] },
+              { key: 'typicalAngles', label: 'Typical Angles', kind: 'list' as const, text: '', values: draft.typicalAngles || [] },
+            ]).map((section) => {
+              const count = section.values.length;
+              const isEmpty = section.kind === 'text' ? !section.text : count === 0;
+              // Short lists show inline; the long worldview blob and longer lists
+              // collapse by default behind a one-line preview.
+              const defaultOpen =
+                section.kind === 'list' && count > 0 && count <= 3 && section.values.every((v) => v.length <= 80);
+              const isOpen = expandedSections[section.key] ?? defaultOpen;
+              const previewText =
+                section.kind === 'text'
+                  ? (() => {
+                      const first = section.text.split(/(?<=[.;])\s+/)[0] ?? section.text;
+                      const clipped = first.slice(0, 90);
+                      return `${clipped}${section.text.length > clipped.length ? '…' : ''}`;
+                    })()
+                  : `${count} point${count === 1 ? '' : 's'}`;
+
+              return (
+                <div key={section.key} className="px-4 py-3">
+                  {isEmpty ? (
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">{section.label}</span>
+                      <span className="text-xs text-gray-400">Not set</span>
+                    </div>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => toggleSection(section.key)}
+                        aria-expanded={isOpen}
+                        className="flex w-full items-center justify-between gap-3 text-left"
+                      >
+                        <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.16em] text-gray-500">{section.label}</span>
+                        <span className="flex min-w-0 items-center gap-2">
+                          {!isOpen && (
+                            <span className="max-w-[46vw] truncate text-xs text-gray-500 md:max-w-md">{previewText}</span>
+                          )}
+                          <svg
+                            className={`h-4 w-4 shrink-0 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+                            viewBox="0 0 20 20"
+                            fill="currentColor"
+                            aria-hidden="true"
+                          >
+                            <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                          </svg>
+                        </span>
+                      </button>
+                      {isOpen && (
+                        <div className="mt-2">
+                          {section.kind === 'text' ? (
+                            <p className="text-sm leading-6 text-gray-800">{section.text}</p>
+                          ) : (
+                            <ul className="list-disc space-y-1 pl-5 text-sm text-gray-800">
+                              {section.values.map((item, index) => (
+                                <li key={`${section.key}-${index}`}>{item}</li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )
       )}
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        {!isEditing && (
-          <button
-            type="button"
-            onClick={() => {
-              setPreviousStrategy(normalizeStrategyProfile(profile));
-              setSaveComparison(null);
-              setIsEditing(true);
-            }}
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-          >
-            Edit Strategy
-          </button>
-        )}
+        {/* The strategy is a read-only derived view of the Positioning & Messaging
+            fields (edit those to change it — no duplicate editor here). This action
+            locks the current strategy so automatic AI refinement won't overwrite it. */}
+        <button
+          type="button"
+          onClick={() => { void saveStrategy(); }}
+          disabled={isSaving}
+          className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {isSaving ? 'Locking...' : isLocked ? 'Re-lock strategy' : 'Approve & lock strategy'}
+        </button>
         <button
           type="button"
           onClick={regenerateStrategy}

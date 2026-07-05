@@ -15,6 +15,7 @@
 
 export type ActionId =
   | 'profile.edit'
+  | 'profile.ai_fill'
   | 'website.setup'
   | 'channels.connect'
   | 'apis.configure'
@@ -55,6 +56,7 @@ interface ActionDefinition {
 
 export const COMMAND_CENTER_ACTIONS: Record<ActionId, ActionDefinition> = {
   'profile.edit':        { id: 'profile.edit',        type: 'page', destination: '/company-profile',                 requiredParams: ['companyId'], label: 'Edit company profile' },
+  'profile.ai_fill':     { id: 'profile.ai_fill',     type: 'page', destination: '/company-profile?ai_refine=1',     requiredParams: ['companyId'], label: 'Complete with AI' },
   'website.setup':       { id: 'website.setup',       type: 'page', destination: '/website-setup',                   requiredParams: ['companyId'], label: 'Set up website' },
   'channels.connect':    { id: 'channels.connect',    type: 'page', destination: '/social-platforms',                requiredParams: ['companyId'], label: 'Connect channels' },
   'apis.configure':      { id: 'apis.configure',      type: 'page', destination: '/external-apis',                   requiredParams: ['companyId'], label: 'Configure APIs' },

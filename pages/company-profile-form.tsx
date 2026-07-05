@@ -494,6 +494,8 @@ function GuidedChatPanel({
   onInputChange,
   onSend,
   onClose,
+  extraActions,
+  renderAssistantMessage,
 }: {
   title: string;
   description: string;
@@ -504,6 +506,8 @@ function GuidedChatPanel({
   onInputChange: (value: string) => void;
   onSend: () => void;
   onClose: () => void;
+  extraActions?: React.ReactNode;
+  renderAssistantMessage?: (content: string) => React.ReactNode;
 }) {
   if (!open) return null;
   return (
@@ -539,7 +543,9 @@ function GuidedChatPanel({
                   : 'ml-auto max-w-[85%] bg-indigo-600 text-white'
               }`}
             >
-              {message.content}
+              {message.role === 'assistant' && renderAssistantMessage
+                ? renderAssistantMessage(message.content)
+                : message.content}
             </div>
           ))}
           {loading && messages.length > 0 ? (
@@ -570,6 +576,7 @@ function GuidedChatPanel({
               Send
             </button>
           </div>
+          {extraActions ? <div className="mt-3 flex flex-wrap gap-2">{extraActions}</div> : null}
         </div>
       </div>
     </div>
@@ -2173,7 +2180,6 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             <div className="border rounded-xl p-4 bg-slate-50">
               <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between mb-3">
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-800">Company Facts</h3>
                   <p className="text-xs text-gray-500">
                     These are firmographic facts used in competitor intelligence and should be confirmed by a company admin every 6 months.
                   </p>
@@ -2652,16 +2658,6 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 <span className="font-medium text-gray-800"> Geography</span> and competitors come from
                 <span className="font-medium text-gray-800"> Competitors</span> in the main company profile, so this section only keeps the extra strategic signals.
               </p>
-              <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Market Focus Source</div>
-                  <div className="mt-1">{joinList(activeProfile.geography_list, activeProfile.geography) || 'Not set'}</div>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Competitor Source</div>
-                  <div className="mt-1">{joinList(activeProfile.competitors_list, activeProfile.competitors) || 'Not set'}</div>
-                </div>
-              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium text-gray-700">Business model</label>
@@ -3244,6 +3240,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           setTargetCustomerPanelOpen(false);
           setTargetCustomerLoading(false);
         }}
+        renderAssistantMessage={renderProblemTransformationAssistantMessage}
       />
       <GuidedChatPanel
         title="Campaign purpose"
@@ -3300,6 +3297,16 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           setProblemTransformationInferPanelOpen(false);
           setProblemTransformationInferLoading(false);
         }}
+        extraActions={pendingProblemTransformationUpdates ? (
+          <button
+            type="button"
+            onClick={() => { void sendProblemTransformationRefineMessage('apply'); }}
+            disabled={problemTransformationInferLoading}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            Apply updates
+          </button>
+        ) : null}
       />
     </>
   );

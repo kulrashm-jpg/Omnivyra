@@ -202,6 +202,13 @@ export type CompanyProfileLike = {
   products_services_list?: string[] | null;
   target_audience_list?: string[] | null;
   geography_list?: string[] | null;
+  // Commercial marketing signals (price / revenue / motion) — used by context
+  // enrichment so the questionnaire only asks for what these cannot supply.
+  pricing_model?: string | null;
+  avg_deal_size?: string | null;
+  sales_cycle?: string | null;
+  key_metrics?: string | null;
+  sales_motion?: string | null;
   campaign_purpose_intent?: unknown;
   strategic_inputs?: unknown;
   report_settings?: {

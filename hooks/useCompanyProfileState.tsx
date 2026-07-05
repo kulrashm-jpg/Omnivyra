@@ -1418,16 +1418,38 @@ export function useCompanyProfileState() {
       }
       const data = await response.json();
       if (data.done && data.structuredContext) {
+        const base = intelligenceContext ?? {
+          revenue_segments: [],
+          geographic_exposures: [],
+          dependencies: [],
+          regulatory_exposures: [],
+          workforce_profile: null,
+          technology_dependencies: [],
+        };
+        const sc = data.structuredContext as Partial<CompanyContextIntelligence>;
+        const norm = (v: unknown) => String(v ?? '').toLowerCase().trim();
+        // Append new rows, keyed dedup — never replace/erase already-captured rows.
+        const mergeArray = <T,>(existing: T[] | undefined, incoming: unknown, keyOf: (row: any) => string): T[] => {
+          const out: T[] = Array.isArray(existing) ? [...existing] : [];
+          const seen = new Set(out.map((row) => keyOf(row)));
+          for (const row of Array.isArray(incoming) ? incoming : []) {
+            const key = keyOf(row);
+            if (key && seen.has(key)) continue;
+            seen.add(key);
+            out.push(row as T);
+          }
+          return out;
+        };
         const nextContext = {
-          ...(intelligenceContext ?? {
-            revenue_segments: [],
-            geographic_exposures: [],
-            dependencies: [],
-            regulatory_exposures: [],
-            workforce_profile: null,
-            technology_dependencies: [],
-          }),
-          ...data.structuredContext,
+          ...base,
+          revenue_segments: mergeArray(base.revenue_segments, sc.revenue_segments, (r) => `${norm(r.customer_segment ?? r.customer_segment_key)}:${norm(r.customer_industry ?? r.customer_industry_key)}`),
+          geographic_exposures: mergeArray(base.geographic_exposures, sc.geographic_exposures, (r) => `${norm(r.geography ?? r.geography_key)}:${norm(r.exposure_type ?? r.exposure_type_key)}`),
+          dependencies: mergeArray(base.dependencies, sc.dependencies, (r) => `${norm(r.dependency_type ?? r.dependency_type_key)}:${norm(r.dependency_name)}`),
+          regulatory_exposures: mergeArray(base.regulatory_exposures, sc.regulatory_exposures, (r) => `${norm(r.regulation_type ?? r.regulation_type_key)}:${norm(r.jurisdiction)}`),
+          technology_dependencies: mergeArray(base.technology_dependencies, sc.technology_dependencies, (r) => `${norm(r.provider_category ?? r.provider_category_key)}:${norm(r.provider_name)}`),
+          workforce_profile: sc.workforce_profile != null
+            ? { ...(base.workforce_profile ?? {}), ...(sc.workforce_profile as object) }
+            : base.workforce_profile,
         } as CompanyContextIntelligence;
         setIntelligenceContext(nextContext);
         setContextIntelligencePanelOpen(false);

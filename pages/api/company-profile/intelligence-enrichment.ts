@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import {
   getCompanyContextEnrichmentSuggestions,
+  loadCompanyPublicSignals,
   reviewCompanyContextEnrichmentSuggestion,
   runCompanyContextEnrichment,
 } from '../../../backend/services/companyContextEnrichmentService';
@@ -29,9 +30,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false });
       const run = String(req.query.run ?? '') === '1';
       if (run) {
+        const { website, socialLinks } = await loadCompanyPublicSignals(
+          companyId,
+          profile as unknown as Record<string, unknown>,
+        );
         const enrichment = await runCompanyContextEnrichment({
           companyId,
           profile,
+          website,
+          socialLinks,
           actorUserId,
           persist: true,
         });
@@ -60,9 +67,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const action = String(body.action || '');
       if (action === 'run') {
         const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false });
+        const { website, socialLinks } = await loadCompanyPublicSignals(
+          companyId,
+          profile as unknown as Record<string, unknown>,
+        );
         const enrichment = await runCompanyContextEnrichment({
           companyId,
           profile,
+          website,
+          socialLinks,
           actorUserId,
           persist: true,
         });

@@ -114,7 +114,7 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
         evaluate: (s) =>
           need(s.identity.companyName, 'Company name is not set', 'Add your company name so generated work is branded correctly.', {
             label: 'Add company name',
-            actionId: 'profile.edit',
+            actionId: 'profile.ai_fill',
           }),
       },
       {
@@ -125,7 +125,7 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
         evaluate: (s) =>
           need(s.identity.industry, 'Industry is not set', 'Select your industry to benchmark your position and tailor output.', {
             label: 'Add industry',
-            actionId: 'profile.edit',
+            actionId: 'profile.ai_fill',
           }),
       },
       {
@@ -136,7 +136,7 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
         evaluate: (s) =>
           need(s.identity.companySize, 'Company size is not set', 'Add your company size so planning matches your organization.', {
             label: 'Add organization details',
-            actionId: 'profile.edit',
+            actionId: 'profile.ai_fill',
           }),
       },
       {
@@ -177,7 +177,7 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
         evaluate: () =>
           need(s.brand.voice, 'Brand voice not defined', 'Define your brand voice so written content stays on-tone.', {
             label: 'Define brand voice',
-            actionId: 'profile.edit',
+            actionId: 'profile.ai_fill',
           }),
       },
       {
@@ -188,7 +188,7 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
         evaluate: () =>
           need(s.brand.positioning, 'Brand positioning not defined', 'Add your positioning so campaigns align to your market stance.', {
             label: 'Add positioning',
-            actionId: 'profile.edit',
+            actionId: 'profile.ai_fill',
           }),
       },
     ],
@@ -238,13 +238,20 @@ export const SETUP_REGISTRY: CapabilityCategoryDef<SetupSignals>[] = [
         : { supported: true, enabled: true, available: false, reason: s.channels.reason ?? 'Channel connection status is temporarily unavailable.' },
     factors: (s) => {
       const connected = new Set(s.channels.connected.map((p) => p.toLowerCase()));
+      const anyConnected = connected.size > 0;
+      // "Only channels the company uses": a CONNECTED platform is a used channel
+      // and is scored (done). UNCONNECTED platforms are optional/informational
+      // (weight 0) — still shown so the user can add them, but they never block
+      // 100%. If NOTHING is connected yet, every platform is scored (weight 1) so
+      // the category reads as incomplete until the company connects at least one.
+      // This makes Setup 100% reachable without forcing every niche platform.
       return s.channels.supported.map((platform) => {
         const isConnected = connected.has(platform.toLowerCase());
         return {
           id: `channels.${platform.toLowerCase()}`,
           title: platform,
           description: `Publish and engage on ${platform} directly from the app.`,
-          weight: 1,
+          weight: anyConnected ? (isConnected ? 1 : 0) : 1,
           evaluate: (): FactorEvalResult =>
             isConnected
               ? { score: 1 }

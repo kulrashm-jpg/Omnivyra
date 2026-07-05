@@ -4,8 +4,9 @@ import ChatVoiceButton from '../components/ChatVoiceButton';
 import AIGenerationProgress from '../components/AIGenerationProgress';
 import { joinList, splitToList } from './company-profile.types';
 import { useCompanyProfileState } from '../hooks/useCompanyProfileState';
-import { CompanyProfileChatPanel, ProblemTransformationPanel, CreateCompanyModal } from './company-profile-panels';
+import { ProblemTransformationPanel, CreateCompanyModal } from './company-profile-panels';
 import CompanyProfileForm from './company-profile-form';
+import { isValidCanonicalWebsite } from '../utils/companyProfileValidation';
 
 export default function CompanyProfilePage() {
   const d = useCompanyProfileState();
@@ -166,6 +167,33 @@ export default function CompanyProfilePage() {
     userRole,
   } = d;
 
+  // Setup "Complete with AI" links land here with ?ai_refine=1 — auto-start the
+  // Refine-with-AI chat once so the AI gathers the missing profile info, then
+  // strip the param so a refresh/back doesn't re-fire it.
+  const aiRefineTriggeredRef = React.useRef(false);
+  React.useEffect(() => {
+    if (aiRefineTriggeredRef.current) return;
+    if (!router?.isReady) return;
+    if (router.query?.ai_refine !== '1') return;
+    if (isLoading || !companyId) return;
+    aiRefineTriggeredRef.current = true;
+    // Assess the prerequisite: Refine-with-AI researches the company from its
+    // website, so it's only useful once a valid website is connected.
+    if (isValidCanonicalWebsite(activeProfile?.website_url)) {
+      // Website connected → let the AI research + run the guided refinement.
+      void Promise.resolve(refineProfile?.());
+    } else {
+      // No website → refine has nothing to research. Open editing and guide the
+      // user to add the website first (the unlock for AI completion), instead of
+      // firing a refine that would immediately fail.
+      setIsEditing?.(true);
+      setSuccessMessage?.('Add your website below so AI can research your company, then use “Refine with AI” to complete the rest.');
+    }
+    const rest = { ...router.query };
+    delete rest.ai_refine;
+    void router.replace({ pathname: router.pathname, query: rest }, undefined, { shallow: true });
+  }, [router?.isReady, router?.query, isLoading, companyId, refineProfile, activeProfile?.website_url, setIsEditing, setSuccessMessage, router]);
+
   return (
     <div className="min-h-screen bg-gray-50">
       {showCompanyFactReviewPrompt && isCompanyAdmin && (
@@ -228,65 +256,10 @@ export default function CompanyProfilePage() {
       )}
       <CompanyProfileForm d={d} />
 
-      <CompanyProfileChatPanel
-        open={targetCustomerPanelOpen}
-        onClose={() => setTargetCustomerPanelOpen(false)}
-        title="Define Target Customer"
-        messages={targetCustomerMessages}
-        loading={targetCustomerLoading}
-        input={targetCustomerInput}
-        onInputChange={setTargetCustomerInput}
-        onSubmit={sendTargetCustomerMessage}
-        accentColor="indigo"
-        renderAssistantMessage={renderProblemTransformationAssistantMessage}
-      />
-
-      <CompanyProfileChatPanel
-        open={campaignPurposePanelOpen}
-        onClose={() => setCampaignPurposePanelOpen(false)}
-        title="Campaign Purpose & Strategic Intent"
-        messages={campaignPurposeMessages}
-        loading={campaignPurposeLoading}
-        input={campaignPurposeInput}
-        onInputChange={setCampaignPurposeInput}
-        onSubmit={sendCampaignPurposeMessage}
-        accentColor="amber"
-      />
-
-      <CompanyProfileChatPanel
-        open={marketingIntelligencePanelOpen}
-        onClose={() => setMarketingIntelligencePanelOpen(false)}
-        title="Refine Marketing Intelligence"
-        messages={marketingIntelligenceMessages}
-        loading={marketingIntelligenceChatLoading}
-        input={marketingIntelligenceInput}
-        onInputChange={setMarketingIntelligenceInput}
-        onSubmit={sendMarketingIntelligenceMessage}
-        accentColor="emerald"
-      />
-
-      <CompanyProfileChatPanel
-        open={problemTransformationInferPanelOpen}
-        onClose={() => !problemTransformationInferLoading && setProblemTransformationInferPanelOpen(false)}
-        title="Infer & Refine Problem & Transformation"
-        messages={problemTransformationInferMessages}
-        loading={problemTransformationInferLoading}
-        input={problemTransformationInferInput}
-        onInputChange={setProblemTransformationInferInput}
-        onSubmit={sendProblemTransformationRefineMessage}
-        accentColor="indigo"
-        disableBackdropClose
-        extraActions={pendingProblemTransformationUpdates && (
-          <button
-            type="button"
-            onClick={() => sendProblemTransformationRefineMessage('apply')}
-            disabled={problemTransformationInferLoading}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
-          >
-            Apply updates
-          </button>
-        )}
-      />
+      {/* Guided chat panels for target-customer, campaign-purpose, marketing-intelligence,
+          context-intelligence and problem-transformation are rendered once by the form
+          (GuidedChatPanel). The duplicate CompanyProfileChatPanel set was removed to stop
+          two overlapping panels opening for the same flow. */}
 
       <ProblemTransformationPanel
         open={problemTransformationPanelOpen}
