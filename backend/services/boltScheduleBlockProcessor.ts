@@ -90,15 +90,21 @@ export type BlockScheduleResult = {
 
 /** Long-form types are processed first so post-repurposing can reference them */
 /**
- * Content-dedup key for the "unique per (platform, week)" rule. The platform is
- * part of the key but the day/date is NOT — so identical content on the same
- * platform on different days collides (dropped), while the SAME message on a
- * DIFFERENT platform (cross-posting, same day or not) never collides. Content is
- * normalized (lowercased, whitespace-collapsed, trimmed) so trivial formatting
- * differences don't defeat the match.
+ * Content-dedup key for the "unique per (platform, content-type, week)" rule. The
+ * platform AND the content type are part of the key; the day/date is NOT. So:
+ *  - identical content, same platform, same content type, different days → collides (dropped);
+ *  - the SAME message on a DIFFERENT platform (cross-posting) → never collides;
+ *  - the same caption on a DIFFERENT content type (e.g. a carousel and an infographic
+ *    that both fall back to the master caption) → never collides — they are distinct
+ *    DELIVERABLES, so dropping one would silently lose a whole asset the user selected.
+ * Content is normalized (lowercased, whitespace-collapsed, trimmed) so trivial
+ * formatting differences don't defeat the match.
  */
-export function contentDedupKey(platform: string, text: string): string {
-  return `${String(platform || '').toLowerCase()}::${String(text || '').toLowerCase().replace(/\s+/g, ' ').trim()}`;
+export function contentDedupKey(platform: string, contentType: string, text: string): string {
+  const p = String(platform || '').toLowerCase();
+  const ct = String(contentType || '').toLowerCase();
+  const c = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return `${p}::${ct}::${c}`;
 }
 
 const CONTENT_TYPE_PRIORITY: string[] = [
@@ -684,10 +690,10 @@ async function executeBlockScheduleRuntime(
         // ── DEDUP enforcement — never schedule the same content twice on one
         //    platform in the week. Same content on a different platform (same day
         //    or not) is allowed, so this only skips true same-platform repeats.
-        const dedupKey = contentDedupKey(platform, finalContent);
+        const dedupKey = contentDedupKey(platform, rowContentType, finalContent);
         if (seenContentByPlatform.has(dedupKey)) {
-          console.warn('[block-processor] DEDUP-skip — duplicate content already scheduled on this platform this week', {
-            platform, topic: topic.slice(0, 60), date: row.date,
+          console.warn('[block-processor] DEDUP-skip — duplicate content already scheduled on this platform+type this week', {
+            platform, contentType: rowContentType, topic: topic.slice(0, 60), date: row.date,
           });
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
