@@ -8,7 +8,8 @@ const cnt = (count: number) => ({ available: true, reason: null, count });
 function baseSignals(): ReadinessSignals {
   return {
     features: {},
-    profile: { companyProfileComplete: true, industry: true, regions: true, targetAudience: true, websiteUrl: 'https://example.com' },
+    profile: { companyProfileComplete: true, industry: true, regions: true, targetAudience: true, personas: true, websiteUrl: 'https://example.com' },
+    trust: { available: true, reason: null, legalPagesPresent: false },
     channels: { available: true, reason: null, connectedCount: 0, totalCount: 0, expiredCount: 0, publishReadyCount: 0, permissionIssueCount: 0 },
     foundation: { available: true, reason: null, domainVerified: false, analyticsConnected: false, trackingActive: false },
     content: { library: cnt(0), templates: cnt(0), media: cnt(0) },
@@ -58,6 +59,26 @@ describe('Readiness registry — capability + latch rules', () => {
     expect(blog?.status).toBe('done');
     expect(cat.factors.some((f) => f.id === 'automation.notifications')).toBe(false); // dead no-signal removed
   });
+
+  it('Personas reads satisfied when derivable from the profile, incomplete otherwise', () => {
+    const withInfo = baseSignals();
+    withInfo.profile.personas = true;
+    expect(evalReadiness('audience', withInfo).factors.find((f) => f.id === 'audience.personas')?.status).toBe('done');
+
+    const without = baseSignals();
+    without.profile.personas = false;
+    expect(evalReadiness('audience', without).factors.find((f) => f.id === 'audience.personas')?.status).not.toBe('done');
+  });
+
+  it('Trust privacy policy scores from the crawl legal-pages signal', () => {
+    const present = baseSignals();
+    present.trust.legalPagesPresent = true;
+    expect(evalReadiness('trust', present).factors.find((f) => f.id === 'trust.privacy_policy')?.status).toBe('done');
+
+    const absent = baseSignals();
+    absent.trust.legalPagesPresent = false;
+    expect(evalReadiness('trust', absent).factors.find((f) => f.id === 'trust.privacy_policy')?.status).not.toBe('done');
+  });
 });
 
 describe('buildReadinessSignals — domain latch + blog integration', () => {
@@ -93,5 +114,35 @@ describe('buildReadinessSignals — domain latch + blog integration', () => {
       websiteSnapshot: { domain: { verified: true }, readiness: { checks: [{ id: 'cms', done: true }] } },
     } as any);
     expect(sig.automation.blog.configured).toBe(true);
+  });
+
+  it('derives personas from a defined audience + ICP/industry in the profile', () => {
+    const withIcp = buildReadinessSignals({
+      ...rawBase,
+      profile: { website_url: 'https://example.com', target_audience: 'B2B founders', ideal_customer_profile: 'lean SaaS teams' },
+      websiteSnapshot: null,
+    } as any);
+    expect(withIcp.profile.personas).toBe(true);
+
+    const audienceOnly = buildReadinessSignals({
+      ...rawBase,
+      profile: { website_url: 'https://example.com', target_audience: 'B2B founders' }, // no ICP, no industry
+      websiteSnapshot: null,
+    } as any);
+    expect(audienceOnly.profile.personas).toBe(false);
+  });
+
+  it('detects a privacy/legal page from the content-intelligence legal_pages crawl check', () => {
+    const present = buildReadinessSignals({
+      ...rawBase,
+      websiteSnapshot: { domain: { verified: true }, content: { checks: [{ key: 'legal_pages', score: 100 }] } },
+    } as any);
+    expect(present.trust.legalPagesPresent).toBe(true);
+
+    const absent = buildReadinessSignals({
+      ...rawBase,
+      websiteSnapshot: { domain: { verified: true }, content: { checks: [{ key: 'legal_pages', score: 25 }] } },
+    } as any);
+    expect(absent.trust.legalPagesPresent).toBe(false);
   });
 });

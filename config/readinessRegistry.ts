@@ -40,7 +40,15 @@ export interface ReadinessSignals {
     industry: boolean;
     regions: boolean;
     targetAudience: boolean;
+    /** Derivable from the profile: a defined audience + its context (ICP/industry). */
+    personas: boolean;
     websiteUrl: string | null;
+  };
+  trust: {
+    available: boolean;
+    reason: string | null;
+    /** A privacy / terms / legal page was found in the website crawl. */
+    legalPagesPresent: boolean;
   };
   channels: {
     available: boolean;
@@ -235,7 +243,13 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
         title: 'Personas',
         description: 'Buyer personas refine messaging and campaign targeting.',
         weight: 1,
-        evaluate: () => noCanonicalSignal('No canonical persona signal exists in this workspace yet.'),
+        // Derived from the company profile: with a defined audience + its context
+        // (ideal customer profile or industry), personas can be constructed.
+        evaluate: (s) =>
+          scored(s.profile.personas, 'Personas cannot be derived yet', 'Add your target audience and ideal-customer details so personas can be built.', {
+            label: 'Complete audience',
+            actionId: 'profile.edit',
+          }),
       },
     ],
   },
@@ -479,10 +493,16 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
       {
         id: 'trust.privacy_policy',
         title: 'Privacy policy',
-        description: 'A published privacy policy builds visitor trust.',
+        description: 'A published privacy / legal page builds visitor trust.',
         weight: 1,
-        // Not captured by the static crawler signal set; no canonical signal.
-        evaluate: () => noCanonicalSignal('Privacy-policy presence is not a canonical crawl signal yet.'),
+        // Canonical: the Content Intelligence crawl detects a privacy/terms/legal page.
+        evaluate: (s): FactorEvalResult =>
+          !s.trust.available
+            ? unavailable(s.trust.reason ?? 'Website crawl is temporarily unavailable.')
+            : scored(s.trust.legalPagesPresent, 'No privacy / legal page found on the site', 'Publish a privacy policy (and terms) page so visitors and search engines trust the site.', {
+                label: 'Review website',
+                actionId: 'profile.edit',
+              }),
       },
       {
         id: 'trust.cookie_banner',

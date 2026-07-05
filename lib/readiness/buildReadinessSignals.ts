@@ -29,6 +29,8 @@ export interface WebsiteSnapshotInput {
   tracking?: { active?: boolean; installed?: boolean } | null;
   readiness?: { checks?: Array<{ id?: string; done?: boolean }> } | null;
   integrations?: Array<{ type?: string; status?: string }> | null;
+  /** Content Intelligence crawl checks — used for the legal/privacy-page signal. */
+  content?: { checks?: Array<{ key?: string; score?: number | null }> } | null;
 }
 
 export interface RawReadinessInputs {
@@ -147,15 +149,32 @@ export function buildReadinessSignals(input: RawReadinessInputs): ReadinessSigna
       ? (p['website_url'] as string).trim()
       : null;
 
+  const industry = nonEmpty(p['industry']) || nonEmpty(p['industry_list']);
+  const targetAudience = nonEmpty(p['target_audience']) || nonEmpty(p['target_audience_list']);
+  const idealCustomerProfile = nonEmpty(p['ideal_customer_profile']);
+  // Personas are DERIVED from the company profile: with a defined audience plus its
+  // context (ICP or industry) a buyer persona can be constructed — no separate
+  // persona-entry step, so this reads satisfied once that information exists.
+  const personas = targetAudience && (idealCustomerProfile || industry);
+
+  // Trust — legal/privacy page presence from the Content Intelligence crawl
+  // (legal_pages check matches privacy / terms / legal / cookie pages).
+  const legalCheck = snap?.content?.checks?.find((c) => c.key === 'legal_pages');
+  const trust: ReadinessSignals['trust'] = snap?.content
+    ? { available: true, reason: null, legalPagesPresent: typeof legalCheck?.score === 'number' && legalCheck.score >= 50 }
+    : { available: false, reason: `Website intelligence could not be loaded. ${REFRESH_MSG}`, legalPagesPresent: false };
+
   return {
     features,
     profile: {
-      companyProfileComplete: nonEmpty(p['name']) && (nonEmpty(p['industry']) || nonEmpty(p['industry_list'])),
-      industry: nonEmpty(p['industry']) || nonEmpty(p['industry_list']),
+      companyProfileComplete: nonEmpty(p['name']) && industry,
+      industry,
       regions: nonEmpty(p['geography']) || nonEmpty(p['geography_list']),
-      targetAudience: nonEmpty(p['target_audience']) || nonEmpty(p['target_audience_list']),
+      targetAudience,
+      personas,
       websiteUrl,
     },
+    trust,
     channels,
     foundation,
     content: {
