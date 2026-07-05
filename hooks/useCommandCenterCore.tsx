@@ -243,6 +243,9 @@ export function useCommandCenter() {
         setMasterySignals(
           buildMasterySignals({
             profile: profileData?.profile ?? null,
+            // Latched feature-completion flags — mastery credits ever-used
+            // capabilities forever, independent of current artifact counts.
+            features: data.features,
             blogsCount: Array.isArray(blogsData?.blogs) ? blogsData.blogs.length : null,
             campaignsCount: Array.isArray(campaignsData?.campaigns) ? campaignsData.campaigns.length : null,
             reportsCount: Array.isArray(reportsData?.reports) ? reportsData.reports.length : null,

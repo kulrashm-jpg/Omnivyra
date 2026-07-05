@@ -18,6 +18,7 @@
 
 import type { MasterySignals } from '../../config/masteryRegistry';
 import type { TelemetryProviderResult } from '../../lib/telemetry/telemetryTypes';
+import type { FeatureStatus } from '../../backend/services/commandCenterReadinessService';
 
 const REFRESH_MSG = 'This will refresh automatically.';
 
@@ -26,6 +27,13 @@ export type MasteryTelemetry = Record<string, TelemetryProviderResult> | null | 
 
 export interface RawMasteryInputs {
   profile: Record<string, unknown> | null;
+  /**
+   * Latched feature-completion flags (feature_completion, monotonic). Mastery is
+   * "once = forever": a capability the company has ever used stays credited even
+   * if the underlying artifacts are later deleted (live counts drop, the latch
+   * does not). Optional for backward compatibility.
+   */
+  features?: FeatureStatus[];
   blogsCount: number | null;
   campaignsCount: number | null;
   reportsCount: number | null;
@@ -73,6 +81,25 @@ const telCount = (
   return count(proxyN);
 };
 
+/** Latched "ever used at all" from feature-completion (monotonic score > 0). */
+const everUsed = (features: FeatureStatus[], ...keys: string[]): boolean =>
+  keys.some((key) => {
+    const f = features.find((x) => x.key === key);
+    if (!f) return false;
+    return typeof f.score === 'number' ? f.score > 0 : f.status === 'completed';
+  });
+
+/**
+ * "Once = forever" floor: if the capability has ever been used (latched feature),
+ * the signal is credited as used at least once — the live/telemetry count can lift
+ * it higher (depth), but deleting artifacts can never drop it back below used-once.
+ */
+const floorByFeature = (
+  sig: { available: boolean; reason: string | null; count: number },
+  ever: boolean,
+): { available: boolean; reason: string | null; count: number } =>
+  ever ? { available: true, reason: sig.reason, count: Math.max(sig.count, 1) } : sig;
+
 const competitorCount = (profile: Record<string, unknown> | null): number => {
   const p = profile ?? {};
   const list = p['competitors_list'] ?? p['competitors'];
@@ -84,13 +111,32 @@ const competitorCount = (profile: Record<string, unknown> | null): number => {
 export function buildMasterySignals(input: RawMasteryInputs): MasterySignals {
   const tel = input.telemetry;
 
-  // Telemetry-preferred adoption counts (proxy fallback when telemetry is dark).
-  const publishedSignal = telCount(tel, 'publishing_cadence', 'published', input.blogsCount);
+  const features = input.features ?? [];
+
+  // Telemetry-preferred adoption counts (proxy fallback when telemetry is dark),
+  // then latched: a capability ever used stays credited even if artifacts are
+  // deleted ("done once = still considered for score").
+  const publishedSignal = floorByFeature(
+    telCount(tel, 'publishing_cadence', 'published', input.blogsCount),
+    everUsed(features, 'blog_created', 'content_writer', 'content_short_format', 'content_creator', 'content_writer_asset'),
+  );
   const templatesSignal = telCount(tel, 'template_utilization', 'templateUsed', input.templatesCount);
-  const mediaSignal = telCount(tel, 'media_utilization', 'mediaUploaded', input.mediaCount);
-  const aiAssetsSignal = telCount(tel, 'media_utilization', 'aiGenerated', input.mediaCount);
-  const campaignCompletedSignal = telCount(tel, 'campaign_completion_rate', 'completed', input.campaignsCount);
-  const reportsSignal = telCount(tel, 'report_usage', 'generated', input.reportsCount);
+  const mediaSignal = floorByFeature(
+    telCount(tel, 'media_utilization', 'mediaUploaded', input.mediaCount),
+    everUsed(features, 'content_creator', 'content_writer_asset'),
+  );
+  const aiAssetsSignal = floorByFeature(
+    telCount(tel, 'media_utilization', 'aiGenerated', input.mediaCount),
+    everUsed(features, 'content_creator', 'content_writer_asset'),
+  );
+  const campaignCompletedSignal = floorByFeature(
+    telCount(tel, 'campaign_completion_rate', 'completed', input.campaignsCount),
+    everUsed(features, 'campaign_created', 'campaign_published'),
+  );
+  const reportsSignal = floorByFeature(
+    telCount(tel, 'report_usage', 'generated', input.reportsCount),
+    everUsed(features, 'report_generated'),
+  );
 
   // Surfaces derive from the RESOLVED (telemetry-preferred) written/creator counts
   // so they follow telemetry when it is live and the proxy otherwise.
