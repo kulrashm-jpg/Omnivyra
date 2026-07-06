@@ -566,7 +566,7 @@ function normalizeOverlayText(input: {
   return {
     hook: compactText(authoritative ? overlay.hook : (overlay.hook || input.metadata.topic || input.title)).slice(0, 76),
     headline: compactText(authoritative ? overlay.headline : (overlay.headline || input.title)).slice(0, 84),
-    keyInsight: compactText(overlay.keyInsight || overlay.key_insight || '').slice(0, 132),
+    keyInsight: compactText(overlay.keyInsight || overlay.key_insight || '').slice(0, 190),
     cta,
     supportingText: compactText(overlay.supportingText || overlay.supporting_text || '').slice(0, 96),
   };
@@ -924,7 +924,7 @@ function buildOverlaySvg(input: {
   const insightText = compactText(input.overlay.keyInsight || '');
   let fittedInsightSize = preset.insightSize;
   {
-    const insightFloor = Math.max(14, Math.round(preset.insightSize * 0.72));
+    const insightFloor = Math.max(13, Math.round(preset.insightSize * 0.62));
     const charsAt = (size: number) => Math.max(8, Math.round(preset.insightChars * (preset.insightSize / Math.max(1, size))));
     const fitsAt = (size: number) => insightText.length === 0
       || Math.ceil(insightText.length / charsAt(size)) <= preset.maxInsightLines;
