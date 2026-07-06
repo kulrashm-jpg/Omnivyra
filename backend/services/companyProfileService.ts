@@ -1895,6 +1895,11 @@ export async function saveProfile(
 
   const payload = buildSavePayload(classifiedInput, existing, companyId, source, lastRefinedAt, nowIso, confidenceScore);
   const hasExplicitCompetitorInput = input.competitors !== undefined || input.competitors_list !== undefined;
+  const competitorsLocked = Array.isArray(existing?.user_locked_fields) && existing!.user_locked_fields.includes('competitors');
+  // When the user has locked competitors (saved them explicitly before), preserve
+  // their picks through refinement: feed as trusted 'manual' and skip network
+  // discovery so an auto-refine doesn't replace the set until the user edits again.
+  const preserveLockedCompetitors = competitorsLocked && !hasExplicitCompetitorInput;
   const rawCompetitorInputs = mergeStringArrays(
     [],
     hasExplicitCompetitorInput
@@ -1910,7 +1915,7 @@ export async function saveProfile(
   const finalCompetitors = await getFinalCompetitors({
     candidates: buildCandidatesFromNames(
       rawCompetitorInputs,
-      hasExplicitCompetitorInput && source === 'user' ? 'manual' : 'profile_ai',
+      (hasExplicitCompetitorInput && source === 'user') || competitorsLocked ? 'manual' : 'profile_ai',
     ),
     context: competitorValidationContextForProfile({
       ...(existing ?? {}),
@@ -1918,7 +1923,7 @@ export async function saveProfile(
       company_id: companyId,
     } as CompanyProfile),
     max: 8,
-    useNetwork: true,
+    useNetwork: !preserveLockedCompetitors,
     companyId,
   });
   const splitSavedCompetitors = splitRankedCompetitorsForOutput(finalCompetitors, 8, 0);
@@ -1941,6 +1946,13 @@ export async function saveProfile(
       const val = input[key as keyof CompanyProfile];
       const hasVal = Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && String(val).trim() !== '';
       if (hasVal) { lockedSet.add(key); didLock = true; }
+    }
+    // Lock competitors when the user explicitly saves them, so subsequent
+    // refinement preserves their picks (fed as trusted 'manual', no network
+    // re-discovery) until the user edits competitors again.
+    if (hasExplicitCompetitorInput && source === 'user' && rawCompetitorInputs.length > 0) {
+      lockedSet.add('competitors');
+      didLock = true;
     }
   }
   if (didLock) {
