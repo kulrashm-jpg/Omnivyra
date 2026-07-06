@@ -2513,7 +2513,24 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 />
                 {competitorIntelToShow.length > 0 ? (
                   <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-slate-700">
-                    <div className="font-semibold text-indigo-900">Competitive intelligence</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold text-indigo-900">Competitive intelligence</div>
+                      {competitorPendingSave && competitorPendingSave.length > 0 ? (
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 whitespace-nowrap">Not saved yet</span>
+                          <button
+                            type="button"
+                            onClick={() => { void confirmSaveCompetitors(); }}
+                            disabled={isSaving}
+                            className="rounded-full bg-indigo-600 px-2.5 py-0.5 text-[11px] font-semibold text-white disabled:opacity-50 whitespace-nowrap"
+                          >
+                            {isSaving ? 'Saving…' : 'Save competitors'}
+                          </button>
+                        </div>
+                      ) : (
+                        <StatusChip done doneLabel="Saved — shows next time" />
+                      )}
+                    </div>
                     <ul className="mt-1 space-y-1">
                       {competitorIntelToShow.map((c) => (
                         <li key={c.name} className="flex flex-wrap items-baseline gap-x-2">
