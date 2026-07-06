@@ -131,8 +131,15 @@ function normalizeCreatorCardForAttachment(input: {
   // template-wins→banner coercion still applies when the user did NOT explicitly pick POST + IMAGE.
   const explicitSupportingVisual =
     (rawIntent.attachmentMode ?? input.creatorCard.attachment_mode) === 'supporting_visual';
+  // Inverse of BETA-013: when the user EXPLICITLY picked "text inside image"
+  // (embedded_copy), a raw supporting_image blanks the overlay (zero-text profile),
+  // so honor the explicit request by coercing to a text-bearing banner — the same
+  // path as template-authoritative copy. Explicit POST + IMAGE (supporting_visual)
+  // still wins and stays a clean photograph.
+  const explicitEmbeddedCopy =
+    (rawIntent.attachmentMode ?? input.creatorCard.attachment_mode) === 'embedded_copy';
   const assetType =
-    rawAssetType === 'supporting_image' && templateAuthoritativeText && !explicitSupportingVisual
+    rawAssetType === 'supporting_image' && !explicitSupportingVisual && (templateAuthoritativeText || explicitEmbeddedCopy)
       ? 'banner'
       : rawAssetType;
   const requestedMode = normalizeAttachmentMode(rawIntent.attachmentMode ?? input.creatorCard.attachment_mode);
