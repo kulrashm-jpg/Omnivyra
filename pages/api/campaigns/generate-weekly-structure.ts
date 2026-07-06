@@ -332,6 +332,46 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     let lastAutoRebalanceEffective = false;
     let lastAutoOptimizeDistributionEffective = false;
 
+    // Cross-campaign conflict avoidance: gather the platform-days this company's
+    // OTHER campaigns have already scheduled, so day-placement below schedules
+    // around them (never double-books a platform on a day across campaigns).
+    // Best-effort — any lookup failure degrades to the prior single-campaign behavior.
+    const existingScheduledByPlatform = new Map<string, Set<string>>();
+    try {
+      const { data: siblingCampaigns } = await supabase
+        .from('campaigns')
+        .select('id')
+        .eq('company_id', cid)
+        .neq('id', campaignId);
+      const siblingIds = (siblingCampaigns ?? []).map((c: { id: string }) => c.id).filter(Boolean);
+      if (siblingIds.length > 0) {
+        const { data: existingRows } = await supabase
+          .from('daily_content_plans')
+          .select('platforms, date')
+          .in('campaign_id', siblingIds);
+        for (const row of existingRows ?? []) {
+          const rowDate = String((row as { date?: unknown }).date ?? '').trim();
+          if (!rowDate) continue;
+          const plats = Array.isArray((row as { platforms?: unknown }).platforms)
+            ? (row as { platforms: unknown[] }).platforms
+            : [];
+          for (const pl of plats) {
+            const key = normalizePlatformKey(String(pl));
+            if (!key) continue;
+            const set = existingScheduledByPlatform.get(key) ?? new Set<string>();
+            set.add(rowDate);
+            existingScheduledByPlatform.set(key, set);
+          }
+        }
+      }
+      console.log('[weekly-structure][cross-campaign-conflicts]', {
+        siblings: siblingIds.length,
+        occupied: [...existingScheduledByPlatform.entries()].map(([p, s]) => ({ platform: p, days: s.size })),
+      });
+    } catch (e) {
+      console.warn('[weekly-structure] cross-campaign conflict lookup failed (continuing):', (e as Error)?.message);
+    }
+
     for (const weekNumber of weekNumbers) {
       const weekBlueprint = blueprint.weeks.find((w) => Number(w.week_number) === weekNumber)!;
 
@@ -910,7 +950,8 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           continue;
         }
 
-        const usedDates = usedDatesByPlatform.get(platformKey) ?? new Set<string>();
+        const usedDates = usedDatesByPlatform.get(platformKey)
+          ?? new Set<string>(existingScheduledByPlatform.get(platformKey) ?? []);
         const nth = platformDayCursor.get(platformKey) ?? 0;
         let dayName: string = fallbackDayName;
         let date: string = fallbackDate;
