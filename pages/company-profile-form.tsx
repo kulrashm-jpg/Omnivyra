@@ -2754,6 +2754,15 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     Define Strategic Purpose
                   </button>
                 )}
+                {!isEditing && activeProfile.campaign_purpose_intent && (
+                  <SavedHint value={[
+                    activeProfile.campaign_purpose_intent.primary_objective,
+                    activeProfile.campaign_purpose_intent.campaign_intent,
+                    activeProfile.campaign_purpose_intent.monetization_intent,
+                    activeProfile.campaign_purpose_intent.brand_positioning_angle,
+                    ...(activeProfile.campaign_purpose_intent.dominant_problem_domains ?? []),
+                  ].filter(Boolean).join(', ')} />
+                )}
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -2764,6 +2773,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. SMB, enterprise"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.target_customer_segment} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Ideal customer profile</label>
@@ -2774,6 +2784,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     rows={2}
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.ideal_customer_profile} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Pricing model</label>
@@ -2783,6 +2794,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. subscription, usage-based"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.pricing_model} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Sales motion</label>
@@ -2792,6 +2804,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. self-serve, sales-led"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.sales_motion} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Avg deal size</label>
@@ -2801,6 +2814,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. $5k, $50k"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.avg_deal_size} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Sales cycle</label>
@@ -2810,6 +2824,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. 2 weeks, 3 months"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.sales_cycle} />}
                 </div>
                 <div className="md:col-span-2">
                   <label className="text-sm font-medium text-gray-700">Key metrics</label>
@@ -2819,6 +2834,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. MRR, CAC, LTV"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.key_metrics} />}
                 </div>
               </div>
               {activeProfile.last_edited_by === 'user' && (
@@ -3038,6 +3054,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. social, email, events"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.marketing_channels} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Content strategy</label>
@@ -3048,6 +3065,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     rows={2}
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.content_strategy} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Campaign focus</label>
@@ -3057,6 +3075,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="What campaigns typically focus on"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.campaign_focus} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Key messages</label>
@@ -3067,6 +3086,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     rows={2}
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.key_messages} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Brand positioning</label>
@@ -3077,6 +3097,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     rows={2}
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.brand_positioning} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Competitive advantages</label>
@@ -3087,6 +3108,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     rows={2}
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={activeProfile.competitive_advantages} />}
                 </div>
                 <div className="md:col-span-2 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
