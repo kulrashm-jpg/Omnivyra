@@ -920,11 +920,37 @@ export function useCompanyProfileState() {
     if (!pending || pending.length === 0) return;
     const names = pending.map((c) => String(c.name || '').trim()).filter(Boolean);
     if (names.length === 0) return;
+
+    // 1) Save the names to the (auto-locked) Competitors field.
     const updated = { ...activeProfile, competitors: names.join(', '), competitors_list: names };
     updateActiveProfile(updated);
     setCompetitorChatOpen(false);
     setCompetitorPendingSave(null);
     await saveProfile(updated);
+
+    // 2) Persist the domains + offerings as user-guided competitor intelligence so
+    //    the full card survives reloads and feeds refinement as a trusted signal.
+    //    The guidance endpoint does a targeted report_settings update, so it does
+    //    not clobber the competitors field saved above.
+    const currentGuidance = activeProfile.report_settings?.user_guidance ?? null;
+    const now = new Date().toISOString();
+    const keyOf = (v?: string | null) => String(v || '').trim().toLowerCase();
+    const savedKeys = new Set(names.map((n) => keyOf(n)));
+    const preserved = (currentGuidance?.competitors ?? []).filter((c) => !savedKeys.has(keyOf(c.name)));
+    const guidedComps = pending
+      .filter((c) => String(c.name || '').trim())
+      .map((c) => ({
+        name: String(c.name).trim(),
+        ...(c.domain ? { domain: String(c.domain).trim() } : {}),
+        state: 'user_added' as const,
+        source: 'user_guided',
+        rationale: c.offering ? String(c.offering).trim() : null,
+        updated_at: now,
+      }));
+    await saveUserGuidance(
+      { ...(currentGuidance || { version: 1 }), competitors: [...preserved, ...guidedComps] },
+      'competitor_user_added',
+    );
   };
 
   const updateIntelligenceContext = (patch: Partial<CompanyContextIntelligence>) => {

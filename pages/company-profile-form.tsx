@@ -1411,6 +1411,12 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   const rejectedGuidedCompetitors = guidedCompetitors.filter((competitor) =>
     ['rejected', 'removed'].includes(competitor.state)
   );
+  // Below-field competitive-intelligence card: prefer fresh chat suggestions, else
+  // the persisted user-guided competitors (with domains) so it survives reloads.
+  const persistedCompetitorIntel = pinnedGuidedCompetitors
+    .map((c) => ({ name: c.name, domain: c.domain ?? undefined, offering: c.rationale ?? undefined }))
+    .filter((c) => c.name);
+  const competitorIntelToShow = competitorSuggestions.length > 0 ? competitorSuggestions : persistedCompetitorIntel;
   const [guidedCompetitorName, setGuidedCompetitorName] = React.useState('');
   const [guidedCompetitorNote, setGuidedCompetitorNote] = React.useState('');
   const [identityGuidanceNote, setIdentityGuidanceNote] = React.useState('');
@@ -2498,11 +2504,11 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   placeholder="Same-category product competitors, comma-separated"
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
-                {competitorSuggestions.length > 0 ? (
+                {competitorIntelToShow.length > 0 ? (
                   <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-slate-700">
                     <div className="font-semibold text-indigo-900">Competitive intelligence</div>
                     <ul className="mt-1 space-y-1">
-                      {competitorSuggestions.map((c) => (
+                      {competitorIntelToShow.map((c) => (
                         <li key={c.name} className="flex flex-wrap items-baseline gap-x-2">
                           <span className="font-medium text-slate-800">{c.name}</span>
                           {c.domain ? (
