@@ -107,6 +107,14 @@ export type UserGuidedIntelligence = {
   version?: number;
   updated_at?: string | null;
   competitors?: UserGuidedCompetitor[] | null;
+  /** The durable, cumulative "read" of this company for competitor intelligence — the
+   *  analyst statement refined by the user's chat input, persisted so the next session
+   *  starts from it. `edited_by_user` marks a manual edit (protected from AI overwrite). */
+  competitor_understanding?: {
+    statement: string;
+    updated_at?: string | null;
+    edited_by_user?: boolean;
+  } | null;
   messaging?: Partial<Record<UserGuidanceStrategicSection, UserGuidedStrategicField>> | null;
   guidance_notes?: Array<{
     id: string;

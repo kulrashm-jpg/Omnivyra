@@ -1219,6 +1219,8 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     competitorChatLoading,
     competitorSuggestions,
     competitorPendingSave,
+    competitorUnderstanding,
+    saveCompetitorUnderstanding,
     saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,
@@ -1297,6 +1299,11 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     user,
     userRole,
   } = d;
+
+  // Editable "company understanding" draft — synced from the persisted value, editable by the user.
+  const [understandingDraft, setUnderstandingDraft] = React.useState<string>(competitorUnderstanding || '');
+  const [savingUnderstanding, setSavingUnderstanding] = React.useState(false);
+  React.useEffect(() => { setUnderstandingDraft(competitorUnderstanding || ''); }, [competitorUnderstanding]);
 
   const [factsLookupLoading, setFactsLookupLoading] = React.useState(false);
   const fillFactsFromWikidata = async () => {
@@ -2572,6 +2579,36 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     ) : null}
                   </div>
                 ) : null}
+                {/* Cumulative company understanding — refined in chat on save, editable here, seeds the next session. */}
+                <div className="mt-3 rounded-lg border border-indigo-100 bg-white p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-semibold text-slate-900">Company understanding</div>
+                    <StatusChip done={Boolean(competitorUnderstanding)} doneLabel="Saved" pendingLabel="Not set" />
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">
+                    The cumulative read of your company that seeds competitor intelligence. It&apos;s refined when you save competitors from the chat — and you can edit it here; a manual edit is kept and won&apos;t be overwritten by the AI.
+                  </p>
+                  <textarea
+                    value={understandingDraft}
+                    onChange={(e) => setUnderstandingDraft(e.target.value)}
+                    rows={3}
+                    placeholder="Run “Suggest with AI” to establish this, or write it yourself…"
+                    className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  />
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={savingUnderstanding || understandingDraft.trim() === (competitorUnderstanding || '').trim()}
+                      onClick={async () => { setSavingUnderstanding(true); await saveCompetitorUnderstanding(understandingDraft); setSavingUnderstanding(false); }}
+                      className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                    >
+                      {savingUnderstanding ? 'Saving…' : 'Save understanding'}
+                    </button>
+                    {competitorUnderstanding && understandingDraft.trim() === competitorUnderstanding.trim() ? (
+                      <span className="text-xs font-medium text-blue-600">✓ Saved — seeds your next competitor session</span>
+                    ) : null}
+                  </div>
+                </div>
                 {unifiedCompetitorIntelligence ? (
                   <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50/70 p-3 text-xs text-slate-800">
                     <div className="flex flex-wrap items-center justify-between gap-2">

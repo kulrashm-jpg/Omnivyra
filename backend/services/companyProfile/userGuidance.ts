@@ -104,16 +104,29 @@ export function normalizeUserGuidedIntelligence(
       : []),
   ].slice(-MAX_AUDIT_EVENTS);
 
+  // Cumulative competitor "understanding" — keep the incoming statement, else preserve the
+  // previously-saved one so a partial guidance update never wipes it.
+  const cuSource = (raw.competitor_understanding ?? options?.previous?.competitor_understanding) ?? null;
+  const cuStatement = cleanText(cuSource?.statement, 2000);
+  const competitor_understanding = cuStatement
+    ? {
+        statement: cuStatement,
+        updated_at: cleanText(cuSource?.updated_at, 40) ?? nowIso,
+        edited_by_user: Boolean(cuSource?.edited_by_user),
+      }
+    : null;
+
   const result: UserGuidedIntelligence = {
     version: GUIDANCE_VERSION,
     updated_at: nowIso,
     competitors: Array.from(competitorsByKey.values()).slice(0, MAX_COMPETITOR_GUIDANCE),
+    competitor_understanding,
     messaging,
     guidance_notes: guidanceNotes,
     audit,
   };
 
-  return result.competitors?.length || Object.keys(messaging).length || guidanceNotes.length || audit.length
+  return result.competitors?.length || competitor_understanding || Object.keys(messaging).length || guidanceNotes.length || audit.length
     ? result
     : null;
 }

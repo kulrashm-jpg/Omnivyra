@@ -419,6 +419,14 @@ export type CompanyContextEnrichmentSuggestion = {
 export type UserGuidedIntelligence = {
   version?: number;
   updated_at?: string | null;
+  /** Cumulative "company understanding" for competitor intelligence — refined via the chat
+   *  and editable by the user (edited_by_user = protected from AI overwrite). Seeds the next
+   *  session so competitor work resumes instead of restarting. */
+  competitor_understanding?: {
+    statement: string;
+    updated_at?: string | null;
+    edited_by_user?: boolean;
+  } | null;
   competitors?: Array<{
     name: string;
     domain?: string | null;

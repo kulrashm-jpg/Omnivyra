@@ -32,6 +32,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const p = profile as unknown as Record<string, unknown>;
     const str = (v: unknown) => String(v ?? '').trim();
     const website = str(p.website) || str(p.canonical_website) || str(p.domain);
+
+    // Cumulative memory: seed from what we already established last time — the persisted
+    // "company understanding" and the competitors already tracked — so this session builds
+    // on prior work instead of restarting from scratch.
+    const guidance = (p.report_settings as { user_guidance?: {
+      competitor_understanding?: { statement?: string } | null;
+      competitors?: Array<{ name?: unknown; state?: unknown }> | null;
+    } } | undefined)?.user_guidance;
+    const priorUnderstanding = str(guidance?.competitor_understanding?.statement);
+    const savedCompetitors = (Array.isArray(p.competitors_list) ? (p.competitors_list as unknown[]) : [])
+      .map((c) => str(c)).filter(Boolean);
+    const guidedNames = (guidance?.competitors ?? [])
+      .filter((c) => c && c.state !== 'rejected' && c.state !== 'removed')
+      .map((c) => str(c?.name)).filter(Boolean);
+    const trackedCompetitors = Array.from(new Set([...savedCompetitors, ...guidedNames]));
+
     const grounding = [
       `Company: ${str(p.name) || companyId}`,
       website ? `Website: ${website}` : '',
@@ -40,11 +56,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       `Unique value: ${str(p.unique_value) || 'Not set'}`,
       `Target customer: ${str(p.target_audience) || str(p.ideal_customer_profile) || 'Not set'}`,
       `Content themes: ${str(p.content_themes) || 'Not set'}`,
+      priorUnderstanding ? `Established understanding (refine with the user's input, do NOT discard): ${priorUnderstanding}` : '',
+      trackedCompetitors.length ? `Competitors already confirmed by the user (keep unless the user removes them): ${trackedCompetitors.join(', ')}` : '',
     ].filter(Boolean).join('\n');
 
     const userMessages = conversation.filter((m: { role?: string }) => m.role === 'user');
 
-    // ── Turn 0: share understanding, invite confirmation ──────────────────────
+    // ── Turn 0: resume from the persisted understanding when we have one ───────
+    if (userMessages.length === 0 && priorUnderstanding) {
+      const listLine = trackedCompetitors.length
+        ? `\n\nCompetitors we're already tracking: ${trackedCompetitors.join(', ')}.`
+        : '';
+      return res.status(200).json({
+        understanding: priorUnderstanding,
+        nextQuestion:
+          `Here's what we established about your company last time:\n\n${priorUnderstanding}${listLine}\n\n` +
+          `Want to refine anything — a sharper product category, add or remove rivals, or correct the industry/domain — or reply "looks good" to keep it and map competitors?`,
+      });
+    }
+
+    // ── Turn 0 (first time): share understanding, invite confirmation ─────────
     if (userMessages.length === 0) {
       const completion = await runCompletion({
         companyId,
@@ -70,6 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         understanding = `Here's my read: ${str(p.name) || 'your company'} competes in ${[str(p.industry), str(p.category)].filter(Boolean).join(' / ') || 'its category'}, selling ${str(p.products_services) || 'its products'} to ${str(p.target_audience) || 'its market'}.`;
       }
       return res.status(200).json({
+        understanding,
         nextQuestion:
           `${understanding}\n\nDoes this capture your business? Add any nuance I'm missing — a sharper product category, specific rivals you already know, or markets to focus on — or just reply "looks good" and I'll map your direct competitors.`,
       });

@@ -122,6 +122,8 @@ export function useCompanyProfileState() {
   const [competitorChatLoading, setCompetitorChatLoading] = useState(false);
   const [competitorSuggestions, setCompetitorSuggestions] = useState<Array<{ name: string; domain?: string; offering?: string }>>([]);
   const [competitorPendingSave, setCompetitorPendingSave] = useState<Array<{ name: string; domain?: string; offering?: string }> | null>(null);
+  // The latest "company understanding" produced/refined in the chat, staged to persist on save.
+  const [competitorUnderstandingPending, setCompetitorUnderstandingPending] = useState<string | null>(null);
   const [problemTransformationPanelOpen, setProblemTransformationPanelOpen] = useState(false);
   const [problemTransformationQuestions, setProblemTransformationQuestions] = useState<string[]>([]);
   const [problemTransformationAnswers, setProblemTransformationAnswers] = useState<string[]>([]);
@@ -887,6 +889,8 @@ export function useCompanyProfileState() {
           .map((c) => `• ${c.name}${c.domain ? ` (${c.domain})` : ''}${c.offering ? ` — ${c.offering}` : ''}`)
           .join('\n');
         const takeText = String(data.final_take || '').trim();
+        // Stage the refined understanding — persisted alongside the competitors on save.
+        if (takeText) setCompetitorUnderstandingPending(takeText);
         setCompetitorChatMessages((prev) => [
           ...prev,
           {
@@ -895,6 +899,7 @@ export function useCompanyProfileState() {
           },
         ]);
       } else if (data.nextQuestion) {
+        if (data.understanding) setCompetitorUnderstandingPending(String(data.understanding).trim());
         setCompetitorChatMessages((prev) =>
           isInitial
             ? [{ role: 'assistant' as const, content: data.nextQuestion }]
@@ -958,10 +963,40 @@ export function useCompanyProfileState() {
         rationale: c.offering ? String(c.offering).trim() : null,
         updated_at: now,
       }));
+    // Persist the refined "company understanding" from the chat alongside the competitors,
+    // so the next session resumes from it. A user's manual edit (edited_by_user) is never
+    // overwritten by the AI's chat take.
+    const existingCU = currentGuidance?.competitor_understanding ?? null;
+    const understanding = String(competitorUnderstandingPending || '').trim();
+    const nextCU = existingCU?.edited_by_user
+      ? existingCU
+      : (understanding ? { statement: understanding, updated_at: now, edited_by_user: false } : existingCU);
     await saveUserGuidance(
-      { ...(currentGuidance || { version: 1 }), competitors: [...preserved, ...guidedComps] },
+      {
+        ...(currentGuidance || { version: 1 }),
+        competitors: [...preserved, ...guidedComps],
+        ...(nextCU ? { competitor_understanding: nextCU } : {}),
+      },
       'competitor_user_added',
     );
+    setCompetitorUnderstandingPending(null);
+  };
+
+  // Manual edit of the persisted "company understanding" — user-authored, so it's marked
+  // edited_by_user and protected from being overwritten by the AI chat take.
+  const saveCompetitorUnderstanding = async (text: string): Promise<boolean> => {
+    const statement = String(text || '').trim();
+    const currentGuidance = activeProfile.report_settings?.user_guidance ?? null;
+    const result = await saveUserGuidance(
+      {
+        ...(currentGuidance || { version: 1 }),
+        competitor_understanding: statement
+          ? { statement, updated_at: new Date().toISOString(), edited_by_user: true }
+          : null,
+      },
+      'competitor_understanding_edited',
+    );
+    return Boolean(result);
   };
 
   const updateIntelligenceContext = (patch: Partial<CompanyContextIntelligence>) => {
@@ -2265,6 +2300,8 @@ export function useCompanyProfileState() {
     competitorChatLoading,
     competitorSuggestions,
     competitorPendingSave,
+    competitorUnderstanding: activeProfile.report_settings?.user_guidance?.competitor_understanding?.statement ?? '',
+    saveCompetitorUnderstanding,
     saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,
