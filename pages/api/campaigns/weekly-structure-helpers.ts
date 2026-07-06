@@ -1169,6 +1169,8 @@ export interface GenerateWeeklyStructureInput {
   format_frequency?: Record<string, number>;
   /** Whether content is shared across platforms (same_day_per_topic) or unique per platform (staggered). */
   cross_platform_sharing?: boolean | { enabled: boolean };
+  /** Cross-campaign conflict decision from the launch UI: avoid (default) / skip / override. */
+  conflict_policy?: 'avoid' | 'skip' | 'override';
 }
 
 /** Core logic for generating weekly structure. Callable from API or BOLT pipeline. */

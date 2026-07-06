@@ -1166,6 +1166,7 @@ async function runGenerateWeeklyStructure(
         ...(options?.campaignStartDate ? { campaign_start_date: options.campaignStartDate } : {}),
         ...(resolvedFormatFreq ? { format_frequency: resolvedFormatFreq } : {}),
         cross_platform_sharing: options?.execConfig?.cross_platform_sharing as boolean | { enabled: boolean } | undefined,
+        conflict_policy: options?.execConfig?.conflict_policy as 'avoid' | 'skip' | 'override' | undefined,
         ...(adaptiveInsights
           ? {
               adaptive_performance_insights: {

@@ -166,7 +166,13 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     boltTextOnly: boltTextOnlyBody,
     format_frequency: formatFrequencyBody,
     cross_platform_sharing: crossPlatformSharingBody,
+    conflict_policy: conflictPolicyBody,
   } = body || {};
+  // Cross-campaign conflict decision from the launch UI: 'avoid' (default — schedule
+  // around other campaigns), 'skip' (drop pieces that can't get a free day), or
+  // 'override' (ignore other campaigns and allow same-day double-booking).
+  const conflictPolicy: 'avoid' | 'skip' | 'override' =
+    conflictPolicyBody === 'skip' || conflictPolicyBody === 'override' ? conflictPolicyBody : 'avoid';
   // Only default to text-only when the adapter explicitly passes that setting.
   const boltTextOnly = boltTextOnlyBody != null ? Boolean(boltTextOnlyBody) : false;
   void variantMetadata;
@@ -951,7 +957,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         }
 
         const usedDates = usedDatesByPlatform.get(platformKey)
-          ?? new Set<string>(existingScheduledByPlatform.get(platformKey) ?? []);
+          ?? new Set<string>(conflictPolicy === 'override' ? [] : existingScheduledByPlatform.get(platformKey) ?? []);
         const nth = platformDayCursor.get(platformKey) ?? 0;
         let dayName: string = fallbackDayName;
         let date: string = fallbackDate;
@@ -970,13 +976,21 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         // Rule: at most one piece per platform per day — if this platform already
         // has a post on `date`, shift to the next free weekday in the week.
         if (usedDates.has(date)) {
+          let moved = false;
           for (let di = 1; di <= 7; di += 1) {
             const candidate = computeDayDate({ campaignStart: String(effectiveStartDate), weekNumber, dayIndex: di });
             if (!usedDates.has(candidate)) {
               date = candidate;
               dayName = DAYS_OF_WEEK[di - 1] ?? dayName;
+              moved = true;
               break;
             }
+          }
+          // 'skip' policy: if no free day exists this week, drop the piece rather
+          // than double-booking the platform on a day.
+          if (!moved && conflictPolicy === 'skip') {
+            console.log('[weekly-structure][skip-conflict-no-free-day]', { platform: platformKey, date });
+            continue;
           }
         }
         usedDates.add(date);

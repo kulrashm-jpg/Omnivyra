@@ -637,6 +637,10 @@ export function useBoltStrategy() {
   const [contentFormats, setContentFormats] = useState<ContentFormat[]>([]);
   const [formatFrequency, setFormatFrequency] = useState<Partial<Record<ContentFormat, number>>>({});
   const [duration, setDuration] = useState(4);
+  const [conflictPrompt, setConflictPrompt] = useState<{
+    conflicts: Array<{ platform: string; date: string; content_type: string | null; campaign_name: string }>;
+    summary: string;
+  } | null>(null);
   const [themeSource, setThemeSource] = useState<ThemeSource>('hybrid');
 
   // ── Campaign Memory ────────────────────────────────────────────────────
@@ -917,10 +921,41 @@ export function useBoltStrategy() {
   }
 
   // Called only when user clicks "Confirm & Launch" in the confirmation modal
-  async function handleConfirmLaunch() {
+  function resolveConflictDecision(policy: 'avoid' | 'skip' | 'override' | 'cancel') {
+    setConflictPrompt(null);
+    if (policy === 'cancel') return;
+    void handleConfirmLaunch(policy);
+  }
+
+  async function handleConfirmLaunch(conflictPolicy?: 'avoid' | 'skip' | 'override') {
     const card = confirmingCard;
     if (!card || executing) return;
+
+    // Pre-flight cross-campaign conflict check on the first click (before a policy
+    // is chosen). If other campaigns already occupy target platform-days, surface
+    // the decision panel and wait for the user's choice.
+    if (!conflictPolicy) {
+      try {
+        const cRes = await fetchWithAuth('/api/bolt/conflicts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyId, platforms: selectedPlatforms, startDate: campaignStartDate, weeks: duration }),
+        });
+        if (cRes.ok) {
+          const cData = await cRes.json();
+          if (cData?.hasConflicts) {
+            setConflictPrompt({ conflicts: cData.conflicts ?? [], summary: cData.summary ?? '' });
+            return;
+          }
+        }
+      } catch {
+        // Detection failure → proceed with the default cross-campaign avoidance.
+      }
+      conflictPolicy = 'avoid';
+    }
+
     setConfirmingCard(null);
+    setConflictPrompt(null);
 
     setSelectedIds([card.id]);
     setExecError(null);
@@ -1024,6 +1059,7 @@ export function useBoltStrategy() {
       // User-picked platforms for this campaign (subset of company's connected platforms).
       // Omitted when empty so the pipeline falls back to all eligible platforms.
       ...(selectedPlatforms.length > 0 ? { selected_platforms: selectedPlatforms } : {}),
+      conflict_policy: conflictPolicy ?? 'avoid',
     };
 
     try {
@@ -1294,6 +1330,8 @@ export function useBoltStrategy() {
     goals,
     handleCardSelect,
     handleConfirmLaunch,
+    conflictPrompt,
+    resolveConflictDecision,
     handleGenerate,
     hasGenerated,
     isLoading,

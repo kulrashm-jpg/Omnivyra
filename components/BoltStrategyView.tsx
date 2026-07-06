@@ -633,6 +633,8 @@ export default function BoltStrategyView({ d }: { d: S }) {
     goals,
     handleCardSelect,
     handleConfirmLaunch,
+    conflictPrompt,
+    resolveConflictDecision,
     handleGenerate,
     hasGenerated,
     isLoading,
@@ -1260,11 +1262,46 @@ export default function BoltStrategyView({ d }: { d: S }) {
             </button>
             <button
               type="button"
-              onClick={handleConfirmLaunch}
+              onClick={() => handleConfirmLaunch()}
               className="flex-1 py-2.5 text-sm font-bold rounded-xl bg-amber-500 hover:bg-amber-600 text-white transition-colors"
             >
               Confirm &amp; Launch ⚡
             </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {conflictPrompt && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+        <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
+          <div className="rounded-t-2xl bg-amber-500 px-5 py-3 text-white">
+            <div className="text-sm font-bold">⚠ Already scheduled on these platforms</div>
+            <div className="text-xs opacity-90">Another campaign already has posts on some of your target days.</div>
+          </div>
+          <div className="max-h-64 overflow-y-auto px-5 py-3">
+            <ul className="space-y-1 text-sm text-slate-700">
+              {conflictPrompt.conflicts.slice(0, 12).map((c, i) => (
+                <li key={i} className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="font-medium capitalize text-slate-900">{c.platform}</span>
+                  <span className="text-slate-500">{c.date}</span>
+                  {c.content_type ? <span className="text-slate-400">· {c.content_type}</span> : null}
+                  <span className="text-indigo-600">({c.campaign_name})</span>
+                </li>
+              ))}
+              {conflictPrompt.conflicts.length > 12 ? (
+                <li className="text-xs text-slate-400">…and {conflictPrompt.conflicts.length - 12} more</li>
+              ) : null}
+            </ul>
+          </div>
+          <div className="border-t border-slate-100 px-5 py-3">
+            <div className="mb-2 text-xs font-medium text-slate-500">How should I handle it?</div>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => resolveConflictDecision('avoid')} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Move mine to a free day</button>
+              <button type="button" onClick={() => resolveConflictDecision('skip')} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Skip the clashing pieces</button>
+              <button type="button" onClick={() => resolveConflictDecision('override')} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Post anyway</button>
+              <button type="button" onClick={() => resolveConflictDecision('cancel')} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-50">Cancel</button>
+            </div>
           </div>
         </div>
       </div>
