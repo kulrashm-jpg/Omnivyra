@@ -4462,8 +4462,20 @@ export function estimateDenseBodyHeight(
   if (lead) h += wrap(lead, leadSize, contentWidth, db.leadMaxLines) * r(leadSize * db.leadLineHeightMul) + db.gapAfterLead;
   const bullets = (Array.isArray(s.bullets) ? s.bullets : []).map((b) => String(b ?? '').trim()).filter((b) => b.length >= 4);
   const bulletLineH = r(bulletSize * db.bulletLineHeightMul);
-  for (const b of bullets) {
-    h += wrap(b, bulletSize, contentWidth - (db.bulletTextIndent + 2), db.bulletMaxLines) * bulletLineH + db.detail.bulletInterGap;
+  // Mirror renderDenseBody's 2-column bullets for WIDE cards, else the estimate over-counts
+  // bullet height and the card gets a vertical void back.
+  const twoCol = contentWidth >= 640 && bullets.length >= 3;
+  if (twoCol) {
+    const colW = Math.floor((contentWidth - 28) / 2);
+    const each = bullets.map((b) => wrap(b, bulletSize, colW - (db.bulletTextIndent + 2), db.bulletMaxLines) * bulletLineH + db.detail.bulletInterGap);
+    const half = Math.ceil(each.length / 2);
+    const leftH = each.slice(0, half).reduce((a, b) => a + b, 0);
+    const rightH = each.slice(half).reduce((a, b) => a + b, 0);
+    h += Math.max(leftH, rightH);
+  } else {
+    for (const b of bullets) {
+      h += wrap(b, bulletSize, contentWidth - (db.bulletTextIndent + 2), db.bulletMaxLines) * bulletLineH + db.detail.bulletInterGap;
+    }
   }
   const impact = String(s.impact ?? '').trim();
   const risk = String(s.risk ?? '').trim();
@@ -4897,9 +4909,9 @@ export async function renderInfographicAsset(
   const bodyTextColor = infographicStyle.color_scheme.bodyText;
   const tinyLabelColor = infographicStyle.color_scheme.tinyLabelText;
 
-  const renderCardBase = (x: number, y: number, accentFill: string): string => `
-    <rect x="${x}" y="${y}" width="${cardWidth}" height="${cardHeight}" rx="${infographicStyle.card_style.cornerRadius}" fill="${panel}" opacity="${infographicStyle.card_style.fillOpacity}" />
-    <rect x="${x}" y="${y}" width="${infographicStyle.card_style.accentStripeWidth}" height="${cardHeight}" rx="${infographicStyle.card_style.accentStripeRadius}" fill="${accentFill}" />
+  const renderCardBase = (x: number, y: number, accentFill: string, h: number = cardHeight): string => `
+    <rect x="${x}" y="${y}" width="${cardWidth}" height="${h}" rx="${infographicStyle.card_style.cornerRadius}" fill="${panel}" opacity="${infographicStyle.card_style.fillOpacity}" />
+    <rect x="${x}" y="${y}" width="${infographicStyle.card_style.accentStripeWidth}" height="${h}" rx="${infographicStyle.card_style.accentStripeRadius}" fill="${accentFill}" />
   `;
 
   /**
@@ -5104,13 +5116,37 @@ export async function renderInfographicAsset(
       .map((b) => String(b || '').trim())
       .filter((b) => b.length >= 4);
     const bulletLineH = Math.round(bulletSize * db.bulletLineHeightMul);
-    for (const bullet of bullets) {
-      const lines = clampLines(bullet, bulletSize, width - (db.bulletTextIndent + 2), db.bulletMaxLines);
-      if (lines.length === 0) continue;
-      if (!fits(lines.length * bulletLineH)) break;
-      parts.push(`<circle cx="${db.bulletDotX}" cy="${cursor + Math.round(bulletSize * db.bulletDotCyMul)}" r="${db.bulletDotRadius}" fill="${accentFill}" />`);
-      lines.forEach((ln, i) => parts.push(`<text x="${db.bulletTextIndent}" y="${cursor + bulletSize + i * bulletLineH}" font-size="${bulletSize}" font-family="${fontFamily}" font-weight="${dd.bulletWeight}" fill="${bodyTextColor}">${escapeXml(ln)}</text>`));
-      cursor += lines.length * bulletLineH + dd.bulletInterGap;
+    // WIDE cards (the full-width single-column layouts: timeline / process / hierarchy)
+    // would leave big right-side white-space with a single stack of short bullets. Flow
+    // them into TWO columns so they fill the card width. Narrow grid cards (framework /
+    // comparison ≈ 440px) stay single-column.
+    const twoColBullets = width >= 640 && bullets.length >= 3;
+    if (twoColBullets) {
+      const colGap = 28;
+      const colW = Math.floor((width - colGap) / 2);
+      const colX = [0, colW + colGap];
+      const half = Math.ceil(bullets.length / 2);
+      const colCursor = [cursor, cursor];
+      bullets.forEach((bullet, bi) => {
+        const col = bi < half ? 0 : 1;
+        const lines = clampLines(bullet, bulletSize, colW - (db.bulletTextIndent + 2), db.bulletMaxLines);
+        if (lines.length === 0) return;
+        if (colCursor[col] + lines.length * bulletLineH > height) return;
+        const cy = colCursor[col];
+        parts.push(`<circle cx="${colX[col] + db.bulletDotX}" cy="${cy + Math.round(bulletSize * db.bulletDotCyMul)}" r="${db.bulletDotRadius}" fill="${accentFill}" />`);
+        lines.forEach((ln, i) => parts.push(`<text x="${colX[col] + db.bulletTextIndent}" y="${cy + bulletSize + i * bulletLineH}" font-size="${bulletSize}" font-family="${fontFamily}" font-weight="${dd.bulletWeight}" fill="${bodyTextColor}">${escapeXml(ln)}</text>`));
+        colCursor[col] += lines.length * bulletLineH + dd.bulletInterGap;
+      });
+      cursor = Math.max(colCursor[0], colCursor[1]);
+    } else {
+      for (const bullet of bullets) {
+        const lines = clampLines(bullet, bulletSize, width - (db.bulletTextIndent + 2), db.bulletMaxLines);
+        if (lines.length === 0) continue;
+        if (!fits(lines.length * bulletLineH)) break;
+        parts.push(`<circle cx="${db.bulletDotX}" cy="${cursor + Math.round(bulletSize * db.bulletDotCyMul)}" r="${db.bulletDotRadius}" fill="${accentFill}" />`);
+        lines.forEach((ln, i) => parts.push(`<text x="${db.bulletTextIndent}" y="${cursor + bulletSize + i * bulletLineH}" font-size="${bulletSize}" font-family="${fontFamily}" font-weight="${dd.bulletWeight}" fill="${bodyTextColor}">${escapeXml(ln)}</text>`));
+        cursor += lines.length * bulletLineH + dd.bulletInterGap;
+      }
     }
 
     // Impact / Risk mini-panels (flow directly after the bullets).
@@ -5211,8 +5247,53 @@ export async function renderInfographicAsset(
 
   const L = infographicStyle.geometry.layouts;
   const GT = infographicStyle.geometry.text;
+
+  // ── Per-card content-fit heights (true column masonry) — <10% white-space ─────
+  // The engine returns ONE uniform card height (= the tallest card's content), so shorter
+  // cards render half-empty. Instead we size EACH card to its own content + ~10% padding
+  // and flow each COLUMN independently (cards sharing an x stack from a common top). This
+  // handles single-column layouts (one column → per-card heights) and grids (each column
+  // flows on its own, Pinterest-style) with the same logic, then shrinks the canvas to the
+  // tallest column. `stats` is excluded — its cards are drawn by the numeric/donut path
+  // (not the dense-body estimator) and already render dense, so it keeps the engine height.
+  const perCardTop: number[] = [];
+  const perCardHeight: number[] = [];
+  {
+    const useMasonry = layout !== 'stats';
+    if (!useMasonry) {
+      sections.forEach((_s, i) => { perCardTop[i] = engine.position(i).y; perCardHeight[i] = engine.cardHeight; });
+    } else {
+      const bodyW = Math.max(80, cardWidth - 64);
+      const est = sections.map((s) => estimateDenseBodyHeight(s as Record<string, unknown>, bodyW, infographicStyle, infographicFontMultiplier));
+      const gap = engine.rowGap;
+      const floorH = engine.minCardHeight;
+      const ceilH = engine.cardHeight; // never grow a card beyond the engine's fill height
+      // Card = content + title band + ~10% breathing room. The /0.92 slack matters: it
+      // lets the final panel/footer clear renderDenseBody's fits() check instead of being
+      // dropped (which would leave the space empty), while staying close to <10% white.
+      const cardHeightFor = (i: number) => Math.min(ceilH, Math.max(floorH, Math.round((est[i] + bodyInset) / 0.92)));
+      const startTop = headerH + 24;
+      // Column index by row-major placement — derived from the engine's row count, NOT the
+      // x position (hierarchy indents each card, so x varies within one logical column).
+      const cols = Math.max(1, Math.ceil(sections.length / Math.max(1, engine.rows)));
+      const colTops = new Map<number, number>(); // column index → running top
+      sections.forEach((_s, i) => {
+        const col = i % cols;
+        const top = colTops.get(col) ?? startTop;
+        const h = cardHeightFor(i);
+        perCardTop[i] = top;
+        perCardHeight[i] = h;
+        colTops.set(col, top + h + gap);
+      });
+      const gridBottom = Math.max(startTop, ...Array.from(colTops.values()).map((v) => v - gap));
+      height = Math.max(900, Math.min(height, gridBottom + infographicStyle.spacing.bottomMargin));
+    }
+  }
+
   const cards = sections.map((section, index) => {
-    const { x, y } = engine.position(index);
+    const { x } = engine.position(index);
+    const y = perCardTop[index];
+    const cardHeight = perCardHeight[index];
     const cycleAccent = [accent, accentSecondary, accentTertiary][index % 3];
 
     // ── Data-card short-circuit (Phases 2–3). Falls through to the
@@ -5441,7 +5522,7 @@ export async function renderInfographicAsset(
         }
 
         return `
-          ${renderCardBase(x, y, cycleAccent)}
+          ${renderCardBase(x, y, cycleAccent, cardHeight)}
           <circle cx="${iconCx}" cy="${iconCy}" r="${iconR}" fill="${cycleAccent}" />
           ${renderConceptGlyph(iconCx, iconCy, Math.round(iconR * SC.glyphSizeRatio), index, cycleAccent)}
           ${titleSvg}
@@ -5467,7 +5548,7 @@ export async function renderInfographicAsset(
         const filledArc = (percentValue / 100) * circumference;
         const displayStat = numericMatch ? `${numericMatch[1]}%` : `${Math.round(percentValue)}%`;
         return `
-          ${renderCardBase(x, y, cycleAccent)}
+          ${renderCardBase(x, y, cycleAccent, cardHeight)}
           <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-opacity="${D.trackOpacity}" stroke-width="${donutStroke}" />
           <circle cx="${donutCx}" cy="${donutCy}" r="${donutR}" fill="none" stroke="${cycleAccent}" stroke-width="${donutStroke}" stroke-linecap="round" stroke-dasharray="${filledArc} ${circumference - filledArc}" transform="rotate(-90 ${donutCx} ${donutCy})" />
           <text x="${donutCx}" y="${donutCy + Math.round(donutR * D.statYRatio)}" text-anchor="middle" font-size="${Math.max(D.statFontMin, Math.round(donutR * D.statFontRatio))}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${text}">${escapeXml(displayStat)}</text>
@@ -5503,7 +5584,7 @@ export async function renderInfographicAsset(
           ? Math.min(1, percentValue / 100)
           : Math.min(1, B.fillBase + (index * B.fillIndexStep));
         return `
-          ${renderCardBase(x, y, cycleAccent)}
+          ${renderCardBase(x, y, cycleAccent, cardHeight)}
           <text x="${cardCx}" y="${y + Math.round(cardHeight * B.numeralYRatio)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * B.numeralFontHRatio, cardWidth * B.numeralFontWRatio))}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${cycleAccent}">${escapeXml(numeralStr)}</text>
           <rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" opacity="${B.trackOpacity}" />
           <rect x="${barX}" y="${barY}" width="${Math.round(barW * barFillRatio)}" height="${barH}" rx="${barH / 2}" fill="${cycleAccent}" />
@@ -5541,7 +5622,7 @@ export async function renderInfographicAsset(
       }).join('');
       const ratioLabel = `${filledDots}/10`;
       return `
-        ${renderCardBase(x, y, cycleAccent)}
+        ${renderCardBase(x, y, cycleAccent, cardHeight)}
         <text x="${cardCx}" y="${y + Math.round(cardHeight * DT.ratioYRatio)}" text-anchor="middle" font-size="${Math.round(Math.min(cardHeight * DT.ratioFontHRatio, cardWidth * DT.ratioFontWRatio))}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${cycleAccent}">${escapeXml(ratioLabel)}</text>
         ${dots}
         <text x="${cardCx}" y="${dotY + dotR + DT.titleGap}" text-anchor="middle" font-size="${Math.round(S.titleFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(section.title)}</text>
@@ -5583,7 +5664,7 @@ export async function renderInfographicAsset(
         <polygon points="${arrowMidX - P.connectorArrowHalfW},${arrowY2 - P.connectorArrowGap} ${arrowMidX + P.connectorArrowHalfW},${arrowY2 - P.connectorArrowGap} ${arrowMidX},${arrowY2 + P.connectorTipExt}" fill="${cycleAccent}" />
       `;
       return `
-        ${renderCardBase(x, y, cycleAccent)}
+        ${renderCardBase(x, y, cycleAccent, cardHeight)}
         <!-- Tinted badge panel on the left -->
         <rect x="${x + 6}" y="${y}" width="${badgePanelW}" height="${cardHeight}" rx="${P.bandRx}" fill="${cycleAccent}" opacity="${P.bandOpacity}" />
         <!-- Step badge -->
@@ -5606,7 +5687,7 @@ export async function renderInfographicAsset(
       const cardAccent = isAlt ? accentSecondary : accent;
       const cmpLabelFont = Math.round(C.labelFont * infographicFontMultiplier);
       return `
-        ${renderCardBase(x, y, cardAccent)}
+        ${renderCardBase(x, y, cardAccent, cardHeight)}
         <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="${C.bandHeight}" rx="${C.bandRx}" fill="${cardAccent}" opacity="${C.bandOpacity}" />
         <text x="${x + C.labelX}" y="${y + C.labelY}" font-size="${cmpLabelFont}" font-family="${fontFamily}" font-weight="${GT.labelWeight}" fill="${cardAccent}" letter-spacing="${C.labelSpacing}">${escapeXml(fitTitle(String(section.title).toUpperCase(), cardWidth - C.bodyWidthInset, cmpLabelFont))}</text>
         ${denseBodyFor(section, { x: x + C.bodyX, y: y + C.bodyY, width: cardWidth - C.bodyWidthInset, height: cardHeight - C.bodyHeightInset }, cardAccent)}
@@ -5620,7 +5701,7 @@ export async function renderInfographicAsset(
       const dotCx = x - T.dotXOffset;
       const dotCy = y + T.dotYOffset;
       return `
-        ${renderCardBase(x, y, cycleAccent)}
+        ${renderCardBase(x, y, cycleAccent, cardHeight)}
         <circle cx="${dotCx}" cy="${dotCy}" r="${T.dotRadius}" fill="${cycleAccent}" stroke="${GT.whiteFg}" stroke-width="${T.dotStrokeWidth}" />
         <text x="${x + T.labelX}" y="${y + T.labelY}" font-size="${Math.round(T.labelFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.labelWeight}" fill="${cycleAccent}" letter-spacing="${T.labelSpacing}">PHASE ${index + 1}</text>
         <text x="${x + T.titleX}" y="${y + T.titleY}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(fitTitle(section.title, cardWidth - T.bodyWidthInset, cardTitleFontSize))}</text>
@@ -5634,7 +5715,7 @@ export async function renderInfographicAsset(
       const H = L.hierarchy;
       const numBadge = String(index + 1).padStart(2, '0');
       return `
-        ${renderCardBase(x, y, cycleAccent)}
+        ${renderCardBase(x, y, cycleAccent, cardHeight)}
         <text x="${x + H.numX}" y="${y + H.numY}" font-size="${Math.round(H.numFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.numeralWeight}" fill="${cycleAccent}">${numBadge}</text>
         <text x="${x + H.titleX}" y="${y + H.titleY}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(fitTitle(section.title, cardWidth - H.bodyWidthInset, cardTitleFontSize))}</text>
         ${denseBodyFor(section, { x: x + H.bodyX, y: y + H.bodyY, width: cardWidth - H.bodyWidthInset, height: cardHeight - H.bodyHeightInset }, cycleAccent)}
@@ -5645,7 +5726,7 @@ export async function renderInfographicAsset(
     // band carrying the pillar label, body underneath in the panel.
     const F = L.framework;
     return `
-      ${renderCardBase(x, y, cycleAccent)}
+      ${renderCardBase(x, y, cycleAccent, cardHeight)}
       <rect x="${x + 6}" y="${y}" width="${cardWidth - 6}" height="${F.bandHeight}" rx="${F.bandRx}" fill="${cycleAccent}" opacity="${F.bandOpacity}" />
       <text x="${x + F.labelX}" y="${y + F.labelY}" font-size="${Math.round(F.labelFont * infographicFontMultiplier)}" font-family="${fontFamily}" font-weight="${GT.labelWeight}" fill="${cycleAccent}" letter-spacing="${F.labelSpacing}">PILLAR ${index + 1}</text>
       <text x="${x + F.titleX}" y="${y + F.titleY}" font-size="${cardTitleFontSize}" font-family="${fontFamily}" font-weight="${GT.titleWeight}" fill="${text}">${escapeXml(fitTitle(section.title, cardWidth - F.bodyWidthInset, cardTitleFontSize))}</text>
@@ -5654,8 +5735,9 @@ export async function renderInfographicAsset(
   }).join('');
 
   // Timeline layout needs a vertical rail drawn ONCE behind the cards.
+  const railLastIdx = Math.max(0, sections.length - 1);
   const timelineRail = layout === 'timeline'
-    ? `<line x1="${engine.position(0).x - L.timeline.railXOffset}" y1="${engine.position(0).y - L.timeline.railTopPad}" x2="${engine.position(0).x - L.timeline.railXOffset}" y2="${engine.position(sections.length - 1).y + cardHeight + L.timeline.railBottomPad}" stroke="${accent}" stroke-width="${L.timeline.railStrokeWidth}" stroke-linecap="round" opacity="${L.timeline.railOpacity}" />`
+    ? `<line x1="${engine.position(0).x - L.timeline.railXOffset}" y1="${(perCardTop[0] ?? engine.position(0).y) - L.timeline.railTopPad}" x2="${engine.position(0).x - L.timeline.railXOffset}" y2="${(perCardTop[railLastIdx] ?? engine.position(railLastIdx).y) + (perCardHeight[railLastIdx] ?? engine.cardHeight) + L.timeline.railBottomPad}" stroke="${accent}" stroke-width="${L.timeline.railStrokeWidth}" stroke-linecap="round" opacity="${L.timeline.railOpacity}" />`
     : '';
   // Tinted bottom-half accent fill — adds visual depth and ensures the
   // canvas doesn't read as a sea of empty white space when sections
