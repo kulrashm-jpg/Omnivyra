@@ -765,14 +765,16 @@ export function useCompanyProfileState() {
     updateActiveProfile(updated);
   };
 
-  const saveProfile = async (override?: CompanyProfile) => {
+  // Returns true only when the profile was actually persisted, so callers (e.g.
+  // confirmSaveCompetitors) can avoid discarding their staged data on a failed save.
+  const saveProfile = async (override?: CompanyProfile): Promise<boolean> => {
     try {
       setIsSaving(true);
       setErrorMessage(null);
       setSuccessMessage(null);
       if (!companyId) {
         setErrorMessage('Select a company to continue.');
-        return;
+        return false;
       }
       // `override` lets a guided-capture flow persist the exact fields it just
       // staged without waiting for the activeProfile state to settle.
@@ -832,9 +834,11 @@ export function useCompanyProfileState() {
       setIsEditing(false);
       setSuccessMessage('Profile saved.');
       notifyCompanyProfileUpdated(data.profile?.company_id || companyId);
+      return true;
     } catch (error) {
       console.error('Error saving company profile:', error);
       setErrorMessage('Failed to save company profile.');
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -921,12 +925,19 @@ export function useCompanyProfileState() {
     const names = pending.map((c) => String(c.name || '').trim()).filter(Boolean);
     if (names.length === 0) return;
 
-    // 1) Save the names to the (auto-locked) Competitors field.
+    // 1) Save the names to the (auto-locked) Competitors field. Only clear the staged
+    //    suggestions AFTER the write is confirmed — otherwise a failed save (e.g. an
+    //    expired session) silently loses them with no way to retry.
     const updated = { ...activeProfile, competitors: names.join(', '), competitors_list: names };
     updateActiveProfile(updated);
+    const saved = await saveProfile(updated);
+    if (!saved) {
+      // Keep competitorPendingSave + the chat open so the user can retry; saveProfile
+      // has already surfaced the error. Do NOT persist guidance against an unsaved profile.
+      return;
+    }
     setCompetitorChatOpen(false);
     setCompetitorPendingSave(null);
-    await saveProfile(updated);
 
     // 2) Persist the domains + offerings as user-guided competitor intelligence so
     //    the full card survives reloads and feeds refinement as a trusted signal.
