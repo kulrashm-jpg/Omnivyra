@@ -917,7 +917,21 @@ function buildOverlaySvg(input: {
   const overlayStrategy = input.brandKit.overlayStrategy;
   const accent = input.brandKit.accentColor;
   const headlineLines = balanceTextLines(input.overlay.headline, preset.headlineChars, preset.maxHeadlineLines);
-  const insightLines = balanceTextLines(input.overlay.keyInsight, preset.insightChars, preset.maxInsightLines);
+  // Auto-fit the body: shrink the insight font (which fits more chars per line)
+  // until the FULL keyInsight fits within its line budget, so the body is never
+  // cut short. Floored at 72% for legibility; only activates for slides that would
+  // otherwise overflow — shorter slides keep the deck-consistent size.
+  const insightText = compactText(input.overlay.keyInsight || '');
+  let fittedInsightSize = preset.insightSize;
+  {
+    const insightFloor = Math.max(14, Math.round(preset.insightSize * 0.72));
+    const charsAt = (size: number) => Math.max(8, Math.round(preset.insightChars * (preset.insightSize / Math.max(1, size))));
+    const fitsAt = (size: number) => insightText.length === 0
+      || Math.ceil(insightText.length / charsAt(size)) <= preset.maxInsightLines;
+    while (fittedInsightSize > insightFloor && !fitsAt(fittedInsightSize)) fittedInsightSize -= 1;
+  }
+  const fittedInsightChars = Math.max(8, Math.round(preset.insightChars * (preset.insightSize / Math.max(1, fittedInsightSize))));
+  const insightLines = balanceTextLines(input.overlay.keyInsight, fittedInsightChars, preset.maxInsightLines);
   const supportLines = preset.maxSupportLines > 0 ? balanceTextLines(input.overlay.supportingText, preset.supportChars, preset.maxSupportLines) : [];
   // Hook fallback: prefer operator-typed hook → platform → generic.
   // The previous backdrop panel made the platform fallback look like a
@@ -968,7 +982,7 @@ function buildOverlaySvg(input: {
     ? Math.round(applyScale(logoBaseHeight, strategyMods.logoScaleMultiplier, 0.5, 1.6))
     : logoBaseHeight;
   const headlineLineHeight = Math.round(preset.headlineSize * 1.14);
-  const insightLineHeight = Math.round(preset.insightSize * 1.34);
+  const insightLineHeight = Math.round(fittedInsightSize * 1.34);
   const supportLineHeight = Math.round(preset.supportSize * 1.35);
   const hookLineGap = hook ? Math.round(preset.hookSize * 0.9) + 18 : 0;
   const insightGap = headlineLines.length > 0 && insightLines.length > 0 ? 22 : 0;
@@ -1252,7 +1266,7 @@ function buildOverlaySvg(input: {
         return `<text x="${counterX}" y="${counterY}" filter="url(#textShadow)" fill="rgba(255,255,255,0.94)" font-size="${counterFontSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="700" letter-spacing="2.4">${escapeXml(slideCounter)}</text>`;
       })() : ''}
       ${headlineLines.map((line, index) => `<text x="${textX}" y="${headlineStart + index * headlineLineHeight}" filter="url(#textShadow)" fill="${headingColor}" font-size="${preset.headlineSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.headingWeight}">${escapeXml(line)}</text>`).join('')}
-      ${insightLines.map((line, index) => `<text x="${textX}" y="${insightStart + index * insightLineHeight}" filter="url(#textShadow)" fill="${insightColor}" font-size="${preset.insightSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.bodyWeight}">${escapeXml(line)}</text>`).join('')}
+      ${insightLines.map((line, index) => `<text x="${textX}" y="${insightStart + index * insightLineHeight}" filter="url(#textShadow)" fill="${insightColor}" font-size="${fittedInsightSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.bodyWeight}">${escapeXml(line)}</text>`).join('')}
       ${supportLines.map((line, index) => `<text x="${textX}" y="${supportStart + index * supportLineHeight}" filter="url(#textShadow)" fill="${supportColor}" font-size="${preset.supportSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="500">${escapeXml(line)}</text>`).join('')}
       ${ctaSvg}
       <!-- footer watermark suppressed (brand mark in top-right is canonical); textWidth=${textWidth} retained for layout-spec future use -->
