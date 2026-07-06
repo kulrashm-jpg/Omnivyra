@@ -14,18 +14,26 @@ describe('infographic layout variety — different format per topic', () => {
     expect(pickVariedInfographicLayout(t)).toBe(pickVariedInfographicLayout(t));
   });
 
-  it('varies across different generic topics (not all "framework")', () => {
-    const topics = [
+  it('generic topics rotate ONLY among the dense layouts (stats/framework) to hold <10% white-space', () => {
+    const generic = [
       'Deepening understanding of brand awareness',
-      'Brand awareness — common pitfalls to avoid',
-      'Brand awareness — a real-world example',
       'Building a memorable brand identity',
       'Why consistency drives recall',
       'The psychology of brand trust',
     ];
-    const layouts = new Set(topics.map(pickVariedInfographicLayout));
-    // A generic set should spread across MULTIPLE layouts, not collapse to one.
-    expect(layouts.size).toBeGreaterThan(1);
+    for (const t of generic) {
+      expect(['stats', 'framework']).toContain(pickVariedInfographicLayout(t));
+    }
+  });
+
+  it('a mixed set (generic + content-appropriate) still spreads across multiple formats', () => {
+    const topics = [
+      'Deepening understanding of brand awareness',   // generic → dense
+      'Organic vs paid channels',                     // comparison
+      'How to launch a campaign step by step',        // process
+      'The roadmap of our brand over time',           // timeline
+    ];
+    expect(new Set(topics.map(pickVariedInfographicLayout)).size).toBeGreaterThan(1);
   });
 
   it('only ever returns a real engine', () => {

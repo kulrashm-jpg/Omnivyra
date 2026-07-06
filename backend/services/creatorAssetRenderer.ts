@@ -4196,16 +4196,27 @@ const INFOGRAPHIC_LAYOUTS = ['stats', 'comparison', 'process', 'framework', 'hie
  * imply one, rotate deterministically by a hash of the topic, so different topics land on
  * different layouts while the SAME topic always re-renders identically.
  */
+// Layouts verified to render DENSE (<10% white-space) with generic content: `stats` packs
+// a 2×2 grid + right-rail stat callouts + graph glyphs; `framework` fills a 2-column pillar
+// grid. The single-column engines (timeline/process/hierarchy) and `comparison` leave larger
+// voids with generic copy, so they are used ONLY when the topic genuinely implies that
+// structure — never in the generic rotation — until a per-card content-fit (masonry) pass
+// lets them hold <10% too.
+const DENSE_INFOGRAPHIC_ROTATION = ['stats', 'framework'] as const;
+
 export function pickVariedInfographicLayout(topic: string): string {
   const t = String(topic || '').toLowerCase();
-  if (/\bvs\b|versus|compare|comparison|pros?\s*(and|&|vs)?\s*cons|before\s*(and|&)?\s*after|option\s|either\b/.test(t)) return 'comparison';
-  if (/\bstep|how\s*to|process|workflow|stages?\b|playbook|checklist|guide to|method\b/.test(t)) return 'process';
-  if (/timeline|roadmap|history|evolution|journey|over\s*time|milestones?|quarter|20\d\d\b/.test(t)) return 'timeline';
-  if (/\d+\s*%|\bkpi|metric|by the numbers|data\b|statistics?|\brate\b|growth\b|benchmark/.test(t)) return 'stats';
-  if (/hierarchy|levels?\b|tiers?\b|pyramid|maturity|framework of|pillars?\b/.test(t)) return 'hierarchy';
+  // Content-appropriate engines — only when the topic clearly calls for that structure, so
+  // the specialised layout is filled by matching content rather than padded generic copy.
+  if (/\bvs\b|versus|compare|comparison|pros?\s*(and|&|vs)?\s*cons|before\s*(and|&)?\s*after/.test(t)) return 'comparison';
+  if (/\bstep\b|step[-\s]?by[-\s]?step|how\s*to|workflow|stages?\b|playbook|checklist/.test(t)) return 'process';
+  if (/timeline|roadmap|history|evolution|journey|over\s*time|milestones?\b/.test(t)) return 'timeline';
+  if (/hierarchy|tiers?\b|pyramid|maturity\s*(model|levels?)/.test(t)) return 'hierarchy';
+  if (/\d+\s*%|\bkpi\b|by the numbers|statistics?\b|benchmark/.test(t)) return 'stats';
+  // Generic topics rotate only among the DENSE layouts so white-space stays under ~10%.
   let h = 0;
   for (let i = 0; i < t.length; i += 1) h = (Math.imul(h, 31) + t.charCodeAt(i)) >>> 0;
-  return INFOGRAPHIC_LAYOUTS[h % INFOGRAPHIC_LAYOUTS.length];
+  return DENSE_INFOGRAPHIC_ROTATION[h % DENSE_INFOGRAPHIC_ROTATION.length];
 }
 
 function resolveInfographicLayout(metadata: Record<string, unknown>): string {
