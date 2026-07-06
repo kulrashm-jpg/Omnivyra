@@ -1,6 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getWebsiteSnapshot } from '../../../backend/services/websiteIntelligence/websiteIntelligenceRepository';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { normalizeCompanyDomain } from '../../../lib/shared/domain/companyDomain';
 
 /**
  * GET /api/website-intelligence/canonical — the single read surface for the
@@ -20,6 +22,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const snapshot = await getWebsiteSnapshot(companyId, websiteId);
+    // Domain soft-verify: signing up with a work email at your own domain proves ownership.
+    // If the account's email domain matches the website domain, surface it so the readiness
+    // domain-verification factor credits it. Best-effort — never blocks the snapshot.
+    try {
+      const { data: company } = await supabase
+        .from('companies')
+        .select('admin_email_domain, website_domain')
+        .eq('id', companyId)
+        .maybeSingle();
+      const adminDom = normalizeCompanyDomain(String(company?.admin_email_domain ?? ''));
+      const siteDom = normalizeCompanyDomain(String(company?.website_domain ?? ''));
+      if (adminDom && siteDom && adminDom === siteDom) {
+        const snap = snapshot as unknown as { domain: Record<string, unknown> | null };
+        if (snap.domain) snap.domain.emailDomainMatch = true;
+        else snap.domain = { emailDomainMatch: true };
+      }
+    } catch { /* soft-verify best-effort */ }
     return res.status(200).json({ snapshot });
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load website intelligence' });

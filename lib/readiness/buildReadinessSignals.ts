@@ -25,7 +25,9 @@ const CRM_INTEGRATION_TYPES = new Set(['hubspot', 'salesforce', 'pipedrive', 'cr
 const REFRESH_PROBLEM = new Set(['failed', 'requires_reconnect']);
 
 export interface WebsiteSnapshotInput {
-  domain?: { verified?: boolean; verifiedAt?: string | null } | null;
+  /** `emailDomainMatch` = the account's email domain matches the website domain (ownership
+   *  proof), set server-side by the canonical endpoint for the domain soft-verify. */
+  domain?: { verified?: boolean; verifiedAt?: string | null; emailDomainMatch?: boolean } | null;
   tracking?: { active?: boolean; installed?: boolean } | null;
   readiness?: { checks?: Array<{ id?: string; done?: boolean }> } | null;
   integrations?: Array<{ type?: string; status?: string }> | null;
@@ -106,9 +108,14 @@ export function buildReadinessSignals(input: RawReadinessInputs): ReadinessSigna
         reason: null,
         // Latch: once the domain has ever been verified (verifiedAt is set), it
         // stays verified — verification is a one-time proof, checked at registration.
-        domainVerified: Boolean(snap.domain?.verified || snap.domain?.verifiedAt),
+        // Soft-verify: a verified domain record OR proof that the account owns the domain
+        // (its email domain matches the website domain) — signing up with a work email at
+        // your own domain is strong ownership evidence.
+        domainVerified: Boolean(snap.domain?.verified || snap.domain?.verifiedAt || snap.domain?.emailDomainMatch),
         analyticsConnected: Boolean(analyticsCheck?.done),
-        trackingActive: Boolean(snap.tracking?.active || snap.tracking?.installed),
+        // GA4 (Google Analytics) IS on-site visitor tracking — connecting it satisfies the
+        // Tracking factor too, not just Analytics.
+        trackingActive: Boolean(snap.tracking?.active || snap.tracking?.installed || analyticsCheck?.done),
       }
     : {
         available: false,
