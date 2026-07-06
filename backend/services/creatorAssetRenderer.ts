@@ -2164,7 +2164,11 @@ async function generateProviderImage(input: {
       const refResp = await fetch(referenceUrl.trim());
       if (!refResp.ok) throw new Error(`reference fetch ${refResp.status}`);
       const refBuf = Buffer.from(await refResp.arrayBuffer());
-      const refFile = await toFile(refBuf, 'reference.png', { type: refResp.headers.get('content-type') || 'image/webp' });
+      // Filename extension MUST match the actual bytes/type or the provider can
+      // reject it (simulation confirmed matched webp/png work; mismatched fail).
+      const refType = refResp.headers.get('content-type') || 'image/webp';
+      const refExt = refType.includes('png') ? 'png' : (refType.includes('jpeg') || refType.includes('jpg')) ? 'jpg' : 'webp';
+      const refFile = await toFile(refBuf, `reference.${refExt}`, { type: refType });
       const editResp = await Promise.race([
         client.images.edit(
           {
