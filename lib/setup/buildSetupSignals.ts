@@ -54,7 +54,14 @@ function featureDone(features: FeatureStatus[], key: string): boolean {
 export function buildSetupSignals(input: RawSetupInputs): SetupSignals {
   const p = input.profile ?? {};
 
-  const companySize = nonEmpty(p['team_size']) || nonEmpty(p['company_size']) || nonEmpty(p['size']);
+  // Company size (a.k.a. Team size) is edited under Company Facts, which persists at
+  // report_settings.company_facts.team_size — NOT a top-level column. Read BOTH so the
+  // Setup "Organization details" factor recognises it once set (it was always "not set"
+  // before because only the top-level fields were checked).
+  const companyFacts = ((p['report_settings'] as { company_facts?: Record<string, unknown> } | null | undefined)?.company_facts) ?? {};
+  const companySize =
+    nonEmpty(p['team_size']) || nonEmpty(p['company_size']) || nonEmpty(p['size']) ||
+    nonEmpty(companyFacts['team_size']) || nonEmpty(companyFacts['company_size']) || nonEmpty(companyFacts['size']);
 
   // Channels — canonical connection truth from social_accounts (never URLs).
   let channels: SetupSignals['channels'];
