@@ -235,8 +235,12 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // resilience, but it IS a workspace page and should still get the app header.
   // Keep its auth treatment unchanged; only opt it back into the layout.
   const isCampaignsListRoute = router.pathname === '/campaigns';
+  // Same story for these workspace pages — auth-bypassed for resilience (isPublic), but they
+  // are in-app pages that should carry the shared header. Opt them back into the layout while
+  // leaving their auth treatment unchanged.
+  const isWorkspaceHeaderRoute = isCampaignsListRoute || isCompanyProfile || isContentArchitectHub || isRecommendationsPage;
   // Authenticated routes get AppLayout (header + footer)
-  const showAppLayout = isAuthenticated && !isOnboardingRoute && !isLoginRoute && !isCaptureRoute && (!isPublic || isCampaignsListRoute);
+  const showAppLayout = isAuthenticated && !isOnboardingRoute && !isLoginRoute && !isCaptureRoute && (!isPublic || isWorkspaceHeaderRoute);
 
   // AuthErrorBanner renders any non-session-fatal auth error from
   // CompanyContext (USER_INVITED, USER_NOT_FOUND, SCHEMA_MISMATCH,
