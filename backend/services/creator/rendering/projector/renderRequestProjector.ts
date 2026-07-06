@@ -135,6 +135,15 @@ export function projectRenderRequest(
       pacing_guidance,
       scene_direction,
       visual_prompt,
+      // Style reference (img2img) — included ONLY when the render-layer flag is on,
+      // the family is image, and production supplied a reference URL. Absent by
+      // default so the deterministic hash + output stay byte-identical.
+      ...(process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit'
+        && canonical_asset_family === 'image'
+        && typeof production.reference_image_url === 'string'
+        && (production.reference_image_url as string).trim()
+        ? { reference_image_url: (production.reference_image_url as string).trim() }
+        : {}),
     },
     packaging_projection: {
       caption,

@@ -326,6 +326,18 @@ export function fromPersistedCreatorRow(
       scene_direction: '',
       production_notes: asStrArray((persistedMeta as Record<string, unknown>).production_notes),
       creator_notes: asStrArray((persistedMeta as Record<string, unknown>).creator_notes),
+      // img2img style reference (flag-gated): point at the curated template's
+      // showcase image so a reference-capable provider can condition on it. No-op
+      // unless CREATOR_IMAGE_REFERENCE_MODE='edit' and a blueprint id is known.
+      ...(process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit'
+        ? (() => {
+            const bpId = asStr((persistedMeta as Record<string, unknown>).blueprint_id);
+            const fam = String(assetType || 'image');
+            if (!bpId) return {};
+            const base = String(process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'https://www.omnivyra.com').replace(/\/$/, '');
+            return { reference_image_url: `${base}/creator-showcases/${bpId}/${fam}.webp` };
+          })()
+        : {}),
     },
     platform_context: {
       platform,

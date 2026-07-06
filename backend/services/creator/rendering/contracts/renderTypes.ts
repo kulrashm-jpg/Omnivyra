@@ -33,6 +33,10 @@ export interface RenderBlueprintProjection {
   scene_direction: string;
   /** Visual prompt seed (image) — already strategy-stripped upstream. */
   visual_prompt: string;
+  /** Optional style-reference image URL (curated template showcase). Present ONLY
+   *  when CREATOR_IMAGE_REFERENCE_MODE='edit'; a reference-capable provider
+   *  conditions on it (img2img). Absent by default → hash + output unchanged. */
+  reference_image_url?: string | null;
 }
 
 /** Marketing copy that may be burned in / used as caption guidance.
@@ -158,6 +162,7 @@ export const RENDER_SAFE_FIELDS = Object.freeze([
   'pacing_guidance',
   'scene_direction',
   'visual_prompt',
+  'reference_image_url',
   'caption',
   'overlay_text',
   'platform',

@@ -98,6 +98,47 @@ export function createOpenAIRenderProvider(
     ].filter(Boolean).join('. ').slice(0, 3400);
     const prompt = `${base}. ABSOLUTE OVERRIDE (highest priority, overrides every earlier instruction): Strictly avoid all visible text — no words, letters, numbers, captions, signage, labels, UI text, logos, wordmarks, monograms, or brand/company/product names anywhere in the image, including on screens, devices, paper, walls, packaging, or apparel. Render any screen, dashboard, or interface as abstract blurred shapes and anonymized gradients with no readable glyphs. Do NOT depict any name, logo, or label even if an earlier line described one.`;
 
+    // ── img2img style reference (flag-gated) ────────────────────────────────
+    // When a curated-template reference URL rode through on the spec AND the flag
+    // is on, condition generation on it via images/edits. ANY failure (flag off,
+    // no ref, fetch 404, provider error) falls through to the plain text-to-image
+    // path below — so this can never break existing generation.
+    const referenceUrl = spec.blueprint_projection.reference_image_url;
+    if (process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit' && typeof referenceUrl === 'string' && referenceUrl.trim()) {
+      try {
+        const refResp = await doFetch(referenceUrl.trim());
+        if (refResp.ok) {
+          const refBytes = await refResp.arrayBuffer();
+          const form = new FormData();
+          form.append('model', model);
+          form.append('prompt', prompt);
+          form.append('size', size);
+          form.append('n', '1');
+          // Cost-conscious default; overridable. gpt-image-1 quality: low|medium|high.
+          form.append('quality', process.env.CREATOR_IMAGE_REFERENCE_QUALITY || 'medium');
+          form.append('image', new Blob([refBytes], { type: 'image/webp' }), 'reference.webp');
+          const editResp = await doFetch('https://api.openai.com/v1/images/edits', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${key}` }, // multipart boundary set by FormData
+            body: form,
+          });
+          if (editResp.ok) {
+            const editJson: any = await editResp.json();
+            const editUrl = editJson?.data?.[0]?.url || editJson?.data?.[0]?.b64_json;
+            if (editUrl) {
+              return {
+                provider: 'openai',
+                external_job_id: idempotencyKey,
+                provider_metadata: { model, size, url: editUrl, mode: 'edit-reference' },
+              };
+            }
+          }
+        }
+      } catch {
+        // fall through to plain generation
+      }
+    }
+
     const resp = await doFetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },

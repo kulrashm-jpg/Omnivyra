@@ -87,6 +87,10 @@ export interface WorkspaceProductionContext {
   scene_direction: string;
   production_notes: string[];
   creator_notes: string[];
+  /** Optional img2img style-reference image URL (curated template showcase).
+   *  Populated only when CREATOR_IMAGE_REFERENCE_MODE='edit'; threaded to the
+   *  RenderSpec's blueprint_projection so a reference-capable provider can use it. */
+  reference_image_url?: string | null;
 }
 
 /** Per-platform delivery context (Phase-6 variant editing). */
