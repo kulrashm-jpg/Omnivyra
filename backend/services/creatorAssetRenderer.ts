@@ -4185,6 +4185,29 @@ function resolveInfographicSections(assetPayload: Record<string, unknown>, metad
   return base;
 }
 
+const INFOGRAPHIC_LAYOUTS = ['stats', 'comparison', 'process', 'framework', 'hierarchy', 'timeline'] as const;
+
+/**
+ * Pick a layout that VARIES per infographic so a campaign's infographics don't all look
+ * like the same 2×2 grid (operator feedback: "different format and style each time").
+ * First honour the content — a comparison/process/timeline/stats/hierarchy topic gets the
+ * matching engine (each uses genuinely different visual elements: graphs & donuts, a
+ * milestone rail, numbered steps, two-column, indented tiers). When the topic doesn't
+ * imply one, rotate deterministically by a hash of the topic, so different topics land on
+ * different layouts while the SAME topic always re-renders identically.
+ */
+export function pickVariedInfographicLayout(topic: string): string {
+  const t = String(topic || '').toLowerCase();
+  if (/\bvs\b|versus|compare|comparison|pros?\s*(and|&|vs)?\s*cons|before\s*(and|&)?\s*after|option\s|either\b/.test(t)) return 'comparison';
+  if (/\bstep|how\s*to|process|workflow|stages?\b|playbook|checklist|guide to|method\b/.test(t)) return 'process';
+  if (/timeline|roadmap|history|evolution|journey|over\s*time|milestones?|quarter|20\d\d\b/.test(t)) return 'timeline';
+  if (/\d+\s*%|\bkpi|metric|by the numbers|data\b|statistics?|\brate\b|growth\b|benchmark/.test(t)) return 'stats';
+  if (/hierarchy|levels?\b|tiers?\b|pyramid|maturity|framework of|pillars?\b/.test(t)) return 'hierarchy';
+  let h = 0;
+  for (let i = 0; i < t.length; i += 1) h = (Math.imul(h, 31) + t.charCodeAt(i)) >>> 0;
+  return INFOGRAPHIC_LAYOUTS[h % INFOGRAPHIC_LAYOUTS.length];
+}
+
 function resolveInfographicLayout(metadata: Record<string, unknown>): string {
   // CREATOR-127: a resolved curated TEMPLATE drives the layout directly (no blueprint).
   const dt = curatedDesignTemplate(metadata);
@@ -4194,9 +4217,12 @@ function resolveInfographicLayout(metadata: Record<string, unknown>): string {
   // never the same generic grid. No fallback generator runs while a blueprint is set.
   const bp = blueprintIdForRender(metadata);
   if (bp) return infographicLayoutForBlueprint(bp);
-  // RULE 7: blueprint_id == null → existing generic behavior unchanged.
+  // RULE 7: blueprint_id == null. Honour an explicit per-asset layout when the generator
+  // set one; otherwise pick a VARIED, content-aware layout (was hardcoded 'framework',
+  // which made every generic infographic identical).
   const requested = String(metadata.infographic_layout || safeObject(metadata.creator_card).infographic_layout || '').trim().toLowerCase();
-  return ['stats', 'comparison', 'process', 'framework', 'hierarchy', 'timeline'].includes(requested) ? requested : 'framework';
+  if ((INFOGRAPHIC_LAYOUTS as readonly string[]).includes(requested)) return requested;
+  return pickVariedInfographicLayout(String(metadata.topic || safeObject(metadata.creator_card).topic || ''));
 }
 
 function validateInfographicDensity(
