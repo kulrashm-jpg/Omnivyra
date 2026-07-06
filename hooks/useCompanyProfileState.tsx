@@ -116,8 +116,12 @@ export function useCompanyProfileState() {
   // silently before the user knows it was recorded.
   const [targetCustomerPendingSave, setTargetCustomerPendingSave] = useState(false);
   const [marketingIntelligencePendingSave, setMarketingIntelligencePendingSave] = useState(false);
-  const [competitorSuggestLoading, setCompetitorSuggestLoading] = useState(false);
-  const [competitorSuggestions, setCompetitorSuggestions] = useState<Array<{ name: string; why?: string }>>([]);
+  const [competitorChatOpen, setCompetitorChatOpen] = useState(false);
+  const [competitorChatMessages, setCompetitorChatMessages] = useState<Array<{ role: 'assistant' | 'user'; content: string }>>([]);
+  const [competitorChatInput, setCompetitorChatInput] = useState('');
+  const [competitorChatLoading, setCompetitorChatLoading] = useState(false);
+  const [competitorSuggestions, setCompetitorSuggestions] = useState<Array<{ name: string; domain?: string; offering?: string }>>([]);
+  const [competitorPendingSave, setCompetitorPendingSave] = useState<Array<{ name: string; domain?: string; offering?: string }> | null>(null);
   const [problemTransformationPanelOpen, setProblemTransformationPanelOpen] = useState(false);
   const [problemTransformationQuestions, setProblemTransformationQuestions] = useState<string[]>([]);
   const [problemTransformationAnswers, setProblemTransformationAnswers] = useState<string[]>([]);
@@ -836,42 +840,91 @@ export function useCompanyProfileState() {
     }
   };
 
-  // AI-suggest product-first competitors grounded in the profile, then stage them
-  // into the editable Competitors field for the user to review before saving.
-  const suggestCompetitors = async () => {
+  // Competitive-intelligence chat: the assistant shares its understanding of the
+  // company, the user confirms/refines, then it returns named competitors with
+  // domains. Deterministic 2-turn flow (understanding → competitors on reply).
+  const sendCompetitorMessage = async (userContent?: string) => {
+    const content = (userContent ?? competitorChatInput).trim();
+    const isInitial = competitorChatMessages.length === 0 && !content;
+    if (!content && !isInitial) return;
     if (!companyId) return;
-    setCompetitorSuggestLoading(true);
+
+    const nextMessages = isInitial
+      ? []
+      : [...competitorChatMessages, { role: 'user' as const, content }];
+    if (!isInitial && content) setCompetitorChatMessages(nextMessages);
+    setCompetitorChatInput('');
+    setCompetitorChatLoading(true);
     setErrorMessage(null);
-    setSuccessMessage(null);
     try {
       const response = await fetchWithAuth(
         `/api/company-profile/suggest-competitors?companyId=${encodeURIComponent(companyId)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ companyId, company_id: companyId }),
+          body: JSON.stringify({
+            companyId,
+            company_id: companyId,
+            conversation: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+          }),
         },
       );
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
-        throw new Error(err?.error || 'Failed to suggest competitors');
+        throw new Error(err?.error || 'Request failed');
       }
       const data = await response.json();
-      const list: Array<{ name: string; why?: string }> = Array.isArray(data.competitors) ? data.competitors : [];
-      setCompetitorSuggestions(list);
-      const names = list.map((c) => String(c.name || '').trim()).filter(Boolean);
-      if (names.length === 0) {
-        setErrorMessage('No confident same-category competitors found. Try adding one manually.');
-        return;
+      if (data.done) {
+        const comps: Array<{ name: string; domain?: string; offering?: string }> =
+          Array.isArray(data.competitors) ? data.competitors : [];
+        setCompetitorSuggestions(comps);
+        setCompetitorPendingSave(comps);
+        const listText = comps
+          .map((c) => `• ${c.name}${c.domain ? ` (${c.domain})` : ''}${c.offering ? ` — ${c.offering}` : ''}`)
+          .join('\n');
+        const takeText = String(data.final_take || '').trim();
+        setCompetitorChatMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant' as const,
+            content: `${takeText ? `${takeText}\n\n` : ''}Direct competitors I'd track:\n${listText || '(none I can confidently name)'}\n\nClick "Save competitors" to add them to your profile (they'll be locked from auto-refinement).`,
+          },
+        ]);
+      } else if (data.nextQuestion) {
+        setCompetitorChatMessages((prev) =>
+          isInitial
+            ? [{ role: 'assistant' as const, content: data.nextQuestion }]
+            : [...prev, { role: 'assistant' as const, content: data.nextQuestion }],
+        );
       }
-      updateActiveProfile({ ...activeProfile, competitors: names.join(', '), competitors_list: names });
-      if (!isEditing) setIsEditing(true);
-      setSuccessMessage('Suggested competitors added — review, edit if needed, then Save Profile.');
     } catch (e) {
-      setErrorMessage((e as Error).message || 'Failed to suggest competitors');
+      setErrorMessage((e as Error).message || 'Competitor intelligence failed');
     } finally {
-      setCompetitorSuggestLoading(false);
+      setCompetitorChatLoading(false);
     }
+  };
+
+  const openCompetitorChat = () => {
+    setCompetitorChatMessages([]);
+    setCompetitorChatInput('');
+    setCompetitorPendingSave(null);
+    setCompetitorChatOpen(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    setCompetitorChatLoading(true);
+    sendCompetitorMessage();
+  };
+
+  const confirmSaveCompetitors = async () => {
+    const pending = competitorPendingSave;
+    if (!pending || pending.length === 0) return;
+    const names = pending.map((c) => String(c.name || '').trim()).filter(Boolean);
+    if (names.length === 0) return;
+    const updated = { ...activeProfile, competitors: names.join(', '), competitors_list: names };
+    updateActiveProfile(updated);
+    setCompetitorChatOpen(false);
+    setCompetitorPendingSave(null);
+    await saveProfile(updated);
   };
 
   const updateIntelligenceContext = (patch: Partial<CompanyContextIntelligence>) => {
@@ -2164,9 +2217,17 @@ export function useCompanyProfileState() {
     saveProblemTransformation,
     saveIntelligenceContext,
     saveProfile,
-    suggestCompetitors,
-    competitorSuggestLoading,
+    openCompetitorChat,
+    sendCompetitorMessage,
+    confirmSaveCompetitors,
+    competitorChatOpen,
+    setCompetitorChatOpen,
+    competitorChatMessages,
+    competitorChatInput,
+    setCompetitorChatInput,
+    competitorChatLoading,
     competitorSuggestions,
+    competitorPendingSave,
     saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,

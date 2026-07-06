@@ -4,10 +4,13 @@ import { resolveCompanyAccess } from '../../../backend/services/contentArchitect
 import { getProfile } from '../../../backend/services/companyProfileService';
 
 /**
- * Product-first competitor suggestions grounded in the company's OWN profile/website.
- * Direct competitors = same-category PRODUCTS/software a buyer would consider instead.
- * Explicitly excludes newsletters, individual creators, agencies, and off-category
- * (e.g. wellness) noise — the failure modes the earlier refinement produced.
+ * Competitive-intelligence chat.
+ *   Turn 0 (no user message): share a grounded UNDERSTANDING of the company and
+ *   invite the user to confirm/refine.
+ *   Turn 1+ (user replied): produce a FINAL TAKE plus 4-6 direct, same-category
+ *   competitors WITH their web domain and what they offer.
+ * Product-first throughout: hard-excludes newsletters, creators, agencies,
+ * communities, and off-category (e.g. wellness) noise.
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -17,6 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (req.body?.companyId as string | undefined) ||
     (req.body?.company_id as string | undefined);
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
+  const conversation = Array.isArray(req.body?.conversation) ? req.body.conversation : [];
 
   const access = await resolveCompanyAccess(req, res, companyId);
   if (!access) return;
@@ -35,21 +39,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       `What it sells (products/services): ${str(p.products_services) || 'Not set'}`,
       `Unique value: ${str(p.unique_value) || 'Not set'}`,
       `Target customer: ${str(p.target_audience) || str(p.ideal_customer_profile) || 'Not set'}`,
+      `Content themes: ${str(p.content_themes) || 'Not set'}`,
     ].filter(Boolean).join('\n');
 
-    const systemPrompt =
-      'You identify DIRECT competitors for a company, grounded strictly in what THIS company sells. ' +
-      'Direct competitors are real, named companies offering a SAME-CATEGORY PRODUCT or software that a buyer ' +
-      'would seriously evaluate INSTEAD of this company (i.e. they rent/sell a substitutable product). ' +
-      'Hard rules:\n' +
-      '- Same product category only. Ground every pick in the company\'s own products/website above.\n' +
-      '- NEVER return: newsletters, media publications, individual creators/influencers, agencies/consultancies, ' +
-      'communities, or any company in a different category (e.g. wellness/health if this is a marketing product).\n' +
-      '- Only well-known, real companies. Do not invent names. If you are unsure a name is a real same-category ' +
-      'product, omit it.\n' +
-      '- 4 to 6 competitors, most-substitutable first.\n' +
-      'Return JSON ONLY: { "competitors": [ { "name": string, "why": string (max 12 words, why it is a same-category substitute) } ] }.';
+    const userMessages = conversation.filter((m: { role?: string }) => m.role === 'user');
 
+    // ── Turn 0: share understanding, invite confirmation ──────────────────────
+    if (userMessages.length === 0) {
+      const completion = await runCompletion({
+        companyId,
+        operation: 'suggestCompetitorsUnderstanding',
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a sharp competitive-intelligence analyst. In 3–4 confident, specific sentences, state your understanding of THIS company: the exact product CATEGORY it competes in, what it actually sells, who it serves, and the competitive arena — grounded strictly in the profile (never invent). ' +
+              'Return JSON ONLY: { "understanding": string }.',
+          },
+          { role: 'user', content: `Company profile:\n${grounding}` },
+        ],
+      });
+      let understanding = '';
+      try {
+        understanding = str((JSON.parse((completion.output ?? '').trim() || '{}') as { understanding?: unknown }).understanding);
+      } catch { understanding = ''; }
+      if (!understanding) {
+        understanding = `Here's my read: ${str(p.name) || 'your company'} competes in ${[str(p.industry), str(p.category)].filter(Boolean).join(' / ') || 'its category'}, selling ${str(p.products_services) || 'its products'} to ${str(p.target_audience) || 'its market'}.`;
+      }
+      return res.status(200).json({
+        nextQuestion:
+          `${understanding}\n\nDoes this capture your business? Add any nuance I'm missing — a sharper product category, specific rivals you already know, or markets to focus on — or just reply "looks good" and I'll map your direct competitors.`,
+      });
+    }
+
+    // ── Turn 1+: final take + competitors with domains ────────────────────────
+    const userNotes = userMessages.map((m: { content?: string }) => str(m.content)).filter(Boolean).join('\n');
     const completion = await runCompletion({
       companyId,
       operation: 'suggestCompetitors',
@@ -57,28 +84,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       temperature: 0.2,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Company profile:\n${grounding}\n\nList this company's direct, same-category product competitors.` },
+        {
+          role: 'system',
+          content:
+            'You are a competitive-intelligence analyst. Using the company profile and the user\'s confirmation/corrections, produce:\n' +
+            '1) final_take: one crisp paragraph on where this company sits competitively and how to win.\n' +
+            '2) competitors: 4–6 DIRECT competitors — real, named companies selling a SAME-CATEGORY product a buyer would evaluate instead. For each give: name, its primary web domain (e.g. "hubspot.com", no protocol), and a ≤10-word note on what it offers.\n' +
+            'HARD RULES: same product category only, grounded in what this company sells. NEVER return newsletters, media, individual creators/influencers, agencies/consultancies, communities, or any off-category company (e.g. wellness for a marketing product). Only real companies — omit any name or domain you are unsure is real. Most-substitutable first.\n' +
+            'Return JSON ONLY: { "final_take": string, "competitors": [ { "name": string, "domain": string, "offering": string } ] }.',
+        },
+        { role: 'user', content: `Company profile:\n${grounding}\n\nUser confirmation / corrections:\n${userNotes || '(confirmed as-is)'}` },
       ],
     });
 
-    const raw = (completion.output ?? '').trim() || '{}';
-    let competitors: Array<{ name: string; why?: string }> = [];
+    let finalTake = '';
+    let competitors: Array<{ name: string; domain?: string; offering?: string }> = [];
     try {
-      const parsed = JSON.parse(raw) as { competitors?: Array<{ name?: unknown; why?: unknown }> };
+      const parsed = JSON.parse((completion.output ?? '').trim() || '{}') as {
+        final_take?: unknown;
+        competitors?: Array<{ name?: unknown; domain?: unknown; offering?: unknown }>;
+      };
+      finalTake = str(parsed.final_take);
       competitors = (Array.isArray(parsed.competitors) ? parsed.competitors : [])
-        .map((c) => ({ name: str(c?.name), why: str(c?.why) || undefined }))
+        .map((c) => ({
+          name: str(c?.name),
+          domain: str(c?.domain).replace(/^https?:\/\//, '').replace(/\/$/, '') || undefined,
+          offering: str(c?.offering) || undefined,
+        }))
         .filter((c) => c.name)
         .slice(0, 6);
     } catch {
       return res.status(500).json({ error: 'Invalid AI response' });
     }
 
-    return res.status(200).json({ competitors });
+    return res.status(200).json({ done: true, final_take: finalTake, competitors });
   } catch (err: unknown) {
-    console.error('Suggest competitors failed:', err);
+    console.error('Competitor intelligence chat failed:', err);
     return res.status(500).json({
-      error: 'Failed to suggest competitors',
+      error: 'Failed to run competitor intelligence',
       details: err instanceof Error ? err.message : null,
     });
   }

@@ -1208,9 +1208,17 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     saveProblemTransformation,
     saveIntelligenceContext,
     saveProfile,
-    suggestCompetitors,
-    competitorSuggestLoading,
+    openCompetitorChat,
+    sendCompetitorMessage,
+    confirmSaveCompetitors,
+    competitorChatOpen,
+    setCompetitorChatOpen,
+    competitorChatMessages,
+    competitorChatInput,
+    setCompetitorChatInput,
+    competitorChatLoading,
     competitorSuggestions,
+    competitorPendingSave,
     saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,
@@ -2476,11 +2484,11 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   <label className="text-sm font-medium text-gray-700">Competitors</label>
                   <button
                     type="button"
-                    onClick={() => { void suggestCompetitors(); }}
-                    disabled={competitorSuggestLoading}
+                    onClick={() => { void openCompetitorChat(); }}
+                    disabled={competitorChatLoading}
                     className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
                   >
-                    {competitorSuggestLoading ? 'Suggesting…' : '✨ Suggest with AI'}
+                    {competitorChatLoading ? 'Thinking…' : '✨ Suggest with AI'}
                   </button>
                 </div>
                 <textarea
@@ -2492,12 +2500,22 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 />
                 {competitorSuggestions.length > 0 ? (
                   <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-slate-700">
-                    <div className="font-semibold text-indigo-900">AI suggestions (review, then Save Profile)</div>
-                    <ul className="mt-1 space-y-0.5">
+                    <div className="font-semibold text-indigo-900">Competitive intelligence</div>
+                    <ul className="mt-1 space-y-1">
                       {competitorSuggestions.map((c) => (
-                        <li key={c.name}>
+                        <li key={c.name} className="flex flex-wrap items-baseline gap-x-2">
                           <span className="font-medium text-slate-800">{c.name}</span>
-                          {c.why ? <span className="text-slate-500"> — {c.why}</span> : null}
+                          {c.domain ? (
+                            <a
+                              href={`https://${c.domain}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-indigo-600 hover:underline"
+                            >
+                              {c.domain}
+                            </a>
+                          ) : null}
+                          {c.offering ? <span className="text-slate-500">— {c.offering}</span> : null}
                         </li>
                       ))}
                     </ul>
@@ -3534,6 +3552,27 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
             {isSaving ? 'Saving…' : 'Save'}
+          </button>
+        ) : null}
+      />
+      <GuidedChatPanel
+        title="Competitive intelligence"
+        description="I'll share my read on your company, then map your direct competitors with their domains — confirm to save."
+        open={competitorChatOpen}
+        messages={competitorChatMessages}
+        input={competitorChatInput}
+        loading={competitorChatLoading}
+        onInputChange={setCompetitorChatInput}
+        onSend={() => { void sendCompetitorMessage(); }}
+        onClose={() => { setCompetitorChatOpen(false); }}
+        extraActions={competitorPendingSave && competitorPendingSave.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => { void confirmSaveCompetitors(); }}
+            disabled={isSaving}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {isSaving ? 'Saving…' : 'Save competitors'}
           </button>
         ) : null}
       />
