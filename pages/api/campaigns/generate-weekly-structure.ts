@@ -877,6 +877,10 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     // every platform clustering on item.dayIndex (which effectively picked Monday
     // for every post under sharing ON).
     const platformDayCursor = new Map<string, number>();
+    // Scheduling-integrity guards for this week: at most ONE piece per platform per
+    // day, and NO duplicate content on the same platform (drop repeats).
+    const usedDatesByPlatform = new Map<string, Set<string>>();
+    const usedContentByPlatform = new Map<string, Set<string>>();
 
     for (const item of finalItems) {
       const fallbackDayName = DAYS_OF_WEEK[item.dayIndex - 1] ?? 'Monday';
@@ -897,6 +901,16 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         // assigned it this week, and we pick the nth entry from that platform's
         // research-backed best_days list (falls back to Tue/Wed/Thu when unknown).
         const platformKey = normalizePlatformKey(platform);
+
+        // Rule: no duplicate content on the same platform — drop the repeat.
+        const contentKey = `${String(item.contentType || 'post').toLowerCase()}::${normalizeTopicKey(String(item.topicTitle || ''))}`;
+        const usedContent = usedContentByPlatform.get(platformKey) ?? new Set<string>();
+        if (usedContent.has(contentKey)) {
+          console.log('[weekly-structure][skip-duplicate-platform-content]', { platform: platformKey, contentKey });
+          continue;
+        }
+
+        const usedDates = usedDatesByPlatform.get(platformKey) ?? new Set<string>();
         const nth = platformDayCursor.get(platformKey) ?? 0;
         let dayName: string = fallbackDayName;
         let date: string = fallbackDate;
@@ -912,6 +926,22 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           // fall back to item.dayIndex on any lookup failure
         }
         platformDayCursor.set(platformKey, nth + 1);
+        // Rule: at most one piece per platform per day — if this platform already
+        // has a post on `date`, shift to the next free weekday in the week.
+        if (usedDates.has(date)) {
+          for (let di = 1; di <= 7; di += 1) {
+            const candidate = computeDayDate({ campaignStart: String(effectiveStartDate), weekNumber, dayIndex: di });
+            if (!usedDates.has(candidate)) {
+              date = candidate;
+              dayName = DAYS_OF_WEEK[di - 1] ?? dayName;
+              break;
+            }
+          }
+        }
+        usedDates.add(date);
+        usedDatesByPlatform.set(platformKey, usedDates);
+        usedContent.add(contentKey);
+        usedContentByPlatform.set(platformKey, usedContent);
         const identitySource = {
           content_type: String(item.contentType || 'post'),
           platform: normalizePlatformKey(platform),
