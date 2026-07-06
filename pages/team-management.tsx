@@ -6,6 +6,16 @@ import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import { emitSetupChanged } from '../lib/setup/setupEvents';
 
+// /api/company/users is guarded by withIdempotency (POST/PUT/DELETE) and 400s
+// without this header. A fresh key per user action makes each mutation safely
+// retryable without duplicating it.
+function newIdempotencyKey(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  } catch { /* fall through */ }
+  return `team-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 type TeamMember = {
   user_id?: string;
   id?: string;
@@ -121,7 +131,7 @@ export default function TeamManagement() {
     try {
       const response = await fetchWithAuth('/api/company/users', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({
           name: inviteForm.name,
           email: inviteForm.email,
@@ -152,7 +162,7 @@ export default function TeamManagement() {
     try {
       const response = await fetchWithAuth('/api/company/users', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({ companyId: selectedCompanyId, role, userId }),
       });
       if (!response.ok) {
@@ -175,7 +185,7 @@ export default function TeamManagement() {
     try {
       const response = await fetchWithAuth('/api/company/users', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({ email, role, name, companyId: selectedCompanyId }),
       });
       const result = await response.json();
@@ -199,7 +209,7 @@ export default function TeamManagement() {
     try {
       const response = await fetchWithAuth('/api/company/users', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({ companyId: selectedCompanyId, role, userId, status: 'inactive' }),
       });
       const result = await response.json();
@@ -224,7 +234,7 @@ export default function TeamManagement() {
     try {
       const response = await fetchWithAuth('/api/company/users', {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({ companyId: selectedCompanyId, userId }),
       });
       const result = await response.json();
