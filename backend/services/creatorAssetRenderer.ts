@@ -204,15 +204,23 @@ function wrapText(value: string, maxChars: number, maxLines: number): string[] {
 
   const lines: string[] = [];
   let current = '';
-  for (const word of words) {
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
     const next = current ? `${current} ${word}` : word;
     if (next.length <= maxChars) {
       current = next;
       continue;
     }
+    if (lines.length >= maxLines - 1) {
+      // On the last allowed line, keep the remaining words ON this line so
+      // balanceTextLines clips with an ellipsis — never silently drop the tail
+      // (which made overflowing slides look abruptly "short of text").
+      const rest = words.slice(i).join(' ');
+      current = current ? `${current} ${rest}` : rest;
+      break;
+    }
     if (current) lines.push(current);
     current = word;
-    if (lines.length >= maxLines - 1) break;
   }
   if (current && lines.length < maxLines) lines.push(current);
   return lines.slice(0, maxLines);
