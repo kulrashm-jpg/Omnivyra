@@ -613,6 +613,43 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       executionItems = reconciled;
     }
 
+    // ── BOLT "frequency is total" ────────────────────────────────────────────
+    // format_frequency is the TOTAL number of posts across platforms, not a
+    // per-platform count. The synth/reconcile above attach ALL platforms to each
+    // format's pieces, which the per-platform daily expansion below would
+    // multiply into (frequency × platforms) — e.g. 6 confirmed → 11 scheduled.
+    // Redistribute so each piece targets a SINGLE platform (round-robin): the
+    // total scheduled posts then equals exactly the frequency the user confirmed.
+    if (formatFrequency) {
+      executionItems = executionItems.flatMap((it) => {
+        const plats = (it.selected_platforms || []).map((p) => String(p)).filter(Boolean);
+        const slots = Array.isArray(it.topic_slots) ? it.topic_slots : [];
+        if (plats.length <= 1 || slots.length === 0) return [it];
+        const buckets = plats.length;
+        const base = Math.floor(slots.length / buckets);
+        const rem = slots.length % buckets;
+        const split: ExecutionItemInput[] = [];
+        let cursor = 0;
+        for (let i = 0; i < buckets; i += 1) {
+          const take = base + (i < rem ? 1 : 0);
+          if (take <= 0) continue;
+          split.push({
+            content_type: it.content_type,
+            selected_platforms: [plats[i]!],
+            count_per_week: take,
+            topic_slots: slots.slice(cursor, cursor + take),
+          });
+          cursor += take;
+        }
+        return split.length > 0 ? split : [it];
+      });
+      console.log('[weekly-structure][bolt-frequency-total]', {
+        weekNumber,
+        totalScheduledPosts: executionItems.reduce((s, it) => s + (Array.isArray(it.topic_slots) ? it.topic_slots.length : 0), 0),
+        items: executionItems.map((it) => ({ type: it.content_type, platform: it.selected_platforms?.[0], count: it.count_per_week })),
+      });
+    }
+
     // ── DEDUPE GUARD: ensure no two activity cards share the same topic ──────
     // Whether topics came from synth or AI-provided execution_items, we must
     // guarantee each slot has a unique, content-type-appropriate title. Walk
