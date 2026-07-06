@@ -116,6 +116,8 @@ export function useCompanyProfileState() {
   // silently before the user knows it was recorded.
   const [targetCustomerPendingSave, setTargetCustomerPendingSave] = useState(false);
   const [marketingIntelligencePendingSave, setMarketingIntelligencePendingSave] = useState(false);
+  const [competitorSuggestLoading, setCompetitorSuggestLoading] = useState(false);
+  const [competitorSuggestions, setCompetitorSuggestions] = useState<Array<{ name: string; why?: string }>>([]);
   const [problemTransformationPanelOpen, setProblemTransformationPanelOpen] = useState(false);
   const [problemTransformationQuestions, setProblemTransformationQuestions] = useState<string[]>([]);
   const [problemTransformationAnswers, setProblemTransformationAnswers] = useState<string[]>([]);
@@ -831,6 +833,44 @@ export function useCompanyProfileState() {
       setErrorMessage('Failed to save company profile.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // AI-suggest product-first competitors grounded in the profile, then stage them
+  // into the editable Competitors field for the user to review before saving.
+  const suggestCompetitors = async () => {
+    if (!companyId) return;
+    setCompetitorSuggestLoading(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    try {
+      const response = await fetchWithAuth(
+        `/api/company-profile/suggest-competitors?companyId=${encodeURIComponent(companyId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyId, company_id: companyId }),
+        },
+      );
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.error || 'Failed to suggest competitors');
+      }
+      const data = await response.json();
+      const list: Array<{ name: string; why?: string }> = Array.isArray(data.competitors) ? data.competitors : [];
+      setCompetitorSuggestions(list);
+      const names = list.map((c) => String(c.name || '').trim()).filter(Boolean);
+      if (names.length === 0) {
+        setErrorMessage('No confident same-category competitors found. Try adding one manually.');
+        return;
+      }
+      updateActiveProfile({ ...activeProfile, competitors: names.join(', '), competitors_list: names });
+      if (!isEditing) setIsEditing(true);
+      setSuccessMessage('Suggested competitors added — review, edit if needed, then Save Profile.');
+    } catch (e) {
+      setErrorMessage((e as Error).message || 'Failed to suggest competitors');
+    } finally {
+      setCompetitorSuggestLoading(false);
     }
   };
 
@@ -2124,6 +2164,9 @@ export function useCompanyProfileState() {
     saveProblemTransformation,
     saveIntelligenceContext,
     saveProfile,
+    suggestCompetitors,
+    competitorSuggestLoading,
+    competitorSuggestions,
     saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,

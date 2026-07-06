@@ -1208,6 +1208,9 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     saveProblemTransformation,
     saveIntelligenceContext,
     saveProfile,
+    suggestCompetitors,
+    competitorSuggestLoading,
+    competitorSuggestions,
     saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,
@@ -2469,13 +2472,37 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             </div>
             {(canViewStrategicSections || isCompanyAdmin) && (
               <div>
-                <label className="text-sm font-medium text-gray-700">Competitors</label>
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-sm font-medium text-gray-700">Competitors</label>
+                  <button
+                    type="button"
+                    onClick={() => { void suggestCompetitors(); }}
+                    disabled={competitorSuggestLoading}
+                    className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                  >
+                    {competitorSuggestLoading ? 'Suggesting…' : '✨ Suggest with AI'}
+                  </button>
+                </div>
                 <textarea
                   value={displayedCompetitorText}
                   onChange={(e) => handleChange('competitors', e.target.value)}
                   rows={2}
+                  placeholder="Same-category product competitors, comma-separated"
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+                {competitorSuggestions.length > 0 ? (
+                  <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-slate-700">
+                    <div className="font-semibold text-indigo-900">AI suggestions (review, then Save Profile)</div>
+                    <ul className="mt-1 space-y-0.5">
+                      {competitorSuggestions.map((c) => (
+                        <li key={c.name}>
+                          <span className="font-medium text-slate-800">{c.name}</span>
+                          {c.why ? <span className="text-slate-500"> — {c.why}</span> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {(competitorDetails.length > 0 || lowConfidenceDomainContext) ? (
                   <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
                     <div className="flex flex-wrap items-center gap-2">
