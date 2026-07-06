@@ -2104,6 +2104,10 @@ async function resolveOpenAiImageKey(): Promise<string | null> {
 
 async function generateProviderImage(input: {
   prompt: string;
+  /** Optional img2img style-reference image URL (curated template showcase).
+   *  Used only when CREATOR_IMAGE_REFERENCE_MODE='edit'; conditions generation
+   *  via images.edit. Absent/flag-off → plain text-to-image (unchanged). */
+  referenceImageUrl?: string | null;
   /**
    * Telemetry-only context. Passed through to `creatorEvent` so a
    * dashboard can pivot provider failures by platform / attachment mode /
@@ -2138,8 +2142,79 @@ async function generateProviderImage(input: {
 
   const { default: OpenAI } = await import('openai');
   const client = new OpenAI({ apiKey });
-  const modelCandidates = ['gpt-image-1'];
+  // Env-selectable model, gpt-image-1 as the known-good fallback. Set
+  // OPENAI_IMAGE_MODEL=gpt-image-2 to prefer the newer model (falls back on error).
+  const modelCandidates = Array.from(new Set(
+    [process.env.OPENAI_IMAGE_MODEL, 'gpt-image-1'].filter((m): m is string => Boolean(m && m.trim())),
+  ));
   const failures: string[] = [];
+
+  // ── img2img style reference (flag-gated) ──────────────────────────────────
+  // When a curated-template reference image is supplied AND CREATOR_IMAGE_
+  // REFERENCE_MODE='edit', condition generation on it via images.edit so the
+  // output resembles the picked template. ANY failure (flag off, no ref, fetch
+  // 404, edit unsupported, provider error) falls through to the plain
+  // text-to-image loop below — it can never break existing generation.
+  const referenceUrl = input.referenceImageUrl;
+  if (process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit' && typeof referenceUrl === 'string' && referenceUrl.trim()) {
+    const editModel = modelCandidates[0];
+    const editStartedAt = Date.now();
+    try {
+      const { toFile } = await import('openai');
+      const refResp = await fetch(referenceUrl.trim());
+      if (!refResp.ok) throw new Error(`reference fetch ${refResp.status}`);
+      const refBuf = Buffer.from(await refResp.arrayBuffer());
+      const refFile = await toFile(refBuf, 'reference.png', { type: refResp.headers.get('content-type') || 'image/webp' });
+      const editResp = await Promise.race([
+        client.images.edit(
+          {
+            model: editModel,
+            image: refFile,
+            prompt: input.prompt,
+            n: 1,
+            size: AI_IMAGE_SIZE,
+            quality: (process.env.CREATOR_IMAGE_REFERENCE_QUALITY || 'low'),
+          } as Parameters<typeof client.images.edit>[0],
+          { timeout: AI_IMAGE_TIMEOUT_MS },
+        ),
+        timeoutAfter<Awaited<ReturnType<typeof client.images.edit>>>(AI_IMAGE_TIMEOUT_MS, `Image edit ${editModel}`),
+      ]);
+      recordCreatorDuration('provider_image', Date.now() - editStartedAt, {
+        model: `${editModel}:edit`,
+        platform: input.eventContext?.platform ?? null,
+        creatorType: input.eventContext?.creatorType ?? null,
+        attachmentMode: input.eventContext?.attachmentMode ?? null,
+      });
+      const firstEdit = getFirstImageResult(editResp);
+      if (firstEdit?.b64_json || firstEdit?.url) {
+        if (input.attribution?.organizationId) {
+          await captureImageProviderCost({
+            organizationId: input.attribution.organizationId,
+            campaignId: input.attribution.campaignId ?? null,
+            userId: input.attribution.userId ?? null,
+            processType: 'creator_content',
+            provider: 'openai',
+            model: editModel,
+            imageCount: 1,
+            size: AI_IMAGE_SIZE,
+            activity: 'creator_image_generation',
+            referenceType: 'creator_asset',
+            referenceId: input.attribution.campaignId ?? null,
+            parentActivityId: input.attribution.campaignId ?? null,
+          });
+        }
+        recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
+        if (firstEdit.b64_json) return { image: { buffer: Buffer.from(firstEdit.b64_json, 'base64'), model: `${editModel}:edit` } };
+        return { image: { buffer: await bufferFromRemoteImage(firstEdit.url as string), model: `${editModel}:edit` } };
+      }
+      failures.push(`${editModel}:edit: no image returned`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`${editModel}:edit: ${message}`);
+      console.warn('[creator-asset-renderer][provider-image-edit-failed]', { model: editModel, message });
+      // fall through to the plain generation loop below
+    }
+  }
 
   for (const model of modelCandidates) {
     const providerStartedAt = Date.now();
@@ -2568,8 +2643,19 @@ async function composeSingleVisualAsset(
     subtypeHint,
     companyId: options.companyId ?? null,
   });
+  // img2img style reference (flag-gated): point at the curated template's showcase
+  // image so the provider can condition on it. Null unless the flag is on and a
+  // blueprint id is present → plain text-to-image (unchanged).
+  const referenceImageUrl = (() => {
+    if (process.env.CREATOR_IMAGE_REFERENCE_MODE !== 'edit') return null;
+    const bpId = typeof metadata.blueprint_id === 'string' ? metadata.blueprint_id.trim() : '';
+    if (!bpId) return null;
+    const base = String(process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'https://www.omnivyra.com').replace(/\/$/, '');
+    return `${base}/creator-showcases/${bpId}/image.webp`;
+  })();
   const providerResult = await generateProviderImage({
     prompt: providerPrompt,
+    referenceImageUrl,
     eventContext: {
       creatorType: fileNamePrefix,
       attachmentMode: attachmentRenderPolicy,
