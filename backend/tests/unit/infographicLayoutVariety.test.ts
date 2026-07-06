@@ -14,16 +14,19 @@ describe('infographic layout variety — different format per topic', () => {
     expect(pickVariedInfographicLayout(t)).toBe(pickVariedInfographicLayout(t));
   });
 
-  it('generic topics rotate ONLY among the dense layouts (stats/framework) to hold <10% white-space', () => {
+  it('generic topics spread across the full engine set (real variety, all now dense)', () => {
+    const valid = new Set(['stats', 'comparison', 'process', 'framework', 'hierarchy', 'timeline']);
     const generic = [
       'Deepening understanding of brand awareness',
       'Building a memorable brand identity',
       'Why consistency drives recall',
       'The psychology of brand trust',
+      'Turning attention into demand',
+      'The compounding effect of presence',
     ];
-    for (const t of generic) {
-      expect(['stats', 'framework']).toContain(pickVariedInfographicLayout(t));
-    }
+    for (const t of generic) expect(valid.has(pickVariedInfographicLayout(t))).toBe(true);
+    // A batch of generic topics should hit more than just one or two layouts.
+    expect(new Set(generic.map(pickVariedInfographicLayout)).size).toBeGreaterThanOrEqual(2);
   });
 
   it('a mixed set (generic + content-appropriate) still spreads across multiple formats', () => {

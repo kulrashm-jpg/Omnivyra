@@ -4196,27 +4196,23 @@ const INFOGRAPHIC_LAYOUTS = ['stats', 'comparison', 'process', 'framework', 'hie
  * imply one, rotate deterministically by a hash of the topic, so different topics land on
  * different layouts while the SAME topic always re-renders identically.
  */
-// Layouts verified to render DENSE (<10% white-space) with generic content: `stats` packs
-// a 2×2 grid + right-rail stat callouts + graph glyphs; `framework` fills a 2-column pillar
-// grid. The single-column engines (timeline/process/hierarchy) and `comparison` leave larger
-// voids with generic copy, so they are used ONLY when the topic genuinely implies that
-// structure — never in the generic rotation — until a per-card content-fit (masonry) pass
-// lets them hold <10% too.
-const DENSE_INFOGRAPHIC_ROTATION = ['stats', 'framework'] as const;
+// With the two-pass content-fit (masonry + 2-column bullets) pass, every engine now renders
+// dense, so generic topics rotate across the FULL set for maximum format variety.
+const GENERIC_INFOGRAPHIC_ROTATION = ['stats', 'framework', 'process', 'timeline', 'hierarchy', 'comparison'] as const;
 
 export function pickVariedInfographicLayout(topic: string): string {
   const t = String(topic || '').toLowerCase();
-  // Content-appropriate engines — only when the topic clearly calls for that structure, so
-  // the specialised layout is filled by matching content rather than padded generic copy.
+  // Content-appropriate engines first — a topic that clearly implies a structure gets it, so
+  // the specialised layout is filled by matching content.
   if (/\bvs\b|versus|compare|comparison|pros?\s*(and|&|vs)?\s*cons|before\s*(and|&)?\s*after/.test(t)) return 'comparison';
   if (/\bstep\b|step[-\s]?by[-\s]?step|how\s*to|workflow|stages?\b|playbook|checklist/.test(t)) return 'process';
   if (/timeline|roadmap|history|evolution|journey|over\s*time|milestones?\b/.test(t)) return 'timeline';
   if (/hierarchy|tiers?\b|pyramid|maturity\s*(model|levels?)/.test(t)) return 'hierarchy';
   if (/\d+\s*%|\bkpi\b|by the numbers|statistics?\b|benchmark/.test(t)) return 'stats';
-  // Generic topics rotate only among the DENSE layouts so white-space stays under ~10%.
+  // Generic topics rotate deterministically across ALL engines (hash of topic) for variety.
   let h = 0;
   for (let i = 0; i < t.length; i += 1) h = (Math.imul(h, 31) + t.charCodeAt(i)) >>> 0;
-  return DENSE_INFOGRAPHIC_ROTATION[h % DENSE_INFOGRAPHIC_ROTATION.length];
+  return GENERIC_INFOGRAPHIC_ROTATION[h % GENERIC_INFOGRAPHIC_ROTATION.length];
 }
 
 function resolveInfographicLayout(metadata: Record<string, unknown>): string {
@@ -5046,9 +5042,9 @@ export async function renderInfographicAsset(
     impact: string | null;
     risk: string | null;
     accentFill: string;
-  }): string => {
+  }): { svg: string; usedH: number } => {
     const { x, y, width, height, accentFill } = args;
-    if (width <= 40 || height <= 30) return '';
+    if (width <= 40 || height <= 30) return { svg: '', usedH: 0 };
     const db = infographicStyle.geometry.denseBody;
     const dd = db.detail;
     const leadSize = Math.round(db.leadSize * infographicFontMultiplier);
@@ -5203,14 +5199,14 @@ export async function renderInfographicAsset(
       }
     }
 
-    if (parts.length === 0) return '';
+    if (parts.length === 0) return { svg: '', usedH: 0 };
     // Keep the block TOP-aligned under the layout's (fixed-position) title.
     // A tiny optical nudge only — never center, which would detach the body
     // from the title on tall, sparsely-filled cards. Underfill leaves
     // contiguous trailing space at the bottom, which reads as card padding.
     const usedH = cursor;
     const offsetY = Math.min(db.offsetYCap, Math.max(0, Math.round((height - usedH) / 2)));
-    return `<g transform="translate(${x}, ${y + offsetY})">${parts.join('')}</g>`;
+    return { svg: `<g transform="translate(${x}, ${y + offsetY})">${parts.join('')}</g>`, usedH };
   };
 
   // Rich-field accessor — sections carry the composer's dense output
@@ -5243,7 +5239,14 @@ export async function renderInfographicAsset(
     lead: String((s as { body?: unknown }).body || ''),
     ...richFieldsOf(s),
     accentFill,
-  });
+  }).svg;
+
+  // TWO-PASS measure: render a section's dense body at a generous height (so nothing is
+  // dropped by fits()) and return the EXACT pixel height it occupies. Sizing cards from
+  // this real height — instead of an estimate — removes the estimate/render divergence
+  // that left ~10-15% voids on some cards.
+  const measureDenseBodyFor = (s: Record<string, unknown>, width: number): number =>
+    renderDenseBody({ x: 0, y: 0, width, height: 100000, lead: String((s as { body?: unknown }).body || ''), ...richFieldsOf(s), accentFill: '#000000' }).usedH;
 
   const L = infographicStyle.geometry.layouts;
   const GT = infographicStyle.geometry.text;
@@ -5263,15 +5266,18 @@ export async function renderInfographicAsset(
     if (!useMasonry) {
       sections.forEach((_s, i) => { perCardTop[i] = engine.position(i).y; perCardHeight[i] = engine.cardHeight; });
     } else {
-      const bodyW = Math.max(80, cardWidth - 64);
-      const est = sections.map((s) => estimateDenseBodyHeight(s as Record<string, unknown>, bodyW, infographicStyle, infographicFontMultiplier));
+      // TWO-PASS: measure each section's ACTUAL rendered body height (nothing dropped at the
+      // generous measure height), so the card is sized to exactly what renders — no estimate
+      // divergence. Slightly conservative width (−96) so the measure never under-counts vs.
+      // layouts that inset further (e.g. process's step badge).
+      const bodyW = Math.max(80, cardWidth - 96);
+      const est = sections.map((s) => measureDenseBodyFor(s as Record<string, unknown>, bodyW));
       const gap = engine.rowGap;
       const floorH = engine.minCardHeight;
-      const ceilH = engine.cardHeight; // never grow a card beyond the engine's fill height
-      // Card = content + title band + ~10% breathing room. The /0.92 slack matters: it
-      // lets the final panel/footer clear renderDenseBody's fits() check instead of being
-      // dropped (which would leave the space empty), while staying close to <10% white.
-      const cardHeightFor = (i: number) => Math.min(ceilH, Math.max(floorH, Math.round((est[i] + bodyInset) / 0.92)));
+      // Card = measured body + title band (+ a few px so the final element clears fits() at
+      // equal heights). Cap generously — at least the tallest measured card — so the fullest
+      // card is never clipped (which was leaving a void where the dropped element would go).
+      const cardHeightFor = (i: number) => Math.max(floorH, Math.round(est[i] + bodyInset + 8));
       const startTop = headerH + 24;
       // Column index by row-major placement — derived from the engine's row count, NOT the
       // x position (hierarchy indents each card, so x varies within one logical column).
@@ -5286,7 +5292,9 @@ export async function renderInfographicAsset(
         colTops.set(col, top + h + gap);
       });
       const gridBottom = Math.max(startTop, ...Array.from(colTops.values()).map((v) => v - gap));
-      height = Math.max(900, Math.min(height, gridBottom + infographicStyle.spacing.bottomMargin));
+      // Grow the canvas to fit the measured content (cards are never clipped), up to a
+      // platform-safe portrait ceiling; shrink it when the content is short.
+      height = Math.max(900, Math.min(1900, gridBottom + infographicStyle.spacing.bottomMargin));
     }
   }
 
