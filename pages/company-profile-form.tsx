@@ -696,6 +696,43 @@ function MiniSelect({
   );
 }
 
+/**
+ * Status pill shown on a section header (Guided Capture card / collapsed intelligence
+ * section) so the user can tell — at a glance, without expanding — whether that section
+ * has been captured. `done` → green "Captured"; otherwise a muted "Not started".
+ */
+function StatusChip({ done, doneLabel = 'Captured', pendingLabel = 'Not started' }: {
+  done: boolean;
+  doneLabel?: string;
+  pendingLabel?: string;
+}) {
+  return done ? (
+    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 whitespace-nowrap">
+      <span aria-hidden>✓</span>{doneLabel}
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500 whitespace-nowrap">
+      {pendingLabel}
+    </span>
+  );
+}
+
+/**
+ * Blue confirmation shown BELOW a filled field so the user knows the value is saved and
+ * used downstream (rather than just displayed). Renders nothing when the field is empty.
+ */
+function SavedHint({ value }: { value?: unknown }) {
+  const text = Array.isArray(value)
+    ? value.filter(Boolean).map(String).join(', ').trim()
+    : String(value ?? '').trim();
+  if (!text) return null;
+  return (
+    <p className="mt-1 text-xs font-medium text-blue-600">
+      ✓ Saved — used by Content Architect
+    </p>
+  );
+}
+
 function IntelligenceContextSections({
   context,
   readiness,
@@ -746,6 +783,25 @@ function IntelligenceContextSections({
   const removeRow = <T,>(rows: T[], index: number) => rows.filter((_, rowIndex) => rowIndex !== index);
   const readinessScores = readiness?.section_scores;
   const readinessScore = readiness?.score ?? 0;
+  // "Filled" detection for the collapsed section headers — a section counts as captured
+  // when it has at least one row/field carrying real (non-metadata, non-"unknown") data.
+  const META_KEYS = new Set(['id', 'source', 'review_status', 'confidence', 'user_confirmed', 'created_at', 'updated_at']);
+  const cellHasValue = (v: unknown): boolean => {
+    const s = String(Array.isArray(v) ? v.join('') : (v ?? '')).trim().toLowerCase();
+    return s.length > 0 && s !== 'unknown';
+  };
+  const rowHasData = (row: unknown): boolean =>
+    Boolean(row) && typeof row === 'object' &&
+    Object.entries(row as Record<string, unknown>).some(([k, v]) => !META_KEYS.has(k) && cellHasValue(v));
+  const hasRows = (arr: unknown): boolean => Array.isArray(arr) && arr.some(rowHasData);
+  const sectionFilled = {
+    revenue: hasRows(ctx.revenue_segments),
+    market: hasRows(ctx.geographic_exposures),
+    operational: hasRows(ctx.dependencies),
+    workforce: rowHasData(ctx.workforce_profile),
+    regulatory: hasRows(ctx.regulatory_exposures),
+    technology: hasRows(ctx.technology_dependencies),
+  };
   const recommendations = [
     ctx.revenue_segments.length === 0 ? 'Add your primary customer markets' : null,
     ctx.geographic_exposures.length === 0 ? 'Add the geographies that influence revenue or operations' : null,
@@ -881,7 +937,7 @@ function IntelligenceContextSections({
 
       <div className="space-y-3">
         <details className="rounded-xl border border-slate-200 bg-white p-4" open>
-          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Customer & Revenue Exposure</summary>
+          <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-semibold text-slate-900"><span>Customer & Revenue Exposure</span><StatusChip done={sectionFilled.revenue} /></summary>
           <p className="mt-2 text-sm text-slate-500">Used to separate revenue dependency from generic audience descriptions.</p>
           <div className="mt-4 space-y-3">
             {ctx.revenue_segments.map((row, index) => (
@@ -905,7 +961,7 @@ function IntelligenceContextSections({
         </details>
 
         <details className="rounded-xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Market Exposure</summary>
+          <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-semibold text-slate-900"><span>Market Exposure</span><StatusChip done={sectionFilled.market} /></summary>
           <p className="mt-2 text-sm text-slate-500">Used to distinguish customer, workforce, vendor, and operational exposure by geography.</p>
           <div className="mt-4 space-y-3">
             {ctx.geographic_exposures.map((row, index) => (
@@ -927,7 +983,7 @@ function IntelligenceContextSections({
         </details>
 
         <details className="rounded-xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Operational Dependencies</summary>
+          <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-semibold text-slate-900"><span>Operational Dependencies</span><StatusChip done={sectionFilled.operational} /></summary>
           <p className="mt-2 text-sm text-slate-500">Used to capture non-technology dependencies that can disrupt delivery, channels, or costs.</p>
           <div className="mt-4 space-y-3">
             {ctx.dependencies.map((row, index) => (
@@ -951,7 +1007,7 @@ function IntelligenceContextSections({
         </details>
 
         <details className="rounded-xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Workforce & Hiring</summary>
+          <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-semibold text-slate-900"><span>Workforce & Hiring</span><StatusChip done={sectionFilled.workforce} /></summary>
           <p className="mt-2 text-sm text-slate-500">Used to model labor, immigration, contractor, remote-work, and skill-market sensitivity.</p>
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
             {(() => {
@@ -974,7 +1030,7 @@ function IntelligenceContextSections({
         </details>
 
         <details className="rounded-xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Regulatory Exposure</summary>
+          <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-semibold text-slate-900"><span>Regulatory Exposure</span><StatusChip done={sectionFilled.regulatory} /></summary>
           <p className="mt-2 text-sm text-slate-500">Used to capture jurisdictions and rule families that need future relevance filtering.</p>
           <div className="mt-4 space-y-3">
             {ctx.regulatory_exposures.map((row, index) => (
@@ -997,7 +1053,7 @@ function IntelligenceContextSections({
         </details>
 
         <details className="rounded-xl border border-slate-200 bg-white p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Technology Dependencies</summary>
+          <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-semibold text-slate-900"><span>Technology Dependencies</span><StatusChip done={sectionFilled.technology} /></summary>
           <p className="mt-2 text-sm text-slate-500">Used to identify platform, cloud, AI, payments, analytics, and security dependency sensitivity.</p>
           <div className="mt-4 space-y-3">
             {ctx.technology_dependencies.map((row, index) => (
@@ -2080,17 +2136,23 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               >
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   {([
-                    ['Customer', 'ICP and sales model', openTargetCustomerPanel],
-                    ['Marketing', 'Positioning and campaigns', openMarketingIntelligencePanel],
-                    ['Transformation', 'Problem and authority', openRefineProblemTransformationPanel],
-                  ] as Array<[string, string, () => void]>).map(([label, detail, action]) => (
+                    ['Customer', 'ICP and sales model', openTargetCustomerPanel,
+                      Boolean(String(activeProfile.target_audience ?? '').trim() || (activeProfile.target_audience_list ?? []).length)],
+                    ['Marketing', 'Positioning and campaigns', openMarketingIntelligencePanel,
+                      Boolean(String(activeProfile.brand_positioning ?? '').trim() || String(activeProfile.campaign_focus ?? '').trim())],
+                    ['Transformation', 'Problem and authority', openRefineProblemTransformationPanel,
+                      Boolean(String(activeProfile.core_problem_statement ?? '').trim() || String(activeProfile.desired_transformation ?? '').trim())],
+                  ] as Array<[string, string, () => void, boolean]>).map(([label, detail, action, done]) => (
                     <button
                       key={String(label)}
                       type="button"
                       onClick={action}
                       className="rounded-xl border border-indigo-100 bg-white px-4 py-3 text-left shadow-sm hover:border-indigo-300"
                     >
-                      <div className="text-sm font-semibold text-slate-950">{label}</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-semibold text-slate-950">{label}</div>
+                        <StatusChip done={done} doneLabel="Captured" pendingLabel="Add details" />
+                      </div>
                       <div className="mt-1 text-xs text-slate-500">{detail}</div>
                     </button>
                   ))}
@@ -2206,6 +2268,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   onChange={(e) => handleChange('name', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+                {!isEditing && <SavedHint value={activeProfile.name} />}
               </div>
               )}
               {!isOnboardingPreRefine && (
@@ -2217,6 +2280,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   onChange={(e) => handleChange('industry', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+                {!isEditing && <SavedHint value={displayFieldValue(activeProfile.industry, activeProfile.industry_list)} />}
                 {renderInlineRefinementQuestions('industry')}
                 {industryReview?.conflict && (
                   <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -2243,6 +2307,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   onChange={(e) => handleChange('category', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+                {!isEditing && <SavedHint value={displayFieldValue(activeProfile.category, activeProfile.category_list)} />}
                 {renderInlineRefinementQuestions('category')}
               </div>
                 </>
@@ -2276,6 +2341,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   onChange={(e) => handleChange('geography', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+                {!isEditing && <SavedHint value={displayFieldValue(activeProfile.geography, activeProfile.geography_list)} />}
                 {renderInlineRefinementQuestions('geography')}
             </div>
               )}
@@ -2310,6 +2376,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. 11-50"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={companyFacts.team_size} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Founded year</label>
@@ -2319,6 +2386,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. 2022"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={companyFacts.founded_year} />}
                 </div>
                 <div>
                   <label className="text-sm font-medium text-gray-700">Revenue range</label>
@@ -2328,6 +2396,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     placeholder="e.g. $1M-$5M"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
+                  {!isEditing && <SavedHint value={companyFacts.revenue_range} />}
                 </div>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -2362,6 +2431,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {!isEditing && <SavedHint value={displayFieldValue(activeProfile.products_services, activeProfile.products_services_list)} />}
               {renderInlineRefinementQuestions('products_services')}
             </div>
             <div>
@@ -2372,6 +2442,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {!isEditing && <SavedHint value={displayFieldValue(activeProfile.target_audience, activeProfile.target_audience_list)} />}
               {renderInlineRefinementQuestions('target_audience')}
             </div>
             <div>
@@ -2382,6 +2453,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {!isEditing && <SavedHint value={displayFieldValue(activeProfile.brand_voice, activeProfile.brand_voice_list)} />}
               {renderInlineRefinementQuestions('brand_voice')}
             </div>
             <div>
@@ -2392,6 +2464,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {!isEditing && <SavedHint value={displayFieldValue(activeProfile.goals, activeProfile.goals_list)} />}
               {renderInlineRefinementQuestions('goals')}
             </div>
             {(canViewStrategicSections || isCompanyAdmin) && (
@@ -2603,6 +2676,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {!isEditing && <SavedHint value={activeProfile.unique_value} />}
               {renderInlineRefinementQuestions('unique_value')}
             </div>
             <div>
@@ -2613,6 +2687,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {!isEditing && <SavedHint value={displayFieldValue(activeProfile.content_themes, activeProfile.content_themes_list)} />}
               {renderInlineRefinementQuestions('content_themes')}
             </div>
             </div>
