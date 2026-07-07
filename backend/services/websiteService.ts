@@ -159,30 +159,67 @@ export async function getWebsites(companyId: string): Promise<Website[]> {
   return (data || []) as Website[];
 }
 
-export async function ensureDefaultWebsite(companyId: string, userId?: string | null): Promise<Website> {
-  const existing = await getWebsites(companyId);
-  if (existing.length > 0) return existing[0]!;
+/** Canonical URLs the backfill invented when it had no real domain to use. */
+export const PLACEHOLDER_WEBSITE_URL_RE = /^https?:\/\/company-[0-9a-fA-F-]+\.local$/i;
 
-  let domainUrl = '';
+/**
+ * Resolve the REAL canonical URL for a company: a registered domain first
+ * (company_domains.final_domain / input_domain), otherwise the website captured
+ * at registration (companies.website). Empty string only when neither exists.
+ *
+ * NOTE: company_domains has NO `domain` column (it is input_domain/final_domain).
+ * The previous select referenced `domain`, which failed silently and forced the
+ * `.local` placeholder even for accounts that already have a verified domain.
+ */
+async function resolveRegisteredWebsiteUrl(companyId: string): Promise<{ url: string; domainId: string | null }> {
   const { data: domainRow } = await ownedDbTable('company_domains')
-    .select('id, final_domain, domain, is_primary')
+    .select('id, final_domain, input_domain, is_primary')
     .eq('company_id', companyId)
     .order('is_primary', { ascending: false })
     .limit(1)
     .maybeSingle();
+  const domainId = (domainRow as any)?.id ?? null;
+  const domainStr = String((domainRow as any)?.final_domain || (domainRow as any)?.input_domain || '').trim();
+  if (domainStr) return { url: normalizeWebsiteUrl(domainStr), domainId };
 
-  const finalDomain =
-    (domainRow as any)?.final_domain ||
-    (domainRow as any)?.domain ||
-    '';
-  if (finalDomain) domainUrl = `https://${String(finalDomain).replace(/^https?:\/\//i, '')}`;
+  // Fall back to the website provided at signup before inventing a placeholder.
+  const { data: companyRow } = await ownedDbTable('companies')
+    .select('website')
+    .eq('id', companyId)
+    .maybeSingle();
+  const site = String((companyRow as any)?.website || '').trim();
+  return { url: site ? normalizeWebsiteUrl(site) : '', domainId };
+}
+
+export async function ensureDefaultWebsite(companyId: string, userId?: string | null): Promise<Website> {
+  const existing = await getWebsites(companyId);
+  const { url: realUrl, domainId } = await resolveRegisteredWebsiteUrl(companyId);
+
+  if (existing.length > 0) {
+    const first = existing[0]!;
+    // Self-heal a backfilled `.local` placeholder to the real registration domain
+    // once we know it, so long-standing accounts stop being asked to connect a
+    // website they already provided at signup.
+    if (realUrl && PLACEHOLDER_WEBSITE_URL_RE.test(String(first.canonical_url || ''))) {
+      try {
+        return await updateWebsite(first.id, companyId, {
+          canonicalUrl: realUrl,
+          name: websiteNameFromUrl(realUrl),
+          domainId: first.domain_id ?? domainId ?? undefined,
+        });
+      } catch {
+        return first;
+      }
+    }
+    return first;
+  }
 
   return createWebsite({
     companyId,
     createdBy: userId ?? null,
-    domainId: (domainRow as any)?.id ?? null,
-    name: finalDomain ? websiteNameFromUrl(domainUrl) : 'Default Website',
-    canonicalUrl: domainUrl || `https://company-${companyId}.local`,
+    domainId,
+    name: realUrl ? websiteNameFromUrl(realUrl) : 'Default Website',
+    canonicalUrl: realUrl || `https://company-${companyId}.local`,
     metadata: { created_by_backfill: true },
   });
 }
