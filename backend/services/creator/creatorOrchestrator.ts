@@ -612,12 +612,26 @@ export async function runCreatorOrchestration(
       platform: primaryPlatform,
       companyId: input.companyId,
       durationMs: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - generationStartedAt),
-      template: card.template_id ? {
-        id: String(card.template_id),
-        version: typeof card.template_version === 'number' ? card.template_version : undefined,
-        assetFamily: typeof card.template_asset_family === 'string' ? String(card.template_asset_family) : undefined,
-        renderingContractVersion: typeof renderMeta.renderingContractVersion === 'string' ? String(renderMeta.renderingContractVersion) : undefined,
-      } : undefined,
+      // Resolve the selected template (system, user, OR on-demand curated) so the
+      // compliance line reports its real name + contract version (100) rather than
+      // collapsing to the bare id (90). Falls back to card fields when unresolved.
+      template: card.template_id ? (() => {
+        const tid = String(card.template_id);
+        let resolved: import('../../../lib/creator-templates').CreatorTemplate | null = null;
+        try {
+          const { getTemplateById } = require('../../../lib/creator-templates') as typeof import('../../../lib/creator-templates');
+          resolved = getTemplateById(tid);
+        } catch { resolved = null; }
+        return {
+          id: tid,
+          name: resolved?.name,
+          version: resolved?.version ?? (typeof card.template_version === 'number' ? card.template_version : undefined),
+          assetFamily: resolved?.assetFamily ?? (typeof card.template_asset_family === 'string' ? String(card.template_asset_family) : undefined),
+          renderingContractVersion:
+            resolved?.renderingContract?.renderingContractVersion
+            ?? (typeof renderMeta.renderingContractVersion === 'string' ? String(renderMeta.renderingContractVersion) : undefined),
+        };
+      })() : undefined,
       companyContext: safeObject(card.canonical_company_context),
       brandVoice: (input.canonicalBrandVoice ?? safeObject(card.canonical_brand_voice)) as Record<string, unknown>,
       contentViolations: masterCopyViolations,

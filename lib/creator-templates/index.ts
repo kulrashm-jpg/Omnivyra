@@ -95,13 +95,46 @@ export function listCategoriesForFamily(family: TemplateAssetFamily): TemplateCa
 }
 
 /** Resolve a template by id. Family is optional but, when given, must match. */
+/* Memoized on-demand materialization for curated SYSTEM templates. Their ids
+ * (`sys-curated-<blueprintId>-<family>`) are NOT in the static registry — they
+ * are derived deterministically from a visual blueprint. The gallery projects a
+ * curated selection onto this id, so BOTH the client editor and the server
+ * renderer must resolve it here — the single template chokepoint — otherwise the
+ * selection silently collapses to the default layout (Template Compliance 70,
+ * no text-inside overlay). Deterministic → safe to cache forever. */
+const curatedMaterializeCache = new Map<string, CreatorTemplate | null>();
+const CURATED_ID_RE = /^sys-curated-(.+)-(image|carousel|infographic)$/;
+
+function materializeCuratedById(id: string): CreatorTemplate | null {
+  if (curatedMaterializeCache.has(id)) return curatedMaterializeCache.get(id) ?? null;
+  const m = CURATED_ID_RE.exec(id);
+  if (!m) { curatedMaterializeCache.set(id, null); return null; }
+  const blueprintId = m[1];
+  const fam = m[2] as TemplateAssetFamily;
+  let tpl: CreatorTemplate | null = null;
+  try {
+    // Lazy require avoids any static import cycle through this barrel and keeps
+    // the materializer out of modules that never touch curated ids.
+    const { materializeCuratedTemplate } =
+      require('../creator-outcomes/creatorTemplateMaterializer') as typeof import('../creator-outcomes/creatorTemplateMaterializer');
+    tpl = materializeCuratedTemplate(blueprintId, fam);
+  } catch {
+    tpl = null;
+  }
+  curatedMaterializeCache.set(id, tpl);
+  return tpl;
+}
+
 export function getTemplateById(id: string, family?: TemplateAssetFamily): CreatorTemplate | null {
   const normalized = String(id || '').trim();
   if (!normalized) return null;
   // System templates (in-code) first, then runtime-registered user templates —
   // resolved through the SAME path so a user template behaves like a system one.
+  // Curated SYSTEM templates are materialized on demand (deterministic) so a
+  // gallery-selected curated design resolves identically on client and server.
   const found = ALL_SYSTEM_TEMPLATES.find((t) => t.id === normalized)
     ?? userTemplateRegistry.get(normalized)
+    ?? materializeCuratedById(normalized)
     ?? null;
   if (!found) return null;
   if (family && found.assetFamily !== family) return null;
