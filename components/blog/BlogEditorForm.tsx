@@ -23,6 +23,7 @@ import { calculateQualityScore, getPublishBlockers } from '../../lib/blog/blogVa
 import type { ContentBlock, BlockType } from '../../lib/blog/blockTypes';
 import type { BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import type { MediaBlockItem } from './BlogMediaBlock';
+import { BlogMasthead, BlogHeroImage, BlogArticleBody, estimateReadMins } from './BlogArticleLayout';
 import {
   buildImageQuery,
   searchImages,
@@ -239,337 +240,6 @@ function BlockEditor({
   }
 }
 
-// ── Standalone image component so each image has its own error state ──────────
-
-function PreviewImage({ src, alt, caption }: { src: string; alt: string; caption?: string }) {
-  const [err, setErr] = useState(false);
-  return (
-    <figure className="my-8">
-      {!err ? (
-        <img
-          src={src}
-          alt={alt || ''}
-          referrerPolicy="no-referrer"
-          crossOrigin="anonymous"
-          className="w-full rounded-xl"
-          style={{ maxHeight: '600px', objectFit: 'contain', background: '#f9fafb' }}
-          onError={() => setErr(true)}
-        />
-      ) : (
-        <div className="w-full h-44 rounded-xl bg-gray-100 flex flex-col items-center justify-center text-gray-400 gap-1">
-          <span className="text-2xl">🖼</span>
-          <span className="text-sm">Image could not be loaded</span>
-        </div>
-      )}
-      {caption && (
-        <figcaption className="mt-2 text-center text-sm text-gray-500 italic">{caption}</figcaption>
-      )}
-    </figure>
-  );
-}
-
-// ── Preview block renderer ────────────────────────────────────────────────────
-
-function PreviewBlock({ block }: { block: ContentBlock }) {
-  switch (block.type) {
-
-    // ── Heading ──────────────────────────────────────────────────────────────
-    case 'heading': {
-      const b = block as HeadingBlock;
-      const lvl = b.level ?? 2;
-      if (lvl === 2) return (
-        <h2 id={b.anchor} className={getFormattedBlockClass(b, 'text-2xl font-bold text-gray-900 mt-10 mb-3 scroll-mt-20')}>{b.text}</h2>
-      );
-      return (
-        <h3 id={b.anchor} className={getFormattedBlockClass(b, 'text-xl font-semibold text-gray-900 mt-8 mb-2 scroll-mt-20')}>{b.text}</h3>
-      );
-    }
-
-    // ── Paragraph (TipTap HTML) ───────────────────────────────────────────────
-    case 'paragraph': {
-      const b = block as ParagraphBlock;
-      return (
-        // nosec — content is internal editor HTML, not user-supplied
-        <div
-          className={getFormattedBlockClass(
-            b,
-            'text-gray-700 leading-relaxed mb-5 [&_a]:text-indigo-700 [&_a]:underline [&_strong]:font-semibold [&_em]:italic [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:rounded',
-          )}
-          dangerouslySetInnerHTML={{ __html: b.html ?? '' }}
-        />
-      );
-    }
-
-    // ── Key Insights ──────────────────────────────────────────────────────────
-    case 'key_insights': {
-      const b = block as KeyInsightsBlock;
-      return (
-        <div className={getFormattedBlockClass(b, 'rounded-xl border-l-4 border-indigo-500 bg-indigo-50 px-5 py-4 mb-6')}>
-          <p className="font-semibold text-indigo-900 mb-2">{b.title ?? 'Key Insights'}</p>
-          <ol className={getFormattedListClass(b, 'space-y-1.5 list-decimal list-inside')}>
-            {(b.items ?? []).map((item, i) => (
-              <li key={i} className="text-sm text-indigo-800">{item}</li>
-            ))}
-          </ol>
-        </div>
-      );
-    }
-
-    // ── Callout ───────────────────────────────────────────────────────────────
-    case 'callout': {
-      const b = block as CalloutBlock;
-      const styles: Record<string, string> = {
-        insight: 'border-blue-300 bg-blue-50 text-blue-900',
-        note:    'border-amber-300 bg-amber-50 text-amber-900',
-        warning: 'border-red-300 bg-red-50 text-red-900',
-      };
-      return (
-        <div className={getFormattedBlockClass(b, `rounded-xl border px-5 py-4 mb-6 ${styles[b.variant] ?? styles.note}`)}>
-          {b.title && <p className="font-semibold mb-1">{b.title}</p>}
-          <p className="text-sm leading-relaxed">{b.body}</p>
-        </div>
-      );
-    }
-
-    // ── Quote ─────────────────────────────────────────────────────────────────
-    case 'quote': {
-      const b = block as QuoteBlock;
-      return (
-        <blockquote className={getFormattedBlockClass(b, 'my-6 border-l-[3px] border-gray-400 pl-5')}>
-          <p className="text-lg italic text-gray-700 leading-relaxed">&ldquo;{b.text}&rdquo;</p>
-          {(b.author || b.source) && (
-            <footer className="mt-2 text-xs text-gray-500 not-italic">
-              {b.author && <span>— {b.author}</span>}
-              {b.source && (
-                b.source.startsWith('http')
-                  ? <a href={b.source} target="_blank" rel="noopener noreferrer" className="ml-2 underline text-indigo-600">[source]</a>
-                  : <span className="ml-2 text-gray-400">{b.source}</span>
-              )}
-            </footer>
-          )}
-        </blockquote>
-      );
-    }
-
-    // ── Image ─────────────────────────────────────────────────────────────────
-    case 'image': {
-      const b = block as ImageBlock;
-      if (!b.url) return null;
-      return (
-        <>
-          <PreviewImage src={b.url} alt={b.alt} caption={b.caption} />
-          {b.attribution && (
-            <p className="text-center text-[10px] text-gray-400 italic -mt-6 mb-6">
-              {b.attributionUrl ? (
-                <a href={b.attributionUrl} target="_blank" rel="noopener noreferrer" className="hover:text-gray-600 underline">
-                  {b.attribution}
-                </a>
-              ) : (
-                b.attribution
-              )}
-            </p>
-          )}
-        </>
-      );
-    }
-
-    // ── Media (YouTube / Spotify / external link) ─────────────────────────────
-    case 'media': {
-      const b = block as MediaBlock;
-      if (b.mediaType === 'youtube') {
-        // Convert watch URL or youtu.be to embed URL
-        let embedId = '';
-        try {
-          const u = new URL(b.url);
-          embedId = u.searchParams.get('v') ?? u.pathname.replace('/', '');
-        } catch { /* ignore */ }
-        return (
-          <div className={getFormattedBlockClass(b, 'my-8 overflow-hidden rounded-xl')} style={{ aspectRatio: '16/9' }}>
-            <iframe
-              src={`https://www.youtube-nocookie.com/embed/${embedId}`}
-              title={b.title ?? 'YouTube video'}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-              className="w-full h-full border-0"
-            />
-          </div>
-        );
-      }
-      if (b.mediaType === 'spotify_track' || b.mediaType === 'spotify_podcast') {
-        // Convert standard open.spotify URL to embed URL
-        const embedUrl = b.url.replace('open.spotify.com/', 'open.spotify.com/embed/');
-        return (
-          <div className={getFormattedBlockClass(b, 'my-6')}>
-            <iframe
-              src={embedUrl}
-              title={b.title ?? 'Spotify'}
-              allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-              className="w-full rounded-xl border-0"
-              height={b.mediaType === 'spotify_podcast' ? '232' : '152'}
-            />
-          </div>
-        );
-      }
-      // external_link → link card
-      return (
-        <a
-          href={b.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={getFormattedBlockClass(b, 'my-6 flex items-start gap-4 rounded-xl border border-gray-200 bg-gray-50 px-5 py-4 no-underline hover:bg-gray-100 transition-colors')}
-        >
-          <div className="min-w-0">
-            {b.title && <p className="font-semibold text-gray-900 truncate">{b.title}</p>}
-            {b.description && <p className="text-sm text-gray-500 mt-0.5 line-clamp-2">{b.description}</p>}
-            <p className="text-xs text-indigo-600 mt-1 truncate">{b.url}</p>
-          </div>
-        </a>
-      );
-    }
-
-    // ── Divider ───────────────────────────────────────────────────────────────
-    case 'divider': {
-      const b = block as DividerBlock;
-      if (b.variant === 'section_break') {
-        return (
-          <div className={getFormattedBlockClass(b, 'my-10 flex items-center gap-4 text-gray-300')}>
-            <hr className="flex-1 border-gray-200" />
-            <span className="text-xl">✦</span>
-            <hr className="flex-1 border-gray-200" />
-          </div>
-        );
-      }
-      return <hr className={getFormattedBlockClass(b, 'my-6 border-gray-200')} />;
-    }
-
-    // ── List ──────────────────────────────────────────────────────────────────
-    case 'list': {
-      const b = block as ListBlock;
-      const renderItems = (items: ListBlock['items']) =>
-        items.map((item) => (
-          <li key={item.id} className="text-gray-700 leading-relaxed">
-            {item.text}
-            {item.children && item.children.length > 0 && (
-              <ul className="mt-1 ml-4 list-disc space-y-1">
-                {item.children.map((child) => (
-                  <li key={child.id} className="text-sm text-gray-600">{child.text}</li>
-                ))}
-              </ul>
-            )}
-          </li>
-        ));
-      return b.listType === 'numbered' ? (
-        <ol className={getFormattedListClass(b, 'list-decimal list-outside pl-5 space-y-1.5 mb-5')}>{renderItems(b.items ?? [])}</ol>
-      ) : (
-        <ul className={getFormattedListClass(b, 'list-disc list-outside pl-5 space-y-1.5 mb-5')}>{renderItems(b.items ?? [])}</ul>
-      );
-    }
-
-    // ── References ────────────────────────────────────────────────────────────
-    case 'references': {
-      const b = block as ReferencesBlock;
-      return (
-        <div className={getFormattedBlockClass(b, 'mt-10 border-t border-gray-200 pt-6')}>
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">References</p>
-          <ol className={getFormattedListClass(b, 'space-y-2 list-decimal list-outside pl-5')}>
-            {(b.items ?? []).map((ref) => (
-              <li key={ref.id} className="text-sm text-gray-600">
-                <a
-                  href={ref.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-indigo-700 hover:underline"
-                >
-                  {ref.title || ref.url}
-                </a>
-              </li>
-            ))}
-          </ol>
-        </div>
-      );
-    }
-
-    // ── Internal Link ─────────────────────────────────────────────────────────
-    case 'internal_link': {
-      const b = block as InternalLinkBlock;
-      return (
-        <div className={getFormattedBlockClass(b, 'my-6 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50 to-white px-5 py-4 flex items-start gap-4')}>
-          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-100">
-            <svg className="h-4 w-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-            </svg>
-          </div>
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-indigo-400 mb-0.5">Related reading</p>
-            <p className="font-semibold text-gray-900 leading-snug">
-              {b.title ?? b.slug}
-            </p>
-            {b.excerpt && (
-              <p className="mt-1 text-sm text-gray-500 leading-relaxed line-clamp-2">{b.excerpt}</p>
-            )}
-            <p className="mt-1.5 text-xs text-indigo-500">/blog/{b.slug}</p>
-          </div>
-        </div>
-      );
-    }
-
-    // ── Summary ───────────────────────────────────────────────────────────────
-    case 'summary': {
-      const b = block as SummaryBlock;
-      return (
-        <div className={getFormattedBlockClass(b, 'mt-8 rounded-xl bg-gray-900 text-white px-6 py-5')}>
-          <p className="text-xs font-semibold uppercase tracking-widest text-gray-400 mb-2">Summary</p>
-          <p className="leading-relaxed text-gray-100">{b.body}</p>
-        </div>
-      );
-    }
-
-    // ── Columns ──────────────────────────────────────────────────────────────
-    case 'columns': {
-      const b = block as ColumnsBlock;
-      const gridClass = b.columnCount === 3 ? 'grid-cols-3' : b.columnCount === 2 ? 'grid-cols-2' : 'grid-cols-1';
-      return (
-        <div className={getFormattedBlockClass(b, `grid ${gridClass} gap-6 my-6`)}>
-          {b.columns.map((col) => (
-            <div key={col.id}>
-              {col.blocks.map((inner) => (
-                <PreviewBlock key={inner.id} block={inner} />
-              ))}
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    case 'creator_asset': {
-      const b = block as CreatorAssetBlock;
-      const assetUrl = b.url || b.files?.find(Boolean) || '';
-      if (!b.assetId && !assetUrl) return null;
-      return (
-        <figure className={getFormattedBlockClass(b, 'my-8 rounded-xl border border-violet-100 bg-violet-50/50 p-4')}>
-          {assetUrl ? (
-            <img src={assetUrl} alt={b.title || 'Creator asset'} className="w-full rounded-lg object-cover" />
-          ) : (
-            <div className="flex h-44 items-center justify-center rounded-lg bg-white text-sm font-semibold text-violet-600">
-              Creator asset
-            </div>
-          )}
-          {(b.title || b.caption) && (
-            <figcaption className="mt-3 text-sm text-gray-600">
-              {b.title && <span className="font-semibold text-gray-900">{b.title}</span>}
-              {b.title && b.caption && <span> - </span>}
-              {b.caption}
-            </figcaption>
-          )}
-        </figure>
-      );
-    }
-
-    default:
-      return null;
-  }
-}
 
 // ── Main form ─────────────────────────────────────────────────────────────────
 
@@ -1372,47 +1042,33 @@ export function BlogEditorForm({
             </div>
           </div>
 
-          {/* Body */}
+          {/* Body — the SAME publish-ready shell used by the template picker and the
+              published page, so what you finalize here is exactly what ships. */}
           <div className="mx-auto w-full max-w-3xl px-6 py-10">
-            {/* Title */}
-            <h1 className="text-3xl font-bold text-gray-900 leading-tight mb-2">{state.title || 'Untitled'}</h1>
-            {state.excerpt && <p className="text-lg text-gray-600 mt-2 mb-6 leading-relaxed">{state.excerpt}</p>}
+            <BlogMasthead
+              meta={{
+                kicker: state.category || null,
+                title: state.title || 'Untitled',
+                subtitle: state.excerpt || null,
+                readMins: estimateReadMins(state.content_blocks),
+              }}
+              templateName={null}
+            />
 
             {/* Tags */}
             {state.tags.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-8">
+              <div className="flex flex-wrap gap-2 -mt-4 mb-8">
                 {state.tags.map(t => (
                   <span key={t} className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600">{t}</span>
                 ))}
               </div>
             )}
 
-            {/* Featured image — full width, error-handled */}
-            {state.featured_image_url && !featImgErr && (
-              <img
-                src={state.featured_image_url}
-                alt=""
-                referrerPolicy="no-referrer"
-                crossOrigin="anonymous"
-                className="w-full rounded-xl mb-8"
-                style={{ maxHeight: '520px', objectFit: 'contain', background: '#f9fafb' }}
-                onError={() => setFeatImgErr(true)}
-              />
-            )}
-            {state.featured_image_url && featImgErr && (
-              <div className="w-full h-48 rounded-xl bg-gray-100 flex flex-col items-center justify-center text-gray-400 mb-8 gap-1">
-                <span className="text-2xl">🖼</span>
-                <span className="text-sm">Image could not be loaded</span>
-                <span className="text-xs text-gray-300">{state.featured_image_url.slice(0, 60)}…</span>
-              </div>
-            )}
+            {/* Hero image (swappable while finalizing) */}
+            <BlogHeroImage src={state.featured_image_url || null} />
 
-            {/* Content blocks → rendered */}
-            <div className="prose prose-gray max-w-none">
-              {state.content_blocks.map((block, idx) => (
-                <PreviewBlock key={idx} block={block} />
-              ))}
-            </div>
+            {/* Content blocks — canonical BlockRenderer, not a preview-only renderer */}
+            <BlogArticleBody blocks={state.content_blocks} templateName={null} />
 
             {/* SEO preview */}
             {(state.seo_meta_title || state.seo_meta_description) && (

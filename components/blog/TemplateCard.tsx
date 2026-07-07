@@ -3,7 +3,7 @@
 import React from 'react';
 import type { ContentBlock, BlockType } from '../../lib/blog/blockTypes';
 import { BLOCK_LABELS } from '../../lib/blog/blockTypes';
-import { BlockRenderer } from './BlockRenderer';
+import { BlogMasthead, BlogArticleBody } from './BlogArticleLayout';
 import { getTemplateShowcases } from '../../lib/blog/showcaseLoader';
 
 /** Reusable "Structure | Live Example" segmented toggle. */
@@ -31,7 +31,6 @@ function ExampleViewToggle({ view, onChange }: { view: 'example' | 'structure'; 
  * faithfully visible even in a narrow preview. The sample content is the same
  * across templates; the LAYOUT is what differs and what this shows.
  */
-const SERIF_TEMPLATES = ['Magazine', 'Visual Feature', 'Narrative Article', 'Opinion Piece', 'Investigative Deep Dive'];
 
 function TemplateExample({ templateName }: { templateName?: string }) {
   // Curated, publish-ready showcase documents (>= 3) for this template.
@@ -41,7 +40,6 @@ function TemplateExample({ templateName }: { templateName?: string }) {
   const idx = Math.min(exampleIdx, docs.length - 1);
   const doc = docs[idx] ?? docs[0];
   const multi = docs.length > 1;
-  const serif = SERIF_TEMPLATES.includes(templateName || '');
   const frameRef = React.useRef<HTMLDivElement>(null);
   const contentRef = React.useRef<HTMLDivElement>(null);
   const DESKTOP_W = 860; // wide enough to trigger md: column splits in BlockRenderer
@@ -86,32 +84,10 @@ function TemplateExample({ templateName }: { templateName?: string }) {
           <div ref={contentRef} style={{ width: DESKTOP_W, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
             {/* A real "page" sheet — generous margins so it reads as a document. */}
             <div style={{ background: '#ffffff', padding: '52px 68px', minHeight: 640, boxShadow: 'inset 0 0 0 1px #f1f5f9' }}>
-              {/* Designed masthead — kicker, display title, dek, real byline. */}
-              <header className="mb-9">
-                <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em] text-[#0A66C2]">{m.kicker}</p>
-                <h1 className={`${serif ? 'font-serif' : 'font-sans'} text-[46px] font-bold leading-[1.04] tracking-tight text-[#0B1F33]`}>{m.title}</h1>
-                <p className="mt-4 text-[19px] leading-[1.6] text-[#5B6B7C]">{m.subtitle}</p>
-                <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-[#6B7C93]">
-                  <span className="font-semibold text-[#0B1F33]">{m.author}</span>
-                  <span aria-hidden>·</span><span>{m.company}</span>
-                  <span aria-hidden>·</span><span>{m.date}</span>
-                  <span aria-hidden>·</span><span>{m.readMins} min read</span>
-                </div>
-                <div className="mt-6 h-px w-full bg-gradient-to-r from-gray-200 to-transparent" />
-              </header>
-              <article
-                className={[
-                  'prose max-w-none',
-                  serif ? 'prose-headings:font-serif prose-headings:tracking-tight' : 'prose-headings:font-sans',
-                  'prose-p:text-[16px] prose-p:leading-[1.8] prose-p:text-[#3D4F61]',
-                  'prose-img:my-7',
-                  'prose-li:text-[15.5px] prose-li:text-[#3D4F61]',
-                  // Editorial drop-cap on the opening paragraph.
-                  '[&>div:first-of-type_p]:first-letter:float-left [&>div:first-of-type_p]:first-letter:mr-3 [&>div:first-of-type_p]:first-letter:font-serif [&>div:first-of-type_p]:first-letter:text-[58px] [&>div:first-of-type_p]:first-letter:font-bold [&>div:first-of-type_p]:first-letter:leading-[0.8] [&>div:first-of-type_p]:first-letter:text-[#0B1F33]',
-                ].join(' ')}
-              >
-                <BlockRenderer blocks={doc.blocks} />
-              </article>
+              {/* Canonical publish-ready shell — shared with the editor preview and
+                  the published page so preview == finalizing == published. */}
+              <BlogMasthead meta={m} templateName={templateName} />
+              <BlogArticleBody blocks={doc.blocks} templateName={templateName} />
             </div>
           </div>
         </div>

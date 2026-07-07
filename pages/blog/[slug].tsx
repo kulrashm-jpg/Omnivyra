@@ -19,7 +19,7 @@ import { TTSPlayer } from '../../components/blog/TTSPlayer';
 import { ArrowLeft, Loader2, Calendar, Clock, Eye, Megaphone } from 'lucide-react';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 import { extractTextFromBlocks, estimateReadTimeFromBlocks } from '../../lib/blog/blockUtils';
-import { BlockRenderer } from '../../components/blog/BlockRenderer';
+import { BlogArticleBody } from '../../components/blog/BlogArticleLayout';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { CampaignPerformanceSignal } from '../../components/blog/CampaignPerformanceSignal';
 
@@ -98,7 +98,10 @@ function ArticleBody({
     const insertAfter = Math.floor(post.content_blocks.length * 0.6) - 1;
     return (
       <div ref={containerRef}>
-        <BlockRenderer
+        {/* Canonical publish-ready shell — the SAME BlogArticleBody the template
+            picker preview and the editor's finalizing preview use, so what shipped
+            is exactly what was previewed (prose typography + editorial drop-cap). */}
+        <BlogArticleBody
           blocks={post.content_blocks}
           productInsertAfterIndex={insertAfter}
           ProductInsert={<SoftProductInsert />}
