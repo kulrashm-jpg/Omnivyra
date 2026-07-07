@@ -4,7 +4,7 @@
  * distinct from the default stacked overlay, so a "Statistic" template actually looks
  * like a stat card. Default (no composition) is unchanged and covered elsewhere.
  */
-import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg } from '../../services/creatorAssetRenderer';
+import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg, buildTwoColumnCardSvg } from '../../services/creatorAssetRenderer';
 import type { CreatorBrandKit } from '../../services/creatorBrandKit';
 
 const BRAND = {
@@ -118,5 +118,34 @@ describe('buildSplitCardSvg — split/contrast image composition', () => {
     });
     expect(oneSide.quality.flags).toContain('missing_support');
     expect(oneSide.quality.score).toBe(0.5);
+  });
+});
+
+describe('buildTwoColumnCardSvg — side-by-side comparison composition', () => {
+  it('renders both option columns, a divider, and a VS badge', () => {
+    const { svg, quality } = buildTwoColumnCardSvg({
+      width: 1080,
+      height: 1080,
+      overlay: { headline: 'Manual routing', supportingText: 'Automated routing' },
+      brandKit: BRAND,
+      fileNamePrefix: 'image',
+    });
+    expect(svg.startsWith('<svg')).toBe(true);
+    for (const token of ['Manual', 'Automated', 'routing']) {
+      expect(svg).toContain(token);
+    }
+    expect(svg).toContain('>VS<'); // center VS badge
+    expect(svg).toContain('<circle'); // badge circle
+    expect(quality.preset).toBe('two_column_card');
+    expect(quality.score).toBe(1);
+  });
+
+  it('flags a missing option side', () => {
+    const { quality } = buildTwoColumnCardSvg({
+      width: 1080, height: 1080, overlay: { headline: 'Only option A' },
+      brandKit: BRAND, fileNamePrefix: 'image',
+    });
+    expect(quality.flags).toContain('missing_support');
+    expect(quality.score).toBe(0.5);
   });
 });

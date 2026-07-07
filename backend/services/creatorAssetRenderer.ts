@@ -1043,6 +1043,84 @@ export function buildSplitCardSvg(input: {
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
 
+/**
+ * Two-column image composition (opt-in via renderingContract.imageComposition='two-column').
+ * Side-by-side option columns — left = overlay.headline (Option A), right = overlay.supportingText
+ * (Option B) — with a vertical divider and a center "VS" badge, each with a derived "Word:" label.
+ * Gives Comparison templates the side-by-side contrast their intent needs, using the existing
+ * twoColForm (headline + subheadline) fields — no new fields.
+ */
+export function buildTwoColumnCardSvg(input: {
+  width: number;
+  height: number;
+  overlay: Record<string, string>;
+  brandKit: CreatorBrandKit;
+  fileNamePrefix: string;
+}): { svg: string; quality: OverlayQualityReport; brandPlacement: { top: number; left: number; maxWidth: number; maxHeight: number } } {
+  const { width, height, overlay, brandKit } = input;
+  const font = brandKit.typography?.fontFamily || 'Inter, Arial, sans-serif';
+  const accent = Array.isArray(brandKit.palette) && brandKit.palette.length ? brandKit.palette[0] : '#7c3aed';
+  const cx = Math.round(width / 2);
+  const cy = Math.round(height / 2);
+
+  const parse = (t: string): { label: string | null; body: string } => {
+    const s = compactText(t || '').trim();
+    const m = s.match(/^([A-Za-z][A-Za-z ]{1,14}):\s*(.+)$/);
+    return m ? { label: m[1].trim().toUpperCase(), body: m[2].trim() } : { label: null, body: s };
+  };
+  const left = parse(overlay.headline || '');
+  const right = parse(overlay.supportingText || overlay.keyInsight || '');
+
+  const colTextW = Math.round(width * 0.4);
+  const col = (centerX: number, label: string | null, body: string): string => {
+    const labelSize = Math.round(width * 0.024);
+    const bodySize = Math.round(width * 0.042);
+    const bodyLines = balanceTextLines(body, Math.max(8, Math.floor(colTextW / (bodySize * 0.56))), 6);
+    const lineH = Math.round(bodySize * 1.24);
+    const labelGap = label ? labelSize + Math.round(height * 0.02) : 0;
+    const blockH = labelGap + bodyLines.length * lineH;
+    let y = cy - Math.round(blockH / 2) + Math.round(bodySize * 0.7);
+    let svg = '';
+    if (label) {
+      svg += `<text x="${centerX}" y="${y}" text-anchor="middle" fill="${accent}" font-family="${font}" font-size="${labelSize}" font-weight="800" letter-spacing="2.5">${escapeXml(label)}</text>`;
+      y += labelGap;
+    }
+    svg += bodyLines.map((line, i) =>
+      `<text x="${centerX}" y="${y + i * lineH}" text-anchor="middle" filter="url(#twoColShadow)" fill="#ffffff" font-family="${font}" font-size="${bodySize}" font-weight="600">${escapeXml(line)}</text>`,
+    ).join('');
+    return svg;
+  };
+
+  const badgeR = Math.round(width * 0.058);
+  const svg =
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
+    '<defs>' +
+    '<linearGradient id="twoColScrim" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.7"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.72"/>' +
+    '</linearGradient>' +
+    '<filter id="twoColShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000000" flood-opacity="0.45"/></filter>' +
+    '</defs>' +
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="url(#twoColScrim)"/>` +
+    `<rect x="${cx - 2}" y="${Math.round(height * 0.14)}" width="4" height="${Math.round(height * 0.72)}" fill="#ffffff" opacity="0.32"/>` +
+    col(Math.round(width * 0.25), left.label, left.body) +
+    col(Math.round(width * 0.75), right.label, right.body) +
+    `<circle cx="${cx}" cy="${cy}" r="${badgeR}" fill="${accent}"/>` +
+    `<text x="${cx}" y="${cy + Math.round(width * 0.022)}" text-anchor="middle" fill="#ffffff" font-family="${font}" font-size="${Math.round(width * 0.036)}" font-weight="800" letter-spacing="1">VS</text>` +
+    '</svg>';
+
+  const flags: string[] = [];
+  if (!left.body) flags.push('missing_headline');
+  if (!right.body) flags.push('missing_support');
+  const quality: OverlayQualityReport = {
+    score: left.body && right.body ? 1 : left.body || right.body ? 0.5 : 0,
+    flags,
+    text_units: left.body.length + right.body.length,
+    preset: 'two_column_card',
+  };
+  return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
+}
+
 function buildOverlaySvg(input: {
   width: number;
   height: number;
@@ -3038,6 +3116,8 @@ async function composeSingleVisualAsset(
       ? buildQuoteCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
       : imageComposition === 'split'
       ? buildSplitCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
+      : imageComposition === 'two-column'
+      ? buildTwoColumnCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
       : buildOverlaySvg({
           width,
           height,
