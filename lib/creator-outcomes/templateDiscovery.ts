@@ -9,6 +9,7 @@
 import type { CreatorTemplate, TemplateAssetFamily } from '../creator-templates/types';
 import { listCuratedTemplatesForGoal } from './curatedTemplateGallery';
 import { CURATED_SYSTEM_TEMPLATES } from './curatedSystemTemplates';
+import { goalCategoriesFor } from './goalAffinity';
 
 export type DiscoveryScope =
   | 'SYSTEM' | 'MARKETPLACE' | 'ORGANIZATION' | 'PERSONAL' | 'AI'
@@ -37,7 +38,27 @@ export function applyDiscovery(items: CreatorTemplate[], q: DiscoveryQuery): Cre
   if (q.family) out = out.filter((t) => t.assetFamily === q.family);
   if (q.category) out = out.filter((t) => (t.category || '').toLowerCase() === q.category!.toLowerCase());
   if (needle) out = out.filter((t) => `${t.name} ${t.description} ${(t.tags || []).join(' ')}`.toLowerCase().includes(needle));
-  if (q.sort === 'name') out = [...out].sort((a, b) => a.name.localeCompare(b.name));
+  if (q.sort === 'name') {
+    out = [...out].sort((a, b) => a.name.localeCompare(b.name));
+  } else if (q.goalId) {
+    // 'recommended' (default): order by how strongly each template's visual
+    // category is affined to the active goal — a template in the goal's PRIMARY
+    // category leads, secondary next, unaffined last. Without this the sort was a
+    // no-op, so the single "Recommended for your campaign" pick and the browse
+    // order were arbitrary insertion order rather than the goal. Stable within a
+    // rank (preserves the curated pool order for ties). Deterministic.
+    const cats = goalCategoriesFor(q.goalId);
+    if (cats.length) {
+      const rank = (t: CreatorTemplate): number => {
+        const i = cats.indexOf(t.designFamily ?? '');
+        return i === -1 ? cats.length : i;
+      };
+      out = out
+        .map((t, i) => ({ t, i }))
+        .sort((a, b) => rank(a.t) - rank(b.t) || a.i - b.i)
+        .map((x) => x.t);
+    }
+  }
   return out;
 }
 

@@ -65,7 +65,7 @@ export function OutcomeGallery({ goalId, goalLabel, family, onUse, onBack }: {
   const [learnOpen, setLearnOpen] = React.useState(false);
 
   const base = React.useMemo(() => systemScopeSource({ scope: 'SYSTEM', family, goalId, sort: 'recommended' }), [family, goalId]);
-  const items = React.useMemo(() => applyDiscovery(base, { scope: 'SYSTEM', family, query, sort: 'recommended' }), [base, family, query]);
+  const items = React.useMemo(() => applyDiscovery(base, { scope: 'SYSTEM', family, goalId, query, sort: 'recommended' }), [base, family, goalId, query]);
   const recommendedId = base[0]?.id ?? null; // the single, top-recommended outcome
 
   React.useEffect(() => { setIndex(0); }, [query, family, goalId]);
