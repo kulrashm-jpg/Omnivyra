@@ -365,6 +365,36 @@ function resolveCarouselRenderStyle(metadata: Record<string, unknown>): Carousel
   return resolveTemplate(templateIdForRender(metadata), { family: 'carousel' }).carouselStyle as CarouselStyleSchema;
 }
 /**
+ * Per-template carousel slide arc (fidelity). Each carousel template carries its OWN
+ * narrative in preview.sample.slides (e.g. Before/After → before, pain, shift, after,
+ * how_to_start; Mistakes → intro, mistake_1…, fix_it). Slugify those into distinct role
+ * keys so the deck renders the TEMPLATE's arc — not the shared 3 purpose arcs, which flattened
+ * all 20 templates into 3 behaviours. Returns null for non-carousel templates or those without
+ * a sample arc, so the purpose arc / generic fallback is used unchanged.
+ */
+export function resolveCarouselTemplateArc(metadata: Record<string, unknown>): string[] | null {
+  const tid = templateIdForRender(metadata);
+  if (!tid) return null;
+  const t = resolveTemplate(tid, { family: 'carousel' }).template;
+  if (!t || t.assetFamily !== 'carousel') return null;
+  const slides = (t.preview as { sample?: { slides?: unknown } } | undefined)?.sample?.slides;
+  if (!Array.isArray(slides) || slides.length === 0) return null;
+  const seen = new Set<string>();
+  const roles: string[] = [];
+  for (const s of slides) {
+    let key = String(s || '')
+      .toLowerCase()
+      .replace(/^(the|a|an)\s+/, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 24) || `slide_${roles.length + 1}`;
+    if (seen.has(key)) key = `${key}_${roles.length + 1}`;
+    seen.add(key);
+    roles.push(key);
+  }
+  return roles.length > 0 ? roles : null;
+}
+/**
  * Project the carousel visual language onto the overlay base preset the slide
  * composer consumes (`getOverlayPreset`'s `style`). The deck shares the image
  * overlay system, so we keep the image platform-preset matrix / CTA / footer /
@@ -3926,6 +3956,10 @@ function normalizeStructuredItems(
   const slideArcRoles = Array.isArray((purposeStrategy as Record<string, unknown> | null)?.slideArcRoles)
     ? ((purposeStrategy as Record<string, unknown>).slideArcRoles as unknown[]).map(String).filter(Boolean)
     : null;
+  // Fidelity: prefer the selected template's OWN arc (from preview.sample.slides) over the
+  // shared purpose arc, so each of the 20 carousel templates renders its own narrative.
+  const templateArc = resolveCarouselTemplateArc(metadata);
+  const effectiveArc = templateArc && templateArc.length > 0 ? templateArc : slideArcRoles;
 
   const clean = items.map((item, index) => ({
     role: compactText(item.role || item.section_type || item.type || `Slide ${index + 1}`),
@@ -3953,7 +3987,7 @@ function normalizeStructuredItems(
     // the ACTUAL number of slides so every slide gets a distinct strategic role. Prevents
     // generic `slide_N` filler on long decks (which read as duplicates) and dropped roles
     // on short decks. See fitSlideArcToCount.
-    const baseArc = slideArcRoles && slideArcRoles.length > 0 ? slideArcRoles : ['hook', 'insight', 'proof', 'content', 'cta'];
+    const baseArc = effectiveArc && effectiveArc.length > 0 ? effectiveArc : ['hook', 'insight', 'proof', 'content', 'cta'];
     const fittedRoles = fitSlideArcToCount(baseArc, sliced.length);
     return sliced.map((item, index) => ({
       role: fittedRoles[index] || item.role || `slide_${index + 1}`,
@@ -3970,11 +4004,11 @@ function normalizeStructuredItems(
   const topic = compactText(metadata.topic || fallbackLabel, fallbackLabel);
   const summary = compactText(metadata.summary || fallbackLabel, fallbackLabel);
   const objective = compactText(metadata.objective || 'Make the core idea easy to act on');
-  if (slideArcRoles && slideArcRoles.length > 0) {
-    return slideArcRoles.map((role, index) => ({
+  if (effectiveArc && effectiveArc.length > 0) {
+    return effectiveArc.map((role, index) => ({
       role,
       headline: index === 0 ? topic : role.replace(/_/g, ' '),
-      body: index === 0 ? summary : index === slideArcRoles.length - 1 ? objective : 'Detail for this slide will be expanded.',
+      body: index === 0 ? summary : index === effectiveArc.length - 1 ? objective : 'Detail for this slide will be expanded.',
       designNote: `${role} slide`,
     }));
   }
