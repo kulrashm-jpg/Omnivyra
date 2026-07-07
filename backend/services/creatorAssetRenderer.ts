@@ -4920,36 +4920,71 @@ const INFOGRAPHIC_LAYOUTS = ['stats', 'comparison', 'process', 'framework', 'hie
 // dense, so generic topics rotate across the FULL set for maximum format variety.
 const GENERIC_INFOGRAPHIC_ROTATION = ['stats', 'framework', 'process', 'timeline', 'hierarchy', 'comparison'] as const;
 
-export function pickVariedInfographicLayout(topic: string): string {
-  const t = String(topic || '').toLowerCase();
-  // Content-appropriate engines first — a topic that clearly implies a structure gets it, so
-  // the specialised layout is filled by matching content.
+/**
+ * STRONG content→engine signal: a keyword match that clearly implies a specific engine.
+ * Returns null when the content gives no strong structural cue (caller decides the fallback).
+ * Keyword-only — no hash — so it is safe to let this OVERRIDE an aesthetic template's layout.
+ */
+export function contentImpliedInfographicLayout(text: string): string | null {
+  const t = String(text || '').toLowerCase();
   if (/\bvs\b|versus|compare|comparison|pros?\s*(and|&|vs)?\s*cons|before\s*(and|&)?\s*after/.test(t)) return 'comparison';
-  if (/\bstep\b|step[-\s]?by[-\s]?step|how\s*to|workflow|stages?\b|playbook|checklist/.test(t)) return 'process';
+  if (/\bsteps?\b|step[-\s]?by[-\s]?step|how\s*to|workflow|stages?\b|playbook|checklist/.test(t)) return 'process';
   if (/timeline|roadmap|history|evolution|journey|over\s*time|milestones?\b/.test(t)) return 'timeline';
   if (/hierarchy|tiers?\b|pyramid|maturity\s*(model|levels?)/.test(t)) return 'hierarchy';
   if (/\d+\s*%|\bkpi\b|by the numbers|statistics?\b|benchmark/.test(t)) return 'stats';
-  // Generic topics rotate deterministically across ALL engines (hash of topic) for variety.
+  return null;
+}
+
+export function pickVariedInfographicLayout(topic: string): string {
+  const t = String(topic || '').toLowerCase();
+  // Content-appropriate engine first; only fall to the deterministic rotation when the content
+  // gives no structural cue (so generic topics still vary instead of always 'framework').
+  const implied = contentImpliedInfographicLayout(t);
+  if (implied) return implied;
   let h = 0;
   for (let i = 0; i < t.length; i += 1) h = (Math.imul(h, 31) + t.charCodeAt(i)) >>> 0;
   return GENERIC_INFOGRAPHIC_ROTATION[h % GENERIC_INFOGRAPHIC_ROTATION.length];
 }
 
+/** All the text the layout picker should consider — topic + summary + section labels. */
+function infographicContentText(metadata: Record<string, unknown>): string {
+  const card = safeObject(metadata.creator_card);
+  const parts: string[] = [
+    String(metadata.topic || card.topic || ''),
+    String(metadata.summary || card.summary || ''),
+  ];
+  const sections = metadata.infographic_sections ?? card.infographic_sections;
+  if (Array.isArray(sections)) {
+    for (const s of sections.slice(0, 12)) {
+      const so = safeObject(s);
+      parts.push(String(so.label ?? so.title ?? so.heading ?? ''), String(so.value ?? ''));
+    }
+  }
+  return parts.filter(Boolean).join(' ');
+}
+
 function resolveInfographicLayout(metadata: Record<string, unknown>): string {
+  const contentText = infographicContentText(metadata);
   // CREATOR-127: a resolved curated TEMPLATE drives the layout directly (no blueprint).
+  // FIDELITY (item 3b): curated templates hardcode a layout by AESTHETIC (e.g. Luxury→hierarchy).
+  // Decouple structure from look — when the CONTENT strongly implies a specific engine (keyword
+  // signal, not the generic hash), that wins over the template's hardcoded layout; the template's
+  // aesthetic STYLE still applies via resolveInfographicRenderStyle. Otherwise the template layout.
   const dt = curatedDesignTemplate(metadata);
-  if (dt?.renderingContract.infographicLayout) return dt.renderingContract.infographicLayout;
+  if (dt?.renderingContract.infographicLayout) {
+    return contentImpliedInfographicLayout(contentText) ?? dt.renderingContract.infographicLayout;
+  }
   // CREATOR-106 (RULE 4): once a Marketing Sample is chosen, the SAMPLE determines the
-  // layout structure — different samples produce genuinely different layout engines,
-  // never the same generic grid. No fallback generator runs while a blueprint is set.
+  // layout structure — different samples produce genuinely different layout engines.
   const bp = blueprintIdForRender(metadata);
   if (bp) return infographicLayoutForBlueprint(bp);
   // RULE 7: blueprint_id == null. Honour an explicit per-asset layout when the generator
-  // set one; otherwise pick a VARIED, content-aware layout (was hardcoded 'framework',
-  // which made every generic infographic identical).
+  // set one; otherwise pick a VARIED, content-aware layout from ALL the content (item 3c:
+  // topic + summary + section labels, not just the topic — so AI/programmatic paths that
+  // set no layout get a content-fit engine, not an arbitrary topic hash).
   const requested = String(metadata.infographic_layout || safeObject(metadata.creator_card).infographic_layout || '').trim().toLowerCase();
   if ((INFOGRAPHIC_LAYOUTS as readonly string[]).includes(requested)) return requested;
-  return pickVariedInfographicLayout(String(metadata.topic || safeObject(metadata.creator_card).topic || ''));
+  return pickVariedInfographicLayout(contentText);
 }
 
 function validateInfographicDensity(
