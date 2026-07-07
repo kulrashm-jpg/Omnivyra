@@ -565,7 +565,14 @@ function normalizeOverlayText(input: {
     : compactText(overlay.cta || input.metadata.cta || 'Learn more').replace(/\b(click here|submit|read now)\b/gi, 'Learn more').slice(0, 42);
   return {
     hook: compactText(authoritative ? overlay.hook : (overlay.hook || input.metadata.topic || input.title)).slice(0, 76),
-    headline: compactText(authoritative ? overlay.headline : (overlay.headline || input.title)).slice(0, 84),
+    // Text-inside must NEVER render blank. When the template/answer fields carry
+    // no headline (e.g. the workspace brief flow supplies a free-text brief, not a
+    // per-field headline, and the curated template has no default field values),
+    // fall back to the generated master title even under template-authoritative
+    // mode. `input.title` is real generated copy (descriptor.headline / caption
+    // hook), NOT the template placeholder the authoritative flag guards against —
+    // so this restores on-image text without re-introducing garbled examples.
+    headline: compactText(overlay.headline || input.title).slice(0, 84),
     keyInsight: compactText(overlay.keyInsight || overlay.key_insight || '').slice(0, 190),
     cta,
     supportingText: compactText(overlay.supportingText || overlay.supporting_text || '').slice(0, 96),
