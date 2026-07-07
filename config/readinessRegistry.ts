@@ -507,15 +507,20 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
         description: 'Your website is served over HTTPS.',
         weight: 2,
         evaluate: (s): FactorEvalResult => {
-          if (!s.profile.websiteUrl) return unavailable('Connect a website to evaluate SSL.');
-          return /^https:\/\//i.test(s.profile.websiteUrl)
-            ? { score: 1 }
-            : {
+          const url = String(s.profile.websiteUrl ?? '').trim();
+          if (!url) return unavailable('Connect a website to evaluate SSL.');
+          // A website is stored canonically as a bare domain ("omnivyra.com") OR with a
+          // scheme. HTTPS is the modern default, so only an EXPLICIT http:// counts as
+          // insecure — a scheme-less domain or https:// passes. (Previously the check
+          // required a literal "https://" prefix, so a bare-domain website always failed.)
+          return /^http:\/\//i.test(url)
+            ? {
                 score: 0,
                 missing: ['Website is not served over HTTPS'],
                 recommendation: 'Serve your site over HTTPS so visitors and search engines trust it.',
                 nextAction: { label: 'Review website', actionId: 'profile.edit' },
-              };
+              }
+            : { score: 1 };
         },
       },
       {
