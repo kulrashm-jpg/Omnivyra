@@ -9,6 +9,7 @@ import {
   normalizeWriterCreatorAssetType,
   resolveAttachmentModeFromIntent,
   validateAttachmentPayload,
+  copyPolicyForIntent,
   SUPPORTING_VISUAL_COPY_POLICY,
   type AssetCompositionIntent,
   type AttachmentMode,
@@ -207,20 +208,27 @@ function normalizeCreatorCardForAttachment(input: {
   const ctaPresent = String(
     input.creatorCard.cta ?? input.creatorCard.CTA ?? rawOverlayTextForSignals.cta ?? '',
   ).trim().length > 0;
+  // A CTA present for text-inside-image (embedded_copy) IS the intent to embed it — allow it even
+  // when the workspace/curated brief flow sent no copy-policy flags. Applies to BOTH branches:
+  // the explicit-policy branch AND the default branch (which previously fell back to
+  // copyPolicyForIntent with allowCTA:false, re-triggering the rejection).
+  const derivedAllowCTA = rawCopyPolicy.allowCTA === true || (attachmentMode === 'embedded_copy' && ctaPresent);
   const compositionIntent = buildAssetCompositionIntent({
     assetType,
     attachmentMode,
     sourceTextTransform,
     copyPolicy: isSupportingVisualMode
       ? SUPPORTING_VISUAL_COPY_POLICY
-      : (rawCopyPolicy.sourceTextTransform
-          ? {
-              allowHeadline: rawCopyPolicy.allowHeadline === true,
-              allowKeyInsight: rawCopyPolicy.allowKeyInsight === true,
-              allowCTA: rawCopyPolicy.allowCTA === true || (attachmentMode === 'embedded_copy' && ctaPresent),
-              sourceTextTransform,
-            }
-          : undefined),
+      : rawCopyPolicy.sourceTextTransform
+        ? {
+            allowHeadline: rawCopyPolicy.allowHeadline === true,
+            allowKeyInsight: rawCopyPolicy.allowKeyInsight === true,
+            allowCTA: derivedAllowCTA,
+            sourceTextTransform,
+          }
+        : attachmentMode === 'embedded_copy'
+          ? copyPolicyForIntent({ attachmentMode, sourceTextTransform, allowCTA: derivedAllowCTA })
+          : undefined,
   });
   const rawOverlayText = safeObject(input.creatorCard.overlay_text);
   const sourceContent = safeObject(input.creatorCard.source_content);

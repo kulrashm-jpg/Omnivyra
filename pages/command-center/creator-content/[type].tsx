@@ -3016,7 +3016,7 @@ export default function CreatorTypeWorkflowPage() {
           hook: String(overlayText.hook || '').trim(),
           headline: String(overlayText.headline || answers.headline || answers.topic || '').trim(),
           keyInsight: String(overlayText.keyInsight || '').trim(),
-          cta: writerCopyPolicy?.allowCTA ? String(overlayText.cta || answers.cta || '').trim() : '',
+          cta: (writerCopyPolicy?.allowCTA || (!writerSource && standaloneEmbeddedCopy)) ? String(overlayText.cta || answers.cta || '').trim() : '',
           supportingText: String(overlayText.supportingText || '').trim(),
         }
       : null;
@@ -3228,7 +3228,7 @@ export default function CreatorTypeWorkflowPage() {
           hook: String(overlayText.hook || '').trim(),
           headline: String(overlayText.headline || answers.headline || answers.topic || '').trim(),
           keyInsight: String(overlayText.keyInsight || '').trim(),
-          cta: writerCopyPolicy?.allowCTA ? String(overlayText.cta || answers.cta || '').trim() : '',
+          cta: (writerCopyPolicy?.allowCTA || (!writerSource && standaloneEmbeddedCopy)) ? String(overlayText.cta || answers.cta || '').trim() : '',
           supportingText: String(overlayText.supportingText || '').trim(),
         }
       : null;
