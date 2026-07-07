@@ -354,10 +354,10 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
       {
         id: 'content.templates',
         title: 'Templates',
-        description: 'Saved template collections accelerate consistent creation.',
+        description: 'Saved templates accelerate consistent creation.',
         weight: 1,
         evaluate: (s) =>
-          fromCount(s.content.templates, 'No saved template collections yet', 'Save a template collection to speed up consistent creation.', {
+          fromCount(s.content.templates, 'No saved templates yet', 'Save a template (blog, creator, or a collection) to speed up consistent creation.', {
             label: 'Manage templates',
             actionId: 'creator.open',
           }),

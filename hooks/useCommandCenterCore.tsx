@@ -206,6 +206,7 @@ export function useCommandCenter() {
         creatorAssetsResponse,
         templateCollectionsResponse,
         userTemplatesResponse,
+        blockTemplatesResponse,
         automationConfigResponse,
         campaignsResponse,
         reportsResponse,
@@ -223,6 +224,7 @@ export function useCommandCenter() {
         getJson(`/api/creator-assets?company_id=${cid}`),
         getJson(`/api/creator-templates/collections?company_id=${cid}`),
         getJson(`/api/creator-templates/user?company_id=${cid}`),
+        getJson(`/api/block-templates?company_id=${cid}`),
         getJson(`/api/automation/config?organization_id=${cid}`),
         getJson(`/api/campaigns?companyId=${cid}`),
         getJson(`/api/reports?company_id=${cid}`),
@@ -240,7 +242,7 @@ export function useCommandCenter() {
       setReadinessScore(data.readiness.score);
       if (profileResponse?.ok) {
         const profileData = await profileResponse.json();
-        const [companyApiConfigData, externalApisData, socialStatusData, teamSummaryData, subscriptionData, websiteSnapshotData, blogsData, creatorAssetsData, templateCollectionsData, userTemplatesData, automationConfigData, campaignsData, reportsData, telemetryProvidersData] = await Promise.all([
+        const [companyApiConfigData, externalApisData, socialStatusData, teamSummaryData, subscriptionData, websiteSnapshotData, blogsData, creatorAssetsData, templateCollectionsData, userTemplatesData, blockTemplatesData, automationConfigData, campaignsData, reportsData, telemetryProvidersData] = await Promise.all([
           companyApiConfigResponse?.ok ? companyApiConfigResponse.json() : Promise.resolve(null),
           externalApisResponse?.ok ? externalApisResponse.json() : Promise.resolve(null),
           socialStatusResponse?.ok ? socialStatusResponse.json() : Promise.resolve(null),
@@ -251,6 +253,7 @@ export function useCommandCenter() {
           creatorAssetsResponse?.ok ? creatorAssetsResponse.json() : Promise.resolve(null),
           templateCollectionsResponse?.ok ? templateCollectionsResponse.json() : Promise.resolve(null),
           userTemplatesResponse?.ok ? userTemplatesResponse.json() : Promise.resolve(null),
+          blockTemplatesResponse?.ok ? blockTemplatesResponse.json() : Promise.resolve(null),
           automationConfigResponse?.ok ? automationConfigResponse.json() : Promise.resolve(null),
           campaignsResponse?.ok ? campaignsResponse.json() : Promise.resolve(null),
           reportsResponse?.ok ? reportsResponse.json() : Promise.resolve(null),
@@ -307,12 +310,14 @@ export function useCommandCenter() {
           campaignsCount: Array.isArray(campaignsData?.campaigns) ? campaignsData.campaigns.length : null,
           reportsCount: Array.isArray(reportsData?.reports) ? reportsData.reports.length : null,
           mediaCount: Array.isArray(creatorAssetsData?.assets) ? creatorAssetsData.assets.length : null,
-          // Count BOTH saved template collections AND individual user templates — saving
-          // one template of either kind should score the factor ("done once = scored").
+          // Count ANY saved template — creator-template collections, individual creator
+          // templates, AND blog/block templates ("Your Templates" on /blogs/template). Saving
+          // one of any kind should score the factor ("done once = scored").
           templatesCount: (() => {
             const cols = Array.isArray(templateCollectionsData?.collections) ? templateCollectionsData.collections.length : null;
             const usr = Array.isArray(userTemplatesData?.templates) ? userTemplatesData.templates.length : null;
-            return cols === null && usr === null ? null : (cols ?? 0) + (usr ?? 0);
+            const blk = Array.isArray(blockTemplatesData?.templates) ? blockTemplatesData.templates.length : null;
+            return cols === null && usr === null && blk === null ? null : (cols ?? 0) + (usr ?? 0) + (blk ?? 0);
           })(),
           websiteSnapshot: websiteSnapshotData?.snapshot ?? null,
           automation: freshAutomation,
