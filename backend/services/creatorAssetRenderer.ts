@@ -2570,6 +2570,21 @@ async function composeSingleVisualAsset(
   const overlay = attachmentRenderPolicy === 'supporting_visual'
     ? { hook: '', headline: '', keyInsight: '', cta: '', supportingText: '' }
     : normalizeOverlayText({ assetPayload, metadata, title, body });
+  // Diagnostic (text-inside "no text" investigation): reveals whether the policy
+  // resolved to embedded_copy AND whether the overlay actually carries copy.
+  console.log('[creator-asset-renderer][attachment-policy]', {
+    fileNamePrefix,
+    metadata_attachment_mode: typeof metadata.attachment_mode === 'string' ? metadata.attachment_mode : null,
+    enforcedAssetType: enforcedAssetType ?? null,
+    resolvedPolicy: attachmentRenderPolicy,
+    overlayLens: {
+      hook: (overlay.hook ?? '').length,
+      headline: (overlay.headline ?? '').length,
+      keyInsight: (overlay.keyInsight ?? '').length,
+      cta: (overlay.cta ?? '').length,
+      supporting: (overlay.supportingText ?? '').length,
+    },
+  });
   const writerGoverned = Boolean(metadata.writer_asset_type || metadata.creator_content_asset_type || metadata.attachment_mode);
   const governanceAssetType = enforcedAssetType ?? (writerGoverned
     ? String(metadata.writer_asset_type || metadata.creator_content_asset_type || metadata.content_type || fileNamePrefix || 'supporting_image')
