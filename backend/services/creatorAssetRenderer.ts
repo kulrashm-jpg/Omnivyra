@@ -963,6 +963,86 @@ export function buildQuoteCardSvg(input: {
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
 
+/**
+ * Split / contrast image composition (opt-in via renderingContract.imageComposition='split').
+ * Two stacked panels — top = overlay.headline (Before / Myth), bottom = overlay.supportingText
+ * (After / Fact) — with a red→green tint, a center divider, edge accent bars, and a derived
+ * label (the leading "Word:" of each side, e.g. "MYTH" / "FACT"). Gives before/after and
+ * myth-vs-fact templates the two-sided layout their intent needs, using the existing
+ * headline + subheadline fields (no new fields).
+ */
+export function buildSplitCardSvg(input: {
+  width: number;
+  height: number;
+  overlay: Record<string, string>;
+  brandKit: CreatorBrandKit;
+  fileNamePrefix: string;
+}): { svg: string; quality: OverlayQualityReport; brandPlacement: { top: number; left: number; maxWidth: number; maxHeight: number } } {
+  const { width, height, overlay, brandKit } = input;
+  const font = brandKit.typography?.fontFamily || 'Inter, Arial, sans-serif';
+  const cx = Math.round(width / 2);
+  const half = Math.round(height / 2);
+  const negColor = '#ef4444';
+  const posColor = '#22c55e';
+
+  const parse = (t: string): { label: string | null; body: string } => {
+    const s = compactText(t || '').trim();
+    const m = s.match(/^([A-Za-z][A-Za-z ]{1,14}):\s*(.+)$/);
+    return m ? { label: m[1].trim().toUpperCase(), body: m[2].trim() } : { label: null, body: s };
+  };
+  const top = parse(overlay.headline || '');
+  const bot = parse(overlay.supportingText || overlay.keyInsight || '');
+
+  const panel = (yBase: number, accent: string, label: string | null, body: string): string => {
+    const labelSize = Math.round(width * 0.026);
+    const bodySize = Math.round(width * 0.05);
+    const bodyLines = balanceTextLines(body, Math.max(14, Math.floor(width / (bodySize * 0.54))), 4);
+    const lineH = Math.round(bodySize * 1.22);
+    const labelGap = label ? labelSize + Math.round(height * 0.02) : 0;
+    const blockH = labelGap + bodyLines.length * lineH;
+    let y = yBase + Math.round((half - blockH) / 2) + Math.round(bodySize * 0.7);
+    let svg = '';
+    if (label) {
+      svg += `<text x="${cx}" y="${y}" text-anchor="middle" fill="${accent}" font-family="${font}" font-size="${labelSize}" font-weight="800" letter-spacing="3">${escapeXml(label)}</text>`;
+      y += labelGap;
+    }
+    svg += bodyLines.map((line, i) =>
+      `<text x="${cx}" y="${y + i * lineH}" text-anchor="middle" filter="url(#splitShadow)" fill="#ffffff" font-family="${font}" font-size="${bodySize}" font-weight="600">${escapeXml(line)}</text>`,
+    ).join('');
+    return svg;
+  };
+
+  const svg =
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
+    '<defs>' +
+    '<linearGradient id="splitScrim" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.68"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.68"/>' +
+    '</linearGradient>' +
+    '<filter id="splitShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000000" flood-opacity="0.45"/></filter>' +
+    '</defs>' +
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="url(#splitScrim)"/>` +
+    `<rect x="0" y="0" width="${width}" height="${half}" fill="${negColor}" opacity="0.14"/>` +
+    `<rect x="0" y="${half}" width="${width}" height="${height - half}" fill="${posColor}" opacity="0.14"/>` +
+    `<rect x="0" y="0" width="10" height="${half}" fill="${negColor}"/>` +
+    `<rect x="0" y="${half}" width="10" height="${height - half}" fill="${posColor}"/>` +
+    `<rect x="0" y="${half - 2}" width="${width}" height="4" fill="#ffffff" opacity="0.5"/>` +
+    panel(0, negColor, top.label, top.body) +
+    panel(half, posColor, bot.label, bot.body) +
+    '</svg>';
+
+  const flags: string[] = [];
+  if (!top.body) flags.push('missing_headline');
+  if (!bot.body) flags.push('missing_support');
+  const quality: OverlayQualityReport = {
+    score: top.body && bot.body ? 1 : top.body || bot.body ? 0.5 : 0,
+    flags,
+    text_units: top.body.length + bot.body.length,
+    preset: 'split_card',
+  };
+  return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
+}
+
 function buildOverlaySvg(input: {
   width: number;
   height: number;
@@ -2956,6 +3036,8 @@ async function composeSingleVisualAsset(
       ? buildStatCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
       : imageComposition === 'quote'
       ? buildQuoteCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
+      : imageComposition === 'split'
+      ? buildSplitCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
       : buildOverlaySvg({
           width,
           height,

@@ -4,7 +4,7 @@
  * distinct from the default stacked overlay, so a "Statistic" template actually looks
  * like a stat card. Default (no composition) is unchanged and covered elsewhere.
  */
-import { buildStatCardSvg, buildQuoteCardSvg } from '../../services/creatorAssetRenderer';
+import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg } from '../../services/creatorAssetRenderer';
 import type { CreatorBrandKit } from '../../services/creatorBrandKit';
 
 const BRAND = {
@@ -74,5 +74,49 @@ describe('buildQuoteCardSvg — quote-card image composition', () => {
       brandKit: BRAND, fileNamePrefix: 'image',
     });
     expect(svg).toContain('— Jane Doe, CEO');
+  });
+});
+
+describe('buildSplitCardSvg — split/contrast image composition', () => {
+  it('renders two panels with derived labels and both sides of content', () => {
+    const { svg, quality } = buildSplitCardSvg({
+      width: 1080,
+      height: 1080,
+      overlay: { headline: 'Myth: AI replaces marketers', supportingText: 'Fact: it removes the busywork' },
+      brandKit: BRAND,
+      fileNamePrefix: 'image',
+    });
+    expect(svg.startsWith('<svg')).toBe(true);
+    // Derived labels from the leading "Word:" prefix.
+    expect(svg).toContain('MYTH');
+    expect(svg).toContain('FACT');
+    // Both sides' body tokens present.
+    for (const token of ['replaces', 'marketers', 'removes', 'busywork']) {
+      expect(svg).toContain(token);
+    }
+    // Two-panel contrast: red (neg) + green (pos) accent bars.
+    expect(svg).toContain('#ef4444');
+    expect(svg).toContain('#22c55e');
+    expect(quality.preset).toBe('split_card');
+    expect(quality.score).toBe(1);
+  });
+
+  it('works without label prefixes (plain before/after) and flags a missing side', () => {
+    const both = buildSplitCardSvg({
+      width: 1080, height: 1350,
+      overlay: { headline: 'Manual routing, hours of triage', supportingText: 'Automated routing, seconds' },
+      brandKit: BRAND, fileNamePrefix: 'image',
+    });
+    expect(both.svg).toContain('Manual');
+    expect(both.svg).toContain('Automated');
+    expect(both.quality.flags).toEqual([]);
+
+    const oneSide = buildSplitCardSvg({
+      width: 1080, height: 1080,
+      overlay: { headline: 'Before only' },
+      brandKit: BRAND, fileNamePrefix: 'image',
+    });
+    expect(oneSide.quality.flags).toContain('missing_support');
+    expect(oneSide.quality.score).toBe(0.5);
   });
 });

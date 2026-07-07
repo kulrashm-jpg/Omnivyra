@@ -257,7 +257,7 @@ const IMAGE_TEMPLATES: CreatorTemplate[] = [
       field({ key: 'headline', label: 'Myth (Image Text)', required: true, control: 'textarea', helperText: 'The misconception, rendered on the image.', maxLength: 90, placeholder: 'Myth: …' }),
       field({ key: 'subheadline', label: 'Fact', required: true, control: 'textarea', helperText: 'The correcting fact.', maxLength: 110, placeholder: 'Fact: …' }),
     ] },
-    renderingContract: imageContract('educational-image'), tags: ['myth-fact', 'education'],
+    renderingContract: imageContract('educational-image', null, 'split'), tags: ['myth-fact', 'education'],
   }),
   tpl({
     id: 'sys-image-before-after', assetFamily: 'image', name: 'Before / After', category: 'Transformation',
@@ -268,7 +268,7 @@ const IMAGE_TEMPLATES: CreatorTemplate[] = [
       field({ key: 'headline', label: 'Before (Image Text)', required: true, control: 'textarea', helperText: 'The before state.', maxLength: 90, placeholder: 'Before: …' }),
       field({ key: 'subheadline', label: 'After', required: true, control: 'textarea', helperText: 'The after state.', maxLength: 90, placeholder: 'After: …' }),
     ] },
-    renderingContract: imageContract('educational-image'), tags: ['before-after', 'transformation'],
+    renderingContract: imageContract('educational-image', null, 'split'), tags: ['before-after', 'transformation'],
   }),
   tpl({
     id: 'sys-image-checklist', assetFamily: 'image', name: 'Checklist', category: 'Checklist',
