@@ -325,6 +325,64 @@ const EMPTY_OVERLAY_TEXT: WriterOverlayText = {
   supportingText: '',
 };
 
+/**
+ * Auto-fill the overlay-text panel (hook / headline / supportingText / keyInsight)
+ * from imported source content — a campaign post or Writer document — so a
+ * campaign-generated image opens ALREADY POPULATED from the campaign theme rather
+ * than blank. Mirrors the ranking + one-sentence-per-field allocation used by the
+ * live suggestion chips (`overlayFieldSuggestions`), but returns a single best value
+ * per field. Real content only (no generic starter chips): a field the body can't
+ * fill stays empty, except hook/headline which fall back to the source title. The
+ * operator can still edit or swap any field via the chips. overlayText feeds the
+ * generation payload directly, so this changes the rendered image, not just the UI.
+ */
+function deriveOverlayFromContent(title: string, body: string): WriterOverlayText {
+  const limits = { hook: 76, headline: 84, keyInsight: 132, supportingText: 96 } as const;
+  const compact = (raw: string, max: number): string => {
+    const single = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!single) return '';
+    return single.length <= max ? single : `${single.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+  };
+  const normalize = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  const cleanTitle = String(title || '').trim();
+
+  const sentences = String(body || '')
+    .replace(/https?:\/\/\S+/gi, '')
+    .split(/(?<=[.!?])\s+|\n+/u)
+    .map((s) => s.replace(/^[\-*\d.)\s\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]+/u, '').replace(/\s+/g, ' ').trim())
+    .filter((s) => s.length >= 18 && /[A-Za-z]/.test(s));
+
+  const PROOF_KEYWORDS = /\b(proof|trust|built|backed|teams|customers|data|result|outcome|measur|evidence|clarity|insight|because|reason)\b/i;
+  const hookCandidates = sentences.filter((s) => s.length <= 110).sort((a, b) => a.length - b.length);
+  const supportingCandidates = sentences
+    .map((s) => ({ s, score: (PROOF_KEYWORDS.test(s) ? 1 : 0) + (s.length >= 40 && s.length <= 120 ? 1 : 0) }))
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.s);
+  const insightCandidates = sentences.filter((s) => s.length >= 40).sort((a, b) => Math.min(b.length, 132) - Math.min(a.length, 132));
+
+  // Each sentence is claimed by at most one field, priority hook → supporting → keyInsight,
+  // so the three body-derived fields never restate the same sentence (headline uses the title).
+  const claimed = new Set<string>();
+  const take = (candidates: string[], max: number): string => {
+    for (const s of candidates) {
+      const k = normalize(s);
+      if (!k || claimed.has(k)) continue;
+      const v = compact(s, max);
+      if (!v) continue;
+      claimed.add(k);
+      return v;
+    }
+    return '';
+  };
+
+  const hook = take(hookCandidates, limits.hook) || compact(cleanTitle, limits.hook);
+  const headline = compact(cleanTitle, limits.headline) || take(sentences, limits.headline);
+  const supportingText = take(supportingCandidates, limits.supportingText);
+  const keyInsight = take(insightCandidates, limits.keyInsight);
+
+  return { hook, headline, keyInsight, cta: '', supportingText };
+}
+
 function isSocialCreativeType(type: CreatorTypeId | null): boolean {
   return type === 'image' || type === 'banner' || type === 'infographic';
 }
@@ -1949,7 +2007,11 @@ export default function CreatorTypeWorkflowPage() {
         config.primaryPlatforms[0] ||
         'linkedin';
       setSelectedPlatform(importedPlatform);
-      setOverlayText(EMPTY_OVERLAY_TEXT);
+      // Auto-fill the overlay panel from the imported campaign/Writer content (the
+      // "campaign theme") so the image opens populated, not blank. Was cleared to
+      // EMPTY_OVERLAY_TEXT, which left hook / supportingText / keyInsight empty in
+      // the generated image (headline alone survived via the answers fallback).
+      setOverlayText(deriveOverlayFromContent(normalizedSource.title, normalizedSource.body));
       if (type === 'image') setRecommendedAttachmentMode(null);
       setAnswers((current) => ({
         ...current,
