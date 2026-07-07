@@ -701,3 +701,57 @@ export function listPurposeStrategiesForContentType(
 ): ReadonlyArray<PurposeStrategy> {
   return REGISTRY.filter((s) => s.contentType === contentType);
 }
+
+/**
+ * Fit a base slide-role arc to an EXACT slide count so every rendered slide gets a
+ * distinct strategic role.
+ *
+ * The purpose arcs are fixed 5–7 role sequences, but carousel templates request 5 / 7 / 10
+ * slides. Applying a 6-role arc to a 10-slide deck left slides 7–10 with generic `slide_N`
+ * roles (they read as filler / duplicates); applying a 7-role arc to a 5-slide deck dropped
+ * the closing roles. This sizes the arc to `count`:
+ *   • always opens on the arc's first role (the hook) and closes on its last (the CTA);
+ *   • CONTRACTS by keeping the leading middle beats (narrative-priority order);
+ *   • EXPANDS by inserting numbered `detail_N` beats before the closing middle beat,
+ *     so extra slides are distinct continuations, never repeats.
+ * The result always has exactly `count` entries, hook-first / cta-last, no duplicate roles.
+ */
+export function fitSlideArcToCount(baseRoles: readonly string[], count: number): string[] {
+  const base = baseRoles.map((r) => String(r || '').trim()).filter(Boolean);
+  if (count <= 0) return [];
+  if (base.length === 0) {
+    // No arc to work from — synthesize a generic hook → point_N → cta sequence.
+    if (count === 1) return ['hook'];
+    const generic = ['hook'];
+    for (let i = 1; i < count - 1; i += 1) generic.push(`point_${i}`);
+    generic.push('cta');
+    return generic;
+  }
+  if (count === base.length) return base.slice();
+  if (count === 1) return [base[0]];
+
+  const first = base[0];
+  const last = base.length >= 2 ? base[base.length - 1] : (base[0] === 'cta' ? 'close' : 'cta');
+  if (count === 2) return [first, last];
+
+  const middle = base.slice(1, -1);
+  const need = count - 2; // interior slots to fill
+  const interior: string[] = [];
+
+  if (need <= middle.length) {
+    // Contract — keep the leading (highest-priority) middle beats.
+    interior.push(...middle.slice(0, need));
+  } else {
+    // Expand — all core middle beats, then numbered `detail_N` continuations inserted
+    // BEFORE the closing middle beat (summary / conclusion / outcome) so it stays last.
+    const closer = middle.length ? middle[middle.length - 1] : '';
+    const core = middle.slice(0, Math.max(0, middle.length - 1));
+    interior.push(...core);
+    let n = 1;
+    const target = closer ? need - 1 : need;
+    while (interior.length < target) { interior.push(`detail_${n}`); n += 1; }
+    if (closer) interior.push(closer);
+  }
+
+  return [first, ...interior, last];
+}

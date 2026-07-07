@@ -12,6 +12,7 @@ import { brandRuntimeToCreatorBrandKit } from './brand/brandRuntimeAdapter';
 import { captureImageProviderCost } from './billing/blackHoleCostCapture';
 import { recordAssetCredits } from './aiUsageCollector';
 import { resolveCostProfile } from './creator/costProfiles';
+import { fitSlideArcToCount } from './creator/purposeStrategyRegistry';
 import { isBetaAiRenderMode, createBetaMockImage, BETA_MOCK_MODEL } from './creator/rendering/providers/betaMockRenderProvider';
 import { creatorEvent } from './creatorObservation';
 import { recordCreatorDuration } from './creatorRuntimeMetrics';
@@ -3533,17 +3534,14 @@ function normalizeStructuredItems(
     // example → summary, Story: hook → problem → journey → ..., etc.),
     // assign roles in order so structured slide generation matches
     // the strategy's narrative architecture.
-    if (slideArcRoles && slideArcRoles.length > 0) {
-      return sliced.map((item, index) => ({
-        role: slideArcRoles[index] || item.role || `slide_${index + 1}`,
-        headline: item.headline,
-        body: item.body,
-        designNote: item.designNote,
-      }));
-    }
-    const lastIndex = sliced.length - 1;
+    // Count-aware role arc — size the strategy arc (or a generic hook→…→cta arc) to
+    // the ACTUAL number of slides so every slide gets a distinct strategic role. Prevents
+    // generic `slide_N` filler on long decks (which read as duplicates) and dropped roles
+    // on short decks. See fitSlideArcToCount.
+    const baseArc = slideArcRoles && slideArcRoles.length > 0 ? slideArcRoles : ['hook', 'insight', 'proof', 'content', 'cta'];
+    const fittedRoles = fitSlideArcToCount(baseArc, sliced.length);
     return sliced.map((item, index) => ({
-      role: index === 0 ? 'hook' : index === lastIndex ? 'cta' : item.role || (index === 1 ? 'insight' : index === 2 ? 'proof' : 'content'),
+      role: fittedRoles[index] || item.role || `slide_${index + 1}`,
       headline: item.headline,
       body: item.body,
       designNote: item.designNote,

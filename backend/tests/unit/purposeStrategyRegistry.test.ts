@@ -33,6 +33,7 @@ import {
   resolvePurposeStrategy,
   listPurposeStrategies,
   listPurposeStrategiesForContentType,
+  fitSlideArcToCount,
   type PurposeStrategy,
 } from '../../services/creator/purposeStrategyRegistry';
 import {
@@ -392,5 +393,51 @@ describe('Distinctness contract — the core delivery from this phase', () => {
     const b = composeCreatorImagePrompt({ ...BASE_INPUT, contentType: 'infographic', purposeKey: 'timeline' });
     expect(a.prompt).not.toBe(b.prompt);
     expect(a.purposeStrategy!.informationArchitecturePattern).not.toBe(b.purposeStrategy!.informationArchitecturePattern);
+  });
+});
+
+describe('fitSlideArcToCount — count-correct slide roles (no empty/duplicate slides)', () => {
+  const STORY = ['hook', 'problem', 'journey', 'transformation', 'outcome', 'cta']; // 6
+  const FRAMEWORK = ['hook', 'overview', 'pillar_1', 'pillar_2', 'pillar_3', 'conclusion', 'cta']; // 7
+
+  const uniq = (arr: string[]) => new Set(arr).size === arr.length;
+
+  test('same count → identity', () => {
+    expect(fitSlideArcToCount(STORY, 6)).toEqual(STORY);
+    expect(fitSlideArcToCount(FRAMEWORK, 7)).toEqual(FRAMEWORK);
+  });
+
+  test.each([3, 5, 7, 8, 10, 12])('produces EXACTLY the requested count = %i, hook-first / cta-last, all distinct', (count) => {
+    const roles = fitSlideArcToCount(STORY, count);
+    expect(roles).toHaveLength(count);
+    expect(roles[0]).toBe('hook');
+    expect(roles[roles.length - 1]).toBe('cta');
+    expect(uniq(roles)).toBe(true); // no duplicate roles → no filler/duplicate slides
+  });
+
+  test('contract keeps leading beats + closes on cta (5 from 7-role framework)', () => {
+    const roles = fitSlideArcToCount(FRAMEWORK, 5);
+    expect(roles).toEqual(['hook', 'overview', 'pillar_1', 'pillar_2', 'cta']);
+  });
+
+  test('expand inserts numbered detail beats before the closer (10 from 6-role story)', () => {
+    const roles = fitSlideArcToCount(STORY, 10);
+    expect(roles).toHaveLength(10);
+    expect(roles[0]).toBe('hook');
+    expect(roles[roles.length - 1]).toBe('cta');
+    expect(roles[roles.length - 2]).toBe('outcome'); // closer preserved just before cta
+    expect(roles.filter((r) => r.startsWith('detail_')).length).toBe(4); // 10 - 6 extras
+    expect(uniq(roles)).toBe(true);
+  });
+
+  test('empty base → generic hook → point_N → cta', () => {
+    const roles = fitSlideArcToCount([], 4);
+    expect(roles).toEqual(['hook', 'point_1', 'point_2', 'cta']);
+  });
+
+  test('degenerate counts', () => {
+    expect(fitSlideArcToCount(STORY, 0)).toEqual([]);
+    expect(fitSlideArcToCount(STORY, 1)).toEqual(['hook']);
+    expect(fitSlideArcToCount(STORY, 2)).toEqual(['hook', 'cta']);
   });
 });
