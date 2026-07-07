@@ -2208,6 +2208,7 @@ async function generateProviderImage(input: {
           });
         }
         recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
+        console.log('[creator-asset-renderer][provider-image-edit-ok]', { model: editModel, ms: Date.now() - editStartedAt });
         if (firstEdit.b64_json) return { image: { buffer: Buffer.from(firstEdit.b64_json, 'base64'), model: `${editModel}:edit` } };
         return { image: { buffer: await bufferFromRemoteImage(firstEdit.url as string), model: `${editModel}:edit` } };
       }
