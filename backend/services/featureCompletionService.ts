@@ -572,6 +572,49 @@ async function detectActiveLeadsUsed(companyId: string): Promise<FeatureDetectio
 }
 
 /**
+ * RECURRING_ENGAGEMENT — the org has actually engaged in the past: at least one
+ * OUTBOUND engagement message (an auto-reply / DM the org sent) exists. This is the
+ * durable "log to check" — engagement history survives even after auto-reply/auto-DM
+ * is later toggled off, so mastery credit for the capability is never lost ("done
+ * once = scored forever"). Pure proof: any outbound engagement → 100%.
+ *
+ * engagement_messages carries no org column; it joins to engagement_threads
+ * (organization_id) via thread_id, so we resolve the org's threads first, then look
+ * for any outgoing message within them.
+ */
+async function detectRecurringEngagement(companyId: string): Promise<FeatureDetectionResult> {
+  try {
+    const { data: threads, error: tErr } = await supabase
+      .from('engagement_threads')
+      .select('id')
+      .eq('organization_id', companyId)
+      .order('created_at', { ascending: false })
+      .limit(300);
+    if (tErr) return { isCompleted: false, score: 0, reason: `Error: ${tErr.message}` };
+    const threadIds = (threads ?? []).map((t) => (t as { id: string }).id);
+    if (threadIds.length === 0) {
+      return { isCompleted: false, score: 0, reason: 'No engagement activity yet' };
+    }
+    const { data: sent, error: mErr } = await supabase
+      .from('engagement_messages')
+      .select('id')
+      .in('thread_id', threadIds)
+      .eq('direction', 'outgoing')
+      .limit(1);
+    if (mErr) return { isCompleted: false, score: 0, reason: `Error: ${mErr.message}` };
+    const engaged = (sent?.length ?? 0) > 0;
+    return {
+      isCompleted: engaged,
+      score: engaged ? 1 : 0,
+      reason: engaged ? 'Engaged in the past (auto-reply / DM sent)' : 'No outbound engagement yet',
+      completedAt: engaged ? new Date() : undefined,
+    };
+  } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
+  }
+}
+
+/**
  * FREE_CREDITS_USED — the org actually spent shared free credits on real
  * product actions (credit_transactions: deduction, category='free').
  * Tier: 1 → 40%, 3 → 70%, 5+ → 100%.
@@ -620,6 +663,7 @@ export async function computeFeatureCompletion(
     [FeatureKey.SOCIAL_ACCOUNTS_CONNECTED]: detectSocialAccountsConnected,
     [FeatureKey.CAMPAIGN_CREATED]: detectCampaignCreated,
     [FeatureKey.CAMPAIGN_PUBLISHED]: detectCampaignPublished,
+    [FeatureKey.RECURRING_ENGAGEMENT]: detectRecurringEngagement,
     [FeatureKey.CHROME_EXTENSION_INSTALLED]: detectChromeExtensionInstalled,
     [FeatureKey.API_CONFIGURED]: detectApiConfigured,
     [FeatureKey.CONTENT_WRITER]: detectContentWriter,

@@ -148,14 +148,18 @@ export function buildMasterySignals(input: RawMasteryInputs): MasterySignals {
 
   const leadsCheck = input.websiteSnapshot?.readiness?.checks?.find((c) => c.id === 'leads');
 
-  // Automation adoption: prefer telemetry (ever-enabled workflows) over the
-  // config-flag proxy; fall back to the config flag when telemetry is dark.
+  // Automation adoption: latch first — if the org has EVER engaged (recurring_engagement
+  // feature: an outbound auto-reply/DM in the log), the capability is proven and stays
+  // credited even after auto-reply/auto-DM is toggled off ("done once = scored forever").
+  // Otherwise prefer telemetry (ever-enabled workflows), then the config-flag proxy.
   const automationTel = tel?.['automation_adoption'];
-  const automationWorkflows = hasTelemetry(automationTel)
-    ? { available: true, reason: null, configured: (automationTel.supportingMetrics?.netEnabled ?? 0) > 0 }
-    : input.automation
-      ? { available: true, reason: null, configured: input.automation.enabled && (input.automation.autoReply || input.automation.autoDm) }
-      : { available: false, reason: `Automation status could not be loaded. ${REFRESH_MSG}`, configured: false };
+  const automationWorkflows = everUsed(features, 'recurring_engagement')
+    ? { available: true, reason: null, configured: true }
+    : hasTelemetry(automationTel)
+      ? { available: true, reason: null, configured: (automationTel.supportingMetrics?.netEnabled ?? 0) > 0 }
+      : input.automation
+        ? { available: true, reason: null, configured: input.automation.enabled && (input.automation.autoReply || input.automation.autoDm) }
+        : { available: false, reason: `Automation status could not be loaded. ${REFRESH_MSG}`, configured: false };
 
   return {
     content: {

@@ -20,6 +20,7 @@ export enum FeatureKey {
   SOCIAL_ACCOUNTS_CONNECTED = 'social_accounts_connected',
   CAMPAIGN_CREATED = 'campaign_created',
   CAMPAIGN_PUBLISHED = 'campaign_published',
+  RECURRING_ENGAGEMENT = 'recurring_engagement',      // ever sent an auto-reply / DM engagement (latched)
 
   // Tools & Integration
   CHROME_EXTENSION_INSTALLED = 'chrome_extension_installed',

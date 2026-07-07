@@ -124,6 +124,7 @@ export function getReadinessRecommendations(
         [FeatureKey.SOCIAL_ACCOUNTS_CONNECTED]: 'Connect your social media accounts to enable campaigns',
         [FeatureKey.CAMPAIGN_CREATED]: 'Create and stage your first campaign',
         [FeatureKey.CAMPAIGN_PUBLISHED]: 'Publish or send your first campaign to your audience',
+        [FeatureKey.RECURRING_ENGAGEMENT]: 'Enable auto-reply / auto-DM engagement to respond automatically',
         [FeatureKey.CHROME_EXTENSION_INSTALLED]: 'Install the Chrome extension for real-time engagement notifications',
         [FeatureKey.API_CONFIGURED]: 'Configure API keys for campaign automation',
         [FeatureKey.CONTENT_WRITER]: 'Write your first long-form piece to unlock writer features',

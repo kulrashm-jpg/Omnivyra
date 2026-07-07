@@ -87,6 +87,25 @@ const graded = (
   return { score: 0, missing: [missing], recommendation, nextAction };
 };
 
+/**
+ * Capability proof: doing something ONCE proves the user knows how — full score,
+ * latched (the underlying count is floored at 1 by feature-completion, so the credit
+ * never drops). Use for factors where mastery = "can you do it", not "how many times":
+ * saving one template proves you can template; running one campaign proves you can
+ * campaign. Depth-graded factors stay on `graded`.
+ */
+const provenOnce = (
+  sig: SignalCount,
+  missing: string,
+  recommendation: string,
+  nextAction: { actionId: string; label?: string },
+): FactorEvalResult =>
+  !sig.available
+    ? { available: false, reason: sig.reason ?? 'Adoption signal temporarily unavailable.' }
+    : sig.count > 0
+      ? { score: 1 }
+      : { score: 0, missing: [missing], recommendation, nextAction };
+
 const fromFlag = (
   sig: SignalFlag,
   missing: string,
@@ -148,10 +167,11 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
       {
         id: 'content.templates',
         title: 'Template utilization',
-        description: 'Saved template collections you actively reuse.',
+        description: 'Saving one template proves you can template — mastery credited.',
         weight: 1,
+        // Capability proof: one saved template is enough to prove mastery (done once = scored).
         evaluate: (s) =>
-          graded(s.content.templates, [1, 3], 'No template collections saved', 'Save and reuse templates to speed up creation.', {
+          provenOnce(s.content.templates, 'No template saved yet', 'Save a template to prove you can reuse your best work.', {
             label: 'Manage templates',
             actionId: 'creator.open',
           }),
@@ -178,10 +198,11 @@ export const MASTERY_REGISTRY: CapabilityCategoryDef<MasterySignals>[] = [
       {
         id: 'campaign.completed',
         title: 'Campaigns completed',
-        description: 'Campaigns you have actually built and run.',
+        description: 'Building and running one campaign proves you can — mastery credited.',
         weight: 3,
+        // Capability proof: one completed campaign is enough to prove mastery (done once = scored).
         evaluate: (s) =>
-          graded(s.campaign.completed, [2, 5], 'No campaigns yet', 'Build and run campaigns to reach your audience.', {
+          provenOnce(s.campaign.completed, 'No campaign run yet', 'Build and run a campaign to prove you can reach your audience.', {
             label: 'Create campaign',
             actionId: 'campaign.create',
           }),
