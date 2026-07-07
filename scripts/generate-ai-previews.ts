@@ -24,7 +24,13 @@ function loadKey(): string {
 const SUBJECT = 'a modern B2B SaaS CRM platform for small businesses';
 function promptFor(s: MarketingSample): string {
   return `High-quality marketing visual for ${SUBJECT}. Visual style: ${s.generationDNA.promptModifiers}. `
-    + `Polished, editorial, professional composition. Absolutely no text, no words, no letters, no captions, no logos, no watermark.`;
+    + `Polished, editorial, professional composition. `
+    // CREATOR-106 hardening: the generic no-text ban was insufficient for screen
+    // scenes — gpt-image-1 bakes GARBLED words/numbers into any dashboard/UI it
+    // draws (the SUBJECT skews toward screens). Add the same screen-abstract
+    // override the live renderer uses so interfaces render as pure abstract shapes
+    // with zero readable glyphs/digits.
+    + `ABSOLUTE OVERRIDE (highest priority): strictly no text, words, letters, numbers, digits, captions, labels, signage, logos, wordmarks, monograms, or brand/company/product names anywhere in the image — including on any screen, dashboard, chart, table, UI, device, paper, wall, packaging, or apparel. Render every screen, dashboard, chart, table, graph, or interface as ABSTRACT blurred shapes, bars, and anonymized gradients with NO readable glyphs, labels, or numbers of any kind. Do not depict any name, label, or number even if the style described one.`;
 }
 
 async function genOne(key: string, s: MarketingSample, out: string): Promise<{ ok: boolean; error?: string }> {
