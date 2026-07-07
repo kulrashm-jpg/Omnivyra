@@ -249,6 +249,38 @@ type SectionState<T> = {
   featureFlags: DashboardPayload['meta']['featureFlags'] | null;
 };
 
+// Single-flight fetch: the dashboard renders ~9 sections, each of which used to
+// independently fetch the FULL system-state aggregation endpoint (17 table reads
+// + external Google API calls). That fired ~9 identical heavy requests per refresh
+// tick, saturating serverless concurrency and causing slow/partial loads that
+// reset to "refreshing". Now all sections for a given (companyId, refreshTick)
+// share ONE in-flight request and each slices out its own key.
+let sharedStateKey: string | null = null;
+let sharedStatePromise: Promise<DashboardPayload> | null = null;
+function fetchSystemStateShared(companyId: string, refreshTick: number): Promise<DashboardPayload> {
+  const key = `${companyId}:${refreshTick}`;
+  if (sharedStateKey !== key || !sharedStatePromise) {
+    sharedStateKey = key;
+    sharedStatePromise = fetch(`${API_ENDPOINT}?companyId=${encodeURIComponent(companyId)}`, {
+      credentials: 'include',
+    }).then(async (response) => {
+      if (!response.ok) {
+        throw new Error('Failed to load analytics system state');
+      }
+      return (await response.json()) as DashboardPayload;
+    });
+    // On failure, drop the cache so a later retry re-fetches instead of every
+    // section replaying the same rejected promise.
+    sharedStatePromise.catch(() => {
+      if (sharedStateKey === key) {
+        sharedStateKey = null;
+        sharedStatePromise = null;
+      }
+    });
+  }
+  return sharedStatePromise;
+}
+
 function useSystemStateSection<K extends SectionKey>(
   companyId: string,
   sectionKey: K,
@@ -282,15 +314,7 @@ function useSystemStateSection<K extends SectionKey>(
       setState((current) => ({ ...current, loading: true, error: null }));
 
       try {
-        const response = await fetch(`${API_ENDPOINT}?companyId=${encodeURIComponent(companyId)}`, {
-          credentials: 'include',
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to load analytics system state');
-        }
-
-        const payload = (await response.json()) as DashboardPayload;
+        const payload = await fetchSystemStateShared(companyId, refreshTick);
         if (cancelled) return;
 
         setState({
