@@ -60,7 +60,12 @@ export const ASSET_GOVERNANCE_PROFILES: Record<GovernedAssetType, AssetGovernanc
     visualPriority: 'visual',
   },
   banner: {
-    maxWordsPerSlide: 14,
+    // Text-inside-image (embedded_copy) templates carry STRUCTURED copy — headline +
+    // subheadline + CTA (+ an optional hook) — which is legitimately ~24-28 words; the prior 14
+    // (tuned for a single hero headline) failed those closed with text_density_exceeds_profile.
+    // Raised to 30 (still below carousel's 34); maxTextAreaPercent + the renderer's per-region
+    // line caps remain the true overflow guards.
+    maxWordsPerSlide: 30,
     maxTextAreaPercent: 18,
     allowCTA: true,
     allowParagraphs: false,

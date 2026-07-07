@@ -39,6 +39,29 @@ describe('creator asset governance', () => {
     expect(result.errors).toContain('paragraph_overlay_forbidden');
   });
 
+  it('banner accepts a structured headline + subheadline + CTA, rejects genuinely dense copy', () => {
+    // Text-inside-image promo copy (~24-26 words across headline/sub/CTA) must NOT fail closed.
+    const promo = validateVisualGovernance({
+      assetType: 'banner',
+      platform: 'linkedin',
+      textBlocks: [
+        'Unlock 40% Off Omnivyra for Founding Members - Elevate Your Marketing',
+        'Omnivyra will be available for founding members at 40% of its original price',
+        'Learn more',
+      ],
+      hasCTA: true,
+    });
+    expect(promo.errors).not.toContain('text_density_exceeds_profile');
+    // Genuinely dense copy (well over the budget) still fails closed.
+    const dense = validateVisualGovernance({
+      assetType: 'banner',
+      platform: 'linkedin',
+      textBlocks: [Array.from({ length: 44 }, (_, i) => `word${i}`).join(' ')],
+      hasCTA: false,
+    });
+    expect(dense.errors).toContain('text_density_exceeds_profile');
+  });
+
   it('enforces infographic density constraints', () => {
     const result = validateVisualGovernance({
       assetType: 'infographic',
@@ -131,13 +154,13 @@ describe('creator asset governance', () => {
     const validation = validateVisualGovernance({
       assetType: 'banner',
       platform: 'instagram',
-      textBlocks: ['copy '.repeat(20)],
+      textBlocks: ['copy '.repeat(40)],
       textAreaPercent: 30,
     });
     const quality = scoreCreatorQuality({
       assetType: 'banner',
       platform: 'instagram',
-      textBlocks: ['copy '.repeat(20)],
+      textBlocks: ['copy '.repeat(40)],
       overlapRisk: true,
     });
 
