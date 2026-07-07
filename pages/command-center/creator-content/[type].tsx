@@ -3071,7 +3071,21 @@ export default function CreatorTypeWorkflowPage() {
           // more" fallback injection) and collapse empty optional fields.
           ? (v2Runtime
               ? (v2Runtime.payload.overlay_text as Record<string, unknown>)
-              : ({ ...(overlayPayload || { hook: '', headline: '', keyInsight: '', cta: '', supportingText: '' }), ...projectImageOverlayText(activeTemplate, templateValues), __template_authoritative: true } as Record<string, unknown>))
+              : (() => {
+                  // The overlay copy must be the OPERATOR'S submitted inputs, never a
+                  // template placeholder example (which the model then bakes garbled).
+                  // Prefer the intake answers (topic → headline, main message →
+                  // keyInsight, CTA); fall back to any real template-field value.
+                  const tv = projectImageOverlayText(activeTemplate, templateValues);
+                  return {
+                    hook: '',
+                    headline: (String(answers.topic || '').trim() || String(tv.headline || '').trim()).slice(0, 84),
+                    keyInsight: (String(answers.keyMessage || '').trim() || String(tv.keyInsight || '').trim()).slice(0, 190),
+                    cta: (String(answers.cta || '').trim() || String(tv.cta || '').trim()).slice(0, 42),
+                    supportingText: String(tv.supportingText || '').trim().slice(0, 96),
+                    __template_authoritative: true,
+                  } as Record<string, unknown>;
+                })())
           : overlayPayload,
         brand_generation_mode: brandMode,
         brand_presence: brandMode === 'brand-aware' ? brandPresence : 'none',
