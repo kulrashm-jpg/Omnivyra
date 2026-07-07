@@ -13,6 +13,7 @@ import { captureImageProviderCost } from './billing/blackHoleCostCapture';
 import { recordAssetCredits } from './aiUsageCollector';
 import { resolveCostProfile } from './creator/costProfiles';
 import { fitSlideArcToCount } from './creator/purposeStrategyRegistry';
+import { resolveTemplateStyle } from '../../lib/creator-outcomes/creatorVisualStyleRegistry';
 import { isBetaAiRenderMode, createBetaMockImage, BETA_MOCK_MODEL } from './creator/rendering/providers/betaMockRenderProvider';
 import { creatorEvent } from './creatorObservation';
 import { recordCreatorDuration } from './creatorRuntimeMetrics';
@@ -360,6 +361,17 @@ function resolveImageComposition(metadata: Record<string, unknown>): string | nu
   const tid = templateIdForRender(metadata);
   if (!tid) return null;
   return resolveTemplate(tid, { family: 'image' }).template?.renderingContract?.imageComposition ?? null;
+}
+/**
+ * Aesthetic style id for an image template (Corporate / Luxury / Bold / …). Only the style
+ * aliases and the minimal base map to a dedicated style card; all other image templates
+ * return null → the default overlay, unchanged.
+ */
+function resolveImageStyleId(metadata: Record<string, unknown>): string | null {
+  const tid = templateIdForRender(metadata);
+  if (!tid) return null;
+  const res = resolveTemplateStyle(tid);
+  return STYLE_CARD_SPECS[res.styleId] && (res.isAlias || res.styleId === 'minimal') ? res.styleId : null;
 }
 function resolveCarouselRenderStyle(metadata: Record<string, unknown>): CarouselStyleSchema {
   return resolveTemplate(templateIdForRender(metadata), { family: 'carousel' }).carouselStyle as CarouselStyleSchema;
@@ -1228,6 +1240,125 @@ export function buildListCardSvg(input: {
     flags,
     text_units: title.length + items.join(' ').length,
     preset: 'list_card',
+  };
+  return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
+}
+
+/**
+ * Aesthetic-style image composition (Corporate / Luxury / Bold / Editorial / Modern Tech /
+ * Creative / Minimal). These templates are style ALIASES of one base — they used to render
+ * near-identically because colours are brand-owned and platform presets flattened the base
+ * typography. This gives each aesthetic a distinct LAYOUT (alignment, serif vs sans, type
+ * scale/weight, and a decoration treatment) WITHIN the brand's colours, so the style choice
+ * actually shows. Text is overlay.headline (+ optional supportingText, cta).
+ */
+type StyleCardSpec = {
+  align: 'center' | 'left';
+  serif: boolean;
+  scale: number;
+  weight: number;
+  upper: boolean;
+  tracking: number;
+  deco: 'rule-above' | 'rule-below' | 'left-bar' | 'underline' | 'block-under' | 'none';
+};
+const STYLE_CARD_SPECS: Readonly<Record<string, StyleCardSpec>> = {
+  luxury:       { align: 'center', serif: true,  scale: 0.070, weight: 600, upper: false, tracking: 1.5, deco: 'rule-above' },
+  premium:      { align: 'center', serif: true,  scale: 0.070, weight: 600, upper: false, tracking: 1.5, deco: 'rule-above' },
+  elegant:      { align: 'center', serif: true,  scale: 0.070, weight: 600, upper: false, tracking: 1.2, deco: 'rule-above' },
+  editorial:    { align: 'left',   serif: true,  scale: 0.074, weight: 700, upper: false, tracking: 0,   deco: 'rule-below' },
+  corporate:    { align: 'left',   serif: false, scale: 0.068, weight: 700, upper: false, tracking: 0,   deco: 'left-bar' },
+  technology:   { align: 'left',   serif: false, scale: 0.072, weight: 800, upper: false, tracking: 0,   deco: 'left-bar' },
+  illustration: { align: 'center', serif: false, scale: 0.082, weight: 800, upper: false, tracking: 0,   deco: 'underline' },
+  bold:         { align: 'center', serif: false, scale: 0.098, weight: 900, upper: true,  tracking: 1,   deco: 'block-under' },
+  vibrant:      { align: 'center', serif: false, scale: 0.094, weight: 900, upper: true,  tracking: 1,   deco: 'block-under' },
+  minimal:      { align: 'center', serif: false, scale: 0.060, weight: 700, upper: false, tracking: 0.5, deco: 'none' },
+};
+
+export function buildStyleCardSvg(styleId: string, input: {
+  width: number;
+  height: number;
+  overlay: Record<string, string>;
+  brandKit: CreatorBrandKit;
+  fileNamePrefix: string;
+}): { svg: string; quality: OverlayQualityReport; brandPlacement: { top: number; left: number; maxWidth: number; maxHeight: number } } {
+  const { width, height, overlay, brandKit } = input;
+  const spec = STYLE_CARD_SPECS[styleId] ?? STYLE_CARD_SPECS.minimal;
+  const sans = brandKit.typography?.fontFamily || 'Inter, Arial, sans-serif';
+  const font = spec.serif ? "Georgia, 'Times New Roman', serif" : sans;
+  const accent = Array.isArray(brandKit.palette) && brandKit.palette.length ? brandKit.palette[0] : '#0ea5e9';
+
+  const marginX = Math.round(width * (spec.align === 'center' ? 0.12 : 0.11));
+  const barGap = spec.deco === 'left-bar' ? Math.round(width * 0.045) : 0;
+  const textLeft = marginX + barGap;
+  const anchor = spec.align === 'center' ? 'middle' : 'start';
+  const anchorX = spec.align === 'center' ? Math.round(width / 2) : textLeft;
+  const contentW = spec.align === 'center' ? Math.round(width * 0.76) : width - textLeft - marginX;
+
+  let headline = compactText(overlay.headline || '').trim();
+  if (spec.upper) headline = headline.toUpperCase();
+  const sub = compactText(overlay.supportingText || '').trim();
+  const cta = compactText(overlay.cta || '').trim();
+
+  const hSize = Math.round(width * spec.scale);
+  const hLines = balanceTextLines(headline, Math.max(8, Math.floor(contentW / (hSize * (spec.serif ? 0.5 : 0.56)))), 4);
+  const hLineH = Math.round(hSize * 1.14);
+  const subSize = Math.round(width * 0.03);
+  const subLines = sub ? balanceTextLines(sub, Math.max(16, Math.floor(contentW / (subSize * 0.55))), 2) : [];
+  const subLineH = Math.round(subSize * 1.35);
+
+  const decoAboveH = spec.deco === 'rule-above' ? Math.round(height * 0.05) : 0;
+  const blockH = decoAboveH + hLines.length * hLineH + (subLines.length ? Math.round(height * 0.035) + subLines.length * subLineH : 0);
+  const top = Math.round((height - blockH) / 2);
+  let y = top + decoAboveH + Math.round(hSize * 0.82);
+  const firstLineY = y;
+
+  const deco: string[] = [];
+  const ruleW = Math.round(width * 0.11);
+  const ruleX = spec.align === 'center' ? Math.round(width / 2 - ruleW / 2) : textLeft;
+  if (spec.deco === 'rule-above') deco.push(`<rect x="${ruleX}" y="${top + Math.round(decoAboveH * 0.3)}" width="${ruleW}" height="4" rx="2" fill="${accent}"/>`);
+  if (spec.deco === 'left-bar') deco.push(`<rect x="${marginX}" y="${top}" width="8" height="${blockH}" rx="2" fill="${accent}"/>`);
+
+  const hSvg = hLines.map((line, i) =>
+    `<text x="${anchorX}" y="${firstLineY + i * hLineH}" text-anchor="${anchor}" filter="url(#styleShadow)" fill="#ffffff" font-family="${font}" font-size="${hSize}" font-weight="${spec.weight}" letter-spacing="${spec.tracking}">${escapeXml(line)}</text>`,
+  ).join('');
+  const lastLineY = firstLineY + (hLines.length - 1) * hLineH;
+
+  if (spec.deco === 'underline') deco.push(`<rect x="${ruleX}" y="${lastLineY + Math.round(hSize * 0.22)}" width="${ruleW}" height="6" rx="3" fill="${accent}"/>`);
+  if (spec.deco === 'block-under') deco.push(`<rect x="${ruleX}" y="${lastLineY + Math.round(hSize * 0.2)}" width="${Math.round(ruleW * 1.4)}" height="14" rx="2" fill="${accent}"/>`);
+
+  let subY = lastLineY + Math.round(height * 0.035) + subSize;
+  if (spec.deco === 'rule-below' && subLines.length) {
+    deco.push(`<rect x="${ruleX}" y="${lastLineY + Math.round(hSize * 0.28)}" width="${ruleW}" height="3" rx="1.5" fill="${accent}"/>`);
+    subY += Math.round(height * 0.01);
+  }
+  const subSvg = subLines.map((line, i) =>
+    `<text x="${anchorX}" y="${subY + i * subLineH}" text-anchor="${anchor}" fill="rgba(255,255,255,0.9)" font-family="${sans}" font-size="${subSize}" font-weight="500">${escapeXml(line)}</text>`,
+  ).join('');
+
+  const ctaSvg = cta
+    ? `<text x="${anchorX}" y="${Math.round(height * 0.93)}" text-anchor="${anchor}" fill="${accent}" font-family="${sans}" font-size="${Math.round(width * 0.028)}" font-weight="700" letter-spacing="0.5">${escapeXml(cta)} →</text>`
+    : '';
+
+  const svg =
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
+    '<defs>' +
+    '<linearGradient id="styleScrim" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.62"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.72"/>' +
+    '</linearGradient>' +
+    '<filter id="styleShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#000000" flood-opacity="0.45"/></filter>' +
+    '</defs>' +
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="url(#styleScrim)"/>` +
+    deco.join('') + hSvg + subSvg + ctaSvg +
+    '</svg>';
+
+  const flags: string[] = [];
+  if (!headline) flags.push('missing_headline');
+  const quality: OverlayQualityReport = {
+    score: headline ? 1 : 0,
+    flags,
+    text_units: headline.length + sub.length + cta.length,
+    preset: `style_${styleId}`,
   };
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
@@ -3219,6 +3350,7 @@ async function composeSingleVisualAsset(
   // composition (renderingContract.imageComposition), dispatch to it; otherwise the default
   // stacked overlay, byte-identical. Only image templates carry a composition.
   const imageComposition = resolveImageComposition(metadata);
+  const imageStyleId = imageComposition ? null : resolveImageStyleId(metadata);
   // Raw (pre-normalisation) overlay supportingText preserves newlines — the list
   // composition needs the individual checklist items, which the overlay normaliser collapses.
   const rawListItems = (() => {
@@ -3239,6 +3371,8 @@ async function composeSingleVisualAsset(
       ? buildTwoColumnCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
       : imageComposition === 'list'
       ? buildListCardSvg({ width, height, title: governedOverlay.headline, itemsRaw: rawListItems, brandKit, fileNamePrefix })
+      : imageStyleId
+      ? buildStyleCardSvg(imageStyleId, { width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
       : buildOverlaySvg({
           width,
           height,
