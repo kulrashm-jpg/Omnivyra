@@ -31,6 +31,24 @@ describe('Canonical attachment governance contract', () => {
     expect(img.errors).not.toContain('thread carousel requires transform policy');
   });
 
+  it('embedded_copy with a CTA requires allowCTA — and allowCTA clears it (text-inside-image intent)', () => {
+    // Text-inside-image + CTA but policy does not allow CTA → rejected (the reported bug when the
+    // workspace/curated brief flow leaves allowCTA unset).
+    const blocked = validateAttachmentPayload({
+      sourceType: 'post', assetType: 'banner', attachmentMode: 'embedded_copy',
+      copyPolicy: { sourceTextTransform: 'summarize', allowHeadline: true, allowCTA: false },
+      cta: 'Try it free',
+    } as any);
+    expect(blocked.errors).toContain('embedded_copy CTA requires explicit copy policy allowCTA');
+    // With allowCTA (what the normalizer now derives from a present CTA) → the CTA is accepted.
+    const ok = validateAttachmentPayload({
+      sourceType: 'post', assetType: 'banner', attachmentMode: 'embedded_copy',
+      copyPolicy: { sourceTextTransform: 'summarize', allowHeadline: true, allowCTA: true },
+      cta: 'Try it free',
+    } as any);
+    expect(ok.errors).not.toContain('embedded_copy CTA requires explicit copy policy allowCTA');
+  });
+
   it('validator source contains no asset-type governance conditionals', () => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require('fs');

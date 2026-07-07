@@ -199,6 +199,14 @@ function normalizeCreatorCardForAttachment(input: {
     : normalizeSourceTextTransform(
         safeObject(rawIntent.copyPolicy).sourceTextTransform ?? rawCopyPolicy.sourceTextTransform ?? input.creatorCard.source_text_transform,
       );
+  // "Text inside image" (embedded_copy) with a CTA IS the intent to embed that CTA — the
+  // workspace / curated brief form collects the CTA but does not assert copy-policy flags, so
+  // the CTA would otherwise be rejected ("embedded_copy CTA requires explicit copy policy
+  // allowCTA"). Treat a present CTA as allowCTA for embedded_copy. Supporting_visual is unaffected
+  // (its CTA is stripped above and its policy is contract-fixed).
+  const ctaPresent = String(
+    input.creatorCard.cta ?? input.creatorCard.CTA ?? rawOverlayTextForSignals.cta ?? '',
+  ).trim().length > 0;
   const compositionIntent = buildAssetCompositionIntent({
     assetType,
     attachmentMode,
@@ -209,7 +217,7 @@ function normalizeCreatorCardForAttachment(input: {
           ? {
               allowHeadline: rawCopyPolicy.allowHeadline === true,
               allowKeyInsight: rawCopyPolicy.allowKeyInsight === true,
-              allowCTA: rawCopyPolicy.allowCTA === true,
+              allowCTA: rawCopyPolicy.allowCTA === true || (attachmentMode === 'embedded_copy' && ctaPresent),
               sourceTextTransform,
             }
           : undefined),
