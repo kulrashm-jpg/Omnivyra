@@ -49,6 +49,8 @@ export interface ReadinessSignals {
     reason: string | null;
     /** A privacy / terms / legal page was found in the website crawl. */
     legalPagesPresent: boolean;
+    /** The sending domain has SPF and/or DMARC configured (from a DNS check). */
+    emailAuthConfigured: boolean;
   };
   channels: {
     available: boolean;
@@ -549,8 +551,15 @@ export const READINESS_REGISTRY: CapabilityCategoryDef<ReadinessSignals>[] = [
         title: 'Email authentication',
         description: 'SPF/DKIM/DMARC protect your sending domain.',
         weight: 1,
-        // Sending-domain email auth is not supported by any canonical signal.
-        evaluate: () => noCanonicalSignal('Email authentication is not supported by a canonical signal in this workspace.'),
+        // Canonical: a DNS check (emailAuthService) for an SPF (v=spf1) record on the domain
+        // and a DMARC (v=DMARC1) record on _dmarc.<domain>, surfaced via the canonical endpoint.
+        evaluate: (s): FactorEvalResult =>
+          scored(
+            s.trust.emailAuthConfigured,
+            'No SPF or DMARC record found on your sending domain',
+            'Add an SPF (v=spf1) TXT record and a DMARC (v=DMARC1) record at _dmarc.<domain> so mailbox providers trust email from your domain.',
+            { label: 'Review website', actionId: 'profile.edit' },
+          ),
       },
     ],
   },

@@ -33,6 +33,8 @@ export interface WebsiteSnapshotInput {
   integrations?: Array<{ type?: string; status?: string }> | null;
   /** Content Intelligence crawl checks — used for the legal/privacy-page signal. */
   content?: { checks?: Array<{ key?: string; score?: number | null }> } | null;
+  /** SPF/DMARC posture of the sending domain (DNS), set by the canonical endpoint. */
+  emailAuth?: { spf?: boolean; dmarc?: boolean; configured?: boolean } | null;
 }
 
 export interface RawReadinessInputs {
@@ -167,9 +169,12 @@ export function buildReadinessSignals(input: RawReadinessInputs): ReadinessSigna
   // Trust — legal/privacy page presence from the Content Intelligence crawl
   // (legal_pages check matches privacy / terms / legal / cookie pages).
   const legalCheck = snap?.content?.checks?.find((c) => c.key === 'legal_pages');
+  // Email auth (SPF/DMARC) is a DNS signal set by the canonical endpoint — independent of the
+  // content crawl, so it's read even when the crawl (content) is unavailable.
+  const emailAuthConfigured = Boolean(snap?.emailAuth?.configured);
   const trust: ReadinessSignals['trust'] = snap?.content
-    ? { available: true, reason: null, legalPagesPresent: typeof legalCheck?.score === 'number' && legalCheck.score >= 50 }
-    : { available: false, reason: `Website intelligence could not be loaded. ${REFRESH_MSG}`, legalPagesPresent: false };
+    ? { available: true, reason: null, legalPagesPresent: typeof legalCheck?.score === 'number' && legalCheck.score >= 50, emailAuthConfigured }
+    : { available: false, reason: `Website intelligence could not be loaded. ${REFRESH_MSG}`, legalPagesPresent: false, emailAuthConfigured };
 
   return {
     features,

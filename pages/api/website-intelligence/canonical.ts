@@ -3,6 +3,7 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { getWebsiteSnapshot } from '../../../backend/services/websiteIntelligence/websiteIntelligenceRepository';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { normalizeCompanyDomain } from '../../../lib/shared/domain/companyDomain';
+import { checkEmailAuth } from '../../../backend/services/emailAuthService';
 
 /**
  * GET /api/website-intelligence/canonical — the single read surface for the
@@ -28,17 +29,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const { data: company } = await supabase
         .from('companies')
-        .select('admin_email_domain, website_domain')
+        .select('admin_email_domain, website_domain, website')
         .eq('id', companyId)
         .maybeSingle();
       const adminDom = normalizeCompanyDomain(String(company?.admin_email_domain ?? ''));
-      const siteDom = normalizeCompanyDomain(String(company?.website_domain ?? ''));
+      const siteDom = normalizeCompanyDomain(String(company?.website_domain ?? '')) ||
+        normalizeCompanyDomain(String(company?.website ?? ''));
       if (adminDom && siteDom && adminDom === siteDom) {
         const snap = snapshot as unknown as { domain: Record<string, unknown> | null };
         if (snap.domain) snap.domain.emailDomainMatch = true;
         else snap.domain = { emailDomainMatch: true };
       }
-    } catch { /* soft-verify best-effort */ }
+      // Canonical email-authentication signal — SPF + DMARC on the sending domain, read from
+      // DNS. Surfaced so the readiness Trust → Email authentication factor can score it.
+      const authDomain = siteDom || adminDom;
+      if (authDomain) {
+        const emailAuth = await checkEmailAuth(authDomain);
+        (snapshot as unknown as { emailAuth?: unknown }).emailAuth = emailAuth;
+      }
+    } catch { /* soft-verify + email-auth are best-effort */ }
     return res.status(200).json({ snapshot });
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load website intelligence' });
