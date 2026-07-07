@@ -3185,15 +3185,29 @@ async function composeSingleVisualAsset(
     overlapRisk: corrected.textBlocks.join(' ').length > 360,
     tinyTextRisk: corrected.textBlocks.length > 4,
   });
+  // Density counts only the fields the chosen composition ACTUALLY paints. Specialized image
+  // compositions (stat/quote/split/two-column/list/style) render a SUBSET — headline + one support
+  // field + CTA — not all five overlay fields, so counting the unrendered hook/keyInsight falsely
+  // tripped text_density_exceeds_profile for legitimate before/after + promo copy. The generic
+  // stacked overlay (no composition) still counts every field — unchanged.
+  const govComposition = resolveImageComposition(metadata);
+  const govStyleId = govComposition ? null : resolveImageStyleId(metadata);
+  const governanceTextBlocks = (
+    govComposition === 'quote'
+      ? [governedOverlay.headline, governedOverlay.keyInsight || governedOverlay.supportingText, governedOverlay.cta]
+      : (govComposition || govStyleId)
+        ? [governedOverlay.headline, governedOverlay.supportingText, governedOverlay.cta]
+        : corrected.textBlocks
+  ).filter(Boolean);
   const visualGovernance = validateVisualGovernance({
     assetType: governanceAssetType,
     platform,
-    textBlocks: corrected.textBlocks,
+    textBlocks: governanceTextBlocks,
     hasCTA: Boolean(governedOverlay.cta),
-    textAreaPercent: estimateTextAreaPercent({ textBlocks: corrected.textBlocks }),
-    paragraphCount: corrected.textBlocks.filter((block) => block.length > 110 || /[.!?]\s+[A-Z0-9]/.test(block)).length,
-    overlapRisk: corrected.textBlocks.join(' ').length > 360,
-    tinyTextRisk: corrected.textBlocks.length > 4,
+    textAreaPercent: estimateTextAreaPercent({ textBlocks: governanceTextBlocks }),
+    paragraphCount: governanceTextBlocks.filter((block) => block.length > 110 || /[.!?]\s+[A-Z0-9]/.test(block)).length,
+    overlapRisk: governanceTextBlocks.join(' ').length > 360,
+    tinyTextRisk: governanceTextBlocks.length > 4,
   });
   const previewGovernanceWarnings = buildPreviewGovernanceWarnings({
     validation: visualGovernance,
