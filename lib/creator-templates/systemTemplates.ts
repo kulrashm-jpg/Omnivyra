@@ -279,7 +279,7 @@ const IMAGE_TEMPLATES: CreatorTemplate[] = [
       field({ key: 'headline', label: 'Checklist title (Image Text)', required: true, helperText: HEADLINE_HELP, maxLength: 70, placeholder: 'e.g. Pre-launch checklist' }),
       field({ key: 'subheadline', label: 'Items (one per line)', required: true, control: 'textarea', helperText: 'The checklist items rendered on the image.', maxLength: 220, placeholder: 'Item one\nItem two\nItem three' }),
     ] },
-    renderingContract: imageContract('educational-image'), tags: ['checklist', 'list'],
+    renderingContract: imageContract('educational-image', null, 'list'), tags: ['checklist', 'list'],
   }),
   tpl({
     id: 'sys-image-promotion', assetFamily: 'image', name: 'Promotion', category: 'Promotional',

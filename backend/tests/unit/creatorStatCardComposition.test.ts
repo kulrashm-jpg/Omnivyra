@@ -4,7 +4,7 @@
  * distinct from the default stacked overlay, so a "Statistic" template actually looks
  * like a stat card. Default (no composition) is unchanged and covered elsewhere.
  */
-import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg, buildTwoColumnCardSvg } from '../../services/creatorAssetRenderer';
+import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg, buildTwoColumnCardSvg, buildListCardSvg } from '../../services/creatorAssetRenderer';
 import type { CreatorBrandKit } from '../../services/creatorBrandKit';
 
 const BRAND = {
@@ -147,5 +147,42 @@ describe('buildTwoColumnCardSvg — side-by-side comparison composition', () => 
     });
     expect(quality.flags).toContain('missing_support');
     expect(quality.score).toBe(0.5);
+  });
+});
+
+describe('buildListCardSvg — checklist image composition', () => {
+  it('renders a title + one check-badge row per newline item (raw items preserved)', () => {
+    const { svg, quality } = buildListCardSvg({
+      width: 1080,
+      height: 1350,
+      title: 'Pre-launch checklist',
+      itemsRaw: 'Set the goal\nConnect a channel\nSchedule the first post',
+      brandKit: BRAND,
+      fileNamePrefix: 'image',
+    });
+    expect(svg.startsWith('<svg')).toBe(true);
+    expect(svg).toContain('Pre-launch');
+    for (const token of ['Set', 'Connect', 'Schedule']) {
+      expect(svg).toContain(token);
+    }
+    // One check badge (circle + ✓) per item → 3 checkmarks.
+    expect((svg.match(/&#10003;/g) || []).length).toBe(3);
+    expect(quality.preset).toBe('list_card');
+    expect(quality.score).toBe(1);
+  });
+
+  it('strips bullet/number prefixes and flags empty items', () => {
+    const withPrefixes = buildListCardSvg({
+      width: 1080, height: 1350, title: 'Do these', itemsRaw: '- one\n2) two\n• three',
+      brandKit: BRAND, fileNamePrefix: 'image',
+    });
+    expect((withPrefixes.svg.match(/&#10003;/g) || []).length).toBe(3);
+    expect(withPrefixes.svg).not.toContain('2)');
+
+    const noItems = buildListCardSvg({
+      width: 1080, height: 1350, title: 'Empty', itemsRaw: '', brandKit: BRAND, fileNamePrefix: 'image',
+    });
+    expect(noItems.quality.flags).toContain('missing_items');
+    expect(noItems.quality.score).toBe(0.5);
   });
 });

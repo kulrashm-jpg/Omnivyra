@@ -1121,6 +1121,87 @@ export function buildTwoColumnCardSvg(input: {
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
 
+/**
+ * List / checklist image composition (opt-in via renderingContract.imageComposition='list').
+ * A title (overlay.headline) over a checklist of items — each a green check badge + one line.
+ * Items come from the RAW overlay supportingText (newline-separated), read before the overlay
+ * normaliser collapses whitespace, so the checklist keeps its distinct rows. Gives Checklist
+ * templates the itemised layout their intent needs.
+ */
+export function buildListCardSvg(input: {
+  width: number;
+  height: number;
+  title: string;
+  itemsRaw: string;
+  brandKit: CreatorBrandKit;
+  fileNamePrefix: string;
+}): { svg: string; quality: OverlayQualityReport; brandPlacement: { top: number; left: number; maxWidth: number; maxHeight: number } } {
+  const { width, height, brandKit } = input;
+  const font = brandKit.typography?.fontFamily || 'Inter, Arial, sans-serif';
+  const accent = Array.isArray(brandKit.palette) && brandKit.palette.length ? brandKit.palette[0] : '#22c55e';
+
+  const fit = (s: string, chars: number): string => (s.length <= chars ? s : `${s.slice(0, Math.max(0, chars - 1)).trimEnd()}…`);
+  const title = compactText(input.title || '').trim();
+  const items = String(input.itemsRaw || '')
+    .split(/\r?\n/)
+    .map((s) => compactText(s).replace(/^[-*•✓\d.)\s]+/, '').trim())
+    .filter(Boolean)
+    .slice(0, 6);
+
+  const marginX = Math.round(width * 0.1);
+  const titleSize = Math.round(width * 0.058);
+  const itemSize = Math.round(width * 0.042);
+  const rowH = Math.round(height * 0.104);
+  const checkR = Math.round(itemSize * 0.62);
+  const titleLines = title ? balanceTextLines(title, Math.max(10, Math.floor((width - marginX * 2) / (titleSize * 0.55))), 2) : [];
+  const titleBlockH = titleLines.length * Math.round(titleSize * 1.15);
+  const listH = items.length * rowH;
+  const totalH = titleBlockH + Math.round(height * 0.05) + listH;
+  const titleY = Math.round((height - totalH) / 2) + titleSize;
+  const listTop = titleY + (titleLines.length - 1) * Math.round(titleSize * 1.15) + Math.round(height * 0.09);
+
+  const titleSvg = titleLines.map((line, i) =>
+    `<text x="${marginX}" y="${titleY + i * Math.round(titleSize * 1.15)}" fill="#ffffff" filter="url(#listShadow)" font-family="${font}" font-size="${titleSize}" font-weight="800">${escapeXml(line)}</text>`,
+  ).join('');
+
+  const textX = marginX + checkR * 2 + Math.round(width * 0.025);
+  const itemChars = Math.max(10, Math.floor((width - textX - marginX) / (itemSize * 0.54)));
+  const itemsSvg = items.map((it, i) => {
+    const rowY = listTop + i * rowH;
+    const badgeCy = rowY - Math.round(itemSize * 0.32);
+    return (
+      `<circle cx="${marginX + checkR}" cy="${badgeCy}" r="${checkR}" fill="${accent}"/>` +
+      `<text x="${marginX + checkR}" y="${badgeCy + Math.round(checkR * 0.55)}" text-anchor="middle" fill="#ffffff" font-family="${font}" font-size="${Math.round(checkR * 1.4)}" font-weight="900">&#10003;</text>` +
+      `<text x="${textX}" y="${rowY}" fill="#ffffff" filter="url(#listShadow)" font-family="${font}" font-size="${itemSize}" font-weight="500">${escapeXml(fit(it, itemChars))}</text>`
+    );
+  }).join('');
+
+  const svg =
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
+    '<defs>' +
+    '<linearGradient id="listScrim" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.72"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.74"/>' +
+    '</linearGradient>' +
+    '<filter id="listShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000000" flood-opacity="0.45"/></filter>' +
+    '</defs>' +
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="url(#listScrim)"/>` +
+    `<rect x="${marginX}" y="${titleY - Math.round(titleSize * 1.15)}" width="${Math.round(width * 0.12)}" height="6" rx="3" fill="${accent}"/>` +
+    titleSvg + itemsSvg +
+    '</svg>';
+
+  const flags: string[] = [];
+  if (!title) flags.push('missing_headline');
+  if (items.length === 0) flags.push('missing_items');
+  const quality: OverlayQualityReport = {
+    score: title && items.length ? 1 : title || items.length ? 0.5 : 0,
+    flags,
+    text_units: title.length + items.join(' ').length,
+    preset: 'list_card',
+  };
+  return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
+}
+
 function buildOverlaySvg(input: {
   width: number;
   height: number;
@@ -3108,6 +3189,14 @@ async function composeSingleVisualAsset(
   // composition (renderingContract.imageComposition), dispatch to it; otherwise the default
   // stacked overlay, byte-identical. Only image templates carry a composition.
   const imageComposition = resolveImageComposition(metadata);
+  // Raw (pre-normalisation) overlay supportingText preserves newlines — the list
+  // composition needs the individual checklist items, which the overlay normaliser collapses.
+  const rawListItems = (() => {
+    const direct = safeObject((assetPayload as Record<string, unknown>).overlay_text);
+    const meta = safeObject((metadata as Record<string, unknown>).overlay_text);
+    const src = Object.keys(direct).length > 0 ? direct : meta;
+    return String((src as Record<string, unknown>).supportingText ?? '');
+  })();
   const overlayRender = skipOverlayComposite
     ? null
     : imageComposition === 'stat'
@@ -3118,6 +3207,8 @@ async function composeSingleVisualAsset(
       ? buildSplitCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
       : imageComposition === 'two-column'
       ? buildTwoColumnCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
+      : imageComposition === 'list'
+      ? buildListCardSvg({ width, height, title: governedOverlay.headline, itemsRaw: rawListItems, brandKit, fileNamePrefix })
       : buildOverlaySvg({
           width,
           height,
