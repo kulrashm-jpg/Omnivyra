@@ -973,8 +973,9 @@ function buildOverlaySvg(input: {
   // below the logo line. brandPlacement / standardBrandMode are
   // recomputed later from these same values for backward-compat.
   const standardBrandMode = preset.brandMode === 'standard';
-  const logoBaseWidth = Math.round(input.width * (standardBrandMode ? 0.24 : 0.16));
-  const logoBaseHeight = Math.round(input.height * (standardBrandMode ? 0.13 : 0.11));
+  // Brand mark enlarged 1.8× — operator feedback: logo/favicon too small on the asset.
+  const logoBaseWidth = Math.round(input.width * (standardBrandMode ? 0.24 : 0.16) * 1.8);
+  const logoBaseHeight = Math.round(input.height * (standardBrandMode ? 0.13 : 0.11) * 1.8);
   const logoMaxWidth = strategyMods
     ? Math.round(applyScale(logoBaseWidth, strategyMods.logoScaleMultiplier, 0.5, 1.6))
     : logoBaseWidth;
@@ -1021,7 +1022,7 @@ function buildOverlaySvg(input: {
   // The math below computes the target headline-TOP Y per mode, then
   // clamps it so the stack always fits between the safety bounds.
   const stackBottomMax = input.height - bottomPadding - footerHeight - ctaSlotHeight;
-  const logoMaxHeightForSafety = Math.round(input.height * (preset.brandMode === 'standard' ? 0.13 : 0.11));
+  const logoMaxHeightForSafety = Math.round(input.height * (preset.brandMode === 'standard' ? 0.13 : 0.11) * 1.8);
   const topSafetyMargin = safeMargin + 14 + logoMaxHeightForSafety + Math.round(input.height * 0.04);
   const totalStackPixelHeight = headlineBlockHeight + insightGap + insightBlockHeight + supportGap + supportBlockHeight;
   const layoutMode = (input.deckContext && typeof input.slideIndex === 'number'
@@ -1194,7 +1195,10 @@ function buildOverlaySvg(input: {
   // Carousel visual language: continuity wave is on unless the resolved
   // carouselStyle disables it. Omitted (image renders / default) → on →
   // byte-identical.
-  const renderWave = input.waveEnabled !== false;
+  // The continuity wave is a CAROUSEL decoration (it flows across slides). On a
+  // single image it's just stray "wave lines" over the photo — render it only as
+  // part of a deck.
+  const renderWave = input.waveEnabled !== false && Boolean(input.deckContext);
 
   const svg = `
     <svg width="${input.width}" height="${input.height}" viewBox="0 0 ${input.width} ${input.height}" xmlns="http://www.w3.org/2000/svg">
