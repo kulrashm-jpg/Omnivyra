@@ -897,6 +897,72 @@ export function buildStatCardSvg(input: {
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
 
+/**
+ * Quote-card image composition (opt-in via renderingContract.imageComposition='quote').
+ * A large decorative quotation mark, the quote (overlay.headline) centered, and the
+ * attribution (overlay.keyInsight) in the brand accent — an editorial quote layout distinct
+ * from the stacked overlay, so Quote / Testimonial templates read as quote cards.
+ */
+export function buildQuoteCardSvg(input: {
+  width: number;
+  height: number;
+  overlay: Record<string, string>;
+  brandKit: CreatorBrandKit;
+  fileNamePrefix: string;
+}): { svg: string; quality: OverlayQualityReport; brandPlacement: { top: number; left: number; maxWidth: number; maxHeight: number } } {
+  const { width, height, overlay, brandKit } = input;
+  const font = brandKit.typography?.fontFamily || 'Inter, Arial, sans-serif';
+  const accent = Array.isArray(brandKit.palette) && brandKit.palette.length ? brandKit.palette[0] : '#0ea5e9';
+  const cx = Math.round(width / 2);
+
+  // Strip any wrapping quotes — we render our own decorative mark.
+  const quote = compactText(overlay.headline || '').trim().replace(/^["“”'']+|["“”'']+$/g, '').trim();
+  const author = compactText(overlay.keyInsight || overlay.supportingText || '').trim();
+
+  const quoteSize = Math.round(width * 0.062);
+  const quoteLines = balanceTextLines(quote, Math.max(14, Math.floor(width / (quoteSize * 0.52))), 5);
+  const authorSize = Math.round(width * 0.03);
+  const lineH = Math.round(quoteSize * 1.32);
+  const authorGap = author ? Math.round(height * 0.055) : 0;
+  const blockH = quoteLines.length * lineH + authorGap + (author ? authorSize : 0);
+  const markSize = Math.round(width * 0.16);
+  const startY = Math.round((height - blockH) / 2);
+  const quoteTop = startY + quoteSize;
+
+  const markSvg = `<text x="${cx}" y="${startY - Math.round(markSize * 0.12)}" text-anchor="middle" fill="${accent}" font-family="Georgia, 'Times New Roman', serif" font-size="${markSize}" font-weight="700" opacity="0.9">&#8220;</text>`;
+  const quoteSvg = quoteLines.map((line, i) =>
+    `<text x="${cx}" y="${quoteTop + i * lineH}" text-anchor="middle" filter="url(#quoteShadow)" fill="#ffffff" font-family="${font}" font-size="${quoteSize}" font-weight="600">${escapeXml(line)}</text>`,
+  ).join('');
+  const authorY = quoteTop + (quoteLines.length - 1) * lineH + authorGap + authorSize;
+  const authorSvg = author
+    ? `<text x="${cx}" y="${authorY}" text-anchor="middle" fill="${accent}" font-family="${font}" font-size="${authorSize}" font-weight="700" letter-spacing="0.4">${escapeXml(/^[—–-]/.test(author) ? author : `— ${author}`)}</text>`
+    : '';
+
+  const svg =
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
+    '<defs>' +
+    '<linearGradient id="quoteScrim" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.74"/>' +
+    '<stop offset="0.5" stop-color="#0b1220" stop-opacity="0.55"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.8"/>' +
+    '</linearGradient>' +
+    '<filter id="quoteShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000000" flood-opacity="0.4"/></filter>' +
+    '</defs>' +
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="url(#quoteScrim)"/>` +
+    markSvg + quoteSvg + authorSvg +
+    '</svg>';
+
+  const flags: string[] = [];
+  if (!quote) flags.push('missing_headline');
+  const quality: OverlayQualityReport = {
+    score: quote ? 1 : 0,
+    flags,
+    text_units: quote.length + author.length,
+    preset: 'quote_card',
+  };
+  return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
+}
+
 function buildOverlaySvg(input: {
   width: number;
   height: number;
@@ -2888,6 +2954,8 @@ async function composeSingleVisualAsset(
     ? null
     : imageComposition === 'stat'
       ? buildStatCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
+      : imageComposition === 'quote'
+      ? buildQuoteCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
       : buildOverlaySvg({
           width,
           height,

@@ -172,7 +172,7 @@ const IMAGE_TEMPLATES: CreatorTemplate[] = [
         field({ key: 'author', label: 'Author / Attribution', required: false, helperText: 'Who said it (rendered under the quote).', maxLength: 60, placeholder: 'e.g. — Jane Doe, CEO' }),
       ],
     },
-    renderingContract: { renderingContractVersion: CREATOR_TEMPLATE_CONTRACT_VERSION, family: 'image', purposeKey: 'quote-image', subtype: 'quote-image', attachmentMode: 'embedded_copy', writerAssetType: 'banner' },
+    renderingContract: { renderingContractVersion: CREATOR_TEMPLATE_CONTRACT_VERSION, family: 'image', purposeKey: 'quote-image', subtype: 'quote-image', attachmentMode: 'embedded_copy', writerAssetType: 'banner', imageComposition: 'quote' },
     version: 1,
     status: 'published',
     ownership: 'system',
@@ -238,7 +238,7 @@ const IMAGE_TEMPLATES: CreatorTemplate[] = [
       field({ key: 'quote', label: 'Testimonial (Image Text)', required: true, control: 'textarea', helperText: 'The customer quote rendered inside the image.', maxLength: 180, placeholder: 'What the customer said' }),
       field({ key: 'author', label: 'Attribution', required: false, helperText: 'Name, role, company.', maxLength: 70, placeholder: '— Name, Role, Company' }),
     ] },
-    renderingContract: imageContract('quote-image'), tags: ['testimonial', 'social-proof'],
+    renderingContract: imageContract('quote-image', null, 'quote'), tags: ['testimonial', 'social-proof'],
   }),
   tpl({
     id: 'sys-image-announcement', assetFamily: 'image', name: 'Announcement', category: 'Announcement',

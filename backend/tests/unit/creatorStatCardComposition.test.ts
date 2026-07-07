@@ -4,7 +4,7 @@
  * distinct from the default stacked overlay, so a "Statistic" template actually looks
  * like a stat card. Default (no composition) is unchanged and covered elsewhere.
  */
-import { buildStatCardSvg } from '../../services/creatorAssetRenderer';
+import { buildStatCardSvg, buildQuoteCardSvg } from '../../services/creatorAssetRenderer';
 import type { CreatorBrandKit } from '../../services/creatorBrandKit';
 
 const BRAND = {
@@ -43,5 +43,36 @@ describe('buildStatCardSvg — stat-card image composition', () => {
     expect(svg).toContain('height="1350"');
     expect(quality.flags).toContain('missing_headline');
     expect(quality.score).toBe(0);
+  });
+});
+
+describe('buildQuoteCardSvg — quote-card image composition', () => {
+  it('renders the quote + attribution with a decorative mark, centered', () => {
+    const { svg, quality } = buildQuoteCardSvg({
+      width: 1080,
+      height: 1080,
+      overlay: { headline: '“Make the right thing the easy thing.”', keyInsight: '— Dr. A. Rivera, CTO' },
+      brandKit: BRAND,
+      fileNamePrefix: 'image',
+    });
+    expect(svg.startsWith('<svg')).toBe(true);
+    expect(svg).toContain('text-anchor="middle"');
+    expect(svg).toContain('&#8220;'); // decorative opening quotation mark
+    // Wrapping quotes are stripped from the quote body; tokens remain.
+    for (const token of ['Make', 'right', 'thing', 'easy']) {
+      expect(svg).toContain(token);
+    }
+    expect(svg).toContain('Rivera');
+    expect(quality.preset).toBe('quote_card');
+    expect(quality.flags).not.toContain('missing_headline');
+  });
+
+  it('prefixes an em-dash on attribution when missing', () => {
+    const { svg } = buildQuoteCardSvg({
+      width: 1080, height: 1080,
+      overlay: { headline: 'Ship less, learn more.', keyInsight: 'Jane Doe, CEO' },
+      brandKit: BRAND, fileNamePrefix: 'image',
+    });
+    expect(svg).toContain('— Jane Doe, CEO');
   });
 });
