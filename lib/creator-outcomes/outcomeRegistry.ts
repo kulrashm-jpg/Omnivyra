@@ -3,8 +3,10 @@
  *
  * THE single source of truth for the outcome-first Creator experience. Each
  * outcome groups creator templates by BUSINESS OUTCOME (what the user wants to
- * achieve) instead of implementation/format. Every one of the 61 system
- * templates maps to exactly one outcome (enforced by coverage tests).
+ * achieve) instead of implementation/format. Membership is MANY-TO-MANY: every
+ * system template belongs to at least one outcome (full coverage, no orphans), and
+ * a template MAY serve multiple outcomes so each goal offers image + carousel +
+ * infographic routes wherever that makes sense (enforced by coverage tests).
  *
  * This layer is pure data — it does NOT touch the runtime. `templateIds` are the
  * canonical membership; the mapper (outcomeTemplateMapper) feeds them into the
@@ -54,19 +56,19 @@ export const CREATOR_OUTCOMES: CreatorOutcome[] = [
     id: 'launch-product', label: 'Launch a New Product', category: 'launch-promote', funnelStage: 'decision',
     objective: 'launch a new product', description: 'Introduce a new product or feature and drive first action.',
     industries: ALL_IND, audiences: [AUD.prospects, AUD.customers], tags: ['launch', 'product', 'announcement', 'release'],
-    templateIds: { image: ['sys-image-product-highlight', 'sys-image-feature-highlight', 'sys-banner-product-launch'] },
+    templateIds: { image: ['sys-image-product-highlight', 'sys-image-feature-highlight', 'sys-banner-product-launch'], carousel: ['sys-carousel-product-walkthrough', 'sys-carousel-step-by-step', 'sys-carousel-before-after'], infographic: ['sys-infographic-product-architecture', 'sys-infographic-process'] },
   }),
   defineOutcome({
     id: 'promote-offer', label: 'Promote an Offer or Sale', category: 'launch-promote', funnelStage: 'decision',
     objective: 'promote an offer or sale', description: 'Drive conversions with a time-bound offer, discount, or promotion.',
     industries: ['marketing', 'sales', 'education', 'technology'], audiences: [AUD.prospects, AUD.customers], tags: ['promotion', 'sale', 'offer', 'discount'],
-    templateIds: { image: ['sys-image-promotion', 'sys-banner-sale'] },
+    templateIds: { image: ['sys-image-promotion', 'sys-banner-sale'], carousel: ['sys-carousel-listicle', 'sys-carousel-tips'], infographic: ['sys-infographic-statistics', 'sys-infographic-comparison'] },
   }),
   defineOutcome({
     id: 'promote-event', label: 'Promote an Event', category: 'launch-promote', funnelStage: 'decision',
     objective: 'promote an event or webinar', description: 'Fill seats for a webinar, event, or live session.',
     industries: ALL_IND, audiences: [AUD.prospects, AUD.practitioners], tags: ['event', 'webinar', 'register', 'rsvp'],
-    templateIds: { image: ['sys-image-event', 'sys-banner-event', 'sys-banner-webinar'] },
+    templateIds: { image: ['sys-image-event', 'sys-banner-event', 'sys-banner-webinar'], carousel: ['sys-carousel-step-by-step', 'sys-carousel-timeline'], infographic: ['sys-infographic-timeline', 'sys-infographic-roadmap'] },
   }),
   defineOutcome({
     id: 'generate-leads', label: 'Generate Leads', category: 'launch-promote', funnelStage: 'decision',
@@ -78,7 +80,7 @@ export const CREATOR_OUTCOMES: CreatorOutcome[] = [
     id: 'announce-news', label: 'Announce News', category: 'launch-promote', funnelStage: 'awareness',
     objective: 'announce news or an update', description: 'Share an announcement, milestone, or company news with reach.',
     industries: ALL_IND, audiences: [AUD.customers, AUD.prospects], tags: ['announcement', 'news', 'update'],
-    templateIds: { image: ['sys-image-announcement', 'sys-image-hero-announcement'] },
+    templateIds: { image: ['sys-image-announcement', 'sys-image-hero-announcement'], carousel: ['sys-carousel-storytelling-7', 'sys-carousel-thought-leadership'], infographic: ['sys-infographic-timeline'] },
   }),
 
   // ── B · Educate & Explain (consideration) ────────────────────────────────
@@ -86,7 +88,7 @@ export const CREATOR_OUTCOMES: CreatorOutcome[] = [
     id: 'educate-audience', label: 'Educate Your Audience', category: 'educate-explain', funnelStage: 'consideration',
     objective: 'educate the audience on a concept', description: 'Teach a concept clearly with a guided, skimmable arc.',
     industries: ALL_IND, audiences: [AUD.practitioners, AUD.prospects], tags: ['educational', 'teach', 'explainer', 'concept'],
-    templateIds: { carousel: ['sys-carousel-educational-5'] },
+    templateIds: { carousel: ['sys-carousel-educational-5'], infographic: ['sys-infographic-process', 'sys-infographic-framework', 'sys-infographic-cycle'] },
   }),
   defineOutcome({
     id: 'explain-process', label: 'Explain a Process or How-To', category: 'educate-explain', funnelStage: 'consideration',
@@ -104,13 +106,13 @@ export const CREATOR_OUTCOMES: CreatorOutcome[] = [
     id: 'tips-and-mistakes', label: 'Share Tips & Common Mistakes', category: 'educate-explain', funnelStage: 'consideration',
     objective: 'share tips and common mistakes', description: 'Deliver quick, practical value with tips, checklists, or pitfalls to avoid.',
     industries: ALL_IND, audiences: [AUD.practitioners], tags: ['tips', 'mistakes', 'checklist', 'listicle', 'advice'],
-    templateIds: { image: ['sys-image-tip-card', 'sys-image-checklist'], carousel: ['sys-carousel-tips', 'sys-carousel-mistakes', 'sys-carousel-checklist-10', 'sys-carousel-listicle'] },
+    templateIds: { image: ['sys-image-tip-card', 'sys-image-checklist'], carousel: ['sys-carousel-tips', 'sys-carousel-mistakes', 'sys-carousel-checklist-10', 'sys-carousel-listicle'], infographic: ['sys-infographic-comparison', 'sys-infographic-framework'] },
   }),
   defineOutcome({
     id: 'answer-faqs', label: 'Answer Common Questions', category: 'educate-explain', funnelStage: 'consideration',
     objective: 'answer frequently asked questions', description: 'Address the questions prospects ask most, in a clear Q&A.',
     industries: ALL_IND, audiences: [AUD.prospects, AUD.customers], tags: ['faq', 'questions', 'answers'],
-    templateIds: { carousel: ['sys-carousel-faq'] },
+    templateIds: { carousel: ['sys-carousel-faq'], infographic: ['sys-infographic-decision-tree', 'sys-infographic-framework'] },
   }),
   defineOutcome({
     id: 'present-framework', label: 'Present a Framework or Model', category: 'educate-explain', funnelStage: 'consideration',
@@ -124,25 +126,25 @@ export const CREATOR_OUTCOMES: CreatorOutcome[] = [
     id: 'industry-insight', label: 'Share an Industry Insight', category: 'build-authority', funnelStage: 'awareness',
     objective: 'share an industry insight or point of view', description: 'Build authority with a sharp point of view or expert quote.',
     industries: ALL_IND, audiences: [AUD.execs, AUD.practitioners], tags: ['insight', 'thought-leadership', 'pov', 'quote'],
-    templateIds: { image: ['sys-image-thought-leadership', 'sys-image-quote-author'], carousel: ['sys-carousel-thought-leadership'] },
+    templateIds: { image: ['sys-image-thought-leadership', 'sys-image-quote-author'], carousel: ['sys-carousel-thought-leadership'], infographic: ['sys-infographic-statistics', 'sys-infographic-kpi-dashboard', 'sys-infographic-framework'] },
   }),
   defineOutcome({
     id: 'bust-a-myth', label: 'Bust a Myth', category: 'build-authority', funnelStage: 'awareness',
     objective: 'correct a common misconception', description: 'Challenge a common misconception with a clear myth-vs-fact.',
     industries: ALL_IND, audiences: [AUD.prospects, AUD.practitioners], tags: ['myth', 'fact', 'misconception', 'truth'],
-    templateIds: { image: ['sys-image-myth-fact'] },
+    templateIds: { image: ['sys-image-myth-fact'], carousel: ['sys-carousel-mistakes', 'sys-carousel-comparison'], infographic: ['sys-infographic-comparison', 'sys-infographic-matrix'] },
   }),
   defineOutcome({
     id: 'highlight-statistic', label: 'Highlight a Statistic', category: 'build-authority', funnelStage: 'awareness',
     objective: 'highlight a key statistic or data point', description: 'Lead with a striking number to earn attention and trust.',
     industries: ALL_IND, audiences: [AUD.execs, AUD.prospects], tags: ['statistic', 'data', 'number', 'metric'],
-    templateIds: { image: ['sys-image-statistic'], infographic: ['sys-infographic-statistics', 'sys-infographic-kpi-dashboard'] },
+    templateIds: { image: ['sys-image-statistic'], carousel: ['sys-carousel-educational-5', 'sys-carousel-tips'], infographic: ['sys-infographic-statistics', 'sys-infographic-kpi-dashboard'] },
   }),
   defineOutcome({
     id: 'brand-awareness', label: 'Build Brand Awareness', category: 'build-authority', funnelStage: 'awareness',
     objective: 'build brand awareness', description: 'Reinforce your brand identity with a polished, on-brand statement.',
     industries: ALL_IND, audiences: [AUD.prospects, AUD.customers], tags: ['brand', 'identity', 'awareness', 'style'],
-    templateIds: { image: ['sys-image-minimal-brand-card', 'sys-image-logo-only', 'sys-image-premium-luxury', 'sys-image-corporate', 'sys-image-modern-tech', 'sys-image-creative', 'sys-image-clean-editorial', 'sys-image-bold-marketing', 'sys-image-headline', 'sys-banner-website-hero'] },
+    templateIds: { image: ['sys-image-minimal-brand-card', 'sys-image-logo-only', 'sys-image-premium-luxury', 'sys-image-corporate', 'sys-image-modern-tech', 'sys-image-creative', 'sys-image-clean-editorial', 'sys-image-bold-marketing', 'sys-image-headline', 'sys-banner-website-hero'], carousel: ['sys-carousel-thought-leadership', 'sys-carousel-storytelling-7'] },
   }),
 
   // ── D · Prove Trust & Results (decision / retention) ─────────────────────
@@ -150,7 +152,7 @@ export const CREATOR_OUTCOMES: CreatorOutcome[] = [
     id: 'increase-trust', label: 'Increase Trust', category: 'prove-trust', funnelStage: 'decision',
     objective: 'increase trust with social proof', description: 'Earn confidence with a customer testimonial or proof point.',
     industries: ALL_IND, audiences: [AUD.prospects, AUD.execs], tags: ['testimonial', 'trust', 'social-proof', 'review'],
-    templateIds: { image: ['sys-image-testimonial'] },
+    templateIds: { image: ['sys-image-testimonial'], carousel: ['sys-carousel-case-study', 'sys-carousel-customer-journey'], infographic: ['sys-infographic-statistics'] },
   }),
   defineOutcome({
     id: 'customer-success', label: 'Tell a Customer Success Story', category: 'prove-trust', funnelStage: 'decision',
@@ -162,13 +164,13 @@ export const CREATOR_OUTCOMES: CreatorOutcome[] = [
     id: 'show-transformation', label: 'Show a Transformation', category: 'prove-trust', funnelStage: 'consideration',
     objective: 'show a before-and-after transformation', description: 'Make impact tangible with a before / after contrast.',
     industries: ALL_IND, audiences: [AUD.prospects, AUD.customers], tags: ['before-after', 'transformation', 'results', 'change'],
-    templateIds: { image: ['sys-image-before-after'], carousel: ['sys-carousel-before-after', 'sys-carousel-problem-solution', 'sys-carousel-transformation'] },
+    templateIds: { image: ['sys-image-before-after'], carousel: ['sys-carousel-before-after', 'sys-carousel-problem-solution', 'sys-carousel-transformation'], infographic: ['sys-infographic-process', 'sys-infographic-lifecycle', 'sys-infographic-timeline'] },
   }),
   defineOutcome({
     id: 'celebrate-milestone', label: 'Celebrate a Milestone', category: 'prove-trust', funnelStage: 'awareness',
     objective: 'celebrate a milestone or thank customers', description: 'Mark a milestone or thank your community.',
     industries: ALL_IND, audiences: [AUD.customers], tags: ['milestone', 'celebrate', 'thank-you', 'anniversary'],
-    templateIds: { image: ['sys-image-milestone', 'sys-image-thank-you'] },
+    templateIds: { image: ['sys-image-milestone', 'sys-image-thank-you'], carousel: ['sys-carousel-timeline', 'sys-carousel-storytelling-7'], infographic: ['sys-infographic-timeline', 'sys-infographic-roadmap'] },
   }),
 
   // ── E · Company & Culture (awareness) ────────────────────────────────────
@@ -176,19 +178,19 @@ export const CREATOR_OUTCOMES: CreatorOutcome[] = [
     id: 'hiring', label: 'Hire & Recruit', category: 'company-culture', funnelStage: 'awareness',
     objective: 'attract candidates and recruit', description: 'Attract talent with a clear, branded hiring announcement.',
     industries: ALL_IND, audiences: [AUD.candidates], tags: ['hiring', 'recruit', 'jobs', 'careers'],
-    templateIds: { image: ['sys-banner-hiring'] },
+    templateIds: { image: ['sys-banner-hiring'], carousel: ['sys-carousel-storytelling-7', 'sys-carousel-step-by-step'], infographic: ['sys-infographic-org-structure', 'sys-infographic-process'] },
   }),
   defineOutcome({
     id: 'behind-the-scenes', label: 'Show Behind the Scenes', category: 'company-culture', funnelStage: 'awareness',
     objective: 'humanize the brand with behind-the-scenes', description: 'Humanize your brand with a behind-the-scenes moment.',
     industries: ALL_IND, audiences: [AUD.customers, AUD.candidates], tags: ['culture', 'behind-the-scenes', 'team', 'human'],
-    templateIds: { image: ['sys-image-behind-the-scenes'] },
+    templateIds: { image: ['sys-image-behind-the-scenes'], carousel: ['sys-carousel-storytelling-7', 'sys-carousel-customer-journey'], infographic: ['sys-infographic-process', 'sys-infographic-workflow'] },
   }),
   defineOutcome({
     id: 'company-update', label: 'Share a Company Update', category: 'company-culture', funnelStage: 'awareness',
     objective: 'share a company update', description: 'Keep your audience informed with a clean company update.',
     industries: ALL_IND, audiences: [AUD.customers, AUD.execs], tags: ['update', 'company', 'news'],
-    templateIds: { image: ['sys-image-company-update'] },
+    templateIds: { image: ['sys-image-company-update'], carousel: ['sys-carousel-timeline', 'sys-carousel-thought-leadership'], infographic: ['sys-infographic-timeline', 'sys-infographic-roadmap'] },
   }),
 
   // ── F · Plan & Structure (consideration) ─────────────────────────────────

@@ -8,20 +8,17 @@ const allSystemIds = FAMILIES.flatMap((f) => SYSTEM_TEMPLATES[f].map((t) => t.id
 const allMappedIds = CREATOR_OUTCOMES.flatMap((o) => FAMILIES.flatMap((f) => o.templateIds[f] ?? []));
 
 describe('CREATOR-044 — Outcome registry coverage (STEP 8)', () => {
-  it('every system template belongs to EXACTLY one outcome', () => {
+  it('every system template belongs to AT LEAST one outcome (many-to-many; no orphans, no phantoms)', () => {
     const counts = new Map<string, number>();
     for (const id of allMappedIds) counts.set(id, (counts.get(id) ?? 0) + 1);
-    // No duplicate mappings.
-    const duplicated = [...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id);
-    expect(duplicated).toEqual([]);
-    // No orphan templates — every system id is mapped.
+    // Many-to-many membership: a template MAY serve multiple outcomes (no duplicate ban).
+    // No orphan templates — every system id is mapped to at least one outcome (full coverage).
     const orphans = allSystemIds.filter((id) => !counts.has(id));
     expect(orphans).toEqual([]);
     // No phantom mappings — every mapped id is a real system template.
     const phantom = allMappedIds.filter((id) => !allSystemIds.includes(id));
     expect(phantom).toEqual([]);
-    // Exact bijection of counts.
-    expect(allMappedIds.length).toBe(allSystemIds.length);
+    // Coverage: the set of mapped ids exactly equals the set of system ids (no orphan, no phantom).
     expect(new Set(allMappedIds).size).toBe(allSystemIds.length);
   });
 
@@ -57,9 +54,15 @@ describe('CREATOR-044 — Outcome registry coverage (STEP 8)', () => {
         expect(a!.templateId).toBe(b!.templateId);           // deterministic
       }
     }
-    // Unsupported family → null (never a wrong-family template).
-    const imageOnly = listOutcomes().find((o) => !o.supportedFamilies.includes('carousel'))!;
-    expect(resolveOutcomeTemplate(imageOnly.id, 'carousel')).toBeNull();
+    // Unsupported family → null (never a wrong-family template). Robust to many-to-many:
+    // assert for EVERY (outcome, family) pair the outcome does not support.
+    for (const o of listOutcomes()) {
+      for (const f of FAMILIES) {
+        if (!o.supportedFamilies.includes(f)) {
+          expect(resolveOutcomeTemplate(o.id, f)).toBeNull();
+        }
+      }
+    }
     // Default fallback id is a member of the outcome.
     for (const o of listOutcomes()) {
       for (const f of o.supportedFamilies) {
