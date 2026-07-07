@@ -352,15 +352,38 @@ function resolveImageRenderStyle(metadata: Record<string, unknown>): ImageStyleS
   return resolveTemplate(templateIdForRender(metadata), { family: 'image' }).imageStyle as ImageStyleSchema;
 }
 /**
- * Per-template IMAGE composition (additive). Returns the template's opt-in
- * `renderingContract.imageComposition` (e.g. 'stat') when a system image template is in
- * flight, else null → the default stacked overlay path (byte-identical). Only image-family
- * templates can carry it, so carousel/infographic renders always resolve null.
+ * Blueprint id → image composition. Both the goal-named BLUEPRINT templates
+ * (sys-image-before-after) and their CURATED style variants (sys-curated-before-after-image)
+ * derive from the same blueprint, so map the composition by blueprint id — the curated variant
+ * doesn't carry the renderingContract.imageComposition the blueprint template def sets.
  */
-function resolveImageComposition(metadata: Record<string, unknown>): string | null {
+const BLUEPRINT_IMAGE_COMPOSITION: Readonly<Record<string, string>> = {
+  'before-after': 'split',
+  'myth-fact': 'split',
+  comparison: 'two-column',
+  checklist: 'list',
+  statistic: 'stat',
+  quote: 'quote',
+  testimonial: 'quote',
+};
+
+/**
+ * Per-template IMAGE composition (additive). Resolves the composition from (1) the template's
+ * explicit renderingContract.imageComposition, then (2) the blueprint id — via the curated
+ * template id (sys-curated-<blueprint>-image) or metadata.blueprint_id — so curated style
+ * variants get the same composition as their blueprint. Null → the default stacked overlay.
+ */
+export function resolveImageComposition(metadata: Record<string, unknown>): string | null {
   const tid = templateIdForRender(metadata);
-  if (!tid) return null;
-  return resolveTemplate(tid, { family: 'image' }).template?.renderingContract?.imageComposition ?? null;
+  if (tid) {
+    const explicit = resolveTemplate(tid, { family: 'image' }).template?.renderingContract?.imageComposition;
+    if (explicit) return explicit;
+    const curated = /^sys-curated-(.+)-image$/.exec(tid);
+    if (curated && BLUEPRINT_IMAGE_COMPOSITION[curated[1]]) return BLUEPRINT_IMAGE_COMPOSITION[curated[1]];
+  }
+  const bp = blueprintIdForRender(metadata);
+  if (bp && BLUEPRINT_IMAGE_COMPOSITION[bp]) return BLUEPRINT_IMAGE_COMPOSITION[bp];
+  return null;
 }
 /**
  * Aesthetic style id for an image template (Corporate / Luxury / Bold / …). Only the style
