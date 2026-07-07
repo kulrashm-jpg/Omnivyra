@@ -82,6 +82,42 @@ export function listTemplatesForFamily(family: TemplateAssetFamily): CreatorTemp
   return [...SYSTEM_TEMPLATES[family]];
 }
 
+/* Curated STYLE pool (sys-curated-*), lazily loaded via require to avoid the static import
+ * cycle this barrel deliberately dodges (see materializeCuratedById). Grouped by family once. */
+let curatedByFamilyCache: Map<string, CreatorTemplate[]> | null = null;
+function curatedTemplatesForFamily(family: TemplateAssetFamily): CreatorTemplate[] {
+  if (!curatedByFamilyCache) {
+    curatedByFamilyCache = new Map();
+    try {
+      const { CURATED_SYSTEM_TEMPLATES } =
+        require('../creator-outcomes/curatedSystemTemplates') as typeof import('../creator-outcomes/curatedSystemTemplates');
+      for (const t of CURATED_SYSTEM_TEMPLATES) {
+        const arr = curatedByFamilyCache.get(t.assetFamily) ?? [];
+        arr.push(t);
+        curatedByFamilyCache.set(t.assetFamily, arr);
+      }
+    } catch {
+      /* curated pool unavailable (e.g. gallery JSON absent) → blueprint only */
+    }
+  }
+  return curatedByFamilyCache.get(family) ?? [];
+}
+
+/** The curated STYLE templates for a family (aesthetic pool, e.g. Corporate / Luxury). */
+export function listCuratedTemplatesForFamily(family: TemplateAssetFamily): CreatorTemplate[] {
+  return [...curatedTemplatesForFamily(family)];
+}
+
+/**
+ * The FULL system library for a family — the goal-named BLUEPRINT set (structural) plus the
+ * curated STYLE pool (aesthetic), so both are reachable from one place. `listTemplatesForFamily`
+ * stays blueprint-only (its tested contract); this is the additive superset for surfaces that
+ * want the complete library. Curated appended after blueprint (order preserved).
+ */
+export function listAllTemplatesForFamily(family: TemplateAssetFamily): CreatorTemplate[] {
+  return [...SYSTEM_TEMPLATES[family], ...curatedTemplatesForFamily(family)];
+}
+
 /** Distinct categories present for a family, in first-seen order. */
 export function listCategoriesForFamily(family: TemplateAssetFamily): TemplateCategory[] {
   const seen = new Set<string>();

@@ -6,6 +6,7 @@ import PageLoader from '../../../../components/PageLoader';
 import {
   familyForCreatorType,
   listTemplatesForFamily,
+  listAllTemplatesForFamily,
   resolveTemplate,
   registerUserTemplates,
   resolveAutoSelection,
@@ -364,7 +365,11 @@ export default function CreatorTemplateGalleryPage() {
 
   // System + user templates merged into ONE list (same model, same gallery),
   // then scoped by the ownership filter (All / System / My Templates / Shared).
-  const merged = [...listTemplatesForFamily(family), ...userTemplates];
+  // System = the goal-named BLUEPRINT set PLUS the curated STYLE pool (item 3a) so both are
+  // reachable/searchable from the library, not just the separate Sample Gallery. The blueprint-
+  // only `listTemplatesForFamily` (and its contract test + the structural auto-preselect above)
+  // is unchanged.
+  const merged = [...listAllTemplatesForFamily(family), ...userTemplates];
   const myId = user?.userId;
   const scoped = ownerScope === 'system' ? merged.filter((t) => t.ownership === 'system')
     : ownerScope === 'mine' ? merged.filter((t) => t.ownership === 'user' && (t.metadata as Record<string, unknown> | undefined)?.ownerUserId === myId)
