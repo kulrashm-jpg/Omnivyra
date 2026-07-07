@@ -164,6 +164,14 @@ export interface TemplateRenderingContract {
   subtype?: string | null;
   /** Maps onto creator_card.infographic_layout (existing infographic layouts). */
   infographicLayout?: string | null;
+  /**
+   * Per-template IMAGE composition (additive, opt-in). When set, the image renderer
+   * dispatches to a dedicated composition (e.g. 'stat' = a big centered figure card)
+   * instead of the default stacked headline/sub/cta overlay — so image templates with
+   * distinct intents render structurally differently. Omitted/null → the existing
+   * generic overlay, byte-identical.
+   */
+  imageComposition?: string | null;
   /** Maps onto creator_card.attachment_mode (text-in-image vs clean visual). */
   attachmentMode?: 'embedded_copy' | 'supporting_visual';
   /**

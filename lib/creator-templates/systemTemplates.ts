@@ -86,8 +86,8 @@ function titleDescSection(sectionLabel: string, titleLabel: string, descLabel: s
 
 const V = CREATOR_TEMPLATE_CONTRACT_VERSION;
 /** Text-image / banner rendering contract (embedded copy, banner lane). */
-function imageContract(purposeKey: string, subtype: string | null = null): TemplateRenderingContract {
-  return { renderingContractVersion: V, family: 'image', purposeKey, subtype: subtype ?? purposeKey, attachmentMode: 'embedded_copy', writerAssetType: 'banner' };
+function imageContract(purposeKey: string, subtype: string | null = null, imageComposition: string | null = null): TemplateRenderingContract {
+  return { renderingContractVersion: V, family: 'image', purposeKey, subtype: subtype ?? purposeKey, attachmentMode: 'embedded_copy', writerAssetType: 'banner', imageComposition };
 }
 /** Common scaffold for a published system template (trims per-entry boilerplate). */
 function tpl(t: Omit<CreatorTemplate, 'version' | 'status' | 'ownership' | 'metadata' | 'preview'> & { preview?: CreatorTemplate['preview'] }): CreatorTemplate {
@@ -219,7 +219,7 @@ const IMAGE_TEMPLATES: CreatorTemplate[] = [
     visualLanguage: { densityBias: 'minimal', brandingIntensity: 'subtle', typographyWeight: 'feature', accent: '#0ea5e9', surface: '#0b1220' },
     preview: { thumbnailUrl: null, sampleAssetUrl: null, sample: { headline: '92% faster onboarding', subheadline: 'after switching to automated routing' } },
     formDefinition: { fields: headlineForm({ maxHeadline: 40, subLabel: 'Context (what the number means)' }) },
-    renderingContract: imageContract('educational-image'), tags: ['stat', 'data'],
+    renderingContract: imageContract('educational-image', null, 'stat'), tags: ['stat', 'data'],
   }),
   tpl({
     id: 'sys-image-product-highlight', assetFamily: 'image', name: 'Product Highlight', category: 'Product',

@@ -350,6 +350,17 @@ function resolveInfographicRenderStyle(metadata: Record<string, unknown>): Infog
 function resolveImageRenderStyle(metadata: Record<string, unknown>): ImageStyleSchema {
   return resolveTemplate(templateIdForRender(metadata), { family: 'image' }).imageStyle as ImageStyleSchema;
 }
+/**
+ * Per-template IMAGE composition (additive). Returns the template's opt-in
+ * `renderingContract.imageComposition` (e.g. 'stat') when a system image template is in
+ * flight, else null → the default stacked overlay path (byte-identical). Only image-family
+ * templates can carry it, so carousel/infographic renders always resolve null.
+ */
+function resolveImageComposition(metadata: Record<string, unknown>): string | null {
+  const tid = templateIdForRender(metadata);
+  if (!tid) return null;
+  return resolveTemplate(tid, { family: 'image' }).template?.renderingContract?.imageComposition ?? null;
+}
 function resolveCarouselRenderStyle(metadata: Record<string, unknown>): CarouselStyleSchema {
   return resolveTemplate(templateIdForRender(metadata), { family: 'carousel' }).carouselStyle as CarouselStyleSchema;
 }
@@ -807,6 +818,83 @@ function evaluateOverlayQuality(input: {
     text_units: textUnits,
     preset: input.preset.name,
   };
+}
+
+/**
+ * Stat-card image composition (additive, opt-in via renderingContract.imageComposition='stat').
+ * Renders a big centered figure (overlay.headline) over a legibility scrim, a one-line context
+ * (overlay.supportingText), an accent rule, and an optional CTA — structurally distinct from the
+ * default stacked headline/sub/cta overlay, so a "Statistic" template actually reads as a stat
+ * card. Returns the same { svg, brandPlacement } shape buildOverlaySvg's consumers use.
+ */
+export function buildStatCardSvg(input: {
+  width: number;
+  height: number;
+  overlay: Record<string, string>;
+  brandKit: CreatorBrandKit;
+  fileNamePrefix: string;
+}): { svg: string; quality: OverlayQualityReport; brandPlacement: { top: number; left: number; maxWidth: number; maxHeight: number } } {
+  const { width, height, overlay, brandKit } = input;
+  const font = brandKit.typography?.fontFamily || 'Inter, Arial, sans-serif';
+  const accent = Array.isArray(brandKit.palette) && brandKit.palette.length ? brandKit.palette[0] : '#0ea5e9';
+  const cx = Math.round(width / 2);
+
+  const stat = compactText(overlay.headline || '').trim();
+  const context = compactText(overlay.supportingText || overlay.keyInsight || '').trim();
+  const cta = compactText(overlay.cta || '').trim();
+
+  const statSize = Math.round(width * 0.135);
+  const statLines = balanceTextLines(stat, Math.max(6, Math.floor(width / (statSize * 0.62))), 2);
+  const ctxSize = Math.round(width * 0.033);
+  const ctxLines = context ? balanceTextLines(context, Math.max(18, Math.floor(width / (ctxSize * 0.56))), 3) : [];
+
+  const statLineH = Math.round(statSize * 1.04);
+  const ctxLineH = Math.round(ctxSize * 1.4);
+  const gap = ctxLines.length ? Math.round(height * 0.03) : 0;
+  const blockH = statLines.length * statLineH + gap + ctxLines.length * ctxLineH;
+  const firstBaseline = Math.round((height - blockH) / 2 + statSize * 0.78);
+
+  const ruleW = Math.round(width * 0.12);
+  const ruleY = Math.round((height - blockH) / 2 - height * 0.022);
+  const ruleSvg = `<rect x="${cx - Math.round(ruleW / 2)}" y="${ruleY}" width="${ruleW}" height="6" rx="3" fill="${accent}"/>`;
+
+  const statSvg = statLines.map((line, i) =>
+    `<text x="${cx}" y="${firstBaseline + i * statLineH}" text-anchor="middle" filter="url(#statShadow)" fill="#ffffff" font-family="${font}" font-size="${statSize}" font-weight="900" letter-spacing="-1">${escapeXml(line)}</text>`,
+  ).join('');
+
+  const ctxTop = firstBaseline + (statLines.length - 1) * statLineH + gap + ctxSize;
+  const ctxSvg = ctxLines.map((line, i) =>
+    `<text x="${cx}" y="${ctxTop + i * ctxLineH}" text-anchor="middle" fill="rgba(255,255,255,0.92)" font-family="${font}" font-size="${ctxSize}" font-weight="500">${escapeXml(line)}</text>`,
+  ).join('');
+
+  const ctaSize = Math.round(width * 0.028);
+  const ctaSvg = cta
+    ? `<text x="${cx}" y="${Math.round(height * 0.93)}" text-anchor="middle" fill="${accent}" font-family="${font}" font-size="${ctaSize}" font-weight="700" letter-spacing="0.5">${escapeXml(cta)} →</text>`
+    : '';
+
+  const svg =
+    `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
+    '<defs>' +
+    '<linearGradient id="statScrim" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.72"/>' +
+    '<stop offset="0.5" stop-color="#0b1220" stop-opacity="0.5"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.78"/>' +
+    '</linearGradient>' +
+    '<filter id="statShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#000000" flood-opacity="0.45"/></filter>' +
+    '</defs>' +
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="url(#statScrim)"/>` +
+    ruleSvg + statSvg + ctxSvg + ctaSvg +
+    '</svg>';
+
+  const flags: string[] = [];
+  if (!stat) flags.push('missing_headline');
+  const quality: OverlayQualityReport = {
+    score: stat ? 1 : 0,
+    flags,
+    text_units: stat.length + context.length + cta.length,
+    preset: 'stat_card',
+  };
+  return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
 
 function buildOverlaySvg(input: {
@@ -2792,20 +2880,26 @@ async function composeSingleVisualAsset(
         modifiers: _composeVariantOnto(renderStrategyRaw.modifiers, variantProfile),
       }
     : renderStrategyRaw;
+  // Additive per-template composition: when the image template opts into a dedicated
+  // composition (renderingContract.imageComposition), dispatch to it; otherwise the default
+  // stacked overlay, byte-identical. Only image templates carry a composition.
+  const imageComposition = resolveImageComposition(metadata);
   const overlayRender = skipOverlayComposite
     ? null
-    : buildOverlaySvg({
-        width,
-        height,
-        overlay: governedOverlay,
-        brandKit,
-        platform,
-        fileNamePrefix,
-        subtypeHint,
-        renderStrategy,
-        // Image/banner overlay base resolved via the canonical resolveTemplate().
-        imageStyle: resolveImageRenderStyle(metadata),
-      });
+    : imageComposition === 'stat'
+      ? buildStatCardSvg({ width, height, overlay: governedOverlay, brandKit, fileNamePrefix })
+      : buildOverlaySvg({
+          width,
+          height,
+          overlay: governedOverlay,
+          brandKit,
+          platform,
+          fileNamePrefix,
+          subtypeHint,
+          renderStrategy,
+          // Image/banner overlay base resolved via the canonical resolveTemplate().
+          imageStyle: resolveImageRenderStyle(metadata),
+        });
   const brandPlacement = overlayRender?.brandPlacement
     ?? defaultBrandPlacement({ width, height, fileNamePrefix });
   const brandMark = await loadBrandMark({ brandKit, placement: brandPlacement });
