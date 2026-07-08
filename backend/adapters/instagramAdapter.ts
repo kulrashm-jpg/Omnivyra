@@ -32,14 +32,23 @@ import axios from 'axios';
 import type { PublishResult } from './platformAdapterTypes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
+import { generateHostedBrandedCover } from './mediaCover';
 
 interface ScheduledPost {
   id: string;
   platform: string;
   content: string;
+  title?: string;
   hashtags?: string[];
   media_urls?: string[];
   scheduled_for: string;
+  publish_settings?: Record<string, any> | null; // generic per-platform options
+}
+
+interface InstagramReelOptions {
+  coverUrl?: string;        // custom cover image URL (branded/user)
+  thumbOffsetMs?: number;   // cover frame offset (ms) when no cover image
+  shareToFeed: boolean;     // also show the Reel in the main feed
 }
 
 interface SocialAccount {
@@ -97,15 +106,22 @@ async function uploadVideoToInstagram(
   videoUrl: string,
   caption: string,
   instagramAccountId: string,
-  token: Token
+  token: Token,
+  options: InstagramReelOptions,
 ): Promise<{ container_id: string }> {
-  // Step 1: Create media container for video
+  // Step 1: Create media container for video (Reel), with cover + feed options.
   const containerUrl = `https://graph.facebook.com/v22.0/${instagramAccountId}/media`;
-  
+
   const containerResponse = await axios.post(containerUrl, {
     media_type: 'REELS', // or 'VIDEO' for regular posts
     video_url: videoUrl,
     caption: caption,
+    share_to_feed: options.shareToFeed,
+    // A custom cover image wins; otherwise pick a frame offset if provided.
+    ...(options.coverUrl ? { cover_url: options.coverUrl } : {}),
+    ...(!options.coverUrl && Number.isFinite(options.thumbOffsetMs)
+      ? { thumb_offset: Math.max(0, Math.trunc(options.thumbOffsetMs as number)) }
+      : {}),
   }, {
     headers: {
       Authorization: `Bearer ${token.access_token}`,
@@ -233,12 +249,32 @@ export async function publishToInstagram(
 
     // Upload media and get container ID
     if (isVideo) {
+      // Reel options from publish_settings.instagram: cover mode
+      // (branded | frame | auto), cover frame time, share-to-feed.
+      const igSettings = (post.publish_settings && typeof post.publish_settings === 'object'
+        ? (post.publish_settings as any).instagram : null) || {};
+      const coverMode = String(igSettings.cover ?? '').toLowerCase();
+      const coverTimeMs = Number(igSettings.cover_time_ms);
+      let coverUrl: string | undefined;
+      if (coverMode === 'branded') {
+        // Deterministic branded cover, hosted publicly. Non-fatal — falls back
+        // to a frame / auto cover if generation or hosting fails.
+        const generated = await generateHostedBrandedCover(post.title || caption, { companyName: account.username });
+        if (generated) coverUrl = generated;
+      } else if (typeof igSettings.cover_url === 'string' && igSettings.cover_url.trim()) {
+        coverUrl = igSettings.cover_url.trim();
+      }
       // Video upload (requires processing time)
       const result = await uploadVideoToInstagram(
         firstMediaUrl,
         caption,
         instagramAccountId,
-        token
+        token,
+        {
+          coverUrl,
+          thumbOffsetMs: Number.isFinite(coverTimeMs) ? coverTimeMs : undefined,
+          shareToFeed: igSettings.share_to_feed !== false, // default: also share to feed
+        },
       );
       containerId = result.container_id;
     } else {

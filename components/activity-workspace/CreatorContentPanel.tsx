@@ -1465,6 +1465,15 @@ export default function CreatorContentPanel({
       cover_time_ms: Number.isFinite(s.cover_time_ms) ? Number(s.cover_time_ms) : 1000,
     };
   });
+  // Per-video Instagram Reel options (cover mode + frame + share-to-feed).
+  const [instagram, setInstagram] = useState<{ cover: 'branded' | 'frame' | 'auto'; cover_time_ms: number; share_to_feed: boolean }>(() => {
+    const s = ((creatorAsset as { publish_settings?: { instagram?: any } })?.publish_settings?.instagram) || {};
+    return {
+      cover: s.cover === 'branded' || s.cover === 'frame' ? s.cover : 'auto',
+      cover_time_ms: Number.isFinite(s.cover_time_ms) ? Number(s.cover_time_ms) : 1000,
+      share_to_feed: s.share_to_feed !== false,
+    };
+  });
   // Per-platform video mapping rows (platform + format + url + title). Seeded
   // from the richer platform_video_mappings, else from legacy platform_videos
   // (one row per platform, default format) for backward compatibility.
@@ -1633,7 +1642,7 @@ export default function CreatorContentPanel({
         uploaded_by: { user_id: uploadedById, name: uploadedByName || undefined },
         video_mode: videoMode,
         youtube_visibility: youtubeVisibility, // per-video YouTube privacy (read by the scheduler)
-        publish_settings: { tiktok }, // generic per-platform publish options (read by the scheduler)
+        publish_settings: { tiktok, instagram }, // generic per-platform publish options (read by the scheduler)
         ...(platform_videos ? { platform_videos } : {}),
         ...(platform_video_mappings ? { platform_video_mappings } : {}),
         ...(platform_videos
@@ -1946,6 +1955,29 @@ export default function CreatorContentPanel({
                     </label>
                   </div>
                   <p className="text-[10px] text-gray-400 mt-0.5">Applies when this video publishes to TikTok.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Instagram Reel cover &amp; feed</label>
+                  <select
+                    value={instagram.cover}
+                    onChange={(e) => setInstagram((i) => ({ ...i, cover: e.target.value as 'branded' | 'frame' | 'auto' }))}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-400 bg-white"
+                  >
+                    <option value="auto">Auto cover (Instagram picks a frame)</option>
+                    <option value="branded">Branded cover (auto-generated)</option>
+                    <option value="frame">Frame at a chosen time</option>
+                  </select>
+                  <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-gray-600">
+                    {instagram.cover === 'frame' && (
+                      <label className="inline-flex items-center gap-1">Cover at
+                        <input type="number" min={0} step={0.5} value={instagram.cover_time_ms / 1000}
+                          onChange={(e) => setInstagram((i) => ({ ...i, cover_time_ms: Math.max(0, Math.round(Number(e.target.value) * 1000)) }))}
+                          className="w-14 px-1 py-0.5 text-xs border border-gray-300 rounded" /> s
+                      </label>
+                    )}
+                    <label className="inline-flex items-center gap-1"><input type="checkbox" checked={instagram.share_to_feed} onChange={(e) => setInstagram((i) => ({ ...i, share_to_feed: e.target.checked }))} /> Also share to feed</label>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Applies when this video publishes to Instagram Reels.</p>
                 </div>
               </div>
             )}
