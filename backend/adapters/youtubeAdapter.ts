@@ -32,6 +32,7 @@ import axios from 'axios';
 import type { PublishResult } from './platformAdapterTypes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
+import { generateBrandedYouTubeThumbnail, setYouTubeThumbnail } from './youtubeThumbnail';
 
 interface ScheduledPost {
   id: string;
@@ -389,6 +390,13 @@ export async function publishToYouTube(
       categoryId,
       privacyStatus,
     );
+
+    // Best-effort branded custom thumbnail — deterministic (clean title text),
+    // and fully non-fatal: any failure leaves YouTube's auto thumbnail.
+    try {
+      const thumb = await generateBrandedYouTubeThumbnail(videoTitle, { companyName: account.username });
+      if (thumb) await setYouTubeThumbnail(uploadedVideoId, thumb, token.access_token);
+    } catch { /* non-fatal — video already published */ }
 
     return {
       success: true,
