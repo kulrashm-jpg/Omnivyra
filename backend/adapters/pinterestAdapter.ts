@@ -36,6 +36,7 @@ interface ScheduledPost {
   hashtags?: string[];
   media_urls?: string[]; // Image URLs (required)
   scheduled_for: string;
+  publish_settings?: Record<string, any> | null; // generic per-platform options
 }
 
 interface SocialAccount {
@@ -126,10 +127,17 @@ export async function publishToPinterest(
     // Round-3 Phase 3: media-required check removed. Centralized validator in
     // publishToPlatform rejects no-media payloads upstream as MEDIA_REQUIRED.
 
+    const pSettings = (post.publish_settings && typeof post.publish_settings === 'object'
+      ? (post.publish_settings as any).pinterest : null) || {};
     const imageUrl = post.media_urls[0];
-    const boardName = post.title || 'My Pins';
-    const pinTitle = post.title || formattedContent.text.substring(0, 100);
+    // A STABLE board (configured name), not the per-post title — the old default
+    // (post.title) spawned a new board for every pin.
+    const boardName = String(pSettings.board_name || '').trim() || 'Marketing';
+    const pinTitle = (post.title || formattedContent.text).substring(0, 100);
     const pinDescription = formattedContent.text;
+    // Real destination link from the campaign settings; the old media_urls[1]
+    // fallback was fragile (that slot is rarely a link).
+    const destinationLink = String(pSettings.link || '').trim() || post.media_urls[1] || '';
 
     // Get or create board
     const boardId = await getOrCreateBoard(boardName, 'Pins from Virality Platform', token);
@@ -145,7 +153,7 @@ export async function publishToPinterest(
         },
         title: pinTitle,
         description: pinDescription,
-        link: post.media_urls[1] || '', // Optional link destination
+        link: destinationLink,
       },
       {
         headers: {
