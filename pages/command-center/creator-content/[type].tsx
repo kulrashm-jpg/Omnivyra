@@ -47,7 +47,7 @@ import {
   type CreatorTypeForVariant,
 } from '../../../lib/variants/creatorStrategyMapping';
 import { runVariantFanOut } from '../../../lib/variants/fanOutRunner';
-import { resolvePurposeStrategy } from '../../../backend/services/creator/purposeStrategyRegistry';
+import { resolvePurposeStrategy, fitSlideArcToCount } from '../../../backend/services/creator/purposeStrategyRegistry';
 // Creator Template Foundation — template-driven form + generation inputs.
 // All additions are gated on an active template resolved from
 // ?template_id=…; with no template_id the page behaves byte-identically.
@@ -1833,6 +1833,26 @@ export default function CreatorTypeWorkflowPage() {
     setAiBusyKey(ctx.busyKey);
     setError(null);
     try {
+      // Carousel slides play distinct roles in a narrative arc — attach each slide's role +
+      // intent so the AI writes arc-aware titles/bodies (hook → build → proof → CTA) that
+      // advance the story instead of repeating. Derived from the purpose strategy's slideArc,
+      // sized to the actual slide count (the same arc the renderer/preview uses).
+      let slideRoles: Array<{ role: string; intent: string }> = [];
+      if (activeTemplate.assetFamily === 'carousel' && ctx.targets.some((t) => t.scope === 'slide')) {
+        const strategy = resolvePurposeStrategy(type, String(answers.subtype || ''));
+        const arc = strategy?.slideArc ?? [];
+        const slideCount = Math.max(
+          (templateValues.slides ?? []).length,
+          ...ctx.targets.filter((t) => t.scope === 'slide').map((t) => (t.index ?? 0) + 1),
+          1,
+        );
+        const sizedRoles = fitSlideArcToCount(arc.map((a) => a.role), slideCount);
+        const intentByRole = new Map(arc.map((a) => [a.role, a.intent] as const));
+        slideRoles = sizedRoles.map((role) => ({
+          role,
+          intent: intentByRole.get(role) ?? 'Advance the narrative with a distinct supporting point — do not repeat an earlier slide.',
+        }));
+      }
       const resp = await fetch('/api/creator-templates/field-assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1841,7 +1861,12 @@ export default function CreatorTypeWorkflowPage() {
           asset_family: activeTemplate.assetFamily,
           template_id: activeTemplate.id,
           action: ctx.action,
-          targets: ctx.targets.map((t) => ({ scope: t.scope, field_key: t.fieldKey, index: t.index, current_value: t.currentValue })),
+          targets: ctx.targets.map((t) => ({
+            scope: t.scope, field_key: t.fieldKey, index: t.index, current_value: t.currentValue,
+            ...(t.scope === 'slide' && typeof t.index === 'number' && slideRoles[t.index]
+              ? { role: slideRoles[t.index].role, role_intent: slideRoles[t.index].intent }
+              : {}),
+          })),
           context: {
             topic: String(answers.topic || '').trim(),
             audience: String(answers.audience || '').trim(),

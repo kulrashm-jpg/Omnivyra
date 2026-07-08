@@ -291,3 +291,43 @@ describe('Field assist — overlay scope (baked-on creative copy, role-framed)',
     expect(res.usedFallback).toBe(false);
   });
 });
+
+describe('Field assist — carousel slides are arc-aware (thread structure)', () => {
+  it('validator parses per-slide role + role_intent', () => {
+    const v = validateFieldAssistRequest({
+      asset_family: 'carousel', template_id: carouselTpl.id, action: 'generate',
+      targets: [{ scope: 'slide', field_key: 'title', index: 0, role: 'hook', role_intent: 'Open with a curiosity gap' }],
+    });
+    expect(v.ok).toBe(true);
+    expect(v.request?.targets[0]).toMatchObject({ scope: 'slide', fieldKey: 'title', index: 0, role: 'hook', roleIntent: 'Open with a curiosity gap' });
+  });
+
+  it('prompt frames each slide by its arc role + intent and adds the narrative-sequence rule', () => {
+    const request: FieldAssistRequest = {
+      assetFamily: 'carousel', templateId: carouselTpl.id, action: 'generate',
+      context: { topic: 'Launch' },
+      targets: [
+        { scope: 'slide', fieldKey: 'title', index: 0, currentValue: '', role: 'hook', roleIntent: 'Open with a curiosity gap' },
+        { scope: 'slide', fieldKey: 'title', index: 3, currentValue: '', role: 'cta', roleIntent: 'Close with a next step' },
+      ],
+    };
+    const resolved = request.targets.map((t) => ({ target: t, field: resolveTemplateField(carouselTpl, 'slide', 'title')! }));
+    const prompt = buildFieldAssistMessages(carouselTpl, request, resolved).map((m) => m.content).join('\n');
+    expect(prompt).toContain('arc role: hook');
+    expect(prompt).toContain('Open with a curiosity gap');
+    expect(prompt).toContain('arc role: cta');
+    expect(prompt).toMatch(/narrative carousel|advance the story/i);
+  });
+
+  it('no arc roles → no narrative-sequence rule (plain per-slide generation unchanged)', () => {
+    const request: FieldAssistRequest = {
+      assetFamily: 'carousel', templateId: carouselTpl.id, action: 'generate',
+      targets: [{ scope: 'slide', fieldKey: 'title', index: 0, currentValue: '' }],
+      context: {},
+    };
+    const resolved = [{ target: request.targets[0], field: resolveTemplateField(carouselTpl, 'slide', 'title')! }];
+    const prompt = buildFieldAssistMessages(carouselTpl, request, resolved).map((m) => m.content).join('\n');
+    expect(prompt).not.toMatch(/narrative carousel/i);
+    expect(prompt).not.toContain('arc role:');
+  });
+});

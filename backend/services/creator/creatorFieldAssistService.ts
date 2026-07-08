@@ -45,6 +45,11 @@ export interface FieldAssistTarget {
   fieldKey: string;
   index?: number;
   currentValue?: string;
+  /** For carousel/infographic slides: this slide's role in the narrative arc (e.g. 'hook',
+   *  'proof', 'cta') so generated copy is arc-aware and advances the story, not a generic repeat. */
+  role?: string;
+  /** Human intent for that role (e.g. "Open with a curiosity gap"). */
+  roleIntent?: string;
 }
 
 export interface FieldAssistContext {
@@ -114,7 +119,9 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
     }
     const idxRaw = obj.index ?? obj.idx;
     const index = typeof idxRaw === 'number' && Number.isInteger(idxRaw) && idxRaw >= 0 ? idxRaw : undefined;
-    targets.push({ scope, fieldKey, index, currentValue: String(obj.current_value ?? obj.currentValue ?? '') });
+    const role = str(obj.role) || undefined;
+    const roleIntent = str(obj.role_intent ?? obj.roleIntent) || undefined;
+    targets.push({ scope, fieldKey, index, currentValue: String(obj.current_value ?? obj.currentValue ?? ''), role, roleIntent });
   }
 
   if (errors.length > 0) return { ok: false, errors };
@@ -203,10 +210,17 @@ export function buildFieldAssistMessages(
     const where = target.scope === 'slide' ? ` (slide ${Number(target.index) + 1})`
       : target.scope === 'section' ? ` (section ${Number(target.index) + 1})`
         : '';
+    // Carousel/infographic slides carry a narrative-arc role so each slide advances the story.
+    const roleHint = target.role
+      ? ` [arc role: ${target.role}${target.roleIntent ? ` — ${target.roleIntent}` : ''}]`
+      : '';
     const max = field.maxLength ? `, max ${field.maxLength} chars` : '';
     const cur = target.currentValue ? ` — current: "${target.currentValue}"` : ' — current: (empty)';
-    return `- scope=${target.scope} field_key=${field.key}${where}: "${field.label}"${max}${cur}`;
+    return `- scope=${target.scope} field_key=${field.key}${where}${roleHint}: "${field.label}"${max}${cur}`;
   }).join('\n');
+
+  // When the batch spans a slide arc, tell the model to treat it as ONE narrative sequence.
+  const hasArc = resolved.some(({ target }) => Boolean(target.role));
 
   const contextLines = [
     ctx.topic ? `Topic: ${ctx.topic}` : '',
@@ -226,6 +240,9 @@ export function buildFieldAssistMessages(
   const user = [
     `${actionVerb[request.action]} for the following field(s):`,
     fieldLines,
+    hasArc
+      ? '\nThese slides form ONE narrative carousel: honour each slide\'s arc role, advance the story slide to slide, and NEVER repeat another slide\'s point. The hook opens with tension/curiosity; the CTA closes with a concrete next step; the middle slides build and prove.'
+      : '',
     siblingLines ? `\nAlready on this asset — do NOT repeat or restate these; make the new value distinct:\n${siblingLines}` : '',
     contextLines ? `\nContext:\n${contextLines}` : '',
     '\nReturn ONLY the JSON object.',
