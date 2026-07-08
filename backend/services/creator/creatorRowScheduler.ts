@@ -46,6 +46,23 @@ import {
 import { resolveVideoForPlatform, readCreatorVideoAsset } from '../../../lib/shared/creatorVideoResolution';
 import { buildAutonomousScheduleDiagnostic } from './creatorScheduleDrift';
 
+/**
+ * Read the per-video YouTube visibility the user picked at upload from the
+ * parsed row content (creator_asset.youtube_visibility). Returns
+ * 'unlisted' | 'private', or null (null = the YouTube adapter default 'public').
+ * Never throws.
+ */
+function extractYouTubeVisibility(attachedContent: unknown): string | null {
+  try {
+    const p = (attachedContent && typeof attachedContent === 'object') ? attachedContent as Record<string, any> : {};
+    const asset = (p.creator_asset && typeof p.creator_asset === 'object') ? p.creator_asset : {};
+    const vis = String(asset.youtube_visibility ?? p.youtube_visibility ?? '').trim().toLowerCase();
+    return vis === 'unlisted' || vis === 'private' ? vis : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Small pure helpers (faithful copies of the structuredPlanScheduler
 //    internals; the content-type fallback map is already duplicated across
 //    structuredPlanScheduler / boltScheduleBlockProcessor / boltContentJobProcessor,
@@ -245,6 +262,9 @@ async function scheduleCreatorRowPost(input: {
       repurpose_total: 1,
       idempotency_key: idempotencyKey,
       design_attribution: designAttribution,
+      // Per-video YouTube visibility chosen at upload (creator_asset). NULL →
+      // adapter default 'public'. Defensive: any parse issue leaves it null.
+      youtube_privacy: extractYouTubeVisibility(attachedContent),
       created_at: nowIso,
       updated_at: nowIso,
     })

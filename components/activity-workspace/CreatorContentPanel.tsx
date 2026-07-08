@@ -88,6 +88,8 @@ export type CreatorAssetPayload = {
   /** PHASE CREATOR-VIDEO-UX-SIMPLIFICATION — ownership + same/different mapping. */
   uploaded_by?: { user_id: string; name?: string };
   video_mode?: 'same' | 'different';
+  /** Per-video YouTube visibility (only affects the YouTube upload). */
+  youtube_visibility?: 'public' | 'unlisted' | 'private';
   platform_videos?: Record<string, string>;
   /**
    * PLATFORM-SPECIFIC VIDEO MAPPING — richer per-row mappings (platform +
@@ -1446,6 +1448,10 @@ export default function CreatorContentPanel({
   );
   const [sameVideoUrl, setSameVideoUrl] = useState<string>(creatorAsset?.url ?? '');
   const [videoTitle, setVideoTitle] = useState<string>(creatorAsset?.description ?? '');
+  // Per-video YouTube visibility (only affects the YouTube upload; other platforms ignore it).
+  const [youtubeVisibility, setYoutubeVisibility] = useState<'public' | 'unlisted' | 'private'>(
+    ((creatorAsset as { youtube_visibility?: string })?.youtube_visibility as 'public' | 'unlisted' | 'private') ?? 'public',
+  );
   // Per-platform video mapping rows (platform + format + url + title). Seeded
   // from the richer platform_video_mappings, else from legacy platform_videos
   // (one row per platform, default format) for backward compatibility.
@@ -1613,6 +1619,7 @@ export default function CreatorContentPanel({
         description: videoTitle.trim() || undefined,
         uploaded_by: { user_id: uploadedById, name: uploadedByName || undefined },
         video_mode: videoMode,
+        youtube_visibility: youtubeVisibility, // per-video YouTube privacy (read by the scheduler)
         ...(platform_videos ? { platform_videos } : {}),
         ...(platform_video_mappings ? { platform_video_mappings } : {}),
         ...(platform_videos
@@ -1889,6 +1896,19 @@ export default function CreatorContentPanel({
                     placeholder="Short label for this video…"
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-400"
                   />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">YouTube visibility</label>
+                  <select
+                    value={youtubeVisibility}
+                    onChange={(e) => setYoutubeVisibility(e.target.value as 'public' | 'unlisted' | 'private')}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-400 bg-white"
+                  >
+                    <option value="public">Public — anyone can find and watch</option>
+                    <option value="unlisted">Unlisted — only people with the link</option>
+                    <option value="private">Private — only you</option>
+                  </select>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Applies when this video publishes to YouTube.</p>
                 </div>
               </div>
             )}

@@ -41,6 +41,13 @@ interface ScheduledPost {
   hashtags?: string[];
   media_urls?: string[]; // Video file URLs (required)
   scheduled_for: string;
+  youtube_privacy?: string | null; // 'public' | 'unlisted' | 'private' — per-video visibility
+}
+
+/** Coerce a stored visibility value into a valid YouTube privacyStatus. */
+function resolveYouTubeVisibility(value: unknown): YouTubeVisibility {
+  const v = String(value ?? '').trim().toLowerCase();
+  return v === 'unlisted' || v === 'private' ? v : 'public';
 }
 
 interface SocialAccount {
@@ -312,8 +319,8 @@ export async function publishToYouTube(
     // a keyword-mapped category, and richer tags (hashtags + title keywords).
     const categoryId = resolveYouTubeCategoryId(`${videoTitle} ${formatted.text}`);
     const tags = buildYouTubeTags(post.hashtags, videoTitle);
-    // Visibility default; surfaced as a user/campaign choice is a follow-up.
-    const privacyStatus: YouTubeVisibility = 'public';
+    // Per-video visibility from the user's choice (falls back to 'public').
+    const privacyStatus: YouTubeVisibility = resolveYouTubeVisibility(post.youtube_privacy);
 
     // Video metadata
     const videoMetadata = {
