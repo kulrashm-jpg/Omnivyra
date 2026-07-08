@@ -70,7 +70,9 @@ function defaultForm(family: TemplateAssetFamily, sectionLabel: string): Templat
     return {
       fields: [{ key: 'cta', label: 'Call To Action', control: 'text', required: false, maxLength: 28, aiAssist: ai }],
       slides: {
-        countOptions: [3, 4, 5, 6], defaultCount: 4,
+        // Default to 5 slides (user-adjustable on the editor via the slide-count
+        // control); options span 3–6 so it can be changed on-screen.
+        countOptions: [3, 4, 5, 6], defaultCount: 5,
         fields: [
           { key: 'title', label: 'Slide Title', control: 'text', required: true, maxLength: 60, aiAssist: ai },
           { key: 'body', label: 'Slide Body', control: 'textarea', required: false, maxLength: 160, aiAssist: ai },
