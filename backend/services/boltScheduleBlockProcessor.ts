@@ -614,7 +614,7 @@ async function executeBlockScheduleRuntime(
         return (ia >= 0 ? ia : 999) - (ib >= 0 ? ib : 999) || pa.localeCompare(pb);
       });
 
-      const rowUpdates: { id: string; content: string }[] = [];
+      const rowUpdates: { id: string; content: string; scheduled_post_id: string | null }[] = [];
 
       for (const row of orderedRows) {
         const rawPlatform = String(row.platform || '').trim().toLowerCase();
@@ -677,13 +677,23 @@ async function executeBlockScheduleRuntime(
         const charLimit = PLATFORM_CHAR_LIMITS[platform];
         let finalContent = content;
         if (charLimit && finalContent.length > charLimit) {
-          // Truncate at word boundary, leave room for "..."
-          const cut = finalContent.slice(0, charLimit - 4);
-          const lastSpace = cut.lastIndexOf(' ');
-          finalContent = (lastSpace > charLimit - 100 ? cut.slice(0, lastSpace) : cut).trim() + '...';
-          console.log('[block-processor] Content truncated to platform limit', {
+          // Trim to fit the platform limit while keeping the text COMPLETE: end on
+          // the last full sentence within budget (word-boundary fallback), never a
+          // mid-word cut, never a trailing ellipsis. Generation is budgeted to fit,
+          // so this is a last-resort safety net.
+          const cut = finalContent.slice(0, charLimit);
+          const sentenceEnd = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+          const trailingPunct = /[.!?]$/.test(cut) ? cut.length - 1 : -1;
+          const bestSentence = Math.max(sentenceEnd, trailingPunct);
+          if (bestSentence > charLimit * 0.45) {
+            finalContent = cut.slice(0, bestSentence + 1).trim();
+          } else {
+            const lastSpace = cut.lastIndexOf(' ');
+            finalContent = (lastSpace > charLimit * 0.6 ? cut.slice(0, lastSpace) : cut).trim();
+          }
+          console.log('[block-processor] Content trimmed to a complete sentence within platform limit', {
             platform, topic: topic.slice(0, 50),
-            originalLen: content.length, truncatedLen: finalContent.length, limit: charLimit,
+            originalLen: content.length, trimmedLen: finalContent.length, limit: charLimit,
           });
         }
 
@@ -785,20 +795,46 @@ async function executeBlockScheduleRuntime(
           source_execution_id:  String(rowParsed.source_execution_id || rowParsed.execution_id || '').trim() || undefined,
           distribution_mode:    (Number(rowParsed.total_distributions) || topicRows.length) > 1 ? 'shared' : 'unique',
         };
-        rowUpdates.push({ id: row.id, content: JSON.stringify(finalizedJson) });
+        // Link the plan row to the scheduled post it produced. The calendar's
+        // asset_type (the user-selected format, e.g. poll/short_story) is surfaced
+        // by joining daily_content_plans on scheduled_post_id; without this link the
+        // join misses for text formats and the card falls back to the coerced
+        // platform-native content_type ("post"). Each row is single-platform, so
+        // this is one-to-one and unambiguous.
+        rowUpdates.push({
+          id: row.id,
+          content: JSON.stringify(finalizedJson),
+          scheduled_post_id: (inserted as any)?.id ? String((inserted as any).id) : null,
+        });
       }
 
       // ── 4e. Persist finalized content back to daily_content_plans ─────────
       if (rowUpdates.length > 0) {
         await Promise.all(
-          rowUpdates.map(({ id, content: updatedContent }) =>
-            ownedDbTable('daily_content_plans')
-              .update({ content: updatedContent, updated_at: new Date().toISOString() })
-              .eq('id', id)
-              .then(({ error }) => {
-                if (error) console.warn('[block-processor] daily_content_plans update failed:', id, error.message);
-              })
-          )
+          rowUpdates.flatMap(({ id, content: updatedContent, scheduled_post_id }) => {
+            const ops = [
+              ownedDbTable('daily_content_plans')
+                .update({ content: updatedContent, updated_at: new Date().toISOString() })
+                .eq('id', id)
+                .then(({ error }: { error: { message: string } | null }) => {
+                  if (error) console.warn('[block-processor] daily_content_plans content update failed:', id, error.message);
+                }),
+            ];
+            if (scheduled_post_id) {
+              // Best-effort asset_type link — kept SEPARATE so a missing
+              // scheduled_post_id column (pre-migration env) never blocks the
+              // content persist above.
+              ops.push(
+                ownedDbTable('daily_content_plans')
+                  .update({ scheduled_post_id })
+                  .eq('id', id)
+                  .then(({ error }: { error: { message: string } | null }) => {
+                    if (error) console.warn('[block-processor] scheduled_post_id link failed (non-fatal):', id, error.message);
+                  }),
+              );
+            }
+            return ops;
+          })
         );
       }
     } // end card block
