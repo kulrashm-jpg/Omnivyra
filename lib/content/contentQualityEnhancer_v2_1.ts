@@ -54,10 +54,10 @@ import { htmlToBlocks } from '../blog/htmlToBlocks';
 //   contentQualityEnhancerDepth.ts  — Step 1 depth hard enforcement (v2.3)
 //   contentQualityEnhancerPasses.ts — Steps 2–4 linking / GEO / anti-shallow
 // Public surface is re-exported below, so importers keep using this path.
-import { wordCount } from '../../pages/blogs.helpers';
 import {
   type QualityEnhancerInput, type QualityEnhancerOutput, type ParsedSection,
   parseSections, assembleSections, aggregateDepthScoreFromSections,
+  depthScore, evalDepthState,
 } from './contentQualityEnhancerCore';
 import { enforceDepth } from './contentQualityEnhancerDepth';
 import { runInternalLinking, runGeoOptimization, antiShallowReport, aggregateGeoScore } from './contentQualityEnhancerPasses';
