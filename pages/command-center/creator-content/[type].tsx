@@ -1872,6 +1872,14 @@ export default function CreatorTypeWorkflowPage() {
             audience: String(answers.audience || '').trim(),
             objective: String(answers.objective || '').trim(),
             tone: String(answers.styleDirection || '').trim(),
+            // The content the asset is built FROM: the Writer post body / campaign card when this
+            // flow carried one, else the operator's key message / data points. Carousel generation
+            // turns this into the slide sequence instead of inventing from the short topic.
+            source_content: String(
+              writerSource?.body
+              || [answers.keyMessage, answers.dataPoints].map((v) => String(v || '').trim()).filter(Boolean).join('\n\n')
+              || '',
+            ).trim().slice(0, 6000) || undefined,
             // Already-filled fields on this asset, so AI-generated copy stays DISTINCT
             // (e.g. the subheadline won't restate the headline). The API drops the field
             // being written and instructs the model not to duplicate the rest.
@@ -1895,7 +1903,7 @@ export default function CreatorTypeWorkflowPage() {
     } finally {
       setAiBusyKey(null);
     }
-  }, [activeTemplate, selectedCompanyId, answers, templateValues]);
+  }, [activeTemplate, selectedCompanyId, answers, templateValues, writerSource, type]);
 
   // AI-generate a single OVERLAY field (hook / headline / supporting text / key insight).
   // Overlay copy isn't a template field, so we call field-assist with the 'overlay' scope

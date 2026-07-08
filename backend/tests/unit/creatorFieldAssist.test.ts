@@ -331,3 +331,42 @@ describe('Field assist — carousel slides are arc-aware (thread structure)', ()
     expect(prompt).not.toContain('arc role:');
   });
 });
+
+describe('Field assist — builds from source content (writer / campaign card / brief)', () => {
+  it('validator accepts source_content (snake or camel) and caps it', () => {
+    const v = validateFieldAssistRequest({
+      asset_family: 'carousel', template_id: carouselTpl.id, action: 'generate',
+      targets: [{ scope: 'slide', field_key: 'title', index: 0 }],
+      context: { source_content: 'The Writer post body about launching Omnivyra.' },
+    });
+    expect(v.ok).toBe(true);
+    expect(v.request?.context?.sourceContent).toContain('launching Omnivyra');
+  });
+
+  it('carousel: source content is framed as the material to turn into the slide sequence', () => {
+    const request: FieldAssistRequest = {
+      assetFamily: 'carousel', templateId: carouselTpl.id, action: 'generate',
+      context: { sourceContent: 'Point one. Point two. Point three.' },
+      targets: [
+        { scope: 'slide', fieldKey: 'title', index: 0, role: 'hook', roleIntent: 'Open' },
+        { scope: 'slide', fieldKey: 'title', index: 1, role: 'cta', roleIntent: 'Close' },
+      ],
+    };
+    const resolved = request.targets.map((t) => ({ target: t, field: resolveTemplateField(carouselTpl, 'slide', 'title')! }));
+    const prompt = buildFieldAssistMessages(carouselTpl, request, resolved).map((m) => m.content).join('\n');
+    expect(prompt).toContain('Point one. Point two. Point three.');
+    expect(prompt).toMatch(/turn this into the slide sequence/i);
+  });
+
+  it('non-arc field: source content is framed as ground truth to draw from', () => {
+    const request: FieldAssistRequest = {
+      assetFamily: 'image', templateId: imageTpl.id, action: 'generate',
+      context: { sourceContent: 'Founding members get 40% off.' },
+      targets: [{ scope: 'flat', fieldKey: 'headline', currentValue: '' }],
+    };
+    const resolved = [{ target: request.targets[0], field: resolveTemplateField(imageTpl, 'flat', 'headline')! }];
+    const prompt = buildFieldAssistMessages(imageTpl, request, resolved).map((m) => m.content).join('\n');
+    expect(prompt).toContain('Founding members get 40% off.');
+    expect(prompt).toMatch(/do not contradict or invent beyond it/i);
+  });
+});

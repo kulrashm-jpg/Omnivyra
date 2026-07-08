@@ -58,6 +58,11 @@ export interface FieldAssistContext {
   objective?: string;
   tone?: string;
   brand?: string;
+  /** Source content the asset is being BUILT FROM — the Writer post body, a campaign theme /
+   *  weekly / daily card, or a longer brief. When present, generated copy (esp. carousel slides)
+   *  must be derived from this content, preserving its facts and sequence — not invented from the
+   *  short topic alone. */
+  sourceContent?: string;
   /** Sibling fields already filled on the SAME asset — so generated copy stays DISTINCT
    *  (e.g. the subheadline must not restate the headline). Label + current value. */
   siblings?: Array<{ label: string; value: string }>;
@@ -133,6 +138,7 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
     objective: str(rawContext.objective),
     tone: str(rawContext.tone),
     brand: str(rawContext.brand),
+    sourceContent: str(rawContext.source_content ?? rawContext.sourceContent).slice(0, 6000) || undefined,
     siblings: Array.isArray(rawContext.siblings)
       ? (rawContext.siblings as unknown[])
           .map((s) => (s && typeof s === 'object' ? (s as Record<string, unknown>) : {}))
@@ -231,6 +237,13 @@ export function buildFieldAssistMessages(
     ...companyLines,
   ].filter(Boolean).join('\n');
 
+  // Source content the asset is built FROM (Writer post / campaign card / brief). For a carousel
+  // arc this is the raw material to turn into slides; for any field it's the ground truth to draw
+  // from rather than inventing from the topic.
+  const sourceBlock = ctx.sourceContent
+    ? `\nSource content to build from${hasArc ? ' (turn this into the slide sequence — preserve its facts, order, and specifics; do not invent beyond it)' : ' (draw from this; do not contradict or invent beyond it)'}:\n"""\n${ctx.sourceContent}\n"""`
+    : '';
+
   // Sibling fields already on the asset — the generated value(s) MUST NOT duplicate these.
   const siblingLines = (ctx.siblings ?? [])
     .filter((s) => !resolved.some(({ field }) => field.label === s.label)) // don't list the field being written
@@ -245,6 +258,7 @@ export function buildFieldAssistMessages(
       : '',
     siblingLines ? `\nAlready on this asset — do NOT repeat or restate these; make the new value distinct:\n${siblingLines}` : '',
     contextLines ? `\nContext:\n${contextLines}` : '',
+    sourceBlock,
     '\nReturn ONLY the JSON object.',
   ].join('\n');
 
