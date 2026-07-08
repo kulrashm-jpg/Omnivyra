@@ -1474,6 +1474,16 @@ export default function CreatorContentPanel({
       share_to_feed: s.share_to_feed !== false,
     };
   });
+  // Per-pin Pinterest options (board + destination link). Pinterest publishes
+  // IMAGES; a stable board keeps pins together (no board-per-pin), and the link
+  // drives traffic. Empty link → adapter falls back to the company website.
+  const [pinterest, setPinterest] = useState<{ board_name: string; link: string }>(() => {
+    const s = ((creatorAsset as { publish_settings?: { pinterest?: any } })?.publish_settings?.pinterest) || {};
+    return {
+      board_name: typeof s.board_name === 'string' ? s.board_name : '',
+      link: typeof s.link === 'string' ? s.link : '',
+    };
+  });
   // Per-platform video mapping rows (platform + format + url + title). Seeded
   // from the richer platform_video_mappings, else from legacy platform_videos
   // (one row per platform, default format) for backward compatibility.
@@ -1642,7 +1652,7 @@ export default function CreatorContentPanel({
         uploaded_by: { user_id: uploadedById, name: uploadedByName || undefined },
         video_mode: videoMode,
         youtube_visibility: youtubeVisibility, // per-video YouTube privacy (read by the scheduler)
-        publish_settings: { tiktok, instagram }, // generic per-platform publish options (read by the scheduler)
+        publish_settings: { tiktok, instagram, pinterest }, // generic per-platform publish options (read by the scheduler)
         ...(platform_videos ? { platform_videos } : {}),
         ...(platform_video_mappings ? { platform_video_mappings } : {}),
         ...(platform_videos
@@ -2411,6 +2421,41 @@ export default function CreatorContentPanel({
             </div>
           )}
         </div>
+
+        {/* ── Section 4: Pinterest pin options (image assets) ───────── */}
+        {connectedPlatforms.includes('pinterest') && (
+          <div className="px-5 py-4 border-t border-gray-100">
+            <SectionHeader
+              icon={<Image className="h-3.5 w-3.5" />}
+              title="Pinterest pin"
+              subtitle="Board and destination link for this pin"
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Board</label>
+                <input
+                  type="text"
+                  value={pinterest.board_name}
+                  onChange={(e) => setPinterest((p) => ({ ...p, board_name: e.target.value }))}
+                  placeholder="Marketing"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-400"
+                />
+                <p className="text-[10px] text-gray-400 mt-0.5">Pins group under this board (created if new). Defaults to “Marketing”.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Destination link</label>
+                <input
+                  type="url"
+                  value={pinterest.link}
+                  onChange={(e) => setPinterest((p) => ({ ...p, link: e.target.value }))}
+                  placeholder="https://your-site.com/landing"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-400"
+                />
+                <p className="text-[10px] text-gray-400 mt-0.5">Where the pin sends viewers. Leave blank to use your website.</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         </>)}
 
