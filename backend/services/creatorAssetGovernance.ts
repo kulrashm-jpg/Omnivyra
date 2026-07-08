@@ -168,6 +168,28 @@ function words(value: string): string[] {
   return value.trim().split(/\s+/).filter(Boolean);
 }
 
+/**
+ * Reduce copy to fit a word budget while keeping it COMPLETE: keep as many whole
+ * sentences as fit within maxWords (so the slide never ends mid-thought). Only if
+ * not even the first sentence fits does it fall back to a whole-word cut. This is
+ * a governance safety net — the generators are told the budget so copy usually
+ * already fits.
+ */
+function trimCopyToWordBudget(value: string, maxWords: number): string {
+  const sentences = value.match(/[^.!?]+[.!?]+(\s|$)|[^.!?]+$/g)?.map((s) => s.trim()).filter(Boolean) ?? [value];
+  const kept: string[] = [];
+  let count = 0;
+  for (const sentence of sentences) {
+    const w = words(sentence).length;
+    if (count + w > maxWords) break;
+    kept.push(sentence);
+    count += w;
+  }
+  if (kept.length > 0) return kept.join(' ').trim();
+  // First sentence alone exceeds the budget → whole-word cut as a last resort.
+  return words(value).slice(0, maxWords).join(' ');
+}
+
 function normalizeAssetType(value: string): GovernedAssetType {
   const normalized = String(value || '').trim().toLowerCase();
   if (
@@ -211,7 +233,9 @@ export function autoCorrectVisualCopy(input: {
     const tokens = words(next);
     if (tokens.length > maxWords) {
       corrections.push('reduced_text_density');
-      next = tokens.slice(0, maxWords).join(' ');
+      // Keep complete sentences within the word budget instead of a mid-thought
+      // word-count chop, so overlay/slide copy always reads as finished.
+      next = trimCopyToWordBudget(next, maxWords);
     }
     return next;
   }).filter(Boolean);

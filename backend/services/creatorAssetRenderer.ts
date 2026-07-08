@@ -249,8 +249,12 @@ function balanceTextLines(value: string, maxChars: number, maxLines: number): st
 
   return lines.map((line, index) => {
     if (index < maxLines - 1 || line.length <= maxChars) return line;
-    const clipped = line.slice(0, Math.max(0, maxChars - 1)).trimEnd();
-    return clipped ? `${clipped}...` : line;
+    // Last-resort clip to fit — end on a COMPLETE word, never mid-word, and no
+    // trailing ellipsis (which reads as "cut off"). Generation is now budgeted to
+    // fit the composition, so this should rarely trigger.
+    const cut = line.slice(0, maxChars).trimEnd();
+    const lastSpace = cut.lastIndexOf(' ');
+    return (lastSpace > maxChars * 0.5 ? cut.slice(0, lastSpace).trimEnd() : cut) || line;
   });
 }
 
