@@ -6,11 +6,22 @@ import { CompanyProvider } from '../components/CompanyContext';
 import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
-import LandingNavbar from '../components/landing/LandingNavbar';
+import dynamic from 'next/dynamic';
 import { TourProvider } from '../components/tour/TourContext';
-import AppLayout from '../components/layout/AppLayout';
 import { AuthErrorBanner } from '../components/auth/AuthErrorBanner';
-import { AuthDevPanel } from '../components/auth/AuthDevPanel';
+
+// PERF: the route shells are conditionally RENDERED but were statically IMPORTED, so
+// every page shipped all of them in the shared bundle (~1MB raw JS parsed per load).
+// next/dynamic splits them into on-demand chunks: marketing visitors don't parse the
+// app chrome (header/footer/command palette/retention), app users don't parse the
+// landing navbar, and production never fetches the dev panel. SSR stays ON for the
+// layouts so prerendered HTML is unchanged (no flash) — only the JS loads on demand.
+const LandingNavbar = dynamic(() => import('../components/landing/LandingNavbar'));
+const AppLayout = dynamic(() => import('../components/layout/AppLayout'));
+const AuthDevPanel = dynamic(
+  () => import('../components/auth/AuthDevPanel').then((m) => m.AuthDevPanel),
+  { ssr: false }, // dev-only diagnostics — chunk is never requested in production
+);
 import PageLoader from '../components/PageLoader';
 import {
   WEBSITE_GA_MEASUREMENT_ID,
@@ -276,7 +287,8 @@ function MyApp({ Component, pageProps }: AppProps) {
         <AuthGate>
           <Component {...pageProps} />
         </AuthGate>
-        <AuthDevPanel />
+        {/* Gated at the render site too, so production never even requests the chunk. */}
+        {process.env.NODE_ENV === 'development' ? <AuthDevPanel /> : null}
       </TourProvider>
     </CompanyProvider>
   );
