@@ -77,7 +77,7 @@ export const PLATFORM_STYLE_MAP: Record<string, string> = {
   x: 'Concise and punchy style, high information density.',
   twitter: 'Concise and punchy style, high information density.',
   instagram: 'Emotionally resonant and visually descriptive tone, hashtag-friendly ending.',
-  youtube: 'Title + description orientation, SEO-friendly structure, include metadata hints naturally.',
+  youtube: 'Output for YouTube in TWO parts separated by a blank line. FIRST LINE = a compelling, SEO-optimized video TITLE, keyword front-loaded, max 70 characters, no hashtags. Then a blank line, then the DESCRIPTION: a strong hook in the first 1-2 lines (shown above the fold), followed by the value/detail, a clear call-to-action, and finish with 3-5 relevant hashtags on the last line.',
 };
 
 /**
@@ -410,7 +410,7 @@ export async function generatePlatformVariantFromMaster(
     x: 'Concise and punchy style, high information density.',
     twitter: 'Concise and punchy style, high information density.',
     instagram: 'Emotionally resonant and visually descriptive tone, hashtag-friendly ending.',
-    youtube: 'Title + description orientation, SEO-friendly structure, include metadata hints naturally.',
+    youtube: 'Output for YouTube in TWO parts separated by a blank line. FIRST LINE = a compelling, SEO-optimized video TITLE, keyword front-loaded, max 70 characters, no hashtags. Then a blank line, then the DESCRIPTION: a strong hook in the first 1-2 lines, then the value/detail, a clear call-to-action, and finish with 3-5 relevant hashtags on the last line.',
   };
   const styleInstruction = platformStyles[normalizedPlatform] || 'Neutral adaptation with clear readability.';
   const maxLength = toPositiveNumber(constraints.max_length);

@@ -227,6 +227,26 @@ async function createYouTubeVideoFromUrl(
  * 
  * YouTube posts are videos, so media_urls[0] must be a video file
  */
+/**
+ * Split a YouTube variant into an SEO title + structured description. The
+ * variant prompt emits "TITLE\n\nDESCRIPTION"; the first line is treated as the
+ * title only when it's short and followed by a body. Falls back to the post's
+ * own title (and the whole content as the description) otherwise.
+ */
+export function splitYouTubeContent(raw: string, fallbackTitle: string): { title: string; description: string } {
+  const text = String(raw || '').trim();
+  const fallback = String(fallbackTitle || '').trim();
+  const nlIdx = text.indexOf('\n');
+  if (nlIdx > 0) {
+    const firstLine = text.slice(0, nlIdx).trim();
+    const rest = text.slice(nlIdx).replace(/^\s+/, '');
+    if (firstLine.length > 0 && firstLine.length <= 100 && rest.length > 0) {
+      return { title: firstLine.replace(/^#+\s*/, ''), description: rest };
+    }
+  }
+  return { title: fallback || text.slice(0, 100), description: text };
+}
+
 export async function publishToYouTube(
   post: ScheduledPost,
   account: SocialAccount,
@@ -247,8 +267,12 @@ export async function publishToYouTube(
     // Round-3 Phase 3: media-required check removed. Centralized validator in
     // publishToPlatform rejects no-media payloads upstream as MEDIA_REQUIRED.
 
-    // YouTube requires title
-    if (!post.title || post.title.trim().length === 0) {
+    // Split the YouTube variant into an SEO title + structured description
+    // (the variant prompt emits "TITLE\n\nDESCRIPTION"; falls back to post.title).
+    const ytParsed = splitYouTubeContent(post.content, post.title || '');
+
+    // YouTube requires a title
+    if (!ytParsed.title || ytParsed.title.trim().length === 0) {
       return {
         success: false,
         error: {
@@ -259,8 +283,8 @@ export async function publishToYouTube(
       };
     }
 
-    // Format content (description) automatically for YouTube
-    const formatted = formatContentForPlatform(post.content, 'youtube', {
+    // Format the DESCRIPTION portion automatically for YouTube
+    const formatted = formatContentForPlatform(ytParsed.description, 'youtube', {
       hashtags: post.hashtags,
       mediaUrls: post.media_urls,
     });
@@ -278,8 +302,8 @@ export async function publishToYouTube(
       description += '\n\n' + formatted.hashtags.join(' ');
     }
 
-    // Build video title (YouTube max 100 chars)
-    let videoTitle = post.title;
+    // Build video title (YouTube max 100 chars) from the parsed SEO title
+    let videoTitle = ytParsed.title;
     if (videoTitle.length > 100) {
       videoTitle = videoTitle.substring(0, 97) + '...';
     }
