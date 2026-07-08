@@ -499,6 +499,11 @@ export default function BoltCombinedStrategyPage() {
       content_formats: allFormats,
       text_formats: textFormats,
       creator_formats: creatorFormats,
+      // The platform picker's selection MUST reach the pipeline — it narrows the
+      // eligible platforms to exactly these (boltPipelineService). Without it the
+      // user's deselection (e.g. turning X off) was ignored and content still
+      // scheduled to every connected platform.
+      selected_platforms: selectedPlatforms,
       cross_platform_sharing: sharingMode === 'shared' ? { enabled: true } : sharingMode === 'unique' ? { enabled: false } : true,
     };
 
