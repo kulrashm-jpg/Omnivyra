@@ -457,6 +457,43 @@ export function useCreatorWorkflowCore() {
     }
   }, [activeTemplate, selectedCompanyId, answers, templateValues, writerSource, type]);
 
+  // Auto-fill EMPTY slide titles ONCE on arrival from the brief flow
+  // (?from=workspace), so "Generate my carousel" lands on a titled carousel
+  // instead of an empty "NOT READY" form. This mirrors the "Generate empty
+  // slides" button exactly (only fully-empty rows, only generate-enabled
+  // fields) — so it never overwrites anything the user typed, and the once-per
+  // (template + slide count) guard means editing or changing the count later
+  // never re-triggers it. Manual entry points (not ?from=workspace) still start
+  // clean, honouring the "never an automatic overwrite" rule.
+  const autoFilledSlidesRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (router.query.from !== 'workspace') return;
+    if (aiBusyKey) return;
+    const slideDef = activeTemplate?.formDefinition.slides;
+    if (!slideDef) return;
+    const slideFields = slideDef.fields ?? [];
+    const rows = templateValues.slides ?? [];
+    if (rows.length === 0 || slideFields.length === 0) return;
+    const targets = rows.flatMap((row, index) => {
+      const rowEmpty = slideFields.every((f) => !String(row[f.key] || '').trim());
+      if (!rowEmpty) return [];
+      return slideFields
+        .filter((f) => f.aiAssist.generate)
+        .map((f) => ({ scope: 'slide' as const, fieldKey: f.key, index, currentValue: String(row[f.key] || '') }));
+    });
+    if (targets.length === 0) return;
+    const fireKey = `${activeTemplate!.id}:${rows.length}`;
+    if (autoFilledSlidesRef.current === fireKey) return;
+    autoFilledSlidesRef.current = fireKey;
+    handleTemplateAiAssist({
+      template: activeTemplate!,
+      action: 'generate',
+      busyKey: 'batch:slide:Generate empty slides',
+      label: 'Generate empty slides',
+      targets,
+    });
+  }, [router.query.from, activeTemplate, templateValues.slides, aiBusyKey, handleTemplateAiAssist]);
+
   // AI-generate a single OVERLAY field (hook / headline / supporting text / key insight).
   // Overlay copy isn't a template field, so we call field-assist with the 'overlay' scope
   // (role-framed synthetic fields), passing the OTHER filled overlay fields as siblings so
