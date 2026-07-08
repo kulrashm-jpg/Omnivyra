@@ -35,7 +35,7 @@ const PLATFORMS: {
     envSecret: 'X_CLIENT_SECRET',
     authUrl: 'https://twitter.com/i/oauth2/authorize',
     tokenUrl: 'https://api.twitter.com/2/oauth2/token',
-    scopes: ['tweet.read', 'tweet.write', 'users.read', 'like.write', 'follows.write', 'offline.access'],
+    scopes: ['tweet.read', 'tweet.write', 'media.write', 'users.read', 'like.write', 'follows.write', 'offline.access'],
   },
   {
     platform: 'facebook',

@@ -241,7 +241,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Phase 0 — persist actually-granted scopes (X OAuth 2.0 returns the
     // granted scope set as a space-separated `scope` field on the token
     // response). Fall back to the originally-requested scopes if absent.
-    const requestedXScopes = 'tweet.read tweet.write users.read like.write follows.write offline.access';
+    const requestedXScopes = 'tweet.read tweet.write media.write users.read like.write follows.write offline.access';
     const grantedXScopes = normaliseScopes(tokenData.scope ?? requestedXScopes, 'space');
     await persistGrantedScopes({
       socialAccountId: accountId,

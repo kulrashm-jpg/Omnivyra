@@ -26,6 +26,7 @@ import axios from 'axios';
 import type { PublishResult } from './platformAdapterTypes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
+import { uploadXMedia } from './xMedia';
 
 interface ScheduledPost {
   id: string;
@@ -111,13 +112,22 @@ export async function publishToX(
       payload.reply = { in_reply_to_tweet_id: options.replyToPlatformPostId };
     }
 
-    // Add media if present (media_ids required for images/videos)
+    // Upload media first — v2 tweet-create only accepts already-uploaded
+    // media_ids. Best-effort: if the upload yields no ids (e.g. missing
+    // media.write scope, or a transient failure), fall back to a text-only
+    // tweet rather than failing the whole post.
     if (post.media_urls && post.media_urls.length > 0) {
-      // TODO: Upload media to Twitter first using media/upload endpoint
-      // For now, assume media already uploaded or handle separately
-      // payload.media = { media_ids: [...] };
-      
-      console.warn('⚠️ Media upload not yet implemented for X/Twitter');
+      try {
+        const mediaIds = await uploadXMedia(post.media_urls, token);
+        if (mediaIds.length > 0) {
+          payload.media = { media_ids: mediaIds };
+          console.log(`✅ X media uploaded (${mediaIds.length}): ${mediaIds.join(', ')}`);
+        } else {
+          console.warn('⚠️ X media upload produced no media_ids — posting text-only');
+        }
+      } catch (mediaError: any) {
+        console.warn('⚠️ X media upload failed — posting text-only:', mediaError?.response?.data || mediaError?.message);
+      }
     }
 
     // Make API call

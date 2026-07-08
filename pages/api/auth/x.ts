@@ -39,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       client_id: credentials.client_id,
       redirect_uri: `${getXRedirectBase(req)}/auth/x/callback`,
       state,
-      scope: 'tweet.read tweet.write users.read like.write follows.write offline.access',
+      scope: 'tweet.read tweet.write media.write users.read like.write follows.write offline.access',
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
     });
