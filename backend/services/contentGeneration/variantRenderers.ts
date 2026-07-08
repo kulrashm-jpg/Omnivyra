@@ -77,11 +77,25 @@ export function blueprintToFullText(bp: ContentBlueprint): string {
   return parts.join('\n\n');
 }
 
-/** Truncate text to maxChars at word boundary. */
+/**
+ * Trim text to fit maxChars while keeping it COMPLETE — a last-resort safety net
+ * (generation should already fit the budget). Prefers to end on the last full
+ * sentence within budget (., !, ?), so the result never stops mid-thought and
+ * never appends an ellipsis. Falls back to a word boundary only when no sentence
+ * end sits reasonably far in (>45%), and to a hard cut only in the extreme case.
+ */
 export function truncateAtWordBoundary(text: string, maxChars: number): string {
   const s = String(text ?? '').trim();
   if (s.length <= maxChars) return s;
   const cut = s.slice(0, maxChars);
+  // 1) Prefer the last complete sentence within budget.
+  const sentenceEnd = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  const trailingPunct = /[.!?]$/.test(cut) ? cut.length - 1 : -1;
+  const bestSentence = Math.max(sentenceEnd, trailingPunct);
+  if (bestSentence > maxChars * 0.45) {
+    return cut.slice(0, bestSentence + 1).trim();
+  }
+  // 2) Otherwise fall back to a word boundary (no ellipsis).
   const lastSpace = cut.lastIndexOf(' ');
   if (lastSpace > maxChars * 0.6) return cut.slice(0, lastSpace).trim();
   return cut.trim();

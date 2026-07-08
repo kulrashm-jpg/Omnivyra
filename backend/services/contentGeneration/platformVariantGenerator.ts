@@ -59,6 +59,7 @@ async function resolveCompanyContextBlock(companyId: string | null | undefined):
 import {
   blueprintToFullText,
   renderDeterministicVariant,
+  truncateAtWordBoundary,
   canDeriveDeterministically,
   DETERMINISTIC_DERIVABLE,
   X_CHAR_LIMIT,
@@ -243,14 +244,16 @@ export async function renderPlatformVariantsFromBlueprint(
       discoverabilityMeta,
       blueprint.cta ? String(blueprint.cta).trim() : null
     );
-    const rawBounded = target.max_length ? rawContent.slice(0, target.max_length) : rawContent;
+    // Complete-sentence safety trim (never a mid-word cut); generation should
+    // already fit, so this is a last resort.
+    const rawBounded = target.max_length ? truncateAtWordBoundary(rawContent, target.max_length) : rawContent;
     const processed = await processContent({
       content: rawBounded,
       platform: target.platform,
       content_type: target.content_type,
       card_type: 'platform_variant',
     });
-    const bounded = target.max_length ? processed.content.slice(0, target.max_length) : processed.content;
+    const bounded = target.max_length ? truncateAtWordBoundary(processed.content, target.max_length) : processed.content;
     const mediaSearchIntent = buildMediaSearchIntent(
       target.platform,
       target.content_type,
@@ -337,14 +340,14 @@ export async function renderPlatformVariantsFromBlueprint(
       }
 
       const maxLength = toPositiveNumber(target.max_length);
-      const rawBounded2 = maxLength ? rawContent.slice(0, maxLength) : rawContent;
+      const rawBounded2 = maxLength ? truncateAtWordBoundary(rawContent, maxLength) : rawContent;
       const processed2 = await processContent({
         content: rawBounded2,
         platform: target.platform,
         content_type: target.content_type,
         card_type: 'platform_variant',
       });
-      const bounded = maxLength ? processed2.content.slice(0, maxLength) : processed2.content;
+      const bounded = maxLength ? truncateAtWordBoundary(processed2.content, maxLength) : processed2.content;
       const mediaSearchIntent = buildMediaSearchIntent(
         target.platform,
         target.content_type,
@@ -558,19 +561,19 @@ export async function generatePlatformVariantFromMaster(
       };
     }
 
-    let rawBounded3 = maxLength ? aiContent.slice(0, maxLength) : aiContent;
+    let rawBounded3 = maxLength ? truncateAtWordBoundary(aiContent, maxLength) : aiContent;
     const processed3 = await processContent({
       content: rawBounded3,
       platform: normalizedPlatform,
       content_type: contentType,
       card_type: 'platform_variant',
     });
-    let bounded = maxLength ? processed3.content.slice(0, maxLength) : processed3.content;
+    let bounded = maxLength ? truncateAtWordBoundary(processed3.content, maxLength) : processed3.content;
     if (maxLength && targetLength && bounded.length < targetLength) {
       const expanded = await requestVariant(
         `Rewrite for platform "${normalizedPlatform}" and content_type "${contentType}" with richer promotional detail (CTA, hook, value) while staying <= ${maxLength} chars and targeting ~${targetLength} chars. Style: ${styleInstruction}`
       );
-      const expandedRaw = nonEmpty(maxLength ? expanded.slice(0, maxLength) : expanded);
+      const expandedRaw = nonEmpty(maxLength ? truncateAtWordBoundary(expanded, maxLength) : expanded);
       if (expandedRaw.length > bounded.length) {
         const processed3b = await processContent({
           content: expandedRaw,
@@ -578,7 +581,7 @@ export async function generatePlatformVariantFromMaster(
           content_type: contentType,
           card_type: 'platform_variant',
         });
-        const expandedBounded = maxLength ? processed3b.content.slice(0, maxLength) : processed3b.content;
+        const expandedBounded = maxLength ? truncateAtWordBoundary(processed3b.content, maxLength) : processed3b.content;
         if (expandedBounded.length > bounded.length) bounded = expandedBounded;
       }
     }
@@ -796,14 +799,14 @@ async function buildPlatformVariantsRuntime(item: DailyExecutionItemLike): Promi
       }
 
       const maxLength = toPositiveNumber(target.max_length);
-      const rawBounded4 = maxLength ? rawContent.slice(0, maxLength) : rawContent;
+      const rawBounded4 = maxLength ? truncateAtWordBoundary(rawContent, maxLength) : rawContent;
       const processed4 = await processContent({
         content: rawBounded4,
         platform: target.platform,
         content_type: target.content_type,
         card_type: 'platform_variant',
       });
-      const bounded = maxLength ? processed4.content.slice(0, maxLength) : processed4.content;
+      const bounded = maxLength ? truncateAtWordBoundary(processed4.content, maxLength) : processed4.content;
 
       const mediaSearchIntent =
         normalizeLegacyMediaSearchIntent(existingVariant?.media_search_intent) ||

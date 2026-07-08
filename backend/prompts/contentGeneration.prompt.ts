@@ -32,7 +32,13 @@ export const CONTENT_BLUEPRINT_SYSTEM = `Generate a content blueprint from the g
 
 export const CONTENT_MASTER_SYSTEM = `Write publish-ready universal master content from the provided JSON context. Keep it neutral and non-platform-specific. Maintain weekly narrative intent. Output plain text only. Max 180 words.`;
 
-export const PLATFORM_VARIANTS_SYSTEM = `Rewrite the given content for each platform. Output strict JSON only. Keys match platform_config[].key. Each value is adapted plain-text content. No markdown. Max 120 words per variant. Keys must match platform_config[].key exactly.`;
+export const PLATFORM_VARIANTS_SYSTEM = `Rewrite the given content for each platform. Output strict JSON only. Keys match platform_config[].key exactly. Each value is adapted plain-text content. No markdown.
+
+LENGTH & COMPLETENESS (critical — the output is published as-is and MUST NOT be cut off):
+- Each variant MUST fit within that platform_config entry's "max_chars" budget when provided. Count characters; never exceed it.
+- Write a COMPLETE, self-contained piece that ends on a full sentence with proper punctuation. Never stop mid-sentence, never trail off, never end with "..." or an ellipsis.
+- If the message will not fit, TIGHTEN and rephrase so the whole thought fits — do NOT cut it off. Fewer complete sentences beat one longer truncated sentence.
+- When no max_chars is given, keep it concise (about 120 words) but always a complete, well-formed piece.`;
 
 function buildContentGenerationContextBlock(context: ContentGenerationPromptContext): string {
   const parts = [

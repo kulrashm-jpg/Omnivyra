@@ -227,18 +227,24 @@ export function formatContentForPlatform(
     finalText = `${finalText} ${hashtagText}`.trim();
   }
 
-  // Truncate if over limit
+  // Trim to fit — but keep the message COMPLETE: end on a full sentence, never
+  // a mid-word cut, and never append an ellipsis (which reads as "cut off").
+  // Generation is instructed to fit the budget, so this is a last-resort net.
   if (finalText.length > limits.maxChars) {
     truncated = true;
-    warnings.push(`Content truncated from ${finalText.length} to ${limits.maxChars} characters`);
-    
-    // Smart truncation: try to cut at word boundary
-    let truncatedText = finalText.substring(0, limits.maxChars);
-    const lastSpace = truncatedText.lastIndexOf(' ');
-    if (lastSpace > limits.maxChars * 0.9) { // Only if we're close to limit
-      truncatedText = truncatedText.substring(0, lastSpace);
+    const cut = finalText.substring(0, limits.maxChars);
+    // 1) Prefer the last complete sentence within budget.
+    const sentenceEnd = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+    const trailingPunct = /[.!?]$/.test(cut) ? cut.length - 1 : -1;
+    const bestSentence = Math.max(sentenceEnd, trailingPunct);
+    if (bestSentence > limits.maxChars * 0.45) {
+      finalText = cut.substring(0, bestSentence + 1).trim();
+    } else {
+      // 2) Fall back to a word boundary (still no ellipsis).
+      const lastSpace = cut.lastIndexOf(' ');
+      finalText = (lastSpace > limits.maxChars * 0.6 ? cut.substring(0, lastSpace) : cut).trim();
     }
-    finalText = truncatedText + (truncatedText.length < finalText.length ? '...' : '');
+    warnings.push(`Content trimmed to a complete sentence within ${limits.maxChars} characters`);
   }
 
   // Handle links
