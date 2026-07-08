@@ -247,7 +247,7 @@ type CreatorContentPanelProps = {
   contentType?: string;
   platforms?: string[];
   onAssetSaved: (asset: CreatorAssetPayload) => void;
-  onGeneratePromotion: () => void;
+  onGeneratePromotion: (asset?: Record<string, unknown> | null) => void;
   isGeneratingPromotion?: boolean;
   campaignId: string;
   executionId: string;
@@ -1633,7 +1633,11 @@ export default function CreatorContentPanel({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error ?? data?.message ?? 'Failed to save video asset');
       onAssetSaved(asset);
-      onNotice?.('success', 'Video asset saved. AI will generate captions, hashtags and CTA at publish time.');
+      onNotice?.('success', 'Video asset saved. Generating the caption, hashtags & CTA to post with it…');
+      // Auto-offer the marketing content on upload: generate the platform
+      // caption/hashtags/CTA immediately from the just-saved asset (passed
+      // directly to avoid the async creatorAsset state being stale).
+      try { onGeneratePromotion(asset as unknown as Record<string, unknown>); } catch { /* non-fatal */ }
     } catch (err) {
       onNotice?.('error', String((err as Error)?.message ?? 'Failed to save'));
     } finally {
@@ -1752,7 +1756,9 @@ export default function CreatorContentPanel({
       if (!res.ok) throw new Error(data?.error ?? data?.message ?? 'Failed to save creator asset');
 
       onAssetSaved(asset);
-      onNotice?.('success', 'Creator asset saved. Click Generate Promotion Content to create platform posts.');
+      onNotice?.('success', 'Creator asset saved. Generating platform posts (caption, hashtags & CTA)…');
+      // Auto-offer the marketing content on upload (see video handler above).
+      try { onGeneratePromotion(asset as unknown as Record<string, unknown>); } catch { /* non-fatal */ }
     } catch (err) {
       onNotice?.('error', String((err as Error)?.message ?? 'Failed to save'));
     } finally {
@@ -2333,7 +2339,7 @@ export default function CreatorContentPanel({
           {hasAsset && (
             <button
               type="button"
-              onClick={onGeneratePromotion}
+              onClick={() => onGeneratePromotion()}
               disabled={isGeneratingPromotion}
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
             >

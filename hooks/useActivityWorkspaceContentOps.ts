@@ -309,7 +309,11 @@ export function useActivityWorkspaceContentOps({
     });
   };
 
-  const handleGenerateCreatorPromotion = async () => {
+  const handleGenerateCreatorPromotion = async (assetOverride?: Record<string, unknown> | null) => {
+    // assetOverride lets the caller (e.g. auto-generate right after a video save)
+    // pass the just-saved asset directly, since the creatorAsset state updates
+    // asynchronously and would otherwise be stale on an immediate chained call.
+    const effectiveCreatorAsset = assetOverride ?? creatorAsset;
     const campaignId = String(payload?.campaignId ?? '').trim();
     const executionId = String(payload?.activityId ?? (payload?.dailyExecutionItem as any)?.execution_id ?? '').trim();
     const currentDaily = asObject(payload?.dailyExecutionItem) || {};
@@ -328,7 +332,7 @@ export function useActivityWorkspaceContentOps({
           schedules: schedules.length > 0 ? schedules : [{ id: 'default', platform: 'linkedin', contentType: 'post' }],
           dailyExecutionItem: {
             ...currentDaily,
-            creator_asset: creatorAsset,
+            creator_asset: effectiveCreatorAsset,
             master_content: null,
             platform_variants: platformVariants,
           },
@@ -358,7 +362,7 @@ export function useActivityWorkspaceContentOps({
           ...prev,
           dailyExecutionItem: {
             ...current,
-            creator_asset: creatorAsset,
+            creator_asset: effectiveCreatorAsset,
             platform_variants: mergedVariants,
           },
         };
