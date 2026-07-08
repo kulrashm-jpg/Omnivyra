@@ -1838,6 +1838,12 @@ export default function CreatorTypeWorkflowPage() {
             audience: String(answers.audience || '').trim(),
             objective: String(answers.objective || '').trim(),
             tone: String(answers.styleDirection || '').trim(),
+            // Already-filled fields on this asset, so AI-generated copy stays DISTINCT
+            // (e.g. the subheadline won't restate the headline). The API drops the field
+            // being written and instructs the model not to duplicate the rest.
+            siblings: (activeTemplate.formDefinition.fields ?? [])
+              .map((f) => ({ label: f.label, value: String(templateValues.fields?.[f.key] ?? '').trim() }))
+              .filter((s) => s.value),
           },
         }),
       });
@@ -1855,7 +1861,7 @@ export default function CreatorTypeWorkflowPage() {
     } finally {
       setAiBusyKey(null);
     }
-  }, [activeTemplate, selectedCompanyId, answers]);
+  }, [activeTemplate, selectedCompanyId, answers, templateValues]);
 
   React.useEffect(() => {
     if (authChecked && !isLoading && !user?.userId) {

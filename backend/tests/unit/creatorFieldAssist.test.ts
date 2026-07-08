@@ -6,6 +6,7 @@ import {
   fieldAllowsAction,
   deterministicTransform,
   parseAssistResponse,
+  buildFieldAssistMessages,
   type FieldAssistRequest,
   type AssistLlm,
 } from '../../services/creator/creatorFieldAssistService';
@@ -213,5 +214,41 @@ describe('Field assist — tolerant response parsing', () => {
     const resolved = [{ target: { scope: 'flat' as const, fieldKey: 'headline', currentValue: '' }, field: resolveTemplateField(imageTpl, 'flat', 'headline')! }];
     const m = parseAssistResponse('Sure! ```json\n{"updates":[{"scope":"flat","field_key":"headline","value":"Hi"}]}\n```', resolved);
     expect(m.get('flat::headline')).toBe('Hi');
+  });
+});
+
+describe('Field assist — distinctness (no duplicate sibling copy)', () => {
+  it('validator preserves siblings context', () => {
+    const v = validateFieldAssistRequest({
+      asset_family: 'image', template_id: imageTpl.id, action: 'generate',
+      targets: [{ scope: 'flat', field_key: 'subheadline' }],
+      context: { topic: 'X', siblings: [{ label: 'Headline', value: 'Launching Omnivyra' }] },
+    });
+    expect(v.ok).toBe(true);
+    expect(v.request?.context?.siblings).toEqual([{ label: 'Headline', value: 'Launching Omnivyra' }]);
+  });
+
+  it('prompt shows sibling values and instructs the model not to duplicate them', () => {
+    const headline = resolveTemplateField(imageTpl, 'flat', 'headline')!;
+    const request = req({
+      targets: [{ scope: 'flat', fieldKey: 'subheadline', currentValue: '' }],
+      context: { topic: 'Launching Omnivyra', siblings: [{ label: headline.label, value: 'Launching Omnivyra on September 2026' }] },
+    });
+    const resolved = [{ target: request.targets[0], field: resolveTemplateField(imageTpl, 'flat', 'subheadline')! }];
+    const all = buildFieldAssistMessages(imageTpl, request, resolved).map((m) => m.content).join('\n');
+    expect(all).toContain('DISTINCT');
+    expect(all).toContain('Launching Omnivyra on September 2026'); // sibling headline surfaced
+    expect(all).toMatch(/do NOT repeat|not restate/i);
+  });
+
+  it('does not list the field being written as its own sibling', () => {
+    const headline = resolveTemplateField(imageTpl, 'flat', 'headline')!;
+    const request = req({
+      targets: [{ scope: 'flat', fieldKey: 'headline', currentValue: '' }],
+      context: { siblings: [{ label: headline.label, value: 'An old headline' }] },
+    });
+    const resolved = [{ target: request.targets[0], field: headline }];
+    const user = buildFieldAssistMessages(imageTpl, request, resolved).find((m) => m.role === 'user')!.content;
+    expect(user).not.toContain('Already on this asset'); // only sibling equals the target → filtered out
   });
 });

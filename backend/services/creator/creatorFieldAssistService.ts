@@ -39,6 +39,9 @@ export interface FieldAssistContext {
   objective?: string;
   tone?: string;
   brand?: string;
+  /** Sibling fields already filled on the SAME asset — so generated copy stays DISTINCT
+   *  (e.g. the subheadline must not restate the headline). Label + current value. */
+  siblings?: Array<{ label: string; value: string }>;
   /** Canonical company context (business understanding) — server-resolved. */
   company?: CreatorCompanyContext;
   /** Canonical brand voice (communication style) — server-resolved. */
@@ -109,6 +112,13 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
     objective: str(rawContext.objective),
     tone: str(rawContext.tone),
     brand: str(rawContext.brand),
+    siblings: Array.isArray(rawContext.siblings)
+      ? (rawContext.siblings as unknown[])
+          .map((s) => (s && typeof s === 'object' ? (s as Record<string, unknown>) : {}))
+          .map((s) => ({ label: str(s.label), value: str(s.value) }))
+          .filter((s) => s.label && s.value)
+          .slice(0, 12)
+      : undefined,
   };
 
   return {
@@ -166,6 +176,7 @@ export function buildFieldAssistMessages(
     'You ONLY produce text for the specific fields requested. You NEVER return a whole asset, extra fields, commentary, or markdown.',
     'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section","field_key":"...","index":<number|optional>,"value":"..."}]}.',
     'Keep each value within its max length. Match the platform-native, concise tone of social creative copy.',
+    'Every field on an asset must be DISTINCT: never repeat or lightly reword another field. A subheadline must ADD new information or angle, not restate the headline; a CTA is an action, not a headline. If a value would duplicate a sibling field shown below, write something genuinely different.',
     // Brand voice (communication style) — canonical, server-resolved.
     ...(brandVoiceLines.length ? ['Write in the brand voice:', ...brandVoiceLines] : []),
     // Ground copy in the company's ACTUAL business — never invent company facts.
@@ -190,9 +201,16 @@ export function buildFieldAssistMessages(
     ...companyLines,
   ].filter(Boolean).join('\n');
 
+  // Sibling fields already on the asset — the generated value(s) MUST NOT duplicate these.
+  const siblingLines = (ctx.siblings ?? [])
+    .filter((s) => !resolved.some(({ field }) => field.label === s.label)) // don't list the field being written
+    .map((s) => `- ${s.label}: "${s.value}"`)
+    .join('\n');
+
   const user = [
     `${actionVerb[request.action]} for the following field(s):`,
     fieldLines,
+    siblingLines ? `\nAlready on this asset — do NOT repeat or restate these; make the new value distinct:\n${siblingLines}` : '',
     contextLines ? `\nContext:\n${contextLines}` : '',
     '\nReturn ONLY the JSON object.',
   ].join('\n');
