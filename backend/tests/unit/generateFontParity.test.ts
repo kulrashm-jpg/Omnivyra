@@ -15,7 +15,20 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 describe('Generate font parity (render-inline ↔ generate)', () => {
   it('creatorAssetRenderer initializes fonts BEFORE sharp loads (covers every render path)', () => {
-    const src = read('backend/services/creatorAssetRenderer.ts');
+    // creatorAssetRenderer is now a barrel over split parts — the invariant must hold in
+    // EVERY part: ensureRenderFonts() runs in the shared header BEFORE any sharp require.
+    const partDir = 'backend/services';
+    const parts = require('fs').readdirSync(partDir).filter((f) => /^creatorAssetRenderer[A-Z].*.ts$/.test(f));
+    expect(parts.length).toBeGreaterThan(5);
+    for (const part of parts) {
+      const psrc = read(partDir + '/' + part);
+      const pe = psrc.indexOf('ensureRenderFonts()');
+      const ps = psrc.indexOf("require('sharp')");
+      expect(pe).toBeGreaterThan(-1);
+      if (ps !== -1) expect(pe).toBeLessThan(ps);
+      expect(psrc).toContain("import { ensureRenderFonts } from './creatorRenderFonts'");
+    }
+    const src = read('backend/services/creatorAssetRendererContracts.ts');
     const ensureIdx = src.indexOf('ensureRenderFonts()');
     const sharpIdx = src.indexOf("require('sharp')");
     expect(ensureIdx).toBeGreaterThan(-1);

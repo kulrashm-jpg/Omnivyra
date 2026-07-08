@@ -14,7 +14,7 @@ import path from 'path';
  */
 describe('infographic render correctness — no foreignObject', () => {
   const SRC = readFileSync(
-    path.join(__dirname, '..', '..', 'services', 'creatorAssetRenderer.ts'),
+    path.join(__dirname, '..', '..', 'services', 'creatorAssetRendererInfographic.ts'), // split part holding renderInfographicAsset
     'utf8',
   );
 
