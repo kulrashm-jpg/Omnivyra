@@ -758,6 +758,21 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
     if (dailyPlanId) {
       await markSlotReady(bolt_job_id, dailyPlanId, scheduledPostId, content);
 
+      // Backfill the daily_content_plans → scheduled_posts FK for the TEXT lane
+      // (creator lane already does this). Without it the calendar's asset_type
+      // recovery join (pages/api/calendar/activity-events.ts) misses and the card
+      // falls back to the platform-native content_type — so a 'poll' renders as
+      // "post"/"tweet". Writing the id lets the card show the real format.
+      if (scheduledPostId) {
+        try {
+          await ownedDbTable('daily_content_plans')
+            .update({ scheduled_post_id: scheduledPostId, updated_at: new Date().toISOString() })
+            .eq('id', dailyPlanId);
+        } catch (fkErr: any) {
+          console.warn('[bolt-job] daily_content_plans.scheduled_post_id backfill failed (non-fatal):', fkErr?.message);
+        }
+      }
+
       // Update daily_content_plans.content with finalized JSON
       try {
         const rowParsed = tryParseJson<Record<string, unknown>>((planRow as any)?.content) ?? {};

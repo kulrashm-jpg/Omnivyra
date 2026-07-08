@@ -441,11 +441,26 @@ export function useDashboardState() {
     };
     return map[p] || 'bg-gray-100 text-gray-700 border-gray-200';
   };
+  // A campaign that already has scheduled content on the calendar must NOT also
+  // render a bare "campaign name" marker on its EMPTY days (e.g. a start date
+  // whose first post lands on a later best-day) — that reads as a placeholder
+  // "with nothing in it". Markers are kept only for campaigns with no scheduled
+  // events yet, so the calendar still surfaces those.
+  const scheduledCampaignIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    Object.values(calendarActivityEvents).forEach((evs) => {
+      (evs || []).forEach((e) => { if (e.campaign_id) ids.add(String(e.campaign_id)); });
+    });
+    return ids;
+  }, [calendarActivityEvents]);
+
   const getCalendarActivitiesForDate = (date: Date): CalendarActivity[] => {
     const dayStart = new Date(date);
     dayStart.setHours(0, 0, 0, 0);
     const activities: CalendarActivity[] = [];
     calendarFilteredCampaigns.forEach((campaign) => {
+      // Scheduled campaigns surface via their real posts, not a bare marker.
+      if (scheduledCampaignIds.has(String((campaign as { id?: unknown }).id ?? ''))) return;
       const start = parseCalendarDate(campaign.start_date);
       if (!start) return;
       start.setHours(0, 0, 0, 0);
