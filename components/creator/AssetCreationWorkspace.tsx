@@ -24,6 +24,7 @@ import type { CreatorTemplate } from '../../lib/creator-templates/types';
 import type { TemplateAssetFamily } from '../../lib/creator-templates/types';
 import { MARKETING_BRIEF_SESSION_KEY, serializeMarketingBrief } from '../../lib/content/marketingBriefResolver';
 import ChatVoiceButton from '../ChatVoiceButton';
+import CreateWithAIChat from './CreateWithAIChat';
 import { color, radius, shadow, space, fontSize, fontWeight } from '../../lib/platform/ui';
 
 type Asset = 'image' | 'carousel' | 'infographic';
@@ -77,6 +78,7 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
   const [selectedSample, setSelectedSample] = React.useState<CreatorTemplate | null>(null);
   const [aiBusy, setAiBusy] = React.useState(false);
   const [aiError, setAiError] = React.useState<string | null>(null);
+  const [chatOpen, setChatOpen] = React.useState(false);
   // CREATOR-106: typed-text base preserved so spoken brief APPENDS to (not replaces) it.
   const voiceBaseRef = React.useRef('');
 
@@ -213,10 +215,38 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
           style={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, background: color.surface, color: color.primary[600], border: `1px solid ${color.primary[600]}`, borderRadius: radius.md, padding: `${space.xs}px ${space.md}px`, cursor: aiBusy ? 'default' : 'pointer', fontWeight: fontWeight.semibold, fontSize: fontSize.sm, opacity: aiBusy ? 0.6 : 1 }}>
           <Sparkles size={14} /> {aiBusy ? 'Drafting your brief…' : 'Suggest with AI'}
         </button>
+        <button type="button" onClick={() => setChatOpen(true)}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, background: color.primary[600], color: color.onPrimary, border: `1px solid ${color.primary[600]}`, borderRadius: radius.md, padding: `${space.xs}px ${space.md}px`, cursor: 'pointer', fontWeight: fontWeight.semibold, fontSize: fontSize.sm }}>
+          <Wand2 size={14} /> Create with AI
+        </button>
         <span style={{ fontSize: 12, color: color.textSubtle, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          Let AI draft the brief from your goal — or tap the mic to speak it. You can edit everything before generating.
+          Let AI draft the brief from your goal, chat it out with “Create with AI”, or tap the mic. You can edit everything before generating.
         </span>
       </div>
+      {chatOpen ? (
+        <CreateWithAIChat
+          assetFamily={cfg.family}
+          assetLabel={cfg.label}
+          goal={customLabel ?? getOutcome(goalId ?? '')?.label ?? cfg.label}
+          initialBrief={{
+            freeText: String(brief.freeText ?? ''),
+            audience: String((brief.audience as string) ?? ''),
+            tone: String((brief.tone as string) ?? ''),
+            cta: String((brief.cta as string) ?? ''),
+            offer: String((brief.offer as string) ?? ''),
+          }}
+          onApply={(b) => {
+            const patch: Record<string, string> = {};
+            (['freeText', 'audience', 'tone', 'cta', 'offer'] as const).forEach((k) => {
+              if (b[k] && b[k].trim()) patch[k] = b[k];
+            });
+            if (patch.freeText) voiceBaseRef.current = patch.freeText;
+            if (Object.keys(patch).length) setBrief((prev) => mergeBrief(prev, patch as Partial<MarketingBrief>));
+            setChatOpen(false);
+          }}
+          onClose={() => setChatOpen(false)}
+        />
+      ) : null}
       {aiError ? <div style={{ fontSize: 12, color: color.danger, marginBottom: 12 }}>{aiError}</div> : null}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
         {([['audience', 'Audience'], ['tone', 'Tone'], ['cta', 'Call to action'], ['offer', 'Offer / product']] as [keyof MarketingBrief, string][]).map(([k, lbl]) => (
