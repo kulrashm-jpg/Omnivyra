@@ -1,6 +1,7 @@
 import React from 'react';
 import { Sparkles, Send, X, Check } from 'lucide-react';
 import { color, radius, shadow, space, fontSize, fontWeight } from '../../lib/platform/ui';
+import ChatVoiceButton from '../ChatVoiceButton';
 
 /**
  * "Create with AI" — a conversational brief builder. The user chats to work out
@@ -56,6 +57,9 @@ export default function CreateWithAIChat({
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
+  // Typed text captured before a voice session starts, so speech APPENDS to what
+  // was typed (ChatVoiceButton streams the cumulative transcript on each update).
+  const voiceBaseRef = React.useRef('');
 
   React.useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -166,14 +170,22 @@ export default function CreateWithAIChat({
 
         {/* Composer */}
         <div style={{ borderTop: `1px solid ${color.border}`, padding: space.md, display: 'flex', gap: space.sm, alignItems: 'flex-end' }}>
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-            rows={2}
-            placeholder="Describe your idea or answer the question… (Enter to send)"
-            style={{ flex: 1, resize: 'vertical', borderRadius: radius.md, border: `1px solid ${color.border}`, padding: `${space.sm}px ${space.md}px`, fontSize: fontSize.sm, color: color.text }}
-          />
+          <div style={{ position: 'relative', flex: 1 }}>
+            <textarea
+              value={input}
+              onChange={(e) => { voiceBaseRef.current = e.target.value; setInput(e.target.value); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+              rows={2}
+              placeholder="Type or speak — describe your idea or answer the question (Enter to send)"
+              style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: radius.md, border: `1px solid ${color.border}`, padding: `${space.sm}px ${space.md}px`, paddingRight: 44, fontSize: fontSize.sm, color: color.text }}
+            />
+            <div style={{ position: 'absolute', right: 8, bottom: 10 }}>
+              <ChatVoiceButton
+                title="Speak your message"
+                onTranscription={(t) => setInput(`${voiceBaseRef.current.trim() ? `${voiceBaseRef.current.trim()} ` : ''}${t}`)}
+              />
+            </div>
+          </div>
           <button type="button" onClick={send} disabled={busy || !input.trim()}
             style={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, background: color.surface, color: color.primary[600], border: `1px solid ${color.primary[600]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, cursor: busy || !input.trim() ? 'default' : 'pointer', fontWeight: fontWeight.semibold, fontSize: fontSize.sm, opacity: busy || !input.trim() ? 0.6 : 1 }}>
             <Send size={14} /> Send
