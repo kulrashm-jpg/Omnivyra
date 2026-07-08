@@ -90,13 +90,47 @@ async function downloadRemoteVideo(videoUrl: string): Promise<{
  * 3. Finalize upload
  * 4. Create video resource with metadata
  */
+export type YouTubeVisibility = 'public' | 'unlisted' | 'private';
+
+/**
+ * Map the marketing content to a YouTube video category id (default 22, People
+ * & Blogs). Keyword-driven from the title/description — leverages the generated
+ * marketing copy instead of hardcoding a single category.
+ */
+export function resolveYouTubeCategoryId(text: string): string {
+  const t = String(text || '').toLowerCase();
+  const has = (...ws: string[]) => ws.some((w) => t.includes(w));
+  if (has('how to', 'how-to', 'tutorial', 'guide', 'learn', 'course', 'lesson', 'training', 'education', 'explain')) return '27'; // Education
+  if (has('software', ' app', 'ai ', 'tech', 'saas', 'developer', 'coding', 'data', 'automation', 'gadget', 'platform')) return '28'; // Science & Technology
+  if (has('news', 'announce', 'launch', 'report', 'update')) return '25'; // News & Politics
+  if (has('entertain', 'comedy', 'funny', 'story time')) return '24'; // Entertainment
+  return '22'; // People & Blogs — marketing/business/brand content fits here on YT
+}
+
+/** Build YouTube tags from hashtags + salient title words (deduped, max 50). */
+export function buildYouTubeTags(hashtags: string[] | undefined, title: string): string[] {
+  const fromHashtags = (hashtags || []).map((h) => String(h).replace(/^#/, '').trim()).filter(Boolean);
+  const fromTitle = String(title || '')
+    .toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 3);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const tag of [...fromHashtags, ...fromTitle]) {
+    const key = tag.toLowerCase();
+    if (!seen.has(key)) { seen.add(key); out.push(tag); }
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
 async function uploadVideoToYouTube(
   videoUrl: string,
   title: string,
   description: string,
   tags: string[],
   channelId: string,
-  token: Token
+  token: Token,
+  categoryId: string = '22',
+  privacyStatus: YouTubeVisibility = 'public',
 ): Promise<string> {
   const { buffer, contentType, contentLength } = await downloadRemoteVideo(videoUrl);
 
@@ -105,12 +139,12 @@ async function uploadVideoToYouTube(
       title,
       description,
       tags: tags.slice(0, 50), // YouTube max 50 tags
-      categoryId: '22', // People & Blogs (default)
+      categoryId,
       defaultLanguage: 'en',
       defaultAudioLanguage: 'en',
     },
     status: {
-      privacyStatus: 'public', // or 'unlisted', 'private'
+      privacyStatus,
       selfDeclaredMadeForKids: false,
     },
   };
@@ -244,14 +278,18 @@ export async function publishToYouTube(
       description += '\n\n' + formatted.hashtags.join(' ');
     }
 
-    // Extract tags (hashtags without # for YouTube)
-    const tags = formatted.hashtags.map(tag => tag.replace('#', ''));
-
-    // Build video title (max 100 chars)
+    // Build video title (YouTube max 100 chars)
     let videoTitle = post.title;
     if (videoTitle.length > 100) {
       videoTitle = videoTitle.substring(0, 97) + '...';
     }
+
+    // Derive YouTube fields from the marketing content instead of hardcoding:
+    // a keyword-mapped category, and richer tags (hashtags + title keywords).
+    const categoryId = resolveYouTubeCategoryId(`${videoTitle} ${formatted.text}`);
+    const tags = buildYouTubeTags(post.hashtags, videoTitle);
+    // Visibility default; surfaced as a user/campaign choice is a follow-up.
+    const privacyStatus: YouTubeVisibility = 'public';
 
     // Video metadata
     const videoMetadata = {
@@ -259,11 +297,11 @@ export async function publishToYouTube(
         title: videoTitle,
         description: description.substring(0, 5000), // YouTube max 5000 chars
         tags: tags.slice(0, 50), // YouTube max 50 tags
-        categoryId: '22', // People & Blogs (common category)
+        categoryId,
         defaultLanguage: 'en',
       },
       status: {
-        privacyStatus: 'public', // Options: public, unlisted, private
+        privacyStatus,
         selfDeclaredMadeForKids: false,
       },
     };
@@ -316,7 +354,9 @@ export async function publishToYouTube(
       description.substring(0, 5000),
       tags,
       account.platform_user_id,
-      token
+      token,
+      categoryId,
+      privacyStatus,
     );
 
     return {
