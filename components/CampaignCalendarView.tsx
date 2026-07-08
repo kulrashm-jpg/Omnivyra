@@ -494,6 +494,19 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                   >
                                     <div className="font-medium text-gray-900">{modeLabel ?? 'AI Ready'}</div>
                                     {modeExplanation && <div className="text-xs text-gray-500 mt-0.5">{modeExplanation}</div>}
+                                    {/* Completion framing for the intelligent-mix landing: AI-produced
+                                        items are done once scheduled; creator-required items (video/reel)
+                                        are the user's to finish. Mirrors the post-schedule routing. */}
+                                    <span
+                                      className={`inline-block mt-1 text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                                        execMode === 'CREATOR_REQUIRED'
+                                          ? 'border-amber-300 bg-amber-50 text-amber-800'
+                                          : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                      }`}
+                                      title={execMode === 'CREATOR_REQUIRED' ? 'Needs you to add the media (e.g. video)' : 'AI can complete this — no action needed'}
+                                    >
+                                      {execMode === 'CREATOR_REQUIRED' ? 'WIP · Needs your input' : 'Completed'}
+                                    </span>
                                     {execMode === 'CONDITIONAL_AI' && (
                                       <>
                                         <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">Template Required</span>

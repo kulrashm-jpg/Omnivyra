@@ -10,6 +10,40 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { plannerEventBus } from '../../../backend/services/plannerEventBus';
+import { resolveCanonicalState, CanonicalContentState } from '../../../lib/shared/contentLifecycle';
+import { isSupportedManualVideoUpload } from '../../../lib/shared/contentTypeClassification';
+
+/**
+ * Does this completed campaign still need USER action — i.e. any item is a
+ * manual video/reel/short upload AI cannot produce? Mirrors the calendar's own
+ * "pending" predicate (pages/api/calendar/activity-events.ts): canonical
+ * PENDING_CREATOR AND a supported manual video upload. Image/carousel/text are
+ * AI-produced and never count. Used so the intelligent-mix post-schedule routing
+ * agrees with what the calendar shows — fully-AI campaigns skip the campaign
+ * calendar and land straight on the dashboard calendar.
+ */
+async function campaignRequiresUserAction(campaignId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('daily_content_plans')
+    .select('content_status, content, content_type')
+    .eq('campaign_id', campaignId)
+    .limit(2000);
+  if (error || !Array.isArray(data)) return false;
+  for (const r of data as Array<Record<string, unknown>>) {
+    const canonical = resolveCanonicalState({
+      content_status: typeof r.content_status === 'string' ? r.content_status : null,
+      content: (r.content ?? null) as Record<string, unknown> | string | null,
+      scheduled_post_id: null,
+    });
+    if (
+      canonical === CanonicalContentState.PENDING_CREATOR &&
+      isSupportedManualVideoUpload(String(r.content_type ?? ''))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -262,6 +296,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Never let progressive-state enrichment break the polling endpoint.
     }
 
+    // Compute the fully-AI vs needs-user signal ONCE, only when the run has
+    // completed and produced a campaign — drives the intelligent-mix routing.
+    let requiresUserAction: boolean | undefined;
+    if (row.status === 'completed' && row.result_campaign_id) {
+      requiresUserAction = await campaignRequiresUserAction(row.result_campaign_id);
+    }
+
     return res.status(200).json({
       stage: row.current_stage,
       stage_label: stageLabel,
@@ -281,6 +322,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       weeks_generated: row.weeks_generated ?? undefined,
       daily_slots_created: row.daily_slots_created ?? undefined,
       scheduled_posts_created: row.scheduled_posts_created ?? undefined,
+      // Intelligent-mix routing: true when the campaign has manual-upload
+      // (video/reel/short) items still needing the user; false = fully AI.
+      requires_user_action: requiresUserAction,
       // Progressive state (Part 8). All fields optional — existing clients
       // continue to render exactly as before, new clients can opt in.
       progressive: progressiveState,

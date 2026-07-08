@@ -521,6 +521,10 @@ export default function BoltCombinedStrategyPage() {
       const POLL_INTERVAL_MS = 2500;
       const DEADLINE = Date.now() + 15 * 60 * 1000; // 15 min — includes scheduling
       let completedCampaignId: string | null = null;
+      // Intelligent-mix routing: true when the scheduled campaign has manual
+      // (video/reel/short) items still needing the user → land on the campaign
+      // calendar; false = fully AI → straight to the dashboard calendar.
+      let requiresUserAction = false;
       let done = false;
 
       while (!done) {
@@ -536,6 +540,7 @@ export default function BoltCombinedStrategyPage() {
           result_campaign_id?: string; error_message?: string;
           weeks_generated?: number; daily_slots_created?: number;
           failed_stage?: string; failed_stage_label?: string; error_code?: string;
+          requires_user_action?: boolean;
         };
 
         if (!mounted) return;
@@ -548,7 +553,7 @@ export default function BoltCombinedStrategyPage() {
           failed_stage: prog.failed_stage, failed_stage_label: prog.failed_stage_label, error_code: prog.error_code,
         });
 
-        if (prog.status === 'completed') { completedCampaignId = prog.result_campaign_id ?? null; done = true; }
+        if (prog.status === 'completed') { completedCampaignId = prog.result_campaign_id ?? null; requiresUserAction = prog.requires_user_action === true; done = true; }
         else if (prog.status === 'failed' || prog.status === 'aborted') throw new Error(prog.error_message || 'BOLT execution failed');
       }
 
@@ -563,7 +568,16 @@ export default function BoltCombinedStrategyPage() {
       if (outcomeView === 'daily_plan') {
         router.push(`/campaign-daily-plan/${completedCampaignId}?${qs.toString()}`);
       } else if (outcomeView === 'schedule') {
-        router.push(`/campaign-calendar/${completedCampaignId}?${qs.toString()}`);
+        // Fully-AI campaign → nothing for the user to do, so go straight to the
+        // dashboard calendar. Needs manual creator work (e.g. video) → land on
+        // the campaign calendar where AI items read done and creator items WIP.
+        if (requiresUserAction) {
+          router.push(`/campaign-calendar/${completedCampaignId}?${qs.toString()}`);
+        } else {
+          const dq = new URLSearchParams({ tab: 'calendar' });
+          if (companyId) dq.set('companyId', companyId);
+          router.push(`/dashboard?${dq.toString()}`);
+        }
       } else {
         router.push(`/campaign-details/${completedCampaignId}?mode=fast&${qs.toString()}`);
       }
