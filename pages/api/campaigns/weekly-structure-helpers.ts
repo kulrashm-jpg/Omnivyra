@@ -1,3 +1,4 @@
-/** BARREL — verbatim split into 2 parts (importers keep this path): Alloc, Shape */
-export * from './weekly-structure-helpersAlloc';
-export * from './weekly-structure-helpersShape';
+/** BARREL — helpers split into backend/services/campaigns (kept OUT of pages/api so Next
+ *  does not treat the parts as routes). Importers keep this path. */
+export * from '../../../backend/services/campaigns/weeklyStructureHelpersAlloc';
+export * from '../../../backend/services/campaigns/weeklyStructureHelpersShape';
