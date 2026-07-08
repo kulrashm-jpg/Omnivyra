@@ -105,11 +105,12 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
       if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d?.error || `Suggestion failed (${resp.status})`); }
       const data = await resp.json();
       const updates = Array.isArray(data?.updates) ? data.updates : [];
+      const allowed = new Set(['freeText', 'audience', 'tone', 'cta', 'offer']);
       const patch: Record<string, string> = {};
       for (const u of updates) {
         const key = String(u?.field_key ?? u?.fieldKey ?? '');
         const value = typeof u?.value === 'string' ? u.value : '';
-        if (key && value.trim()) patch[key] = value;
+        if (allowed.has(key) && value.trim()) patch[key] = value;
       }
       if (patch.freeText) voiceBaseRef.current = patch.freeText;
       if (Object.keys(patch).length) setBrief((b) => mergeBrief(b, patch as Partial<MarketingBrief>));

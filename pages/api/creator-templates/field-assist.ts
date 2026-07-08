@@ -71,7 +71,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       llmPricing: {
         provider: 'openai',
         model: 'gpt-4o-mini',
-        maxInputTokens: 2000,
+        // Input budget must hold the capped source_content (≤6000 chars ≈ 1500 tokens) PLUS
+        // company/brand grounding + field/sibling lines. All client strings are length-capped
+        // in validateFieldAssistRequest, so 4000 is a true ceiling, not an open door.
+        maxInputTokens: 4000,
         maxOutputTokens: 700,
         actionKey: 'content_rewrite',
       },

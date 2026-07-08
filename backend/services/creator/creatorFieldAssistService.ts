@@ -50,7 +50,8 @@ const OVERLAY_ROLE_FIELDS: Record<string, TemplateField> = {
   headline: { key: 'headline', label: 'Headline (the main line on the creative)', control: 'text', required: false, maxLength: 84, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
   supportingText: { key: 'supportingText', label: 'Supporting text (one short proof, context, or benefit line)', control: 'text', required: false, maxLength: 96, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
   keyInsight: { key: 'keyInsight', label: 'Key insight (the strongest positioning statement or takeaway)', control: 'textarea', required: false, maxLength: 132, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
-  cta: { key: 'cta', label: 'Call to action (a short action, not a headline)', control: 'text', required: false, maxLength: 40, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+  // maxLength mirrors the client overlay clamp (setOverlayField limits) — keep in sync.
+  cta: { key: 'cta', label: 'Call to action (a short action, not a headline)', control: 'text', required: false, maxLength: 42, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
 };
 
 export interface FieldAssistTarget {
@@ -137,25 +138,28 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
     }
     const idxRaw = obj.index ?? obj.idx;
     const index = typeof idxRaw === 'number' && Number.isInteger(idxRaw) && idxRaw >= 0 ? idxRaw : undefined;
-    const role = str(obj.role) || undefined;
-    const roleIntent = str(obj.role_intent ?? obj.roleIntent) || undefined;
-    targets.push({ scope, fieldKey, index, currentValue: String(obj.current_value ?? obj.currentValue ?? ''), role, roleIntent });
+    // Every client string is length-capped before it reaches the billed prompt.
+    const role = str(obj.role).slice(0, 60) || undefined;
+    const roleIntent = str(obj.role_intent ?? obj.roleIntent).slice(0, 300) || undefined;
+    targets.push({ scope, fieldKey: fieldKey.slice(0, 80), index, currentValue: String(obj.current_value ?? obj.currentValue ?? '').slice(0, 1000), role, roleIntent });
   }
 
   if (errors.length > 0) return { ok: false, errors };
 
   const rawContext = (body.context && typeof body.context === 'object' ? body.context : {}) as Record<string, unknown>;
+  // Every client string is length-capped before it reaches the billed prompt (cost + injection
+  // surface). Server-resolved grounding (company/brandVoice) is attached later by the route.
   const context: FieldAssistContext = {
-    topic: str(rawContext.topic),
-    audience: str(rawContext.audience),
-    objective: str(rawContext.objective),
-    tone: str(rawContext.tone),
-    brand: str(rawContext.brand),
+    topic: str(rawContext.topic).slice(0, 300),
+    audience: str(rawContext.audience).slice(0, 300),
+    objective: str(rawContext.objective).slice(0, 300),
+    tone: str(rawContext.tone).slice(0, 120),
+    brand: str(rawContext.brand).slice(0, 120),
     sourceContent: str(rawContext.source_content ?? rawContext.sourceContent).slice(0, 6000) || undefined,
     siblings: Array.isArray(rawContext.siblings)
       ? (rawContext.siblings as unknown[])
           .map((s) => (s && typeof s === 'object' ? (s as Record<string, unknown>) : {}))
-          .map((s) => ({ label: str(s.label), value: str(s.value) }))
+          .map((s) => ({ label: str(s.label).slice(0, 80), value: str(s.value).slice(0, 400) }))
           .filter((s) => s.label && s.value)
           .slice(0, 12)
       : undefined,

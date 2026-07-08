@@ -29,6 +29,7 @@ describe('Creator Asset ID Factory — single canonical minter', () => {
       'lib/content/writerAttachmentGraph.ts',
       'lib/content/writerSchedulingRefs.ts',
       'pages/command-center/creator-content/[type].tsx',
+      'lib/creator-content/creatorTypeWorkflow.ts', // extracted [type].tsx domain model — same rule
     ];
     const forbidden = [
       /`casset_/,                       // canonical id literal — factory only
