@@ -75,8 +75,50 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
   const [customLabel, setCustomLabel] = React.useState<string | null>(null);
   const [brief, setBrief] = React.useState<MarketingBrief>(emptyMarketingBrief());
   const [selectedSample, setSelectedSample] = React.useState<CreatorTemplate | null>(null);
+  const [aiBusy, setAiBusy] = React.useState(false);
+  const [aiError, setAiError] = React.useState<string | null>(null);
   // CREATOR-106: typed-text base preserved so spoken brief APPENDS to (not replaces) it.
   const voiceBaseRef = React.useRef('');
+
+  // "Suggest with AI" — draft the whole brief (free text + audience / tone / CTA / offer) from the
+  // chosen goal + the company's canonical context, so the operator reviews-and-goes instead of
+  // typing from scratch. Reuses field-assist over synthetic 'brief' fields; the resulting brief is
+  // what "Generate my <asset>" already carries to the editor on the next page.
+  const suggestBrief = async () => {
+    if (!selectedSample || aiBusy) return;
+    setAiBusy(true); setAiError(null);
+    try {
+      const goalLabel = customLabel ?? getOutcome(goalId ?? '')?.label ?? cfg.label;
+      const resp = await fetch('/api/creator-templates/field-assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asset_family: cfg.family,
+          template_id: selectedSample.id,
+          action: 'generate',
+          targets: (['freeText', 'audience', 'tone', 'cta', 'offer'] as const).map((k) => ({
+            scope: 'brief', field_key: k, current_value: String((brief[k as keyof MarketingBrief] as string) ?? ''),
+          })),
+          context: { topic: goalLabel, objective: goalLabel },
+        }),
+      });
+      if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d?.error || `Suggestion failed (${resp.status})`); }
+      const data = await resp.json();
+      const updates = Array.isArray(data?.updates) ? data.updates : [];
+      const patch: Record<string, string> = {};
+      for (const u of updates) {
+        const key = String(u?.field_key ?? u?.fieldKey ?? '');
+        const value = typeof u?.value === 'string' ? u.value : '';
+        if (key && value.trim()) patch[key] = value;
+      }
+      if (patch.freeText) voiceBaseRef.current = patch.freeText;
+      if (Object.keys(patch).length) setBrief((b) => mergeBrief(b, patch as Partial<MarketingBrief>));
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : 'Suggestion failed');
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   const setField = (k: keyof MarketingBrief, v: string) => setBrief((b) => mergeBrief(b, { [k]: v } as Partial<MarketingBrief>));
   const header = (title: string, sub?: string, back?: () => void) => (
@@ -165,9 +207,16 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
           />
         </div>
       </div>
-      <div style={{ fontSize: 12, color: color.textSubtle, marginBottom: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        Tap the mic to speak your brief — we&apos;ll transcribe it as you talk.
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <button type="button" onClick={suggestBrief} disabled={aiBusy || !selectedSample}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: space.xs, background: color.surface, color: color.primary[600], border: `1px solid ${color.primary[600]}`, borderRadius: radius.md, padding: `${space.xs}px ${space.md}px`, cursor: aiBusy ? 'default' : 'pointer', fontWeight: fontWeight.semibold, fontSize: fontSize.sm, opacity: aiBusy ? 0.6 : 1 }}>
+          <Sparkles size={14} /> {aiBusy ? 'Drafting your brief…' : 'Suggest with AI'}
+        </button>
+        <span style={{ fontSize: 12, color: color.textSubtle, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          Let AI draft the brief from your goal — or tap the mic to speak it. You can edit everything before generating.
+        </span>
       </div>
+      {aiError ? <div style={{ fontSize: 12, color: color.danger, marginBottom: 12 }}>{aiError}</div> : null}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
         {([['audience', 'Audience'], ['tone', 'Tone'], ['cta', 'Call to action'], ['offer', 'Offer / product']] as [keyof MarketingBrief, string][]).map(([k, lbl]) => (
           <div key={k}><div style={{ ...label, marginBottom: 6 }}>{lbl}</div>

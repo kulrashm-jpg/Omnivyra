@@ -370,3 +370,45 @@ describe('Field assist — builds from source content (writer / campaign card / 
     expect(prompt).toMatch(/do not contradict or invent beyond it/i);
   });
 });
+
+describe('Field assist — brief scope ("Tell us once" AI suggestion)', () => {
+  it('validator accepts the brief scope + role field_key', () => {
+    const v = validateFieldAssistRequest({
+      asset_family: 'carousel', template_id: carouselTpl.id, action: 'generate',
+      targets: [
+        { scope: 'brief', field_key: 'freeText' },
+        { scope: 'brief', field_key: 'audience' },
+      ],
+    });
+    expect(v.ok).toBe(true);
+    expect(v.request?.targets.map((t) => t.fieldKey)).toEqual(['freeText', 'audience']);
+  });
+
+  it('resolves synthetic brief fields with their own labels + limits', () => {
+    const free = resolveTemplateField(carouselTpl, 'brief', 'freeText')!;
+    expect(free.label).toMatch(/creative brief/i);
+    expect(free.maxLength).toBe(320);
+    expect(resolveTemplateField(carouselTpl, 'brief', 'audience')!.label).toMatch(/audience/i);
+    expect(resolveTemplateField(carouselTpl, 'brief', 'nope')).toBeNull();
+  });
+
+  it('generates a coherent brief (all requested fields returned, none extra)', async () => {
+    const res = await runCreatorFieldAssist({
+      template: carouselTpl,
+      request: {
+        assetFamily: 'carousel', templateId: carouselTpl.id, action: 'generate',
+        context: { topic: 'Promote event' },
+        targets: (['freeText', 'audience', 'tone', 'cta', 'offer'] as const).map((k) => ({ scope: 'brief' as const, fieldKey: k, currentValue: '' })),
+      },
+      llm: jsonLlm([
+        { scope: 'brief', field_key: 'freeText', value: 'A launch carousel for founding members, confident and clear.' },
+        { scope: 'brief', field_key: 'audience', value: 'Busy founders' },
+        { scope: 'brief', field_key: 'tone', value: 'Confident, friendly' },
+        { scope: 'brief', field_key: 'cta', value: 'Start free' },
+        { scope: 'brief', field_key: 'offer', value: 'Omnivyra founding-member plan' },
+      ]),
+    });
+    expect(res.updates.map((u) => u.fieldKey).sort()).toEqual(['audience', 'cta', 'freeText', 'offer', 'tone']);
+    expect(res.usedFallback).toBe(false);
+  });
+});

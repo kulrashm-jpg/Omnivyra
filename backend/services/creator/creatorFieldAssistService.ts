@@ -24,7 +24,20 @@ import {
 import { buildCreatorGroundingBlock, type CreatorCompanyContext, type CreatorBrandVoice } from './creatorCopyContextResolver';
 import { validateCreatorCopyValue, type CopyViolation } from './creatorCopyValidation';
 
-export type FieldAssistScope = 'flat' | 'slide' | 'section' | 'overlay';
+export type FieldAssistScope = 'flat' | 'slide' | 'section' | 'overlay' | 'brief';
+
+/**
+ * The creation "brief" (Tell us once) is the up-front intake — a free-text brief plus audience /
+ * tone / CTA / offer — that feeds every downstream field. Suggesting it with AI is the same
+ * field-assist path over synthetic, role-labeled fields, grounded in the company + the chosen goal.
+ */
+const BRIEF_ROLE_FIELDS: Record<string, TemplateField> = {
+  freeText: { key: 'freeText', label: 'Creative brief (2–3 sentences: what to create, the angle, and why it lands for this audience)', control: 'textarea', required: false, maxLength: 320, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+  audience: { key: 'audience', label: 'Audience (who this asset is for)', control: 'text', required: false, maxLength: 90, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+  tone: { key: 'tone', label: 'Tone (e.g. confident and friendly, bold, expert)', control: 'text', required: false, maxLength: 60, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+  cta: { key: 'cta', label: 'Call to action (a short action, not a headline)', control: 'text', required: false, maxLength: 40, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+  offer: { key: 'offer', label: 'Offer / product (what is being promoted)', control: 'text', required: false, maxLength: 90, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+};
 
 /**
  * The overlay-text panel (hook / headline / supporting text / key insight / CTA) is NOT a set of
@@ -89,7 +102,7 @@ export interface FieldAssistUpdate {
 
 export type AssistLlm = (messages: Array<{ role: 'system' | 'user'; content: string }>) => Promise<string>;
 
-const SCOPES: ReadonlySet<FieldAssistScope> = new Set(['flat', 'slide', 'section', 'overlay']);
+const SCOPES: ReadonlySet<FieldAssistScope> = new Set(['flat', 'slide', 'section', 'overlay', 'brief']);
 const MAX_TARGETS = 60;
 
 /* ── Validation ─────────────────────────────────────────────────────── */
@@ -119,7 +132,7 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
     const scope = obj.scope as FieldAssistScope;
     const fieldKey = String(obj.field_key ?? obj.fieldKey ?? '').trim();
     if (!SCOPES.has(scope) || !fieldKey) {
-      errors.push('each target needs a valid scope (flat|slide|section|overlay) and field_key');
+      errors.push('each target needs a valid scope (flat|slide|section|overlay|brief) and field_key');
       continue;
     }
     const idxRaw = obj.index ?? obj.idx;
@@ -158,8 +171,10 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
 /* ── Field resolution (AI may only touch template-defined fields) ───── */
 
 export function resolveTemplateField(template: CreatorTemplate, scope: FieldAssistScope, fieldKey: string): TemplateField | null {
-  // Overlay roles are synthetic (baked-onto-creative copy), not template-defined fields.
+  // Overlay + brief roles are synthetic (baked-onto-creative copy / up-front intake), not
+  // template-defined fields.
   if (scope === 'overlay') return OVERLAY_ROLE_FIELDS[fieldKey] ?? null;
+  if (scope === 'brief') return BRIEF_ROLE_FIELDS[fieldKey] ?? null;
   const def = template.formDefinition;
   const pool = scope === 'slide' ? def.slides?.fields : scope === 'section' ? def.sections?.fields : def.fields;
   return (pool ?? []).find((f) => f.key === fieldKey) ?? null;
@@ -203,7 +218,7 @@ export function buildFieldAssistMessages(
   const system = [
     `You are a marketing copy assistant for a ${template.assetFamily} asset ("${template.name}").`,
     'You ONLY produce text for the specific fields requested. You NEVER return a whole asset, extra fields, commentary, or markdown.',
-    'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section|overlay","field_key":"...","index":<number|optional>,"value":"..."}]}.',
+    'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section|overlay|brief","field_key":"...","index":<number|optional>,"value":"..."}]}.',
     'Keep each value within its max length. Match the platform-native, concise tone of social creative copy.',
     'Every field on an asset must be DISTINCT: never repeat or lightly reword another field. A subheadline must ADD new information or angle, not restate the headline; a CTA is an action, not a headline. If a value would duplicate a sibling field shown below, write something genuinely different.',
     // Brand voice (communication style) — canonical, server-resolved.
