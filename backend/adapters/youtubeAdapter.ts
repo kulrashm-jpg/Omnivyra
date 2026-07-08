@@ -33,6 +33,7 @@ import type { PublishResult } from './platformAdapterTypes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
 import { generateBrandedYouTubeThumbnail, setYouTubeThumbnail } from './youtubeThumbnail';
+import { resolveCoverBrand } from './mediaCover';
 
 interface ScheduledPost {
   id: string;
@@ -394,7 +395,8 @@ export async function publishToYouTube(
     // Best-effort branded custom thumbnail — deterministic (clean title text),
     // and fully non-fatal: any failure leaves YouTube's auto thumbnail.
     try {
-      const thumb = await generateBrandedYouTubeThumbnail(videoTitle, { companyName: account.username });
+      const brand = await resolveCoverBrand((account as { company_id?: unknown }).company_id, account.username);
+      const thumb = await generateBrandedYouTubeThumbnail(videoTitle, brand);
       if (thumb) await setYouTubeThumbnail(uploadedVideoId, thumb, token.access_token);
     } catch { /* non-fatal — video already published */ }
 

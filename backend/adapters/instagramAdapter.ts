@@ -32,7 +32,7 @@ import axios from 'axios';
 import type { PublishResult } from './platformAdapterTypes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
-import { generateHostedBrandedCover } from './mediaCover';
+import { generateHostedBrandedCover, resolveCoverBrand } from './mediaCover';
 
 interface ScheduledPost {
   id: string;
@@ -259,7 +259,8 @@ export async function publishToInstagram(
       if (coverMode === 'branded') {
         // Deterministic branded cover, hosted publicly. Non-fatal — falls back
         // to a frame / auto cover if generation or hosting fails.
-        const generated = await generateHostedBrandedCover(post.title || caption, { companyName: account.username });
+        const brand = await resolveCoverBrand((account as { company_id?: unknown }).company_id, account.username);
+        const generated = await generateHostedBrandedCover(post.title || caption, brand);
         if (generated) coverUrl = generated;
       } else if (typeof igSettings.cover_url === 'string' && igSettings.cover_url.trim()) {
         coverUrl = igSettings.cover_url.trim();
