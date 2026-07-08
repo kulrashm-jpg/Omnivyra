@@ -46,6 +46,36 @@ interface ScheduledPost {
   hashtags?: string[];
   media_urls?: string[]; // Video file URLs (required)
   scheduled_for: string;
+  publish_settings?: Record<string, any> | null; // generic per-platform options
+}
+
+type TikTokPrivacy = 'PUBLIC_TO_EVERYONE' | 'MUTUAL_FOLLOW_FRIENDS' | 'SELF_ONLY';
+interface TikTokPostOptions {
+  privacy_level: TikTokPrivacy;
+  disable_comment: boolean;
+  disable_duet: boolean;
+  disable_stitch: boolean;
+  video_cover_timestamp_ms: number;
+}
+
+/** Resolve TikTok post options from publish_settings.tiktok, applying safe
+ *  defaults (public, all interactions enabled, 1s cover frame). */
+function resolveTikTokOptions(publishSettings: Record<string, any> | null | undefined): TikTokPostOptions {
+  const s = (publishSettings && typeof publishSettings === 'object' ? publishSettings.tiktok : null) || {};
+  const priv = String(s.privacy ?? '').toUpperCase();
+  const privacy_level: TikTokPrivacy =
+    priv === 'MUTUAL_FOLLOW_FRIENDS' || priv === 'FRIENDS' ? 'MUTUAL_FOLLOW_FRIENDS'
+      : priv === 'SELF_ONLY' || priv === 'PRIVATE' ? 'SELF_ONLY'
+      : 'PUBLIC_TO_EVERYONE';
+  // Settings are stored as ALLOW_* (user-friendly); the API takes DISABLE_*.
+  const coverMs = Number(s.cover_time_ms);
+  return {
+    privacy_level,
+    disable_comment: s.allow_comments === false,
+    disable_duet: s.allow_duet === false,
+    disable_stitch: s.allow_stitch === false,
+    video_cover_timestamp_ms: Number.isFinite(coverMs) && coverMs >= 0 ? Math.trunc(coverMs) : 1000,
+  };
 }
 
 interface SocialAccount {
@@ -67,7 +97,7 @@ interface Token {
  * Returns upload URL and upload_id for chunked upload
  */
 async function initTikTokVideoUpload(
-  videoInfo: { title: string; privacy_level: string },
+  videoInfo: { title: string; options: TikTokPostOptions },
   token: Token
 ): Promise<{ upload_url: string; upload_id: string }> {
   const response = await axios.post(
@@ -78,11 +108,11 @@ async function initTikTokVideoUpload(
       },
       post_info: {
         title: videoInfo.title,
-        privacy_level: videoInfo.privacy_level || 'PUBLIC_TO_EVERYONE',
-        disable_duet: false,
-        disable_comment: false,
-        disable_stitch: false,
-        video_cover_timestamp_ms: 1000,
+        privacy_level: videoInfo.options.privacy_level,
+        disable_duet: videoInfo.options.disable_duet,
+        disable_comment: videoInfo.options.disable_comment,
+        disable_stitch: videoInfo.options.disable_stitch,
+        video_cover_timestamp_ms: videoInfo.options.video_cover_timestamp_ms,
       },
     },
     {
@@ -200,12 +230,11 @@ export async function publishToTikTok(
     const videoUrl = post.media_urls[0];
     const title = post.title || formattedContent.text.substring(0, 150) || 'TikTok Video';
 
-    // Step 1: Initialize upload
+    // Step 1: Initialize upload — privacy + interaction settings + cover frame
+    // come from the per-video publish_settings (defaults: public, all on, 1s).
+    const options = resolveTikTokOptions(post.publish_settings);
     const { upload_url, upload_id } = await initTikTokVideoUpload(
-      {
-        title,
-        privacy_level: 'PUBLIC_TO_EVERYONE',
-      },
+      { title, options },
       token
     );
 

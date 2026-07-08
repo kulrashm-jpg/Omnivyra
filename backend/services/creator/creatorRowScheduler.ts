@@ -63,6 +63,22 @@ function extractYouTubeVisibility(attachedContent: unknown): string | null {
   }
 }
 
+/**
+ * Read the generic per-platform publish settings the user picked at upload from
+ * the parsed row content (creator_asset.publish_settings — e.g. { tiktok: {...} }).
+ * Returns the object or null. Never throws.
+ */
+function extractPublishSettings(attachedContent: unknown): Record<string, unknown> | null {
+  try {
+    const p = (attachedContent && typeof attachedContent === 'object') ? attachedContent as Record<string, any> : {};
+    const asset = (p.creator_asset && typeof p.creator_asset === 'object') ? p.creator_asset : {};
+    const ps = asset.publish_settings ?? p.publish_settings;
+    return (ps && typeof ps === 'object' && !Array.isArray(ps)) ? ps as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Small pure helpers (faithful copies of the structuredPlanScheduler
 //    internals; the content-type fallback map is already duplicated across
 //    structuredPlanScheduler / boltScheduleBlockProcessor / boltContentJobProcessor,
@@ -265,6 +281,7 @@ async function scheduleCreatorRowPost(input: {
       // Per-video YouTube visibility chosen at upload (creator_asset). NULL →
       // adapter default 'public'. Defensive: any parse issue leaves it null.
       youtube_privacy: extractYouTubeVisibility(attachedContent),
+      publish_settings: extractPublishSettings(attachedContent),
       created_at: nowIso,
       updated_at: nowIso,
     })

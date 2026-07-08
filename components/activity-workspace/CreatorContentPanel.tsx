@@ -90,6 +90,8 @@ export type CreatorAssetPayload = {
   video_mode?: 'same' | 'different';
   /** Per-video YouTube visibility (only affects the YouTube upload). */
   youtube_visibility?: 'public' | 'unlisted' | 'private';
+  /** Generic per-platform publish options (e.g. { tiktok: {...} }). */
+  publish_settings?: Record<string, unknown>;
   platform_videos?: Record<string, string>;
   /**
    * PLATFORM-SPECIFIC VIDEO MAPPING — richer per-row mappings (platform +
@@ -1452,6 +1454,17 @@ export default function CreatorContentPanel({
   const [youtubeVisibility, setYoutubeVisibility] = useState<'public' | 'unlisted' | 'private'>(
     ((creatorAsset as { youtube_visibility?: string })?.youtube_visibility as 'public' | 'unlisted' | 'private') ?? 'public',
   );
+  // Per-video TikTok publish options (privacy + interactions + cover frame).
+  const [tiktok, setTiktok] = useState<{ privacy: 'public' | 'friends' | 'private'; allow_comments: boolean; allow_duet: boolean; allow_stitch: boolean; cover_time_ms: number }>(() => {
+    const s = ((creatorAsset as { publish_settings?: { tiktok?: any } })?.publish_settings?.tiktok) || {};
+    return {
+      privacy: s.privacy === 'friends' || s.privacy === 'private' ? s.privacy : 'public',
+      allow_comments: s.allow_comments !== false,
+      allow_duet: s.allow_duet !== false,
+      allow_stitch: s.allow_stitch !== false,
+      cover_time_ms: Number.isFinite(s.cover_time_ms) ? Number(s.cover_time_ms) : 1000,
+    };
+  });
   // Per-platform video mapping rows (platform + format + url + title). Seeded
   // from the richer platform_video_mappings, else from legacy platform_videos
   // (one row per platform, default format) for backward compatibility.
@@ -1620,6 +1633,7 @@ export default function CreatorContentPanel({
         uploaded_by: { user_id: uploadedById, name: uploadedByName || undefined },
         video_mode: videoMode,
         youtube_visibility: youtubeVisibility, // per-video YouTube privacy (read by the scheduler)
+        publish_settings: { tiktok }, // generic per-platform publish options (read by the scheduler)
         ...(platform_videos ? { platform_videos } : {}),
         ...(platform_video_mappings ? { platform_video_mappings } : {}),
         ...(platform_videos
@@ -1909,6 +1923,29 @@ export default function CreatorContentPanel({
                     <option value="private">Private — only you</option>
                   </select>
                   <p className="text-[10px] text-gray-400 mt-0.5">Applies when this video publishes to YouTube.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">TikTok privacy &amp; interactions</label>
+                  <select
+                    value={tiktok.privacy}
+                    onChange={(e) => setTiktok((t) => ({ ...t, privacy: e.target.value as 'public' | 'friends' | 'private' }))}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-400 bg-white"
+                  >
+                    <option value="public">Public</option>
+                    <option value="friends">Friends</option>
+                    <option value="private">Private — only me</option>
+                  </select>
+                  <div className="flex flex-wrap gap-3 mt-2 text-xs text-gray-600">
+                    <label className="inline-flex items-center gap-1"><input type="checkbox" checked={tiktok.allow_comments} onChange={(e) => setTiktok((t) => ({ ...t, allow_comments: e.target.checked }))} /> Comments</label>
+                    <label className="inline-flex items-center gap-1"><input type="checkbox" checked={tiktok.allow_duet} onChange={(e) => setTiktok((t) => ({ ...t, allow_duet: e.target.checked }))} /> Duet</label>
+                    <label className="inline-flex items-center gap-1"><input type="checkbox" checked={tiktok.allow_stitch} onChange={(e) => setTiktok((t) => ({ ...t, allow_stitch: e.target.checked }))} /> Stitch</label>
+                    <label className="inline-flex items-center gap-1">Cover at
+                      <input type="number" min={0} step={0.5} value={tiktok.cover_time_ms / 1000}
+                        onChange={(e) => setTiktok((t) => ({ ...t, cover_time_ms: Math.max(0, Math.round(Number(e.target.value) * 1000)) }))}
+                        className="w-14 px-1 py-0.5 text-xs border border-gray-300 rounded" /> s
+                    </label>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Applies when this video publishes to TikTok.</p>
                 </div>
               </div>
             )}
