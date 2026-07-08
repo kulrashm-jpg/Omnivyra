@@ -10,6 +10,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorCodes';
 import { validateDailyPlanRow } from '../../../lib/shared/bolt/validateDailyPlanRow';
+import { filterPlatformsForFormat } from '../../../lib/shared/bolt/formatPlatformBinding';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -619,7 +620,14 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const countPerType = formatFrequency?.[contentType] != null
           ? Math.max(1, Math.round(Number(formatFrequency[contentType])))
           : synthDefaultCountPerType;
-        executionItems.push({ content_type: contentType, selected_platforms: synthSlotPlatforms, count_per_week: countPerType, topic_slots: buildTopicSlots(contentType, countPerType) });
+        // Per-format platform eligibility: tweet→X only, poll↛X (truncates), etc.
+        // Drop the format entirely when none of the candidate platforms qualify.
+        const plats = filterPlatformsForFormat(synthSlotPlatforms, contentType);
+        if (plats.length === 0) {
+          console.log('[weekly-structure][skip-format-no-eligible-platform]', { contentType, candidates: synthSlotPlatforms });
+          continue;
+        }
+        executionItems.push({ content_type: contentType, selected_platforms: plats, count_per_week: countPerType, topic_slots: buildTopicSlots(contentType, countPerType) });
       }
     } else if (userFormats && userFormats.length > 0) {
       // RECONCILE AI-provided execution_items against the user's explicit
@@ -648,7 +656,13 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         } else if (slots.length < desired) {
           slots = [...slots, ...buildTopicSlots(type, desired - slots.length)];
         }
-        const plats = existing && existing.selected_platforms.length > 0 ? existing.selected_platforms : synthSlotPlatforms;
+        const rawPlats = existing && existing.selected_platforms.length > 0 ? existing.selected_platforms : synthSlotPlatforms;
+        // Per-format platform eligibility (tweet→X only, poll↛X, etc.).
+        const plats = filterPlatformsForFormat(rawPlats, type);
+        if (plats.length === 0) {
+          console.log('[weekly-structure][skip-format-no-eligible-platform]', { type, candidates: rawPlats });
+          continue;
+        }
         reconciled.push({ content_type: type, selected_platforms: plats, count_per_week: desired, topic_slots: slots });
       }
       console.log('[weekly-structure][reconcile-format-frequency]', {
