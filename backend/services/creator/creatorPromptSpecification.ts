@@ -16,6 +16,7 @@
  */
 
 import { getCreatorSystemPrompt } from '../../prompts/creatorContentPromptsV1';
+import { resolveAssetGovernanceProfile } from '../creatorAssetGovernance';
 
 type SystemPromptKind = Parameters<typeof getCreatorSystemPrompt>[0];
 type SystemPromptContext = Parameters<typeof getCreatorSystemPrompt>[1];
@@ -65,12 +66,25 @@ export function buildCreatorBlueprintPromptSpecification(
     input.creatorContext,
   );
 
+  // Generate-to-fit: the copy is composited onto a fixed-size visual, so tell the
+  // model the per-block word budget (from the asset's governance profile) and
+  // require complete copy within it. This is what keeps the downstream governance
+  // trim / renderer clip from ever having to cut text mid-thought.
+  const wordBudget = resolveAssetGovernanceProfile(input.assetType).maxWordsPerSlide;
+  const copyBudgetInstruction =
+    typeof wordBudget === 'number' && wordBudget > 0
+      ? `Text length & completeness (critical — copy is composited onto a fixed visual and MUST NOT be cut off):
+- Keep EACH text block (headline, body, and every slide's copy) within about ${wordBudget} words. Count words.
+- Every block must be a COMPLETE thought that ends cleanly — never write copy that would need truncation to fit, and never end mid-phrase or with an ellipsis.
+- If an idea will not fit, tighten it into a shorter complete statement rather than letting it overflow.\n\n`
+      : '';
+
   const user = `Generate a creator asset blueprint.
 
 Input:
 ${JSON.stringify(input.promptInput, null, 2)}
 
-Analytics intelligence guidance:
+${copyBudgetInstruction}Analytics intelligence guidance:
 ${input.analyticsPromptBlock ?? 'No analytics/search intelligence is available. Use only the supplied creator and campaign context.'}
 ${input.analyticsLowConfidenceNote ? `\nConfidence note: ${input.analyticsLowConfidenceNote}` : ''}
 
