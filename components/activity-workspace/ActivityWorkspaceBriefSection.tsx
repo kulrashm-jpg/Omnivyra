@@ -76,6 +76,20 @@ export default function ActivityWorkspaceBriefSection({ d }: { d: S }) {
               <div className="text-gray-500">Desired action (CTA)</div>
               <div className="text-gray-900">{String((creatorCard?.intent as any)?.cta_type || writerBrief?.desiredAction || intent?.cta_type || '-')}</div>
             </div>
+            {/* Surface the richer daily-plan brief for creator/video activities so
+                the creator has complete direction (was previously writer-only). */}
+            <div className="md:col-span-2">
+              <div className="text-gray-500">What problem are we addressing</div>
+              <div className="text-gray-900 whitespace-pre-wrap">{effectiveProblemAddressed || String((writerBrief as any)?.whatProblemAreWeAddressing || '-')}</div>
+            </div>
+            <div className="md:col-span-2">
+              <div className="text-gray-500">What should the viewer take away</div>
+              <div className="text-gray-900 whitespace-pre-wrap">{effectiveWhatReaderLearns || String((writerBrief as any)?.whatShouldReaderLearn || '-')}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Narrative style</div>
+              <div className="text-gray-900">{String((writerBrief as any)?.narrativeStyle || creatorCard?.tone || '-')}</div>
+            </div>
             {workspaceVisibility.platformSuggestions && (
               <div className="md:col-span-2">
                 <div className="text-gray-500">Platforms</div>
