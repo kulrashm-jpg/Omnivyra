@@ -1111,6 +1111,15 @@ function buildDefaultAnswers(config: WorkflowConfig): Record<string, string> {
   config.fields.forEach((field) => {
     if (field.kind === 'single-select') {
       defaults[field.id] = field.options[0]?.value || '';
+      return;
+    }
+    // Pre-populate preset-backed fields — notably the CTA ("What action should
+    // the viewer take?") — with a sensible default so the creative always ships
+    // WITH a call-to-action instead of a blank field. Any campaign/workspace
+    // prefill or restored value overrides this in the setAnswers merge.
+    const presets = (field as { presets?: ReadonlyArray<string> }).presets;
+    if (Array.isArray(presets) && presets.length > 0) {
+      defaults[field.id] = String(presets[0]);
     }
   });
   return defaults;
