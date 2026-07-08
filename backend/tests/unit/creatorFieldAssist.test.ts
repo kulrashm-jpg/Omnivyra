@@ -252,3 +252,42 @@ describe('Field assist — distinctness (no duplicate sibling copy)', () => {
     expect(user).not.toContain('Already on this asset'); // only sibling equals the target → filtered out
   });
 });
+
+describe('Field assist — overlay scope (baked-on creative copy, role-framed)', () => {
+  it('validator accepts the overlay scope + role field_key', () => {
+    const v = validateFieldAssistRequest({
+      asset_family: 'image', template_id: imageTpl.id, action: 'generate',
+      targets: [{ scope: 'overlay', field_key: 'keyInsight' }],
+    });
+    expect(v.ok).toBe(true);
+    expect(v.request?.targets[0]).toMatchObject({ scope: 'overlay', fieldKey: 'keyInsight' });
+  });
+
+  it('resolves synthetic role fields with role-specific label + max length', () => {
+    const ki = resolveTemplateField(imageTpl, 'overlay', 'keyInsight')!;
+    expect(ki.label).toMatch(/key insight/i);
+    expect(ki.maxLength).toBe(132);
+    const hook = resolveTemplateField(imageTpl, 'overlay', 'hook')!;
+    expect(hook.label).toMatch(/hook/i);
+    expect(resolveTemplateField(imageTpl, 'overlay', 'not-a-role')).toBeNull();
+  });
+
+  it('generates an overlay field (only that role returned) and frames the prompt by role + siblings', async () => {
+    const request: FieldAssistRequest = {
+      assetFamily: 'image', templateId: imageTpl.id, action: 'generate',
+      targets: [{ scope: 'overlay', fieldKey: 'supportingText', currentValue: '' }],
+      context: { topic: 'Launch', siblings: [{ label: 'Hook', value: 'Launching Omnivyra in September 2026' }] },
+    };
+    const resolved = [{ target: request.targets[0], field: resolveTemplateField(imageTpl, 'overlay', 'supportingText')! }];
+    const prompt = buildFieldAssistMessages(imageTpl, request, resolved).map((m) => m.content).join('\n');
+    expect(prompt).toMatch(/supporting text/i);           // role-framed
+    expect(prompt).toContain('Launching Omnivyra in September 2026'); // sibling shown, must stay distinct
+
+    const res = await runCreatorFieldAssist({
+      template: imageTpl, request,
+      llm: jsonLlm([{ scope: 'overlay', field_key: 'supportingText', value: 'Backed by a 40% founding-member discount' }]),
+    });
+    expect(res.updates).toEqual([{ scope: 'overlay', fieldKey: 'supportingText', index: undefined, value: 'Backed by a 40% founding-member discount' }]);
+    expect(res.usedFallback).toBe(false);
+  });
+});

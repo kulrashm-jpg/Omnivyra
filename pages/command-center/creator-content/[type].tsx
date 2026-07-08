@@ -1872,6 +1872,77 @@ export default function CreatorTypeWorkflowPage() {
     }
   }, [activeTemplate, selectedCompanyId, answers, templateValues]);
 
+  // AI-generate a single OVERLAY field (hook / headline / supporting text / key insight).
+  // Overlay copy isn't a template field, so we call field-assist with the 'overlay' scope
+  // (role-framed synthetic fields), passing the OTHER filled overlay fields as siblings so
+  // each role stays distinct (a key insight won't restate the headline).
+  const OVERLAY_FIELD_LABELS: Record<keyof WriterOverlayText, string> = {
+    hook: 'Hook', headline: 'Headline', supportingText: 'Supporting text', keyInsight: 'Key insight', cta: 'CTA',
+  };
+  const handleOverlayAi = React.useCallback(async (fieldId: keyof WriterOverlayText, action: 'generate' | 'rewrite' = 'generate') => {
+    if (!activeTemplate) return;
+    const busyKey = `overlay:${fieldId}`;
+    setAiBusyKey(busyKey);
+    setError(null);
+    try {
+      const siblings = (Object.keys(OVERLAY_FIELD_LABELS) as Array<keyof WriterOverlayText>)
+        .filter((k) => k !== fieldId)
+        .map((k) => ({ label: OVERLAY_FIELD_LABELS[k], value: String(overlayText[k] || '').trim() }))
+        .filter((s) => s.value);
+      const resp = await fetch('/api/creator-templates/field-assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: selectedCompanyId || undefined,
+          asset_family: activeTemplate.assetFamily,
+          template_id: activeTemplate.id,
+          action,
+          targets: [{ scope: 'overlay', field_key: fieldId, current_value: String(overlayText[fieldId] || '') }],
+          context: {
+            topic: String(answers.topic || '').trim(),
+            audience: String(answers.audience || '').trim(),
+            objective: String(answers.objective || '').trim(),
+            tone: String(answers.styleDirection || '').trim(),
+            siblings,
+          },
+        }),
+      });
+      if (!resp.ok) {
+        const detail = await resp.json().catch(() => ({}));
+        throw new Error(detail?.error || `AI assist failed (${resp.status})`);
+      }
+      const data = await resp.json();
+      const updates = Array.isArray(data?.updates) ? data.updates : [];
+      const match = updates.find((u: { field_key?: string; fieldKey?: string; value?: string }) => (u.field_key ?? u.fieldKey) === fieldId);
+      if (match && typeof match.value === 'string' && match.value.trim()) {
+        setOverlayField(fieldId, match.value);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'AI assist failed');
+    } finally {
+      setAiBusyKey(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTemplate, selectedCompanyId, answers, overlayText]);
+
+  // Text-inside-image prepopulation: mirror the template-content fields the operator already
+  // filled on the previous step into the overlay panel so it isn't blank — hook ← the image
+  // text (headline), overlay headline ← the subtext (subheadline). Only fills EMPTY overlay
+  // fields (never overrides edits), and only for the standalone flow (writer imports derive
+  // their overlay from the source post instead).
+  React.useEffect(() => {
+    if (!activeTemplate || writerSource) return;
+    const imageText = String(templateValues.fields?.headline ?? '').trim();
+    const subText = String(templateValues.fields?.subheadline ?? '').trim();
+    if (!imageText && !subText) return;
+    setOverlayText((prev) => {
+      const next = { ...prev };
+      if (!String(prev.hook || '').trim() && imageText) next.hook = imageText.slice(0, 76);
+      if (!String(prev.headline || '').trim() && subText) next.headline = subText.slice(0, 84);
+      return next.hook === prev.hook && next.headline === prev.headline ? prev : next;
+    });
+  }, [activeTemplate, writerSource, templateValues.fields?.headline, templateValues.fields?.subheadline]);
+
   React.useEffect(() => {
     if (authChecked && !isLoading && !user?.userId) {
       router.replace('/login');
@@ -4452,8 +4523,19 @@ export default function CreatorTypeWorkflowPage() {
                         <label key={field.id} className="block">
                           <span className="mb-1 flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">
                             <span>{field.label}</span>
-                            <span className="font-medium normal-case tracking-normal text-emerald-600">
-                              {(overlayText[field.id] || '').length}/{field.max}
+                            <span className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleOverlayAi(field.id)}
+                                disabled={aiBusyKey === `overlay:${field.id}`}
+                                className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50"
+                                title={`AI write the ${field.label.toLowerCase()}`}
+                              >
+                                {aiBusyKey === `overlay:${field.id}` ? '…' : '✦ AI'}
+                              </button>
+                              <span className="font-medium normal-case tracking-normal text-emerald-600">
+                                {(overlayText[field.id] || '').length}/{field.max}
+                              </span>
                             </span>
                           </span>
                           <input
@@ -4484,8 +4566,19 @@ export default function CreatorTypeWorkflowPage() {
                     <label className="block md:col-span-2">
                       <span className="mb-1 flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">
                         <span>Key Insight</span>
-                        <span className="font-medium normal-case tracking-normal text-emerald-600">
-                          {(overlayText.keyInsight || '').length}/132
+                        <span className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleOverlayAi('keyInsight')}
+                            disabled={aiBusyKey === 'overlay:keyInsight'}
+                            className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50"
+                            title="AI write the key insight"
+                          >
+                            {aiBusyKey === 'overlay:keyInsight' ? '…' : '✦ AI'}
+                          </button>
+                          <span className="font-medium normal-case tracking-normal text-emerald-600">
+                            {(overlayText.keyInsight || '').length}/132
+                          </span>
                         </span>
                       </span>
                       <textarea

@@ -24,7 +24,21 @@ import {
 import { buildCreatorGroundingBlock, type CreatorCompanyContext, type CreatorBrandVoice } from './creatorCopyContextResolver';
 import { validateCreatorCopyValue, type CopyViolation } from './creatorCopyValidation';
 
-export type FieldAssistScope = 'flat' | 'slide' | 'section';
+export type FieldAssistScope = 'flat' | 'slide' | 'section' | 'overlay';
+
+/**
+ * The overlay-text panel (hook / headline / supporting text / key insight / CTA) is NOT a set of
+ * template-defined fields — it is the copy baked onto the creative. Each role is a synthetic field
+ * so the SAME field-assist path can generate role-framed copy for it (a "hook" reads differently
+ * from a "key insight"), with the same distinctness + brand-voice grounding as template fields.
+ */
+const OVERLAY_ROLE_FIELDS: Record<string, TemplateField> = {
+  hook: { key: 'hook', label: 'Hook (the attention line that stops the scroll)', control: 'text', required: false, maxLength: 76, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+  headline: { key: 'headline', label: 'Headline (the main line on the creative)', control: 'text', required: false, maxLength: 84, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+  supportingText: { key: 'supportingText', label: 'Supporting text (one short proof, context, or benefit line)', control: 'text', required: false, maxLength: 96, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+  keyInsight: { key: 'keyInsight', label: 'Key insight (the strongest positioning statement or takeaway)', control: 'textarea', required: false, maxLength: 132, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+  cta: { key: 'cta', label: 'Call to action (a short action, not a headline)', control: 'text', required: false, maxLength: 40, aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true } },
+};
 
 export interface FieldAssistTarget {
   scope: FieldAssistScope;
@@ -65,7 +79,7 @@ export interface FieldAssistUpdate {
 
 export type AssistLlm = (messages: Array<{ role: 'system' | 'user'; content: string }>) => Promise<string>;
 
-const SCOPES: ReadonlySet<FieldAssistScope> = new Set(['flat', 'slide', 'section']);
+const SCOPES: ReadonlySet<FieldAssistScope> = new Set(['flat', 'slide', 'section', 'overlay']);
 const MAX_TARGETS = 60;
 
 /* ── Validation ─────────────────────────────────────────────────────── */
@@ -95,7 +109,7 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
     const scope = obj.scope as FieldAssistScope;
     const fieldKey = String(obj.field_key ?? obj.fieldKey ?? '').trim();
     if (!SCOPES.has(scope) || !fieldKey) {
-      errors.push('each target needs a valid scope (flat|slide|section) and field_key');
+      errors.push('each target needs a valid scope (flat|slide|section|overlay) and field_key');
       continue;
     }
     const idxRaw = obj.index ?? obj.idx;
@@ -131,6 +145,8 @@ export function validateFieldAssistRequest(raw: unknown): { ok: boolean; request
 /* ── Field resolution (AI may only touch template-defined fields) ───── */
 
 export function resolveTemplateField(template: CreatorTemplate, scope: FieldAssistScope, fieldKey: string): TemplateField | null {
+  // Overlay roles are synthetic (baked-onto-creative copy), not template-defined fields.
+  if (scope === 'overlay') return OVERLAY_ROLE_FIELDS[fieldKey] ?? null;
   const def = template.formDefinition;
   const pool = scope === 'slide' ? def.slides?.fields : scope === 'section' ? def.sections?.fields : def.fields;
   return (pool ?? []).find((f) => f.key === fieldKey) ?? null;
@@ -174,7 +190,7 @@ export function buildFieldAssistMessages(
   const system = [
     `You are a marketing copy assistant for a ${template.assetFamily} asset ("${template.name}").`,
     'You ONLY produce text for the specific fields requested. You NEVER return a whole asset, extra fields, commentary, or markdown.',
-    'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section","field_key":"...","index":<number|optional>,"value":"..."}]}.',
+    'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section|overlay","field_key":"...","index":<number|optional>,"value":"..."}]}.',
     'Keep each value within its max length. Match the platform-native, concise tone of social creative copy.',
     'Every field on an asset must be DISTINCT: never repeat or lightly reword another field. A subheadline must ADD new information or angle, not restate the headline; a CTA is an action, not a headline. If a value would duplicate a sibling field shown below, write something genuinely different.',
     // Brand voice (communication style) — canonical, server-resolved.
