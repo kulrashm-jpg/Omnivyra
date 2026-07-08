@@ -26,17 +26,28 @@ describe('executionModeInference', () => {
   });
 
   describe('CONDITIONAL_AI', () => {
-    it('returns CONDITIONAL_AI for carousel, slides, infographic, deck, presentation', () => {
-      expect(inferExecutionMode('carousel')).toBe('CONDITIONAL_AI');
-      expect(inferExecutionMode('slides')).toBe('CONDITIONAL_AI');
-      expect(inferExecutionMode('slide')).toBe('CONDITIONAL_AI');
-      expect(inferExecutionMode('slideware')).toBe('CONDITIONAL_AI');
-      expect(inferExecutionMode('infographic')).toBe('CONDITIONAL_AI');
-      expect(inferExecutionMode('deck')).toBe('CONDITIONAL_AI');
-      expect(inferExecutionMode('presentation')).toBe('CONDITIONAL_AI');
+    // Visual formats are now AI-generated (creator renderer) → AI_AUTOMATED.
+    // CONDITIONAL_AI is reserved for genuinely unknown content types.
+    it('returns CONDITIONAL_AI only for unknown content types', () => {
+      expect(inferExecutionMode('unknown_format')).toBe('CONDITIONAL_AI');
+      expect(inferExecutionMode('mystery-thing')).toBe('CONDITIONAL_AI');
     });
-    it('returns CONDITIONAL_AI for compound carousel/slide types', () => {
-      expect(inferExecutionMode('linkedin_carousel')).toBe('CONDITIONAL_AI');
+  });
+
+  describe('AI_AUTOMATED visual formats', () => {
+    it('returns AI_AUTOMATED for carousel, slides, infographic, deck, presentation, image, banner', () => {
+      expect(inferExecutionMode('carousel')).toBe('AI_AUTOMATED');
+      expect(inferExecutionMode('slides')).toBe('AI_AUTOMATED');
+      expect(inferExecutionMode('slide')).toBe('AI_AUTOMATED');
+      expect(inferExecutionMode('slideware')).toBe('AI_AUTOMATED');
+      expect(inferExecutionMode('infographic')).toBe('AI_AUTOMATED');
+      expect(inferExecutionMode('deck')).toBe('AI_AUTOMATED');
+      expect(inferExecutionMode('presentation')).toBe('AI_AUTOMATED');
+      expect(inferExecutionMode('image')).toBe('AI_AUTOMATED');
+      expect(inferExecutionMode('banner')).toBe('AI_AUTOMATED');
+    });
+    it('returns AI_AUTOMATED for compound carousel/slide types', () => {
+      expect(inferExecutionMode('linkedin_carousel')).toBe('AI_AUTOMATED');
     });
   });
 
