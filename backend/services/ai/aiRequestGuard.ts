@@ -58,6 +58,18 @@ export interface AiGuardContext {
   imageCount?: number;
   /** When true, treat the caller as super-admin (bypasses rate/burst). */
   isAdmin?: boolean;
+  /**
+   * Trusted internal / background generation (worker jobs, cron, batch
+   * pipelines) that is NOT a direct user-facing request. When true the
+   * user-facing rate layers (per-user, per-company, per-IP, burst) are skipped
+   * — those exist to shape interactive abuse, and legitimate batch generation
+   * for one tenant would otherwise trip the per-company cap. Provider-protection
+   * (per-operation, per-provider surge caps) and request validation STILL apply,
+   * and cost/credit + LLM-concurrency controls upstream are unaffected. When not
+   * set explicitly, a request with no user identity at all (no userId and no ip)
+   * is treated as background.
+   */
+  background?: boolean;
 }
 
 export class AiGuardError extends Error {
@@ -228,9 +240,14 @@ export async function guardAiRequest(ctx: AiGuardContext): Promise<void> {
   const exempt = ctx.isAdmin === true || (companyId ? limits.exemptOrgs.has(companyId) : false);
   if (exempt) { countAllowed(operation, provider); return; }
 
+  // Trusted internal/background generation: skip the user-facing rate layers
+  // (per-user, per-company, per-IP, burst) but keep provider-protection layers.
+  // Inferred when the caller passes no user identity at all.
+  const background = ctx.background ?? (!userId && !ctx.ip);
+
   try {
     // 2. Burst protection — tight 10s window per user smooths sudden spikes.
-    if (userId) {
+    if (userId && !background) {
       const burst = await checkLayer('ai:burst:user', userId, limits.burstUserPer10s, 10);
       if (!burst.allowed) {
         countThrottled('burst_user', operation);
@@ -242,21 +259,23 @@ export async function guardAiRequest(ctx: AiGuardContext): Promise<void> {
     // 3. Layered rolling-window rate limits. Each layer is independent; the
     //    first exhausted layer blocks. Identifiers are scoped so a company's
     //    limit is shared across its users while each user also has their own.
-    const layers: Array<{ label: string; prefix: string; id: string | null; limit: number; window: number }> = [
-      { label: 'user_min',     prefix: 'ai:rl:user:min',  id: userId,    limit: limits.userPerMin,     window: 60 },
-      { label: 'user_hour',    prefix: 'ai:rl:user:hr',   id: userId,    limit: limits.userPerHour,    window: 3600 },
-      { label: 'company_min',  prefix: 'ai:rl:co:min',    id: companyId, limit: limits.companyPerMin,  window: 60 },
-      { label: 'company_hour', prefix: 'ai:rl:co:hr',     id: companyId, limit: limits.companyPerHour, window: 3600 },
+    const layers: Array<{ label: string; prefix: string; id: string | null; limit: number; window: number; scope: 'user' | 'platform' }> = [
+      { label: 'user_min',     prefix: 'ai:rl:user:min',  id: userId,    limit: limits.userPerMin,     window: 60,   scope: 'user' },
+      { label: 'user_hour',    prefix: 'ai:rl:user:hr',   id: userId,    limit: limits.userPerHour,    window: 3600, scope: 'user' },
+      { label: 'company_min',  prefix: 'ai:rl:co:min',    id: companyId, limit: limits.companyPerMin,  window: 60,   scope: 'user' },
+      { label: 'company_hour', prefix: 'ai:rl:co:hr',     id: companyId, limit: limits.companyPerHour, window: 3600, scope: 'user' },
       // Operation + provider limits are platform-wide surge guards (protect the
-      // provider integration itself), keyed by the operation/provider name.
-      { label: 'operation_min', prefix: 'ai:rl:op:min',   id: operation, limit: limits.operationPerMin, window: 60 },
-      { label: 'provider_min',  prefix: 'ai:rl:prov:min', id: provider,  limit: limits.providerPerMin,  window: 60 },
+      // provider integration itself) — they apply to background jobs too.
+      { label: 'operation_min', prefix: 'ai:rl:op:min',   id: operation, limit: limits.operationPerMin, window: 60,  scope: 'platform' },
+      { label: 'provider_min',  prefix: 'ai:rl:prov:min', id: provider,  limit: limits.providerPerMin,  window: 60,  scope: 'platform' },
       // Per-IP (best-effort; only when the caller supplies an IP — identity-light routes).
-      { label: 'ip_min',        prefix: 'ai:rl:ip:min',   id: ctx.ip ?? null, limit: limits.ipPerMin,   window: 60 },
+      { label: 'ip_min',        prefix: 'ai:rl:ip:min',   id: ctx.ip ?? null, limit: limits.ipPerMin,   window: 60,  scope: 'user' },
     ];
 
     for (const layer of layers) {
       if (!layer.id) continue;
+      // Background/internal generation is exempt from user-facing layers.
+      if (background && layer.scope === 'user') continue;
       const r = await checkLayer(layer.prefix, layer.id, layer.limit, layer.window);
       if (!r.allowed) {
         countThrottled(layer.label, operation);

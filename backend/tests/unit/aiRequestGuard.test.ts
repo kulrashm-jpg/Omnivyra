@@ -167,6 +167,51 @@ describe('exemptions + toggle (Phase 10)', () => {
   });
 });
 
+describe('trusted internal/background generation (PROD-001 calibration)', () => {
+  it('skips user-facing layers (no userId + no ip is inferred as background)', async () => {
+    allowAll();
+    // Worker job: no request-context identity, explicit companyId (the tenant the
+    // batch belongs to). company/user/burst/ip layers must NOT be checked.
+    await expect(guardAiRequest({ operation: 'campaignGeneration', provider: 'anthropic', companyId: 'co1', messages: msg('hi') }))
+      .resolves.toBeUndefined();
+    const prefixes = mockCheckRateLimit.mock.calls.map((c) => (c[1] as { keyPrefix: string }).keyPrefix);
+    expect(prefixes).toEqual(expect.arrayContaining(['ai:rl:op:min', 'ai:rl:prov:min']));
+    expect(prefixes).not.toContain('ai:rl:co:min');
+    expect(prefixes).not.toContain('ai:rl:user:min');
+    expect(prefixes).not.toContain('ai:burst:user');
+  });
+
+  it('a background batch is NOT throttled by the per-company cap', async () => {
+    blockLayer('ai:rl:co:min'); // would block an interactive tenant
+    await expect(guardAiRequest({ operation: 'blogGeneration', companyId: 'co1', messages: msg('hi') }))
+      .resolves.toBeUndefined();
+  });
+
+  it('provider protection STILL applies to background (per-operation surge cap)', async () => {
+    blockLayer('ai:rl:op:min');
+    await expect(guardAiRequest({ operation: 'reportGeneration', companyId: 'co1', messages: msg('hi') }))
+      .rejects.toMatchObject({ code: 'AI_RATE_LIMIT', layer: 'operation_min' });
+  });
+
+  it('request validation STILL applies to background', async () => {
+    process.env.AI_MAX_PROMPT_CHARS = '10';
+    await expect(guardAiRequest({ operation: 'blogGeneration', companyId: 'co1', messages: msg('x'.repeat(50)) }))
+      .rejects.toMatchObject({ code: 'AI_PROMPT_TOO_LARGE', status: 413 });
+  });
+
+  it('explicit background:true exempts user-facing layers even with a userId present', async () => {
+    blockLayer('ai:rl:user:min'); // would block a normal interactive user
+    await expect(guardAiRequest({ operation: 'chat', userId: 'u1', companyId: 'co1', background: true, messages: msg('hi') }))
+      .resolves.toBeUndefined();
+  });
+
+  it('an interactive request (userId present, not background) keeps full user-facing limits', async () => {
+    blockLayer('ai:rl:co:min');
+    await expect(guardAiRequest({ operation: 'chat', userId: 'u1', companyId: 'co1', messages: msg('hi') }))
+      .rejects.toMatchObject({ code: 'AI_RATE_LIMIT', layer: 'company_min' });
+  });
+});
+
 describe('fail-open (Phase 7 resilience)', () => {
   it('a limiter error never blocks a legitimate request', async () => {
     mockCheckRateLimit.mockRejectedValue(new Error('redis down'));

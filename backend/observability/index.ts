@@ -23,6 +23,6 @@ export { observeTable, timedQuery } from './dbObservability';
 export { startSystemSampler } from './system';
 export { observeQueueEvents, registerQueueForDepth, startQueueDepthSampler } from './queueObservability';
 export { runWithRequestDbScope, getRequestDbStats } from './requestScope';
-export { observedFetch, observeExternalCall } from './externalObservability';
+export { observeExternalCall } from './externalObservability';
 export { getObservabilitySnapshot } from './snapshot';
 export type { ObservabilitySnapshot } from './snapshot';
