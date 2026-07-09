@@ -33,6 +33,7 @@ import { parseDailyExecutionMetadata } from '../lib/dailyExecutionMetadata';
 
 import { getRetentionBadge, hasMasterGenerated, hasAiGeneratedMasterContent, hasVariantsReady, hasAiAdaptedVariant, hasDiscoverabilityOptimization, hasAlgorithmicFormattingOptimization, hasMediaSearchSuggestions, getMediaStatusBadge, getExecutionReadinessBadge, getExecutionJobPills, hasSchedulableExecutionJob, countStrategicFactors } from './DailyPlanViewModel';
 
+import type { useDailyPlanning } from '../hooks/useDailyPlanning';
 type S = ReturnType<typeof useDailyPlanning>;
 
 export default function DailyPlanView({ d }: { d: S }) {
@@ -918,6 +919,4 @@ export default function DailyPlanView({ d }: { d: S }) {
 
 
 
-
-export { default } from './DailyPlanViewMain';
 
