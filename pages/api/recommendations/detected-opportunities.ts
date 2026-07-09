@@ -1,3 +1,4 @@
+/** Route shell — detected-opportunities API (Agent-B split: helpers/types in ../../../backend/apiHandlers/recommendations/detectedOpportunitiesShared). */
 import { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendations } from '../../../backend/services/recommendationEngineService';
 import { getCompanyDefaultApiIds } from '../../../backend/services/externalApiService';
@@ -19,83 +20,7 @@ import {
   type OpportunityInput,
 } from '../../../backend/services/opportunityService';
 
-const DEFAULT_LOOKBACK_DAYS = 90;
-
-const riskFromConfidence = (confidence: number) => {
-  if (confidence >= 0.75) return 'Low';
-  if (confidence >= 0.5) return 'Medium';
-  return 'High';
-};
-
-const normalizeTopic = (value: string) => {
-  return String(value || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^\w\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-};
-
-const computePriorityScore = (trend: any) => {
-  const finalScore =
-    typeof trend.final_score === 'number'
-      ? trend.final_score
-      : typeof trend.score === 'number'
-      ? trend.score
-      : null;
-  const confidence =
-    typeof trend.confidence === 'number'
-      ? trend.confidence
-      : typeof trend.signal_confidence === 'number'
-      ? trend.signal_confidence
-      : 0.6;
-  const signalConfidence =
-    typeof trend.signal_confidence === 'number' ? trend.signal_confidence : confidence;
-
-  if (typeof finalScore === 'number') {
-    return finalScore * 0.5 + confidence * 0.3 + signalConfidence * 0.2;
-  }
-  return confidence;
-};
-
-const buildSignalExplanation = (signals: string[]) => {
-  const signalCopy: Record<string, string> = {
-    topic_overlap_detected: 'This overlaps with topics used in a recent campaign.',
-    related_to_recent_campaign: 'This is related to a recent campaign you ran.',
-    possible_campaign_continuation: 'This could continue momentum from a previous campaign.',
-    novel_theme: 'This appears to be a new theme for your brand.',
-  };
-  return signals.map((signal) => signalCopy[signal]).filter(Boolean);
-};
-
-const clampReasoning = (value: string) => {
-  const text = String(value || '').trim();
-  if (!text) return null;
-  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
-  return sentences.slice(0, 2).join(' ');
-};
-
-const normalizeList = (value?: string | null): string[] =>
-  String(value || '')
-    .split(/[,;/|]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-const buildAudienceKeywords = (profile: any): string[] => {
-  const list = Array.isArray(profile?.target_audience_list)
-    ? profile.target_audience_list
-    : normalizeList(profile?.target_audience);
-  return list.map((item: string) => String(item).toLowerCase()).filter(Boolean);
-};
-
-const computeAudienceMatch = (topic: string, keywords: string[]) => {
-  if (!keywords.length) return 0;
-  const lower = String(topic || '').toLowerCase();
-  const matches = keywords.filter((keyword) => keyword && lower.includes(keyword)).length;
-  return Math.min(1, matches / keywords.length);
-};
-
-const clampScore = (value: number) => Math.max(0, Math.min(1, value));
+import { DEFAULT_LOOKBACK_DAYS, buildAudienceKeywords, buildSignalExplanation, clampReasoning, clampScore, computeAudienceMatch, computePriorityScore, normalizeList, normalizeTopic, riskFromConfidence } from '../../../backend/apiHandlers/recommendations/detectedOpportunitiesShared';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
