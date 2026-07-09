@@ -4,6 +4,7 @@ import type { PlatformConnector } from './baseConnector';
 const TWITTER_API = 'https://api.twitter.com/2';
 
 const requestJson = async (url: string, options: RequestInit, errorPrefix: string) => {
+  // ssrf-ok: url is a fixed api.twitter.com endpoint
   const response = await fetch(url, options);
   const text = await response.text();
   let payload: any = null;

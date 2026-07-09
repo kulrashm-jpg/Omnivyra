@@ -145,11 +145,13 @@ export async function normalizeCmsConnections(
         const cfg = (connection?.non_secret_config ?? row.non_secret_config ?? row.config ?? {}) as Record<string, string>;
         const siteUrl = String(cfg.site_url || cfg.endpoint_url || cfg.shop_domain || '').replace(/\/+$/, '');
         if (siteUrl) {
+          // HARDEN-005A: siteUrl is user-configured — SSRF-safe discovery fetch.
+          const { safeFetch } = await import('../../../lib/security/safeFetch');
           const resolved = await resolveCanonicalApiBase({
             provider: row.type,
             siteUrl,
             connectionId,
-            fetchFn: (url) => fetch(url),
+            fetchFn: (url) => safeFetch(url, {}, { allowHttp: true, maxBytes: 10 * 1024 * 1024 }),
             forceRediscover: true,
           });
           if (resolved.source === 'runtime_discovery') {

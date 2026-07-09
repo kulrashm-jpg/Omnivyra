@@ -48,7 +48,11 @@ export type PublishResult = {
 };
 
 const fetchJson = async (url: string, init: RequestInit) => {
-  const response = await fetch(url, init);
+  // HARDEN-005A: url is built from a DB-configured platform base_url — route
+  // through the SSRF-safe fetcher. allowHttp for legacy endpoints; private-IP
+  // checks still block internal targets.
+  const { safeFetch } = await import('../../lib/security/safeFetch');
+  const response = await safeFetch(url, init, { allowHttp: true, maxBytes: 5 * 1024 * 1024 });
   const body = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, body };
 };

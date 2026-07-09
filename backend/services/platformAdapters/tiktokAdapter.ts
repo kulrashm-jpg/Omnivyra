@@ -86,11 +86,13 @@ export const tiktokAdapter: IPlatformAdapter = {
         }
 
         // ── Step 2: download + upload video ─────────────────────────────────
-        const videoRes = await fetch(mediaUrl);
+        // HARDEN-005A: mediaUrl is user-controlled (scheduled_posts.media_urls) — SSRF-safe download.
+        const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
+        const videoRes = await safeFetch(mediaUrl, { method: 'GET' });
         if (!videoRes.ok) {
           return { success: false, error: `Failed to fetch video from storage (${videoRes.status})` };
         }
-        const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+        const videoBuffer = await readCapped(videoRes);
         const totalSize = videoBuffer.length;
 
         let offset = 0;
@@ -98,6 +100,7 @@ export const tiktokAdapter: IPlatformAdapter = {
           const end = Math.min(offset + CHUNK_SIZE, totalSize);
           const chunk = videoBuffer.slice(offset, end);
 
+          // ssrf-ok: uploadUrl returned by the TikTok init API (trusted platform response)
           const chunkRes = await fetch(uploadUrl, {
             method:  'PUT',
             headers: {

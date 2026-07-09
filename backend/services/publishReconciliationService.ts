@@ -263,17 +263,19 @@ async function verifyExternalPublish(context: Awaited<ReturnType<typeof loadPubl
 
   // Reconciliation uses the SAME canonical API base as publishing — never the
   // hardcoded /wp-json/wp/v2 (broke /wp, subdir & proxy installs).
+  // HARDEN-005A: WordPress siteUrl/base is customer-configured — SSRF-safe fetch.
+  const { safeFetch } = await import('../../lib/security/safeFetch');
   const resolved = await resolveCanonicalApiBase({
     provider: 'wordpress',
     siteUrl,
     connectionId,
-    fetchFn: (url) => fetch(url),
+    fetchFn: (url) => safeFetch(url, {}, { allowHttp: true, maxBytes: 10 * 1024 * 1024 }),
   });
   let apiBase = resolved.apiBase;
   const fetchPost = (base: string) =>
-    fetch(`${base}/posts/${encodeURIComponent(context.externalId!)}?context=edit`, {
+    safeFetch(`${base}/posts/${encodeURIComponent(context.externalId!)}?context=edit`, {
       headers: { Authorization: `Basic ${auth}` },
-    });
+    }, { allowHttp: true, maxBytes: 10 * 1024 * 1024 });
 
   let res = await fetchPost(apiBase);
 
@@ -284,7 +286,7 @@ async function verifyExternalPublish(context: Awaited<ReturnType<typeof loadPubl
       provider: 'wordpress',
       siteUrl,
       connectionId,
-      fetchFn: (url) => fetch(url),
+      fetchFn: (url) => safeFetch(url, {}, { allowHttp: true, maxBytes: 10 * 1024 * 1024 }),
     });
     if (repaired.apiBase && repaired.apiBase !== apiBase) {
       apiBase = repaired.apiBase;

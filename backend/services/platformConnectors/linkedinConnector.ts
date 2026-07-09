@@ -27,6 +27,7 @@ const postJson = async (
   authToken: string,
   options?: { idempotentStatuses?: number[] },
 ) => {
+  // ssrf-ok: url is a fixed api.linkedin.com endpoint
   const response = await fetch(url, {
     method: 'POST',
     headers: {

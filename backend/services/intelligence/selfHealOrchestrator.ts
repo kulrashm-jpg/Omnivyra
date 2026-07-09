@@ -190,11 +190,13 @@ export async function runSelfHeal(
     }
     try {
       const before = (cfg as any)?.api_discovery?.canonical_api_base ?? null;
+      // HARDEN-005A: siteUrl is user-configured — SSRF-safe discovery fetch.
+      const { safeFetch } = await import('../../../lib/security/safeFetch');
       const resolved = await rediscoverAndRepairApiBase({
         provider: c.provider,
         siteUrl,
         connectionId: c.id,
-        fetchFn: (url) => fetch(url),
+        fetchFn: (url) => safeFetch(url, {}, { allowHttp: true, maxBytes: 10 * 1024 * 1024 }),
       });
       let outcome: RepairAttempt['outcome'];
       if (resolved.degraded) { outcome = 'degraded'; }

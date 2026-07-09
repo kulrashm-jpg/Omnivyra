@@ -57,6 +57,7 @@ async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Respon
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
+    // ssrf-ok: url is a fixed wikidata.org endpoint built by this adapter
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);

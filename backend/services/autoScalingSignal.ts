@@ -108,6 +108,7 @@ async function deliverSignal(signal: ScaleSignal, depth: number, latencyMs: numb
         ? `${webhookUrl}&scaleDown=true`
         : webhookUrl;
 
+      // ssrf-ok: url is process.env.AUTOSCALE_WEBHOOK_URL (operator-configured constant)
       await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

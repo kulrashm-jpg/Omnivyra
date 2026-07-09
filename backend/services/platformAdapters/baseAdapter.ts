@@ -118,6 +118,7 @@ export async function fetchJsonWithBearer(
 
   let attempt = 0;
   while (true) {
+    // ssrf-ok: url is a fixed platform API host built by subclass adapters
     const response = await fetch(url, { ...init, headers });
     const text = await response.text();
     let data: any = null;

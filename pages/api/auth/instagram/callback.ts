@@ -28,6 +28,7 @@ type MetaInstagramValidationResponse = {
 };
 
 async function readMetaJson(url: string): Promise<unknown> {
+  // ssrf-ok: url is a fixed graph.facebook/instagram OAuth endpoint (code exchange)
   const response = await fetch(url);
   return response.json().catch(() => ({
     error: {
@@ -38,6 +39,7 @@ async function readMetaJson(url: string): Promise<unknown> {
 }
 
 async function fetchMetaJson<T>(url: string): Promise<T> {
+  // ssrf-ok: url is a fixed graph.facebook/instagram OAuth endpoint (code exchange)
   const response = await fetch(url);
   const body = await response.json().catch(() => null);
   if (!response.ok) {

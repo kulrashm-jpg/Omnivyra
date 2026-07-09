@@ -218,7 +218,12 @@ export async function fetchProduction(
   }
   try {
     const envelope = await withTimeout(providerId, timeoutMs, async (signal) => {
-    const response = await fetch(url, { ...init, signal });
+    // HARDEN-005A: `url` derives from the provider catalog (some entries are
+    // DB/config-driven) — route this central intelligence fetcher through the
+    // SSRF-safe layer. allowHttp preserves any legacy http provider; private-IP
+    // checks still block internal targets.
+    const { safeFetch } = await import('../../../lib/security/safeFetch');
+    const response = await safeFetch(url, { ...init, signal }, { allowHttp: true, maxBytes: 25 * 1024 * 1024 });
     const text = await response.text();
     // Usage accounting (fire-and-forget; never blocks the response).
     void recordProviderUsage({ providerId, units: 1, operation: 'http' });

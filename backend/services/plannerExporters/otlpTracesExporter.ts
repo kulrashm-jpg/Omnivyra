@@ -139,6 +139,7 @@ class OtlpTracer implements Tracer {
           const controller = new AbortController();
           const t = setTimeout(() => controller.abort(), cfg.timeoutMs);
           try {
+            // ssrf-ok: cfg.endpoint is an operator-configured OTLP collector
             const res = await fetch(cfg.endpoint, {
               method: 'POST', headers: cfg.headers, body, signal: controller.signal,
             });

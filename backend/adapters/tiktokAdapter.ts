@@ -142,6 +142,7 @@ async function uploadTikTokVideoChunks(
   // HARDEN-005: videoUrl is user-controlled media — block internal targets first.
   const { assertUrlSafe } = await import('../../lib/security/safeFetch');
   await assertUrlSafe(videoUrl);
+  // ssrf-ok: videoUrl pre-validated by assertUrlSafe above (user media)
   const videoResponse = await axios.get(videoUrl, {
     responseType: 'arraybuffer',
   });
@@ -155,6 +156,7 @@ async function uploadTikTokVideoChunks(
     const chunk = videoBuffer.slice(offset, offset + chunkSize);
     const isLast = offset + chunkSize >= videoBuffer.length;
 
+    // ssrf-ok: uploadUrl returned by the TikTok API (trusted platform response)
     await axios.put(uploadUrl, chunk, {
       headers: {
         Authorization: `Bearer ${token.access_token}`,

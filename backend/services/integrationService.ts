@@ -364,10 +364,12 @@ async function testConnection(
   return { success: false, message: `Unknown integration type: ${type}` };
 }
 
-function fetchWithTimeout(url: string, options: RequestInit, ms: number): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+async function fetchWithTimeout(url: string, options: RequestInit, ms: number): Promise<Response> {
+  // HARDEN-005A: used for WordPress/custom-blog publish where the base URL is
+  // customer-configured — route through the SSRF-safe fetcher. allowHttp for
+  // self-hosted sites; private-IP checks still block internal targets.
+  const { safeFetch } = await import('../../lib/security/safeFetch');
+  return safeFetch(url, options, { allowHttp: true, timeoutMs: ms, maxBytes: 10 * 1024 * 1024 });
 }
 
 // ─── REUSABLE SENDERS ────────────────────────────────────────────────────────

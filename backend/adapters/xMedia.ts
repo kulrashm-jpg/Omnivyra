@@ -62,6 +62,7 @@ async function fetchBytes(url: string): Promise<{ buffer: Buffer; contentType: s
   // mechanics/size caps unchanged for legitimate public media.
   const { assertUrlSafe } = await import('../../lib/security/safeFetch');
   await assertUrlSafe(url);
+  // ssrf-ok: url pre-validated by assertUrlSafe above (user media)
   const res = await axios.get(url, {
     responseType: 'arraybuffer',
     timeout: 30000,
@@ -76,6 +77,7 @@ async function fetchBytes(url: string): Promise<{ buffer: Buffer; contentType: s
 
 async function postForm(token: XToken, params: Record<string, string>): Promise<any> {
   const body = new URLSearchParams(params).toString();
+  // ssrf-ok: UPLOAD_URL is a fixed X media-upload host constant
   const res = await axios.post(UPLOAD_URL, body, {
     headers: {
       Authorization: `Bearer ${token.access_token}`,

@@ -104,7 +104,9 @@ async function dispatch(
       const siteUrl = String(payload.siteUrl ?? '');
       const connectionId = (payload.connectionId as string) ?? null;
       if (!provider || !siteUrl) return { ok: false, detail: 'missing provider/siteUrl' };
-      const r = await rediscoverAndRepairApiBase({ provider, siteUrl, connectionId, fetchFn: (u) => fetch(u) });
+      // HARDEN-005A: siteUrl is user-configured — SSRF-safe discovery fetch.
+      const { safeFetch } = await import('../../../lib/security/safeFetch');
+      const r = await rediscoverAndRepairApiBase({ provider, siteUrl, connectionId, fetchFn: (u) => safeFetch(u, {}, { allowHttp: true, maxBytes: 10 * 1024 * 1024 }) });
       return { ok: !r.degraded, detail: `source=${r.source} degraded=${r.degraded}` };
     }
     return { ok: false, detail: 'unsupported target' };

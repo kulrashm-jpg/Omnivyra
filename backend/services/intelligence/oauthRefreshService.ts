@@ -116,11 +116,13 @@ export async function refreshConnectionToken(
       client_secret: clientSecret,
       refresh_token: refreshToken,
     });
-    const res = await fetch(spec.tokenUrl, {
+    // HARDEN-005A: spec.tokenUrl comes from the provider spec (DB) — SSRF-safe fetch.
+    const { safeFetch } = await import('../../../lib/security/safeFetch');
+    const res = await safeFetch(spec.tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
-    });
+    }, { maxBytes: 2 * 1024 * 1024 });
     const data = await res.json().catch(() => null);
     if (!res.ok || !(data as any)?.access_token) {
       await updateWebsiteConnection(connectionId, { health_status: 'degraded', last_error: `oauth_refresh ${res.status}` }).catch(() => undefined);

@@ -23,6 +23,7 @@ export async function refreshAccountContext(accountId: string): Promise<AccountC
     const baseUrl = getCanonicalAppUrl();
     const url = `${baseUrl}/api/account-context/analyze?companyId=${encodeURIComponent(accountId)}&refresh=1`;
 
+    // ssrf-ok: url is our own canonical app URL (getCanonicalAppUrl), an internal self-call to a fixed host
     const response = await fetch(url, {
       method: 'GET',
       headers: { 'x-internal-refresh': '1' },

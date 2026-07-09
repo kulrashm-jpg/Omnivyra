@@ -129,6 +129,7 @@ async function fetchFirstBytes(objectPath: string, byteCount: number): Promise<B
     if (publicUrl) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
+      // ssrf-ok: publicUrl is a Supabase storage public URL (fixed host, server-derived object path)
       const resp = await fetch(publicUrl, {
         method: 'GET',
         headers: {

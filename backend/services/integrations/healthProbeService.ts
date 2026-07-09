@@ -55,6 +55,7 @@ async function probeOne(platform: string, accessToken: string): Promise<{ status
   if (platform === 'reddit') headers['User-Agent'] = 'virality/1.0 health-probe';
 
   try {
+    // ssrf-ok: url comes from the fixed PROBE_ENDPOINTS constant table (platform API hosts)
     const res = await fetch(url, { headers });
     return {
       status: classifyHttp(res.status),

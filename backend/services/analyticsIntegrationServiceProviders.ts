@@ -459,6 +459,7 @@ async function fetchGoogleAdminJson(
   accessToken: string,
   url: string,
 ): Promise<any> {
+  // ssrf-ok: url is a fixed Google Admin/Search-Console API host built internally
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${accessToken}`,

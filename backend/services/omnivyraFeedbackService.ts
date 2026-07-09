@@ -82,6 +82,7 @@ export const sendLearningSnapshot = async (snapshot: LearningSnapshot): Promise<
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
     try {
+      // ssrf-ok: url is the fixed Omnivyra service base from env
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

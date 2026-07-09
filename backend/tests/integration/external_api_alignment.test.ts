@@ -1,4 +1,11 @@
 import * as externalApiService from '../../services/externalApiService';
+
+// HARDEN-005A: the external-API fetcher now routes through the SSRF-safe layer
+// (undici), not global fetch. Delegate safeFetch to the test global.fetch mock.
+jest.mock("../../../lib/security/safeFetch", () => ({
+  safeFetch: (url, init) => global.fetch(url, init),
+}));
+
 import {
   normalizeNewsApiTrends,
   normalizeSerpApiTrends,

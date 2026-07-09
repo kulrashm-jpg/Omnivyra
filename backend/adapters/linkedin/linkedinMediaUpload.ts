@@ -361,6 +361,7 @@ async function putBinaryToLinkedIn(input: {
   contentType: string;
 }): Promise<{ ok: true; etag: string | null } | { ok: false; error: LinkedInUploadFailure }> {
   try {
+    // ssrf-ok: uploadUrl is returned by the LinkedIn API (trusted platform response), not user input
     const r = await fetch(input.uploadUrl, {
       method: 'PUT',
       headers: {

@@ -78,9 +78,11 @@ export abstract class BaseCmsAdapter implements CmsAdapter {
   }
 
   protected async fetchWithTimeout(url: string, options: RequestInit, ms: number): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ms);
-    return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+    // HARDEN-005A: CMS site/API-base URLs are user-configured (site_url) — route
+    // through the SSRF-safe fetcher. allowHttp because self-hosted CMS may be
+    // http; private-IP checks still block internal targets either way.
+    const { safeFetch } = await import('../../../lib/security/safeFetch');
+    return safeFetch(url, options, { allowHttp: true, timeoutMs: ms, maxBytes: 10 * 1024 * 1024 });
   }
 
   /**

@@ -129,6 +129,23 @@ if (fs.existsSync(envPath)) {
 //
 // See scripts/verify-schema-parity.js for the column manifest and
 // docs/migration-discipline.md for the application protocol.
+// ── HARDEN-005A: outbound-SSRF guard ─────────────────────────────────────────
+// Fails the deploy if server code performs an outbound request with a dynamic
+// URL via a raw fetch/axios/http.request instead of lib/security/safeFetch.
+// See scripts/check-outbound-ssrf.js for the rule + suppression convention.
+process.stdout.write(`Checking outbound-SSRF guard...\n`);
+try {
+  execSync('node scripts/check-outbound-ssrf.js', { stdio: 'inherit' });
+  process.stdout.write(`  outbound-SSRF guard: OK\n`);
+} catch {
+  process.stdout.write(
+    `RESULT: BLOCKED — a raw dynamic-URL outbound call bypasses lib/security/safeFetch.\n` +
+    `Route it through safeFetch/safeFetchBuffer (or assertUrlSafe), or add a\n` +
+    `documented \`// ssrf-ok: <reason>\` comment. See scripts/check-outbound-ssrf.js.\n`,
+  );
+  process.exit(1);
+}
+
 process.stdout.write(`Verifying schema parity against production DB...\n`);
 const strictSchema = process.env.PREDEPLOY_STRICT_SCHEMA === '1';
 try {

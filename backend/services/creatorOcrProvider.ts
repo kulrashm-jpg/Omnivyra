@@ -210,7 +210,9 @@ export async function runCreatorOcr(input: {
     return result;
   }
 
-  const response = await fetch(endpoint, {
+  // HARDEN-005A: OCR provider `endpoint` is config/env-configurable — SSRF-safe fetch.
+  const { safeFetch } = await import('../../lib/security/safeFetch');
+  const response = await safeFetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

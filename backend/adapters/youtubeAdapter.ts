@@ -184,6 +184,7 @@ async function uploadVideoToYouTube(
     throw new Error(initiateResponse.data?.error?.message || 'Failed to initialize YouTube upload session');
   }
 
+  // ssrf-ok: uploadUrl returned by the YouTube resumable-upload API (trusted platform response)
   const uploadResponse = await axios.put(uploadUrl, buffer, {
     headers: {
       Authorization: `Bearer ${token.access_token}`,

@@ -23,3 +23,8 @@ jobs:
 
       - name: TypeScript non-regression baseline
         run: npm run typecheck:ci
+
+      # HARDEN-005A: fail the build if new code makes a raw dynamic-URL outbound
+      # request that bypasses the centralized SSRF layer (lib/security/safeFetch).
+      - name: Outbound-SSRF guard
+        run: npm run check:ssrf

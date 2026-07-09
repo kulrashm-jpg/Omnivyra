@@ -94,6 +94,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    // ssrf-ok: url is a fixed/env SERP provider endpoint (SERPAPI/ScaleSERP/DataForSEO)
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);

@@ -86,7 +86,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Make test API call
-    const response = await fetch(endpoint, {
+    // HARDEN-005A: `endpoint` is a user-supplied connection-test URL — SSRF-safe fetch.
+    const { safeFetch } = await import('../../../../lib/security/safeFetch');
+    const response = await safeFetch(endpoint, {
       headers: {
         Authorization: bearerAuthorization(token.access_token),
       },

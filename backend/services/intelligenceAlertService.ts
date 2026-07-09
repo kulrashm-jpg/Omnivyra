@@ -208,6 +208,7 @@ async function sendEmail(
     event.message ?? fired.map((f) => f.message).join('\n') ?? 'Intelligence alert';
 
   try {
+    // ssrf-ok: webhookUrl is env-configured (INTELLIGENCE_ALERT_EMAIL_WEBHOOK / SLACK_WEBHOOK_URL), operator constant
     const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -247,6 +248,7 @@ async function sendSlack(
     'Intelligence alert';
 
   try {
+    // ssrf-ok: webhookUrl is env-configured (INTELLIGENCE_ALERT_EMAIL_WEBHOOK / SLACK_WEBHOOK_URL), operator constant
     const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

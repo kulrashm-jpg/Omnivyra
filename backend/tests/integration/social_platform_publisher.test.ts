@@ -9,6 +9,14 @@ jest.mock('../../services/externalApiService', () => ({
   getApiHealthByPlatform: jest.fn(),
 }));
 
+// HARDEN-005A: the publisher now routes through the SSRF-safe fetcher (undici),
+// not global fetch. Delegate safeFetch to the test's global.fetch mock so the
+// existing per-test response stubs continue to drive it (validation is covered
+// by the dedicated ssrfGuard/safeFetch suites).
+jest.mock('../../../lib/security/safeFetch', () => ({
+  safeFetch: (url: string, init?: unknown) => (global as unknown as { fetch: (u: string, i?: unknown) => Promise<unknown> }).fetch(url, init),
+}));
+
 const basePost = {
   post_id: 'post-1',
   platform: 'linkedin' as const,
