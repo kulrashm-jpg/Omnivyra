@@ -405,6 +405,14 @@ export async function runCreatorFieldAssist(input: {
     usedFallback = true;
   }
 
+  // Sibling values on the SAME asset — a supporting field (e.g. subheadline)
+  // must ENHANCE, never be an exact copy of another field (e.g. the headline).
+  const siblingValues = new Set(
+    (request.context?.siblings ?? [])
+      .map((s) => String(s?.value ?? '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+
   const updates: FieldAssistUpdate[] = [];
   const violations: CopyViolation[] = [];
   const brandVoice = request.context?.brandVoice;
@@ -425,8 +433,23 @@ export async function runCreatorFieldAssist(input: {
       v = validateCreatorCopyValue(value, target.fieldKey, brandVoice);
     }
     if (v.repaired) usedFallback = true;
+    // Distinctness safety net (mainly the deterministic fallback path — the LLM
+    // is already told not to duplicate siblings): when a GENERATED value is an
+    // exact copy of another field on the asset, drop it for OPTIONAL fields so
+    // it is left blank/regenerated rather than echoing a sibling. Required
+    // fields keep their value (an empty required field is worse than a dup).
+    let finalValue = v.value;
+    if (
+      request.action === 'generate' &&
+      !field.required &&
+      finalValue.trim() &&
+      siblingValues.has(finalValue.trim().toLowerCase())
+    ) {
+      finalValue = '';
+      usedFallback = true;
+    }
     violations.push(...v.violations);
-    updates.push({ scope: target.scope, fieldKey: target.fieldKey, index: target.index, value: v.value });
+    updates.push({ scope: target.scope, fieldKey: target.fieldKey, index: target.index, value: finalValue });
   }
 
   return { updates, usedFallback, invalidTargets, violations };

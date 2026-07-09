@@ -77,6 +77,39 @@ describe('Field assist — batch slide coverage (creator flow 1: no empty requir
   });
 });
 
+describe('Field assist — supporting field must not copy the headline (creator subheadline bug)', () => {
+  it('drops an OPTIONAL generated value that exactly duplicates a sibling (headline)', async () => {
+    // LLM (mis)returns the headline verbatim for the subheadline; the headline is
+    // passed as a sibling → the duplicate is dropped so it never echoes.
+    const res = await runCreatorFieldAssist({
+      template: imageTpl,
+      request: req({
+        assetFamily: 'image',
+        templateId: imageTpl.id,
+        targets: [{ scope: 'flat', fieldKey: 'subheadline', currentValue: 'Promote an Offer or Sale' }],
+        context: { topic: 'Promote an Offer or Sale', siblings: [{ label: 'Headline', value: 'Promote an Offer or Sale' }] },
+      }),
+      llm: jsonLlm([{ scope: 'flat', field_key: 'subheadline', value: 'Promote an Offer or Sale' }]),
+    });
+    expect(res.updates).toHaveLength(1);
+    expect(res.updates[0].value).toBe(''); // duplicate dropped, not echoed
+  });
+
+  it('keeps a DISTINCT supporting line that enhances the headline', async () => {
+    const res = await runCreatorFieldAssist({
+      template: imageTpl,
+      request: req({
+        assetFamily: 'image',
+        templateId: imageTpl.id,
+        targets: [{ scope: 'flat', fieldKey: 'subheadline', currentValue: 'Promote an Offer or Sale' }],
+        context: { topic: 'Promote an Offer or Sale', siblings: [{ label: 'Headline', value: 'Promote an Offer or Sale' }] },
+      }),
+      llm: jsonLlm([{ scope: 'flat', field_key: 'subheadline', value: 'Save 30% this week only — ends Sunday' }]),
+    });
+    expect(res.updates[0].value).toBe('Save 30% this week only — ends Sunday');
+  });
+});
+
 describe('Field assist — validation', () => {
   it('accepts a well-formed request', () => {
     const v = validateFieldAssistRequest({ asset_family: 'image', template_id: 'x', action: 'rewrite', targets: [{ scope: 'flat', field_key: 'headline' }] });

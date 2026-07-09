@@ -134,50 +134,78 @@ export function useCreatorWorkflowActions(
     }
   }, [activeTemplate, selectedCompanyId, answers, templateValues, writerSource, type]);
 
-  // ── Auto-fill an empty carousel/infographic draft on create ──────────────
-  // A carousel/infographic editor otherwise LANDS with every repeated slide/
-  // section row empty, so its required "Slide title" fields immediately show
-  // validation errors. This runs the same field-assist batch ONCE per template,
-  // ONLY when we have something to write from (the operator's topic, or the
-  // Writer post / campaign strategic card that flows in as source_content), and
-  // ONLY over EMPTY fields of EMPTY rows — authored copy is never overwritten.
+  // ── Auto-fill / de-duplicate the draft on create ─────────────────────────
+  // Two problems this fixes, once per template, only when we have something to
+  // write from (the operator's topic, or the Writer post / campaign strategic
+  // card that flows in as source_content):
+  //   1. A carousel/infographic editor LANDS with every repeated slide/section
+  //      row empty, so required "Slide title" fields immediately error. We fill
+  //      the EMPTY fields of ENTIRELY-empty rows (authored copy untouched).
+  //   2. A flat image draft can land with a SUPPORTING field (e.g. subheadline)
+  //      seeded identical to the lead (headline). A supporting line must ENHANCE
+  //      the headline, never copy it — so we regenerate any non-lead field that
+  //      duplicates the lead, plus any empty REQUIRED flat field. field-assist
+  //      is sibling-aware (it's told not to duplicate the other fields), so the
+  //      regenerated value is distinct.
   // The user can still edit or regenerate any field afterwards.
   const autoFilledTemplateRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (!activeTemplate) return;
+    if (autoFilledTemplateRef.current === activeTemplate.id) return; // once per template
+    if (aiBusyKey) return;                                    // an AI op is already running
+    // Need real context — never auto-write generic copy from nothing.
+    const hasContext =
+      String(answers.topic || '').trim().length > 0 || !!String(writerSource?.body || '').trim();
+    if (!hasContext) return;
+
     const fd = activeTemplate.formDefinition;
+    const targets: TemplateAiAssistTarget[] = [];
+
+    // (1) Carousel slides / infographic sections — fill empty fields of empty rows.
     const repeat = fd.slides
       ? { scope: 'slide' as const, fields: fd.slides.fields, rows: templateValues.slides ?? [] }
       : fd.sections
         ? { scope: 'section' as const, fields: fd.sections.fields, rows: templateValues.sections ?? [] }
         : null;
-    if (!repeat) return;                                     // only carousel/infographic
-    if (autoFilledTemplateRef.current === activeTemplate.id) return; // once per template
-    if (aiBusyKey) return;                                   // an AI op is already running
-    // Need real context — never auto-write generic copy from nothing.
-    const hasContext =
-      String(answers.topic || '').trim().length > 0 || !!String(writerSource?.body || '').trim();
-    if (!hasContext) return;
-    // Target only EMPTY fields of ENTIRELY-empty rows (mirrors "Generate empty").
-    const targets: TemplateAiAssistTarget[] = [];
-    repeat.rows.forEach((row, index) => {
-      const rowEmpty = repeat.fields.every((f) => !String(row?.[f.key] || '').trim());
-      if (!rowEmpty) return;
-      for (const f of repeat.fields) {
+    if (repeat) {
+      repeat.rows.forEach((row, index) => {
+        const rowEmpty = repeat.fields.every((f) => !String(row?.[f.key] || '').trim());
+        if (!rowEmpty) return;
+        for (const f of repeat.fields) {
+          if (!f.aiAssist?.generate) continue;
+          targets.push({ scope: repeat.scope, fieldKey: f.key, index, currentValue: '' });
+        }
+      });
+    }
+
+    // (2) Flat fields — regenerate a supporting field that DUPLICATES the lead,
+    //     and fill any empty REQUIRED flat field.
+    const flatFields = fd.fields ?? [];
+    if (flatFields.length > 0) {
+      const leadKey = flatFields.find((f) => ['headline', 'title', 'quote'].includes(f.key))?.key
+        ?? flatFields[0]?.key ?? null;
+      const leadVal = leadKey ? String(templateValues.fields?.[leadKey] ?? '').trim() : '';
+      for (const f of flatFields) {
         if (!f.aiAssist?.generate) continue;
-        targets.push({ scope: repeat.scope, fieldKey: f.key, index, currentValue: '' });
+        const val = String(templateValues.fields?.[f.key] ?? '').trim();
+        const duplicatesLead = f.key !== leadKey && !!leadVal && val.toLowerCase() === leadVal.toLowerCase();
+        const emptyRequired = f.required && !val;
+        if (duplicatesLead || emptyRequired) {
+          targets.push({ scope: 'flat', fieldKey: f.key, currentValue: val });
+        }
       }
-    });
-    if (targets.length === 0) return;                        // nothing empty to fill
+    }
+
+    if (targets.length === 0) return;                        // nothing to fill/fix
     autoFilledTemplateRef.current = activeTemplate.id;       // mark BEFORE firing (block re-entry)
     void handleTemplateAiAssist({
       template: activeTemplate,
       action: 'generate',
-      busyKey: `batch:${repeat.scope}:auto-fill`,
-      label: `Generating ${repeat.scope === 'slide' ? 'slides' : 'sections'}…`,
+      busyKey: `batch:${repeat ? repeat.scope : 'flat'}:auto-fill`,
+      label: repeat ? `Generating ${repeat.scope === 'slide' ? 'slides' : 'sections'}…` : 'Refining copy…',
       targets,
     });
-  }, [activeTemplate, templateValues.slides, templateValues.sections, answers.topic, writerSource?.body, aiBusyKey, handleTemplateAiAssist]);
+  }, [activeTemplate, templateValues.slides, templateValues.sections, templateValues.fields, answers.topic, writerSource?.body, aiBusyKey, handleTemplateAiAssist]);
 
   // AI-generate a single OVERLAY field (hook / headline / supporting text / key insight).
   // Overlay copy isn't a template field, so we call field-assist with the 'overlay' scope
