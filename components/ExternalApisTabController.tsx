@@ -1,4 +1,4 @@
-/** ExternalApisTabContent — thin composition. */
+/** useExternalApisTabController — state/handlers of ExternalApisTabContent, verbatim. */
 import React from 'react';
 import Link from 'next/link';
 import type { useExternalApisState } from '../hooks/useExternalApisState';
@@ -18,14 +18,44 @@ import {
 
 type ExternalApisState = ReturnType<typeof useExternalApisState>;
 
-import { useExternalApisTabController } from './ExternalApisTabController';
-import ExternalApisSectionsA from './ExternalApisSectionsA';
-import ExternalApisSectionsB from './ExternalApisSectionsB';
-
-export default function ExternalApisTabContent({ d }: { d: ExternalApisState }) {
-  const f = useExternalApisTabController({ d });
+export function useExternalApisTabController({ d }: { d: ExternalApisState }) {
   const {
-    d: _d,
+    activeTab, setActiveTab, apis, setApis, form, setForm,
+    editingId, setEditingId, isSaving, isLoading, errorMessage, setErrorMessage,
+    successMessage, setSuccessMessage, expandedCardIds, setExpandedCardIds,
+    accountsByApiId, accountsLoadingId,
+    fetchWithAuth, loadApis, loadAccounts, saveApi, deleteApi, startEdit, addBlankApi,
+    testConnectionApi, testConnectionLoadingId, testResult,
+    testGeo, setTestGeo, testExistingApi, testFetch,
+    testAllRunning, testAllSummary, runAllTests,
+    apiTestResults, setApiTestResults, selectedTestScenario, setSelectedTestScenario,
+    healthCounts, lastHealthCheckAt, getApiSection, getHealthBadge, getHealthStatus,
+    HealthBadgeLegend, formatPercent, showRunTestAndActions,
+    isApiCategoryTab, API_CATEGORY_TABS,
+    headerMode, setHeaderMode, headerJson, setHeaderJson, headerPairs, setHeaderPairs,
+    queryMode, setQueryMode, queryJson, setQueryJson, queryPairs, setQueryPairs,
+    previewUrl, previewHeadersRaw, previewHeadersMerged, previewQueryParams, previewQueryParamsRaw,
+    resolveEditorPayload, parseJsonObject,
+    scaleHeight, dragSourceId, setDragSourceId, dragOverId, setDragOverId,
+    handleAccountDragStart, handleAccountDragOver, handleAccountDrop,
+    openAddAccountModal, openEditAccountModal, deleteAccount, toggleAccountActive,
+    isPlatformAdminView, canManageExternalApis, selectedCompanyId, companyContextId,
+    presets, presetSelection, hiddenPresetIds, editingPresetId, setEditingPresetId,
+    selectedCatalogPreset, setSelectedCatalogPreset, selectedPreset, setSelectedPreset,
+    isSavingPreset, savePreset, addPresetToCatalog, findPresetByName, applyPreset,
+    platformCompanies, platformCompanyId, setPlatformCompanyId,
+    loadPlatformCompanies, isLoadingPlatformCompanies, platformAccessDenied,
+    rejectionReasons, setRejectionReasons, updateRequestStatus,
+    requests, isLoadingRequests, loadRequests, requestForm, setRequestForm,
+    isSubmittingRequest, submitNewApiRequest, resetMessages,
+    validateApi, updateApi, apiKeyEnvName,
+    runtime, setRuntime,
+    isLoadingPresets, loadPresets, openPresetModal, canManagePresets,
+    isPlatformCatalogMode, authRequiresKey, isSuperAdmin,
+  } = d;
+
+  return {
+    d,
     API_CATEGORY_TABS, HealthBadgeLegend, accountsByApiId, accountsLoadingId, activeTab, addBlankApi, addPresetToCatalog,
     apiKeyEnvName, apiTestResults, apis, applyPreset, authRequiresKey, canManageExternalApis, canManagePresets, companyContextId,
     deleteAccount, deleteApi, dragOverId, dragSourceId, editingId, editingPresetId, errorMessage, expandedCardIds, fetchWithAuth,
@@ -43,17 +73,5 @@ export default function ExternalApisTabContent({ d }: { d: ExternalApisState }) 
     setSelectedCatalogPreset, setSelectedPreset, setSelectedTestScenario, setSuccessMessage, setTestGeo, showRunTestAndActions,
     startEdit, submitNewApiRequest, successMessage, testAllRunning, testAllSummary, testConnectionApi, testConnectionLoadingId,
     testExistingApi, testFetch, testGeo, testResult, toggleAccountActive, updateApi, updateRequestStatus, validateApi
-  } = f;
-  return (
-    <>
-        {(isApiCategoryTab || activeTab === 'usage') && (
-          <div className="bg-white rounded-lg shadow p-3">
-            <HealthBadgeLegend />
-          </div>
-        )}
-
-      <ExternalApisSectionsA f={f} />
-      <ExternalApisSectionsB f={f} />
-    </>
-  );
+  };
 }
