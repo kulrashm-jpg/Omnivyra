@@ -1,0 +1,180 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`cron.ts scheduling contract (source characterization) locks every timing-constant definition: timing-constants 1`] = `
+{
+  "AUTO_OPTIMIZATION_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "BASE_TICK_MS": "4 * 60 * 60 * 1000",
+  "BUYER_INTENT_INTERVAL_MS": "30 * 60 * 1000",
+  "CAMPAIGN_HEALTH_EVALUATION_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "CAMPAIGN_OPPORTUNITY_INTERVAL_MS": "60 * 60 * 1000",
+  "COMMUNITY_AI_LEASE_REAP_INTERVAL_MS": "30 * 1000",
+  "COMMUNITY_AI_METRICS_ROLLUP_INTERVAL_MS": "60 * 60 * 1000",
+  "COMMUNITY_AI_METRIC_DLQ_FLUSH_INTERVAL_MS": "60 * 1000",
+  "COMMUNITY_POST_INTERVAL_MS": "3 * 60 * 60 * 1000",
+  "COMPANY_TREND_RELEVANCE_INTERVAL_MS": "6 * 60 * 60 * 1000",
+  "CONFIDENCE_CALIBRATION_INTERVAL_MS": "7 * 24 * 60 * 60 * 1000",
+  "CONTENT_OPPORTUNITY_INTERVAL_MS": "2 * 60 * 60 * 1000",
+  "CONVERSATION_MEMORY_SAFETYNET_MS": "5 * 60 * 1000",
+  "CONVERSATION_TRIAGE_INTERVAL_MS": "3 * 60 * 1000",
+  "CRON_ADMIN_WARM_THROTTLE_MS": "30_000",
+  "CRON_INTERVAL_MS": "(config.CRON_INTERVAL_SECONDS ?? 900) * 1000",
+  "DAILY_INTELLIGENCE_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "ENGAGEMENT_CAPTURE_INTERVAL_MS": "30 * 60 * 1000",
+  "ENGAGEMENT_DIGEST_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "ENGAGEMENT_OPPORTUNITY_DETECTION_INTERVAL_MS": "5 * 60 * 1000",
+  "ENGAGEMENT_OPPORTUNITY_SCANNER_INTERVAL_MS": "4 * 60 * 60 * 1000",
+  "ENGAGEMENT_POLLING_INTERVAL_MS": "10 * 60 * 1000",
+  "ENGAGEMENT_SIGNAL_ARCHIVE_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "ENGAGEMENT_SIGNAL_SCHEDULER_INTERVAL_MS": "15 * 60 * 1000",
+  "FEEDBACK_INTELLIGENCE_INTERVAL_MS": "6 * 60 * 60 * 1000",
+  "GA4_INGESTION_INTERVAL_MS": "6 * 60 * 60 * 1000",
+  "GOVERNANCE_AUDIT_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "INFLUENCER_LEARNING_INTERVAL_MS": "30 * 60 * 1000",
+  "INSIGHT_LEARNING_INTERVAL_MS": "6 * 60 * 60 * 1000",
+  "INTELLIGENCE_EVENT_CLEANUP_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "INTELLIGENCE_PATTERN_LEARN_INTERVAL_MS": "12 * 60 * 1000",
+  "INTELLIGENCE_POLLING_INTERVAL_MS": "2 * 60 * 60 * 1000",
+  "LEAD_THREAD_QUEUE_CLEANUP_INTERVAL_MS": "10 * 60 * 1000",
+  "LEAD_THREAD_RECOMPUTE_SAFETYNET_MS": "5 * 60 * 1000",
+  "NARRATIVE_ENGINE_INTERVAL_MS": "4 * 60 * 60 * 1000",
+  "OFF_HOURS_INTERVAL_MS": "4 * 60 * 60 * 1000",
+  "OPPORTUNITY_LEARNING_INTERVAL_MS": "30 * 60 * 1000",
+  "OPPORTUNITY_SLOTS_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "PERFORMANCE_AGGREGATION_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "PERFORMANCE_INGESTION_INTERVAL_MS": "6 * 60 * 60 * 1000",
+  "RECENT_POSTS_COMMENT_INGEST_INTERVAL_MS": "10 * 60 * 1000",
+  "RECONCILIATION_INTERVAL_MS": "30 * 60 * 1000",
+  "REPLY_INTELLIGENCE_AGGREGATION_INTERVAL_MS": "30 * 60 * 1000",
+  "RESPONSE_PERFORMANCE_EVAL_INTERVAL_MS": "10 * 60 * 1000",
+  "RESPONSE_STRATEGY_LEARNING_INTERVAL_MS": "15 * 60 * 1000",
+  "RPA_ARTIFACT_PRUNE_INTERVAL_MS": "6 * 60 * 60 * 1000",
+  "RPA_BACKPRESSURE_OBSERVE_INTERVAL_MS": "60 * 1000",
+  "RPA_RETRY_FLUSH_INTERVAL_MS": "90 * 1000",
+  "SETTLEMENT_EXPIRY_SWEEP_INTERVAL_MS": "10 * 60 * 1000",
+  "SETTLEMENT_METRICS_RETENTION_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "SIGNAL_CLUSTERING_INTERVAL_MS": "30 * 60 * 1000",
+  "SIGNAL_INTELLIGENCE_INTERVAL_MS": "60 * 60 * 1000",
+  "SOCIAL_ACCOUNT_TOKEN_REFRESH_INTERVAL_MS": "10 * 60 * 1000",
+  "STALE_EXECUTION_SWEEP_INTERVAL_MS": "5 * 60 * 1000",
+  "STRATEGIC_THEME_INTERVAL_MS": "60 * 60 * 1000",
+  "THREAD_ENGINE_INTERVAL_MS": "3 * 60 * 60 * 1000",
+  "WEEKLY_PRICING_ANALYSIS_INTERVAL_MS": "7 * 24 * 60 * 60 * 1000",
+}
+`;
+
+exports[`cron.ts scheduling contract (source characterization) locks the base-tick wiring (publish cycle cadence): base-tick 1`] = `"4 * 60 * 60 * 1000"`;
+
+exports[`cron.ts scheduling contract (source characterization) locks the cron-guard restore map (Redis persistence keys): cron-guard-restore-keys 1`] = `
+[
+  "autoOptimization",
+  "campaignHealthEvaluation",
+  "campaignOpportunity",
+  "communityPost",
+  "companyTrendRelevance",
+  "contentOpportunity",
+  "dailyIntelligence",
+  "engagementCapture",
+  "engagementDigest",
+  "engagementOpportunityScanner",
+  "engagementPolling",
+  "engagementSignalArchive",
+  "engagementSignalScheduler",
+  "feedbackIntelligence",
+  "ga4Ingestion",
+  "governanceAudit",
+  "intelligenceEventCleanup",
+  "intelligencePolling",
+  "leadThreadQueueCleanup",
+  "narrativeEngine",
+  "opportunitySlots",
+  "performanceAggregation",
+  "performanceIngestion",
+  "signalClustering",
+  "signalIntelligence",
+  "socialAccountTokenRefresh",
+  "strategicTheme",
+  "threadEngine",
+  "weeklyPricingAnalysis",
+]
+`;
+
+exports[`cron.ts scheduling contract (source characterization) locks the recurring-worker registry (interval constant ↔ label): worker-registry 1`] = `
+[
+  {
+    "interval": "LEAD_THREAD_RECOMPUTE_SAFETYNET_MS",
+    "label": "leadThreadRecompute-safetynet",
+  },
+  {
+    "interval": "CONVERSATION_MEMORY_SAFETYNET_MS",
+    "label": "conversationMemory-safetynet",
+  },
+  {
+    "interval": "RESPONSE_PERFORMANCE_EVAL_INTERVAL_MS",
+    "label": "responsePerformanceEval",
+  },
+  {
+    "interval": "REPLY_INTELLIGENCE_AGGREGATION_INTERVAL_MS",
+    "label": "replyIntelligenceAggregation",
+  },
+  {
+    "interval": "ENGAGEMENT_OPPORTUNITY_DETECTION_INTERVAL_MS",
+    "label": "engagementOpportunityDetection",
+  },
+  {
+    "interval": "CONVERSATION_TRIAGE_INTERVAL_MS",
+    "label": "conversationTriage",
+  },
+  {
+    "interval": "RESPONSE_STRATEGY_LEARNING_INTERVAL_MS",
+    "label": "responseStrategyLearning",
+  },
+  {
+    "interval": "OPPORTUNITY_LEARNING_INTERVAL_MS",
+    "label": "opportunityLearning",
+  },
+  {
+    "interval": "INFLUENCER_LEARNING_INTERVAL_MS",
+    "label": "influencerLearning",
+  },
+  {
+    "interval": "INSIGHT_LEARNING_INTERVAL_MS",
+    "label": "insightLearning",
+  },
+  {
+    "interval": "BUYER_INTENT_INTERVAL_MS",
+    "label": "buyerIntentLearning",
+  },
+  {
+    "interval": "COMMUNITY_AI_LEASE_REAP_INTERVAL_MS",
+    "label": "communityAiLeaseReaper",
+  },
+  {
+    "interval": "COMMUNITY_AI_METRIC_DLQ_FLUSH_INTERVAL_MS",
+    "label": "communityAiMetricDlqFlush",
+  },
+  {
+    "interval": "RECENT_POSTS_COMMENT_INGEST_INTERVAL_MS",
+    "label": "recentPublishedPostsIngest",
+  },
+  {
+    "interval": "RPA_BACKPRESSURE_OBSERVE_INTERVAL_MS",
+    "label": "rpaBackpressureObserver",
+  },
+  {
+    "interval": "RPA_RETRY_FLUSH_INTERVAL_MS",
+    "label": "rpaRetryQueueFlush",
+  },
+  {
+    "interval": "INTELLIGENCE_PATTERN_LEARN_INTERVAL_MS",
+    "label": "intelligencePatternLearner",
+  },
+  {
+    "interval": "RPA_ARTIFACT_PRUNE_INTERVAL_MS",
+    "label": "rpaArtifactPrune",
+  },
+  {
+    "interval": "COMMUNITY_AI_METRICS_ROLLUP_INTERVAL_MS",
+    "label": "communityAiMetricsRollup",
+  },
+]
+`;
