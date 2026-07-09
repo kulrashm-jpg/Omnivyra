@@ -25,6 +25,8 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
+import { sanitizeHtml, rehypeSanitizeSchema } from '../lib/security/htmlSanitizer';
 import { FormattedAIMessage } from './campaign-ai/FormattedAIMessage';
 import { getPlatformLimits } from '../lib/shared/contentFormatter';
 
@@ -43,7 +45,9 @@ export function RichContent({
 }) {
   return (
     <ReactMarkdown
-      rehypePlugins={[rehypeRaw]}
+      // HARDEN-003: rehype-sanitize (central schema) neutralizes raw HTML
+      // that rehype-raw parses out of AI/user content.
+      rehypePlugins={[rehypeRaw, [rehypeSanitize, rehypeSanitizeSchema]]}
       components={{
         h1: ({ children }) => (
           <h1 className="text-xl font-bold text-gray-900 mb-3 mt-4 first:mt-0 border-b border-gray-200 pb-1">
@@ -311,13 +315,14 @@ function isHtmlContent(content: string): boolean {
 
 /**
  * Renders HTML content produced by RichTextEditor inside a scoped prose wrapper.
- * Uses dangerouslySetInnerHTML — content comes from the user's own editor, not external input.
+ * HARDEN-003: sanitized at render time — stored HTML is never trusted, even
+ * when it originated in the user's own editor (AI drafts land here too).
  */
 function HtmlContent({ content, linkCls }: { content: string; linkCls: string }) {
   return (
     <div
       className="html-content-renderer prose prose-sm max-w-none text-gray-800"
-      dangerouslySetInnerHTML={{ __html: content }}
+      dangerouslySetInnerHTML={{ __html: sanitizeHtml(content, 'rich') }}
     />
   );
 }

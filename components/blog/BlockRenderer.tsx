@@ -26,6 +26,7 @@ import {
   getFormattedBlockClass,
   getFormattedListClass,
 } from '../../lib/content/blockFormatting';
+import { sanitizeHtml, sanitizeUrl } from '../../lib/security/htmlSanitizer';
 
 // ── Prose class (matches existing [slug].tsx proseClass) ─────────────────────
 
@@ -51,7 +52,8 @@ function RenderParagraph({ block }: { block: ParagraphBlock }) {
   return (
     <div
       className={getFormattedBlockClass(block, proseClass)}
-      dangerouslySetInnerHTML={{ __html: block.html }}
+      // HARDEN-003: never trust stored block HTML.
+      dangerouslySetInnerHTML={{ __html: sanitizeHtml(block.html, 'rich') }}
     />
   );
 }
@@ -166,8 +168,8 @@ function RenderImage({ block }: { block: ImageBlock }) {
       )}
       {block.attribution && (
         <p className="mt-1 text-center text-[10px] text-gray-400 italic">
-          {block.attributionUrl ? (
-            <a href={block.attributionUrl} target="_blank" rel="noopener noreferrer" className="hover:text-gray-600 underline">
+          {sanitizeUrl(block.attributionUrl) ? (
+            <a href={sanitizeUrl(block.attributionUrl)} target="_blank" rel="noopener noreferrer" className="hover:text-gray-600 underline">
               {block.attribution}
             </a>
           ) : (
@@ -296,7 +298,7 @@ function RenderListItems({ items, type, depth = 0 }: { items: ListItem[]; type: 
     <Tag className={cls}>
       {items.map((item) => (
         <li key={item.id} className="leading-relaxed text-[1.0625rem]">
-          <span dangerouslySetInnerHTML={{ __html: item.text }} />
+          <span dangerouslySetInnerHTML={{ __html: sanitizeHtml(item.text, 'inline') }} />
           {item.children && item.children.length > 0 && (
             <RenderListItems items={item.children} type={type} depth={depth + 1} />
           )}
@@ -326,9 +328,9 @@ function RenderReferences({ block }: { block: ReferencesBlock }) {
         {validItems.map((ref, i) => (
           <li key={ref.id} className="flex items-start gap-3 text-sm text-[#3D4F61]">
             <span className="text-xs text-gray-400 font-mono mt-0.5 shrink-0">[{i + 1}]</span>
-            {ref.url ? (
+            {sanitizeUrl(ref.url) ? (
               <a
-                href={ref.url}
+                href={sanitizeUrl(ref.url)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[#0A66C2] hover:underline leading-relaxed"
@@ -336,7 +338,7 @@ function RenderReferences({ block }: { block: ReferencesBlock }) {
                 {ref.title || ref.url}
               </a>
             ) : (
-              <span className="leading-relaxed">{ref.title}</span>
+              <span className="leading-relaxed">{ref.title || ref.url}</span>
             )}
           </li>
         ))}

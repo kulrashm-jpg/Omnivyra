@@ -33,6 +33,11 @@ module.exports = {
   // Module path mapping (if needed)
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/$1',
+    // HARDEN-003: isomorphic-dompurify's bundled jsdom pulls ESM-only deps
+    // (@exodus/bytes) that jest's CJS resolver can't load. Under tests we map
+    // it to plain dompurify — identical sanitize API; tests that use it run
+    // with the `@jest-environment jsdom` pragma so a window exists.
+    '^isomorphic-dompurify$': 'dompurify',
   },
   
   // Coverage settings

@@ -7,6 +7,7 @@ import {
   getFilenameFromContentDisposition,
 } from './reportView.types';
 import ReportPageContent from '@/components/reports/view/ReportPageContent';
+import { sanitizeHtml } from '@/lib/security/htmlSanitizer';
 
 export default function ReportViewPage() {
   const router = useRouter();
@@ -352,7 +353,10 @@ export default function ReportViewPage() {
               </div>
             ) : snapshotHtmlMarkup ? (
               <div className="snapshot-report-frame rounded-3xl border border-slate-200 bg-white/70 p-3 shadow-sm sm:p-5">
-                <div dangerouslySetInnerHTML={{ __html: `<div class="report-page">${snapshotHtmlMarkup}</div>` }} />
+                {/* HARDEN-003: the snapshot is system-generated but embeds AI
+                    text — 'document' profile keeps its layout CSS while
+                    stripping anything executable before it joins OUR origin. */}
+                <div dangerouslySetInnerHTML={{ __html: `<div class="report-page">${sanitizeHtml(snapshotHtmlMarkup, 'document')}</div>` }} />
               </div>
             ) : (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800 shadow-sm">
@@ -431,6 +435,10 @@ export default function ReportViewPage() {
               <iframe
                 title="Performance Intelligence Report"
                 srcDoc={performanceHtmlDocument}
+                // HARDEN-003: the report document is static HTML/CSS — the
+                // sandbox (no allow-scripts) makes any script that reached the
+                // stored document inert while styles/images/links still work.
+                sandbox="allow-popups allow-popups-to-escape-sandbox"
                 className="h-[calc(100vh-140px)] min-h-[720px] w-full rounded-3xl border border-slate-800 bg-white shadow-2xl"
               />
             ) : (

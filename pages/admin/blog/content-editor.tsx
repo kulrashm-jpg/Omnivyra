@@ -9,6 +9,7 @@ import {
   BookOpen, Eye, BarChart2, X, ChevronDown,
 } from 'lucide-react';
 import { RichTextEditor } from '../../../components/blog/RichTextEditor';
+import { sanitizeHtml } from '../../../lib/security/htmlSanitizer';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type BlogGenerationInput = {
@@ -630,7 +631,8 @@ export default function AdminBlogContentEditorPage() {
                     {state.excerpt && <p className="italic text-gray-600">{state.excerpt}</p>}
                     <div
                       className="prose prose-sm prose-slate max-w-none"
-                      dangerouslySetInnerHTML={{ __html: state.content }}
+                      // HARDEN-003: admin preview renders sanitized HTML only.
+                      dangerouslySetInnerHTML={{ __html: sanitizeHtml(state.content, 'rich') }}
                     />
                   </div>
                 )}

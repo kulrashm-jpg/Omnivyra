@@ -6,6 +6,8 @@ import { useRouter } from 'next/router';
 import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
+import { sanitizeHtml, toJsonLd, rehypeSanitizeSchema } from '../../lib/security/htmlSanitizer';
 import Footer from '../../components/landing/Footer';
 import { BlogMediaBlocks, type MediaBlockItem } from '../../components/blog/BlogMediaBlock';
 import { BlogShareButtons } from '../../components/blog/BlogShareButtons';
@@ -128,17 +130,20 @@ function ArticleBody({
     prose-code:text-slate-800 prose-code:before:content-none prose-code:after:content-none`;
 
   if (post.content_html) {
-    const parts = post.content_html.split(/(?<=<\/p>)/);
+    // HARDEN-003: stored HTML is sanitized BEFORE any splitting/rendering —
+    // rendering never trusts stored content (AI-generated or user-edited).
+    const safeContentHtml = sanitizeHtml(post.content_html, 'rich');
+    const parts = safeContentHtml.split(/(?<=<\/p>)/);
     const splitAt = Math.floor(parts.length * 0.6);
     const [firstHalf, secondHalf] =
       splitAt > 0 && splitAt < parts.length
         ? [parts.slice(0, splitAt).join(''), parts.slice(splitAt).join('')]
-        : [post.content_html, ''];
+        : [safeContentHtml, ''];
 
     if (!secondHalf) {
       return (
         <div ref={containerRef} className={proseClass}>
-          <div dangerouslySetInnerHTML={{ __html: post.content_html }} />
+          <div dangerouslySetInnerHTML={{ __html: safeContentHtml }} />
           <BlogMediaBlocks blocks={post.media_blocks} />
         </div>
       );
@@ -158,11 +163,12 @@ function ArticleBody({
     );
   }
 
-  // Markdown fallback
+  // Markdown fallback — rehype-sanitize (central schema) neutralizes any raw
+  // HTML rehype-raw parses out of the markdown.
   return (
     <div ref={containerRef}>
       <div className={proseClass}>
-        <ReactMarkdown rehypePlugins={[rehypeRaw]}>{post.content_markdown}</ReactMarkdown>
+        <ReactMarkdown rehypePlugins={[rehypeRaw, [rehypeSanitize, rehypeSanitizeSchema]]}>{post.content_markdown}</ReactMarkdown>
       </div>
       <KeyTakeawayBox />
       <SoftProductInsert />
@@ -285,8 +291,10 @@ export default function BlogDetailPage() {
         {/* Article structured data */}
         <script
           type="application/ld+json"
+          // HARDEN-003: toJsonLd escapes </script> sequences in stored fields
+          // (title/description) so they can never break out of this element.
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
+            __html: toJsonLd({
               '@context': 'https://schema.org',
               '@type': 'Article',
               headline: post.title,

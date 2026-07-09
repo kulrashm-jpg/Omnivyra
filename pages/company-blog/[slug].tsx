@@ -16,6 +16,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
+import { rehypeSanitizeSchema } from '../../lib/security/htmlSanitizer';
 import {
   ArrowLeft, Loader2, Calendar, Clock,
   Repeat2, Copy, Check, RefreshCw, ChevronDown, ChevronUp,
@@ -546,7 +548,8 @@ export default function CompanyBlogPost() {
                 {hasBlocks ? (
                   <BlockRenderer blocks={post.content_blocks!} />
                 ) : post.content ? (
-                  <ReactMarkdown rehypePlugins={[rehypeRaw]}>
+                  /* HARDEN-003: rehype-sanitize neutralizes raw HTML in stored markdown */
+                  <ReactMarkdown rehypePlugins={[rehypeRaw, [rehypeSanitize, rehypeSanitizeSchema]]}>
                     {post.content}
                   </ReactMarkdown>
                 ) : (

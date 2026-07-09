@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { sanitizeContentBlocks } from '../../lib/security/htmlSanitizer';
 /**
  * Blog Publishing Service
  * Publish to WordPress, custom blog API, or host internally as fallback.
@@ -544,7 +545,11 @@ export async function createBlog(
       content:              input.content              ?? '',
       slug,
       excerpt:              input.excerpt              ?? null,
-      content_blocks:       input.content_blocks       ?? null,
+      // HARDEN-003 defense-in-depth: block HTML fields are sanitized before
+      // storage (render-side sanitization still applies — never trust stored).
+      // `content` is markdown, not HTML — it is protected at render time by
+      // rehype-sanitize; sanitizing markdown here would corrupt legit syntax.
+      content_blocks:       input.content_blocks ? sanitizeContentBlocks(input.content_blocks) : null,
       featured_image_url:   input.featured_image_url   ?? null,
       category:             input.category             ?? null,
       tags:                 input.tags                 ?? [],
@@ -608,6 +613,11 @@ export async function updateBlog(
       if (!data) { updates = { ...updates, slug }; break; }
       suffix++;
     }
+  }
+
+  // HARDEN-003 defense-in-depth: sanitize block HTML fields on update too.
+  if (updates.content_blocks) {
+    updates = { ...updates, content_blocks: sanitizeContentBlocks(updates.content_blocks) };
   }
 
   const { data, error } = await ownedDbTable('blogs')

@@ -11,6 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { htmlToSafeText } from '../../lib/security/htmlSanitizer';
 
 // ── Icons (inline SVG to avoid extra imports) ─────────────────────────────────
 
@@ -50,8 +51,12 @@ const SpeakerIcon = () => (
 /** Extract readable text from an HTML string. */
 function htmlToText(html: string): string {
   if (typeof document === 'undefined') return '';
+  // HARDEN-003: strip ALL markup via the central sanitizer BEFORE the string
+  // touches innerHTML — raw stored HTML on even a detached node could trigger
+  // resource loads / onerror handlers. The (tag-free) result goes through a
+  // detached div purely to decode HTML entities for natural speech.
   const div = document.createElement('div');
-  div.innerHTML = html;
+  div.innerHTML = htmlToSafeText(html);
   return (div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim();
 }
 

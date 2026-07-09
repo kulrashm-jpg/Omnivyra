@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { ExternalLink, Play } from 'lucide-react';
+import { sanitizeUrl } from '../../lib/security/htmlSanitizer';
 
 export type MediaBlockItem = {
   type: 'youtube' | 'spotify_track' | 'spotify_podcast' | 'external_link';
@@ -48,7 +49,7 @@ export function BlogMediaBlock({ block }: { block: MediaBlockItem }) {
     const thumb = getYoutubeThumbnail(block.url);
     if (!embedUrl) {
       return (
-        <a href={block.url} target="_blank" rel="noopener noreferrer" className="blog-media-link">
+        <a href={sanitizeUrl(block.url)} target="_blank" rel="noopener noreferrer" className="blog-media-link">
           Watch on YouTube
         </a>
       );
@@ -93,7 +94,7 @@ export function BlogMediaBlock({ block }: { block: MediaBlockItem }) {
     const embedUrl = getSpotifyEmbedUrl(block.url, 'track');
     if (!embedUrl) {
       return (
-        <a href={block.url} target="_blank" rel="noopener noreferrer" className="blog-media-link">
+        <a href={sanitizeUrl(block.url)} target="_blank" rel="noopener noreferrer" className="blog-media-link">
           Listen on Spotify
         </a>
       );
@@ -118,7 +119,7 @@ export function BlogMediaBlock({ block }: { block: MediaBlockItem }) {
     const embedUrl = getSpotifyEmbedUrl(block.url, 'episode');
     if (!embedUrl) {
       return (
-        <a href={block.url} target="_blank" rel="noopener noreferrer" className="blog-media-link">
+        <a href={sanitizeUrl(block.url)} target="_blank" rel="noopener noreferrer" className="blog-media-link">
           Listen on Spotify
         </a>
       );
@@ -142,7 +143,7 @@ export function BlogMediaBlock({ block }: { block: MediaBlockItem }) {
   if (block.type === 'external_link') {
     return (
       <a
-        href={block.url}
+        href={sanitizeUrl(block.url)}
         target="_blank"
         rel="noopener noreferrer"
         className="blog-media-link inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-gray-700 hover:bg-gray-100"

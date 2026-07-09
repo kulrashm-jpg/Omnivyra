@@ -3,6 +3,7 @@
  */
 
 import React, { useRef, useEffect } from 'react';
+import { sanitizeHtml } from '../lib/security/htmlSanitizer';
 import {
   Bold, Italic, Underline, List, ListOrdered, Quote,
   Heading1, Heading2, Link2, Undo2,
@@ -46,7 +47,9 @@ export function RichEditor({ initialContent, onChange }: { initialContent: strin
 
   useEffect(() => {
     if (editorRef.current) {
-      editorRef.current.innerHTML = initialContent;
+      // HARDEN-003: stored HTML is sanitized before entering the editor DOM —
+      // a stored <img onerror> payload must not execute on edit.
+      editorRef.current.innerHTML = sanitizeHtml(initialContent, 'rich');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

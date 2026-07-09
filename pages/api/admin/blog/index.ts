@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { BLOG_PUBLISH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
+import { sanitizeHtml, sanitizeContentBlocks } from '../../../../lib/security/htmlSanitizer';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Read uses dashboard-view (bridge satisfies); write uses BLOG_PUBLISH_MANAGE
@@ -42,12 +43,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const slug = body.slug?.trim() || title.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
       const excerpt = body.excerpt?.trim() || null;
       const content_markdown = body.content_markdown ?? '';
-      const content_html = body.content_html ?? null;
+      // HARDEN-003 defense-in-depth: HTML is sanitized BEFORE storage as well
+      // as at render time — a payload never persists in executable form.
+      const content_html = body.content_html ? sanitizeHtml(String(body.content_html), 'rich') : null;
       const featured_image_url = body.featured_image_url?.trim() || null;
       const category = body.category?.trim() || null;
       const tags = Array.isArray(body.tags) ? body.tags : (body.tags ? [body.tags] : []);
       const media_blocks = body.media_blocks ?? null;
-      const content_blocks = body.content_blocks ?? null;
+      const content_blocks = body.content_blocks ? sanitizeContentBlocks(body.content_blocks) : null;
       const seo_meta_title = body.seo_meta_title?.trim() || null;
       const seo_meta_description = body.seo_meta_description?.trim() || null;
       const status = ['draft', 'scheduled', 'published'].includes(body.status) ? body.status : 'draft';
