@@ -24,6 +24,8 @@ import {
 } from '../utils/authStateMachine';
 import { singleFlight } from '../lib/auth/singleFlightRefresh';
 import { apiFetch } from '../lib/apiFetch';
+import { verifySessionInBackground } from '../lib/auth/optimisticSession';
+import { markAuthActivation } from '../lib/observability/clientPerf';
 
 /**
  * Retry-guard configuration for the /api/company-profile?mode=list probe.
@@ -612,23 +614,28 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         assertAuthBootstrapProbeSkipped(currentPathname, isAuthBootstrapPage);
 
         if (event === 'INITIAL_SESSION' && !isAuthBootstrapPage) {
+          // PERF-002 optimistic activation: the LOCAL session is already
+          // SDK-validated, so activate the app IMMEDIATELY and verify against
+          // the backend in the BACKGROUND. A 401 (ghost / soft-deleted /
+          // revoked session) still runs the exact same sign-out — security is
+          // identical, only the verification is asynchronous. This removes a
+          // full post-login-route round-trip from the critical path on every
+          // session restore / tab refresh. `probeInFlight` stays set for the
+          // verification window so a transient null-session event is ignored.
+          setIsAuthenticated(true);
+          setAuthChecked(true);
+          markAuthActivation();
           probeInFlight = true;
-          try {
-            const probe = await apiFetch('/api/auth/post-login-route');
-            if (probe.status === 401) {
-              await supabase.auth.signOut();
-              setIsAuthenticated(false);
-              setAuthChecked(true);
-              probeInFlight = false;
-              return;
-            }
-          } catch {
-            // Network error: optimistically allow; refreshCompanies catches 401 later.
-          }
-          probeInFlight = false;
+          void verifySessionInBackground({
+            probe: () => apiFetch('/api/auth/post-login-route'),
+            signOut: async () => { await supabase.auth.signOut(); },
+            onRevoked: () => setIsAuthenticated(false),
+          }).finally(() => { probeInFlight = false; });
+          return;
         }
         setIsAuthenticated(true);
         setAuthChecked(true);
+        markAuthActivation();
         return;
       }
       // No session — but if a probe is in flight, skip this event (it's a transient null)

@@ -85,6 +85,8 @@ export const M = {
     interaction: 'client.interaction.latency_ms',
     longTask: 'client.longtask.duration_ms',
     heapUsed: 'client.memory.heap_used_bytes',
+    // PERF-002: time (ms since navigation start) to authenticated-interactive.
+    activation: 'client.activation.interactive_ms',
   },
 } as const;
 

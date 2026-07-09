@@ -15,7 +15,8 @@
 
 type ClientKind =
   | 'pageLoad' | 'routeChange' | 'render'
-  | 'lcp' | 'fcp' | 'interaction' | 'longTask' | 'heapUsed';
+  | 'lcp' | 'fcp' | 'interaction' | 'longTask' | 'heapUsed'
+  | 'activation';
 
 interface Sample { kind: ClientKind; value: number; route: string }
 
@@ -84,6 +85,16 @@ export function markRouteChange(durationMs: number): void {
 export function markRender(durationMs: number, r?: string): void {
   if (!started) return;
   push('render', durationMs, r ?? route());
+}
+
+// PERF-002: record time-to-authenticated-interactive exactly ONCE per page load
+// (performance.now() ≈ ms since navigation start). Idempotent so repeat auth
+// events — TOKEN_REFRESHED, company switch — never pollute the metric.
+let activationMarked = false;
+export function markAuthActivation(): void {
+  if (!started || activationMarked) return;
+  activationMarked = true;
+  try { push('activation', performance.now()); } catch { /* fail-safe */ }
 }
 
 /** Initialize once (idempotent). Safe to call on every mount. */

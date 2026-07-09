@@ -19,6 +19,7 @@ import { normalizeRoute } from '../../../backend/observability/apiObservability'
 const MAX_SAMPLES = 100; // ignore anything beyond this per beacon (bounded work)
 const VALID_KINDS = new Set([
   'pageLoad', 'routeChange', 'render', 'lcp', 'fcp', 'interaction', 'longTask', 'heapUsed',
+  'activation', // PERF-002: time-to-authenticated-interactive
 ]);
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
