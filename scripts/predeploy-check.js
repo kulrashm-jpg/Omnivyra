@@ -146,6 +146,25 @@ try {
   process.exit(1);
 }
 
+// ── HARDEN-007: tenant-isolation authorization guard ─────────────────────────
+// Fails the deploy if a NEW API route reads tenant-owned data by a request-
+// supplied tenant id via the service-role client without an approved
+// authorization call. See scripts/check-tenant-authz.js + the grandfathered
+// baseline scripts/tenant-authz-baseline.json.
+process.stdout.write(`Checking tenant-authz guard...\n`);
+try {
+  execSync('node scripts/check-tenant-authz.js', { stdio: 'inherit' });
+  process.stdout.write(`  tenant-authz guard: OK\n`);
+} catch {
+  process.stdout.write(
+    `RESULT: BLOCKED — a new API route accesses tenant-owned data without an approved\n` +
+    `authorization call. Add enforceCompanyAccess / requireCapability / requireCampaignAccess\n` +
+    `or wrap the handler in withTenantGuard(...), or add a documented \`// authz-ok: <reason>\`.\n` +
+    `See scripts/check-tenant-authz.js.\n`,
+  );
+  process.exit(1);
+}
+
 process.stdout.write(`Verifying schema parity against production DB...\n`);
 const strictSchema = process.env.PREDEPLOY_STRICT_SCHEMA === '1';
 try {

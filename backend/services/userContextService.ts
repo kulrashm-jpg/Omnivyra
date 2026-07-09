@@ -196,6 +196,11 @@ export const enforceCompanyAccess = async (input: {
     role: user.role,
     reason: canonical.reason,
   });
+  // HARDEN-007: observe tenant-access denials (fail-safe; no behavior change).
+  try {
+    const { recordRawCounter } = require('../observability');
+    recordRawCounter('authz.tenant.denied', 1, { reason: String(canonical.reason ?? 'denied') });
+  } catch { /* fail-safe */ }
   input.res.status(403).json({ error: 'Access denied to company' });
   return null;
 };

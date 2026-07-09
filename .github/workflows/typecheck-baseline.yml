@@ -28,3 +28,8 @@ jobs:
       # request that bypasses the centralized SSRF layer (lib/security/safeFetch).
       - name: Outbound-SSRF guard
         run: npm run check:ssrf
+
+      # HARDEN-007: fail the build if a NEW API route reads tenant-owned data by
+      # a request-supplied tenant id without an approved authorization call.
+      - name: Tenant-authz guard
+        run: npm run check:authz
