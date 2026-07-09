@@ -1,0 +1,186 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`renderInfographicAsset — gradient default path golden master: composed SVG + renderer metadata are deterministic: infographic-metadata 1`] = `
+{
+  "auto_corrections": [],
+  "density": {
+    "contentTooThin": true,
+    "flags": [
+      "infographic_content_too_thin",
+    ],
+    "ok": false,
+  },
+  "engine": "infographic-stats-engine-v2",
+  "governance": {
+    "errors": [
+      "typography_overlap_risk",
+    ],
+    "ok": false,
+    "platformProfile": {
+      "carouselBehavior": "framework",
+      "ctaTolerance": "low",
+      "preferredDensity": "medium",
+      "preferredTypographyScale": "standard",
+      "visualStyle": "professional",
+    },
+    "profile": {
+      "allowCTA": false,
+      "allowDenseCopy": false,
+      "allowHeadline": true,
+      "allowMetrics": true,
+      "allowParagraphs": false,
+      "maxTextAreaPercent": 34,
+      "maxWordsPerSlide": 72,
+      "visualPriority": "balanced",
+    },
+    "textAreaPercent": 1,
+    "warnings": [],
+    "wordCount": 5,
+  },
+  "height": 900,
+  "icon_zones": [
+    {
+      "icon": "01",
+      "safeZone": "center",
+      "section": 1,
+    },
+    {
+      "icon": "02",
+      "safeZone": "center",
+      "section": 2,
+    },
+    {
+      "icon": "03",
+      "safeZone": "center",
+      "section": 3,
+    },
+    {
+      "icon": "04",
+      "safeZone": "center",
+      "section": 4,
+    },
+  ],
+  "layout": "stats",
+  "quality": {
+    "cleanliness": 73,
+    "clutterRisk": 30,
+    "ctaAbuseRisk": 0,
+    "duplicationRisk": 0,
+    "readability": 100,
+    "rejected": true,
+    "typographySafety": 45,
+    "visualHierarchy": 84,
+    "warnings": [
+      "typography_overlap_risk",
+    ],
+  },
+  "warnings": [
+    "typography_overlap_risk",
+  ],
+  "width": 1200,
+}
+`;
+
+exports[`renderInfographicAsset — gradient default path golden master: composed SVG + renderer metadata are deterministic: infographic-svg 1`] = `
+"
+    <svg width="1200" height="900" viewBox="0 0 1200 900" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="infographicWaveGradient" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2563eb" stop-opacity="0.55" /><stop offset="100%" stop-color="#2563eb" stop-opacity="0.18" /></linearGradient>
+        <linearGradient id="infographicBgGradient" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#111827" /><stop offset="35%" stop-color="#2563eb" stop-opacity="0.85" /><stop offset="100%" stop-color="#2563eb" /></linearGradient>
+        <linearGradient id="infographicHeaderGradient" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#111827" /><stop offset="100%" stop-color="#2563eb" stop-opacity="0.9" /></linearGradient>
+      </defs>
+      <!-- Full-bleed background. Gradient mode → opaque brand gradient
+           (byte-identical default). Image mode → a mandatory translucent
+           scrim painted over the image that the renderer composites
+           underneath; cards float on top so text stays readable. -->
+      <rect width="1200" height="900" fill="url(#infographicBgGradient)" />
+      <!-- Header band — gradient strip with the title in white at
+           large-poster scale. Subtitle (intro line) under the title
+           when metadata.summary is set. The title is LEFT-aligned
+           and width-constrained to leave room for the brand logo on
+           the right; long titles wrap to 2 lines instead of running
+           through the logo. -->
+      <rect x="0" y="0" width="1200" height="212" fill="url(#infographicHeaderGradient)" />
+      <text x="80" y="106" font-size="62" font-family="Arial, Helvetica, sans-serif" font-weight="900" fill="#ffffff" letter-spacing="0.5">Automation Payoffs</text>
+      <text x="80" y="143" font-size="21" font-family="Arial, Helvetica, sans-serif" font-weight="500" fill="rgba(255,255,255,0.92)">One deterministic narrative line.</text>
+      <!-- Inner safe panel — soft white with rounded corners, floats
+           inside the gradient frame. Cards live on top of this. -->
+      <rect x="32" y="200" width="1136" height="676" rx="18" fill="#f8fafc" opacity="0.95" />
+      <path d="M 80 192 C 360 169, 744 228, 1120 210" fill="none" stroke="url(#infographicWaveGradient)" stroke-width="5" stroke-linecap="round" />
+      
+      
+          
+    <rect x="80" y="236" width="505" height="260" rx="14" fill="#ffffff" opacity="0.97" />
+    <rect x="80" y="236" width="6" height="260" rx="3" fill="#2563eb" />
+  
+          <circle cx="137" cy="293" r="21" fill="#2563eb" />
+          
+        <path d="M 131.5 291.9 a 5.5 5.5 0 1 1 11 0 c 0 2.75 -1.65 4.4 -2.75 5.5 l -5.5 0 c -1.1 -1.1 -2.75 -2.75 -2.75 -5.5 z" fill="#ffffff" />
+        <rect x="134.58" y="297.95" width="4.84" height="1.98" rx="0.77" fill="#ffffff" />
+        <rect x="135.24" y="300.26" width="3.52" height="1.1" rx="0.55" fill="#ffffff" />
+      
+          <text x="172" y="300" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="800" fill="#111827">Speed</text>
+          <text x="108" y="356" font-size="20" font-family="Arial, Helvetica, sans-serif" font-weight="500" fill="#334155">Ship faster with automated checks</text>
+          
+          
+          
+          
+        
+          
+    <rect x="615" y="236" width="505" height="260" rx="14" fill="#ffffff" opacity="0.97" />
+    <rect x="615" y="236" width="6" height="260" rx="3" fill="#14b8a6" />
+  
+          <circle cx="672" cy="293" r="21" fill="#14b8a6" />
+          
+        <circle cx="672" cy="293" r="10.45" fill="none" stroke="#ffffff" stroke-width="1.54" />
+        <circle cx="672" cy="293" r="5.5" fill="none" stroke="#ffffff" stroke-width="1.54" />
+        <circle cx="672" cy="293" r="1.98" fill="#ffffff" />
+      
+          <text x="707" y="300" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="800" fill="#111827">Quality</text>
+          <text x="643" y="356" font-size="20" font-family="Arial, Helvetica, sans-serif" font-weight="500" fill="#334155">Fewer defects reach production</text>
+          
+          
+          
+          
+        
+          
+    <rect x="80" y="526" width="505" height="260" rx="14" fill="#ffffff" opacity="0.97" />
+    <rect x="80" y="526" width="6" height="260" rx="3" fill="#a855f7" />
+  
+          <circle cx="137" cy="583" r="21" fill="#a855f7" />
+          
+        <polyline points="126.55,588.5 133.15,583 137,584.65 147.45,576.95" fill="none" stroke="#ffffff" stroke-width="1.98" stroke-linecap="round" stroke-linejoin="round" />
+        <polygon points="142.5,576.95 147.45,576.95 147.45,581.9" fill="#ffffff" />
+      
+          <text x="172" y="590" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="800" fill="#111827">Cost</text>
+          <text x="108" y="646" font-size="20" font-family="Arial, Helvetica, sans-serif" font-weight="500" fill="#334155">Lower spend through reuse</text>
+          
+          
+          
+          
+        
+          
+    <rect x="615" y="526" width="505" height="260" rx="14" fill="#ffffff" opacity="0.97" />
+    <rect x="615" y="526" width="6" height="260" rx="3" fill="#2563eb" />
+  
+          <circle cx="672" cy="583" r="21" fill="#2563eb" />
+          
+        <polyline points="665.4,583.55 670.9,589.05 679.7,576.95" fill="none" stroke="#ffffff" stroke-width="2.42" stroke-linecap="round" stroke-linejoin="round" />
+      
+          <text x="707" y="590" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="800" fill="#111827">Trust</text>
+          <text x="643" y="646" font-size="20" font-family="Arial, Helvetica, sans-serif" font-weight="500" fill="#334155">Auditable pipelines build confidence</text>
+          
+          
+          
+          
+        
+      
+        <!-- CTA footer band — anchors the whole infographic to a
+             single next-step. Pill on a tinted accent strip at the
+             very bottom of the canvas. -->
+        <rect x="32" y="812" width="1136" height="56" rx="18" fill="#2563eb" opacity="0.16" />
+        <text x="600" y="850" text-anchor="middle" font-size="31" font-family="Arial, Helvetica, sans-serif" font-weight="800" fill="#111827">Book a demo</text>
+      
+    </svg>
+  "
+`;
