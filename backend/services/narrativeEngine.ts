@@ -91,27 +91,46 @@ export async function generateCampaignNarratives(): Promise<GenerateCampaignNarr
   let narrativesCreated = 0;
   let narrativesSkipped = 0;
 
-  for (const opp of opportunities) {
+  // ── HARDEN-004: build all (opportunity × angle × platform) rows in memory
+  // (same generator, same order) and try ONE bulk insert instead of up to
+  // 1,200 sequential INSERTs. On a foreign-key failure (the only per-row
+  // error the loop tolerated) fall back to the original per-row path so
+  // per-row 23503-skip counting is identical.
+  const allRows = opportunities.flatMap((opp) => {
     const title = opp.opportunity_title ?? opp.opportunity_description ?? 'Content opportunity';
-
-    for (const angle of NARRATIVE_ANGLES) {
+    return NARRATIVE_ANGLES.flatMap((angle) => {
       const { angle: narrativeAngle, summary } = generateNarrativeForAngle(title, angle);
+      return PLATFORMS.map((platform) => ({
+        opportunity_id: opp.id,
+        narrative_angle: narrativeAngle,
+        narrative_summary: summary,
+        target_audience: 'Marketing and growth teams',
+        platform,
+      }));
+    });
+  });
 
-      for (const platform of PLATFORMS) {
-        const { error } = await ownedDbTable('campaign_narratives').insert({
-          opportunity_id: opp.id,
-          narrative_angle: narrativeAngle,
-          narrative_summary: summary,
-          target_audience: 'Marketing and growth teams',
-          platform,
-        });
+  let bulkDone = false;
+  if (allRows.length > 0) {
+    const { error } = await ownedDbTable('campaign_narratives').insert(allRows);
+    if (!error) {
+      narrativesCreated = allRows.length;
+      bulkDone = true;
+    } else if (error.code !== '23503') {
+      throw new Error(`campaign_narratives insert failed: ${error.message}`);
+    }
+  } else {
+    bulkDone = true;
+  }
 
-        if (error) {
-          if (error.code === '23503') narrativesSkipped++;
-          else throw new Error(`campaign_narratives insert failed: ${error.message}`);
-        } else {
-          narrativesCreated++;
-        }
+  if (!bulkDone) {
+    for (const row of allRows) {
+      const { error } = await ownedDbTable('campaign_narratives').insert(row);
+      if (error) {
+        if (error.code === '23503') narrativesSkipped++;
+        else throw new Error(`campaign_narratives insert failed: ${error.message}`);
+      } else {
+        narrativesCreated++;
       }
     }
   }

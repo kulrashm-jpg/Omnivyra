@@ -42,14 +42,16 @@ export async function runAllCompanyAudits(): Promise<void> {
       return;
     }
 
+    // HARDEN-004: per-company audits are independent — bounded concurrency
+    // instead of a strictly sequential loop. Slot order preserves the input
+    // order, so the aggregated results are identical.
+    const { mapWithConcurrency, getSchedulerConcurrency } = await import('../scheduler/schedulerBatching');
+    const slots = await mapWithConcurrency(companyIds, getSchedulerConcurrency(), (companyId) => runGovernanceAudit(companyId));
     const results: GovernanceAuditResult[] = [];
-    for (const companyId of companyIds) {
-      try {
-        const result = await runGovernanceAudit(companyId);
-        results.push(result);
-      } catch (err) {
-        console.error('GovernanceAuditJob: audit failed for company', companyId, err);
-      }
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      if (slot.ok && slot.value !== undefined) results.push(slot.value);
+      else console.error('GovernanceAuditJob: audit failed for company', companyIds[i], slot.error);
     }
 
     const critical = results.filter((r) => r.auditStatus === 'CRITICAL').length;

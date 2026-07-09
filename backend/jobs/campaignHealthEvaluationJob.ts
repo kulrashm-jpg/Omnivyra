@@ -242,15 +242,36 @@ export async function runCampaignHealthEvaluation(): Promise<CampaignHealthEvalu
       pairs.push({ campaignId: cid, companyId: coId });
     }
 
+    // HARDEN-004: the per-pair campaigns lookup was one .maybeSingle() query
+    // per campaign (≤500 sequential round-trips). One .in() read + a map keeps
+    // the identical skip decision (missing row ⇔ old error/!campaign path).
+    // On a batch error, fall back to the original per-campaign lookups.
+    let campaignById: Map<string, Record<string, unknown>> | null = null;
+    if (pairs.length > 0) {
+      const { data: campaignRows, error: batchError } = await supabase
+        .from('campaigns')
+        .select('id, name, description, objective, target_audience, duration_weeks, posting_schedule, weekly_themes')
+        .in('id', pairs.map((p) => p.campaignId));
+      if (!batchError && campaignRows) {
+        campaignById = new Map((campaignRows as Array<Record<string, unknown>>).map((c) => [String(c.id), c]));
+      }
+    }
+
     for (const { campaignId, companyId } of pairs) {
       try {
-        const { data: campaign, error: campError } = await supabase
-          .from('campaigns')
-          .select('id, name, description, objective, target_audience, duration_weeks, posting_schedule, weekly_themes')
-          .eq('id', campaignId)
-          .maybeSingle();
+        let campaign: Record<string, unknown> | null = null;
+        if (campaignById) {
+          campaign = campaignById.get(campaignId) ?? null;
+        } else {
+          const { data, error: campError } = await supabase
+            .from('campaigns')
+            .select('id, name, description, objective, target_audience, duration_weeks, posting_schedule, weekly_themes')
+            .eq('id', campaignId)
+            .maybeSingle();
+          campaign = campError ? null : (data as Record<string, unknown> | null);
+        }
 
-        if (campError || !campaign) continue;
+        if (!campaign) continue;
 
         const status = String((campaign as { status?: string }).status ?? '').toLowerCase();
         if (!ACTIVE_STATUSES.has(status)) continue;

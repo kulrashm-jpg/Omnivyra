@@ -95,26 +95,42 @@ export async function generateCommunityThreads(): Promise<GenerateCommunityThrea
   let threadsCreated = 0;
   let threadsSkipped = 0;
 
-  for (const post of posts) {
+  // ── HARDEN-004: same rows built in memory, ONE bulk insert (was one INSERT
+  // per post); FK failures fall back to the identical per-row path.
+  const rows = posts.map((post) => {
     const platform = post.platform || 'LinkedIn';
     const parts = splitIntoThreadParts(post.post_content, platform);
-
     const threadType =
       platform === 'Twitter/X' ? 'reply_chain' : platform === 'LinkedIn' ? 'carousel' : 'discussion_prompt';
-
-    const threadContent = parts.map((p, i) => formatThreadPart(p, i)).join('\n\n');
-
-    const { error } = await ownedDbTable('community_threads').insert({
+    return {
       post_id: post.id,
       thread_type: threadType,
-      thread_content: threadContent,
-    });
+      thread_content: parts.map((p, i) => formatThreadPart(p, i)).join('\n\n'),
+    };
+  });
 
-    if (error) {
-      if (error.code === '23503') threadsSkipped++;
-      else throw new Error(`community_threads insert failed: ${error.message}`);
-    } else {
-      threadsCreated++;
+  let bulkDone = false;
+  if (rows.length > 0) {
+    const { error } = await ownedDbTable('community_threads').insert(rows);
+    if (!error) {
+      threadsCreated = rows.length;
+      bulkDone = true;
+    } else if (error.code !== '23503') {
+      throw new Error(`community_threads insert failed: ${error.message}`);
+    }
+  } else {
+    bulkDone = true;
+  }
+
+  if (!bulkDone) {
+    for (const row of rows) {
+      const { error } = await ownedDbTable('community_threads').insert(row);
+      if (error) {
+        if (error.code === '23503') threadsSkipped++;
+        else throw new Error(`community_threads insert failed: ${error.message}`);
+      } else {
+        threadsCreated++;
+      }
     }
   }
 

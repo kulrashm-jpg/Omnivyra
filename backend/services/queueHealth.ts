@@ -172,12 +172,27 @@ export async function sweepStaleExecutions(
     // Best-effort: per-row, never throws, only touches these two columns.
     if (sweptRows.length > 0) {
       const { deriveAbandonmentAttribution } = await import('../../lib/shared/bolt/abandonmentAttribution');
+      // HARDEN-004: derive attribution in memory per row (pure), then group by
+      // identical (campaign_type, pipeline_mode) tuple and issue ONE .in()
+      // update per distinct tuple — was one UPDATE per swept row. Same two
+      // columns, same values, same best-effort semantics.
+      const idsByTuple = new Map<string, { campaign_type: unknown; pipeline_mode: unknown; ids: string[] }>();
       for (const r of sweptRows) {
         try {
           const attribution = deriveAbandonmentAttribution(r.payload ?? null);
+          const key = `${String(attribution.campaign_type)}|${String(attribution.pipeline_mode)}`;
+          const group = idsByTuple.get(key) ?? { campaign_type: attribution.campaign_type, pipeline_mode: attribution.pipeline_mode, ids: [] };
+          group.ids.push(r.id);
+          idsByTuple.set(key, group);
+        } catch {
+          // Best-effort — attribution is additive; the sweep itself already succeeded.
+        }
+      }
+      for (const group of idsByTuple.values()) {
+        try {
           await ownedDbTable('bolt_execution_runs')
-            .update({ campaign_type: attribution.campaign_type, pipeline_mode: attribution.pipeline_mode })
-            .eq('id', r.id);
+            .update({ campaign_type: group.campaign_type, pipeline_mode: group.pipeline_mode })
+            .in('id', group.ids);
         } catch {
           // Best-effort — attribution is additive; the sweep itself already succeeded.
         }

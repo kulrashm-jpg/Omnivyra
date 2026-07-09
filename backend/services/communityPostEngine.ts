@@ -96,6 +96,10 @@ export async function generateCommunityPosts(): Promise<GenerateCommunityPostsRe
   let postsCreated = 0;
   let postsSkipped = 0;
 
+  // ── HARDEN-004: same eligibility decisions in memory, then ONE bulk insert
+  // (was one INSERT per narrative). FK failures (23503, the only tolerated
+  // per-row error) fall back to the original per-row path.
+  const rows: Array<Record<string, unknown>> = [];
   for (const n of narratives) {
     const companyId = n.company_id;
     if (!companyId) {
@@ -109,22 +113,39 @@ export async function generateCommunityPosts(): Promise<GenerateCommunityPostsRe
       continue;
     }
 
-    const platform = n.platform ?? 'LinkedIn';
-    const { error } = await ownedDbTable('community_posts').insert({
+    rows.push({
       narrative_id: n.id,
       company_id: companyId,
-      platform,
+      platform: n.platform ?? 'LinkedIn',
       post_content: postContent,
       post_type: 'thought_leadership',
       scheduled_at: null,
       published_at: null,
     });
+  }
 
-    if (error) {
-      if (error.code === '23503') postsSkipped++;
-      else throw new Error(`community_posts insert failed: ${error.message}`);
-    } else {
-      postsCreated++;
+  let bulkDone = false;
+  if (rows.length > 0) {
+    const { error } = await ownedDbTable('community_posts').insert(rows);
+    if (!error) {
+      postsCreated = rows.length;
+      bulkDone = true;
+    } else if (error.code !== '23503') {
+      throw new Error(`community_posts insert failed: ${error.message}`);
+    }
+  } else {
+    bulkDone = true;
+  }
+
+  if (!bulkDone) {
+    for (const row of rows) {
+      const { error } = await ownedDbTable('community_posts').insert(row);
+      if (error) {
+        if (error.code === '23503') postsSkipped++;
+        else throw new Error(`community_posts insert failed: ${error.message}`);
+      } else {
+        postsCreated++;
+      }
     }
   }
 

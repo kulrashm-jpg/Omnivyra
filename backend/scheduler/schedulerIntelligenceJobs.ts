@@ -35,6 +35,9 @@ import {
   logExecutionEnd,
   logSkipped,
 } from '../services/intelligenceConfigService';
+import { mapWithConcurrency, getSchedulerConcurrency } from './schedulerBatching';
+
+type GlobalConfigRow = NonNullable<Awaited<ReturnType<typeof getGlobalConfig>>>;
 
 /** Polling window in minutes (2 hours) for rate limit check */
 const INTELLIGENCE_POLLING_WINDOW_MINUTES = 120;
@@ -145,6 +148,12 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
   let skippedRateLimit = 0;
   let skippedDisabled = 0;
 
+  // ── HARDEN-004: decide in memory (unchanged rules), then enqueue in ONE
+  // pipelined addBulk instead of ≤500 sequential Redis round-trips. Payloads,
+  // priorities, jobIds and job options are identical; order is preserved.
+  // Any bulk failure falls back to the original per-source loop.
+  const purpose = useGlobalFallback ? 'global_intelligence_polling' : 'intelligence_polling';
+  const toEnqueue: Array<{ sourceId: string; priority: number }> = [];
   for (const source of sources) {
     const reliability = healthBySource.get(source.id) ?? 1;
     if (reliability < 0.1) {
@@ -164,16 +173,36 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
       reliability >= RELIABILITY_HIGH ? 1 : reliability >= RELIABILITY_MEDIUM ? 5 : 10;
     const companyPollingPriority = pollingPriorityBySource.get(source.id) ?? 10;
     const priority = Math.min(reliabilityPriority, companyPollingPriority);
+    toEnqueue.push({ sourceId: source.id, priority });
+  }
 
+  if (toEnqueue.length > 0) {
+    let bulkDone = false;
     try {
-      const purpose = useGlobalFallback ? 'global_intelligence_polling' : 'intelligence_polling';
-      await addIntelligencePollingJob(
-        { apiSourceId: source.id, companyId: null, purpose },
-        { priority }
+      const { addIntelligencePollingJobsBulk } = await import('../queue/intelligencePollingQueue');
+      await addIntelligencePollingJobsBulk(
+        toEnqueue.map(({ sourceId, priority }) => ({
+          payload: { apiSourceId: sourceId, companyId: null, purpose },
+          priority,
+        }))
       );
-      enqueued++;
-    } catch (err: any) {
-      console.warn('[enqueueIntelligencePolling] failed to enqueue', source.id, err?.message);
+      enqueued = toEnqueue.length;
+      bulkDone = true;
+    } catch (bulkErr: any) {
+      console.warn('[enqueueIntelligencePolling] bulk enqueue failed — falling back to per-source', bulkErr?.message);
+    }
+    if (!bulkDone) {
+      for (const { sourceId, priority } of toEnqueue) {
+        try {
+          await addIntelligencePollingJob(
+            { apiSourceId: sourceId, companyId: null, purpose },
+            { priority }
+          );
+          enqueued++;
+        } catch (err: any) {
+          console.warn('[enqueueIntelligencePolling] failed to enqueue', sourceId, err?.message);
+        }
+      }
     }
   }
 
@@ -300,22 +329,43 @@ export async function runCompanyTrendRelevance(): Promise<{
     return { companies_processed: 0, total_themes_scored: 0, errors: error ? [error.message] : [] };
   }
 
+  // HARDEN-004: (a) the global config and the theme set are company-
+  // independent — load each ONCE instead of once per company; (b) per-company
+  // work is independent, so run it with bounded concurrency instead of
+  // strictly sequentially. Results are aggregated IN INPUT ORDER
+  // (mapWithConcurrency guarantees slot order), so totals and the errors
+  // array are identical to the sequential run.
+  const [preloadedGlobal, preloadedThemes] = await Promise.all([
+    getGlobalConfig('trend_relevance'),
+    import('../services/companyTrendRelevanceEngine').then((m) => m.loadThemesWithTopic()),
+  ]);
+
   let totalThemesScored = 0;
   const errors: string[] = [];
 
-  for (const row of companies as { id: string }[]) {
-    try {
-      const result = await runWithConfig(
-        'trend_relevance',
-        row.id,
-        () => computeThemeRelevanceForCompany(row.id),
-      );
-      if ('skipped' in result) continue;
-      totalThemesScored += result.themes_scored;
-      errors.push(...result.errors);
-    } catch (e: unknown) {
-      errors.push(`company ${row.id}: ${e instanceof Error ? e.message : String(e)}`);
+  const results = await mapWithConcurrency(
+    companies as { id: string }[],
+    getSchedulerConcurrency(),
+    (row) => runWithConfig(
+      'trend_relevance',
+      row.id,
+      () => computeThemeRelevanceForCompany(row.id, preloadedThemes),
+      'scheduler',
+      preloadedGlobal,
+    ),
+  );
+
+  for (let i = 0; i < results.length; i++) {
+    const slot = results[i];
+    if (!slot.ok || slot.value === undefined) {
+      const row = (companies as { id: string }[])[i];
+      errors.push(`company ${row.id}: ${slot.error?.message ?? 'unknown error'}`);
+      continue;
     }
+    const result = slot.value;
+    if ('skipped' in result) continue;
+    totalThemesScored += result.themes_scored;
+    errors.push(...result.errors);
   }
 
   return {
@@ -341,8 +391,11 @@ async function runWithConfig<T>(
   companyId: string | null,
   runner: () => Promise<T>,
   triggeredBy = 'scheduler',
+  // HARDEN-004: per-company batch runners preload the (jobType-constant)
+  // global config ONCE instead of re-fetching it for every company.
+  preloadedGlobal?: GlobalConfigRow | null,
 ): Promise<T | { skipped: true; reason: string }> {
-  const global = await getGlobalConfig(jobType);
+  const global = preloadedGlobal !== undefined ? preloadedGlobal : await getGlobalConfig(jobType);
   if (!global) {
     console.warn(`[scheduler] ${jobType}: not found in intelligence_global_config — skipping`);
     return { skipped: true, reason: 'job_type_not_found' };
@@ -430,37 +483,85 @@ export async function enqueueScheduledLeadDetection(): Promise<{ enqueued: numbe
 
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  for (const companyId of companyIds) {
-    try {
-      const { count } = await ownedDbTable('lead_jobs_v1')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .gt('created_at', twentyFourHoursAgo);
-      if ((count ?? 0) >= 2) continue;
-      const { data: job, error: insertError } = await ownedDbTable('lead_jobs_v1')
-        .insert({
-          company_id: companyId,
-          platforms: SCHEDULED_LEAD_PLATFORMS,
-          regions: SCHEDULED_LEAD_REGIONS,
-          keywords: null,
-          mode: 'REACTIVE',
-          status: 'PENDING',
-          total_found: 0,
-          total_qualified: 0,
-          context_payload: { scheduled_run: true },
-        })
-        .select('id')
-        .single();
-      if (insertError || !job) {
-        errors.push(`${companyId}: ${(insertError as Error)?.message ?? 'insert failed'}`);
-        continue;
+  // ── HARDEN-004: the per-company 24h throttle used to be a COUNT query per
+  // company (≤500 sequential round-trips). One .in() read + in-memory counting
+  // applies the identical `>= 2 → skip` rule.
+  const recentCountByCompany = new Map<string, number>();
+  try {
+    const { data: recentRows, error: recentError } = await ownedDbTable('lead_jobs_v1')
+      .select('company_id')
+      .in('company_id', companyIds)
+      .gt('created_at', twentyFourHoursAgo);
+    if (recentError) throw new Error(recentError.message);
+    for (const r of (recentRows ?? []) as { company_id: string }[]) {
+      recentCountByCompany.set(r.company_id, (recentCountByCompany.get(r.company_id) ?? 0) + 1);
+    }
+  } catch (countErr: any) {
+    // Old behavior on a failing count was per-company error entries; a failing
+    // batched count is equivalent to all counts failing.
+    return { enqueued: 0, errors: companyIds.map((id) => `${id}: ${countErr?.message ?? String(countErr)}`) };
+  }
+
+  const eligibleCompanyIds = companyIds.filter((id) => (recentCountByCompany.get(id) ?? 0) < 2);
+  if (eligibleCompanyIds.length === 0) return { enqueued: 0, errors };
+
+  const rowFor = (companyId: string) => ({
+    company_id: companyId,
+    platforms: SCHEDULED_LEAD_PLATFORMS,
+    regions: SCHEDULED_LEAD_REGIONS,
+    keywords: null,
+    mode: 'REACTIVE',
+    status: 'PENDING',
+    total_found: 0,
+    total_qualified: 0,
+    context_payload: { scheduled_run: true },
+  });
+
+  // ── HARDEN-004: bulk insert + addBulk (was insert + queue.add per company).
+  // jobIds stay `lead-detection:<row id>`. On any bulk failure fall back to the
+  // original per-company loop for identical partial-failure semantics.
+  let bulkDone = false;
+  try {
+    const { data: jobs, error: insertError } = await ownedDbTable('lead_jobs_v1')
+      .insert(eligibleCompanyIds.map(rowFor))
+      .select('id, company_id');
+    if (insertError || !jobs || jobs.length !== eligibleCompanyIds.length) {
+      throw new Error(insertError?.message ?? 'bulk insert row count mismatch');
+    }
+    const enqueueStartedAt = Date.now();
+    await jobQueue.addBulk(
+      (jobs as { id: string }[]).map((job) => ({
+        name: 'lead-job',
+        data: { type: 'LEAD', jobId: job.id },
+        opts: { jobId: `lead-detection:${job.id}` },
+      }))
+    );
+    const perJobMs = Math.round((Date.now() - enqueueStartedAt) / jobs.length);
+    for (let i = 0; i < jobs.length; i++) recordLeadQueueEnqueue(perJobMs);
+    enqueued = jobs.length;
+    bulkDone = true;
+  } catch (bulkErr: any) {
+    console.warn('[enqueueScheduledLeadDetection] bulk path failed — falling back to per-company', bulkErr?.message);
+  }
+
+  if (!bulkDone) {
+    for (const companyId of eligibleCompanyIds) {
+      try {
+        const { data: job, error: insertError } = await ownedDbTable('lead_jobs_v1')
+          .insert(rowFor(companyId))
+          .select('id')
+          .single();
+        if (insertError || !job) {
+          errors.push(`${companyId}: ${(insertError as Error)?.message ?? 'insert failed'}`);
+          continue;
+        }
+        const enqueueStartedAt = Date.now();
+        await jobQueue.add('lead-job', { type: 'LEAD', jobId: job.id }, { jobId: `lead-detection:${job.id}` });
+        recordLeadQueueEnqueue(Date.now() - enqueueStartedAt);
+        enqueued++;
+      } catch (e: any) {
+        errors.push(`${companyId}: ${e?.message ?? String(e)}`);
       }
-      const enqueueStartedAt = Date.now();
-      await jobQueue.add('lead-job', { type: 'LEAD', jobId: job.id }, { jobId: `lead-detection:${job.id}` });
-      recordLeadQueueEnqueue(Date.now() - enqueueStartedAt);
-      enqueued++;
-    } catch (e: any) {
-      errors.push(`${companyId}: ${e?.message ?? String(e)}`);
     }
   }
   return { enqueued, errors };

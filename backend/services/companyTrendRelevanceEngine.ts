@@ -17,7 +17,7 @@ type CompanyContext = {
   competitors: string[];
 };
 
-type ThemeWithTopic = {
+export type ThemeWithTopic = {
   id: string;
   intelligence_id: string;
   keywords: unknown;
@@ -93,8 +93,10 @@ async function loadCompanyContext(companyId: string): Promise<CompanyContext> {
 
 /**
  * Load strategic themes with topic from signal_intelligence.
+ * Exported (HARDEN-004) so per-company batch runners can load the
+ * company-independent theme set ONCE instead of once per company.
  */
-async function loadThemesWithTopic(): Promise<ThemeWithTopic[]> {
+export async function loadThemesWithTopic(): Promise<ThemeWithTopic[]> {
   const { data: themes, error: themesError } = await ownedDbTable('strategic_themes')
     .select('id, intelligence_id, keywords, companies');
 
@@ -165,14 +167,8 @@ function industryMatchScore(topic: string, industryTerms: string[]): number {
   return found ? 1 : 0;
 }
 
-/**
- * Compute relevance for one theme and upsert.
- */
-async function upsertRelevance(
-  companyId: string,
-  theme: ThemeWithTopic,
-  ctx: CompanyContext
-): Promise<void> {
+/** Pure relevance computation for one theme (no I/O). */
+function buildRelevanceRow(companyId: string, theme: ThemeWithTopic, ctx: CompanyContext) {
   const matchedKeywords: string[] = [];
   const matchedCompanies: string[] = [];
 
@@ -190,13 +186,24 @@ async function upsertRelevance(
     )
   );
 
-  const row = {
+  return {
     company_id: companyId,
     theme_id: theme.id,
     relevance_score,
     matched_keywords: matchedKeywords,
     matched_companies: matchedCompanies,
   };
+}
+
+/**
+ * Compute relevance for one theme and upsert.
+ */
+async function upsertRelevance(
+  companyId: string,
+  theme: ThemeWithTopic,
+  ctx: CompanyContext
+): Promise<void> {
+  const row = buildRelevanceRow(companyId, theme, ctx);
 
   const { error } = await ownedDbTable('theme_company_relevance').upsert(row, {
     onConflict: 'company_id,theme_id',
@@ -207,7 +214,7 @@ async function upsertRelevance(
   log('theme_relevance_calculated', {
     company_id: companyId,
     theme_id: theme.id,
-    relevance_score,
+    relevance_score: row.relevance_score,
   });
 }
 
@@ -225,19 +232,47 @@ export type ComputeThemeRelevanceForCompanyResult = {
  * 4. Insert or update theme_company_relevance
  */
 export async function computeThemeRelevanceForCompany(
-  companyId: string
+  companyId: string,
+  // HARDEN-004: the theme set is company-independent — batch runners preload
+  // it once and pass it in, instead of re-querying it for every company.
+  preloadedThemes?: ThemeWithTopic[],
 ): Promise<ComputeThemeRelevanceForCompanyResult> {
   const errors: string[] = [];
   const ctx = await loadCompanyContext(companyId);
-  const themes = await loadThemesWithTopic();
+  const themes = preloadedThemes ?? await loadThemesWithTopic();
   let themesScored = 0;
 
-  for (const theme of themes) {
+  // ── HARDEN-004: one bulk upsert instead of one upsert per theme. Rows and
+  // scores are computed by the same pure function; on any bulk failure we
+  // fall back to the original per-theme loop (identical partial-failure
+  // semantics: per-theme error entries, remaining themes still scored).
+  if (themes.length > 0) {
     try {
-      await upsertRelevance(companyId, theme, ctx);
-      themesScored++;
-    } catch (e: any) {
-      errors.push(e?.message ?? String(e));
+      const rows = themes.map((theme) => buildRelevanceRow(companyId, theme, ctx));
+      const { error } = await ownedDbTable('theme_company_relevance').upsert(rows, {
+        onConflict: 'company_id,theme_id',
+      });
+      if (error) throw new Error(`Failed to upsert theme_company_relevance: ${error.message}`);
+      for (const row of rows) {
+        log('theme_relevance_calculated', {
+          company_id: companyId,
+          theme_id: row.theme_id,
+          relevance_score: row.relevance_score,
+        });
+      }
+      themesScored = rows.length;
+      return { company_id: companyId, themes_scored: themesScored, errors };
+    } catch {
+      // fall through to the per-theme path below
+    }
+
+    for (const theme of themes) {
+      try {
+        await upsertRelevance(companyId, theme, ctx);
+        themesScored++;
+      } catch (e: any) {
+        errors.push(e?.message ?? String(e));
+      }
     }
   }
 

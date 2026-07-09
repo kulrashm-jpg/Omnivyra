@@ -93,6 +93,29 @@ export async function addIntelligencePollingJob(
 }
 
 /**
+ * HARDEN-004: add many polling jobs in ONE pipelined round-trip. Identical
+ * payloads/jobIds/options to calling addIntelligencePollingJob per item —
+ * addBulk preserves array order.
+ */
+export async function addIntelligencePollingJobsBulk(
+  items: Array<{ payload: IntelligencePollingJobPayload; priority?: number; jobId?: string }>
+): Promise<string[]> {
+  if (items.length === 0) return [];
+  const queue = getIntelligencePollingQueue();
+  const jobs = items.map((item) => ({
+    name: 'poll',
+    data: item.payload,
+    opts: {
+      jobId: item.jobId ?? `intel-poll-${item.payload.apiSourceId}-${Date.now()}`,
+      priority: item.priority ?? 5,
+      ...DEFAULT_JOB_OPTIONS,
+    },
+  }));
+  await queue.addBulk(jobs);
+  return jobs.map((j) => j.opts.jobId as string);
+}
+
+/**
  * Close the queue connection (e.g. on shutdown).
  */
 export async function closeIntelligencePollingQueue(): Promise<void> {

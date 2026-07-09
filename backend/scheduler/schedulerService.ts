@@ -16,7 +16,7 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { getQueue, getEngagementPollingQueue } from '../queue/bullmqClient';
 import { createQueueJob } from '../db/queries';
-import { getCampaignReadiness } from '../services/campaignReadinessService';
+import { recordScheduler } from '../observability/metrics';
 
 export {
   enqueueScheduledPostAt,
@@ -45,6 +45,19 @@ interface SchedulerResult {
  * - Skips if job already exists
  */
 export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
+  // HARDEN-001/004: scheduler run timing (fail-safe, measurement only).
+  const _obsStart = Date.now();
+  try {
+    const result = await findDuePostsAndEnqueueInner();
+    try { recordScheduler({ job: 'publish_scheduler', durationMs: Date.now() - _obsStart, outcome: 'completed' }); } catch { /* fail-safe */ }
+    return result;
+  } catch (err) {
+    try { recordScheduler({ job: 'publish_scheduler', durationMs: Date.now() - _obsStart, outcome: 'failed' }); } catch { /* fail-safe */ }
+    throw err;
+  }
+}
+
+async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
   const now = new Date().toISOString();
 
   console.log(`🔍 Finding scheduled posts due before ${now}...`);
@@ -80,12 +93,53 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
     existingJobs?.map(j => j.scheduled_post_id) || []
   );
 
+  // ── HARDEN-004: batch the per-post campaign + readiness lookups ─────────────
+  // The loop below used to run `campaigns` and `campaign_readiness` .single()
+  // queries PER POST (2×N round-trips, repeated even for posts sharing a
+  // campaign). Two batched .in() queries + in-memory maps produce the exact
+  // same per-post decisions: a campaign missing from the map ⇔ the old
+  // .single() error path (CAMPAIGN_NOT_ACTIVE); a readiness row missing from
+  // the map ⇔ the old PGRST116→null path (CAMPAIGN_NOT_READY).
+  const campaignIds = [...new Set(
+    (duePosts || [])
+      .filter((p) => !existingPostIds.has(p.id) && p.campaign_id)
+      .map((p) => p.campaign_id as string)
+  )];
+
+  const campaignStatusById = new Map<string, string>();
+  const readinessStateById = new Map<string, string>();
+  if (campaignIds.length > 0) {
+    const { data: campaignRows, error: campaignsError } = await ownedDbTable('campaigns')
+      .select('id, status')
+      .in('id', campaignIds);
+    if (campaignsError) {
+      // Old behavior: a failing campaign lookup threw out of the run.
+      throw new Error(`Failed to query campaigns: ${campaignsError.message}`);
+    }
+    for (const row of campaignRows || []) {
+      campaignStatusById.set(row.id, String(row.status ?? ''));
+    }
+
+    const { data: readinessRows, error: readinessError } = await ownedDbTable('campaign_readiness')
+      .select('campaign_id, readiness_state')
+      .in('campaign_id', campaignIds);
+    if (readinessError) {
+      // Old behavior: getCampaignReadiness threw on non-missing-row errors.
+      throw new Error(`Failed to load campaign readiness: ${readinessError.message}`);
+    }
+    for (const row of readinessRows || []) {
+      readinessStateById.set(row.campaign_id, String(row.readiness_state ?? ''));
+    }
+  }
+
   let created = 0;
   let skipped = 0;
 
   const queue = getQueue();
 
-  // Process each due post
+  // ── Decide per post from the in-memory maps (identical decisions) ───────────
+  type DuePost = NonNullable<typeof duePosts>[number];
+  const eligible: DuePost[] = [];
   for (const post of duePosts || []) {
     // Skip if job already exists
     if (existingPostIds.has(post.id)) {
@@ -95,12 +149,8 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
     }
 
     if (post.campaign_id) {
-      const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
-        .select('status')
-        .eq('id', post.campaign_id)
-        .single();
-
-      if (campaignError || !campaign || campaign.status !== 'active') {
+      const campaignStatus = campaignStatusById.get(post.campaign_id);
+      if (campaignStatus !== 'active') {
         console.warn({
           campaign_id: post.campaign_id,
           scheduled_post_id: post.id,
@@ -110,8 +160,8 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
         continue;
       }
 
-      const readiness = await getCampaignReadiness(post.campaign_id);
-      if (!readiness || readiness.readiness_state !== 'ready') {
+      const readinessState = readinessStateById.get(post.campaign_id);
+      if (readinessState !== 'ready') {
         console.warn({
           campaign_id: post.campaign_id,
           scheduled_post_id: post.id,
@@ -122,36 +172,96 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
       }
     }
 
-    try {
-      // Create queue_jobs row with priority from scheduled_post
-      const queueJobId = await createQueueJob({
-        scheduled_post_id: post.id,
-        job_type: 'publish',
-        status: 'pending',
-        scheduled_for: post.scheduled_for,
-        priority: (post as any).priority || 0, // Use post priority, default to 0
-      });
+    eligible.push(post);
+  }
 
-      // Enqueue in BullMQ
-      await queue.add(
-        'publish',
-        {
+  // ── HARDEN-004: bulk insert queue_jobs + BullMQ addBulk ─────────────────────
+  // One INSERT and one pipelined enqueue replace 2×N sequential round-trips.
+  // `eligible` keeps the due-post ORDER (priority desc, scheduled_for asc) and
+  // addBulk preserves array order, so publish order is identical. Payloads,
+  // jobIds (queue_jobs.id) and job options are byte-identical to the old
+  // per-post path. On ANY bulk failure we fall back to the original per-post
+  // loop for the same partial-failure semantics as before.
+  if (eligible.length > 0) {
+    let bulkDone = false;
+    try {
+      const { data: insertedRows, error: insertError } = await ownedDbTable('queue_jobs')
+        .insert(eligible.map((post) => ({
+          scheduled_post_id: post.id,
+          job_type: 'publish',
+          status: 'pending',
+          scheduled_for: post.scheduled_for,
+          priority: (post as any).priority || 0,
+          attempts: 0,
+          max_attempts: 3,
+        })))
+        .select('id, scheduled_post_id');
+      if (insertError || !insertedRows || insertedRows.length !== eligible.length) {
+        throw new Error(`bulk queue_jobs insert failed: ${insertError?.message ?? 'row count mismatch'}`);
+      }
+      const jobIdByPostId = new Map<string, string>(
+        insertedRows.map((r: { id: string; scheduled_post_id: string }) => [r.scheduled_post_id, r.id])
+      );
+
+      await queue.addBulk(eligible.map((post) => ({
+        name: 'publish',
+        data: {
           scheduled_post_id: post.id,
           social_account_id: post.social_account_id,
           user_id: post.user_id,
         },
-        {
-          jobId: queueJobId, // Use DB UUID as BullMQ job ID for consistency
+        opts: {
+          jobId: jobIdByPostId.get(post.id), // DB UUID as BullMQ job ID (unchanged)
           removeOnComplete: true,
           removeOnFail: false, // Keep failed jobs for debugging
-        }
-      );
+        },
+      })));
 
-      console.log(`✅ Enqueued job ${queueJobId} for post ${post.id}`);
-      created++;
-    } catch (error: any) {
-      console.error(`❌ Failed to enqueue post ${post.id}:`, error.message);
-      // Continue with other posts
+      for (const post of eligible) {
+        console.log(`✅ Enqueued job ${jobIdByPostId.get(post.id)} for post ${post.id}`);
+      }
+      created += eligible.length;
+      bulkDone = true;
+    } catch (bulkError: any) {
+      console.warn(`[scheduler] bulk enqueue failed (${bulkError?.message}) — falling back to per-post enqueue`);
+    }
+
+    if (!bulkDone) {
+      // Fallback: the original sequential per-post path (identical semantics,
+      // incl. continuing past individual failures). The duplicate guard above
+      // plus queue.add jobId idempotency make re-processing safe even if some
+      // rows were inserted by the failed bulk attempt.
+      for (const post of eligible) {
+        try {
+          const queueJobId = await createQueueJob({
+            scheduled_post_id: post.id,
+            job_type: 'publish',
+            status: 'pending',
+            scheduled_for: post.scheduled_for,
+            priority: (post as any).priority || 0,
+          });
+
+          await queue.add(
+            'publish',
+            {
+              scheduled_post_id: post.id,
+              social_account_id: post.social_account_id,
+              user_id: post.user_id,
+            },
+            {
+              jobId: queueJobId,
+              removeOnComplete: true,
+              removeOnFail: false,
+            }
+          );
+
+          console.log(`✅ Enqueued job ${queueJobId} for post ${post.id}`);
+          created++;
+        } catch (error: any) {
+          console.error(`❌ Failed to enqueue post ${post.id}:`, error.message);
+          // Continue with other posts
+        }
+      }
     }
   }
 

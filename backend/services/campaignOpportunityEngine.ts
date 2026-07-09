@@ -156,13 +156,16 @@ export async function generateCampaignOpportunities(): Promise<GenerateCampaignO
   let opportunitiesCreated = 0;
   let opportunitiesSkipped = 0;
 
-  for (const theme of themesToProcess) {
+  // ── HARDEN-004: build all rows in memory (same generator, same order) and
+  // insert per chunk with ON CONFLICT DO NOTHING — was one INSERT per
+  // (theme, type). Duplicate handling is identical: a (theme_id,
+  // opportunity_type) conflict counts as skipped; any other error throws.
+  const allRows = themesToProcess.flatMap((theme) => {
     const topic = topicFromThemeTitle(theme.theme_title);
     const keywords = Array.isArray(theme.keywords) ? theme.keywords : [];
-
-    for (const opportunityType of OPPORTUNITY_TYPES) {
+    return OPPORTUNITY_TYPES.map((opportunityType) => {
       const { title, description } = generateOpportunityForType(topic, opportunityType);
-      const row = {
+      return {
         theme_id: theme.id,
         cluster_id: theme.cluster_id,
         opportunity_title: title,
@@ -171,22 +174,26 @@ export async function generateCampaignOpportunities(): Promise<GenerateCampaignO
         momentum_score: theme.momentum_score,
         keywords: keywords,
       };
+    });
+  });
 
-      const { error } = await ownedDbTable('campaign_opportunities').insert(row);
-
-      if (error) {
-        if (error.code === '23505') {
-          // unique violation (theme_id, opportunity_type)
-          opportunitiesSkipped++;
-          continue;
-        }
-        throw new Error(`Failed to insert campaign_opportunity: ${error.message}`);
-      }
-      opportunitiesCreated++;
+  const CHUNK = 500;
+  for (let i = 0; i < allRows.length; i += CHUNK) {
+    const chunk = allRows.slice(i, i + CHUNK);
+    const { data: inserted, error } = await ownedDbTable('campaign_opportunities')
+      .upsert(chunk, { onConflict: 'theme_id,opportunity_type', ignoreDuplicates: true })
+      .select('theme_id, opportunity_type, opportunity_title');
+    if (error) {
+      throw new Error(`Failed to insert campaign_opportunity: ${error.message}`);
+    }
+    const insertedRows = inserted ?? [];
+    opportunitiesCreated += insertedRows.length;
+    opportunitiesSkipped += chunk.length - insertedRows.length;
+    for (const row of insertedRows as Array<{ theme_id: string; opportunity_type: string; opportunity_title: string }>) {
       log('opportunity_created', {
-        theme_id: theme.id,
-        opportunity_type: opportunityType,
-        title: title.slice(0, 80),
+        theme_id: row.theme_id,
+        opportunity_type: row.opportunity_type,
+        title: String(row.opportunity_title ?? '').slice(0, 80),
       });
     }
   }

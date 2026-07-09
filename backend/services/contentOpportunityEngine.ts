@@ -150,24 +150,33 @@ export async function generateContentOpportunities(): Promise<GenerateContentOpp
     'industry_analysis',
   ];
 
-  for (const theme of themes) {
+  // ── HARDEN-004: the (theme, company) relevance lookup was ONE read per pair
+  // (themes × companies round-trips). One .in() read + a Map applies the exact
+  // same default (0.5 for missing/invalid rows).
+  const relevanceByPair = new Map<string, number>();
+  if (themes.length > 0 && companyIds.length > 0) {
+    const { data: relRows } = await ownedDbTable('theme_company_relevance')
+      .select('theme_id, company_id, relevance_score')
+      .in('theme_id', themes.map((t) => t.id))
+      .in('company_id', companyIds);
+    for (const r of (relRows ?? []) as Array<{ theme_id: string; company_id: string; relevance_score?: number }>) {
+      const score = typeof r.relevance_score === 'number' ? Math.max(0, Math.min(1, r.relevance_score)) : 0.5;
+      relevanceByPair.set(`${r.theme_id}:${r.company_id}`, score);
+    }
+  }
+
+  // Same rows in the same theme→company→type order; ONE bulk insert per chunk
+  // replaces themes × companies × 3 sequential INSERTs. FK failures (the only
+  // tolerated per-row error) fall back to the identical per-row path.
+  const allRows = themes.flatMap((theme) => {
     const topic = topicFromThemeTitle(theme.theme_title);
     const momentum = theme.momentum_score ?? 0.5;
-
-    for (const companyId of companyIds) {
-      const relevance = await getRelevanceForThemeCompany(theme.id, companyId);
-      const priorityScore = Number(
-        (momentum * 0.6 + relevance * 0.4).toFixed(3)
-      );
-
-      for (const oppType of typesPerTheme) {
-        const { title, description } = generateOpportunityForType(
-          topic,
-          theme.theme_title,
-          oppType
-        );
-
-        const { error } = await ownedDbTable('content_opportunities').insert({
+    return companyIds.flatMap((companyId) => {
+      const relevance = relevanceByPair.get(`${theme.id}:${companyId}`) ?? 0.5;
+      const priorityScore = Number((momentum * 0.6 + relevance * 0.4).toFixed(3));
+      return typesPerTheme.map((oppType) => {
+        const { title, description } = generateOpportunityForType(topic, theme.theme_title, oppType);
+        return {
           theme_id: theme.id,
           company_id: companyId,
           opportunity_title: title,
@@ -175,14 +184,31 @@ export async function generateContentOpportunities(): Promise<GenerateContentOpp
           opportunity_type: oppType,
           priority_score: priorityScore,
           momentum_score: momentum,
-        });
+        };
+      });
+    });
+  });
 
-        if (error) {
-          if (error.code === '23503') opportunitiesSkipped++;
-          else throw new Error(`content_opportunities insert failed: ${error.message}`);
-        } else {
-          opportunitiesCreated++;
-        }
+  const CHUNK = 500;
+  for (let i = 0; i < allRows.length; i += CHUNK) {
+    const chunk = allRows.slice(i, i + CHUNK);
+    const { error } = await ownedDbTable('content_opportunities').insert(chunk);
+    if (!error) {
+      opportunitiesCreated += chunk.length;
+      continue;
+    }
+    if (error.code !== '23503') {
+      throw new Error(`content_opportunities insert failed: ${error.message}`);
+    }
+    // FK failure somewhere in the chunk — replay per row for identical
+    // skip-counting semantics.
+    for (const row of chunk) {
+      const { error: rowError } = await ownedDbTable('content_opportunities').insert(row);
+      if (rowError) {
+        if (rowError.code === '23503') opportunitiesSkipped++;
+        else throw new Error(`content_opportunities insert failed: ${rowError.message}`);
+      } else {
+        opportunitiesCreated++;
       }
     }
   }

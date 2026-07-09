@@ -77,16 +77,8 @@ describe('Campaign readiness gating', () => {
   });
 
   it('scheduler skips enqueue when campaign is not ready', async () => {
-    const readinessSpy = jest
-      .spyOn(readinessService, 'getCampaignReadiness')
-      .mockResolvedValue({
-        campaign_id: 'campaign-1',
-        readiness_percentage: 20,
-        readiness_state: 'not_ready',
-        blocking_issues: [{ code: 'MISSING_DAILY_PLANS', message: 'Missing daily plans' }],
-        last_evaluated_at: new Date().toISOString(),
-      });
-
+    // HARDEN-004: the scheduler reads campaign_readiness in ONE batched query
+    // (same decision rule) — mock the table rather than getCampaignReadiness.
     const duePostsQuery = buildQuery({
       data: [
         {
@@ -103,16 +95,21 @@ describe('Campaign readiness gating', () => {
       error: null,
     });
     const existingJobsQuery = buildQuery({ data: [], error: null });
-    const campaignsQuery = buildQuery({ data: { status: 'active' }, error: null });
+    const campaignsQuery = buildQuery({ data: [{ id: 'campaign-1', status: 'active' }], error: null });
+    const readinessQuery = buildQuery({
+      data: [{ campaign_id: 'campaign-1', readiness_state: 'not_ready' }],
+      error: null,
+    });
 
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'scheduled_posts') return duePostsQuery;
       if (table === 'queue_jobs') return existingJobsQuery;
       if (table === 'campaigns') return campaignsQuery;
+      if (table === 'campaign_readiness') return readinessQuery;
       return buildQuery({ data: [], error: null });
     });
 
-    (getQueue as jest.Mock).mockReturnValue({ add: jest.fn() });
+    (getQueue as jest.Mock).mockReturnValue({ add: jest.fn(), addBulk: jest.fn() });
     (createQueueJob as jest.Mock).mockResolvedValue('job-1');
 
     const result = await findDuePostsAndEnqueue();
@@ -121,8 +118,7 @@ describe('Campaign readiness gating', () => {
     expect(result.skipped).toBe(1);
     expect(createQueueJob).not.toHaveBeenCalled();
     expect((getQueue as jest.Mock).mock.results[0].value.add).not.toHaveBeenCalled();
-
-    readinessSpy.mockRestore();
+    expect((getQueue as jest.Mock).mock.results[0].value.addBulk).not.toHaveBeenCalled();
   });
 
   it('publisher blocks execution when campaign readiness fails', async () => {
@@ -183,16 +179,6 @@ describe('Campaign readiness gating', () => {
   });
 
   it('scheduler enqueues when campaign is ready', async () => {
-    const readinessSpy = jest
-      .spyOn(readinessService, 'getCampaignReadiness')
-      .mockResolvedValue({
-        campaign_id: 'campaign-1',
-        readiness_percentage: 100,
-        readiness_state: 'ready',
-        blocking_issues: [],
-        last_evaluated_at: new Date().toISOString(),
-      });
-
     const duePostsQuery = buildQuery({
       data: [
         {
@@ -208,26 +194,50 @@ describe('Campaign readiness gating', () => {
       ],
       error: null,
     });
-    const existingJobsQuery = buildQuery({ data: [], error: null });
-    const campaignsQuery = buildQuery({ data: { status: 'active' }, error: null });
+    // queue_jobs serves BOTH the dup-check select ([]) and the HARDEN-004 bulk
+    // insert (returning the created row ids) — differentiate on .insert().
+    const queueJobsQuery: any = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      in: jest.fn().mockReturnThis(),
+      insert: jest.fn(() => { queueJobsQuery._inserted = true; return queueJobsQuery; }),
+      then: (resolve: any, reject: any) => {
+        const result = queueJobsQuery._inserted
+          ? { data: [{ id: 'job-2', scheduled_post_id: 'scheduled-2' }], error: null }
+          : { data: [], error: null };
+        return Promise.resolve(result).then(resolve, reject);
+      },
+    };
+    const campaignsQuery = buildQuery({ data: [{ id: 'campaign-1', status: 'active' }], error: null });
+    const readinessQuery = buildQuery({
+      data: [{ campaign_id: 'campaign-1', readiness_state: 'ready' }],
+      error: null,
+    });
 
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'scheduled_posts') return duePostsQuery;
-      if (table === 'queue_jobs') return existingJobsQuery;
+      if (table === 'queue_jobs') return queueJobsQuery;
       if (table === 'campaigns') return campaignsQuery;
+      if (table === 'campaign_readiness') return readinessQuery;
       return buildQuery({ data: [], error: null });
     });
 
     const add = jest.fn();
-    (getQueue as jest.Mock).mockReturnValue({ add });
+    const addBulk = jest.fn(async (jobs: unknown[]) => jobs);
+    (getQueue as jest.Mock).mockReturnValue({ add, addBulk });
     (createQueueJob as jest.Mock).mockResolvedValue('job-2');
 
     const result = await findDuePostsAndEnqueue();
 
     expect(result.created).toBe(1);
-    expect(createQueueJob).toHaveBeenCalled();
-    expect(add).toHaveBeenCalled();
-
-    readinessSpy.mockRestore();
+    // HARDEN-004: one pipelined enqueue with the identical payload + DB-id jobId.
+    expect(addBulk).toHaveBeenCalledTimes(1);
+    expect(addBulk.mock.calls[0][0]).toEqual([
+      {
+        name: 'publish',
+        data: { scheduled_post_id: 'scheduled-2', social_account_id: 'account-1', user_id: 'user-1' },
+        opts: { jobId: 'job-2', removeOnComplete: true, removeOnFail: false },
+      },
+    ]);
   });
 });

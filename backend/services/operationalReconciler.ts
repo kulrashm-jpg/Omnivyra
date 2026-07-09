@@ -79,11 +79,15 @@ export async function reconcileExpiredMedia(): Promise<ReconcileResult> {
     const suspects = (data || []).filter(
       (r) => Array.isArray(r.media_urls) &&
         r.media_urls.some((u: unknown) => typeof u === 'string' && SIGNED_RE.test(u)));
-    let autoFixed = 0;
-    for (const s of suspects) {
-      const refreshed = await refreshDurableMediaBeforePublish(s.id); // safe/flag-gated/no-op by default
-      if (refreshed) autoFixed++;
-    }
+    // HARDEN-004: per-suspect refreshes are independent — bounded concurrency
+    // instead of strictly sequential awaits. Same per-post call, same counting.
+    const { mapWithConcurrency, getSchedulerConcurrency } = await import('../scheduler/schedulerBatching');
+    const refreshResults = await mapWithConcurrency(
+      suspects,
+      getSchedulerConcurrency(),
+      (s) => refreshDurableMediaBeforePublish(s.id), // safe/flag-gated/no-op by default
+    );
+    const autoFixed = refreshResults.filter((r) => r.ok && r.value).length;
     if (suspects.length > 0) {
       logPipelineEvent('orphan.recovery', autoFixed < suspects.length ? 'warn' : 'info', {
         job: 'expired_media', detected: suspects.length, autoFixed,

@@ -545,12 +545,21 @@ export async function ingestRecentPublishedPosts(): Promise<{
   const list = posts ?? [];
   let totalIngested = 0;
   const errors: { scheduled_post_id: string; error: string }[] = [];
-  for (const p of list) {
-    const result = await ingestComments(p.id);
+  // HARDEN-004: per-post ingestion is independent (network-bound platform
+  // fetch + idempotent upserts) — bounded concurrency replaces the strictly
+  // sequential loop. Results are aggregated in input order, so totals and the
+  // errors array are identical to the sequential run.
+  const { mapWithConcurrency, getSchedulerConcurrency } = await import('../scheduler/schedulerBatching');
+  const results = await mapWithConcurrency(list, getSchedulerConcurrency(), (p) => ingestComments(p.id));
+  for (let i = 0; i < results.length; i++) {
+    const slot = results[i];
+    const result = (slot.ok && slot.value !== undefined)
+      ? slot.value
+      : { success: false, ingested: 0, error: slot.error?.message ?? 'unknown error' };
     if (result.success) {
       totalIngested += result.ingested;
     } else if (result.error) {
-      errors.push({ scheduled_post_id: p.id, error: result.error });
+      errors.push({ scheduled_post_id: list[i].id, error: result.error });
     }
   }
   console.info('[engagementIngestion] ingestRecentPublishedPosts completed', {

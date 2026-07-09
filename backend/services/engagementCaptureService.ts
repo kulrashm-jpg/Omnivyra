@@ -51,17 +51,34 @@ export async function captureEngagementSignals(): Promise<CaptureEngagementSigna
   let signalsCreated = 0;
   let signalsSkipped = 0;
 
-  for (const post of posts) {
+  // ── HARDEN-004: same rows built in memory, ONE bulk insert (was one INSERT
+  // per post × engagement type); FK failures fall back to the per-row path.
+  const rows = posts.flatMap((post) => {
     const platform = post.platform ?? 'LinkedIn';
+    return ENGAGEMENT_TYPES.map((engType) => ({
+      post_id: post.id,
+      platform,
+      engagement_type: engType,
+      engagement_count: 0,
+    }));
+  });
 
-    for (const engType of ENGAGEMENT_TYPES) {
-      const { error } = await ownedDbTable('engagement_signals').insert({
-        post_id: post.id,
-        platform,
-        engagement_type: engType,
-        engagement_count: 0,
-      });
+  let bulkDone = false;
+  if (rows.length > 0) {
+    const { error } = await ownedDbTable('engagement_signals').insert(rows);
+    if (!error) {
+      signalsCreated = rows.length;
+      bulkDone = true;
+    } else if (error.code !== '23503') {
+      throw new Error(`engagement_signals insert failed: ${error.message}`);
+    }
+  } else {
+    bulkDone = true;
+  }
 
+  if (!bulkDone) {
+    for (const row of rows) {
+      const { error } = await ownedDbTable('engagement_signals').insert(row);
       if (error) {
         if (error.code === '23503') signalsSkipped++;
         else throw new Error(`engagement_signals insert failed: ${error.message}`);
