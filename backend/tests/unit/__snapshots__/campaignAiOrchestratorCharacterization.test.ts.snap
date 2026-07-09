@@ -1,0 +1,26 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`mode dispatch — refine_day drafts, parses the refined day, persists it, and returns the refine_day envelope: refine-day-envelope 1`] = `
+{
+  "campaign_validation": {
+    "status": "valid",
+  },
+  "day": {
+    "day": 3,
+    "items": [
+      {
+        "title": "Refined item",
+      },
+    ],
+  },
+  "mode": "refine_day",
+  "omnivyre_decision": {
+    "decision": "proceed",
+    "raw": {},
+  },
+  "paid_recommendation": null,
+  "raw_plan_text": "RAW-OUTPUT",
+  "snapshot_hash": "hash-1",
+  "validation_result": null,
+}
+`;
