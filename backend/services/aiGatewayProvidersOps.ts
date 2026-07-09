@@ -39,6 +39,7 @@ import { recordGptCall, recordGptLatency, recordGptFailure } from './metricsColl
 import { evaluateJobCost } from './jobCostEstimator';
 import { trackLlmTokens } from '../../lib/redis/usageProtection';
 import { ownedDbTable } from '../db/writeOwner';
+import { recordAi, recordCache } from '../observability/metrics';
 
 import { UNKNOWN_ORG, FEATURE_AREA_MAP, type GatewayMetadata, type GatewayResponse, type GatewayRequest, GatewayAbortError, isAbortError, _inFlight, sleep, resolveProviderTimeoutMs, _pools, acquireSlot, releaseSlot, resolveLlmConfig, type NormalizedCompletion, callOpenAi, callAnthropic } from './aiGatewayCore';
 
@@ -174,6 +175,8 @@ const executeGatewayCompletion = async (
     request.messages,
     request.cache_version,
   );
+  // HARDEN-001: AI response-cache hit/miss ratio (fail-safe, no behavior change).
+  try { recordCache({ cache: 'ai_response', hit: cachedContent !== null }); } catch { /* fail-safe */ }
   if (cachedContent !== null) {
     // Emit a cache-hit usage_events row — zero tokens, zero cost — so the
     // ledger shows avoided cost. Analytics can sum cost saved by filtering
@@ -297,6 +300,20 @@ const executeGatewayCompletion = async (
   const totalTokens  = normalized.usage?.total_tokens     ?? inputTokens + outputTokens;
   // BUG#8 fix: advisory LLM token tracking
   trackLlmTokens(totalTokens);
+  // HARDEN-001: observe AI provider latency/model/tokens/retries (fail-safe, no
+  // behavior change). Wraps the existing post-call metadata already computed above.
+  try {
+    recordAi({
+      provider: effectiveProvider,
+      model: effectiveModel,
+      durationMs: latency,
+      tokensIn: inputTokens || undefined,
+      tokensOut: outputTokens || undefined,
+      retries: typeof normalized.retry_attempt === 'number' ? normalized.retry_attempt : undefined,
+      operation: request.operation,
+      error: false,
+    });
+  } catch { /* fail-safe — metrics must never break the AI path */ }
   const orgIdForBilling = request.companyId ?? UNKNOWN_ORG;
   const isSystemOrgCall = orgIdForBilling === UNKNOWN_ORG;
   let cost: Awaited<ReturnType<typeof resolveLlmCost>> | null = null;

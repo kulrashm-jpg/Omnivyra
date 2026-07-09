@@ -83,6 +83,13 @@ const shutdown = async () => {
 export async function startWorkers(): Promise<void> {
   _diag('startWorkers:entered');
 
+  // HARDEN-001: begin sampling system resources (CPU/memory/event-loop lag) on
+  // the long-lived worker process. Fail-safe + unref'd; no-op when disabled.
+  try {
+    const { startSystemSampler } = await import('../observability/system');
+    startSystemSampler();
+  } catch { /* fail-safe — never block worker boot on instrumentation */ }
+
   // ── Phase 17: thread-runtime persistence boot wiring ──
   // Workers run as a separate process (spawned by scripts/start-all.js), so
   // the bootstrap helper must be invoked here too. Idempotent in-process.
@@ -542,8 +549,28 @@ export async function startWorkers(): Promise<void> {
       console.error('[creator-render-worker] error:', err?.message ?? err));
     creatorRenderWorker.on('active', (job) =>
       console.log('[creator-render-worker] active', { jobId: job?.id, name: job?.name }));
-    creatorRenderWorker.on('completed', (job) =>
-      console.log('[creator-render-worker] completed', { jobId: job?.id }));
+    creatorRenderWorker.on('completed', (job) => {
+      console.log('[creator-render-worker] completed', { jobId: job?.id });
+      // HARDEN-001: queue job timing (processing + wait), fail-safe.
+      try {
+        void import('../observability/metrics').then(({ recordQueueJob }) => {
+          const ts = (job as unknown as { processedOn?: number; finishedOn?: number; timestamp?: number }) || {};
+          recordQueueJob({
+            queue: 'creator-render',
+            ok: true,
+            processingMs: ts.processedOn && ts.finishedOn ? ts.finishedOn - ts.processedOn : undefined,
+            waitMs: ts.timestamp && ts.processedOn ? ts.processedOn - ts.timestamp : undefined,
+          });
+        }).catch(() => {});
+      } catch { /* fail-safe */ }
+    });
+    creatorRenderWorker.on('failed', (job) => {
+      try {
+        void import('../observability/metrics').then(({ recordQueueJob }) => {
+          recordQueueJob({ queue: 'creator-render', ok: false });
+        }).catch(() => {});
+      } catch { /* fail-safe */ }
+    });
     // Explicit boot diagnostic — prints queue name + prefix so when the
     // UI says "no worker consuming" you can verify from the boot logs
     // whether the worker IS up AND on the matching prefix.

@@ -10,6 +10,7 @@ import { ownedDbTable } from '../db/writeOwner';
  * '../scheduler/schedulerService'.
  */
 
+import { recordScheduler } from '../observability/metrics';
 import { addIntelligencePollingJob } from '../queue/intelligencePollingQueue';
 import { INTELLIGENCE_POLLER_USER_ID, isApiSourceExecutable } from '../services/externalApiService';
 import { clusterRecentSignals } from '../services/signalClusterEngine';
@@ -354,6 +355,7 @@ async function runWithConfig<T>(
   if (!config.enabled) {
     console.log(`[scheduler] ${jobType} disabled${companyId ? ` (${companyId})` : ''}`);
     await logSkipped(jobType, companyId, 'disabled', triggeredBy);
+    try { recordScheduler({ job: jobType, durationMs: 0, outcome: 'skipped' }); } catch { /* fail-safe */ }
     return { skipped: true, reason: 'disabled' };
   }
 
@@ -364,6 +366,7 @@ async function runWithConfig<T>(
     if (todayCount >= dailyLimit) {
       console.log(`[scheduler] ${jobType} budget_exceeded for ${companyId} (${todayCount}/${dailyLimit} today)`);
       await logSkipped(jobType, companyId, 'budget_exceeded', triggeredBy);
+      try { recordScheduler({ job: jobType, durationMs: 0, outcome: 'skipped' }); } catch { /* fail-safe */ }
       return { skipped: true, reason: 'budget_exceeded' };
     }
   }
@@ -383,16 +386,20 @@ async function runWithConfig<T>(
 
   // ── 4. Execute with logging ────────────────────────────────────────────────
   const logId = await logExecutionStart(jobType, companyId, triggeredBy);
+  // HARDEN-001: scheduler execution timing (fail-safe; no behavior change).
+  const _obsStart = Date.now();
   try {
     const result = await runner();
     await logExecutionEnd(logId, 'completed', {
       ...(result as Record<string, unknown>),
       effective_priority: effectivePriority,
     });
+    try { recordScheduler({ job: jobType, durationMs: Date.now() - _obsStart, outcome: 'completed' }); } catch { /* fail-safe */ }
     return result;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     await logExecutionEnd(logId, 'failed', { effective_priority: effectivePriority }, msg);
+    try { recordScheduler({ job: jobType, durationMs: Date.now() - _obsStart, outcome: 'failed' }); } catch { /* fail-safe */ }
     throw err;
   }
 }
