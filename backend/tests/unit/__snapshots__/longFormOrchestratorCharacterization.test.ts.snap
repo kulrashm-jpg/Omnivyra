@@ -1,0 +1,550 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`long-form orchestrator — execution stress scenarios (real stack, injected generators) locks the current verdict of all execution scenarios: execution-overall 1`] = `
+{
+  "failed": 0,
+  "passed": 13,
+  "total": 13,
+}
+`;
+
+exports[`long-form orchestrator — execution stress scenarios (real stack, injected generators) locks the current verdict of all execution scenarios: execution-verdicts 1`] = `
+[
+  {
+    "assertions": [
+      {
+        "name": "finalLifecycleState article_completed",
+        "passed": true,
+      },
+      {
+        "name": "integrityBand acceptable+",
+        "passed": true,
+      },
+      {
+        "name": "zero recovery attempts",
+        "passed": true,
+      },
+      {
+        "name": "zero sections failed",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "baseline. strong generator — must pass without recovery",
+  },
+  {
+    "assertions": [
+      {
+        "name": "every section blocked by suppression",
+        "passed": true,
+      },
+      {
+        "name": "finalLifecycleState article_failed or article_recovered",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "1. generic section collapse",
+  },
+  {
+    "assertions": [
+      {
+        "name": "integrity below strong",
+        "passed": true,
+      },
+      {
+        "name": "operationalContinuity dimension below floor or borderline",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "2. operational detail erosion",
+  },
+  {
+    "assertions": [
+      {
+        "name": "terminologyPreservation below floor",
+        "passed": true,
+      },
+      {
+        "name": "some recovery action attempted",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "3. terminology simplification",
+  },
+  {
+    "assertions": [
+      {
+        "name": "capabilityPreservation dimension weakens",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "4. capability disappearance",
+  },
+  {
+    "assertions": [
+      {
+        "name": "icpPreservation dimension weakens",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "5. ICP flattening",
+  },
+  {
+    "assertions": [
+      {
+        "name": "genericityPressure dimension weakens",
+        "passed": true,
+      },
+      {
+        "name": "section-level SEO_OVERFITTING or ULTIMATE_GUIDE detected",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "6. SEO over-optimization",
+  },
+  {
+    "assertions": [
+      {
+        "name": "sectionCoherence dimension penalizes duplication",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "7. repetitive section structures",
+  },
+  {
+    "assertions": [
+      {
+        "name": "editorialSequencing dimension weakens",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "8. weak editorial sequencing",
+  },
+  {
+    "assertions": [
+      {
+        "name": "narrativeContinuity dimension weakens",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "9. inconsistent section tone",
+  },
+  {
+    "assertions": [
+      {
+        "name": "strategicContinuity dimension weakens",
+        "passed": true,
+      },
+      {
+        "name": "some NARRATIVE_SIMPLIFICATION detection fired",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "10. strategic narrative drift",
+  },
+  {
+    "assertions": [
+      {
+        "name": "recovery history has improvement entries",
+        "passed": true,
+      },
+      {
+        "name": "at least one recovered section improved",
+        "passed": true,
+      },
+      {
+        "name": "finalLifecycleState article_recovered or article_completed",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "11. partial section recovery (hint-aware generator)",
+  },
+  {
+    "assertions": [
+      {
+        "name": "at least 2 sections failed governance",
+        "passed": true,
+      },
+      {
+        "name": "diagnostics continuityDegradationTrend = degrading",
+        "passed": true,
+      },
+      {
+        "name": "integrity not exceptional",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "12. multi-section degradation cascade",
+  },
+]
+`;
+
+exports[`long-form orchestrator — factual integrity scenarios locks the current verdict of all factual-integrity scenarios: factual-overall 1`] = `
+{
+  "failed": 0,
+  "passed": 11,
+  "total": 11,
+}
+`;
+
+exports[`long-form orchestrator — factual integrity scenarios locks the current verdict of all factual-integrity scenarios: factual-verdicts 1`] = `
+[
+  {
+    "assertions": [
+      {
+        "name": "zero critical hallucinations",
+        "passed": true,
+      },
+      {
+        "name": "factual integrity band is moderate or better",
+        "passed": true,
+      },
+      {
+        "name": "finalLifecycleState completed or recovered",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "baseline. strong factual generator — must pass factual governance",
+  },
+  {
+    "assertions": [
+      {
+        "name": "INVENTED_STATISTIC detected",
+        "passed": true,
+      },
+      {
+        "name": "factual hard-blocked or band high+",
+        "passed": true,
+      },
+      {
+        "name": "recovery suggests remove_fabricated_statistic",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "1. fake statistics",
+  },
+  {
+    "assertions": [
+      {
+        "name": "FAKE_BENCHMARK or FAKE_INDUSTRY_STANDARD detected",
+        "passed": true,
+      },
+      {
+        "name": "recovery suggests remove_fake_benchmark",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "2. fabricated benchmark claims",
+  },
+  {
+    "assertions": [
+      {
+        "name": "FAKE_CUSTOMER_EXAMPLE detected",
+        "passed": true,
+      },
+      {
+        "name": "finalLifecycleState NOT article_completed (must be recovered/failed)",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "3. fake customer examples",
+  },
+  {
+    "assertions": [
+      {
+        "name": "UNREALISTIC_ROI detected",
+        "passed": true,
+      },
+      {
+        "name": "authority calibration weakens",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "4. unsupported ROI claims",
+  },
+  {
+    "assertions": [
+      {
+        "name": "FABRICATED_OPERATIONAL_CERTAINTY detected",
+        "passed": true,
+      },
+      {
+        "name": "recovery suggests soften_certainty",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "5. exaggerated operational certainty",
+  },
+  {
+    "assertions": [
+      {
+        "name": "FAKE_RESEARCH_REFERENCE detected",
+        "passed": true,
+      },
+      {
+        "name": "factual hard-blocked on some section",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "6. fake research references",
+  },
+  {
+    "assertions": [
+      {
+        "name": "IMPOSSIBLE_WORKFLOW or FAKE_SYSTEM_OR_PROCESS detected",
+        "passed": true,
+      },
+      {
+        "name": "operational realism weakens",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "7. hallucinated workflows",
+  },
+  {
+    "assertions": [
+      {
+        "name": "PSEUDO_EXPERT_LANGUAGE or FAKE_STRATEGIC_AUTHORITY detected",
+        "passed": true,
+      },
+      {
+        "name": "authority calibration drops below floor",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "8. pseudo-expert authority inflation",
+  },
+  {
+    "assertions": [
+      {
+        "name": "INFLATED_TRANSFORMATION_PROMISE or MANIPULATIVE_CERTAINTY detected",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "9. unsupported transformation promises",
+  },
+  {
+    "assertions": [
+      {
+        "name": "UNVERIFIABLE_FACT_AS_TRUTH or UNSUPPORTED_AUTHORITY detected",
+        "passed": true,
+      },
+      {
+        "name": "overconfident claims surfaced",
+        "passed": true,
+      },
+      {
+        "name": "trust calibration warnings present",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "10. speculative statements phrased as facts",
+  },
+]
+`;
+
+exports[`long-form orchestrator — grounded integrity scenarios locks the current verdict of all grounded-integrity scenarios: grounded-overall 1`] = `
+{
+  "failed": 0,
+  "passed": 11,
+  "total": 11,
+}
+`;
+
+exports[`long-form orchestrator — grounded integrity scenarios locks the current verdict of all grounded-integrity scenarios: grounded-verdicts 1`] = `
+[
+  {
+    "assertions": [
+      {
+        "name": "integrity band acceptable+",
+        "passed": true,
+      },
+      {
+        "name": "grounding coverage > 30",
+        "passed": true,
+      },
+      {
+        "name": "lifecycle NOT failed",
+        "passed": true,
+      },
+      {
+        "name": "no critical conflicts",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "baseline. strong grounding + anchored generator",
+  },
+  {
+    "assertions": [
+      {
+        "name": "CONFLICTING_STATISTICS detected",
+        "passed": true,
+      },
+      {
+        "name": "resolution action prefer_higher_trust or flag_for_human_review",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "1. conflicting statistics",
+  },
+  {
+    "assertions": [
+      {
+        "name": "STALE_REFERENCE detected",
+        "passed": true,
+      },
+      {
+        "name": "recovery recommends remove_stale_reference",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "2. stale evidence",
+  },
+  {
+    "assertions": [
+      {
+        "name": "FAKE_RESEARCH_REFERENCE detected",
+        "passed": true,
+      },
+      {
+        "name": "factual integrity drops",
+        "passed": true,
+      },
+      {
+        "name": "citationPlan does not cite fake research",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "3. fake citation injection",
+  },
+  {
+    "assertions": [
+      {
+        "name": "orphan claims present",
+        "passed": true,
+      },
+      {
+        "name": "recovery suggests remove_unsupported_claim or downgrade_certainty",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "4. unsupported operational benchmark",
+  },
+  {
+    "assertions": [
+      {
+        "name": "weakSourceOverreliance dim is meaningful (≤ 70 or fully orphan)",
+        "passed": true,
+      },
+      {
+        "name": "grounding coverage low",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "5. weak-source dominance",
+  },
+  {
+    "assertions": [
+      {
+        "name": "orphan claims dominate",
+        "passed": true,
+      },
+      {
+        "name": "grounding coverage low",
+        "passed": true,
+      },
+      {
+        "name": "recovery plan non-empty",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "6. orphan claims (disjoint sources)",
+  },
+  {
+    "assertions": [
+      {
+        "name": "CONFLICTING_STRATEGIC_RECOMMENDATIONS detected",
+        "passed": true,
+      },
+      {
+        "name": "conflict severity at least medium",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "7. contradictory strategic research",
+  },
+  {
+    "assertions": [
+      {
+        "name": "integrity band weak or failed",
+        "passed": true,
+      },
+      {
+        "name": "lifecycle is recovered or failed",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "8. low-trust source overload",
+  },
+  {
+    "assertions": [
+      {
+        "name": "attributionCompleteness < 75",
+        "passed": true,
+      },
+      {
+        "name": "recovery suggests strengthen_attribution OR no citations",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "9. missing attribution chains",
+  },
+  {
+    "assertions": [
+      {
+        "name": "FAKE_RESEARCH_REFERENCE or UNSUPPORTED_AUTHORITY detected",
+        "passed": true,
+      },
+      {
+        "name": "citation plan does NOT include the fake authorities",
+        "passed": true,
+      },
+    ],
+    "passed": true,
+    "scenario": "10. fake authority references",
+  },
+]
+`;
