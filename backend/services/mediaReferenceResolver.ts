@@ -177,10 +177,11 @@ export async function detectDeadMedia(
   let confirmedDead = 0;
   for (const url of valid) {
     try {
-      const ac = new AbortController();
-      const t = setTimeout(() => ac.abort(), timeoutMs);
-      const r = await fetch(url, { method: 'HEAD', signal: ac.signal });
-      clearTimeout(t);
+      // HARDEN-005: media URLs are generated/user content — validate via the
+      // SSRF-safe fetcher. A blocked (internal-pointing) URL throws and is
+      // treated as inconclusive by the catch below (no internal request made).
+      const { safeFetch } = await import('../../lib/security/safeFetch');
+      const r = await safeFetch(url, { method: 'HEAD' }, { timeoutMs });
       if (r.status >= 400) confirmedDead++;
     } catch {
       /* inconclusive — ignore */

@@ -269,10 +269,10 @@ export async function assertMediaAccessible(
   const urls = (Array.isArray(mediaUrls) ? mediaUrls : []).filter(isHttpUrl);
   for (const url of urls) {
     try {
-      const ac = new AbortController();
-      const t = setTimeout(() => ac.abort(), timeoutMs);
-      const r = await fetch(url, { method: 'HEAD', signal: ac.signal });
-      clearTimeout(t);
+      // HARDEN-005: media URL is user/generated content — validate via the
+      // SSRF-safe fetcher (blocked internal URLs throw → inconclusive below).
+      const { safeFetch } = await import('../../lib/security/safeFetch');
+      const r = await safeFetch(url, { method: 'HEAD' }, { timeoutMs });
       if (r.status >= 400) {
         return pipelineError(
           PipelineErrorCode.MEDIA_ASSET_INACCESSIBLE,
@@ -281,7 +281,7 @@ export async function assertMediaAccessible(
         );
       }
     } catch {
-      // Network/timeout — inconclusive, not a hard fail (avoid false positives).
+      // Network/timeout/SSRF-block — inconclusive, not a hard fail (avoid false positives).
       return null;
     }
   }

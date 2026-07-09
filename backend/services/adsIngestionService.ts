@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import axios from 'axios';
 import { supabase } from '../db/supabaseClient';
 import { hashKey, safeNumber, todayIsoDate } from './ingestionUtils';
 import { ownedDbTable } from '../db/writeOwner';
@@ -42,14 +41,17 @@ async function loadAdsRows(input: AdsIngestionInput): Promise<AdsCampaignRow[]> 
     return [];
   }
 
-  const response = await axios.get(input.endpointUrl, {
-    headers: {
-      Authorization: `Bearer ${input.accessToken}`,
-    },
-    timeout: 15000,
-  });
-
-  return Array.isArray(response.data?.rows) ? response.data.rows : [];
+  // HARDEN-005: `endpointUrl` is a tenant-configured "custom API base URL"
+  // (company_integrations.config) — a Bearer token is sent to it, so route it
+  // through the SSRF-safe fetcher to keep it off the internal network.
+  const { safeFetch, readCapped } = await import('../../lib/security/safeFetch');
+  const response = await safeFetch(input.endpointUrl, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${input.accessToken}` },
+  }, { timeoutMs: 15000, maxBytes: 10 * 1024 * 1024 });
+  if (!response.ok) return [];
+  const data = JSON.parse((await readCapped(response)).toString('utf8') || '{}');
+  return Array.isArray(data?.rows) ? data.rows : [];
 }
 
 async function upsertCampaign(input: {

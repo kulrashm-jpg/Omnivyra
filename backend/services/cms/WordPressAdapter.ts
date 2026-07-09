@@ -355,10 +355,12 @@ export class WordPressAdapter extends BaseCmsAdapter {
       .maybeSingle();
     if (cached.data?.external_id) return { id: String(cached.data.external_id), url: cached.data.external_url ?? undefined };
 
-    const mediaRes = await fetch(sourceUrl).catch(() => null);
+    // HARDEN-005: sourceUrl is user/generated media — SSRF-safe download.
+    const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
+    const mediaRes = await safeFetch(sourceUrl, { method: 'GET' }).catch(() => null);
     if (!mediaRes?.ok) return null;
     const contentType = mediaRes.headers.get('content-type') || 'image/jpeg';
-    const bytes = Buffer.from(await mediaRes.arrayBuffer());
+    const bytes = await readCapped(mediaRes);
     const filename = this.filenameFromUrl(sourceUrl, contentType);
     const uploaded = await this.uploadMedia(context, { filename, contentType, body: bytes, altText }, apiBase);
     if (uploaded.id) {

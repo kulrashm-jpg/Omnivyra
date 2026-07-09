@@ -199,12 +199,12 @@ export const extractEvidenceFromHtml = (html: string): ExtractedEvidence => {
 export const fetchUrlSummary = async (url?: string | null): Promise<string | null> => {
   if (!url) return null;
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    const response = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeoutId);
+    // HARDEN-005: `url` is a user-supplied company/source website — fetch via
+    // the SSRF-safe fetcher (blocked internal URLs throw → null below).
+    const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
+    const response = await safeFetch(url, { method: 'GET' }, { timeoutMs: 5000, maxBytes: 5 * 1024 * 1024 });
     if (!response.ok) return null;
-    const text = await response.text();
+    const text = (await readCapped(response)).toString('utf8');
     const evidence = extractEvidenceFromHtml(text);
     const parts = [
       evidence.title ? `Title: ${evidence.title}` : null,
@@ -231,21 +231,20 @@ export const crawlWebsiteSources = async (
   const normalizedWebsite = normalizeUrl(websiteUrl);
   if (!normalizedWebsite) return { urls: [], summaries: [], social_links: {} };
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
   let rootHtml = '';
   let socialLinks: Record<string, string[]> = {
     linkedin: [], facebook: [], instagram: [], x: [], youtube: [], tiktok: [], reddit: [],
   };
   try {
-    const response = await fetch(normalizedWebsite, { signal: controller.signal });
-    clearTimeout(timeoutId);
+    // HARDEN-005: `websiteUrl` is user-supplied — SSRF-safe fetch (5MB cap).
+    const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
+    const response = await safeFetch(normalizedWebsite, { method: 'GET' }, { timeoutMs: 8000, maxBytes: 5 * 1024 * 1024 });
     if (response.ok) {
-      rootHtml = await response.text();
+      rootHtml = (await readCapped(response)).toString('utf8');
       socialLinks = extractSocialLinksFromHtml(rootHtml, normalizedWebsite);
     }
   } catch {
-    clearTimeout(timeoutId);
+    /* SSRF-blocked or network error — leave rootHtml empty */
   }
 
   const candidateLinks = extractLinksFromHtml(rootHtml, normalizedWebsite)

@@ -73,6 +73,9 @@ async function downloadRemoteVideo(videoUrl: string): Promise<{
     throw new Error('YouTube upload expects an HTTP(S) video URL');
   }
 
+  // HARDEN-005: videoUrl is user-controlled media — block internal targets first.
+  const { assertUrlSafe } = await import('../../lib/security/safeFetch');
+  await assertUrlSafe(videoUrl);
   const response = await axios.get<ArrayBuffer>(videoUrl, {
     responseType: 'arraybuffer',
     maxContentLength: 1024 * 1024 * 1024,

@@ -775,17 +775,15 @@ export function getFirstImageResult(response: unknown): { b64_json?: string | nu
 }
 
 export async function bufferFromRemoteImage(url: string): Promise<Buffer> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AI_IMAGE_TIMEOUT_MS);
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`Image download failed with ${response.status}`);
-    }
-    return Buffer.from(await response.arrayBuffer());
-  } finally {
-    clearTimeout(timer);
+  // HARDEN-005: image URL is generated/creator-supplied — download via the
+  // SSRF-safe fetcher (validated host, DNS-pinned, size-capped). Preserves the
+  // timeout + "download failed with <status>" behavior.
+  const { safeFetch, readCapped } = await import('../../lib/security/safeFetch');
+  const response = await safeFetch(url, { method: 'GET' }, { timeoutMs: AI_IMAGE_TIMEOUT_MS });
+  if (!response.ok) {
+    throw new Error(`Image download failed with ${response.status}`);
   }
+  return readCapped(response);
 }
 
 export async function resolveOpenAiImageKey(): Promise<string | null> {

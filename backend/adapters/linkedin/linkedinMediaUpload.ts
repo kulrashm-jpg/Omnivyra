@@ -162,7 +162,11 @@ export async function getOrUploadLinkedInAsset(input: {
   let binary: ArrayBuffer;
   let fetchedContentType: string | null;
   try {
-    const r = await fetch(input.sourceUrl, { method: 'GET' });
+    // HARDEN-005: sourceUrl is user-controlled media — SSRF-safe download
+    // (validated host, DNS-pinned, size-capped). A blocked internal URL throws
+    // and is handled by the catch below as a fetch failure.
+    const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
+    const r = await safeFetch(input.sourceUrl, { method: 'GET' });
     if (!r.ok) {
       return {
         ok: false,
@@ -174,7 +178,11 @@ export async function getOrUploadLinkedInAsset(input: {
         },
       };
     }
-    binary = await r.arrayBuffer();
+    const buf = await readCapped(r);
+    // Copy into a standalone ArrayBuffer (buf may be a view over a pooled/shared buffer).
+    const ab = new ArrayBuffer(buf.byteLength);
+    new Uint8Array(ab).set(buf);
+    binary = ab;
     fetchedContentType = r.headers.get('content-type');
   } catch (err) {
     return {

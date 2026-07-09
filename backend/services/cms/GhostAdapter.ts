@@ -217,10 +217,12 @@ export class GhostAdapter extends BaseCmsAdapter {
     sourceUrl: string | null | undefined,
   ): Promise<string | null> {
     if (!sourceUrl) return null;
-    const src = await fetch(sourceUrl).catch(() => null);
+    // HARDEN-005: sourceUrl is user/generated media — SSRF-safe download.
+    const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
+    const src = await safeFetch(sourceUrl, { method: 'GET' }).catch(() => null);
     if (!src?.ok) return sourceUrl; // Ghost can ingest a remote URL directly
     const contentType = src.headers.get('content-type') || 'image/jpeg';
-    const bytes = Buffer.from(await src.arrayBuffer());
+    const bytes = await readCapped(src);
     const uploaded = await this.uploadMedia(context, {
       filename: `featured.${contentType.includes('png') ? 'png' : 'jpg'}`,
       contentType,

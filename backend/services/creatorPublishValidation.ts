@@ -110,11 +110,13 @@ async function fetchMediaBuffer(url: string): Promise<{ buffer: Buffer; mimeType
       mimeType: match[1] || 'image/png',
     };
   }
-  const response = await fetch(url);
+  // HARDEN-005: media URL is user/generated content — download via the
+  // SSRF-safe fetcher (validated host, DNS-pinned, size-capped).
+  const { safeFetch, readCapped } = await import('../../lib/security/safeFetch');
+  const response = await safeFetch(url, { method: 'GET' });
   if (!response.ok) throw new Error(`media_fetch_failed_${response.status}`);
-  const arrayBuffer = await response.arrayBuffer();
   return {
-    buffer: Buffer.from(arrayBuffer),
+    buffer: await readCapped(response),
     mimeType: response.headers.get('content-type') || 'image/png',
   };
 }

@@ -1,4 +1,3 @@
-import axios from 'axios';
 import { supabase } from '../db/supabaseClient';
 import { ensureCanonicalDomain, hashKey, normalizeHost, normalizeUrl, resolveCompanyWebsite } from './ingestionUtils';
 import { ownedDbTable } from '../db/writeOwner';
@@ -247,18 +246,24 @@ function extractPageSignals(rawHtml: string, metaTags: Record<string, string>, h
 /** BETA-ROADMAP-EXEC-002 — fetch robots.txt + sitemap.xml once per domain (2 cheap GETs; degrades to absent). */
 async function fetchSiteFiles(rootUrl: string, timeoutMs: number): Promise<PageSignals['site']> {
   const origin = new URL(rootUrl).origin;
-  const get = async (path: string) => {
+  // HARDEN-005: the crawl origin comes from a user-writable website row, and the
+  // robots.txt-declared sitemap URL is fully attacker-controllable (e.g.
+  // `Sitemap: http://169.254.169.254/…`). Both go through the SSRF-safe fetcher
+  // (validated host, DNS-pinned, redirect-revalidated, size-capped).
+  const { safeFetch, readCapped } = await import('../../lib/security/safeFetch');
+  const getUrl = async (u: string): Promise<string | null> => {
     try {
-      const r = await axios.get<string>(`${origin}${path}`, { timeout: timeoutMs, responseType: 'text', headers: { 'User-Agent': 'OmnivyraBot/1.0 (+https://omnivyra.com)' }, validateStatus: (s) => s >= 200 && s < 400 });
-      return typeof r.data === 'string' ? r.data : '';
+      const r = await safeFetch(u, { method: 'GET', headers: { 'User-Agent': 'OmnivyraBot/1.0 (+https://omnivyra.com)' } }, { timeoutMs, maxBytes: 10 * 1024 * 1024 });
+      if (r.status < 200 || r.status >= 400) return null;
+      return (await readCapped(r)).toString('utf8');
     } catch { return null; }
   };
-  const robots = await get('/robots.txt');
-  let sitemap = await get('/sitemap.xml');
+  const robots = await getUrl(`${origin}/robots.txt`);
+  let sitemap = await getUrl(`${origin}/sitemap.xml`);
   // robots.txt may point at a differently-named sitemap.
   if (sitemap == null && robots) {
     const declared = /Sitemap:\s*(\S+)/i.exec(robots)?.[1];
-    if (declared) { try { sitemap = (await axios.get<string>(declared, { timeout: timeoutMs, responseType: 'text', validateStatus: (s) => s >= 200 && s < 400 })).data as string; } catch { /* absent */ } }
+    if (declared) { sitemap = await getUrl(declared); }
   }
   return {
     robots_txt: robots != null && robots.trim().length > 0,
@@ -324,29 +329,28 @@ function parsePage(html: string, url: string, depth: number, headers: Record<str
 }
 
 async function fetchHtml(url: string, timeoutMs: number): Promise<{ html: string; status: number; headers: Record<string, string> }> {
-  const response = await axios.get<string>(url, {
-    timeout: timeoutMs,
-    maxRedirects: 5,
-    responseType: 'text',
+  // HARDEN-005: crawl target is user-controlled — SSRF-safe fetch (validated
+  // host, DNS-pinned, each redirect hop re-validated up to the cap, 10MB cap).
+  // Preserves the old 200–399 "ok" contract (throw on 4xx/5xx like axios did).
+  const { safeFetch, readCapped } = await import('../../lib/security/safeFetch');
+  const response = await safeFetch(url, {
+    method: 'GET',
     headers: {
       'User-Agent': 'OmnivyraBot/1.0 (+https://omnivyra.com)',
       Accept: 'text/html,application/xhtml+xml',
     },
-    validateStatus: (status) => status >= 200 && status < 400,
-  });
+  }, { timeoutMs, maxRedirects: 5, maxBytes: 10 * 1024 * 1024 });
 
-  // BETA-ROADMAP-EXEC-002: retain the HTTP response headers (previously discarded) so security /
-  // compression / caching metadata can be recovered without any extra request.
-  const headers: Record<string, string> = {};
-  for (const [k, v] of Object.entries(response.headers ?? {})) {
-    if (typeof v === 'string') headers[k.toLowerCase()] = v;
-    else if (Array.isArray(v)) headers[k.toLowerCase()] = v.join(', ');
+  if (response.status < 200 || response.status >= 400) {
+    throw new Error(`Request failed with status ${response.status}`);
   }
-  return {
-    html: String(response.data ?? ''),
-    status: response.status,
-    headers,
-  };
+
+  // Retain the HTTP response headers so security / compression / caching
+  // metadata can be recovered without any extra request.
+  const headers: Record<string, string> = {};
+  response.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
+  const html = (await readCapped(response)).toString('utf8');
+  return { html, status: response.status, headers };
 }
 
 async function persistCrawledPage(companyId: string, domainId: string, page: CrawlPageResult): Promise<{

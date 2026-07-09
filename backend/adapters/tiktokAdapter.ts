@@ -139,10 +139,13 @@ async function uploadTikTokVideoChunks(
   token: Token
 ): Promise<void> {
   // Download video file
+  // HARDEN-005: videoUrl is user-controlled media — block internal targets first.
+  const { assertUrlSafe } = await import('../../lib/security/safeFetch');
+  await assertUrlSafe(videoUrl);
   const videoResponse = await axios.get(videoUrl, {
     responseType: 'arraybuffer',
   });
-  
+
   const videoBuffer = Buffer.from(videoResponse.data);
   const chunkSize = 5 * 1024 * 1024; // 5MB chunks
   let offset = 0;

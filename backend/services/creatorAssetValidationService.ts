@@ -1,5 +1,6 @@
 import { checkCapability } from './creatorCapabilityMap';
 import type { CanonicalCreatorOutput } from './executionEngines/types';
+import { safeFetch } from '../../lib/security/safeFetch';
 
 export type AssetReadinessResult = {
   ready: boolean;
@@ -40,7 +41,10 @@ function inferFileExtension(url: string): string {
 
 async function validateRemoteUrl(url: string): Promise<{ ok: boolean; status: number | null; contentType: string | null; contentLength: number | null }> {
   try {
-    const headResponse = await fetch(url, { method: 'HEAD' });
+    // HARDEN-005: the asset URL originates from generated/creator payloads —
+    // validate it through the SSRF-safe fetcher (an unsafe URL throws and is
+    // reported as not-ok, exactly like the old failure path).
+    const headResponse = await safeFetch(url, { method: 'HEAD' });
     if (headResponse.ok) {
       return {
         ok: true,
@@ -50,7 +54,7 @@ async function validateRemoteUrl(url: string): Promise<{ ok: boolean; status: nu
       };
     }
 
-    const getResponse = await fetch(url, { method: 'GET' });
+    const getResponse = await safeFetch(url, { method: 'GET' });
     if (!getResponse.ok) {
       return {
         ok: false,

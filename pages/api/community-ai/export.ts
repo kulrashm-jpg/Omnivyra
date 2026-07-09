@@ -125,13 +125,11 @@ const fetchLogoBuffer = async (logoUrl?: string | null): Promise<Buffer | null> 
   if (!logoUrl) return null;
   if (!/^https?:\/\//i.test(logoUrl)) return null;
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
-    const response = await fetch(logoUrl, { signal: controller.signal });
-    clearTimeout(timeoutId);
+    // HARDEN-005: logoUrl is user-supplied — SSRF-safe download (blocked → null).
+    const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
+    const response = await safeFetch(logoUrl, { method: 'GET' }, { timeoutMs: 3000, maxBytes: 5 * 1024 * 1024 });
     if (!response.ok) return null;
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    return await readCapped(response);
   } catch {
     return null;
   }

@@ -92,17 +92,18 @@ async function crawlDomainSignals(domain: string, referenceKeywords: string[]): 
     if (visited.has(url)) continue;
     visited.add(url);
     try {
-      const response = await axios.get<string>(url, {
-        timeout: 8000,
-        maxRedirects: 3,
-        responseType: 'text',
+      // HARDEN-005: competitor crawl URLs derive from a user-writable domain —
+      // SSRF-safe fetch (host-validated, DNS-pinned, redirect-revalidated).
+      const { safeFetch, readCapped } = await import('../../lib/security/safeFetch');
+      const response = await safeFetch(url, {
+        method: 'GET',
         headers: {
           'User-Agent': 'OmnivyraBot/1.0 (+https://omnivyra.com)',
           Accept: 'text/html,application/xhtml+xml',
         },
-        validateStatus: (status) => status >= 200 && status < 400,
-      });
-      const html = String(response.data ?? '');
+      }, { timeoutMs: 8000, maxRedirects: 3, maxBytes: 5 * 1024 * 1024 });
+      if (response.status < 200 || response.status >= 400) continue;
+      const html = (await readCapped(response)).toString('utf8');
       const title = extractTitle(html);
       const headings = extractHeadings(html);
       const text = stripHtml(html).slice(0, 9000);

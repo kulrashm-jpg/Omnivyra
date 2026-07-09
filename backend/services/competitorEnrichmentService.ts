@@ -212,12 +212,14 @@ async function fetchHomepageProfile(name: string, domain?: string | null): Promi
   const normalizedDomain = normalizeDomain(domain);
   if (!normalizedDomain) return null;
   try {
-    const response = await axios.get(`https://${normalizedDomain}`, {
-      timeout: 6000,
-      maxRedirects: 3,
+    // HARDEN-005: `normalizedDomain` is a user-writable competitor domain —
+    // fetch its homepage via the SSRF-safe fetcher (blocked → null below).
+    const { safeFetch, readCapped } = await import('../../lib/security/safeFetch');
+    const response = await safeFetch(`https://${normalizedDomain}`, {
+      method: 'GET',
       headers: { 'User-Agent': 'OmnivyraCompetitorEnrichment/1.0' },
-    });
-    const summary = extractHtmlSummary(String(response.data ?? ''));
+    }, { timeoutMs: 6000, maxRedirects: 3, maxBytes: 5 * 1024 * 1024 });
+    const summary = extractHtmlSummary((await readCapped(response)).toString('utf8'));
     if (!summary) return null;
     return profileFromText({
       name,

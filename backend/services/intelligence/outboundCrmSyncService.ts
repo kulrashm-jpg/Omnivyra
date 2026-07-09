@@ -86,9 +86,10 @@ function envCreds(provider: OutboundCrmProvider): { accessToken?: string; instan
 }
 
 async function fetchWithTimeout(url: string, options: RequestInit, ms = 10_000): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+  // HARDEN-005: the CRM sync endpoint is tenant-configured — route it through
+  // the SSRF-safe fetcher (host-validated, DNS-pinned) instead of raw fetch.
+  const { safeFetch } = await import('../../../lib/security/safeFetch');
+  return safeFetch(url, options, { timeoutMs: ms, maxBytes: 5 * 1024 * 1024 });
 }
 
 function hmac(body: string, secret: string): string {

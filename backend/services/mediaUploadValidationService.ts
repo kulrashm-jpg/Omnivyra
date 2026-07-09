@@ -245,19 +245,16 @@ function isMimeInCategory(mime: string, category: MediaUploadCategory): boolean 
 async function probeLiveness(url: URL): Promise<{ status: number | null; mime: string | null; sizeBytes: number | null }> {
   const tryFetch = async (method: 'HEAD' | 'GET'): Promise<Response | null> => {
     try {
-      // Cap GET to 5s; we only need headers. The body stream is aborted.
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const resp = await fetch(url.toString(), {
+      // HARDEN-005: the URL under validation is user/generated media — probe
+      // via the SSRF-safe fetcher (blocked internal URLs throw → null below).
+      const { safeFetch } = await import('../../lib/security/safeFetch');
+      const resp = await safeFetch(url.toString(), {
         method,
-        redirect: 'follow',
-        signal: controller.signal,
         headers: {
           'user-agent': 'OmnivyraMediaValidator/1.0',
           'accept': '*/*',
         },
-      });
-      clearTimeout(timeout);
+      }, { timeoutMs: 5000 });
       return resp;
     } catch {
       return null;

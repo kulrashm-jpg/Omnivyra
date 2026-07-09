@@ -57,6 +57,11 @@ function resolveMediaMeta(url: string, contentType: string): MediaMeta {
 }
 
 async function fetchBytes(url: string): Promise<{ buffer: Buffer; contentType: string }> {
+  // HARDEN-005: media URL is user-controlled (scheduled_posts.media_urls) —
+  // block internal targets before downloading. Keeps the axios download
+  // mechanics/size caps unchanged for legitimate public media.
+  const { assertUrlSafe } = await import('../../lib/security/safeFetch');
+  await assertUrlSafe(url);
   const res = await axios.get(url, {
     responseType: 'arraybuffer',
     timeout: 30000,

@@ -146,9 +146,11 @@ export async function generateProviderImage(input: {
     const editStartedAt = Date.now();
     try {
       const { toFile } = await import('openai');
-      const refResp = await fetch(referenceUrl.trim());
+      // HARDEN-005: reference image URL is user/generated content — SSRF-safe download.
+      const { safeFetch, readCapped } = await import('../../lib/security/safeFetch');
+      const refResp = await safeFetch(referenceUrl.trim(), { method: 'GET' });
       if (!refResp.ok) throw new Error(`reference fetch ${refResp.status}`);
-      const refBuf = Buffer.from(await refResp.arrayBuffer());
+      const refBuf = await readCapped(refResp);
       // Filename extension MUST match the actual bytes/type or the provider can
       // reject it (simulation confirmed matched webp/png work; mismatched fail).
       const refType = refResp.headers.get('content-type') || 'image/webp';

@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { safeFetch } from '../../lib/security/safeFetch';
 
 type WebhookEventType = 'failed' | 'high_risk_pending' | 'anomaly' | 'executed';
 
@@ -12,11 +13,13 @@ type WebhookPayload = {
 };
 
 const postWebhook = async (url: string, payload: WebhookPayload) => {
-  const response = await fetch(url, {
+  // HARDEN-005: webhook_url is customer-controlled (DB) — deliver through the
+  // SSRF-safe fetcher so a hook can never target an internal/private address.
+  const response = await safeFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  });
+  }, { maxBytes: 1 * 1024 * 1024 });
   if (!response.ok) {
     throw new Error(`Webhook failed with status ${response.status}`);
   }

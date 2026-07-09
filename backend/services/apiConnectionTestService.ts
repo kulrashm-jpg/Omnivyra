@@ -102,14 +102,15 @@ export async function testApiConnection(input: {
   }
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-    const response = await fetch(details.url, {
+    // HARDEN-005: `details.url` is a user-supplied API endpoint under test —
+    // route it through the SSRF-safe fetcher so it can't probe the internal
+    // network. A blocked target throws and surfaces as a normal failed result
+    // via the catch below (no behavior change for legitimate external APIs).
+    const { safeFetch } = await import('../../lib/security/safeFetch');
+    const response = await safeFetch(details.url, {
       method: details.method,
       headers: details.headers as Record<string, string>,
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+    }, { timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: 2 * 1024 * 1024 });
     const latencyMs = Date.now() - start;
 
     let message: string;
@@ -186,15 +187,14 @@ async function testOAuthConnection(
       client_secret: clientSecret,
     });
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-    const response = await fetch(tokenUrl, {
+    // HARDEN-005: `tokenUrl` can be a user-supplied OAuth token endpoint —
+    // SSRF-safe fetch (blocked → failed result via the catch below).
+    const { safeFetch } = await import('../../lib/security/safeFetch');
+    const response = await safeFetch(tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+    }, { timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: 2 * 1024 * 1024 });
     const latencyMs = Date.now() - start;
 
     if (response.ok) {

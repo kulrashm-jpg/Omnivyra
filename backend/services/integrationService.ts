@@ -378,11 +378,14 @@ export async function sendLead(companyId: string, payload: LeadPayload): Promise
   if (!integration) return;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (integration.config.secret) headers['X-Webhook-Secret'] = integration.config.secret;
-  await fetch(integration.config.webhook_url, {
+  // HARDEN-005: webhook_url is customer-configured — deliver via the SSRF-safe
+  // fetcher so a lead webhook can't be pointed at an internal address.
+  const { safeFetch } = await import('../../lib/security/safeFetch');
+  await safeFetch(integration.config.webhook_url, {
     method: 'POST',
     headers,
     body: JSON.stringify(payload),
-  }).catch(() => null);
+  }, { maxBytes: 1 * 1024 * 1024 }).catch(() => null);
 }
 
 /** Publish a blog post via wordpress or custom_blog_api integration */
