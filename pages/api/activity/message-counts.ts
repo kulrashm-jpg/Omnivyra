@@ -7,8 +7,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { getMessageCounts } from '../../../backend/services/collaborationMessageService';
+import { withApiObservability } from '../../../backend/observability';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -40,9 +41,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       userId: access.userId,
       applyFilters: (query) => query.eq('campaign_id', campaignId).in('activity_id', activityIds),
     });
+    // HARDEN-002: short-lived private cache (see calendar/message-counts).
+    res.setHeader('Cache-Control', 'private, max-age=30');
+    res.setHeader('Vary', 'Authorization');
     return res.status(200).json(counts);
   } catch (err: unknown) {
     console.error('[activity/message-counts]', err);
     return res.status(500).json({ error: (err as Error)?.message || 'Internal error' });
   }
 }
+
+// HARDEN-002: measurement only (HARDEN-001 API metrics).
+export default withApiObservability(handler, '/api/activity/message-counts');

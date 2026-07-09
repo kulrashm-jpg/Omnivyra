@@ -1,21 +1,29 @@
 import React from 'react';
-import ContentRenderer, { CarouselContent, PLATFORM_HIGHLIGHT } from './ContentRenderer';
-import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Eye, MoreHorizontal, Users, Settings, UserPlus, Heart, ExternalLink, Share, Loader2, Trash2, ExternalLink as ExternalLinkIcon, Link2, FileText, ChevronLeft, ChevronRight, MessageSquare, GripVertical, Send, ArrowRight, Clock, AlertTriangle, Wrench } from 'lucide-react';
-import PlatformIcon from './ui/PlatformIcon';
-import { getPlatformLabel } from '../utils/platformIcons';
-import FloatingChatPanel from './collaboration/FloatingChatPanel';
-import DayDetailPanel, { type DayActivity } from './collaboration/DayDetailPanel';
+import dynamic from 'next/dynamic';
+import { Plus, BarChart3, Calendar, Target, TrendingUp, Play, Edit3, CheckCircle, Users, Loader2, ArrowRight, Clock, AlertTriangle, Wrench } from 'lucide-react';
 import ReportAutomationActivityFeed from './dashboard/ReportAutomationActivityFeed';
-import PostPreviewModal, { type ActivityEvent } from './dashboard/PostPreviewModal';
-import CampaignProgress from './dashboard/CampaignProgress';
-import { DashboardTeamTab, DashboardAnalyticsTab } from './dashboard/DashboardTeamTab';
+import { type DayActivity } from './collaboration/DayDetailPanel';
+import { type ActivityEvent } from './dashboard/PostPreviewModal';
 import { useDashboardState } from './hooks/useDashboardState';
-import type { CalendarActivity, CalendarExecutionStage } from './DashboardPage.types';
-import DashboardCalendarTab from './dashboard/DashboardCalendarTab';
-import DashboardCampaignsTab from './dashboard/DashboardCampaignsTab';
+import type { CalendarActivity } from './DashboardPage.types';
 import DashboardOverviewSection from './dashboard/DashboardOverviewSection';
 import CreditAdvisorBanner from './credit-advisor/CreditAdvisorBanner';
 import CreditAdvisorExecutivePopup from './credit-advisor/CreditAdvisorExecutivePopup';
+
+// HARDEN-002 — lazy rendering. Overlays (chat panel, day drawer, post preview)
+// and non-default tabs are conditionally RENDERED but were statically IMPORTED,
+// so every dashboard load parsed all of them. next/dynamic splits them into
+// on-demand chunks: the default Overview tab parses only what it shows; the
+// calendar/campaigns/team/analytics chunks load when their tab is opened, the
+// overlay chunks on first open. Dead imports (ContentRenderer & friends) that
+// dragged the full content renderer into the dashboard chunk are removed.
+const FloatingChatPanel = dynamic(() => import('./collaboration/FloatingChatPanel'), { ssr: false });
+const DayDetailPanel = dynamic(() => import('./collaboration/DayDetailPanel'), { ssr: false });
+const PostPreviewModal = dynamic(() => import('./dashboard/PostPreviewModal'), { ssr: false });
+const DashboardCalendarTab = dynamic(() => import('./dashboard/DashboardCalendarTab'));
+const DashboardCampaignsTab = dynamic(() => import('./dashboard/DashboardCampaignsTab'));
+const DashboardTeamTab = dynamic(() => import('./dashboard/DashboardTeamTab').then((m) => m.DashboardTeamTab));
+const DashboardAnalyticsTab = dynamic(() => import('./dashboard/DashboardTeamTab').then((m) => m.DashboardAnalyticsTab));
 
 export default function DashboardPage() {
   const d = useDashboardState();
@@ -48,16 +56,26 @@ export default function DashboardPage() {
     isActivityEvent,
   } = d;
 
-  const overdueCount = Object.values(calendarActivityEvents)
-    .flat()
-    .filter((event) => getEventStage(event) === 'overdue').length;
-  const scheduledCount = Object.values(calendarActivityEvents)
-    .flat()
-    .filter((event) => getEventStage(event) === 'content_scheduled').length;
-  const planningCount = campaigns.filter((campaign) => {
+  // HARDEN-002: these flattened every calendar event on EVERY render (drag,
+  // hover, chat keystrokes, …). Memoized on the actual inputs.
+  const { overdueCount, scheduledCount } = React.useMemo(() => {
+    let overdue = 0;
+    let scheduled = 0;
+    for (const events of Object.values(calendarActivityEvents)) {
+      for (const event of events) {
+        const stage = getEventStage(event);
+        if (stage === 'overdue') overdue += 1;
+        else if (stage === 'content_scheduled') scheduled += 1;
+      }
+    }
+    return { overdueCount: overdue, scheduledCount: scheduled };
+    // getEventStage is a pure per-event mapping; the events map is the input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calendarActivityEvents]);
+  const planningCount = React.useMemo(() => campaigns.filter((campaign) => {
     const stage = String(campaign.current_stage || campaign.status || '').toLowerCase();
     return stage.includes('plan') || stage.includes('draft') || stage.includes('pending');
-  }).length;
+  }).length, [campaigns]);
 
   if (showLoadingSpinner) {
     return <div className="p-6 text-gray-500">Loading company context...</div>;

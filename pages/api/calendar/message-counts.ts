@@ -7,8 +7,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { getMessageCounts } from '../../../backend/services/collaborationMessageService';
+import { withApiObservability } from '../../../backend/observability';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -48,9 +49,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .in('campaign_id', campaignIds.length ? campaignIds : [authCampaignId])
           .in('message_date', dates),
     });
+    // HARDEN-002: short-lived private cache. Chat-count markers are advisory
+    // (the UI never live-refreshes them on send), so 30s of browser-private
+    // reuse across month/tab toggles is behavior-neutral. Per-user via Vary.
+    res.setHeader('Cache-Control', 'private, max-age=30');
+    res.setHeader('Vary', 'Authorization');
     return res.status(200).json(counts);
   } catch (err: unknown) {
     console.error('[calendar/message-counts]', err);
     return res.status(500).json({ error: (err as Error)?.message || 'Internal error' });
   }
 }
+
+// HARDEN-002: measurement only (HARDEN-001 API metrics).
+export default withApiObservability(handler, '/api/calendar/message-counts');

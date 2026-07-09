@@ -26,6 +26,28 @@ function isActivityEvent(item: CalendarDayItem): item is ActivityEvent {
   return (item as ActivityEvent).type === 'activity';
 }
 
+/**
+ * Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc.
+ * HARDEN-002: module scope for a stable component identity. It used to be
+ * re-created inside the hook on every render, which made React treat every
+ * <RepurposeDots> as a NEW component type each render and remount it (state
+ * teardown + DOM rebuild) instead of updating in place.
+ */
+const RepurposeDots = ({ index, total, contentType }: { index: number; total: number; contentType?: string }) => {
+  const safeTotal = total < 1 ? 1 : total;
+  const safeIndex = index < 1 ? 1 : index;
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] text-indigo-600" aria-label={safeTotal === 1 ? 'Unique' : `Repurpose ${safeIndex} of ${safeTotal}`}>
+      {Array.from({ length: safeTotal }, (_, i) => (
+        <span key={i} className={i < safeIndex ? 'text-indigo-600' : 'text-gray-300'}>
+          {i < safeIndex ? '●' : '○'}
+        </span>
+      ))}
+      {contentType && <span className="text-gray-400 font-normal ml-0.5">{contentType}</span>}
+    </span>
+  );
+};
+
 export function useDashboardState() {
   const router = useRouter();
   const { selectedCompanyId, isAdmin, isLoading, authChecked, isAuthenticated, companies, companiesResolved, hasPermission, userRole, user } = useCompanyContext();
@@ -106,6 +128,14 @@ export function useDashboardState() {
   const [calendarStageFilter, setCalendarStageFilter] = useState<CalendarExecutionStage | null>(null);
   const [calendarStageEvents, setCalendarStageEvents] = useState<ActivityEvent[]>([]);
   const [calendarStageEventsLoading, setCalendarStageEventsLoading] = useState(false);
+  // HARDEN-002: whether the stage panel is showing the full history (on-demand)
+  // or the default ±90-day rolling window.
+  const [calendarStageFullHistory, setCalendarStageFullHistory] = useState(false);
+  // HARDEN-002: bumped after in-page mutations (reschedule/publish/delete/expand)
+  // so the next fetch carries a new `_v` and bypasses the short-lived private
+  // HTTP cache the read endpoints now emit. Not in any effect deps — it never
+  // triggers a fetch by itself, it only busts the cache on the next natural one.
+  const dashboardCacheVersion = useRef(0);
   const [dayDetailPanelDate, setDayDetailPanelDate] = useState<string | null>(null);
   const [chatPanel, setChatPanel] = useState<{ mode: 'activity' | 'day'; activityId?: string; campaignId: string; date?: string } | null>(null);
   type MessageCount = { total: number; unread: number };
@@ -168,13 +198,17 @@ export function useDashboardState() {
     { id: 'daily_plan', label: 'Daily Plan' },
     { id: 'schedule', label: 'Schedule' },
   ] as const;
-  const filteredCampaigns = stageFilter === 'all'
-    ? campaigns
-    : campaigns.filter((c) => {
-        const stage = c.current_stage || c.status;
-        if (stageFilter === 'week_plan') return stage === 'week_plan' || stage === 'campaign_week_plan';
-        return stage === stageFilter;
-      });
+  // HARDEN-002: memoized so the array identity is stable across unrelated
+  // re-renders (calendar drags, chat state, …) — downstream lists don't rebuild.
+  const filteredCampaigns = React.useMemo(() => (
+    stageFilter === 'all'
+      ? campaigns
+      : campaigns.filter((c) => {
+          const stage = c.current_stage || c.status;
+          if (stageFilter === 'week_plan') return stage === 'week_plan' || stage === 'campaign_week_plan';
+          return stage === stageFilter;
+        })
+  ), [campaigns, stageFilter]);
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
     // Delegate to canonical apiFetch wrapper. apiFetch only accepts string
@@ -266,14 +300,31 @@ export function useDashboardState() {
     return 'content_scheduled'; // scheduled
   };
 
-  /** Fetch all posts for a given stage (no date bounds) and populate the stage list panel. */
-  const fetchStageEvents = (stage: CalendarExecutionStage) => {
+  /**
+   * Fetch posts for a given stage and populate the stage list panel.
+   * HARDEN-002: defaults to a ±90-day rolling window instead of the previous
+   * full-history fetch (2020→2099). The panel offers "Show full history" which
+   * re-fetches with the wide range — same API, on-demand expansion only.
+   */
+  const fetchStageEvents = (stage: CalendarExecutionStage, opts?: { fullHistory?: boolean }) => {
     if (!selectedCompanyId) return;
+    const fullHistory = opts?.fullHistory === true;
+    setCalendarStageFullHistory(fullHistory);
     setCalendarStageFilter(stage);
     setCalendarStageEventsLoading(true);
     const campaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : undefined;
+    let start = '2020-01-01';
+    let end = '2099-12-31';
+    if (!fullHistory) {
+      const from = new Date();
+      from.setDate(from.getDate() - 90);
+      const to = new Date();
+      to.setDate(to.getDate() + 90);
+      start = formatDateKey(from);
+      end = formatDateKey(to);
+    }
     fetchWithAuth(
-      `/api/calendar/activity-events?start=2020-01-01&end=2099-12-31&companyId=${encodeURIComponent(selectedCompanyId)}&stageFilter=1${campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : ''}`
+      `/api/calendar/activity-events?start=${start}&end=${end}&companyId=${encodeURIComponent(selectedCompanyId)}&stageFilter=1${campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : ''}&_v=${dashboardCacheVersion.current}`
     )
       .then((r) => (r.ok ? r.json() : []))
       .then((data: any[]) => {
@@ -421,12 +472,13 @@ export function useDashboardState() {
     const yearLabel = last.getFullYear();
     return `${firstLabel} - ${lastLabel}, ${yearLabel}`;
   };
-  const calendarFilteredCampaigns = campaigns.filter((campaign) => {
+  // HARDEN-002: memoized — recomputed only when the inputs actually change.
+  const calendarFilteredCampaigns = React.useMemo(() => campaigns.filter((campaign) => {
     const campaignMatch = calendarCampaignFilter === 'all' || campaign.id === calendarCampaignFilter;
     const statusCategory = getCampaignStatusCategory(campaign);
     const statusMatch = calendarStatusFilter === 'all' || statusCategory === calendarStatusFilter;
     return campaignMatch && statusMatch;
-  });
+  }), [campaigns, calendarCampaignFilter, calendarStatusFilter]);
   const getPlatformColorForCalendar = (platform: string): string => {
     const p = (platform || '').toLowerCase();
     const map: Record<string, string> = {
@@ -505,22 +557,6 @@ export function useDashboardState() {
     return 'border-l-gray-400';
   };
 
-  /** Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc. */
-  const RepurposeDots = ({ index, total, contentType }: { index: number; total: number; contentType?: string }) => {
-    const safeTotal = total < 1 ? 1 : total;
-    const safeIndex = index < 1 ? 1 : index;
-    return (
-      <span className="inline-flex items-center gap-1 text-[10px] text-indigo-600" aria-label={safeTotal === 1 ? 'Unique' : `Repurpose ${safeIndex} of ${safeTotal}`}>
-        {Array.from({ length: safeTotal }, (_, i) => (
-          <span key={i} className={i < safeIndex ? 'text-indigo-600' : 'text-gray-300'}>
-            {i < safeIndex ? '●' : '○'}
-          </span>
-        ))}
-        {contentType && <span className="text-gray-400 font-normal ml-0.5">{contentType}</span>}
-      </span>
-    );
-  };
-
   const [draggedActivity, setDraggedActivity] = useState<ActivityEvent | null>(null);
   const [dropTargetDate, setDropTargetDate] = useState<string | null>(null);
 
@@ -540,6 +576,7 @@ export function useDashboardState() {
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
+          dashboardCacheVersion.current += 1; // bust private HTTP cache
           setCalendarActivityEvents((prev) => {
             const oldDate = draggedActivity.date;
             if (!oldDate) return prev;
@@ -614,6 +651,7 @@ export function useDashboardState() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return { success: false, error: data?.error || 'Reschedule failed' };
+      dashboardCacheVersion.current += 1; // bust private HTTP cache
       // Update local calendar state
       setCalendarActivityEvents((prev) => {
         const next = { ...prev };
@@ -649,6 +687,7 @@ export function useDashboardState() {
       const data = await res.json();
       if (!res.ok) return { success: false, error: data?.error || 'Publish failed' };
       if (data.status === 'PUBLISHED') {
+        dashboardCacheVersion.current += 1; // bust private HTTP cache
         // Refresh calendar events so the cell updates to published
         setCalendarActivityEvents({});
         setCalendarActivityEventsLoading(true);
@@ -660,7 +699,10 @@ export function useDashboardState() {
     }
   };
 
-  const selectedCalendarCampaign = campaigns.find((campaign) => campaign.id === calendarCampaignFilter) || null;
+  const selectedCalendarCampaign = React.useMemo(
+    () => campaigns.find((campaign) => campaign.id === calendarCampaignFilter) || null,
+    [campaigns, calendarCampaignFilter]
+  );
 
   useEffect(() => {
     if (!campaignIds) {
@@ -668,7 +710,7 @@ export function useDashboardState() {
       return;
     }
     fetchWithAuth(
-      `/api/campaigns/stage-availability-batch?campaignIds=${encodeURIComponent(campaignIds)}`
+      `/api/campaigns/stage-availability-batch?campaignIds=${encodeURIComponent(campaignIds)}&_v=${dashboardCacheVersion.current}`
     )
       .then((r) => r.ok ? r.json() : { availability: {} })
       .then((data) => setStageAvailability(data.availability || {}))
@@ -685,7 +727,7 @@ export function useDashboardState() {
     setCalendarActivityEventsLoading(true);
     const campaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : undefined;
     fetchWithAuth(
-      `/api/calendar/activity-events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&companyId=${encodeURIComponent(selectedCompanyId)}${campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : ''}`
+      `/api/calendar/activity-events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&companyId=${encodeURIComponent(selectedCompanyId)}${campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : ''}&_v=${dashboardCacheVersion.current}`
     )
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => {
@@ -840,8 +882,9 @@ export function useDashboardState() {
         method: 'POST',
       });
       if (res.ok) {
+        dashboardCacheVersion.current += 1; // bust private HTTP cache
         const ids = campaignIds.split(',').filter(Boolean);
-        const r = await fetchWithAuth(`/api/campaigns/stage-availability-batch?campaignIds=${ids.join(',')}`);
+        const r = await fetchWithAuth(`/api/campaigns/stage-availability-batch?campaignIds=${ids.join(',')}&_v=${dashboardCacheVersion.current}`);
         if (r.ok) {
           const data = await r.json();
           setStageAvailability(data.availability || {});
@@ -870,7 +913,7 @@ export function useDashboardState() {
       
       // Fetch campaigns and content stats in parallel
       const campaignsUrl = `/api/campaigns?companyId=${selectedCompanyId}`;
-      const contentStatsUrl = `/api/campaigns/content-stats?companyId=${selectedCompanyId}`;
+      const contentStatsUrl = `/api/campaigns/content-stats?companyId=${selectedCompanyId}&_v=${dashboardCacheVersion.current}`;
       console.log('DASHBOARD_API_CALL', campaignsUrl);
       const [campaignsResponse, contentStatsResponse] = await Promise.all([
         fetchWithAuth(campaignsUrl),
@@ -1017,6 +1060,7 @@ export function useDashboardState() {
       });
       const result = await deleteResponse.json();
       if (deleteResponse.ok && result.success) {
+        dashboardCacheVersion.current += 1; // bust private HTTP cache
         loadDashboardData();
         notify('success', 'Campaign deleted successfully.');
       } else {
@@ -1089,7 +1133,7 @@ export function useDashboardState() {
     calendarWeekFilter, setCalendarWeekFilter, calendarActivityEvents,
     postPreview, setPostPreview, calendarActivityEventsLoading,
     calendarStageFilter, setCalendarStageFilter, calendarStageEvents, setCalendarStageEvents,
-    calendarStageEventsLoading, dayDetailPanelDate, setDayDetailPanelDate,
+    calendarStageEventsLoading, calendarStageFullHistory, dayDetailPanelDate, setDayDetailPanelDate,
     chatPanel, setChatPanel, activityMessageCounts, calendarMessageCounts,
     getMsgTotal, getMsgUnread, dayChatMessages, dayChatLoading, activityChatMessages, activityChatLoading,
     notice, pendingDeleteCampaignId, setPendingDeleteCampaignId, isDeletingCampaign,

@@ -14,6 +14,7 @@ import {
   CanonicalContentState,
 } from '../../../lib/shared/contentLifecycle';
 import { isSupportedManualVideoUpload } from '../../../lib/shared/contentTypeClassification';
+import { withApiObservability } from '../../../backend/observability';
 
 function extractTitleFromContent(content: string | null | undefined): string {
   if (!content || typeof content !== 'string') return 'Scheduled post';
@@ -33,7 +34,7 @@ function toLocalDateKey(value: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -90,12 +91,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json([]);
     }
 
-    // Support broad-range stage-filter fetch (no date bounds when stageFilter param is set)
+    // Support broad-range stage-filter fetch. HARDEN-002: the stage-filter path
+    // previously IGNORED start/end entirely (an unbounded full-history scan).
+    // It now honors the caller-provided range — callers that genuinely want
+    // full history still get it by passing a wide range (the campaign-calendar
+    // sends 2000→2100), while the dashboard sends a ±90-day rolling window.
+    // NULL scheduled_for rows (unscheduled drafts) were always included by the
+    // unbounded path, so the bounded stage query keeps them via OR — otherwise
+    // gte/lte would silently drop them and change what the stage panel shows.
     const stageFilter = typeof req.query.stageFilter === 'string' ? req.query.stageFilter.trim() : '';
 
-    // 2. Query scheduled_posts — full range when stageFilter is active, otherwise month range
-    const applyDateRange = <T extends { gte: (...args: any[]) => T; lte: (...args: any[]) => T }>(query: T) => {
-      if (stageFilter) return query;
+    // 2. Query scheduled_posts — caller range always applies
+    const applyDateRange = <T extends { gte: (...args: any[]) => T; lte: (...args: any[]) => T; or: (f: string) => T }>(query: T) => {
+      if (stageFilter) {
+        return query.or(`scheduled_for.is.null,and(scheduled_for.gte.${startIso},scheduled_for.lte.${endIso})`);
+      }
       return query.gte('scheduled_for', startIso).lte('scheduled_for', endIso);
     };
 
@@ -254,10 +264,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .from('daily_content_plans')
           .select('id, campaign_id, platform, content_type, content_status, content, scheduled_post_id, title, topic, date, scheduled_time, execution_id')
           .in('campaign_id', campaignIdFilter && campaignIds.includes(campaignIdFilter) ? [campaignIdFilter] : campaignIds)
-          .is('scheduled_post_id', null);
-        if (!stageFilter) {
-          pq = pq.gte('date', start).lte('date', end);
-        }
+          .is('scheduled_post_id', null)
+          // HARDEN-002: the caller range applies here too (previously unbounded
+          // under stageFilter). Wide-range callers see identical results.
+          .gte('date', start)
+          .lte('date', end);
         const { data: pendingRows } = await pq.limit(2000);
         for (const r of pendingRows || []) {
           const dateStr = typeof r.date === 'string' ? r.date.slice(0, 10) : '';
@@ -343,9 +354,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // HARDEN-002: short-lived PRIVATE cache. The dashboard refetches this feed
+    // on every overview↔calendar tab switch with an identical URL; a 15s
+    // browser-private cache makes those switches instant. In-page mutations
+    // (reschedule/publish) bust it via a client-side `_v` version param, and
+    // Vary: Authorization keeps entries per-user. Never shared/CDN-cached.
+    res.setHeader('Cache-Control', 'private, max-age=15');
+    res.setHeader('Vary', 'Authorization');
     return res.status(200).json(events);
   } catch (err: any) {
     console.error('[calendar/activity-events]', err);
     return res.status(500).json({ error: err?.message || 'Internal error' });
   }
 }
+
+// HARDEN-002: measurement only — records latency/payload into the HARDEN-001
+// registry so before/after dashboard numbers are observable in production.
+export default withApiObservability(handler, '/api/calendar/activity-events');

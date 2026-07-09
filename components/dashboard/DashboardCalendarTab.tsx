@@ -72,7 +72,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
     calendarActivityEvents, calendarActivityEventsLoading,
     calendarStageFilter, setCalendarStageFilter,
     calendarStageEvents, setCalendarStageEvents,
-    calendarStageEventsLoading,
+    calendarStageEventsLoading, calendarStageFullHistory,
     calendarFilteredCampaigns, calendarMessageCounts,
     dayDetailPanelDate, setDayDetailPanelDate,
     draggedActivity, setDraggedActivity, dropTargetDate, setDropTargetDate,
@@ -85,6 +85,20 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
     getMsgTotal, getMsgUnread, selectedCalendarCampaign,
     campaignIds, handleViewCampaign,
   } = d;
+
+  // HARDEN-002: legend stage counts were recomputed (flattening every month
+  // event) on EVERY render — including per-mousemove drag re-renders. Memoized
+  // on the events map so the flatten runs only when the data changes.
+  const stageCounts = React.useMemo(() => {
+    const counts: Partial<Record<CalendarExecutionStage, number>> = {};
+    Object.values(calendarActivityEvents).flat().forEach((ev) => {
+      const s = getEventStage(ev);
+      counts[s] = (counts[s] ?? 0) + 1;
+    });
+    return counts;
+    // getEventStage is a pure mapping; the events map is the real input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calendarActivityEvents]);
 
   return (
           <div className="space-y-6">
@@ -246,12 +260,6 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
 
               {/* Legend — clickable to view all activities in that stage */}
               {(() => {
-                const allMonthEvents = Object.values(calendarActivityEvents).flat();
-                const stageCounts: Partial<Record<CalendarExecutionStage, number>> = {};
-                allMonthEvents.forEach((ev) => {
-                  const s = getEventStage(ev);
-                  stageCounts[s] = (stageCounts[s] ?? 0) + 1;
-                });
                 const clickableStages: CalendarExecutionStage[] = ['content_created', 'content_scheduled', 'content_shared', 'overdue'];
                 return (
                   <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -310,8 +318,22 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                   <div className="mb-4 rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
                     <div className={`px-4 py-2 flex items-center justify-between ${appearance.badge}`}>
                       <span className="font-semibold text-sm">{appearance.label} — All Activities</span>
-                      {calendarStageEventsLoading && <span className="text-xs opacity-75">Loading…</span>}
-                      {!calendarStageEventsLoading && <span className="text-xs opacity-75">{calendarStageEvents.length} item{calendarStageEvents.length !== 1 ? 's' : ''}</span>}
+                      <span className="flex items-center gap-2">
+                        {/* HARDEN-002: the panel loads a ±90-day window by default;
+                            full history is fetched only on demand. */}
+                        {!calendarStageEventsLoading && !calendarStageFullHistory && (
+                          <button
+                            type="button"
+                            onClick={() => fetchStageEvents(calendarStageFilter, { fullHistory: true })}
+                            className="text-xs underline opacity-75 hover:opacity-100"
+                            title="Showing the last and next 90 days. Load every activity in this stage."
+                          >
+                            Show full history
+                          </button>
+                        )}
+                        {calendarStageEventsLoading && <span className="text-xs opacity-75">Loading…</span>}
+                        {!calendarStageEventsLoading && <span className="text-xs opacity-75">{calendarStageEvents.length} item{calendarStageEvents.length !== 1 ? 's' : ''}</span>}
+                      </span>
                     </div>
                     {calendarStageEventsLoading ? (
                       <div className="px-4 py-6 text-sm text-gray-500 text-center">Loading activities…</div>

@@ -9,8 +9,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { withApiObservability } from '../../../backend/observability';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const companyId = typeof req.query.companyId === 'string' ? req.query.companyId.trim() : null;
@@ -45,5 +46,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('status', 'published'),
   ]);
 
+  // HARDEN-002: short-lived private cache — the dashboard re-requests these
+  // tiles on every remount; in-page mutations bust via the client `_v` param.
+  res.setHeader('Cache-Control', 'private, max-age=30');
+  res.setHeader('Vary', 'Authorization');
   return res.status(200).json({ total: total ?? 0, published: published ?? 0 });
 }
+
+// HARDEN-002: measurement only (HARDEN-001 API metrics).
+export default withApiObservability(handler, '/api/campaigns/content-stats');

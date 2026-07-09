@@ -66,6 +66,10 @@ const autonomousRenderReadyRow = {
   execution_id: 'exec-img2',
 };
 
+// HARDEN-002: capture the filters each query applies so tests can assert the
+// stage-filter path is date-BOUNDED (while still including NULL scheduled_for).
+const mockQueryLog: Array<{ table: string; op: string; args: any[] }> = [];
+
 jest.mock('../../db/supabaseClient', () => {
   const responses: Record<string, { data: any; error: any }> = {
     campaign_versions: { data: [{ campaign_id: 'camp-1' }], error: null },
@@ -79,6 +83,7 @@ jest.mock('../../db/supabaseClient', () => {
     supabase: {
       from: (table: string) => {
         const ctx = { table, isScheduledPostNull: false, hasUserIn: false };
+        const log = (op: string, ...args: any[]) => mockQueryLog.push({ table, op, args });
         const resolveFor = () => {
           if (table === 'campaign_versions') return responses.campaign_versions;
           if (table === 'user_company_roles') return responses.user_company_roles;
@@ -91,8 +96,9 @@ jest.mock('../../db/supabaseClient', () => {
           eq: () => builder,
           in: (col: string) => { if (col === 'user_id') ctx.hasUserIn = true; return builder; },
           is: (col: string, val: any) => { if (col === 'scheduled_post_id' && val === null) ctx.isScheduledPostNull = true; return builder; },
-          gte: () => builder,
-          lte: () => builder,
+          gte: (...args: any[]) => { log('gte', ...args); return builder; },
+          lte: (...args: any[]) => { log('lte', ...args); return builder; },
+          or: (...args: any[]) => { log('or', ...args); return builder; },
           order: () => builder,
           limit: () => builder,
           then: (resolve: any, reject: any) => Promise.resolve(resolveFor()).then(resolve, reject),
@@ -196,5 +202,44 @@ describe('calendar activity-events — unified feed', () => {
     expect(events.find((e) => e.scheduled_post_id === 'sp-1')).toBeTruthy();
     expect(events.find((e) => e.daily_plan_id === 'plan-v')).toBeTruthy();
     expect(events.every((e) => e.campaign_id === 'camp-1')).toBe(true);
+  });
+});
+
+describe('HARDEN-002 — stage-filter fetch is date-bounded', () => {
+  beforeEach(() => { mockQueryLog.length = 0; });
+
+  test('stageFilter applies the caller range to scheduled_posts, keeping NULL scheduled_for rows', async () => {
+    const res = await callFeed({ stageFilter: '1' });
+    expect(res.statusCode).toBe(200);
+    const orCalls = mockQueryLog.filter((q) => q.table === 'scheduled_posts' && q.op === 'or');
+    expect(orCalls.length).toBeGreaterThan(0);
+    for (const call of orCalls) {
+      const filter = String(call.args[0]);
+      expect(filter).toContain('scheduled_for.is.null');       // unscheduled drafts preserved
+      expect(filter).toContain('scheduled_for.gte.2099-01-01'); // caller lower bound applied
+      expect(filter).toContain('scheduled_for.lte.2099-12-31'); // caller upper bound applied
+    }
+  });
+
+  test('stageFilter also bounds the pending daily_content_plans query by the caller range', async () => {
+    await callFeed({ stageFilter: '1' });
+    const pendingBounds = mockQueryLog.filter((q) => q.table === 'daily_content_plans' && (q.op === 'gte' || q.op === 'lte') && q.args[0] === 'date');
+    expect(pendingBounds.some((q) => q.op === 'gte' && q.args[1] === '2099-01-01')).toBe(true);
+    expect(pendingBounds.some((q) => q.op === 'lte' && q.args[1] === '2099-12-31')).toBe(true);
+  });
+
+  test('month view (no stageFilter) keeps plain gte/lte bounds — unchanged', async () => {
+    await callFeed({});
+    const postCalls = mockQueryLog.filter((q) => q.table === 'scheduled_posts');
+    expect(postCalls.some((q) => q.op === 'gte' && q.args[0] === 'scheduled_for')).toBe(true);
+    expect(postCalls.some((q) => q.op === 'lte' && q.args[0] === 'scheduled_for')).toBe(true);
+    expect(postCalls.some((q) => q.op === 'or')).toBe(false);
+  });
+
+  test('feed output is identical under stageFilter with a wide range (campaign-calendar contract)', async () => {
+    const bounded = await callFeed({ stageFilter: 'all', start: '2000-01-01', end: '2100-12-31' });
+    const events = bounded.body as any[];
+    expect(events.find((e) => e.scheduled_post_id === 'sp-1')).toBeTruthy();
+    expect(events.find((e) => e.daily_plan_id === 'plan-v')).toBeTruthy();
   });
 });

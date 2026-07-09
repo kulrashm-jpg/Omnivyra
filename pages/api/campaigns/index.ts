@@ -6,6 +6,7 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { insertActivity, updateActivity, deleteActivity } from '../../../backend/services/executionPlannerService';
 import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
+import { withApiObservability } from '../../../backend/observability';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
@@ -262,7 +263,7 @@ async function handleContentPlan(req: NextApiRequest, res: NextApiResponse): Pro
   res.status(200).json({ plan: mapRowToContentPlan({ ...row, id }) });
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     // Campaign content-plan CRUD (FormatSelectionPage). Campaign-scoped; the
     // owning company is resolved server-side so the caller carries no company
@@ -770,26 +771,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // Enrich name from theme when campaign name is generic "Campaign from themes" (so dashboard shows topic of the theme)
+      // HARDEN-002: this used to fetch EVERY version's FULL campaign_snapshot
+      // (a large JSONB: wizard state, week plans, …) for EVERY campaign, only
+      // to read one theme title from the latest version of the handful of
+      // campaigns with the generic name. Now it (a) runs only when a listed
+      // campaign actually has the generic name, and (b) selects just the
+      // snapshot's source_strategic_theme fragment. Response is identical.
       let themeNameByCampaignId: Record<string, string> = {};
-      if (ids.length > 0) {
+      const genericNameIds = (campaigns || [])
+        .filter((c: any) => String(c?.name || '').trim() === 'Campaign from themes')
+        .map((c: any) => c.id)
+        .filter(Boolean);
+      if (genericNameIds.length > 0) {
         const { data: versionRows } = await supabase
           .from('campaign_versions')
-          .select('campaign_id, campaign_snapshot, version')
+          .select('campaign_id, version, source_strategic_theme:campaign_snapshot->source_strategic_theme')
           .eq('company_id', companyId)
-          .in('campaign_id', ids)
+          .in('campaign_id', genericNameIds)
           .order('version', { ascending: false });
-        const latestByCampaign = new Map<string, { campaign_snapshot: unknown; version: number }>();
+        const latestByCampaign = new Map<string, unknown>();
         for (const row of versionRows || []) {
           const cid = (row as { campaign_id: string }).campaign_id;
           if (!cid || latestByCampaign.has(cid)) continue;
-          latestByCampaign.set(cid, {
-            campaign_snapshot: (row as { campaign_snapshot: unknown }).campaign_snapshot,
-            version: (row as { version: number }).version ?? 0,
-          });
+          latestByCampaign.set(cid, (row as { source_strategic_theme?: unknown }).source_strategic_theme ?? null);
         }
-        for (const [cid, { campaign_snapshot }] of latestByCampaign) {
-          const snap = campaign_snapshot as { source_strategic_theme?: Record<string, unknown> } | null;
-          const name = getStoredStrategicThemeTitle(snap?.source_strategic_theme);
+        for (const [cid, theme] of latestByCampaign) {
+          const name = getStoredStrategicThemeTitle((theme ?? undefined) as Record<string, unknown> | undefined);
           if (name) themeNameByCampaignId[cid] = name;
         }
       }
@@ -816,10 +823,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error('Error in campaigns API:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorStack = error instanceof Error ? error.stack : undefined;
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Internal server error',
       details: errorMessage,
       ...(process.env.NODE_ENV === 'development' && { stack: errorStack })
     });
   }
 }
+
+// HARDEN-002: measurement only — HARDEN-001 API metrics (latency, payload,
+// per-request DB stats). No caching here: this route is mutated from many
+// pages, so even a short-lived private cache could serve a stale list.
+export default withApiObservability(handler, '/api/campaigns');
