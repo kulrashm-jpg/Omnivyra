@@ -221,6 +221,18 @@ export function useCreatorWorkflowActions(
         .filter((k) => k !== fieldId)
         .map((k) => ({ label: OVERLAY_FIELD_LABELS[k], value: String(overlayText[k] || '').trim() }))
         .filter((s) => s.value);
+      // Ground the overlay copy in the actual Template Content (the Headline /
+      // Image Text + Subheadline the user set at the top) so each role EXPANDS
+      // that material into a distinct line, instead of echoing the short topic.
+      // Falls back to the Writer post body / key message when present.
+      const templateContentSource = [
+        String(templateValues.fields?.headline || '').trim(),
+        String(templateValues.fields?.subheadline || '').trim(),
+        String(answers.keyMessage || '').trim(),
+        String(answers.dataPoints || '').trim(),
+      ].filter(Boolean).join('\n');
+      const sourceContent = String(writerSource?.body || templateContentSource || '')
+        .trim().slice(0, 6000) || undefined;
       const resp = await fetch('/api/creator-templates/field-assist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -235,6 +247,7 @@ export function useCreatorWorkflowActions(
             audience: String(answers.audience || '').trim(),
             objective: String(answers.objective || '').trim(),
             tone: String(answers.styleDirection || '').trim(),
+            source_content: sourceContent,
             siblings,
           },
         }),
@@ -255,7 +268,7 @@ export function useCreatorWorkflowActions(
       setAiBusyKey(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTemplate, selectedCompanyId, answers, overlayText]);
+  }, [activeTemplate, selectedCompanyId, answers, overlayText, templateValues.fields, writerSource?.body]);
 
   // Text-inside-image prepopulation: mirror the template-content fields the operator already
   // filled on the previous step into the overlay panel so it isn't blank — hook ← the image
