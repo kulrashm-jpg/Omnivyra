@@ -1,4 +1,2 @@
-/** BARREL — solutions page split into depth-matched component parts (kept OUT of pages/). */
-export * from '../components/solutionsPageSections';
-export * from '../components/solutionsPageMain';
+/** Page barrel — component lives in components/solutionsPageMain (Next bans export * in pages). */
 export { default } from '../components/solutionsPageMain';

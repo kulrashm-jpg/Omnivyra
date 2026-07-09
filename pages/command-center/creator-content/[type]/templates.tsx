@@ -1,5 +1,2 @@
-/** BARREL — the template-gallery page split into depth-matched component parts
- *  (kept OUT of pages/ so Next doesn't route them). This path stays the page. */
-export * from '../../../../components/creator/workflow/templatesPage/templatesSupport';
-export * from '../../../../components/creator/workflow/templatesPage/templatesWidgets';
+/** Page barrel — component lives in components/creator/workflow/templatesPage/ (Next bans export * in pages). */
 export { default } from '../../../../components/creator/workflow/templatesPage/templatesSupport';

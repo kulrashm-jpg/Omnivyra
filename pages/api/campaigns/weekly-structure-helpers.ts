@@ -1,4 +1,6 @@
-/** BARREL — helpers split into backend/services/campaigns (kept OUT of pages/api so Next
- *  does not treat the parts as routes). Importers keep this path. */
-export * from '../../../backend/services/campaigns/weeklyStructureHelpersAlloc';
-export * from '../../../backend/services/campaigns/weeklyStructureHelpersShape';
+/** BARREL — helpers split into backend/services/campaigns (parts kept OUT of pages/api).
+ *  Next bans `export *` in page files, so every name is re-exported EXPLICITLY. */
+export { DAYS_OF_WEEK, SUB_TOPIC_ANGLES, buildCreativeGuidance, deriveHashtags, deriveImagePrompt, deriveKeyPoints, deriveKeywords, deriveRepurposeAngles, deriveSEOFocus, deriveSceneDirection, deriveSynthOutcomePromise, deriveSynthPainPoint, deriveTextHook, deriveVideoPrompt, deriveVisualHook, normalizePlatformKey, normalizeTopicKey, pickContentType, requiresCreatorCreativeGuidance } from '../../../backend/services/campaigns/weeklyStructureHelpersAlloc';
+export type { CreativeGuidance, DailyPlanItem } from '../../../backend/services/campaigns/weeklyStructureHelpersAlloc';
+export { assertDailyExecutionIdentityNotMutated, assertDailyGlobalProgressionNotMutated, assertDailyIntentNotMutated, buildCreatorCard, buildDayTopics, buildDeterministicDailyObjective, buildTopicReference, computeDayDate, computeTopicAssignedDays, deriveContentGuidance, deriveSubTopic, getDefaultPlatformTargets, refineDailyObjectivesWithLLM, sanitizeCardTitle, stableStringify, toIsoDateOnly, validateDailyPlan } from '../../../backend/services/campaigns/weeklyStructureHelpersShape';
+export type { CreatorCard, GenerateWeeklyStructureInput } from '../../../backend/services/campaigns/weeklyStructureHelpersShape';
