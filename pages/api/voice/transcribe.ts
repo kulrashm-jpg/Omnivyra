@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { captureFlatProviderCost } from '../../../backend/services/billing/blackHoleCostCapture';
 import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
+import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiRequestGuard';
 
 // Voice transcription API using Whisper (OpenAI) and AssemblyAI
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -16,6 +17,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!audioFile) {
       return res.status(400).json({ error: 'Audio file is required' });
+    }
+
+    // HARDEN-006: centralized AI protection (rate/burst; audio-size validated via
+    // attachmentCount) before the transcription provider is invoked.
+    try {
+      const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? '').split(',')[0].trim() || null;
+      await guardAiRequest({
+        operation: 'voice.transcribe',
+        provider: provider === 'assemblyai' ? 'other' : 'openai',
+        ip,
+        attachmentCount: 1,
+      });
+    } catch (err) {
+      if (err instanceof AiGuardError) {
+        if (err.retryAfterSecs) res.setHeader('Retry-After', String(err.retryAfterSecs));
+        return res.status(err.status).json({ error: err.message, code: err.code });
+      }
     }
 
     let transcription;

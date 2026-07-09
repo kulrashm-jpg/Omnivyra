@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
 import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
+import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiRequestGuard';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -11,6 +12,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
+  }
+
+  // HARDEN-006: centralized AI protection (validation + rate/burst) before the
+  // provider call. This route is identity-light (BYOK), so the operation/
+  // provider/IP layers do the surge protection; oversized prompts are rejected.
+  try {
+    const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? '').split(',')[0].trim() || null;
+    await guardAiRequest({
+      operation: 'chat.gpt',
+      provider: 'openai',
+      ip,
+      messages: [{ role: 'user', content: String(message) }],
+    });
+  } catch (err) {
+    if (err instanceof AiGuardError) {
+      if (err.retryAfterSecs) res.setHeader('Retry-After', String(err.retryAfterSecs));
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    // fail-open on non-guard errors
   }
 
   const policyResult = await validateAndModerateUserMessage(String(message), {

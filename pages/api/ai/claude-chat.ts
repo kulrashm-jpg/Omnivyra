@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
+import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiRequestGuard';
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
 const TRANSIENT_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
@@ -42,6 +43,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   if (!rl.allowed) {
     return res.status(429).json({ error: 'Too many Claude requests. Please try again later.' });
+  }
+
+  // HARDEN-006: centralized AI protection (request validation + layered
+  // user/company/op/provider limits + burst) — unifies this direct route under
+  // the same framework as the gateway. The route-specific limit above stays as
+  // an extra guard.
+  try {
+    const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? '').split(',')[0].trim() || null;
+    await guardAiRequest({
+      operation: 'chat.claude',
+      provider: 'anthropic',
+      userId: user.id,
+      ip,
+      messages: [{ role: 'user', content: String(message) }],
+    });
+  } catch (err) {
+    if (err instanceof AiGuardError) {
+      if (err.retryAfterSecs) res.setHeader('Retry-After', String(err.retryAfterSecs));
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    // fail-open on non-guard errors
   }
 
   let apiKey: string | undefined;

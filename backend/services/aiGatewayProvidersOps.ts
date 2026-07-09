@@ -42,6 +42,7 @@ import { ownedDbTable } from '../db/writeOwner';
 import { recordAi, recordCache } from '../observability/metrics';
 
 import { UNKNOWN_ORG, FEATURE_AREA_MAP, type GatewayMetadata, type GatewayResponse, type GatewayRequest, GatewayAbortError, isAbortError, _inFlight, sleep, resolveProviderTimeoutMs, _pools, acquireSlot, releaseSlot, resolveLlmConfig, type NormalizedCompletion, callOpenAi, callAnthropic } from './aiGatewayCore';
+import { guardAiRequest, providerFromModel } from './ai/aiRequestGuard';
 
 import { type RetryTrackingContext, callProviderWithRetry, buildMetadata } from './aiGatewayProvidersRetry';
 
@@ -56,6 +57,21 @@ const executeGatewayCompletion = async (
   if (isBetaTextMockMode()) {
     return createBetaMockCompletion(request);
   }
+
+  // ── HARDEN-006: centralized AI protection (request validation + layered
+  // rate limits + burst). Runs FIRST, before any provider-bound work, so an
+  // oversized or rate-limited request is rejected before model resolution,
+  // cost estimation, or provider dispatch. Identity (user/org) comes from the
+  // request context; companyId/operation/model are explicit. Throws
+  // AiGuardError (429/413) which callers surface as a standardized throttle
+  // response. Fail-open on any internal error (never blocks legitimate calls).
+  await guardAiRequest({
+    operation: request.operation,
+    provider: providerFromModel(request.model),
+    companyId: request.companyId ?? null,
+    messages: request.messages,
+    maxTokens: request.max_tokens,
+  });
 
   // ── GAP 6: Resolve effective model based on plan tier + usage budget ────────
   const effectiveModel = await resolveEffectiveModel(
