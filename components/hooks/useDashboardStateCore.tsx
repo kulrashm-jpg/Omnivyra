@@ -1,0 +1,578 @@
+/** useDashboardStateCore — the state half of useDashboardState, verbatim (chained-hook split). */
+import React from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/router';
+import { useCompanyContext } from '../CompanyContext';
+import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
+import { isActivityOverdue } from '../../lib/shared/statusOverlay';
+import { getStageLabelWithDuration } from '../../lib/shared/CampaignStage';
+import { navigateToCampaign, buildResumeUrl, loadCampaignResume } from '../../lib/campaignResumeStore';
+import type { CollaborationMessage } from '../collaboration/FloatingChatPanel';
+import type { ActivityEvent } from '../dashboard/PostPreviewModal';
+import type { IntelligenceWorkspaceView } from '../dashboard/IntelligenceWorkspace';
+import {
+  type Campaign,
+  type CampaignProgressData,
+  type DashboardStats,
+  type CompanyProfileReview,
+  type CompanyFactSnapshot,
+  type CalendarActivity,
+  type CalendarExecutionStage,
+} from '../DashboardPage.types';
+
+/** Union for calendar day cells */
+type CalendarDayItem = CalendarActivity | ActivityEvent;
+function isActivityEvent(item: CalendarDayItem): item is ActivityEvent {
+  return (item as ActivityEvent).type === 'activity';
+}
+
+/**
+ * Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc.
+ * HARDEN-002: module scope for a stable component identity. It used to be
+ * re-created inside the hook on every render, which made React treat every
+ * <RepurposeDots> as a NEW component type each render and remount it (state
+ * teardown + DOM rebuild) instead of updating in place.
+ */
+const RepurposeDots = ({ index, total, contentType }: { index: number; total: number; contentType?: string }) => {
+  const safeTotal = total < 1 ? 1 : total;
+  const safeIndex = index < 1 ? 1 : index;
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] text-indigo-600" aria-label={safeTotal === 1 ? 'Unique' : `Repurpose ${safeIndex} of ${safeTotal}`}>
+      {Array.from({ length: safeTotal }, (_, i) => (
+        <span key={i} className={i < safeIndex ? 'text-indigo-600' : 'text-gray-300'}>
+          {i < safeIndex ? '●' : '○'}
+        </span>
+      ))}
+      {contentType && <span className="text-gray-400 font-normal ml-0.5">{contentType}</span>}
+    </span>
+  );
+};
+
+export function useDashboardStateCore() {
+  const router = useRouter();
+  const { selectedCompanyId, isAdmin, isLoading, authChecked, isAuthenticated, companies, companiesResolved, hasPermission, userRole, user } = useCompanyContext();
+
+  // ── Redirect to onboarding when authenticated but not yet assigned to a company ──
+  // Phase: Tenant Onboarding Stabilization. Gate the redirect on
+  // `companiesResolved` to prevent the race where `isLoading` flips back to
+  // false on auth-flow page transitions before `refreshCompanies` has actually
+  // queried the server. Without this gate, a tenant user navigating from
+  // (e.g.) /onboarding/company → /dashboard could be ping-ponged back to
+  // /onboarding/company because `companies=[]` is the initial state, not the
+  // resolved state.
+  const onboardingRedirectRef = useRef(false);
+  useEffect(() => {
+    if (isLoading || !authChecked || !isAuthenticated) return;
+    if (!companiesResolved) return; // wait for the server-confirmed result
+    if (companies.length > 0) return; // has company — nothing to do
+    if (onboardingRedirectRef.current) return;
+    onboardingRedirectRef.current = true;
+
+    // Ask the server which onboarding step is next (phone, company setup, etc.)
+    getAuthToken().then(async (token) => {
+      if (!token) { router.replace('/login'); return; }
+      try {
+        const res = await apiFetch('/api/auth/post-login-route');
+        if (res.ok) {
+          const { route } = await res.json() as { route: string };
+          router.replace(route ?? '/onboarding/company');
+        } else {
+          router.replace('/onboarding/company');
+        }
+      } catch {
+        router.replace('/onboarding/company');
+      }
+    });
+  }, [isLoading, authChecked, isAuthenticated, companiesResolved, companies.length, router]);
+  const canCreateCampaign = hasPermission('CREATE_CAMPAIGN');
+  const canScheduleContent = hasPermission('SCHEDULE_CONTENT');
+  const [activeTab, setActiveTab] = useState(() => {
+    // Allow deep-linking to a specific tab via ?tab=calendar etc.
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search).get('tab');
+      if (p === 'calendar' || p === 'campaigns' || p === 'team' || p === 'analytics') return p;
+    }
+    return 'overview';
+  });
+  const [intelligenceView, setIntelligenceView] = useState<IntelligenceWorkspaceView>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search).get('intelTab');
+      if (p === 'market-pulse') return p;
+      if (p === 'intelligence') return 'market-pulse';
+    }
+    return 'market-pulse';
+  });
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [stats, setStats] = useState<DashboardStats>({
+    totalCampaigns: 0,
+    activeCampaigns: 0,
+    totalContent: 0,
+    publishedContent: 0
+  });
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [campaignProgress, setCampaignProgress] = useState<{[key: string]: CampaignProgressData}>({});
+
+  const [stageFilter, setStageFilter] = useState<string>('all');
+  const [stageAvailability, setStageAvailability] = useState<Record<string, { stages: Record<string, boolean>; counts: Record<string, number> }>>({});
+  const [calendarCurrentDate, setCalendarCurrentDate] = useState(new Date());
+  const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
+  const [calendarView, setCalendarView] = useState<'month' | 'week'>('month');
+  const [calendarActivityMode, setCalendarActivityMode] = useState<'daily' | 'weekly'>('daily');
+  const [calendarCampaignFilter, setCalendarCampaignFilter] = useState<string>('all');
+  const [calendarStatusFilter, setCalendarStatusFilter] = useState<string>('all');
+  const [calendarWeekFilter, setCalendarWeekFilter] = useState<string>('all');
+  const [calendarActivityEvents, setCalendarActivityEvents] = useState<Record<string, ActivityEvent[]>>({});
+  const [postPreview, setPostPreview] = useState<ActivityEvent | null>(null);
+  const [calendarActivityEventsLoading, setCalendarActivityEventsLoading] = useState(false);
+  const [calendarStageFilter, setCalendarStageFilter] = useState<CalendarExecutionStage | null>(null);
+  const [calendarStageEvents, setCalendarStageEvents] = useState<ActivityEvent[]>([]);
+  const [calendarStageEventsLoading, setCalendarStageEventsLoading] = useState(false);
+  // HARDEN-002: whether the stage panel is showing the full history (on-demand)
+  // or the default ±90-day rolling window.
+  const [calendarStageFullHistory, setCalendarStageFullHistory] = useState(false);
+  // HARDEN-002: bumped after in-page mutations (reschedule/publish/delete/expand)
+  // so the next fetch carries a new `_v` and bypasses the short-lived private
+  // HTTP cache the read endpoints now emit. Not in any effect deps — it never
+  // triggers a fetch by itself, it only busts the cache on the next natural one.
+  const dashboardCacheVersion = useRef(0);
+  const [dayDetailPanelDate, setDayDetailPanelDate] = useState<string | null>(null);
+  const [chatPanel, setChatPanel] = useState<{ mode: 'activity' | 'day'; activityId?: string; campaignId: string; date?: string } | null>(null);
+  type MessageCount = { total: number; unread: number };
+  const [activityMessageCounts, setActivityMessageCounts] = useState<Record<string, MessageCount>>({});
+  const [calendarMessageCounts, setCalendarMessageCounts] = useState<Record<string, MessageCount>>({});
+  const getMsgCount = (c: MessageCount | undefined) => (c ? c.total : 0);
+  const getUnreadCount = (c: MessageCount | undefined) => (c ? c.unread : 0);
+  const [dayChatMessages, setDayChatMessages] = useState<CollaborationMessage[]>([]);
+  const [dayChatLoading, setDayChatLoading] = useState(false);
+  const [activityChatMessages, setActivityChatMessages] = useState<CollaborationMessage[]>([]);
+  const [activityChatLoading, setActivityChatLoading] = useState(false);
+  const [chatRefresh, setChatRefresh] = useState(0);
+  const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [pendingDeleteCampaignId, setPendingDeleteCampaignId] = useState<string | null>(null);
+  const [isDeletingCampaign, setIsDeletingCampaign] = useState(false);
+  const [companyProfileReview, setCompanyProfileReview] = useState<CompanyProfileReview | null>(null);
+  const [companyFactSnapshot, setCompanyFactSnapshot] = useState<CompanyFactSnapshot | null>(null);
+  const [showCompanyFactReviewPrompt, setShowCompanyFactReviewPrompt] = useState(false);
+  const notify = (type: 'success' | 'error' | 'info', message: string) => setNotice({ type, message });
+  const isCompanyAdmin = (userRole || '').toString() === 'COMPANY_ADMIN';
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(t);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!selectedCompanyId || !isCompanyAdmin) {
+      setCompanyProfileReview(null);
+      setCompanyFactSnapshot(null);
+      setShowCompanyFactReviewPrompt(false);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}&includeCompleteness=0`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (cancelled) return;
+        setCompanyProfileReview((data?.company_profile_review ?? null) as CompanyProfileReview | null);
+        setCompanyFactSnapshot((data?.profile?.report_settings?.company_facts ?? null) as CompanyFactSnapshot | null);
+        setShowCompanyFactReviewPrompt(Boolean(data?.company_profile_review?.pending_confirmation));
+      } catch {
+        // ignore reminder load failures on dashboard
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCompanyId, isCompanyAdmin]);
+
+  const CAMPAIGN_STAGES = [
+    { id: 'all', label: 'All' },
+    { id: 'planning', label: 'Planning' },
+    { id: 'week_plan', label: 'Week Plan' },
+    { id: 'daily_plan', label: 'Daily Plan' },
+    { id: 'schedule', label: 'Schedule' },
+  ] as const;
+  // HARDEN-002: memoized so the array identity is stable across unrelated
+  // re-renders (calendar drags, chat state, …) — downstream lists don't rebuild.
+  const filteredCampaigns = React.useMemo(() => (
+    stageFilter === 'all'
+      ? campaigns
+      : campaigns.filter((c) => {
+          const stage = c.current_stage || c.status;
+          if (stageFilter === 'week_plan') return stage === 'week_plan' || stage === 'campaign_week_plan';
+          return stage === stageFilter;
+        })
+  ), [campaigns, stageFilter]);
+
+  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+    // Delegate to canonical apiFetch wrapper. apiFetch only accepts string
+    // URLs, so coerce Request objects to their .url. All call sites in this
+    // file pass plain strings.
+    const url = typeof input === 'string' ? input : input.url;
+    return apiFetch(url, init);
+  };
+
+  useEffect(() => {
+    console.log('DASHBOARD_SELECTED_COMPANY', selectedCompanyId, { isAdmin });
+  }, [selectedCompanyId, isAdmin]);
+
+  useEffect(() => {
+    if (activeTab !== 'calendar') return;
+    if (calendarSelectedDate) return;
+    setCalendarSelectedDate(formatDateKey(new Date()));
+  }, [activeTab, calendarSelectedDate]);
+  useEffect(() => {
+    setCalendarWeekFilter('all');
+  }, [calendarCampaignFilter, calendarActivityMode]);
+
+  const campaignIds = campaigns.map((c) => c.id).filter(Boolean).join(',');
+  const [expandingCampaignId, setExpandingCampaignId] = useState<string | null>(null);
+
+  /** Normalize message count (APIs return { total, unread }) */
+  const getMsgTotal = (c: { total: number; unread: number } | undefined) => c?.total ?? 0;
+  const getMsgUnread = (c: { total: number; unread: number } | undefined) => c?.unread ?? 0;
+
+  const formatDateKey = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+  const parseDateKey = (key: string): Date => {
+    const [y, m, d] = key.split('-').map((value) => Number(value));
+    return new Date(y, (m || 1) - 1, d || 1);
+  };
+  const parseCalendarDate = (rawInput: unknown): Date | null => {
+    const raw = String(rawInput || '').trim();
+    if (!raw) return null;
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    if (dateOnly) {
+      const year = Number(dateOnly[1]);
+      const month = Number(dateOnly[2]);
+      const day = Number(dateOnly[3]);
+      const localDate = new Date(year, month - 1, day);
+      return Number.isFinite(localDate.getTime()) ? localDate : null;
+    }
+    const parsed = new Date(raw);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+  };
+  const getCampaignStatusCategory = (campaign: Campaign): 'active' | 'completed' | 'on_hold' | 'planned' | 'other' => {
+    const raw = String(campaign.status || campaign.current_stage || '').toLowerCase();
+    if (raw.includes('complete') || raw.includes('done') || raw.includes('closed')) return 'completed';
+    if (raw.includes('hold') || raw.includes('pause')) return 'on_hold';
+    if (raw.includes('active') || raw.includes('running')) return 'active';
+    if (raw.includes('draft') || raw.includes('plan') || raw.includes('pending')) return 'planned';
+    return 'other';
+  };
+  /** Overdue is a calendar-date fact: only past scheduled items should be red. */
+  // PHASE STATUS-OVERLAY-PARITY — overdue rule lives in the single shared
+  // authority so Dashboard, Calendar, and Workspace agree. Behavior identical.
+  const isCalendarEventOverdue = (ev: ActivityEvent): boolean =>
+    isActivityOverdue({
+      status: ev.status,
+      date: ev.date,
+      scheduledFor: ev.scheduled_for,
+      isOverdue: ev.is_overdue,
+    });
+
+  /** Maps a scheduled_post's status + overdue flag to one of the legend stages. */
+  const getEventStage = (ev: ActivityEvent): CalendarExecutionStage => {
+    if (isCalendarEventOverdue(ev)) return 'overdue';
+    const canonicalGroup = String(ev.canonical_group || '').trim().toLowerCase();
+    if (canonicalGroup === 'published') return 'content_shared';
+    if (canonicalGroup === 'scheduled') return 'content_scheduled';
+    if (canonicalGroup === 'ready' || canonicalGroup === 'draft' || canonicalGroup === 'pending') return 'content_created';
+
+    const s = String(ev.status || 'scheduled').trim().toLowerCase();
+    if (s === 'published' || s === 'publishing') return 'content_shared';
+    if (s === 'draft' || s === 'pending') return 'content_created';
+    return 'content_scheduled'; // scheduled
+  };
+
+  /**
+   * Fetch posts for a given stage and populate the stage list panel.
+   * HARDEN-002: defaults to a ±90-day rolling window instead of the previous
+   * full-history fetch (2020→2099). The panel offers "Show full history" which
+   * re-fetches with the wide range — same API, on-demand expansion only.
+   */
+  const fetchStageEvents = (stage: CalendarExecutionStage, opts?: { fullHistory?: boolean }) => {
+    if (!selectedCompanyId) return;
+    const fullHistory = opts?.fullHistory === true;
+    setCalendarStageFullHistory(fullHistory);
+    setCalendarStageFilter(stage);
+    setCalendarStageEventsLoading(true);
+    const campaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : undefined;
+    let start = '2020-01-01';
+    let end = '2099-12-31';
+    if (!fullHistory) {
+      const from = new Date();
+      from.setDate(from.getDate() - 90);
+      const to = new Date();
+      to.setDate(to.getDate() + 90);
+      start = formatDateKey(from);
+      end = formatDateKey(to);
+    }
+    fetchWithAuth(
+      `/api/calendar/activity-events?start=${start}&end=${end}&companyId=${encodeURIComponent(selectedCompanyId)}&stageFilter=1${campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : ''}&_v=${dashboardCacheVersion.current}`
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: any[]) => {
+        const all: ActivityEvent[] = (Array.isArray(data) ? data : []).map((ev: any) => ({
+          type: 'activity' as const,
+          date: ev.date || '',
+          platform: ev.platform,
+          title: ev.title,
+          repurpose_index: ev.repurpose_index ?? 1,
+          repurpose_total: ev.repurpose_total ?? 1,
+          campaign_id: ev.campaign_id,
+          content_type: ev.content_type || 'post',
+          execution_id: ev.execution_id,
+          scheduled_post_id: ev.scheduled_post_id,
+          status: ev.status,
+          scheduled_for: ev.scheduled_for,
+          is_overdue: ev.is_overdue,
+          content: ev.content || null,
+          media_urls: Array.isArray(ev.media_urls) ? ev.media_urls : [],
+          media_types: Array.isArray(ev.media_types) ? ev.media_types : [],
+          // ── Creator visibility (additive) — without these the tiles
+          //    can't show status / AI-vs-creator and the drawer brief is dead.
+          asset_type: ev.asset_type,
+          pending: ev.pending,
+          daily_plan_id: ev.daily_plan_id,
+          cta: ev.cta,
+          canonical_state: ev.canonical_state,
+          canonical_badge: ev.canonical_badge,
+          canonical_label: ev.canonical_label,
+          canonical_group: ev.canonical_group,
+          theme_treatment: ev.theme_treatment,
+          creator_guidance: ev.creator_guidance,
+          marketing_package: ev.marketing_package,
+        }));
+        setCalendarStageEvents(all.filter((ev) => getEventStage(ev) === stage));
+      })
+      .catch(() => setCalendarStageEvents([]))
+      .finally(() => setCalendarStageEventsLoading(false));
+  };
+
+  const getCalendarStageAppearance = (stage: CalendarExecutionStage): { badge: string; dot: string; label: string } => {
+    switch (stage) {
+      case 'daily_cards':
+        return {
+          badge: 'bg-green-100 text-green-800 border border-green-200',
+          dot: 'bg-green-300',
+          label: 'Daily Cards',
+        };
+      case 'content_created':
+        return {
+          badge: 'bg-sky-100 text-sky-800 border border-sky-200',
+          dot: 'bg-sky-300',
+          label: 'Content Created',
+        };
+      case 'content_scheduled':
+        return {
+          badge: 'bg-emerald-600 text-white border border-emerald-700',
+          dot: 'bg-emerald-600',
+          label: 'Content Scheduled',
+        };
+      case 'content_shared':
+        return {
+          badge: 'bg-blue-700 text-white border border-blue-800',
+          dot: 'bg-blue-700',
+          label: 'Content Shared',
+        };
+      case 'overdue':
+        return {
+          badge: 'bg-red-600 text-white border border-red-700',
+          dot: 'bg-red-500',
+          label: 'Overdue',
+        };
+      case 'weekly_planning':
+      default:
+        return {
+          badge: 'bg-white text-gray-800 border border-gray-300',
+          dot: 'bg-gray-300',
+          label: 'Weekly Planning',
+        };
+    }
+  };
+  const getCampaignTotalWeeks = (campaign: Campaign): number => {
+    if (typeof campaign.duration_weeks === 'number' && campaign.duration_weeks > 0) {
+      return Math.max(1, Math.floor(campaign.duration_weeks));
+    }
+    const start = parseCalendarDate(campaign.start_date);
+    const end = parseCalendarDate(campaign.end_date);
+    if (!start || !end) return 1;
+    start.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+    const diff = Math.max(0, end.getTime() - start.getTime());
+    return Math.max(1, Math.ceil((diff + 1) / (1000 * 60 * 60 * 24 * 7)));
+  };
+  const getCampaignExecutionStage = (campaign: Campaign): CalendarExecutionStage => {
+    const counts = stageAvailability[campaign.id]?.counts || {};
+    const dailyPlans = Number(counts.dailyPlans || 0);
+    const contentReadyDailyPlans = Number(counts.contentReadyDailyPlans || 0);
+    const scheduledPosts = Number(counts.scheduledPosts || 0);
+    const publishedPosts = Number(counts.publishedPosts || 0);
+    const end = parseCalendarDate(campaign.end_date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (end) {
+      end.setHours(0, 0, 0, 0);
+      const incompleteAfterEnd = end < today && (dailyPlans === 0 || scheduledPosts === 0 || publishedPosts === 0);
+      if (incompleteAfterEnd) return 'overdue';
+    }
+    if (publishedPosts > 0) return 'content_shared';
+    if (scheduledPosts > 0) return 'content_scheduled';
+    if (contentReadyDailyPlans > 0) return 'content_created';
+    if (dailyPlans > 0) return 'daily_cards';
+    return 'weekly_planning';
+  };
+  const getDaysInMonth = (date: Date): Array<Date | null> => {
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const leading = firstDay.getDay();
+    const cells: Array<Date | null> = [];
+    for (let i = 0; i < leading; i += 1) cells.push(null);
+    for (let day = 1; day <= daysInMonth; day += 1) cells.push(new Date(year, month, day));
+    return cells;
+  };
+  const getWeekDays = (anchorDate: Date): Date[] => {
+    const start = new Date(anchorDate);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - start.getDay());
+    return Array.from({ length: 7 }, (_, idx) => {
+      const day = new Date(start);
+      day.setDate(start.getDate() + idx);
+      return day;
+    });
+  };
+  const getWeekLabel = (anchorDate: Date) => {
+    const weekDays = getWeekDays(anchorDate);
+    const first = weekDays[0];
+    const last = weekDays[6];
+    const firstLabel = first.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const lastLabel = last.toLocaleDateString('en-US', {
+      month: first.getMonth() === last.getMonth() ? undefined : 'short',
+      day: 'numeric',
+      year: first.getFullYear() === last.getFullYear() ? undefined : 'numeric',
+    });
+    const yearLabel = last.getFullYear();
+    return `${firstLabel} - ${lastLabel}, ${yearLabel}`;
+  };
+  // HARDEN-002: memoized — recomputed only when the inputs actually change.
+  const calendarFilteredCampaigns = React.useMemo(() => campaigns.filter((campaign) => {
+    const campaignMatch = calendarCampaignFilter === 'all' || campaign.id === calendarCampaignFilter;
+    const statusCategory = getCampaignStatusCategory(campaign);
+    const statusMatch = calendarStatusFilter === 'all' || statusCategory === calendarStatusFilter;
+    return campaignMatch && statusMatch;
+  }), [campaigns, calendarCampaignFilter, calendarStatusFilter]);
+  const getPlatformColorForCalendar = (platform: string): string => {
+    const p = (platform || '').toLowerCase();
+    const map: Record<string, string> = {
+      linkedin:  'bg-blue-100 text-blue-700 border-blue-200',
+      facebook:  'bg-indigo-100 text-indigo-700 border-indigo-200',
+      instagram: 'bg-pink-100 text-pink-700 border-pink-200',
+      youtube:   'bg-red-100 text-red-700 border-red-200',
+      twitter:   'bg-gray-900 text-gray-100 border-gray-700',
+      x:         'bg-gray-900 text-gray-100 border-gray-700',
+      tiktok:    'bg-black text-white border-gray-800',
+      pinterest: 'bg-rose-100 text-rose-700 border-rose-200',
+    };
+    return map[p] || 'bg-gray-100 text-gray-700 border-gray-200';
+  };
+  // A campaign that already has scheduled content on the calendar must NOT also
+  // render a bare "campaign name" marker on its EMPTY days (e.g. a start date
+  // whose first post lands on a later best-day) — that reads as a placeholder
+  // "with nothing in it". Markers are kept only for campaigns with no scheduled
+  // events yet, so the calendar still surfaces those.
+  const scheduledCampaignIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    Object.values(calendarActivityEvents).forEach((evs) => {
+      (evs || []).forEach((e) => { if (e.campaign_id) ids.add(String(e.campaign_id)); });
+    });
+    return ids;
+  }, [calendarActivityEvents]);
+
+  const getCalendarActivitiesForDate = (date: Date): CalendarActivity[] => {
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    const activities: CalendarActivity[] = [];
+    calendarFilteredCampaigns.forEach((campaign) => {
+      // Scheduled campaigns surface via their real posts, not a bare marker.
+      if (scheduledCampaignIds.has(String((campaign as { id?: unknown }).id ?? ''))) return;
+      const start = parseCalendarDate(campaign.start_date);
+      if (!start) return;
+      start.setHours(0, 0, 0, 0);
+      const rawEnd = parseCalendarDate(campaign.end_date);
+      const end = rawEnd ? new Date(rawEnd) : new Date(start);
+      end.setHours(0, 0, 0, 0);
+      if (dayStart < start || dayStart > end) return;
+      const stage = getCampaignExecutionStage(campaign);
+      if (calendarActivityMode === 'weekly') {
+        const elapsedDays = Math.floor((dayStart.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+        const weekNumber = Math.floor(elapsedDays / 7) + 1;
+        const totalWeeks = getCampaignTotalWeeks(campaign);
+        if (weekNumber < 1 || weekNumber > totalWeeks) return;
+        if (calendarWeekFilter !== 'all' && Number(calendarWeekFilter) !== weekNumber) return;
+        activities.push({
+          campaign,
+          stage,
+          weekNumber,
+          label: `Week ${weekNumber} - ${campaign.name}`,
+        });
+        return;
+      }
+      activities.push({
+        campaign,
+        stage,
+        label: campaign.name,
+      });
+    });
+    return activities;
+  };
+
+  /** Feature 4: Platform color strip (left border 4px) */
+  const getPlatformBorderColor = (platform: string): string => {
+    const p = (platform || '').toLowerCase();
+    if (p === 'linkedin')            return 'border-l-blue-500';
+    if (p === 'instagram')           return 'border-l-pink-500';
+    if (p === 'youtube')             return 'border-l-red-500';
+    if (p === 'twitter' || p === 'x') return 'border-l-gray-900';
+    if (p === 'facebook')            return 'border-l-indigo-500';
+    if (p === 'tiktok')              return 'border-l-black';
+    if (p === 'pinterest')           return 'border-l-rose-500';
+    return 'border-l-gray-400';
+  };
+
+  return {
+    CAMPAIGN_STAGES, activeTab, activityChatLoading, activityChatMessages, activityMessageCounts, authChecked,
+    calendarActivityEvents, calendarActivityEventsLoading, calendarActivityMode, calendarCampaignFilter, calendarCurrentDate,
+    calendarFilteredCampaigns, calendarMessageCounts, calendarSelectedDate, calendarStageEvents, calendarStageEventsLoading,
+    calendarStageFilter, calendarStageFullHistory, calendarStatusFilter, calendarView, calendarWeekFilter, campaignIds,
+    campaignProgress, campaigns, canCreateCampaign, canScheduleContent, chatPanel, chatRefresh, companies, companiesResolved,
+    companyFactSnapshot, companyProfileReview, dashboardCacheVersion, dayChatLoading, dayChatMessages, dayDetailPanelDate, error,
+    expandingCampaignId, fetchStageEvents, fetchWithAuth, filteredCampaigns, formatDateKey, getCalendarActivitiesForDate,
+    getCalendarStageAppearance, getCampaignExecutionStage, getCampaignStatusCategory, getCampaignTotalWeeks, getDaysInMonth,
+    getEventStage, getMsgCount, getMsgTotal, getMsgUnread, getPlatformBorderColor, getPlatformColorForCalendar, getUnreadCount,
+    getWeekDays, getWeekLabel, hasPermission, intelligenceView, isAdmin, isAuthenticated, isCalendarEventOverdue, isCompanyAdmin,
+    isDeletingCampaign, isLoading, isLoadingData, notice, notify, onboardingRedirectRef, parseCalendarDate, parseDateKey,
+    pendingDeleteCampaignId, postPreview, router, scheduledCampaignIds, selectedCompanyId, setActiveTab, setActivityChatLoading,
+    setActivityChatMessages, setActivityMessageCounts, setCalendarActivityEvents, setCalendarActivityEventsLoading,
+    setCalendarActivityMode, setCalendarCampaignFilter, setCalendarCurrentDate, setCalendarMessageCounts, setCalendarSelectedDate,
+    setCalendarStageEvents, setCalendarStageEventsLoading, setCalendarStageFilter, setCalendarStageFullHistory,
+    setCalendarStatusFilter, setCalendarView, setCalendarWeekFilter, setCampaignProgress, setCampaigns, setChatPanel, setChatRefresh,
+    setCompanyFactSnapshot, setCompanyProfileReview, setDayChatLoading, setDayChatMessages, setDayDetailPanelDate, setError,
+    setExpandingCampaignId, setIntelligenceView, setIsDeletingCampaign, setIsLoadingData, setNotice, setPendingDeleteCampaignId,
+    setPostPreview, setShowCompanyFactReviewPrompt, setStageAvailability, setStageFilter, setStats, showCompanyFactReviewPrompt,
+    stageAvailability, stageFilter, stats, user, userRole
+  };
+}
