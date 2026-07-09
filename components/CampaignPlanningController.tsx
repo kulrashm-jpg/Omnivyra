@@ -1,4 +1,4 @@
-/** CampaignPlanningContent — thin composition: controller + section slices. */
+/** useCampaignPlanningController — state/handlers of CampaignPlanningContent, verbatim. */
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 
@@ -33,14 +33,171 @@ import type { useCampaignPlanningState } from '../hooks/useCampaignPlanningState
 
 type CampaignState = ReturnType<typeof useCampaignPlanningState>;
 import CampaignPlanDetailsSection from './CampaignPlanDetailsSection';
-import { useCampaignPlanningController } from './CampaignPlanningController';
-import CampaignPlanningSectionsA from './CampaignPlanningSectionsA';
-import CampaignPlanningSectionsB from './CampaignPlanningSectionsB';
 
-export default function CampaignPlanningContent({ d }: { d: CampaignState }) {
-  const f = useCampaignPlanningController({ d });
+export function useCampaignPlanningController({ d }: { d: CampaignState }) {
   const {
-    d: _d,
+    accuracyPct,
+    activePlanningTab,
+    addGoal,
+    aiImprovements,
+    aiImprovementsError,
+    aiProgram,
+    aiSuggestionContext,
+    alignedPreview,
+    alignedPreviewError,
+    approveFrequencyRebalance,
+    campaignData,
+    campaignId,
+    captureAIProgram,
+    checkExistingPlan,
+    contentTypes,
+    continueToMarketAnalysis,
+    createNewCampaign,
+    expandedSuggestionIds,
+    fetchAiImprovements,
+    fetchForecastVsActual,
+    fetchLeadConversionIntel,
+    fetchMomentumData,
+    fetchOptimizationAdvice,
+    fetchPlatformAdvice,
+    fetchReapprovalStatus,
+    fetchStrategyStatus,
+    fetchViralTopicMemory,
+    forecastDelta,
+    forecastError,
+    forecastVsActual,
+    generate12WeekPlan,
+    generatePlanDescription,
+    getContentTypeColor,
+    getContentTypeIcon,
+    getPlatformColor,
+    getPriorityColor,
+    groupedContext,
+    hasExistingPlan,
+    isAiImprovementsLoading,
+    isChatOpen,
+    isDraftMode,
+    isEditMode,
+    isForecastLoading,
+    isLeadIntelLoading,
+    isLoading,
+    isMomentumLoading,
+    isOptimizationLoading,
+    isPlatformAdviceLoading,
+    isRebalanceLoading,
+    isRevisingStrategy,
+    isStrategyLocked,
+    isStrategyProposed,
+    isStrategyStatusLoading,
+    isViralTopicLoading,
+    leadConversionIntel,
+    leadIntelError,
+    loadCampaign,
+    loadExistingCampaign,
+    momentumData,
+    momentumError,
+    newGoal,
+    notice,
+    notify,
+    openDailyPlanning,
+    optimizationAdvice,
+    optimizationError,
+    organizeProgramIntoGoals,
+    planDescription,
+    platformAccuracyEntries,
+    platformAdvice,
+    platformAdviceEntries,
+    platformAdviceError,
+    platformSortMode,
+    platforms,
+    priorities,
+    programStartDate,
+    proposeFrequencyRebalance,
+    reapprovalStatus,
+    rebalanceError,
+    rebalanceProposal,
+    rebalanceRejectReason,
+    rebalanceStatus,
+    recommendationContext,
+    recommendationHash,
+    regenerateAlignedPreview,
+    rejectFrequencyRebalance,
+    removeGoal,
+    reviseError,
+    reviseStrategyFromSuggestions,
+    router,
+    saveCampaign,
+    selectedSuggestionIds,
+    setActivePlanningTab,
+    setAiImprovements,
+    setAiImprovementsError,
+    setAiProgram,
+    setAiSuggestionContext,
+    setAlignedPreview,
+    setAlignedPreviewError,
+    setCampaignData,
+    setCampaignId,
+    setExpandedSuggestionIds,
+    setForecastError,
+    setForecastVsActual,
+    setGroupedContext,
+    setHasExistingPlan,
+    setIsAiImprovementsLoading,
+    setIsChatOpen,
+    setIsForecastLoading,
+    setIsLeadIntelLoading,
+    setIsLoading,
+    setIsMomentumLoading,
+    setIsOptimizationLoading,
+    setIsPlatformAdviceLoading,
+    setIsRebalanceLoading,
+    setIsRevisingStrategy,
+    setIsStrategyStatusLoading,
+    setIsViralTopicLoading,
+    setLeadConversionIntel,
+    setLeadIntelError,
+    setMomentumData,
+    setMomentumError,
+    setNewGoal,
+    setNotice,
+    setOptimizationAdvice,
+    setOptimizationError,
+    setPlanDescription,
+    setPlatformAdvice,
+    setPlatformAdviceError,
+    setPlatformSortMode,
+    setProgramStartDate,
+    setReapprovalStatus,
+    setRebalanceError,
+    setRebalanceProposal,
+    setRebalanceRejectReason,
+    setRebalanceStatus,
+    setRecommendationContext,
+    setRecommendationHash,
+    setReviseError,
+    setSelectedSuggestionIds,
+    setShowProgramCapture,
+    setShowRebalanceRationale,
+    setShowRebalanceRejectModal,
+    setShowWeeklyRefinement,
+    setStableThemesOpen,
+    setStrategyStatus,
+    setViralTopicError,
+    setViralTopicMemory,
+    showProgramCapture,
+    showRebalanceRationale,
+    showRebalanceRejectModal,
+    showWeeklyRefinement,
+    stableThemesOpen,
+    strategyStatus,
+    toggleSuggestionDetails,
+    toggleSuggestionSelection,
+    viralTopicError,
+    viralTopicMemory,
+  } = d;
+
+  return {
+    d,
     accuracyPct, activePlanningTab, addGoal, aiImprovements, aiImprovementsError, aiProgram, aiSuggestionContext, alignedPreview,
     alignedPreviewError, approveFrequencyRebalance, campaignData, campaignId, captureAIProgram, checkExistingPlan, contentTypes,
     continueToMarketAnalysis, createNewCampaign, expandedSuggestionIds, fetchAiImprovements, fetchForecastVsActual,
@@ -67,65 +224,5 @@ export default function CampaignPlanningContent({ d }: { d: CampaignState }) {
     setShowRebalanceRejectModal, setShowWeeklyRefinement, setStableThemesOpen, setStrategyStatus, setViralTopicError,
     setViralTopicMemory, showProgramCapture, showRebalanceRationale, showRebalanceRejectModal, showWeeklyRefinement,
     stableThemesOpen, strategyStatus, toggleSuggestionDetails, toggleSuggestionSelection, viralTopicError, viralTopicMemory
-  } = f;
-  return (
-    <>
-      <div className="max-w-7xl mx-auto px-6 py-8">
-      <CampaignPlanningSectionsA f={f} />
-      <CampaignPlanningSectionsB f={f} />
-      </div>
-
-      {showRebalanceRejectModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl border border-gray-200">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">Reject Optimization Proposal</h3>
-              <button
-                onClick={() => setShowRebalanceRejectModal(false)}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="space-y-2 text-sm text-gray-700">
-              <div className="text-xs text-gray-500">Why rejecting? (optional)</div>
-              <textarea
-                value={rebalanceRejectReason}
-                onChange={(event) => setRebalanceRejectReason(event.target.value)}
-                rows={3}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                placeholder="Add a short reason for rejecting this proposal."
-              />
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                onClick={rejectFrequencyRebalance}
-                disabled={isRebalanceLoading}
-                className="px-4 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
-              >
-                Reject Proposal
-              </button>
-              <button
-                onClick={() => setShowRebalanceRejectModal(false)}
-                className="px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Campaign-Specific AI Chat Modal */}
-          <CampaignAIChat 
-            isOpen={isChatOpen}
-            onClose={() => setIsChatOpen(false)}
-            onMinimize={() => setIsChatOpen(false)}
-            context="campaign-planning"
-            campaignId={campaignId}
-            campaignData={campaignData}
-            onProgramGenerated={captureAIProgram}
-          />
-    </>
-  );
+  };
 }
