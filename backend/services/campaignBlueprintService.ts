@@ -5,6 +5,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import { BLUEPRINT_FREEZE_WINDOW_HOURS } from '../governance/GovernanceConfig';
+import { memoRequest } from './requestScopedMemo';
 
 /** Stage 11: Deterministic guard — campaign must have duration_weeks set before blueprint resolution. */
 export class PrePlanningRequiredError extends Error {
@@ -185,7 +186,14 @@ export async function getUnifiedCampaignBlueprint(
   if (!campaignId || typeof campaignId !== 'string') {
     return null;
   }
+  // PERF-001: dedupe repeated identical blueprint loads within a single request
+  // (loadSources calls this 2-3× per resolve). No-op outside a memo scope.
+  return memoRequest(`blueprint:${campaignId}`, () => loadUnifiedCampaignBlueprint(campaignId));
+}
 
+async function loadUnifiedCampaignBlueprint(
+  campaignId: string
+): Promise<CampaignBlueprint | null> {
   try {
     // 1. Check campaign_week_plan (Flow B - Structured Blueprint)
     // Prefer: edited_committed > committed > draft (status column if present)

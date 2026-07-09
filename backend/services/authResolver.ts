@@ -24,6 +24,11 @@ import {
 import type { NextApiRequest } from 'next';
 import { supabase as db } from '../db/supabaseClient';
 import { logger } from './logger';
+import {
+  getCachedValidation,
+  setCachedValidation,
+  recordValidationLatency,
+} from './authValidationCache';
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -324,6 +329,18 @@ export async function validateAuthToken(token: string): Promise<ValidatedAuthIde
 }
 
 async function validateTokenWithSupabase(token: string): Promise<ValidatedAuthIdentity | null> {
+  // PERF-001: short-TTL cache. A hit skips the redundant GoTrue round-trip for
+  // repeated validations of the SAME token during one activation chain. Only
+  // successful validations are cached, entry lifetime is capped to the JWT exp,
+  // and account-lifecycle enforcement still runs on the DB row every request
+  // (see authValidationCache.ts) — so revocation/deletion behavior is unchanged.
+  const cached = getCachedValidation(token);
+  if (cached) {
+    recordValidationLatency(0, true);
+    return cached;
+  }
+
+  const startedAt = Date.now();
   let result: Awaited<ReturnType<typeof db.auth.getUser>>;
   try {
     result = await Promise.race([
@@ -337,6 +354,8 @@ async function validateTokenWithSupabase(token: string): Promise<ValidatedAuthId
       message: error instanceof Error ? error.message : String(error),
     });
     return null;
+  } finally {
+    recordValidationLatency(Date.now() - startedAt, false);
   }
 
   const authUser = result.data?.user;
@@ -347,11 +366,13 @@ async function validateTokenWithSupabase(token: string): Promise<ValidatedAuthId
     return null;
   }
 
-  return {
+  const identity: ValidatedAuthIdentity = {
     supabaseUid: authUser.id,
     email: authUser.email ?? null,
     emailVerified: !!authUser.email_confirmed_at,
   };
+  setCachedValidation(token, identity);
+  return identity;
 }
 
 // ── JWT iat extraction (Phase 2.B — session revocation epoch check) ─────────

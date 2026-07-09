@@ -18,6 +18,7 @@ import { generateDailyPlansWithAI } from './dailyPlanAiGenerator';
 import type { WeeklyGenerationContext } from './dailyPlanAiGenerator';
 import { getCampaignPlanningInputs } from './campaignPlanningInputsService';
 import { getUnifiedCampaignBlueprint } from './campaignBlueprintService';
+import { memoRequest } from './requestScopedMemo';
 import { scheduleSlotIntelligently } from './intelligentSlotScheduler';
 import type { ScheduledSlot } from './intelligentSlotScheduler';
 import { generateWeeklyStructure } from '../../pages/api/campaigns/generate-weekly-structure';
@@ -178,6 +179,12 @@ export async function saveWeekPlans(
  * drops later duplicates. This cleans up any pre-existing dirty data in the DB.
  */
 export async function getDailyPlans(campaignId: string): Promise<Record<string, unknown>[]> {
+  // PERF-001: dedupe repeated identical daily-plan loads within a single request
+  // (loadSources calls this 2-3× per resolve). No-op outside a memo scope.
+  return memoRequest(`dailyPlans:${campaignId}`, () => loadDailyPlans(campaignId));
+}
+
+async function loadDailyPlans(campaignId: string): Promise<Record<string, unknown>[]> {
   const { data, error } = await supabase
     .from('daily_content_plans')
     .select('*')

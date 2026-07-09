@@ -5,8 +5,14 @@ import { requireCampaignAccess } from '../../../backend/services/campaignAccessS
 import { detectExecutionDrift, type PublishedContent } from '../../../backend/services/executionDriftDetector';
 import type { WeekPlanLike } from '../../../backend/services/executionMomentumTracker';
 import { computeExecutionHealthScore, type ExecutionPressure, type ExecutionMomentum, type ExecutionDrift } from '../../../backend/services/executionHealthScorer';
+import { runWithRequestMemo } from '../../../backend/services/requestScopedMemo';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default function handler(req: NextApiRequest, res: NextApiResponse) {
+  // PERF-001: seed a request-scoped memo (dedupes blueprint loads in-request).
+  return runWithRequestMemo(() => handlerImpl(req, res));
+}
+
+async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }

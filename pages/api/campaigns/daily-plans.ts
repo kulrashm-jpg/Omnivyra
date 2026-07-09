@@ -12,6 +12,7 @@ import { detectMasterContentGroups } from '../../../lib/planning/masterContentGr
 import { buildStrategicMemoryProfile } from '../../../lib/intelligence/strategicMemory';
 import type { StrategistAction } from '../../../lib/intelligence/strategicMemory';
 import { logDistributionDecision } from '../../../lib/intelligence/distributionDecisionLogger';
+import { runWithRequestMemo } from '../../../backend/services/requestScopedMemo';
 
 function tryParseJson(value: unknown): any | null {
   if (typeof value !== 'string') return null;
@@ -24,7 +25,13 @@ function tryParseJson(value: unknown): any | null {
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default function handler(req: NextApiRequest, res: NextApiResponse) {
+  // PERF-001: seed a request-scoped memo so repeated blueprint/daily-plan loads
+  // within this request collapse to one each.
+  return runWithRequestMemo(() => handlerImpl(req, res));
+}
+
+async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }

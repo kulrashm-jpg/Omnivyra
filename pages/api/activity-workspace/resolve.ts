@@ -20,6 +20,7 @@ import { loadCreatorWorkspace } from '@/backend/services/creator/intelligence/wo
 // Gap-fills empty creator briefs at the single read authority so no creator row
 // renders "-", regardless of creation path. Creator-only; writer rows untouched.
 import { synthesizeCreatorBrief, isCreatorContentType } from '@/lib/shared/creatorBriefSynthesis';
+import { runWithRequestMemo } from '@/backend/services/requestScopedMemo';
 
 /**
  * GET /api/activity-workspace/resolve?workspaceKey=... OR ?campaignId=...&executionId=...
@@ -30,7 +31,13 @@ function nonEmpty(v: unknown): string {
   return String(v ?? '').trim();
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default function handler(req: NextApiRequest, res: NextApiResponse) {
+  // PERF-001: seed a request-scoped memo. resolve() runs loadSources 2-3× per
+  // request; this collapses the duplicate blueprint + daily-plan loads to one each.
+  return runWithRequestMemo(() => handlerImpl(req, res));
+}
+
+async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }

@@ -1,0 +1,37 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`shared template path golden master: parses the AI JSON, fills template blocks, returns the full envelope: shared-path-result 1`] = `
+{
+  "category": "Operations",
+  "content_blocks": [
+    {
+      "html": "<p>Speed: Automation changes how retail operators plan their week. Teams that adopt structured checks ship campaigns faster, catch defects before customers see them, and reuse proven assets instead of rebuilding from scratch every cycle. The compounding effect shows up within a quarter as fewer escalations and steadier publishing cadence.</p>",
+      "id": "b1",
+      "type": "paragraph",
+    },
+    {
+      "html": "<p>Quality: Automation changes how retail operators plan their week. Teams that adopt structured checks ship campaigns faster, catch defects before customers see them, and reuse proven assets instead of rebuilding from scratch every cycle. The compounding effect shows up within a quarter as fewer escalations and steadier publishing cadence.</p>",
+      "id": "b2",
+      "type": "paragraph",
+    },
+    {
+      "html": "<p>Reuse: Automation changes how retail operators plan their week. Teams that adopt structured checks ship campaigns faster, catch defects before customers see them, and reuse proven assets instead of rebuilding from scratch every cycle. The compounding effect shows up within a quarter as fewer escalations and steadier publishing cadence.</p>",
+      "id": "b3",
+      "type": "paragraph",
+    },
+  ],
+  "content_html": "",
+  "excerpt": "How automation compounds across retail operations.",
+  "key_insights": [
+    "Speed compounds weekly",
+    "Quality gates prevent rework",
+  ],
+  "seo_meta_description": "How automation compounds across retail teams.",
+  "seo_meta_title": "Automation Payoffs",
+  "tags": [
+    "automation",
+    "retail",
+  ],
+  "title": "Automation Payoffs for Retail Teams",
+}
+`;

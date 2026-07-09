@@ -476,18 +476,24 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // (used below when the API did not return one). Previously the JWT
       // string was used as a sentinel; the auth user id is more correct
       // and avoids a stale-closure dependency on the outer Bearer token.
+      // PERF-001: the display name + user id come from the list response in the
+      // common case. Only fall back to a (network) auth.getUser() round-trip when
+      // the API returned NEITHER a name nor an id — removing a serial round-trip
+      // from the critical path to "active with user details" on every login.
       let resolvedName = listData?.userName || '';
-      let authUserId: string | null = null;
-      try {
-        const { data: { user } } = await getSupabaseBrowser().auth.getUser();
-        authUserId = user?.id ?? null;
-        if (!resolvedName) {
-          resolvedName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
-        }
-      } catch { if (!resolvedName) resolvedName = 'User'; }
+      let resolvedUserId = listData?.userId || '';
+      if (!resolvedName || !resolvedUserId) {
+        try {
+          const { data: { user } } = await getSupabaseBrowser().auth.getUser();
+          if (!resolvedUserId) resolvedUserId = user?.id ?? '';
+          if (!resolvedName) {
+            resolvedName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
+          }
+        } catch { /* fall through to the 'User' default below */ }
+      }
+      if (!resolvedName) resolvedName = 'User';
       setUserName(resolvedName);
 
-      const resolvedUserId = listData?.userId || authUserId || '';
       const nextUser: UserContext = {
         userId: resolvedUserId, // prefer DB id if returned by API
         role: firstRole === 'SUPER_ADMIN' || firstRole === 'COMPANY_ADMIN' ? 'admin' : 'user',
