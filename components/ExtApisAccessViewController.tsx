@@ -1,4 +1,4 @@
-/** ExtApisAccessView — thin composition: controller + section slices. */
+/** useExtApisAccessViewController — prelude + state/handlers of ExtApisAccessView, verbatim. */
 import React, { useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from './CompanyContext';
 import { getAuthToken } from '../utils/getAuthToken';
@@ -91,7 +91,7 @@ type ApiRequest = {
   company_id?: string | null;
 };
 
-const PURPOSE_OPTIONS = [
+export const PURPOSE_OPTIONS = [
   'trend_campaign_detection',
   'market_pulse_signals',
   'competitor_intelligence',
@@ -101,8 +101,8 @@ const PURPOSE_OPTIONS = [
   'keyword_intelligence',
 ] as const;
 
-const POLLING_OPTIONS = ['realtime', '2h', '6h', 'daily', 'weekly'] as const;
-const PRIORITY_OPTIONS = ['HIGH', 'MEDIUM', 'LOW'] as const;
+export const POLLING_OPTIONS = ['realtime', '2h', '6h', 'daily', 'weekly'] as const;
+export const PRIORITY_OPTIONS = ['HIGH', 'MEDIUM', 'LOW'] as const;
 
 const emptyRequestForm = {
   name: '',
@@ -122,7 +122,7 @@ const emptyRequestForm = {
 
 type TabId = 'presets' | 'request' | 'approval' | 'usage';
 
-const FILTER_FIELD_KEYS = [
+export const FILTER_FIELD_KEYS = [
   'keywords',
   'topics',
   'competitors',
@@ -177,19 +177,19 @@ const parseJsonObject = (value: string) => {
   }
 };
 
-const requiresAuth = (authType?: string | null) =>
+export const requiresAuth = (authType?: string | null) =>
   ['api_key', 'bearer', 'query', 'header'].includes(String(authType || 'none'));
 
 /** Classify API error for display (API key, quota, rate limit, etc.) */
 
-const formatPercent = (value: number) => `${Math.round(value * 100)}%`;
+export const formatPercent = (value: number) => `${Math.round(value * 100)}%`;
 
-const scaleHeight = (value: number, max: number, maxHeight = 60) => {
+export const scaleHeight = (value: number, max: number, maxHeight = 60) => {
   if (max <= 0) return 4;
   return Math.max(4, Math.round((value / max) * maxHeight));
 };
 
-function FilterTagRow({
+export function FilterTagRow({
   label,
   values,
   onAdd,
@@ -256,7 +256,7 @@ function FilterTagRow({
   );
 }
 
-const HealthBadgeLegend = () => (
+export const HealthBadgeLegend = () => (
   <div className="text-[11px] text-gray-500 flex flex-wrap gap-3 items-center">
     <span className="flex items-center gap-1">
       <span className="w-2 h-2 rounded-full bg-green-400" />
@@ -274,14 +274,70 @@ const HealthBadgeLegend = () => (
 );
 
 import type { useExtApisAccess } from '../hooks/useExtApisAccess';
-import { useExtApisAccessViewController } from './ExtApisAccessViewController';
-import ExtApisAccessSectionsA from './ExtApisAccessSectionsA';
-import ExtApisAccessSectionsB from './ExtApisAccessSectionsB';
+type S = ReturnType<typeof useExtApisAccess>;
 
-export default function ExtApisAccessView({ d }: { d: ReturnType<typeof useExtApisAccessViewController>['d'] }) {
-  const f = useExtApisAccessViewController({ d });
+export function useExtApisAccessViewController({ d }: { d: S }) {
   const {
-    d: _d,
+    _ef1,
+    _ef2,
+    activeCount,
+    activeTab,
+    allowedPolling,
+    apis,
+    approvalActionId,
+    buildDrafts,
+    canManageExternalApis,
+    companyConfig,
+    companyDefaultApis,
+    configModalApiId,
+    drafts,
+    expandedUsageId,
+    fetchWithAuth,
+    globalPresets,
+    isLoading,
+    isReadOnly,
+    isSubmittingRequest,
+    loadApis,
+    loadRequests,
+    pendingRequestNames,
+    requestForm,
+    requestMessage,
+    requests,
+    runApprovalAction,
+    saveAccess,
+    saveCompanyConfig,
+    saveMessage,
+    selectedApi,
+    selectedApiId,
+    selectedCompanyId,
+    selectedDraft,
+    setActiveTab,
+    setAllowedPolling,
+    setApis,
+    setApprovalActionId,
+    setCanManageExternalApis,
+    setCompanyConfig,
+    setCompanyDefaultApis,
+    setConfigModalApiId,
+    setDrafts,
+    setExpandedUsageId,
+    setGlobalPresets,
+    setIsLoading,
+    setIsSubmittingRequest,
+    setRequestForm,
+    setRequestMessage,
+    setRequests,
+    setSaveMessage,
+    setSelectedApiId,
+    submitRequest,
+    todayKey,
+    updateDraft,
+    usageTotals,
+    visibleApis,
+  } = d;
+
+  return {
+    d,
     _ef1, _ef2, activeCount, activeTab, allowedPolling, apis, approvalActionId, buildDrafts, canManageExternalApis, companyConfig,
     companyDefaultApis, configModalApiId, drafts, expandedUsageId, fetchWithAuth, globalPresets, isLoading, isReadOnly,
     isSubmittingRequest, loadApis, loadRequests, pendingRequestNames, requestForm, requestMessage, requests, runApprovalAction,
@@ -289,77 +345,5 @@ export default function ExtApisAccessView({ d }: { d: ReturnType<typeof useExtAp
     setAllowedPolling, setApis, setApprovalActionId, setCanManageExternalApis, setCompanyConfig, setCompanyDefaultApis,
     setConfigModalApiId, setDrafts, setExpandedUsageId, setGlobalPresets, setIsLoading, setIsSubmittingRequest, setRequestForm,
     setRequestMessage, setRequests, setSaveMessage, setSelectedApiId, submitRequest, todayKey, updateDraft, usageTotals, visibleApis
-  } = f;
-    return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-6xl mx-auto space-y-6">
-        <div className="bg-white rounded-lg shadow p-6">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">External API Access</h1>
-          <p className="text-sm text-gray-600">
-            Company admins set default APIs. Users see the defaults in read-only mode.
-          </p>
-          <p className="text-xs text-gray-500 mt-2">
-            Secrets are never stored. Enter only the env var name (ex: YOUTUBE_API_KEY).
-          </p>
-          {isReadOnly && (
-            <p className="text-xs text-amber-600 mt-2">
-              You have read-only access. Submit a request or contact an admin to enable APIs.
-            </p>
-          )}
-        </div>
-
-        <div className="flex gap-2 border-b border-gray-200 bg-white rounded-t-lg shadow px-4 pt-2">
-          {(
-            [
-              { id: 'presets' as TabId, label: 'Global Preset APIs' },
-              { id: 'request' as TabId, label: 'Request New API' },
-              { id: 'approval' as TabId, label: 'Approval Queue' },
-              { id: 'usage' as TabId, label: 'Usage Analytics' },
-            ] as const
-          ).map(({ id, label }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              className={`px-4 py-2.5 text-sm font-medium rounded-t-lg ${
-                activeTab === id
-                  ? 'bg-gray-100 text-indigo-700 border-b-2 border-indigo-600 -mb-px'
-                  : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div className="bg-white rounded-lg shadow p-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-            <div className="text-xs text-gray-500">Total APIs</div>
-            <div className="text-2xl font-semibold text-gray-900">{visibleApis.length}</div>
-          </div>
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-            <div className="text-xs text-gray-500">Requests today</div>
-            <div className="text-2xl font-semibold text-gray-900">
-              {usageTotals.requestsToday}
-            </div>
-          </div>
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-            <div className="text-xs text-gray-500">Failures today</div>
-            <div className="text-2xl font-semibold text-gray-900">
-              {usageTotals.failuresToday}
-            </div>
-          </div>
-        </div>
-
-        {saveMessage && (
-          <div className="bg-indigo-50 border border-indigo-200 text-indigo-800 text-sm rounded-lg p-3">
-            {saveMessage}
-          </div>
-        )}
-
-      <ExtApisAccessSectionsA f={f} />
-      <ExtApisAccessSectionsB f={f} />
-      </div>
-    </div>
-  );
+  };
 }
-
