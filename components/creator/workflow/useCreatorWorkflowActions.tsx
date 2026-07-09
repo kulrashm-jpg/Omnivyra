@@ -16,7 +16,7 @@ import {
 } from '../../../lib/content/writerCreatorAttachmentContracts';
 import type { VariantFamily } from '../../variant-experience/useVariantApi';
 import { resolvePurposeStrategy, fitSlideArcToCount } from '../../../backend/services/creator/purposeStrategyRegistry';
-import type { TemplateAiAssistContext } from '../TemplateFieldsPanel';
+import type { TemplateAiAssistContext, TemplateAiAssistTarget } from '../TemplateFieldsPanel';
 import { applyTemplateFieldUpdates } from '../../../lib/creator-templates/values';
 import {
   type CreatorResult, type RepurposePath, type SavedCreatorAsset,
@@ -133,6 +133,51 @@ export function useCreatorWorkflowActions(
       setAiBusyKey(null);
     }
   }, [activeTemplate, selectedCompanyId, answers, templateValues, writerSource, type]);
+
+  // ── Auto-fill an empty carousel/infographic draft on create ──────────────
+  // A carousel/infographic editor otherwise LANDS with every repeated slide/
+  // section row empty, so its required "Slide title" fields immediately show
+  // validation errors. This runs the same field-assist batch ONCE per template,
+  // ONLY when we have something to write from (the operator's topic, or the
+  // Writer post / campaign strategic card that flows in as source_content), and
+  // ONLY over EMPTY fields of EMPTY rows — authored copy is never overwritten.
+  // The user can still edit or regenerate any field afterwards.
+  const autoFilledTemplateRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!activeTemplate) return;
+    const fd = activeTemplate.formDefinition;
+    const repeat = fd.slides
+      ? { scope: 'slide' as const, fields: fd.slides.fields, rows: templateValues.slides ?? [] }
+      : fd.sections
+        ? { scope: 'section' as const, fields: fd.sections.fields, rows: templateValues.sections ?? [] }
+        : null;
+    if (!repeat) return;                                     // only carousel/infographic
+    if (autoFilledTemplateRef.current === activeTemplate.id) return; // once per template
+    if (aiBusyKey) return;                                   // an AI op is already running
+    // Need real context — never auto-write generic copy from nothing.
+    const hasContext =
+      String(answers.topic || '').trim().length > 0 || !!String(writerSource?.body || '').trim();
+    if (!hasContext) return;
+    // Target only EMPTY fields of ENTIRELY-empty rows (mirrors "Generate empty").
+    const targets: TemplateAiAssistTarget[] = [];
+    repeat.rows.forEach((row, index) => {
+      const rowEmpty = repeat.fields.every((f) => !String(row?.[f.key] || '').trim());
+      if (!rowEmpty) return;
+      for (const f of repeat.fields) {
+        if (!f.aiAssist?.generate) continue;
+        targets.push({ scope: repeat.scope, fieldKey: f.key, index, currentValue: '' });
+      }
+    });
+    if (targets.length === 0) return;                        // nothing empty to fill
+    autoFilledTemplateRef.current = activeTemplate.id;       // mark BEFORE firing (block re-entry)
+    void handleTemplateAiAssist({
+      template: activeTemplate,
+      action: 'generate',
+      busyKey: `batch:${repeat.scope}:auto-fill`,
+      label: `Generating ${repeat.scope === 'slide' ? 'slides' : 'sections'}…`,
+      targets,
+    });
+  }, [activeTemplate, templateValues.slides, templateValues.sections, answers.topic, writerSource?.body, aiBusyKey, handleTemplateAiAssist]);
 
   // AI-generate a single OVERLAY field (hook / headline / supporting text / key insight).
   // Overlay copy isn't a template field, so we call field-assist with the 'overlay' scope

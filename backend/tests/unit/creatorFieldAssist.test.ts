@@ -29,6 +29,54 @@ function req(partial: Partial<FieldAssistRequest>): FieldAssistRequest {
 const jsonLlm = (updates: Array<Record<string, unknown>>): AssistLlm => async () => JSON.stringify({ updates });
 const throwingLlm: AssistLlm = async () => { throw new Error('llm down'); };
 
+describe('Field assist — batch slide coverage (creator flow 1: no empty required fields)', () => {
+  // The "Generate all slides" batch sends every slide field as a target. Even if
+  // the LLM truncates its JSON (the 700→scaled token cap) and returns only the
+  // first slide, EVERY target must come back with a non-empty value so the
+  // required "Slide title" fields never land empty in the editor.
+  const batchTargets = (slideCount: number) =>
+    Array.from({ length: slideCount }, (_, i) => [
+      { scope: 'slide' as const, fieldKey: 'title', index: i, currentValue: '' },
+      { scope: 'slide' as const, fieldKey: 'body', index: i, currentValue: '' },
+    ]).flat();
+
+  it('fills EVERY slide target even when the LLM returns only slide 1 (truncation)', async () => {
+    const targets = batchTargets(5);
+    // Simulate a truncated response: only the first slide came back.
+    const partialLlm = jsonLlm([
+      { scope: 'slide', field_key: 'title', index: 0, value: 'What is onboarding automation' },
+      { scope: 'slide', field_key: 'body', index: 0, value: 'Automate the busywork of first-day setup.' },
+    ]);
+    const res = await runCreatorFieldAssist({
+      template: carouselTpl,
+      request: req({ assetFamily: 'carousel', templateId: carouselTpl.id, targets, context: { topic: 'Onboarding automation' } }),
+      llm: partialLlm,
+    });
+    // One update per target — nothing dropped.
+    expect(res.updates).toHaveLength(targets.length);
+    // Every required title is non-empty (LLM value for slide 0, deterministic for 1-4).
+    const titles = res.updates.filter((u) => u.fieldKey === 'title');
+    expect(titles).toHaveLength(5);
+    expect(titles.every((u) => u.value.trim().length > 0)).toBe(true);
+    // The slide the LLM actually answered keeps its real copy.
+    expect(titles.find((u) => u.index === 0)?.value).toBe('What is onboarding automation');
+    // The truncated tail fell back deterministically (usedFallback flagged).
+    expect(res.usedFallback).toBe(true);
+  });
+
+  it('fills EVERY slide target when the LLM fails entirely (deterministic fallback)', async () => {
+    const targets = batchTargets(7);
+    const res = await runCreatorFieldAssist({
+      template: carouselTpl,
+      request: req({ assetFamily: 'carousel', templateId: carouselTpl.id, targets, context: { topic: 'Onboarding automation' } }),
+      llm: throwingLlm,
+    });
+    expect(res.updates).toHaveLength(targets.length);
+    expect(res.updates.filter((u) => u.fieldKey === 'title').every((u) => u.value.trim().length > 0)).toBe(true);
+    expect(res.usedFallback).toBe(true);
+  });
+});
+
 describe('Field assist — validation', () => {
   it('accepts a well-formed request', () => {
     const v = validateFieldAssistRequest({ asset_family: 'image', template_id: 'x', action: 'rewrite', targets: [{ scope: 'flat', field_key: 'headline' }] });

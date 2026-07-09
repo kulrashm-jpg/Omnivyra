@@ -57,6 +57,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const copyContext = await resolveCreatorCopyContext(companyId);
   request.context = { ...(request.context ?? {}), company: copyContext.company, brandVoice: copyContext.brandVoice };
 
+  // Output budget scales with the batch size so "Generate all slides/sections"
+  // (up to MAX_TARGETS fields) is never truncated mid-JSON — a truncated
+  // response drops later slides to weak deterministic placeholders. Each target
+  // returns one short field (title ≤70 / body ≤220 chars) plus JSON overhead
+  // ≈ ~150 tokens; we budget generously and clamp so a single-field rewrite
+  // stays cheap while a 10-slide deck (20 fields) gets ~2400 tokens of headroom.
+  const outputTokenBudget = Math.min(2600, Math.max(700, 260 + request.targets.length * 150));
+
   // Billed LLM injector — graceful: errors are caught inside runCreatorFieldAssist
   // and fall back to a deterministic transform.
   const llm: AssistLlm = async (messages) => {
@@ -75,7 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // company/brand grounding + field/sibling lines. All client strings are length-capped
         // in validateFieldAssistRequest, so 4000 is a true ceiling, not an open door.
         maxInputTokens: 4000,
-        maxOutputTokens: 700,
+        maxOutputTokens: outputTokenBudget,
         actionKey: 'content_rewrite',
       },
       idempotency: {
@@ -89,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         model: 'gpt-4o-mini',
         temperature: 0.7,
         messages,
-        max_tokens: 700,
+        max_tokens: outputTokenBudget,
         operation: 'creatorFieldAssist',
         response_format: { type: 'json_object' },
         companyId,
