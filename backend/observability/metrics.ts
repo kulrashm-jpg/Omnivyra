@@ -9,6 +9,7 @@
 import { registry, type Labels } from './registry';
 import { observabilityConfig, domainEnabled } from './config';
 import { logger } from '../services/logger';
+import { noteDbQuery } from './requestScope';
 
 // ── Metric names (single source of truth) ──────────────────────────────────────
 export const M = {
@@ -75,6 +76,16 @@ export const M = {
     cpuPct: 'system.cpu.percent',
     loopLag: 'system.eventloop.lag_ms',
   },
+  client: {
+    pageLoad: 'client.page.load_ms',
+    routeChange: 'client.route.change_ms',
+    render: 'client.render.duration_ms',
+    lcp: 'client.vitals.lcp_ms',
+    fcp: 'client.vitals.fcp_ms',
+    interaction: 'client.interaction.latency_ms',
+    longTask: 'client.longtask.duration_ms',
+    heapUsed: 'client.memory.heap_used_bytes',
+  },
 } as const;
 
 /** Top-N leaderboard names. */
@@ -129,11 +140,18 @@ function safeIncr(name: string, value: number, labels?: Labels): void {
 export function recordApi(input: {
   route: string; method: string; status: number; durationMs: number;
   reqBytes?: number; resBytes?: number; error?: boolean; timeout?: boolean; retried?: boolean;
+  db?: { count: number; totalMs: number; slowCount: number; maxMs: number };
 }): void {
   if (!domainEnabled('api')) return;
   const labels: Labels = { route: input.route, method: input.method, status: input.status };
   registry.observe(M.api.duration, input.durationMs, { route: input.route, method: input.method });
   registry.incr(M.api.requests, 1, labels);
+  // HARDEN-001A: per-request DB profiling attached to the API metric.
+  if (input.db && input.db.count > 0) {
+    registry.observe(M.db.perRequest, input.db.count, { route: input.route });
+    registry.observe('api.request.db_time_ms', input.db.totalMs, { route: input.route });
+    if (input.db.slowCount > 0) registry.incr('api.request.db_slow', input.db.slowCount, { route: input.route });
+  }
   if (typeof input.reqBytes === 'number') registry.observe(M.api.payloadIn, input.reqBytes, { route: input.route });
   if (typeof input.resBytes === 'number') {
     registry.observe(M.api.payloadOut, input.resBytes, { route: input.route });
@@ -155,11 +173,14 @@ export function recordApi(input: {
 
 export function recordDb(input: { table: string; op: string; durationMs: number; rows?: number; error?: boolean }): void {
   if (!domainEnabled('db')) return;
+  const slow = input.durationMs >= observabilityConfig.slowDbMs;
+  // HARDEN-001A: accumulate into the active per-request DB scope (if any).
+  noteDbQuery(input.durationMs, slow);
   registry.observe(M.db.duration, input.durationMs, { table: input.table, op: input.op });
   registry.incr(M.db.queries, 1, { table: input.table, op: input.op });
   if (typeof input.rows === 'number') registry.observe(M.db.rows, input.rows, { table: input.table, op: input.op });
   if (input.error) registry.incr(M.db.errors, 1, { table: input.table, op: input.op });
-  if (input.durationMs >= observabilityConfig.slowDbMs) {
+  if (slow) {
     registry.incr(M.db.slow, 1, { table: input.table, op: input.op });
     registry.top(BOARD.slowDb, input.durationMs, `${input.op} ${input.table}`, { rows: input.rows ?? -1 });
     if (observabilityConfig.logSlow) {
@@ -241,6 +262,20 @@ export function recordSystem(input: { rss: number; heapUsed: number; cpuPct: num
   registry.gauge(M.system.heapUsed, input.heapUsed);
   registry.gauge(M.system.cpuPct, input.cpuPct);
   registry.observe(M.system.loopLag, input.loopLagMs);
+}
+
+/**
+ * HARDEN-001A — ingest a single browser performance sample into the registry.
+ * `kind` maps to a client.* metric; `route` is normalized (collapsed :id) by the
+ * caller. Fail-safe: unknown kinds and non-finite values are dropped silently.
+ */
+export function recordClient(input: { kind: keyof typeof M.client; value: number; route?: string }): void {
+  if (!domainEnabled('client')) return;
+  const name = M.client[input.kind];
+  if (!name || !Number.isFinite(input.value) || input.value < 0) return;
+  const labels: Labels = input.route ? { route: input.route } : {};
+  if (input.kind === 'heapUsed') registry.gauge(name, input.value, labels);
+  else registry.observe(name, input.value, labels);
 }
 
 export { safeIncr as recordRawCounter, safeObserve as recordRawHistogram };

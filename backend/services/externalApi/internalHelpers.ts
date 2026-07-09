@@ -7,6 +7,7 @@
 import { supabase } from '../../db/supabaseClient';
 import { isRateLimited as redisIsRateLimited } from '../redisExternalApiCache';
 import { getProfile } from '../companyProfileService';
+import { observedFetch } from '../../observability/externalObservability';
 import type { ExternalApiSource } from './types';
 
 // ── Core defaults ─────────────────────────────────────────────────────────────
@@ -84,7 +85,10 @@ const fetchWithTimeoutInit = async (
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    // HARDEN-001A: observe external latency/status/error/timeout for every
+    // external-API fetch routed through this central helper (fail-safe, no
+    // behavior change — observedFetch forwards args + result verbatim).
+    const response = await observedFetch(url, { ...init, signal: controller.signal });
     return response;
   } finally {
     clearTimeout(timeoutId);

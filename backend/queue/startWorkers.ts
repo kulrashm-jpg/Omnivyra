@@ -88,6 +88,8 @@ export async function startWorkers(): Promise<void> {
   try {
     const { startSystemSampler } = await import('../observability/system');
     startSystemSampler();
+    const { startQueueDepthSampler } = await import('../observability/queueObservability');
+    startQueueDepthSampler();
   } catch { /* fail-safe — never block worker boot on instrumentation */ }
 
   // ── Phase 17: thread-runtime persistence boot wiring ──

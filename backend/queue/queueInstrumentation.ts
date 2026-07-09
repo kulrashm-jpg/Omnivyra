@@ -31,6 +31,7 @@
 
 import type { Queue, Worker, Job } from 'bullmq';
 import IORedis from 'ioredis';
+import { observeQueueEvents, registerQueueForDepth } from '../observability/queueObservability';
 
 // ── Redis ops model ────────────────────────────────────────────────────────────
 
@@ -166,6 +167,9 @@ export function instrumentQueue(queue: Queue): void {
   // Ensure state entry exists (makes the queue appear in reports even before any jobs)
   getState(name);
 
+  // HARDEN-001A: register for observability depth sampling (fail-safe, additive).
+  registerQueueForDepth(queue);
+
   // Patch add()
   const origAdd = queue.add.bind(queue);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -190,6 +194,9 @@ export function instrumentQueue(queue: Queue): void {
 export function instrumentWorker(worker: Worker): void {
   const name = worker.name;
   getState(name);
+
+  // HARDEN-001A: observability job/worker metrics (additive; fail-safe).
+  observeQueueEvents(worker);
 
   worker.on('completed', (job: Job) => {
     if (!job) return;

@@ -10,6 +10,7 @@
 import type { NextApiHandler, NextApiRequest, NextApiResponse } from 'next';
 import { recordApi } from './metrics';
 import { observabilityConfig } from './config';
+import { newRequestDbStats, runWithRequestDbScope } from './requestScope';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LONGHEX_RE = /^[0-9a-f]{16,}$/i;
@@ -51,6 +52,9 @@ export function withApiObservability(handler: NextApiHandler, staticRoute?: stri
     let route: string;
     let resBytes = 0;
     let recorded = false;
+    // HARDEN-001A: per-request DB stats object, mutated by recordDb via the ALS
+    // scope and read back here on finish (closure survives the event callback).
+    const dbStats = newRequestDbStats();
     try {
       start = performance.now();
       route = staticRoute || normalizeRoute(req.url);
@@ -82,6 +86,7 @@ export function withApiObservability(handler: NextApiHandler, staticRoute?: stri
             reqBytes: reqBytes(req),
             resBytes: resBytes || undefined,
             error: errored,
+            db: dbStats,
           });
         } catch { /* fail-safe */ }
       };
@@ -89,8 +94,10 @@ export function withApiObservability(handler: NextApiHandler, staticRoute?: stri
       res.on('finish', () => finalize(false));
       res.on('close', () => finalize(false));
 
+      // Run the handler inside the DB-profiling scope so every DB query issued
+      // during this request accumulates into dbStats.
       try {
-        return await handler(req, res);
+        return await runWithRequestDbScope(dbStats, () => handler(req, res));
       } catch (err) {
         finalize(true);
         throw err;

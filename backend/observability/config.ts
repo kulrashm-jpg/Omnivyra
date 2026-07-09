@@ -35,6 +35,8 @@ export interface ObservabilityConfig {
   externalApi: boolean;
   cache: boolean;
   system: boolean;
+  /** Client (browser) performance beacons ingested into the server registry. */
+  client: boolean;
   /** Fraction of DB queries to time (1 = all). Keeps hot paths cheap in prod. */
   dbSampleRate: number;
   /** A DB query at/over this many ms is tracked as "slow" + logged at WARN. */
@@ -68,6 +70,7 @@ export const observabilityConfig: ObservabilityConfig = (() => {
     externalApi: boolEnv('OBSERVABILITY_EXTERNAL_API', true),
     cache: boolEnv('OBSERVABILITY_CACHE', true),
     system: boolEnv('OBSERVABILITY_SYSTEM', true),
+    client: boolEnv('OBSERVABILITY_CLIENT', true),
     // In prod default to sampling 20% of DB queries; dev times everything.
     dbSampleRate: numEnv('OBSERVABILITY_DB_SAMPLE_RATE', isProd ? 0.2 : 1),
     slowDbMs: numEnv('OBSERVABILITY_SLOW_DB_MS', 400),

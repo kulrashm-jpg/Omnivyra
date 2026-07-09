@@ -23,6 +23,7 @@ const AuthDevPanel = dynamic(
   { ssr: false }, // dev-only diagnostics — chunk is never requested in production
 );
 import PageLoader from '../components/PageLoader';
+import { initClientPerf, markRouteChange } from '../lib/observability/clientPerf';
 import {
   WEBSITE_GA_MEASUREMENT_ID,
   flushQueuedWebsiteEvents,
@@ -102,6 +103,28 @@ const WebsiteAnalytics: React.FC = () => {
       </Script>
     </>
   );
+};
+
+// HARDEN-001A: client performance bridge. Initializes the (env-gated, fail-safe)
+// browser perf collector once and reports route-transition durations into it.
+// Renders nothing and never affects interaction.
+const ClientPerfBridge: React.FC = () => {
+  const router = useRouter();
+  useEffect(() => { initClientPerf(); }, []);
+  useEffect(() => {
+    let startedAt = 0;
+    const start = () => { startedAt = performance.now(); };
+    const done = () => { if (startedAt) { markRouteChange(performance.now() - startedAt); startedAt = 0; } };
+    router.events.on('routeChangeStart', start);
+    router.events.on('routeChangeComplete', done);
+    router.events.on('routeChangeError', done);
+    return () => {
+      router.events.off('routeChangeStart', start);
+      router.events.off('routeChangeComplete', done);
+      router.events.off('routeChangeError', done);
+    };
+  }, [router.events]);
+  return null;
 };
 
 const RouteProgressBar: React.FC = () => {
@@ -283,6 +306,7 @@ function MyApp({ Component, pageProps }: AppProps) {
           )}
         </Head>
         <WebsiteAnalytics />
+        <ClientPerfBridge />
         <RouteProgressBar />
         <AuthGate>
           <Component {...pageProps} />

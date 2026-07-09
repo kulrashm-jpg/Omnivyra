@@ -15,11 +15,14 @@ export {
   M, BOARD, now, startTimer, time,
   recordApi, recordDb, recordAi, recordExternal,
   recordQueueJob, recordQueueDepth, recordScheduler, recordWorker,
-  recordCache, recordCacheInvalidation, recordSystem,
+  recordCache, recordCacheInvalidation, recordSystem, recordClient,
   recordRawCounter, recordRawHistogram,
 } from './metrics';
 export { withApiObservability } from './apiObservability';
 export { observeTable, timedQuery } from './dbObservability';
 export { startSystemSampler } from './system';
+export { observeQueueEvents, registerQueueForDepth, startQueueDepthSampler } from './queueObservability';
+export { runWithRequestDbScope, getRequestDbStats } from './requestScope';
+export { observedFetch, observeExternalCall } from './externalObservability';
 export { getObservabilitySnapshot } from './snapshot';
 export type { ObservabilitySnapshot } from './snapshot';

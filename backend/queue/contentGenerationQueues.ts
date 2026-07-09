@@ -14,6 +14,7 @@
 
 import { Queue, Worker } from 'bullmq';
 import { getConnectionConfig, getQueuePrefix } from './bullmqClient';
+import { observeQueueEvents } from '../observability/queueObservability';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QUEUE CONFIGURATION
@@ -291,6 +292,8 @@ export async function startContentWorkers(processor: (job: any) => Promise<any>)
       stalledInterval: 1_800_000,
     });
 
+    observeQueueEvents(worker); // HARDEN-001A: queue/worker metrics (fail-safe)
+
     worker.on('completed', (job) => {
       console.info('[contentGenerationQueues][worker-completed]', {
         queueName,
@@ -341,6 +344,8 @@ export async function startCreatorContentWorkers(processor: (job: any) => Promis
       stalledInterval: 1_800_000,
     });
 
+    observeQueueEvents(worker); // HARDEN-001A: queue/worker metrics (fail-safe)
+
     worker.on('completed', (job) => {
       console.info('[contentGenerationQueues][creator-worker-completed]', {
         queueName,
@@ -382,6 +387,8 @@ export async function startBoltContentWorkers(processor: (job: any) => Promise<a
     stalledInterval: 1_800_000,
   });
 
+  observeQueueEvents(worker); // HARDEN-001A: queue/worker metrics (fail-safe)
+
   worker.on('completed', (job) => {
     console.info('[bolt-content-worker][completed]', {
       jobId: job.id,
@@ -413,6 +420,8 @@ export async function startWhatsAppBroadcastWorker(processor: (job: any) => Prom
     stalledInterval: 1_800_000,
   });
 
+  observeQueueEvents(worker); // HARDEN-001A: queue/worker metrics (fail-safe)
+
   worker.on('completed', (job) => {
     console.info('[wa-broadcast-worker][completed]', {
       jobId: job.id,
@@ -439,6 +448,7 @@ export async function startWhatsAppWebhookWorker(processor: (job: any) => Promis
     drainDelay: 300,
     stalledInterval: 1_800_000,
   });
+  observeQueueEvents(worker); // HARDEN-001A: queue/worker metrics (fail-safe)
   worker.on('completed', (job) => {
     console.info('[wa-webhook-worker][completed]', { jobId: job.id });
   });
@@ -480,6 +490,7 @@ export async function startAnalyticsIngestionWorker(processor: (job: any) => Pro
   // The BullMQ Worker emits 'ready' once its Redis connection is ready;
   // 'active' fires on every job claim. If we see neither, the worker
   // never subscribed.
+  observeQueueEvents(worker); // HARDEN-001A: queue/worker metrics (fail-safe)
   worker.on('ready', () => _diag('analytics-ingestion-worker:ready'));
   worker.on('error', (err) => _diag('analytics-ingestion-worker:error', { error: err instanceof Error ? err.message : String(err) }));
   worker.on('closed', () => _diag('analytics-ingestion-worker:closed'));
