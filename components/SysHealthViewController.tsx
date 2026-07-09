@@ -1,5 +1,4 @@
-/** SysHealthView — thin composition: controller + panel sections. */
-/** SysHealthView — thin composition: controller + verbatim JSX. */
+/** useSysHealthViewController — state/handlers of SysHealthView, verbatim. */
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from './CompanyContext';
@@ -86,13 +85,13 @@ interface SystemHealthData {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const SEVERITY_CONFIG: Record<Severity, { bg: string; text: string; dot: string; label: string }> = {
+export const SEVERITY_CONFIG: Record<Severity, { bg: string; text: string; dot: string; label: string }> = {
   CRITICAL: { bg: 'bg-red-50',    text: 'text-red-600',    dot: 'bg-red-600',    label: 'CRITICAL' },
   WARNING:  { bg: 'bg-yellow-50', text: 'text-yellow-600', dot: 'bg-yellow-600', label: 'WARNING'  },
   INFO:     { bg: 'bg-blue-50',   text: 'text-blue-600',   dot: 'bg-blue-600',   label: 'INFO'     },
 };
 
-function SeverityBadge({ severity }: { severity: Severity }) {
+export function SeverityBadge({ severity }: { severity: Severity }) {
   const cfg = SEVERITY_CONFIG[severity] ?? SEVERITY_CONFIG.INFO;
   return (
     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${cfg.bg} ${cfg.text}`}>
@@ -102,7 +101,7 @@ function SeverityBadge({ severity }: { severity: Severity }) {
   );
 }
 
-function StatusDot({ status }: { status: 'ok' | 'degraded' }) {
+export function StatusDot({ status }: { status: 'ok' | 'degraded' }) {
   return (
     <span className={`inline-flex items-center gap-1.5 text-sm font-medium ${status === 'ok' ? 'text-green-600' : 'text-red-600'}`}>
       <span className={`w-2 h-2 rounded-full ${status === 'ok' ? 'bg-green-600' : 'bg-red-600 animate-pulse'}`} />
@@ -111,7 +110,7 @@ function StatusDot({ status }: { status: 'ok' | 'degraded' }) {
   );
 }
 
-function MetaExpander({ metadata }: { metadata: Record<string, unknown> | null }) {
+export function MetaExpander({ metadata }: { metadata: Record<string, unknown> | null }) {
   const [open, setOpen] = useState(false);
   if (!metadata || Object.keys(metadata).length === 0) return <span className="text-slate-500 text-xs">—</span>;
   return (
@@ -131,7 +130,7 @@ function MetaExpander({ metadata }: { metadata: Record<string, unknown> | null }
   );
 }
 
-const STATE_CONFIG: Record<SystemStatus, {
+export const STATE_CONFIG: Record<SystemStatus, {
   border: string; bg: string; icon: string; label: string; textColor: string;
 }> = {
   healthy:  { border: 'border-green-300',  bg: 'bg-green-50',  icon: '✓', label: 'System Healthy',   textColor: 'text-green-600'  },
@@ -139,7 +138,7 @@ const STATE_CONFIG: Record<SystemStatus, {
   critical: { border: 'border-red-300',    bg: 'bg-red-50',    icon: '✕', label: 'System Critical',  textColor: 'text-red-600'    },
 };
 
-function SystemStateBanner({ state }: { state: SystemHealthData['systemState'] }) {
+export function SystemStateBanner({ state }: { state: SystemHealthData['systemState'] }) {
   const cfg = STATE_CONFIG[state.status];
   return (
     <div className={`flex items-start gap-3 p-4 rounded-lg border ${cfg.bg} ${cfg.border} mb-6 shadow-sm`}>
@@ -172,7 +171,7 @@ function fmt(iso: string) {
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 
 type Tab = 'all' | 'user' | 'company' | 'system' | 'railway' | 'cache';
-const TABS: { key: Tab; label: string }[] = [
+export const TABS: { key: Tab; label: string }[] = [
   { key: 'all',     label: 'All'     },
   { key: 'user',    label: 'User'    },
   { key: 'company', label: 'Company' },
@@ -210,44 +209,249 @@ interface CacheData {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 import type { useSysHealth } from '../hooks/useSysHealth';
-import { useSysHealthViewController } from './SysHealthViewController';
-import SysHealthViewPanelsA from './SysHealthViewPanelsA';
-import SysHealthViewPanelsB from './SysHealthViewPanelsB';
-
 type S = ReturnType<typeof useSysHealth>;
 
-export default function SysHealthView({ d }: { d: S }) {
-  const f = useSysHealthViewController({ d });
+export function useSysHealthViewController({ d }: { d: S }) {
   const {
-    d: _d,
+    _notReady,
+    activeSection,
+    activityData,
+    activityLoading,
+    authResolved,
+    cacheData,
+    cacheLoading,
+    cacheMsg,
+    cookieChecked,
+    data,
+    drillMonth,
+    drillYear,
+    drilldown,
+    error,
+    fetchActivityBreakdown,
+    fetchCacheData,
+    fetchData,
+    fetchIntelligence,
+    filtered,
+    flushCache,
+    intel,
+    intelLoading,
+    isSuperAdmin,
+    loading,
+    now2,
+    railwayView,
+    router,
+    setActiveSection,
+    setActivityData,
+    setActivityLoading,
+    setAuthResolved,
+    setCacheData,
+    setCacheLoading,
+    setCacheMsg,
+    setCookieChecked,
+    setData,
+    setDrillMonth,
+    setDrillYear,
+    setDrilldown,
+    setError,
+    setIntel,
+    setIntelLoading,
+    setIsSuperAdmin,
+    setLoading,
+    setRailwayView,
+    setTab,
+    tab,
+  } = d;
+
+  return {
+    d,
     _notReady, activeSection, activityData, activityLoading, authResolved, cacheData, cacheLoading, cacheMsg, cookieChecked, data,
     drillMonth, drillYear, drilldown, error, fetchActivityBreakdown, fetchCacheData, fetchData, fetchIntelligence, filtered,
     flushCache, intel, intelLoading, isSuperAdmin, loading, now2, railwayView, router, setActiveSection, setActivityData,
     setActivityLoading, setAuthResolved, setCacheData, setCacheLoading, setCacheMsg, setCookieChecked, setData, setDrillMonth,
     setDrillYear, setDrilldown, setError, setIntel, setIntelLoading, setIsSuperAdmin, setLoading, setRailwayView, setTab, tab
-  } = f;
-    return (
-    <>
-    <div className="min-h-screen bg-slate-50 text-slate-900 p-6">
+  };
+}
+// ── ServiceCostCard ────────────────────────────────────────────────────────────
+// Reusable card showing cost broken down by process/activity for one infra service.
+
+export interface ProcessRow {
+  label: string;
+  value: number | null;   // null = no dollar estimate, show sub only
+  sub?: string;
+}
+
+export function ServiceCostCard({
+  title, subtitle, svc, color, borderColor,
+  processRows = [], subRows = [], hideTotalBadge = false, extraNote, onClick,
+}: {
+  title: string;
+  subtitle?: string;
+  svc?: ServiceCost;
+  color: string;
+  borderColor: string;
+  processRows?: ProcessRow[];
+  subRows?: ProcessRow[];
+  hideTotalBadge?: boolean;
+  extraNote?: string;
+  onClick?: () => void;
+}) {
+  const total = svc?.estimatedMonthly ?? 0;
+  const maxVal = Math.max(1, ...processRows.filter(r => r.value != null).map(r => r.value as number));
+
+  return (
+    <div
+      className={`bg-gray-900 border ${borderColor} rounded-lg p-4 ${onClick ? 'cursor-pointer hover:border-opacity-60 hover:bg-gray-800/50 transition-colors' : ''}`}
+      onClick={onClick}
+    >
       {/* Header */}
-        <SysHealthViewPanelsA f={f} />
-        <SysHealthViewPanelsB f={f} />
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <p className="text-sm font-medium text-white">{title}</p>
+          {subtitle && <p className="text-xs text-gray-600 mt-0.5">{subtitle}</p>}
+        </div>
+        <div className="flex items-center gap-2 shrink-0 ml-2">
+          {!hideTotalBadge && (
+            <span className={`text-sm font-bold ${color}`}>
+              ${total.toFixed(2)}<span className="text-xs font-normal text-gray-600">/mo</span>
+            </span>
+          )}
+          {onClick && <span className="text-xs text-gray-600 hover:text-gray-400">↗ orgs</span>}
+        </div>
+      </div>
 
+      {/* No data state */}
+      {!svc?.hasData && svc && (
+        <p className="text-xs text-gray-600 mb-2 italic">{svc.notes?.[0] ?? 'No activity data yet'}</p>
+      )}
+
+      {/* Cost breakdown bars */}
+      {processRows.length > 0 && (
+        <div className="space-y-2 mb-3">
+          {processRows.map((row, i) => (
+            <div key={i}>
+              <div className="flex items-start justify-between text-xs mb-0.5 gap-2">
+                <span className="text-gray-300 truncate">{row.label}</span>
+                <span className={`shrink-0 ${row.value != null ? color : 'text-gray-600'}`}>
+                  {row.value != null ? `$${Math.abs(row.value).toFixed(4)}${row.value < 0 ? ' cr' : ''}` : '—'}
+                </span>
+              </div>
+              {row.sub && <p className="text-xs text-gray-600 mb-0.5">{row.sub}</p>}
+              {row.value != null && row.value > 0 && (
+                <div className="w-full bg-gray-800 rounded-full h-1">
+                  <div
+                    className={`h-1 rounded-full ${color.replace('text-', 'bg-')}`}
+                    style={{ width: `${Math.max(2, (row.value / maxVal) * 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Activity metrics (no cost estimate — contextual) */}
+      {subRows.length > 0 && (
+        <div className="border-t border-gray-800 pt-2 mt-2 space-y-1">
+          {subRows.map((row, i) => (
+            <div key={i} className="flex items-start justify-between text-xs gap-2">
+              <span className="text-gray-500 truncate">{row.label}</span>
+              <span className="text-gray-400 shrink-0 text-right max-w-[60%]">{row.sub ?? '—'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Notes from cost engine */}
+      {svc?.notes && svc.notes.length > 0 && (
+        <p className="text-xs text-gray-600 mt-2 border-t border-gray-800 pt-2">
+          {svc.notes[0]}
+        </p>
+      )}
+
+      {extraNote && (
+        <p className="text-xs text-gray-600 mt-1 italic">{extraNote}</p>
+      )}
     </div>
+  );
+}
 
-    {/* ── Org-level service drilldown ────────────────────────────────────── */}
-    {drilldown && (
-      <OrgServiceDrilldown
-        serviceKey={drilldown.serviceKey}
-        serviceLabel={drilldown.serviceLabel}
-        serviceCostUsd={drilldown.serviceCostUsd}
-        initialYear={drillYear}
-        initialMonth={drillMonth}
-        intel={intel as any}
-        onClose={() => setDrilldown(null)}
-      />
-    )}
-    </>
+// ── Intelligence sub-components ───────────────────────────────────────────────
+
+export function IntelCard({
+  title, subtitle, children, active, onToggle, highlight,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  active: boolean;
+  onToggle: () => void;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={`bg-gray-900 border rounded-lg p-4 cursor-pointer transition-colors ${
+        active
+          ? 'border-indigo-500/40 bg-indigo-500/5'
+          : highlight
+            ? 'border-yellow-500/20 hover:border-yellow-500/40'
+            : 'border-gray-800 hover:border-gray-700'
+      }`}
+      onClick={onToggle}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <p className="text-sm font-medium text-white">{title}</p>
+          {subtitle && <p className="text-xs text-gray-600 mt-0.5">{subtitle}</p>}
+        </div>
+        <span className="text-xs text-gray-600">{active ? '▲' : '▼'}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+export function MetricRow({
+  label, value, sub, highlight,
+}: {
+  label: string; value: string; sub?: string; highlight?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between py-0.5">
+      <span className="text-xs text-gray-500">{label}</span>
+      <span className={`text-xs font-medium ml-2 ${highlight ? 'text-red-400' : 'text-gray-300'}`}>
+        {value}
+        {sub && <span className="text-gray-600 ml-1">{sub}</span>}
+      </span>
+    </div>
+  );
+}
+
+export function CostLine({ cost }: { cost?: ServiceCost }) {
+  if (!cost) return null;
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-xs text-gray-600">Est. monthly</span>
+      <span className="text-xs font-medium text-yellow-400">${cost.estimatedMonthly.toFixed(2)} [est]</span>
+    </div>
+  );
+}
+
+export function ConfidencePill({ confidence }: { confidence: 'low' | 'medium' | 'high' }) {
+  const cfg = {
+    low:    'bg-gray-700 text-gray-400',
+    medium: 'bg-yellow-500/10 text-yellow-400',
+    high:   'bg-green-500/10 text-green-400',
+  }[confidence];
+  return (
+    <span className={`inline-block text-xs px-2 py-0.5 rounded mt-1 ${cfg}`}>
+      {confidence} confidence
+    </span>
+  );
+}
+
+export function UnavailableNote({ label }: { label: string }) {
+  return (
+    <p className="text-xs text-gray-700 mt-1 italic">{label} metrics unavailable in this window</p>
   );
 }
 
