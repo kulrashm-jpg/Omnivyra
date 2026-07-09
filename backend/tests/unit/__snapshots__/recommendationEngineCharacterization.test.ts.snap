@@ -1,0 +1,324 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`generateRecommendations — degraded / fallback paths no external signals + no profile fallback + no AI themes → PROFILE_ONLY early return 1`] = `
+{
+  "company_context": {
+    "company_name": "Acme Co",
+  },
+  "confidence_score": 35,
+  "daily_plan": [
+    {
+      "action": "Post",
+      "day": 1,
+    },
+  ],
+  "explanation": "No external signals found. Generated a fallback plan.",
+  "global_disclaimer": undefined,
+  "omnivyra_learning": {
+    "status": "skipped",
+  },
+  "omnivyra_metadata": {
+    "placeholders": [
+      "no_external_signals",
+    ],
+  },
+  "omnivyra_status": {
+    "confidence": undefined,
+    "contract_version": undefined,
+    "endpoint": null,
+    "fallback_reason": "omnivyra_disabled",
+    "last_error": null,
+    "latency_ms": undefined,
+    "status": "disabled",
+  },
+  "persona_summary": {
+    "personas": [],
+    "platform_preferences": [],
+    "tone": null,
+  },
+  "scenario_outcomes": undefined,
+  "scoring_adjustments": {
+    "adjusted_confidence": 35,
+    "base_confidence": 35,
+    "budget_fit": 1,
+    "competitor_gap": 1,
+    "persona_fit": 1,
+  },
+  "signal_quality": {
+    "cache_hits": {
+      "hits": 0,
+      "misses": 0,
+    },
+    "external_api_health_snapshot": [
+      {
+        "api_source_id": "api-1",
+        "health_score": 0.9,
+      },
+    ],
+    "rate_limited_sources": [],
+    "signal_confidence_summary": {
+      "average": 0.8,
+      "max": 0.9,
+      "min": 0.7,
+    },
+  },
+  "signals_source": "PROFILE_ONLY",
+  "sources": [],
+  "trends_ignored": [],
+  "trends_used": [],
+  "weekly_plan": [
+    {
+      "theme": "Week one theme",
+      "week": 1,
+    },
+  ],
+}
+`;
+
+exports[`generateRecommendations — hybrid single-geo path (Omnivyra disabled) golden master: external signals → EXTERNAL result with popularity-ordered topics 1`] = `
+{
+  "campaign_blueprint": {
+    "weeks": [
+      {
+        "week": 1,
+      },
+    ],
+  },
+  "campaign_blueprint_validated": {
+    "weeks": [
+      {
+        "week": 1,
+      },
+    ],
+  },
+  "campaign_blueprint_validation": {
+    "corrected_blueprint": {
+      "weeks": [
+        {
+          "week": 1,
+        },
+      ],
+    },
+    "issues": [],
+  },
+  "company_context": {
+    "company_name": "Acme Co",
+  },
+  "confidence_score": 74,
+  "daily_plan": [
+    {
+      "action": "Post",
+      "day": 1,
+    },
+  ],
+  "execution_blueprint_resolved": {
+    "weeks": [
+      {
+        "week": 1,
+      },
+    ],
+  },
+  "execution_source": "validated_blueprint",
+  "explanation": "Recommendations built from retail analytics adoption, customer loyalty programs, inventory forecasting using external_api.",
+  "global_disclaimer": undefined,
+  "novelty_score": 0.2,
+  "omnivyra_learning": {
+    "status": "skipped",
+  },
+  "omnivyra_metadata": undefined,
+  "omnivyra_status": {
+    "confidence": undefined,
+    "contract_version": undefined,
+    "endpoint": null,
+    "fallback_reason": "omnivyra_disabled",
+    "last_error": null,
+    "latency_ms": undefined,
+    "status": "disabled",
+  },
+  "persona_summary": {
+    "personas": [],
+    "platform_preferences": [],
+    "tone": null,
+  },
+  "scenario_outcomes": undefined,
+  "scoring_adjustments": {
+    "adjusted_confidence": 74,
+    "base_confidence": 74,
+    "budget_fit": 1,
+    "competitor_gap": 1,
+    "persona_fit": 1,
+  },
+  "signal_quality": {
+    "cache_hits": {
+      "hits": 0,
+      "misses": 0,
+    },
+    "external_api_health_snapshot": [
+      {
+        "api_source_id": "api-1",
+        "health_score": 0.9,
+      },
+    ],
+    "rate_limited_sources": [],
+    "signal_confidence_summary": {
+      "average": 0.8,
+      "max": 0.9,
+      "min": 0.7,
+    },
+  },
+  "signals_source": "EXTERNAL",
+  "sources": [
+    "external_api",
+  ],
+  "strategy_dna": {
+    "archetype": "test-dna",
+  },
+  "strategy_feedback": {
+    "gaps": [],
+    "strengths": [],
+  },
+  "strategy_sequence": {
+    "ladder": [
+      {
+        "recommendations": [
+          {
+            "topic": "retail analytics adoption",
+          },
+          {
+            "topic": "customer loyalty programs",
+          },
+          {
+            "topic": "inventory forecasting",
+          },
+          {
+            "topic": "omnichannel retail growth",
+          },
+          {
+            "topic": "checkout personalization",
+          },
+          {
+            "topic": "supply chain visibility",
+          },
+        ],
+        "stage": "awareness",
+      },
+    ],
+  },
+  "trends_ignored": [],
+  "trends_used": [
+    {
+      "frequency": 1,
+      "geo": "US",
+      "platform_tag": undefined,
+      "sentiment": undefined,
+      "signal_confidence": 0.8,
+      "signal_type": "EXTERNAL_API",
+      "source": "external_api",
+      "source_topic": "retail analytics adoption",
+      "sources": [
+        "external_api",
+      ],
+      "topic": "retail analytics adoption",
+      "trend_source_health": undefined,
+      "velocity": undefined,
+      "volume": 90,
+    },
+    {
+      "frequency": 1,
+      "geo": "US",
+      "platform_tag": undefined,
+      "sentiment": undefined,
+      "signal_confidence": 0.8,
+      "signal_type": "EXTERNAL_API",
+      "source": "external_api",
+      "source_topic": "customer loyalty programs",
+      "sources": [
+        "external_api",
+      ],
+      "topic": "customer loyalty programs",
+      "trend_source_health": undefined,
+      "velocity": undefined,
+      "volume": 80,
+    },
+    {
+      "frequency": 1,
+      "geo": "US",
+      "platform_tag": undefined,
+      "sentiment": undefined,
+      "signal_confidence": 0.8,
+      "signal_type": "EXTERNAL_API",
+      "source": "external_api",
+      "source_topic": "inventory forecasting",
+      "sources": [
+        "external_api",
+      ],
+      "topic": "inventory forecasting",
+      "trend_source_health": undefined,
+      "velocity": undefined,
+      "volume": 70,
+    },
+    {
+      "frequency": 1,
+      "geo": "US",
+      "platform_tag": undefined,
+      "sentiment": undefined,
+      "signal_confidence": 0.8,
+      "signal_type": "EXTERNAL_API",
+      "source": "external_api",
+      "source_topic": "omnichannel retail growth",
+      "sources": [
+        "external_api",
+      ],
+      "topic": "omnichannel retail growth",
+      "trend_source_health": undefined,
+      "velocity": undefined,
+      "volume": 60,
+    },
+    {
+      "frequency": 1,
+      "geo": "US",
+      "platform_tag": undefined,
+      "sentiment": undefined,
+      "signal_confidence": 0.8,
+      "signal_type": "EXTERNAL_API",
+      "source": "external_api",
+      "source_topic": "checkout personalization",
+      "sources": [
+        "external_api",
+      ],
+      "topic": "checkout personalization",
+      "trend_source_health": undefined,
+      "velocity": undefined,
+      "volume": 50,
+    },
+    {
+      "frequency": 1,
+      "geo": "US",
+      "platform_tag": undefined,
+      "sentiment": undefined,
+      "signal_confidence": 0.8,
+      "signal_type": "EXTERNAL_API",
+      "source": "external_api",
+      "source_topic": "supply chain visibility",
+      "sources": [
+        "external_api",
+      ],
+      "topic": "supply chain visibility",
+      "trend_source_health": undefined,
+      "velocity": undefined,
+      "volume": 40,
+    },
+  ],
+  "weekly_plan": [
+    {
+      "theme": "Week one theme",
+      "trend_influence": [
+        "retail analytics adoption",
+        "customer loyalty programs",
+        "inventory forecasting",
+      ],
+      "week": 1,
+    },
+  ],
+}
+`;
