@@ -502,6 +502,19 @@ export function buildOverlaySvg(input: {
   const insightColor = overlayColors.body;
   const supportColor = overlayColors.support;
 
+  // Text-focus scrim: a soft, FEATHERED darkened band placed exactly behind the
+  // text block so the copy stays legible / in-focus wherever layoutMode puts it
+  // (top / center / bottom). The bottom scrim alone leaves top- and center-
+  // anchored text with no contrast backing against the wave/gradient art; this
+  // band follows the text. Feathered top+bottom edges keep it from reading as a
+  // hard panel. Intensity tracks the same strategy scrim multiplier.
+  const focusOpacity = Math.min(0.5, 0.42 * scrimIntensity);
+  const focusTextBottomY = supportLines.length ? supportEndY : insightEndY;
+  const focusPad = Math.round(input.height * 0.035);
+  const focusTop = Math.max(0, stackTop - Math.round(headlineLineHeight * 0.6) - focusPad);
+  const focusBottom = Math.min(input.height, focusTextBottomY + focusPad);
+  const focusHeight = Math.max(0, focusBottom - focusTop);
+
   // CTA emission. The strategy's ctaMode decides whether (and how)
   // the overlay renders a CTA pill. 'absent' suppresses entirely;
   // 'subtle' is text-only with low contrast; 'standard' is a soft
@@ -586,6 +599,12 @@ export function buildOverlaySvg(input: {
           <stop offset="55%" stop-color="rgba(2,6,23,${scrimMidOpacity})" />
           <stop offset="100%" stop-color="rgba(2,6,23,${scrimBottomOpacity})" />
         </linearGradient>
+        <linearGradient id="focusScrim" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="rgba(2,6,23,0)" />
+          <stop offset="16%" stop-color="rgba(2,6,23,${focusOpacity})" />
+          <stop offset="84%" stop-color="rgba(2,6,23,${focusOpacity})" />
+          <stop offset="100%" stop-color="rgba(2,6,23,0)" />
+        </linearGradient>
         <linearGradient id="waveGradient" x1="0%" y1="0%" x2="100%" y2="0%">
           <stop offset="0%" stop-color="${accent}" stop-opacity="0.24" />
           <stop offset="100%" stop-color="${accent}" stop-opacity="0.08" />
@@ -612,6 +631,8 @@ export function buildOverlaySvg(input: {
       ${renderWave ? `<path d="M 0 ${waveAEntryY} C ${Math.round(w * 0.28)} ${waveAMidA}, ${Math.round(w * 0.62)} ${waveAMidB}, ${w} ${waveAExitY}" fill="none" stroke="${accent}" stroke-opacity="0.55" stroke-width="${Math.max(2, Math.round(waveStrokeWidth * 0.7))}" stroke-linecap="round" />` : ''}
       ${renderWave ? `<path d="${waveB}" fill="none" stroke="${accent}" stroke-opacity="0.48" stroke-width="${Math.round(waveStrokeWidth * 1.4)}" stroke-linecap="round" />` : ''}
       <rect x="0" y="${scrimTop}" width="${input.width}" height="${scrimHeight}" fill="url(#bottomScrim)" />
+      <!-- Text-focus band: keeps the copy legible wherever layoutMode places it. -->
+      ${focusHeight > 0 ? `<rect x="0" y="${focusTop}" width="${input.width}" height="${focusHeight}" fill="url(#focusScrim)" />` : ''}
       ${(() => {
         // Next-slide swipe indicator. Rendered on every slide except
         // the final one (operator feedback: "no mark to move to the
