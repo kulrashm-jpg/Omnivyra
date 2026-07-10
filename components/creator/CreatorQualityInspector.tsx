@@ -20,8 +20,25 @@ const STATUS_COLORS: Record<Status, { bg: string; fg: string; border: string }> 
   'N/A': { bg: '#1f2937', fg: '#9ca3af', border: '#374151' },
 };
 
+// The diagnostic report emits check values as 'PASS' | 'FAIL' | 'N/A', but this
+// UI's palette is keyed 'PASS' | 'WARNING' | 'FAILED' | 'REPAIRED' | 'N/A'.
+// Normalize report values onto the UI enum ('FAIL' → 'FAILED') so a failing
+// check never lands on an unknown key.
+function toUiStatus(raw: unknown): Status {
+  switch (raw) {
+    case 'PASS': return 'PASS';
+    case 'FAIL':
+    case 'FAILED': return 'FAILED';
+    case 'WARNING': return 'WARNING';
+    case 'REPAIRED': return 'REPAIRED';
+    default: return 'N/A';
+  }
+}
+
 function StatusPill({ status }: { status: Status }) {
-  const c = STATUS_COLORS[status];
+  // Defensive: an out-of-enum status must degrade to a neutral chip, never crash
+  // the whole editor (reading `.fg` on an undefined palette entry white-screens).
+  const c = STATUS_COLORS[status] ?? STATUS_COLORS['N/A'];
   return (
     <span style={{ display: 'inline-block', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, color: c.fg, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 999, padding: '2px 9px' }}>
       {status}
@@ -175,7 +192,7 @@ export default function CreatorQualityInspector({ report }: { report: CreatorDia
       <Section title="Visual Validation" status={visualStatus}>
         <div style={{ marginTop: 6 }}>
           {CHECK_LABELS.map(([key, label]) => {
-            const status = vv.checks[key] as Status;
+            const status = toUiStatus(vv.checks[key]);
             const reason = status === 'FAILED' ? reasonFor(checkCategory[key]) : null;
             return (
               <div key={key} style={S.row}>
