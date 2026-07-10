@@ -125,12 +125,36 @@ type InfographicSection = {
  * it never invents extra generic sections. The LLM (composeInfographicCopy) enriches the
  * slot text downstream; it does not change the count or the structure.
  */
+/**
+ * A section heading must never render as the bare asset-type word ("Infographic")
+ * or the raw topic — that reads as an unfinished placeholder. When the source
+ * title is empty or such a placeholder, derive a real heading from the section
+ * body (its first clause), falling back to a clean ordinal.
+ */
+function resolveSectionHeading(rawTitle: string, body: string, topic: string, index: number): string {
+  const t = rawTitle.trim();
+  const cleanTopic = topic.trim();
+  const isPlaceholder =
+    !t ||
+    /^infographics?$/i.test(t) ||
+    (!!cleanTopic && t.toLowerCase() === cleanTopic.toLowerCase());
+  if (!isPlaceholder) return t;
+  const b = String(body || '').trim();
+  if (b) {
+    const firstClause = b.split(/[.:;—\n]/)[0].trim();
+    if (firstClause.length >= 6 && firstClause.length <= 48) return firstClause;
+    const words = b.split(/\s+/).slice(0, 6).join(' ').replace(/[,:;]+$/, '').trim();
+    if (words.length >= 6) return words.slice(0, 48);
+  }
+  return `Key point ${index + 1}`;
+}
+
 export function planInfographicContent(briefSections: InfographicSection[], slotCount: number, topic: string): InfographicSection[] {
   const out: InfographicSection[] = [];
   for (let i = 0; i < slotCount; i++) {
     const src = briefSections[i];
     out.push({
-      title: (src?.title || '').trim() || `${topic} — point ${i + 1}`,
+      title: resolveSectionHeading(String(src?.title || ''), String(src?.body || ''), topic, i),
       body: src?.body || '',
       icon: ['01', '02', '03', '04', '05', '06', '07', '08'][i] ?? String(i + 1).padStart(2, '0'),
     });
