@@ -23,6 +23,9 @@ import { supabase } from '../db/supabaseClient';
 export type AlertType =
   // Absolute low-balance ladder (owner policy 2026-07-10): <100 / <50 / <20.
   | 'low_100' | 'low_50' | 'low_20'
+  // Burn-velocity email (owner policy 2026-07-10): balance < 200 AND ≥ 100
+  // credits consumed in the past 7 days — top-up nudge BEFORE disruption.
+  | 'velocity_200'
   // Legacy types — retained for credit_alert_log history/dedup continuity.
   | 'low_20pct' | 'low_10pct'
   | 'depleted' | 'auto_topup'
@@ -98,6 +101,16 @@ const THRESHOLDS: Array<{ type: AlertType; credits: number; breached: (balance: 
 
 const DEDUP_HOURS = 24;
 
+// ── Email escalation (owner policy 2026-07-10) ───────────────────────────────
+/** Ladder levels that ALSO send an email to the company admin (not just in-app). */
+const EMAIL_LEVELS: ReadonlySet<AlertType> = new Set(['low_20', 'depleted']);
+/** Velocity email: balance below this … */
+const VELOCITY_BALANCE_THRESHOLD = 200;
+/** … while at least this many credits were consumed in the past 7 days. */
+const VELOCITY_WEEKLY_CONSUMPTION = 100;
+/** Velocity email fires at most once per week per org. */
+const VELOCITY_DEDUP_HOURS = 7 * 24;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function getBalance(orgId: string): Promise<number | null> {
@@ -110,8 +123,8 @@ async function getBalance(orgId: string): Promise<number | null> {
   return (d.free_balance ?? 0) + (d.paid_balance ?? 0) + (d.incentive_balance ?? 0);
 }
 
-async function wasAlertRecentlySent(orgId: string, alertType: AlertType): Promise<boolean> {
-  const since = new Date(Date.now() - DEDUP_HOURS * 3600_000).toISOString();
+async function wasAlertRecentlySent(orgId: string, alertType: AlertType, dedupHours = DEDUP_HOURS): Promise<boolean> {
+  const since = new Date(Date.now() - dedupHours * 3600_000).toISOString();
   const { data } = await ownedDbTable('credit_alert_log')
     .select('id')
     .eq('organization_id', orgId)
@@ -120,6 +133,65 @@ async function wasAlertRecentlySent(orgId: string, alertType: AlertType): Promis
     .limit(1)
     .maybeSingle();
   return !!data;
+}
+
+/** Company-admin email (oldest owner/admin role; same resolution as the forecast email). */
+async function resolveAdminEmail(orgId: string): Promise<string | null> {
+  const { data: roles } = await ownedDbTable('user_company_roles')
+    .select('user_id, role, created_at')
+    .eq('company_id', orgId)
+    .eq('status', 'active');
+  const list = (roles ?? []) as Array<{ user_id: string; role: string; created_at: string }>;
+  if (list.length === 0) return null;
+  const sorted = list.slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const admin = sorted.find((r) => /owner|admin/i.test(String(r.role ?? ''))) ?? sorted[0];
+  if (!admin?.user_id) return null;
+  const { data: u } = await ownedDbTable('users')
+    .select('email')
+    .eq('id', admin.user_id)
+    .maybeSingle();
+  return (u as { email?: string } | null)?.email ?? null;
+}
+
+/** Actual credits consumed in the past 7 days (settled amounts: confirm-phase rows). */
+async function getWeeklyConsumption(orgId: string): Promise<number> {
+  const since = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
+  const { data } = await ownedDbTable('credit_transactions')
+    .select('credits_delta, free_delta, paid_delta, incentive_delta')
+    .eq('organization_id', orgId)
+    .eq('execution_phase', 'confirm')
+    .gte('created_at', since);
+  let total = 0;
+  for (const row of (data ?? []) as Array<Record<string, number | null>>) {
+    // Confirm rows record the ACTUAL settled cost; bucket deltas are the
+    // authoritative amounts (credits_delta can be 0 on remainder-only settles).
+    const byBuckets = Math.abs(row.free_delta ?? 0) + Math.abs(row.paid_delta ?? 0) + Math.abs(row.incentive_delta ?? 0);
+    total += byBuckets > 0 ? byBuckets : Math.abs(row.credits_delta ?? 0);
+  }
+  return total;
+}
+
+/** Best-effort admin email for an alert level — never blocks or throws. */
+async function sendAlertEmail(orgId: string, alertType: AlertType, balance: number, weeklyConsumed: number): Promise<void> {
+  try {
+    const recipient = await resolveAdminEmail(orgId);
+    if (!recipient) return;
+    const { sendCreditAlert } = await import('./emailService');
+    const pool = weeklyConsumed + Math.max(0, balance);
+    await sendCreditAlert(
+      {
+        recipientEmail: recipient,
+        companyName: null,
+        consumedPercent: pool > 0 ? Math.min(100, Math.round((weeklyConsumed / pool) * 100)) : 100,
+        remainingCredits: Math.max(0, Math.round(balance)),
+        projectedRequiredCredits: Math.round(weeklyConsumed),
+        ctaUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'https://www.omnivyra.com'}/company/billing`,
+      },
+      `credit_alert:${orgId}:${alertType}:${new Date().toISOString().slice(0, 10)}`,
+    );
+  } catch (err) {
+    console.warn(`[creditAlert] email send failed for org ${orgId} / ${alertType}`, (err as Error)?.message);
+  }
 }
 
 async function recordAlert(orgId: string, alertType: AlertType, balance: number): Promise<void> {
@@ -181,10 +253,34 @@ export async function checkCreditAlerts(
 
     await recordAlert(orgId, type, balance);
     await sendAlert(orgId, type, message);
+    // Escalation levels (below 20 / depleted) ALSO email the company admin.
+    if (EMAIL_LEVELS.has(type)) {
+      await sendAlertEmail(orgId, type, balance, await getWeeklyConsumption(orgId).catch(() => 0));
+    }
     fired.push(type);
 
     // Send only the most severe newly-breached alert (list is severity-ordered).
     break;
+  }
+
+  // ── Burn-velocity email (owner policy 2026-07-10) ─────────────────────────
+  // Balance below 200 AND ≥ 100 credits consumed in the past 7 days → email
+  // the admin so they can top up BEFORE the ladder alerts start firing.
+  // Independent of the ladder (in-app) alerts; at most once per week per org.
+  if (balance > 0 && balance < VELOCITY_BALANCE_THRESHOLD) {
+    try {
+      const alreadySent = await wasAlertRecentlySent(orgId, 'velocity_200', VELOCITY_DEDUP_HOURS);
+      if (!alreadySent) {
+        const weeklyConsumed = await getWeeklyConsumption(orgId);
+        if (weeklyConsumed >= VELOCITY_WEEKLY_CONSUMPTION) {
+          await recordAlert(orgId, 'velocity_200', balance); // dedup BEFORE send
+          await sendAlertEmail(orgId, 'velocity_200', balance, weeklyConsumed);
+          fired.push('velocity_200');
+        }
+      }
+    } catch (err) {
+      console.warn(`[creditAlert] velocity check failed for org ${orgId}`, (err as Error)?.message);
+    }
   }
 
   return { balance, alerts_fired: fired, alerts_suppressed: suppressed };

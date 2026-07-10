@@ -20,8 +20,10 @@ const { join } = require('path');
 const { Client } = require('pg');
 
 async function main() {
+  // 20260831 supersedes 20260830 (adds 'velocity_200'); both are idempotent
+  // DROP+ADD, so applying the latest yields the full current value set.
   const sql = readFileSync(
-    join(__dirname, '../../supabase/migrations/20260830_credit_alert_type_widen.sql'),
+    join(__dirname, '../../supabase/migrations/20260831_credit_alert_velocity_type.sql'),
     'utf8',
   );
   const client = new Client({
