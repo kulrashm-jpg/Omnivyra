@@ -1367,7 +1367,13 @@ export async function renderInfographicAsset(
   // --- Header text geometry (title + optional subtitle), computed once
   // so the title block and the subtitle block agree on vertical layout. ---
   const HD = infographicStyle.geometry.header;
-  const headerTitleText = compactText(metadata.topic, 'Infographic');
+  // Strip a redundant leading asset-type prefix ("Infographic: …", "Carousel: …")
+  // baked into the topic — it wastes header width and pushes the real title into
+  // a mid-word truncation. The header already reads as an infographic.
+  const headerTitleText = compactText(
+    String(metadata.topic ?? '').replace(/^\s*(infographics?|carousels?|images?|banners?|posters?)\s*[:\-–]\s*/i, ''),
+    'Infographic',
+  );
   const headerLeftX = HD.leftX;
   const headerZoneW = brandPlacement.left - headerLeftX - HD.zoneRightPad;
   const headerTitleCharsPerLine = Math.max(10, Math.floor(headerZoneW / (titleFontSize * HD.titleCharFactor)));

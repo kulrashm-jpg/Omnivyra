@@ -110,6 +110,10 @@ function buildSystemPrompt(input: InfographicCopyInput): string {
     'IMPACT and RISK are required — they make the infographic feel balanced and enterprise-grade. Never leave them blank.',
     'The deck must read as one coherent message ending in the CTA. No emoji, no markdown, no fluff.',
     'No design directives ("use a clean font", "make sure to...") — only reader-facing content.',
+    // Craft bar — the difference between an amateur and a professional infographic.
+    'DISTINCTNESS: every piece within a section must be genuinely different — the lead frames, the bullets add NEW specifics, the takeaway is a fresh angle, impact and risk are opposites. NEVER reword the section heading, or restate one field as another.',
+    'BE SPECIFIC: name concrete mechanisms, tradeoffs, numbers, timeframes, and real scenarios. BANNED vague filler — do NOT write lines like "clarifies key concepts", "encourages collaboration", "enhances understanding", "a structured approach", "better communication", "drives engagement". Any such line must be replaced with a substantive, specific point a practitioner would find useful.',
+    'Each section HEADING must be a specific, insight- or benefit-led phrase (≤52 chars) — never the word "Infographic", the asset type, a step number alone, or a bare restatement of the topic.',
   ];
   if (input.mode === 'company-context' && input.companyContext) {
     lines.push('Ground the copy in the supplied company context (audience, tone). Reference the company by name at most ONCE across the entire deck.');
