@@ -186,19 +186,31 @@ function toDbContentType(
   return (fallback as Record<string, string>)[ct] ?? 'post';
 }
 
+// Never schedule in the past. The creator lane (creatorRowScheduler) already
+// floors every date to now+1h; the text lane must apply the SAME floor or a
+// campaign that starts "today" at a morning time already past produces an
+// overdue poll/post. Self-contained copy matches the established pattern where
+// this helper is duplicated across the scheduler lanes.
+const SCHEDULE_MIN_LEAD_MS = 60 * 60 * 1000; // 1 hour
+function enforceScheduleFloor(d: Date): Date {
+  const floor = Date.now() + SCHEDULE_MIN_LEAD_MS;
+  if (Number.isNaN(d.getTime()) || d.getTime() < floor) return new Date(floor);
+  return d;
+}
+
 function buildScheduledFor(dateStr: string, timeStr: string | null | undefined): Date {
   const time = String(timeStr ?? '09:00').trim();
   const hhmm = time.match(/^(\d{1,2}):(\d{2})/);
   const hours   = hhmm ? Math.min(23, Math.max(0, Number(hhmm[1]))) : 9;
   const minutes = hhmm ? Math.min(59, Math.max(0, Number(hhmm[2]))) : 0;
   const d = String(dateStr ?? '').slice(0, 10);
-  if (!d) return new Date();
-  return new Date(Date.UTC(
+  if (!d) return enforceScheduleFloor(new Date(0));
+  return enforceScheduleFloor(new Date(Date.UTC(
     parseInt(d.slice(0, 4), 10),
     parseInt(d.slice(5, 7), 10) - 1,
     parseInt(d.slice(8, 10), 10),
     hours, minutes, 0
-  ));
+  )));
 }
 
 function buildBlogSlug(topic: string): string {
