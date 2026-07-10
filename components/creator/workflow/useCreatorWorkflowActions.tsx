@@ -270,6 +270,82 @@ export function useCreatorWorkflowActions(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTemplate, selectedCompanyId, answers, overlayText, templateValues.fields, writerSource?.body]);
 
+  // ── Auto-fill the OVERLAY copy on create (image / carousel / infographic) ──
+  // The overlay panel (Hook / Headline / Supporting text / Key insight = the copy
+  // rendered ON the asset) otherwise lands mostly empty — only the hook is seeded
+  // from source content. Generate the empty overlay fields ONCE per template in a
+  // single SIBLING-AWARE field-assist pass, so each field is filled appropriately
+  // for its ROLE and stays distinct (a key insight won't restate the headline),
+  // grounded in the Template Content / Writer source / topic. Authored copy is
+  // never overwritten; the user can still regenerate any field with its "+AI".
+  const OVERLAY_AUTOFILL_FIELDS = React.useMemo(
+    () => ['hook', 'headline', 'supportingText', 'keyInsight'] as Array<keyof WriterOverlayText>,
+    [],
+  );
+  const autoFilledOverlayRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!activeTemplate) return;
+    if (!['image', 'carousel', 'infographic'].includes(activeTemplate.assetFamily)) return;
+    if (autoFilledOverlayRef.current === activeTemplate.id) return;
+    if (aiBusyKey) return;
+    const hasContext =
+      String(answers.topic || '').trim().length > 0 ||
+      String(writerSource?.body || '').trim().length > 0 ||
+      String(overlayText.hook || '').trim().length > 0;
+    if (!hasContext) return;
+    const emptyFields = OVERLAY_AUTOFILL_FIELDS.filter((k) => !String(overlayText[k] || '').trim());
+    if (emptyFields.length === 0) return;
+    autoFilledOverlayRef.current = activeTemplate.id; // mark BEFORE firing (block re-entry)
+
+    void (async () => {
+      setAiBusyKey('overlay:auto-fill');
+      setError(null);
+      try {
+        const siblings = (Object.keys(OVERLAY_FIELD_LABELS) as Array<keyof WriterOverlayText>)
+          .filter((k) => !emptyFields.includes(k))
+          .map((k) => ({ label: OVERLAY_FIELD_LABELS[k], value: String(overlayText[k] || '').trim() }))
+          .filter((s) => s.value);
+        // Ground the overlay in the actual Template Content (or Writer body / topic).
+        const templateContentSource = [
+          String(templateValues.fields?.headline || '').trim(),
+          String(templateValues.fields?.subheadline || '').trim(),
+          String(answers.keyMessage || '').trim(),
+          String(answers.dataPoints || '').trim(),
+        ].filter(Boolean).join('\n');
+        const sourceContent = String(writerSource?.body || templateContentSource || answers.topic || '')
+          .trim().slice(0, 6000) || undefined;
+        const resp = await fetch('/api/creator-templates/field-assist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            company_id: selectedCompanyId || undefined,
+            asset_family: activeTemplate.assetFamily,
+            template_id: activeTemplate.id,
+            action: 'generate',
+            targets: emptyFields.map((k) => ({ scope: 'overlay', field_key: k, current_value: '' })),
+            context: {
+              topic: String(answers.topic || '').trim(),
+              audience: String(answers.audience || '').trim(),
+              objective: String(answers.objective || '').trim(),
+              tone: String(answers.styleDirection || '').trim(),
+              source_content: sourceContent,
+              siblings,
+            },
+          }),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const updates = Array.isArray(data?.updates) ? data.updates : [];
+        for (const u of updates) {
+          const key = String(u?.field_key ?? u?.fieldKey ?? '') as keyof WriterOverlayText;
+          const value = typeof u?.value === 'string' ? u.value : '';
+          if (emptyFields.includes(key) && value.trim()) setOverlayField(key, value);
+        }
+      } catch { /* best-effort — the user can still use per-field +AI */ }
+      finally { setAiBusyKey(null); }
+    })();
+  }, [activeTemplate, answers.topic, writerSource?.body, overlayText, aiBusyKey, selectedCompanyId, templateValues.fields, OVERLAY_AUTOFILL_FIELDS, setOverlayField, setAiBusyKey, setError, answers]);
+
   // Text-inside-image prepopulation: mirror the template-content fields the operator already
   // filled on the previous step into the overlay panel so it isn't blank — hook ← the image
   // text (headline), overlay headline ← the subtext (subheadline). Only fills EMPTY overlay
