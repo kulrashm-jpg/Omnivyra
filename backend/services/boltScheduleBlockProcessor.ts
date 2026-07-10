@@ -626,7 +626,7 @@ async function executeBlockScheduleRuntime(
         return (ia >= 0 ? ia : 999) - (ib >= 0 ? ib : 999) || pa.localeCompare(pb);
       });
 
-      const rowUpdates: { id: string; content: string; scheduled_post_id: string | null }[] = [];
+      const rowUpdates: { id: string; content: string; scheduled_post_id: string | null; scheduled_for: string }[] = [];
 
       for (const row of orderedRows) {
         const rawPlatform = String(row.platform || '').trim().toLowerCase();
@@ -817,16 +817,29 @@ async function executeBlockScheduleRuntime(
           id: row.id,
           content: JSON.stringify(finalizedJson),
           scheduled_post_id: (inserted as any)?.id ? String((inserted as any).id) : null,
+          // EFFECTIVE-TIME WRITE-BACK (overdue-badge fix 2026-07-10): when the
+          // schedule floor moved this post's publish time, persist the
+          // effective slot back onto the plan row so the calendar matches the
+          // publish queue (each row is single-platform → one-to-one).
+          scheduled_for: scheduledFor.toISOString(),
         });
       }
 
       // ── 4e. Persist finalized content back to daily_content_plans ─────────
       if (rowUpdates.length > 0) {
+        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         await Promise.all(
-          rowUpdates.flatMap(({ id, content: updatedContent, scheduled_post_id }) => {
+          rowUpdates.flatMap(({ id, content: updatedContent, scheduled_post_id, scheduled_for }) => {
             const ops = [
               ownedDbTable('daily_content_plans')
-                .update({ content: updatedContent, updated_at: new Date().toISOString() })
+                .update({
+                  content: updatedContent,
+                  // Effective publish slot → plan row (see write-back note above).
+                  date: scheduled_for.slice(0, 10),
+                  scheduled_time: scheduled_for.slice(11, 19),
+                  day_of_week: dayNames[new Date(scheduled_for).getUTCDay()],
+                  updated_at: new Date().toISOString(),
+                })
                 .eq('id', id)
                 .then(({ error }: { error: { message: string } | null }) => {
                   if (error) console.warn('[block-processor] daily_content_plans content update failed:', id, error.message);

@@ -343,12 +343,27 @@ async function scheduleCreatorRowPost(input: {
     throw error;
   }
 
+  // EFFECTIVE-TIME WRITE-BACK (overdue-badge fix 2026-07-10): when
+  // enforceScheduleFloor moved the publish time (a "today" slot whose fixed
+  // platform time was already past), the plan row's date/scheduled_time kept
+  // the ORIGINAL past slot — so the calendar showed the post as overdue while
+  // the publish queue was correct. Persist the EFFECTIVE time back onto the
+  // plan row so the calendar and the queue tell one story. No-op values when
+  // the floor didn't move anything.
+  const effectiveIso = scheduledFor.toISOString();
+  const effectiveSchedule = {
+    date: effectiveIso.slice(0, 10),
+    scheduled_time: effectiveIso.slice(11, 19),
+    day_of_week: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][scheduledFor.getUTCDay()],
+  };
+
   try {
     await ownedDbTable('daily_content_plans')
       .update({
         content: JSON.stringify(scheduledTransition.content),
         content_status: scheduledTransition.contentStatus,
         scheduled_post_id: scheduledPostId,
+        ...effectiveSchedule,
         failure_reason: null,
         failure_type: null,
         updated_at: nowIso,
@@ -361,6 +376,7 @@ async function scheduleCreatorRowPost(input: {
       .update({
         content: JSON.stringify(scheduledTransition.content),
         content_status: scheduledTransition.contentStatus,
+        ...effectiveSchedule,
         failure_reason: null,
         failure_type: null,
         updated_at: nowIso,
