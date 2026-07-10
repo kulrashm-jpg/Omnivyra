@@ -22,13 +22,24 @@ import {
 const CREDIT_COLUMNS =
   'free_balance, paid_balance, incentive_balance, lifetime_purchased, lifetime_consumed, credit_rate_usd';
 
+/** Sentinel: the read itself FAILED (network/DB error) — distinct from "row absent". */
+const READ_FAILED: unique symbol = Symbol('credit-row-read-failed');
+
 async function readCreditRow(
   organizationId: string,
-): Promise<Record<string, unknown> | null> {
-  const { data } = await ownedDbTable('organization_credits')
+): Promise<Record<string, unknown> | null | typeof READ_FAILED> {
+  const { data, error } = await ownedDbTable('organization_credits')
     .select(CREDIT_COLUMNS)
     .eq('organization_id', organizationId)
     .maybeSingle();
+  if (error) {
+    // Incident 2026-07-09: a swallowed read error returned null here, which
+    // is indistinguishable from "row absent" and fired the projection
+    // self-heal against a HEALTHY wallet. A failed read must never be
+    // treated as a broken projection.
+    logger.warn('credit_row_read_failed', { organizationId, message: error.message });
+    return READ_FAILED;
+  }
   return (data as Record<string, unknown> | null) ?? null;
 }
 
@@ -56,6 +67,11 @@ export interface OrgCreditSummary {
 export async function getOrgCreditSummary(organizationId: string): Promise<OrgCreditSummary | null> {
   let credit = await readCreditRow(organizationId);
 
+  // A FAILED read is transient infrastructure trouble, not a broken
+  // projection — surface "unavailable" and do NOT trigger self-heal
+  // (incident 2026-07-09: rebuild fired off a transient null read).
+  if (credit === READ_FAILED) return null;
+
   // Gated self-heal: only when the projection is structurally broken (row
   // absent OR impossible negative balances). A healthy row — including a
   // legitimate all-zero one — is left untouched, so normal RPC operation
@@ -67,8 +83,9 @@ export async function getOrgCreditSummary(organizationId: string): Promise<OrgCr
       // Surface explicitly (caller maps null → "unavailable"); never faked.
       return null;
     }
-    if (result.outcome === 'rebuilt') {
+    if (result.outcome === 'rebuilt' || result.outcome === 'skipped_healthy') {
       credit = await readCreditRow(organizationId); // retry read exactly ONCE
+      if (credit === READ_FAILED) return null;
     }
     // Still inconsistent after one reconcile + reread → fail explicitly.
     // No infinite retry, no synthesized balances.

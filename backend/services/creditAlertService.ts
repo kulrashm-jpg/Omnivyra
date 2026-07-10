@@ -71,13 +71,26 @@ export type CreditAlertResult = {
 
 // ── Configurable thresholds ───────────────────────────────────────────────────
 
-/** Credits considered a "full" allotment — alerts are percentage-based. */
+/** Credits considered a "full" allotment — thresholds scale from this. */
 const REFERENCE_CREDIT_ALLOTMENT = 1000;
 
-const THRESHOLDS: Array<{ type: AlertType; pct: number; message: string }> = [
-  { type: 'low_20pct', pct: 0.20, message: 'Credit balance is below 20% — consider topping up.' },
-  { type: 'low_10pct', pct: 0.10, message: 'Credit balance is critically low (<10%)! Autonomous features may be limited.' },
-  { type: 'depleted',  pct: 0.00, message: 'Credits depleted. Autonomous campaign system is paused.' },
+/**
+ * Ordered MOST-SEVERE-FIRST: the loop below sends only the first breached
+ * alert, so severity order guarantees a balance of e.g. 60 sends the
+ * "below 100" warning — not the milder early notice. (The previous
+ * mildest-first order meant the critical alert could never fire: any
+ * balance under 100 was swallowed by the 20% notice + 24h dedup.)
+ *
+ * At the default reference (1000) these are ABSOLUTE credit levels:
+ *   low_10pct → balance <  100 credits  (THE low-credit warning)
+ *   low_20pct → balance <  200 credits  (early notice)
+ *   depleted  → balance <=   0
+ * Type names are kept for credit_alert_log/dedup continuity.
+ */
+const THRESHOLDS: Array<{ type: AlertType; pct: number; breached: (balance: number, threshold: number) => boolean; message: string }> = [
+  { type: 'depleted',  pct: 0.00, breached: (b, t) => b <= t, message: 'Credits depleted. Autonomous campaign system is paused.' },
+  { type: 'low_10pct', pct: 0.10, breached: (b, t) => b < t,  message: 'Your credits are below 100 — top up soon to avoid interruptions to content and campaigns.' },
+  { type: 'low_20pct', pct: 0.20, breached: (b, t) => b < t,  message: 'Your credits are below 200 — consider topping up.' },
 ];
 
 const DEDUP_HOURS = 24;
@@ -150,21 +163,23 @@ export async function checkCreditAlerts(
   const fired:      AlertType[] = [];
   const suppressed: AlertType[] = [];
 
-  for (const { type, pct, message } of THRESHOLDS) {
+  for (const { type, pct, breached, message } of THRESHOLDS) {
     const threshold = Math.floor(referenceAllotment * pct);
-    if (balance > threshold) continue; // not breached
+    if (!breached(balance, threshold)) continue;
 
     const alreadySent = await wasAlertRecentlySent(orgId, type);
     if (alreadySent) {
+      // The most severe breached alert was already sent within the dedup
+      // window — do NOT fall through and fire a MILDER one on top of it.
       suppressed.push(type);
-      continue;
+      break;
     }
 
     await recordAlert(orgId, type, balance);
     await sendAlert(orgId, type, message);
     fired.push(type);
 
-    // Stop after the first new alert (depleted implies low_10pct implies low_20pct)
+    // Send only the most severe newly-breached alert (list is severity-ordered).
     break;
   }
 

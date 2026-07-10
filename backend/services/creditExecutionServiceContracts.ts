@@ -580,6 +580,12 @@ export async function confirmCreditReservation(handle: CreditReservationHandle &
     });
   }
 
+  // Low-balance check on the SUCCESSFUL deduction path (non-blocking).
+  // Previously alerts only fired on failure/insufficiency paths, so the
+  // "below 100 credits" warning could not arrive until an activity had
+  // already been refused. Firing post-confirm warns at the crossing point.
+  fireAlerts(handle.orgId);
+
   return { status: 'confirmed', confirmTransactionId: transactionId, creditsCharged };
 }
 
@@ -678,6 +684,8 @@ export async function confirmCreditReservationToActual(
       confirmTransactionId: confirmId,
     });
   }
+  // Low-balance check on the successful partial-confirm path too (non-blocking).
+  fireAlerts(handle.orgId);
   return { status: 'confirmed', confirmTransactionId: confirmId, creditsCharged: consumed };
 }
 
