@@ -24,6 +24,58 @@ import {
 } from '../../../lib/creator-content/creatorTypeWorkflow';
 import type { CreatorWorkflowCtx } from './creatorWorkflowCtx';
 
+/**
+ * Global AI-activity indicator. EVERY AI operation on this screen sets `aiBusyKey`
+ * (per-field "+AI", batch generate, and the on-create AUTO-FILL of slides/overlay/
+ * fields) — but the on-create auto-fill's busy-keys don't match any button, so
+ * without this the fields silently populate with no "please wait" signal. This
+ * shows one clear status the whole time any AI is working, then a brief "Ready"
+ * confirmation when it finishes.
+ */
+function AiActivityIndicator({ aiBusyKey }: { aiBusyKey: string | null | undefined }) {
+  const busy = !!aiBusyKey;
+  const [justDone, setJustDone] = React.useState(false);
+  const wasBusy = React.useRef(false);
+  React.useEffect(() => {
+    if (wasBusy.current && !busy) {
+      setJustDone(true);
+      const t = window.setTimeout(() => setJustDone(false), 1800);
+      return () => window.clearTimeout(t);
+    }
+    wasBusy.current = busy;
+  }, [busy]);
+
+  if (!busy && !justDone) return null;
+  const label = !busy
+    ? 'Ready'
+    : String(aiBusyKey).includes('auto-fill')
+      ? 'Drafting your content — please wait…'
+      : String(aiBusyKey).startsWith('overlay')
+        ? 'Writing the overlay copy…'
+        : String(aiBusyKey).startsWith('batch')
+          ? 'Generating fields…'
+          : 'Working…';
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`mb-3 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold ${
+        busy ? 'border-indigo-200 bg-indigo-50 text-indigo-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      }`}
+    >
+      {busy ? (
+        <svg className="h-4 w-4 animate-spin text-indigo-600" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+        </svg>
+      ) : (
+        <span aria-hidden="true">✓</span>
+      )}
+      <span>{label}</span>
+    </div>
+  );
+}
+
 export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) {
   const {
     activeTemplate,
@@ -106,6 +158,7 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
             </div>
 
             <div className="space-y-5">
+              <AiActivityIndicator aiBusyKey={aiBusyKey} />
               {activeTemplate ? (
                 <div>
                   <div className="mb-3 flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
