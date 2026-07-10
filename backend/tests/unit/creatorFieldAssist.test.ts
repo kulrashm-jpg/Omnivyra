@@ -77,6 +77,32 @@ describe('Field assist — batch slide coverage (creator flow 1: no empty requir
   });
 });
 
+describe('Field assist — intake fallback is field-aligned, not the goal label repeated', () => {
+  const fld = (key: string, maxLength = 90) => ({
+    key, label: key, control: 'text', required: false, maxLength,
+    aiAssist: { manual: true, paste: true, generate: true, rewrite: true, expand: true, shorten: true, improve: true },
+  }) as unknown as Parameters<typeof deterministicTransform>[1];
+  const ctx = { topic: 'Promote an Event' };
+
+  it('does not fill audience / tone / brief with the bare goal label', () => {
+    const audience = deterministicTransform('generate', fld('audience'), '', ctx);
+    const tone = deterministicTransform('generate', fld('tone', 60), '', ctx);
+    const freeText = deterministicTransform('generate', fld('freeText', 320), '', ctx);
+    const offer = deterministicTransform('generate', fld('offer'), '', ctx);
+    const cta = deterministicTransform('generate', fld('cta', 40), '', ctx);
+    // audience/tone are role-aligned, NOT the goal label.
+    expect(audience).not.toBe('Promote an Event');
+    expect(tone).not.toBe('Promote an Event');
+    expect(tone.trim().length).toBeGreaterThan(0);
+    // the brief is a sentence, distinct from the short offer field.
+    expect(freeText).not.toBe(offer);
+    expect(freeText.length).toBeGreaterThan(offer.length);
+    // offer legitimately restates the goal; cta is an action.
+    expect(offer).toBe('Promote an Event');
+    expect(cta).toBe('Learn more');
+  });
+});
+
 describe('Field assist — supporting field must not copy the headline (creator subheadline bug)', () => {
   it('drops an OPTIONAL generated value that exactly duplicates a sibling (headline)', async () => {
     // LLM (mis)returns the headline verbatim for the subheadline; the headline is

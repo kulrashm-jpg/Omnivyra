@@ -299,6 +299,17 @@ export function deterministicTransform(
   const generateSeed = (): string => {
     if (key.includes('cta')) return 'Learn more';
     if (key.includes('author')) return '';
+    // Role-aligned seeds so a fallback never fills every field with the goal
+    // label. "Audience"/"tone" describe WHO/HOW — the goal is neither, so we
+    // give a field-appropriate value (or leave audience blank) instead of a
+    // duplicate. Offer/headline/body/brief legitimately restate the topic.
+    if (key.includes('audience')) return '';                     // don't guess "who" — leave for the operator/LLM
+    if (key.includes('tone') || key.includes('voice')) return 'Confident and clear';
+    // A creative brief / description is a sentence, not the bare goal label —
+    // keep it distinct from the short "offer" field.
+    if (key.includes('freetext') || key.includes('brief') || key.includes('description')) {
+      return topic ? `${capitalize(topic)} — a clear, benefit-led message for the right audience.` : field.label;
+    }
     if (key.includes('metric')) return '100%';
     if (key.includes('year') || key.includes('date')) return '2024';
     if (key.includes('step')) return topic ? `${capitalize(topic)} step` : 'Key step';
