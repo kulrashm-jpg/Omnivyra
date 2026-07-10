@@ -117,6 +117,39 @@ describe('Field assist — intake fallback is field-aligned, not the goal label 
     expect(hook.length).toBeLessThanOrEqual(76);
     expect(keyInsight.length).toBeLessThanOrEqual(132);
   });
+
+  it('grounds the fallback in the company business (positioning/product/differentiator), not the goal label', () => {
+    // When the topic is a generic goal label but real company context exists, the
+    // fallback must produce STRONG, business-grounded copy from the company's own
+    // words — never echo the goal, and keep message fields distinct from each other.
+    const companyCtx = {
+      topic: 'Explain a Process or How-To',
+      company: {
+        positioning: 'The fastest way to route revenue signals to the right rep',
+        differentiators: 'Realtime routing accuracy no competitor matches',
+        products: ['Signal Router'],
+        messagingPillars: ['Speed that compounds every quarter'],
+      },
+    } as unknown as Parameters<typeof deterministicTransform>[3];
+
+    const headline = deterministicTransform('generate', fld('headline', 84), '', companyCtx);
+    const hook = deterministicTransform('generate', fld('hook', 76), '', companyCtx);
+    const keyInsight = deterministicTransform('generate', fld('keyInsight', 132), '', companyCtx);
+    const body = deterministicTransform('generate', fld('body', 160), '', companyCtx);
+
+    // None echoes the goal label.
+    for (const v of [headline, hook, keyInsight, body]) {
+      expect(v).not.toBe('Explain a Process or How-To');
+      expect(v.toLowerCase()).not.toContain('the detail that makes it land');
+    }
+    // Each is grounded in a real business fact (the company's own words).
+    expect(headline).toContain('Signal Router');
+    expect(hook).toContain('Speed that compounds');
+    expect(keyInsight.toLowerCase()).toContain('realtime routing');
+    expect(body.toLowerCase()).toContain('fastest way to route');
+    // Message fields stay distinct from one another.
+    expect(new Set([headline, hook, keyInsight, body]).size).toBe(4);
+  });
 });
 
 describe('Field assist — supporting field must not copy the headline (creator subheadline bug)', () => {

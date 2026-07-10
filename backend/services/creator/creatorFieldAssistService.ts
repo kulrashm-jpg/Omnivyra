@@ -231,6 +231,8 @@ export function buildFieldAssistMessages(
     ...(brandVoiceLines.length ? ['Write in the brand voice:', ...brandVoiceLines] : []),
     // Ground copy in the company's ACTUAL business — never invent company facts.
     'Ground the copy in the company context provided below; do not invent products, claims, or company facts that are not given.',
+    // Strength: a generic goal/category label is an ANGLE, not the message.
+    'If the Topic is a generic goal or category label (e.g. "Explain a Process or How-To", "Promote an Event"), treat it ONLY as the angle/intent — write specific, benefit-led copy about the company\'s actual product, positioning, or differentiator from the context below. NEVER output the goal/category label, a bare restatement of it, or a generic template phrase ("the detail that makes it land", "worth stopping for") as the value. Every line must say something concrete a competitor could not copy-paste.',
   ].join(' ');
 
   const fieldLines = resolved.map(({ target, field }) => {
@@ -303,34 +305,52 @@ export function deterministicTransform(
   const topic = str(context.topic);
   const key = field.key.toLowerCase();
 
+  // Server-resolved business facts — the company's OWN words. A fallback grounded
+  // in these reads as contextual/strong; a fallback that echoes the goal label
+  // ("Explain a Process or How-To") reads as broken filler. Distinct priority
+  // orders per field so, when several facts exist, the fields don't collide.
+  const company = context.company;
+  const positioning = str(company?.positioning);
+  const differentiator = str(company?.differentiators);
+  const product = str(company?.products?.[0]);
+  const pillar = str(company?.messagingPillars?.[0]);
+  const firstOf = (...xs: Array<string | undefined>): string => xs.find((x) => !!x && x.trim().length > 0) ?? '';
+
   const generateSeed = (): string => {
     if (key.includes('cta')) return 'Learn more';
     if (key.includes('author')) return '';
-    // Role-aligned seeds so a fallback never fills every field with the goal
-    // label. "Audience"/"tone" describe WHO/HOW — the goal is neither, so we
-    // give a field-appropriate value (or leave audience blank) instead of a
-    // duplicate. Offer/headline/body/brief legitimately restate the topic.
-    if (key.includes('audience')) return '';                     // don't guess "who" — leave for the operator/LLM
-    if (key.includes('tone') || key.includes('voice')) return 'Confident and clear';
-    // A creative brief / description / slide body is a sentence that EXPANDS the
-    // headline — never the bare goal label, and distinct from the short title.
-    if (key.includes('freetext') || key.includes('brief') || key.includes('description') || key.includes('body')) {
-      return topic ? `${capitalize(topic)} — the detail that makes it land for your audience.` : field.label;
+    // "Audience"/"tone" describe WHO/HOW — ground audience in the ICP when known,
+    // never the goal label.
+    if (key.includes('audience')) {
+      const aud = firstOf(str(company?.icp), str(company?.audience?.[0]));
+      return aud ? capitalize(aud) : '';
     }
+    if (key.includes('tone') || key.includes('voice')) return 'Confident and clear';
     if (key.includes('metric')) return '100%';
     if (key.includes('year') || key.includes('date')) return '2024';
     if (key.includes('step')) return topic ? `${capitalize(topic)} step` : 'Key step';
-    // A HOOK opens attention and a KEY INSIGHT is a positioning takeaway — both
-    // INTERPRET the topic, they must never echo it verbatim. Falling back to the
-    // bare topic made "Key insight" render identical to "What is this about" (the
-    // goal label). Give each a role-appropriate line that expands the topic so the
-    // fallback stays distinct from the topic and from the other overlay fields.
+    // Every MESSAGE-bearing field (body/brief, hook, key insight, headline) grounds
+    // in a real business fact first. The goal label is only ever an ANGLE of last
+    // resort — never the copy itself. Each field prefers a DIFFERENT fact so a
+    // multi-field fallback stays distinct rather than repeating one positioning line.
+    if (key.includes('freetext') || key.includes('brief') || key.includes('description') || key.includes('body')) {
+      const s = firstOf(positioning, differentiator, pillar);
+      if (s) return clamp(capitalize(s), field.maxLength);
+      return topic ? `${capitalize(topic)} — the detail that makes it land for your audience.` : field.label;
+    }
     if (key.includes('hook')) {
+      const s = firstOf(pillar, differentiator, positioning);
+      if (s) return clamp(capitalize(s), field.maxLength);
       return topic ? clamp(`${capitalize(topic)}: the part most people scroll right past.`, field.maxLength) : field.label;
     }
     if (key.includes('insight') || key.includes('takeaway')) {
+      const s = firstOf(differentiator, positioning, pillar);
+      if (s) return clamp(capitalize(s), field.maxLength);
       return topic ? clamp(`The takeaway on ${collapseWhitespace(topic).toLowerCase()} that changes how your audience decides.`, field.maxLength) : field.label;
     }
+    // Headline / offer / generic — a real product or positioning line beats the goal label.
+    const lead = firstOf(product, positioning, differentiator, pillar);
+    if (lead) return clamp(capitalize(lead), field.maxLength);
     if (topic) return capitalize(topic);
     return field.label;
   };
