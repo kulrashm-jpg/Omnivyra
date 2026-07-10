@@ -523,13 +523,13 @@ export function buildOverlaySvg(input: {
   const ctaSvg = (() => {
     if (!renderCta) return '';
     if (ctaMode === 'subtle') {
-      return `<text x="${textX}" y="${ctaY + ctaFontSize}" filter="url(#textShadow)" fill="rgba(255,255,255,0.85)" font-size="${ctaFontSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="600" letter-spacing="0.4">${escapeXml(ctaCopy)} →</text>`;
+      return `<text x="${textX}" y="${ctaY + ctaFontSize}" filter="url(#textShadow)" fill="rgba(255,255,255,0.85)" font-size="${ctaFontSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="600" letter-spacing="0.4">${escapeXml(ctaCopy)} →</text>`;
     }
     const pillFill = ctaMode === 'strong' ? accent : 'rgba(255,255,255,0.92)';
     const pillTextColor = ctaMode === 'strong' ? '#0F172A' : '#0F172A';
     return `
       <rect x="${textX}" y="${ctaY}" width="${ctaApproxWidth}" height="${ctaHeight}" rx="${Math.round(ctaHeight / 2)}" fill="${pillFill}" opacity="${ctaMode === 'strong' ? 1.0 : 0.92}" />
-      <text x="${textX + ctaPadX}" y="${ctaY + ctaPadY + ctaFontSize - 4}" fill="${pillTextColor}" font-size="${ctaFontSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${ctaMode === 'strong' ? 800 : 700}" letter-spacing="0.3">${escapeXml(ctaCopy)}</text>
+      <text x="${textX + ctaPadX}" y="${ctaY + ctaPadY + ctaFontSize - 4}" fill="${pillTextColor}" font-size="${ctaFontSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="${ctaMode === 'strong' ? 800 : 700}" letter-spacing="0.3">${escapeXml(ctaCopy)}</text>
     `;
   })();
 
@@ -645,11 +645,11 @@ export function buildOverlaySvg(input: {
         const counterFontSize = Math.max(18, Math.round(preset.hookSize * 0.80));
         const counterY = brandPlacement.top + Math.round(brandPlacement.maxHeight / 2) + Math.round(counterFontSize / 3);
         const counterX = safeMargin;
-        return `<text x="${counterX}" y="${counterY}" filter="url(#textShadow)" fill="rgba(255,255,255,0.94)" font-size="${counterFontSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="700" letter-spacing="2.4">${escapeXml(slideCounter)}</text>`;
+        return `<text x="${counterX}" y="${counterY}" filter="url(#textShadow)" fill="rgba(255,255,255,0.94)" font-size="${counterFontSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="700" letter-spacing="2.4">${escapeXml(slideCounter)}</text>`;
       })() : ''}
-      ${headlineLines.map((line, index) => `<text x="${textX}" y="${headlineStart + index * headlineLineHeight}" filter="url(#textShadow)" fill="${headingColor}" font-size="${preset.headlineSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.headingWeight}">${escapeXml(line)}</text>`).join('')}
-      ${insightLines.map((line, index) => `<text x="${textX}" y="${insightStart + index * insightLineHeight}" filter="url(#textShadow)" fill="${insightColor}" font-size="${fittedInsightSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="${input.brandKit.typography.bodyWeight}">${escapeXml(line)}</text>`).join('')}
-      ${supportLines.map((line, index) => `<text x="${textX}" y="${supportStart + index * supportLineHeight}" filter="url(#textShadow)" fill="${supportColor}" font-size="${preset.supportSize}" font-family="${input.brandKit.typography.fontFamily}" font-weight="500">${escapeXml(line)}</text>`).join('')}
+      ${headlineLines.map((line, index) => `<text x="${textX}" y="${headlineStart + index * headlineLineHeight}" filter="url(#textShadow)" fill="${headingColor}" font-size="${preset.headlineSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="${input.brandKit.typography.headingWeight}">${escapeXml(line)}</text>`).join('')}
+      ${insightLines.map((line, index) => `<text x="${textX}" y="${insightStart + index * insightLineHeight}" filter="url(#textShadow)" fill="${insightColor}" font-size="${fittedInsightSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="${input.brandKit.typography.bodyWeight}">${escapeXml(line)}</text>`).join('')}
+      ${supportLines.map((line, index) => `<text x="${textX}" y="${supportStart + index * supportLineHeight}" filter="url(#textShadow)" fill="${supportColor}" font-size="${preset.supportSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="500">${escapeXml(line)}</text>`).join('')}
       ${ctaSvg}
       <!-- footer watermark suppressed (brand mark in top-right is canonical); textWidth=${textWidth} retained for layout-spec future use -->
     </svg>
@@ -709,7 +709,7 @@ async function renderInitialsBrandMark(input: {
   const svg = `
     <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
       <rect width="${size}" height="${size}" rx="${radius}" fill="${fill}" />
-      <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="${textColor}" font-family="${input.brandKit.typography.fontFamily}" font-size="${fontSize}" font-weight="900">${escapeXml(input.initials.slice(0, 3))}</text>
+      <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="${textColor}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-size="${fontSize}" font-weight="900">${escapeXml(input.initials.slice(0, 3))}</text>
     </svg>
   `.trim();
   return sharp(Buffer.from(svg)).png().toBuffer();

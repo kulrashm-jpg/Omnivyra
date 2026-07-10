@@ -301,7 +301,7 @@ export function renderWrappedBodyText(opts: {
   const anchor = opts.align === 'center' ? ' text-anchor="middle"' : '';
   const startY = opts.y + opts.fontPx;
   return lines
-    .map((line, i) => `<text x="${opts.x}" y="${startY + i * lineH}"${anchor} font-size="${opts.fontPx}" font-family="${opts.fontFamily ?? 'Inter, Arial'}" font-weight="${weight}" fill="${opts.color}">${escapeXml(line)}</text>`)
+    .map((line, i) => `<text x="${opts.x}" y="${startY + i * lineH}"${anchor} font-size="${opts.fontPx}" font-family="${opts.fontFamily ?? 'Inter, Arial, sans-serif'}" font-weight="${weight}" fill="${opts.color}">${escapeXml(line)}</text>`)
     .join('');
 }
 
@@ -486,9 +486,9 @@ function buildSvg(input: {
       <circle cx="120" cy="${input.height - 110}" r="58" fill="rgba(255,255,255,0.09)" />
       <path d="M80 ${input.height - 250} C250 ${input.height - 390}, 360 ${input.height - 150}, 520 ${input.height - 280} S850 ${input.height - 170}, ${input.width - 82} ${input.height - 330}" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="8" stroke-linecap="round"/>
       <rect x="72" y="72" width="${input.width - 144}" height="${input.height - 144}" rx="28" fill="rgba(15,23,42,0.22)" stroke="rgba(255,255,255,0.16)" />
-      ${input.eyebrow ? `<text x="110" y="148" fill="#bfdbfe" font-size="28" font-family="Arial, Helvetica, sans-serif" font-weight="700" letter-spacing="2">${escapeXml(input.eyebrow.toUpperCase())}</text>` : ''}
-      ${titleLines.map((line, index) => `<text x="110" y="${titleY + (index * 78)}" fill="#ffffff" font-size="64" font-family="Arial, Helvetica, sans-serif" font-weight="800">${escapeXml(line)}</text>`).join('')}
-      ${bodyLines.map((line, index) => `<text x="110" y="${bodyY + (index * 48)}" fill="#e2e8f0" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="500">${escapeXml(line)}</text>`).join('')}
+      ${input.eyebrow ? `<text x="110" y="148" fill="#bfdbfe" font-size="28" font-family="Inter, Arial, sans-serif" font-weight="700" letter-spacing="2">${escapeXml(input.eyebrow.toUpperCase())}</text>` : ''}
+      ${titleLines.map((line, index) => `<text x="110" y="${titleY + (index * 78)}" fill="#ffffff" font-size="64" font-family="Inter, Arial, sans-serif" font-weight="800">${escapeXml(line)}</text>`).join('')}
+      ${bodyLines.map((line, index) => `<text x="110" y="${bodyY + (index * 48)}" fill="#e2e8f0" font-size="34" font-family="Inter, Arial, sans-serif" font-weight="500">${escapeXml(line)}</text>`).join('')}
       <rect x="110" y="${accentY}" width="230" height="12" rx="6" fill="#f8fafc" opacity="0.9" />
       <rect x="360" y="${accentY}" width="92" height="12" rx="6" fill="#67e8f9" opacity="0.85" />
     </svg>
