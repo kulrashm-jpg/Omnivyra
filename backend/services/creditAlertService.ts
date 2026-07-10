@@ -21,7 +21,11 @@ import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 
 export type AlertType =
-  | 'low_20pct' | 'low_10pct' | 'depleted' | 'auto_topup'
+  // Absolute low-balance ladder (owner policy 2026-07-10): <100 / <50 / <20.
+  | 'low_100' | 'low_50' | 'low_20'
+  // Legacy types — retained for credit_alert_log history/dedup continuity.
+  | 'low_20pct' | 'low_10pct'
+  | 'depleted' | 'auto_topup'
   // Consumption-based warnings (approved policy) — deduped per billing cycle.
   | 'consumed_80' | 'consumed_90' | 'consumed_95' | 'forecast_insufficient_85';
 
@@ -70,27 +74,26 @@ export type CreditAlertResult = {
 };
 
 // ── Configurable thresholds ───────────────────────────────────────────────────
-
-/** Credits considered a "full" allotment — thresholds scale from this. */
-const REFERENCE_CREDIT_ALLOTMENT = 1000;
-
 /**
- * Ordered MOST-SEVERE-FIRST: the loop below sends only the first breached
- * alert, so severity order guarantees a balance of e.g. 60 sends the
- * "below 100" warning — not the milder early notice. (The previous
- * mildest-first order meant the critical alert could never fire: any
- * balance under 100 was swallowed by the 20% notice + 24h dedup.)
+ * ABSOLUTE low-balance ladder (owner policy 2026-07-10):
+ *   low_100  → balance < 100 credits  (early warning)
+ *   low_50   → balance <  50 credits
+ *   low_20   → balance <  20 credits  (last warning before depletion)
+ *   depleted → balance <=  0
+ * NO alert at 200 (explicitly removed). Thresholds are absolute credit
+ * counts, not percentages of an allotment.
  *
- * At the default reference (1000) these are ABSOLUTE credit levels:
- *   low_10pct → balance <  100 credits  (THE low-credit warning)
- *   low_20pct → balance <  200 credits  (early notice)
- *   depleted  → balance <=   0
- * Type names are kept for credit_alert_log/dedup continuity.
+ * Ordered MOST-SEVERE-FIRST: the loop below sends only the first breached
+ * alert, so severity order guarantees a balance of e.g. 15 sends the
+ * "below 20" warning — not a milder one. (The original mildest-first order
+ * meant the severest alert could never fire: any low balance was swallowed
+ * by the mildest notice + 24h dedup.)
  */
-const THRESHOLDS: Array<{ type: AlertType; pct: number; breached: (balance: number, threshold: number) => boolean; message: string }> = [
-  { type: 'depleted',  pct: 0.00, breached: (b, t) => b <= t, message: 'Credits depleted. Autonomous campaign system is paused.' },
-  { type: 'low_10pct', pct: 0.10, breached: (b, t) => b < t,  message: 'Your credits are below 100 — top up soon to avoid interruptions to content and campaigns.' },
-  { type: 'low_20pct', pct: 0.20, breached: (b, t) => b < t,  message: 'Your credits are below 200 — consider topping up.' },
+const THRESHOLDS: Array<{ type: AlertType; credits: number; breached: (balance: number, threshold: number) => boolean; message: string }> = [
+  { type: 'depleted', credits: 0,   breached: (b, t) => b <= t, message: 'Credits depleted. Autonomous campaign system is paused.' },
+  { type: 'low_20',   credits: 20,  breached: (b, t) => b < t,  message: 'Your credits are below 20 — top up now to keep content and campaigns running.' },
+  { type: 'low_50',   credits: 50,  breached: (b, t) => b < t,  message: 'Your credits are below 50 — top up soon to avoid interruptions.' },
+  { type: 'low_100',  credits: 100, breached: (b, t) => b < t,  message: 'Your credits are below 100 — consider topping up.' },
 ];
 
 const DEDUP_HOURS = 24;
@@ -150,10 +153,12 @@ async function sendAlert(orgId: string, alertType: AlertType, message: string): 
 /**
  * Check credit balance for an org and fire alerts if thresholds are crossed.
  * Safe to call frequently — deduplicates within a 24-hour window.
+ * `_referenceAllotment` is retained for caller compatibility but unused:
+ * thresholds are absolute credit counts (owner policy 2026-07-10).
  */
 export async function checkCreditAlerts(
   orgId: string,
-  referenceAllotment = REFERENCE_CREDIT_ALLOTMENT,
+  _referenceAllotment?: number,
 ): Promise<CreditAlertResult> {
   const balance = await getBalance(orgId);
   if (balance === null) {
@@ -163,9 +168,8 @@ export async function checkCreditAlerts(
   const fired:      AlertType[] = [];
   const suppressed: AlertType[] = [];
 
-  for (const { type, pct, breached, message } of THRESHOLDS) {
-    const threshold = Math.floor(referenceAllotment * pct);
-    if (!breached(balance, threshold)) continue;
+  for (const { type, credits, breached, message } of THRESHOLDS) {
+    if (!breached(balance, credits)) continue;
 
     const alreadySent = await wasAlertRecentlySent(orgId, type);
     if (alreadySent) {

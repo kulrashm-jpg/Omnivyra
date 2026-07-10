@@ -1,9 +1,11 @@
 /**
- * Low-credit warning contract (2026-07-10, requested by owner):
- * THE warning fires when a company's credits drop BELOW 100. Also locks the
- * severity-order fix: previously thresholds were evaluated mildest-first
- * with break-on-first, so any balance under 100 sent only the mild "below
- * 20%" notice and the critical alert could never fire.
+ * Low-credit warning contract (owner policy 2026-07-10):
+ * ABSOLUTE ladder — early warning when a company's credits drop BELOW 100,
+ * again below 50, again below 20, and 'depleted' at 0. Explicitly NO alert
+ * at 200. Also locks the severity-order fix: thresholds are evaluated
+ * most-severe-first (originally mildest-first + break-on-first, so the
+ * severest alert could never fire), and the 24h dedup never downgrades to a
+ * milder alert.
  */
 
 // Scripted ownedDbTable: organization_credits balance + alert log + notifications.
@@ -38,8 +40,9 @@ jest.mock('../../db/writeOwner', () => ({
 
 import { checkCreditAlerts } from '../../services/creditAlertService';
 
-const firedTypes = () =>
-  inserted.filter((i) => i.table === 'credit_alert_log').map((i) => i.payload.alert_type);
+const setBalance = (free: number, paid = 0, incentive = 0) => {
+  balanceRow = { free_balance: free, paid_balance: paid, incentive_balance: incentive };
+};
 
 beforeEach(() => {
   balanceRow = null;
@@ -47,59 +50,59 @@ beforeEach(() => {
   inserted.length = 0;
 });
 
-describe('checkCreditAlerts — below-100 warning contract', () => {
-  it('balance 99 (< 100) fires the low-credit warning, not the mild notice', async () => {
-    balanceRow = { free_balance: 99, paid_balance: 0, incentive_balance: 0 };
+describe('checkCreditAlerts — absolute 100/50/20 ladder', () => {
+  it.each([
+    [99, 'low_100', 'below 100'],
+    [60, 'low_100', 'below 100'],
+    [49, 'low_50', 'below 50'],
+    [20, 'low_50', 'below 50'], // 20 is not below 20
+    [19, 'low_20', 'below 20'],
+    [1, 'low_20', 'below 20'],
+    [0, 'depleted', 'depleted'],
+  ])('balance %s fires %s', async (balance, expectedType, messageFragment) => {
+    setBalance(balance as number);
     const r = await checkCreditAlerts('org-1');
-    expect(r.alerts_fired).toEqual(['low_10pct']);
-    expect(firedTypes()).toEqual(['low_10pct']);
+    expect(r.alerts_fired).toEqual([expectedType]);
     const notification = inserted.find((i) => i.table === 'notifications');
-    expect(notification?.payload.message).toContain('below 100');
+    expect(notification?.payload.message.toLowerCase()).toContain(messageFragment as string);
   });
 
-  it('balance 60 fires the below-100 warning (severity beats the mild notice)', async () => {
-    balanceRow = { free_balance: 60, paid_balance: 0, incentive_balance: 0 };
-    const r = await checkCreditAlerts('org-1');
-    expect(r.alerts_fired).toEqual(['low_10pct']);
-  });
-
-  it('balance exactly 100 is NOT below 100 — only the early (below-200) notice fires', async () => {
-    balanceRow = { free_balance: 100, paid_balance: 0, incentive_balance: 0 };
-    const r = await checkCreditAlerts('org-1');
-    expect(r.alerts_fired).toEqual(['low_20pct']);
-  });
-
-  it('balance 150 fires the early below-200 notice', async () => {
-    balanceRow = { free_balance: 150, paid_balance: 0, incentive_balance: 0 };
-    const r = await checkCreditAlerts('org-1');
-    expect(r.alerts_fired).toEqual(['low_20pct']);
-  });
-
-  it('balance 0 fires depleted', async () => {
-    balanceRow = { free_balance: 0, paid_balance: 0, incentive_balance: 0 };
-    const r = await checkCreditAlerts('org-1');
-    expect(r.alerts_fired).toEqual(['depleted']);
-  });
-
-  it('balance 500 fires nothing', async () => {
-    balanceRow = { free_balance: 500, paid_balance: 0, incentive_balance: 0 };
-    const r = await checkCreditAlerts('org-1');
-    expect(r.alerts_fired).toEqual([]);
-    expect(inserted).toHaveLength(0);
-  });
+  it.each([[100], [150], [200], [500]])(
+    'balance %s fires NOTHING (no alert at or above 100 — 200 notice removed)',
+    async (balance) => {
+      setBalance(balance as number);
+      const r = await checkCreditAlerts('org-1');
+      expect(r.alerts_fired).toEqual([]);
+      expect(inserted).toHaveLength(0);
+    },
+  );
 
   it('24h dedup suppresses a repeat AND does not downgrade to a milder alert', async () => {
-    balanceRow = { free_balance: 60, paid_balance: 0, incentive_balance: 0 };
-    recentAlertRows = { low_10pct: true };
+    setBalance(15); // breaches low_20 (and low_50/low_100)
+    recentAlertRows = { low_20: true };
     const r = await checkCreditAlerts('org-1');
     expect(r.alerts_fired).toEqual([]);
-    expect(r.alerts_suppressed).toEqual(['low_10pct']);
-    expect(inserted).toHaveLength(0); // no mild low_20pct piggybacking
+    expect(r.alerts_suppressed).toEqual(['low_20']);
+    expect(inserted).toHaveLength(0); // no low_50/low_100 piggybacking
   });
 
-  it('buckets sum: 40 free + 70 paid = 110 total → early notice, not the below-100 warning', async () => {
-    balanceRow = { free_balance: 40, paid_balance: 70, incentive_balance: 0 };
+  it('escalates as the balance keeps dropping (each level has its own dedup)', async () => {
+    setBalance(45); // below 50
+    recentAlertRows = { low_100: true }; // the earlier <100 warning already sent
     const r = await checkCreditAlerts('org-1');
-    expect(r.alerts_fired).toEqual(['low_20pct']);
+    expect(r.alerts_fired).toEqual(['low_50']); // severer level still fires
+  });
+
+  it('sums all buckets: 40 free + 70 paid = 110 total → no alert', async () => {
+    setBalance(40, 70);
+    const r = await checkCreditAlerts('org-1');
+    expect(r.alerts_fired).toEqual([]);
+  });
+
+  it('records balance_at_alert for the audit log', async () => {
+    setBalance(42);
+    await checkCreditAlerts('org-1');
+    const log = inserted.find((i) => i.table === 'credit_alert_log');
+    expect(log?.payload).toMatchObject({ alert_type: 'low_50', balance_at_alert: 42 });
   });
 });
