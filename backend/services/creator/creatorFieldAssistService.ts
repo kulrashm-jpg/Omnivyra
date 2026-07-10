@@ -320,6 +320,17 @@ export function deterministicTransform(
     if (key.includes('metric')) return '100%';
     if (key.includes('year') || key.includes('date')) return '2024';
     if (key.includes('step')) return topic ? `${capitalize(topic)} step` : 'Key step';
+    // A HOOK opens attention and a KEY INSIGHT is a positioning takeaway — both
+    // INTERPRET the topic, they must never echo it verbatim. Falling back to the
+    // bare topic made "Key insight" render identical to "What is this about" (the
+    // goal label). Give each a role-appropriate line that expands the topic so the
+    // fallback stays distinct from the topic and from the other overlay fields.
+    if (key.includes('hook')) {
+      return topic ? clamp(`${capitalize(topic)}: the part most people scroll right past.`, field.maxLength) : field.label;
+    }
+    if (key.includes('insight') || key.includes('takeaway')) {
+      return topic ? clamp(`The takeaway on ${collapseWhitespace(topic).toLowerCase()} that changes how your audience decides.`, field.maxLength) : field.label;
+    }
     if (topic) return capitalize(topic);
     return field.label;
   };

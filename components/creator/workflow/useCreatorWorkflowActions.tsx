@@ -364,13 +364,18 @@ export function useCreatorWorkflowActions(
     const imageText = String(templateValues.fields?.headline ?? '').trim();
     const subText = String(templateValues.fields?.subheadline ?? '').trim();
     if (!imageText && !subText) return;
+    // Never mirror a template field that is merely the goal-label default (it
+    // equals the topic) into the hook — that made Hook duplicate "What is this
+    // about". Only seed the hook from image text the operator actually authored.
+    const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+    const topicNorm = norm(String(answers.topic || ''));
     setOverlayText((prev) => {
       const next = { ...prev };
-      if (!String(prev.hook || '').trim() && imageText) next.hook = imageText.slice(0, 76);
-      if (!String(prev.headline || '').trim() && subText) next.headline = subText.slice(0, 84);
+      if (!String(prev.hook || '').trim() && imageText && norm(imageText) !== topicNorm) next.hook = imageText.slice(0, 76);
+      if (!String(prev.headline || '').trim() && subText && norm(subText) !== topicNorm) next.headline = subText.slice(0, 84);
       return next.hook === prev.hook && next.headline === prev.headline ? prev : next;
     });
-  }, [activeTemplate, writerSource, templateValues.fields?.headline, templateValues.fields?.subheadline]);
+  }, [activeTemplate, writerSource, templateValues.fields?.headline, templateValues.fields?.subheadline, answers.topic]);
   const handleUseExistingAsset = (asset: SavedCreatorAsset) => {
     if (isGenerating || actionInProgress) return;
     setSelectedAssetId(asset.id);

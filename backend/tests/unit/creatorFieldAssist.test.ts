@@ -101,6 +101,22 @@ describe('Field assist — intake fallback is field-aligned, not the goal label 
     expect(offer).toBe('Promote an Event');
     expect(cta).toBe('Learn more');
   });
+
+  it('does not fill hook / key insight with the bare goal label (they interpret the topic)', () => {
+    // Regression: "Key insight" rendered identical to "What is this about" (the
+    // goal label) because the fallback returned the bare topic. Hook + key insight
+    // must expand the topic into a distinct, role-appropriate line.
+    const hook = deterministicTransform('generate', fld('hook', 76), '', ctx);
+    const keyInsight = deterministicTransform('generate', fld('keyInsight', 132), '', ctx);
+    expect(hook).not.toBe('Promote an Event');
+    expect(keyInsight).not.toBe('Promote an Event');
+    expect(hook).not.toBe(keyInsight);
+    expect(hook.trim().length).toBeGreaterThan('Promote an Event'.length);
+    expect(keyInsight.trim().length).toBeGreaterThan('Promote an Event'.length);
+    // stays within the field budget
+    expect(hook.length).toBeLessThanOrEqual(76);
+    expect(keyInsight.length).toBeLessThanOrEqual(132);
+  });
 });
 
 describe('Field assist — supporting field must not copy the headline (creator subheadline bug)', () => {
