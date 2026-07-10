@@ -159,8 +159,8 @@ export function buildStyleCardSvg(styleId: string, input: {
     `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
     '<defs>' +
     '<linearGradient id="styleScrim" x1="0" y1="0" x2="0" y2="1">' +
-    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.62"/>' +
-    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.72"/>' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.5"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.64"/>' +
     '</linearGradient>' +
     '<filter id="styleShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#000000" flood-opacity="0.45"/></filter>' +
     '</defs>' +

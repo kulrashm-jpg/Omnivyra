@@ -136,9 +136,9 @@ export function buildStatCardSvg(input: {
     `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
     '<defs>' +
     '<linearGradient id="statScrim" x1="0" y1="0" x2="0" y2="1">' +
-    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.72"/>' +
-    '<stop offset="0.5" stop-color="#0b1220" stop-opacity="0.5"/>' +
-    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.78"/>' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.64"/>' +
+    '<stop offset="0.5" stop-color="#0b1220" stop-opacity="0.3"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.7"/>' +
     '</linearGradient>' +
     '<filter id="statShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#000000" flood-opacity="0.45"/></filter>' +
     '</defs>' +
@@ -202,9 +202,9 @@ export function buildQuoteCardSvg(input: {
     `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
     '<defs>' +
     '<linearGradient id="quoteScrim" x1="0" y1="0" x2="0" y2="1">' +
-    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.74"/>' +
-    '<stop offset="0.5" stop-color="#0b1220" stop-opacity="0.55"/>' +
-    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.8"/>' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.66"/>' +
+    '<stop offset="0.5" stop-color="#0b1220" stop-opacity="0.36"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.72"/>' +
     '</linearGradient>' +
     '<filter id="quoteShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000000" flood-opacity="0.4"/></filter>' +
     '</defs>' +
@@ -276,8 +276,8 @@ export function buildSplitCardSvg(input: {
     `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
     '<defs>' +
     '<linearGradient id="splitScrim" x1="0" y1="0" x2="0" y2="1">' +
-    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.68"/>' +
-    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.68"/>' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.6"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.6"/>' +
     '</linearGradient>' +
     '<filter id="splitShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000000" flood-opacity="0.45"/></filter>' +
     '</defs>' +
@@ -356,8 +356,8 @@ export function buildTwoColumnCardSvg(input: {
     `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
     '<defs>' +
     '<linearGradient id="twoColScrim" x1="0" y1="0" x2="0" y2="1">' +
-    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.7"/>' +
-    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.72"/>' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.62"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.64"/>' +
     '</linearGradient>' +
     '<filter id="twoColShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000000" flood-opacity="0.45"/></filter>' +
     '</defs>' +
@@ -440,8 +440,8 @@ export function buildListCardSvg(input: {
     `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">` +
     '<defs>' +
     '<linearGradient id="listScrim" x1="0" y1="0" x2="0" y2="1">' +
-    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.72"/>' +
-    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.74"/>' +
+    '<stop offset="0" stop-color="#0b1220" stop-opacity="0.64"/>' +
+    '<stop offset="1" stop-color="#0b1220" stop-opacity="0.66"/>' +
     '</linearGradient>' +
     '<filter id="listShadow" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#000000" flood-opacity="0.45"/></filter>' +
     '</defs>' +

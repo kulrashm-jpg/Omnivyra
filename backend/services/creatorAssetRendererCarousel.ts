@@ -424,7 +424,10 @@ async function renderStructuredSlidePng(input: {
     hook: `${input.item.role || 'slide'} ${input.index + 1}/${input.total}`,
     headline: input.item.headline,
     keyInsight: input.item.body,
-    cta: input.index === input.total - 1 ? compactText(input.metadata.cta || 'Take the next step') : 'Keep reading',
+    // Only the FINAL slide carries a CTA pill. Middle slides previously painted a
+    // "Keep reading" button on every frame — an amateur tell that diluted the real
+    // CTA; the swipe chevron already signals continuation.
+    cta: input.index === input.total - 1 ? compactText(input.metadata.cta || 'Take the next step') : '',
     supportingText: '',
   };
   const background = await renderBackgroundPng({
