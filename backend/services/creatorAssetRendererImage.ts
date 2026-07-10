@@ -175,12 +175,26 @@ export async function composeSingleVisualAsset(
     textBlocks: rawTextBlocks,
     allowCTA: metadata.attachment_mode !== 'supporting_visual',
   });
+  // Image overlays must be paragraph-safe: the render manifest rejects ANY block
+  // that is multi-sentence OR >110 chars (paragraph_overlay_forbidden). Collapse
+  // each governed block to a single sentence and cap under the threshold so a
+  // long AI-written line renders as a clean hero line instead of failing
+  // generation closed. (Applied here at the image render only — generic
+  // autoCorrectVisualCopy must not char-cap other profiles like brand_card.)
+  const paragraphSafeBlock = (block: string): string => {
+    let s = String(block ?? '').replace(/\s+/g, ' ').trim();
+    if (!s) return s;
+    if (/[.!?]\s+\S/.test(s)) s = s.match(/[^.!?]+[.!?]?/)?.[0]?.trim() ?? s;
+    if (s.length > 108) s = s.slice(0, 108).replace(/\s+\S*$/, '').trim();
+    return s;
+  };
+  const safeBlocks = corrected.textBlocks.map(paragraphSafeBlock);
   const governedOverlay = {
-    hook: corrected.textBlocks[0] ?? '',
-    headline: corrected.textBlocks[1] ?? '',
-    keyInsight: corrected.textBlocks[2] ?? '',
-    cta: corrected.textBlocks[3] ?? '',
-    supportingText: corrected.textBlocks[4] ?? '',
+    hook: safeBlocks[0] ?? '',
+    headline: safeBlocks[1] ?? '',
+    keyInsight: safeBlocks[2] ?? '',
+    cta: safeBlocks[3] ?? '',
+    supportingText: safeBlocks[4] ?? '',
   };
   const creatorQuality = scoreCreatorQuality({
     assetType: governanceAssetType,
@@ -203,7 +217,7 @@ export async function composeSingleVisualAsset(
       ? [governedOverlay.headline, governedOverlay.keyInsight || governedOverlay.supportingText, governedOverlay.cta]
       : (govComposition || govStyleId)
         ? [governedOverlay.headline, governedOverlay.supportingText, governedOverlay.cta]
-        : corrected.textBlocks
+        : safeBlocks
   ).filter(Boolean);
   const visualGovernance = validateVisualGovernance({
     assetType: governanceAssetType,
