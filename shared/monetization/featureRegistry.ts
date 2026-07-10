@@ -310,6 +310,12 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       'blogRepurpose',
       'blogOptimization',
       'refineProblemTransformation',
+      // Creator field-assist ("Suggest with AI" / per-field + slide/overlay/brief
+      // generate) and the "Create with AI" intake both bill as content_rewrite.
+      // Without these, resolveLlmCost logs "no action_key mapping" and the calls
+      // are flagged untracked_ai_call_blocked (uncosted; blockable if enforced).
+      'creatorFieldAssist',
+      'creator_intake_ai_content',
     ],
     pricing_keys: {
       action_key: 'content_rewrite',
