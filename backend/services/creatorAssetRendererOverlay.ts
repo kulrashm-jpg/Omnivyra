@@ -302,7 +302,7 @@ export function buildOverlaySvg(input: {
   const insightText = compactText(input.overlay.keyInsight || '');
   let fittedInsightSize = preset.insightSize;
   {
-    const insightFloor = Math.max(13, Math.round(preset.insightSize * 0.62));
+    const insightFloor = Math.max(16, Math.round(preset.insightSize * 0.72));
     const charsAt = (size: number) => Math.max(8, Math.round(preset.insightChars * (preset.insightSize / Math.max(1, size))));
     const fitsAt = (size: number) => insightText.length === 0
       || Math.ceil(insightText.length / charsAt(size)) <= preset.maxInsightLines;
@@ -371,7 +371,10 @@ export function buildOverlaySvg(input: {
   const supportBlockHeight = supportLines.length * supportLineHeight;
   const totalStackHeight = hookLineGap + headlineBlockHeight + insightGap + insightBlockHeight + supportGap + supportBlockHeight;
   const footerHeight = preset.footerMode === 'hidden' ? 0 : 40;
-  const bottomPadding = Math.max(48, Math.round(input.height * 0.06));
+  // Bottom breathing room. Bumped 6% → 8% (floor 48 → 66) so bottom-anchored
+  // slides (layoutMode text_bottom) don't jam the copy against the bottom edge —
+  // the stack sits at `height - bottomPadding`, so this IS the bottom margin.
+  const bottomPadding = Math.max(66, Math.round(input.height * 0.08));
   // Operator feedback: "text is hiding behind the button". The CTA
   // was placed AT supportEndY - ctaHeight - 14, which is INSIDE the
   // support text region. Now we reserve a bottom band for the CTA
