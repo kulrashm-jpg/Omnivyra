@@ -374,6 +374,13 @@ export interface RunFieldAssistResult {
   invalidTargets: FieldAssistTarget[];
   /** Deterministic-validation violations that were repaired/flagged. */
   violations: CopyViolation[];
+  /**
+   * Why the LLM path was NOT used (so a silent degrade to the deterministic
+   * transform is diagnosable instead of invisible): the LLM error message, or
+   * 'llm_parsed_empty' when it returned unmappable output, or 'no_llm' when no
+   * injector was provided. Undefined when the LLM produced usable values.
+   */
+  fallbackReason?: string;
 }
 
 /**
@@ -404,16 +411,24 @@ export async function runCreatorFieldAssist(input: {
 
   let llmValues = new Map<string, string>();
   let usedFallback = false;
+  let fallbackReason: string | undefined;
   if (input.llm) {
     try {
       const messages = buildFieldAssistMessages(template, request, resolved);
       const text = await input.llm(messages);
       llmValues = parseAssistResponse(text, resolved);
-    } catch {
+      if (llmValues.size === 0) {
+        // The call succeeded but produced no mappable values (wrong shape / empty).
+        usedFallback = true;
+        fallbackReason = `llm_parsed_empty(raw_len=${typeof text === 'string' ? text.length : 0})`;
+      }
+    } catch (err) {
       usedFallback = true;
+      fallbackReason = `llm_error: ${err instanceof Error ? err.message : String(err)}`;
     }
   } else {
     usedFallback = true;
+    fallbackReason = 'no_llm';
   }
 
   // Sibling values on the SAME asset — a supporting field (e.g. subheadline)
@@ -463,7 +478,7 @@ export async function runCreatorFieldAssist(input: {
     updates.push({ scope: target.scope, fieldKey: target.fieldKey, index: target.index, value: finalValue });
   }
 
-  return { updates, usedFallback, invalidTargets, violations };
+  return { updates, usedFallback, invalidTargets, violations, fallbackReason };
 }
 
 /** Convenience: resolve the template then run assist (endpoint helper). */

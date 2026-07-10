@@ -107,10 +107,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   };
 
   try {
-    const { updates, usedFallback, invalidTargets, violations } = await runCreatorFieldAssist({ template, request, llm });
+    const { updates, usedFallback, invalidTargets, violations, fallbackReason } = await runCreatorFieldAssist({ template, request, llm });
+    // Surface WHY the AI degraded to the deterministic transform so a silent
+    // fallback (shallow/duplicate copy) is diagnosable in logs + the response.
+    if (usedFallback && fallbackReason) {
+      try {
+        const { logger } = await import('../../../backend/services/logger');
+        logger.warn('creator_field_assist_fallback', { operation: request.templateId, action: request.action, reason: fallbackReason });
+      } catch { /* fail-safe */ }
+    }
     return res.status(200).json({
       updates: updates.map((u) => ({ scope: u.scope, field_key: u.fieldKey, index: u.index, value: u.value })),
       used_fallback: usedFallback,
+      ...(fallbackReason ? { fallback_reason: fallbackReason } : {}),
       ...(violations.length > 0 ? { violations } : {}),
       ...(invalidTargets.length > 0 ? { skipped_targets: invalidTargets } : {}),
     });
