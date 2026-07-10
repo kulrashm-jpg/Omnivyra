@@ -104,9 +104,11 @@ describe('Field assist — intake fallback is field-aligned, not the goal label 
 });
 
 describe('Field assist — supporting field must not copy the headline (creator subheadline bug)', () => {
-  it('drops an OPTIONAL generated value that exactly duplicates a sibling (headline)', async () => {
-    // LLM (mis)returns the headline verbatim for the subheadline; the headline is
-    // passed as a sibling → the duplicate is dropped so it never echoes.
+  it('always returns a NON-EMPTY value for a requested field (never blanks it)', async () => {
+    // A single-field "+AI" must never silently produce nothing. Even if the LLM
+    // returns a value that echoes a sibling, we return it (an imperfect line the
+    // user can regenerate beats an empty field) — distinctness is enforced by the
+    // LLM sibling-awareness + the client regenerate-on-duplicate, not by blanking.
     const res = await runCreatorFieldAssist({
       template: imageTpl,
       request: req({
@@ -118,7 +120,7 @@ describe('Field assist — supporting field must not copy the headline (creator 
       llm: jsonLlm([{ scope: 'flat', field_key: 'subheadline', value: 'Promote an Offer or Sale' }]),
     });
     expect(res.updates).toHaveLength(1);
-    expect(res.updates[0].value).toBe(''); // duplicate dropped, not echoed
+    expect(res.updates[0].value.trim().length).toBeGreaterThan(0); // never blank
   });
 
   it('keeps a DISTINCT supporting line that enhances the headline', async () => {

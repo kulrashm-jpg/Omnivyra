@@ -438,14 +438,6 @@ export async function runCreatorFieldAssist(input: {
     fallbackReason = 'no_llm';
   }
 
-  // Sibling values on the SAME asset — a supporting field (e.g. subheadline)
-  // must ENHANCE, never be an exact copy of another field (e.g. the headline).
-  const siblingValues = new Set(
-    (request.context?.siblings ?? [])
-      .map((s) => String(s?.value ?? '').trim().toLowerCase())
-      .filter(Boolean),
-  );
-
   const updates: FieldAssistUpdate[] = [];
   const violations: CopyViolation[] = [];
   const brandVoice = request.context?.brandVoice;
@@ -466,21 +458,13 @@ export async function runCreatorFieldAssist(input: {
       v = validateCreatorCopyValue(value, target.fieldKey, brandVoice);
     }
     if (v.repaired) usedFallback = true;
-    // Distinctness safety net (mainly the deterministic fallback path — the LLM
-    // is already told not to duplicate siblings): when a GENERATED value is an
-    // exact copy of another field on the asset, drop it for OPTIONAL fields so
-    // it is left blank/regenerated rather than echoing a sibling. Required
-    // fields keep their value (an empty required field is worse than a dup).
-    let finalValue = v.value;
-    if (
-      request.action === 'generate' &&
-      !field.required &&
-      finalValue.trim() &&
-      siblingValues.has(finalValue.trim().toLowerCase())
-    ) {
-      finalValue = '';
-      usedFallback = true;
-    }
+    // Distinctness is enforced by the LLM's sibling-awareness (it is told not to
+    // duplicate the other fields) plus the client's regenerate-on-duplicate. We
+    // do NOT blank a duplicate here: emptying an optional field made a single-
+    // field "+AI" click appear to do NOTHING (e.g. a fallback key-insight that
+    // echoes the topic/hook). An imperfect line the user can regenerate beats an
+    // empty field — so the value is always returned when non-empty.
+    const finalValue = v.value;
     violations.push(...v.violations);
     updates.push({ scope: target.scope, fieldKey: target.fieldKey, index: target.index, value: finalValue });
   }
