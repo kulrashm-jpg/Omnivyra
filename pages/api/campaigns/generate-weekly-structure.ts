@@ -179,7 +179,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   void variantMetadata;
     const eligiblePlatforms: string[] | undefined =
       Array.isArray(eligiblePlatformsBody) && eligiblePlatformsBody.length > 0
-        ? eligiblePlatformsBody.map((p: unknown) => String(p).toLowerCase().replace(/^twitter$/i, 'x'))
+        ? eligiblePlatformsBody.map((p: unknown) => normalizePlatformKey(String(p))).filter(Boolean)
         : undefined;
     const postsPerWeek: number | undefined =
       postsPerWeekBody != null && Number.isFinite(Number(postsPerWeekBody))
@@ -449,9 +449,20 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           : Array.isArray(it?.platforms) ? it.platforms
           : it?.platform ? [it.platform]
           : [];
-        const selected_platforms = (selected_platforms_raw || [])
+        const aiPlatforms = (selected_platforms_raw || [])
           .map((p: any) => normalizePlatformKey(String(p)))
           .filter(Boolean);
+        // Owner policy 2026-07-10: the USER'S explicit platform selection is
+        // the authority. AI-chosen platforms are constrained to it; when the
+        // intersection is empty the piece is REASSIGNED to the user's
+        // platforms (the piece survives, the platform choice does not).
+        // No user selection → AI platforms pass through unchanged.
+        const selected_platforms = (() => {
+          if (!eligiblePlatforms || eligiblePlatforms.length === 0) return aiPlatforms;
+          const allow = new Set(eligiblePlatforms);
+          const kept = aiPlatforms.filter((p: string) => allow.has(p));
+          return kept.length > 0 ? kept : [...eligiblePlatforms];
+        })();
         const count_per_week = Number(it?.count_per_week ?? it?.countPerWeek ?? it?.count ?? 0) || 0;
         const topic = typeof it?.topic === 'string' && it.topic.trim() ? String(it.topic).trim() : undefined;
         const topic_slots = Array.isArray(it?.topic_slots)
@@ -497,12 +508,16 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     //    the format_frequency reconciliation below (when it did). Pure, cheap
     //    derivations — safe to compute even when execution_items are present.
     const synthSlotPlatforms = (() => {
+      // Owner policy 2026-07-10: the USER'S explicit platform selection wins.
+      // (Previously the AI blueprint's platform_allocation keys took
+      // precedence — a user who picked linkedin+facebook could get instagram
+      // because the blueprint allocated it.) platform_allocation is only the
+      // fallback when the user made no explicit selection.
+      if (eligiblePlatforms && eligiblePlatforms.length > 0) return eligiblePlatforms;
       const fromAllocation = Object.keys(weekBlueprint.platform_allocation || {})
         .map(normalizePlatformKey)
         .filter(Boolean);
-      return fromAllocation.length > 0
-        ? fromAllocation
-        : (eligiblePlatforms && eligiblePlatforms.length > 0 ? eligiblePlatforms.slice(0, 2) : ['linkedin']);
+      return fromAllocation.length > 0 ? fromAllocation : ['linkedin'];
     })();
     // User's explicit format_frequency keys take precedence over AI-generated
     // content_type_mix — the distribution strictly honours what the user

@@ -363,20 +363,51 @@ describe('synth path (no AI execution_items) — golden master', () => {
   });
 
   it('drops a format entirely when no candidate platform is eligible for it', async () => {
-    // Locked precedence: synth platforms come from blueprint platform_allocation
-    // keys FIRST; eligible_platforms is only the fallback when allocation is empty.
-    // A linkedin-only allocation leaves X-exclusive `tweet` nowhere to go.
-    (getUnifiedCampaignBlueprint as jest.Mock).mockResolvedValue({
-      weeks: [{ ...SYNTH_BLUEPRINT.weeks[0], platform_allocation: { linkedin: 2 } }],
-    });
+    // OWNER POLICY 2026-07-10: the user's explicit platform selection is the
+    // authority (previously blueprint platform_allocation keys won). A
+    // linkedin-only USER selection leaves X-exclusive `tweet` nowhere to go —
+    // even though the blueprint allocation includes X.
     const result = await generateWeeklyStructure({
       ...input,
+      eligible_platforms: ['linkedin'],
       format_frequency: { post: 1, tweet: 2 },
     });
     expect(result.success).toBe(true);
     const rows = capturedRows();
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.content_type === 'post')).toBe(true);
+  });
+
+  it("OWNER POLICY: the user's platform selection beats the blueprint allocation (synth path)", async () => {
+    // The incident scenario: user selects linkedin+facebook; the AI blueprint
+    // allocates linkedin+instagram. Content must land ONLY on the user's picks.
+    (getUnifiedCampaignBlueprint as jest.Mock).mockResolvedValue({
+      weeks: [{ ...SYNTH_BLUEPRINT.weeks[0], platform_allocation: { linkedin: 2, instagram: 1 } }],
+    });
+    await generateWeeklyStructure({
+      ...input,
+      eligible_platforms: ['linkedin', 'facebook'],
+      format_frequency: { post: 2 },
+    });
+    const rows = capturedRows();
+    expect(rows.length).toBeGreaterThan(0);
+    const platforms = new Set(rows.map((r) => r.platform));
+    expect(platforms.has('instagram')).toBe(false);
+    expect([...platforms].every((p) => ['linkedin', 'facebook'].includes(p as string))).toBe(true);
+  });
+
+  it('no user selection → blueprint allocation still drives platforms (fallback preserved)', async () => {
+    (getUnifiedCampaignBlueprint as jest.Mock).mockResolvedValue({
+      weeks: [{ ...SYNTH_BLUEPRINT.weeks[0], platform_allocation: { instagram: 2 } }],
+    });
+    await generateWeeklyStructure({
+      campaignId: 'camp-1',
+      week: 1,
+      format_frequency: { post: 2 },
+    } as any);
+    const rows = capturedRows();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.platform === 'instagram')).toBe(true);
   });
 });
 
@@ -424,6 +455,34 @@ describe('AI execution_items path — format_frequency reconciliation', () => {
     const rows = capturedRows();
     expect(rows.map((r) => r.title).sort()).toEqual(['Topic Alpha', 'Topic Beta']);
     expect(rows.every((r) => r.platform === 'linkedin')).toBe(true);
+  });
+
+  it("OWNER POLICY: AI execution_items' platforms are reassigned to the user's selection when disjoint", async () => {
+    (getUnifiedCampaignBlueprint as jest.Mock).mockResolvedValue({
+      weeks: [
+        {
+          ...SYNTH_BLUEPRINT.weeks[0],
+          execution_items: [
+            {
+              content_type: 'post',
+              selected_platforms: ['instagram'], // AI picked a platform the user did not
+              count_per_week: 2,
+              topic_slots: [intentSlot('Topic Alpha', 1), intentSlot('Topic Beta', 2)],
+            },
+          ],
+        },
+      ],
+    });
+    await generateWeeklyStructure({
+      campaignId: 'camp-1',
+      week: 1,
+      eligible_platforms: ['linkedin', 'facebook'],
+    } as any);
+    const rows = capturedRows();
+    expect(rows.length).toBeGreaterThan(0);
+    const platforms = new Set(rows.map((r) => r.platform));
+    expect(platforms.has('instagram')).toBe(false);
+    expect([...platforms].every((p) => ['linkedin', 'facebook'].includes(p as string))).toBe(true);
   });
 });
 

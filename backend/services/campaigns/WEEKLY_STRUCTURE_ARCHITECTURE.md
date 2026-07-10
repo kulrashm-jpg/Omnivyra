@@ -68,9 +68,15 @@ auto-optimize).
   no duplicate (content_type, topic) per platform; format_frequency is the TOTAL
   across platforms; tweet is X-exclusive, poll blocked on X
   (`filterPlatformsForFormat` is the single authority).
-- **Precedence**: blueprint `platform_allocation` keys beat `eligible_platforms`
-  for synth platforms; user `format_frequency` beats AI counts; card-stamped
-  template beats design-system pool pick.
+- **Precedence** (owner policy 2026-07-10): the USER's explicit
+  `eligible_platforms` selection is the platform authority — synth platforms
+  use it directly, and AI execution_items' platforms are intersected with it
+  (disjoint ⇒ the piece is REASSIGNED to the user's platforms, never dropped
+  and never left on an unselected platform). Blueprint `platform_allocation`
+  keys drive platforms ONLY when the user made no selection. User
+  `format_frequency` beats AI counts; card-stamped template beats
+  design-system pool pick. (Pre-2026-07-10 behavior was allocation-first —
+  users who picked linkedin+facebook could receive instagram.)
 - **Mutation guards**: `assertDaily{Intent,ExecutionIdentity,GlobalProgression}NotMutated`
   run at daily-build / writer-ready / post-validate / post-enrich; validators
   and enrichers must return identity on those fields or generation throws.
