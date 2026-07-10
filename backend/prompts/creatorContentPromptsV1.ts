@@ -120,6 +120,10 @@ ${ctaSuggestions.length > 0 ? `- Suggested CTA phrasings (adapt to the topic; do
 ${arcBlock}${ctaBlock}
 ## CAROUSEL OUTPUT FORMAT - JSON
 
+CRITICAL: EVERY slide — INCLUDING the final CTA slide — goes INSIDE the "slides" array.
+Do NOT return a separate "cta_slide" object. Every slide (the CTA slide too) MUST have a
+non-empty "headline", a "body_text" of at least one full sentence, and a "visual_description".
+
 {
   "carousel_theme": "${creatorContext?.content_theme || 'educational'}",
   "total_slides": number,
@@ -133,14 +137,19 @@ ${arcBlock}${ctaBlock}
       "color_accent": "primary color for this slide",
       "icon_suggestion": "icon or visual element to include",
       "design_note": "any specific design direction (photo, illustration, data viz, etc.)"
+    },
+    {
+      "slide_number": "N (the final slide)",
+      "role": "cta",
+      "headline": "final call-to-action",
+      "body_text": "one complete sentence reinforcing the action and its payoff",
+      "visual_description": "visual that reinforces brand",
+      "cta_text": "specific action button or link",
+      "color_accent": "primary color for this slide",
+      "icon_suggestion": "icon or visual element to include",
+      "design_note": "design direction for the closing slide"
     }
   ],
-  "cta_slide": {
-    "headline": "final call-to-action",
-    "visual_description": "visual that reinforces brand",
-    "cta_text": "specific action button or link",
-    "urgency_element": "optional scarcity/urgency language"
-  },
   "brand_consistency": {
     "color_palette": "${creatorContext?.color_palette?.join(', ') || 'Brand colors'}",
     "visual_style": "${creatorContext?.visual_style || 'Modern professional'}",

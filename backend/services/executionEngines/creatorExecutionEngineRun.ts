@@ -38,7 +38,7 @@ import type {
 } from './types';
 import { ownedDbTable } from '../../db/writeOwner';
 
-import { inferBlueprintType, safeObject, deriveStructureFromTemplate, toArrayOfObjects, validateBlueprintAgainstTemplate, buildTemplateAlignmentInstruction, extractAnalyticsIntelligence, alignBlueprintToTemplate, normalizeCreatorAssetPayload, resolveTemplateForIntent, PLATFORM_RULES, adaptPackagingForPlatform, resolveContextPurposeKey, deriveArcStructureSchema, applyArcStructureToTemplate, MAX_CAROUSEL_COMPLETION_RETRIES, CarouselContentIncompleteError, CarouselQualityRejectedError, carouselBlueprintIsComplete, buildCompletionRetryDirective, buildReducedCarouselFromCompleteSlides, recordCarouselQualityOutcome } from './creatorExecutionEnginePrep';
+import { inferBlueprintType, safeObject, deriveStructureFromTemplate, toArrayOfObjects, validateBlueprintAgainstTemplate, buildTemplateAlignmentInstruction, extractAnalyticsIntelligence, alignBlueprintToTemplate, normalizeCreatorAssetPayload, resolveTemplateForIntent, PLATFORM_RULES, adaptPackagingForPlatform, resolveContextPurposeKey, deriveArcStructureSchema, applyArcStructureToTemplate, MAX_CAROUSEL_COMPLETION_RETRIES, CarouselContentIncompleteError, CarouselQualityRejectedError, carouselBlueprintIsComplete, buildCompletionRetryDirective, buildReducedCarouselFromCompleteSlides, recordCarouselQualityOutcome, normalizeCarouselBlueprintShape } from './creatorExecutionEnginePrep';
 
 async function generateCompleteCarouselDeck(
   context: CreatorGenerationContext,
@@ -55,10 +55,10 @@ async function generateCompleteCarouselDeck(
     const completionRetryHint = attempt === 0
       ? undefined
       : buildCompletionRetryDirective(attempt, expectedRoles, expectedCount);
-    last = await generateBlueprint(
+    last = normalizeCarouselBlueprintShape(await generateBlueprint(
       { ...context, template: effectiveTemplate as CreatorGenerationContext['template'] },
       { completionRetryHint, qualityRetryHint },
-    );
+    ));
     if (carouselBlueprintIsComplete(last, effectiveTemplate)) {
       return { blueprint: last, template: effectiveTemplate, attempts: attempt + 1, fallbackUsed: false };
     }

@@ -601,6 +601,61 @@ export function isCarouselSlideComplete(slide: unknown): boolean {
   return Boolean(headline) && bodyWords >= 3 && Boolean(visual);
 }
 
+/**
+ * Fold a legacy-shaped separate `cta_slide` object into the `slides` array
+ * (incident 2026-07-10: the carousel OUTPUT FORMAT example instructed a
+ * separate `cta_slide`, so the model returned N−1 inline slides + cta_slide —
+ * failing the frame-count contract on EVERY attempt, and when retry-forced
+ * inline, the cta_slide example had no `body_text` field so the final slide
+ * arrived body-less and killed the reduced-deck fallback's bookend check.
+ * All production carousels failed permanently as a result.)
+ *
+ * Uses ONLY model-authored content (headline / body_text / cta_text /
+ * urgency_element / visual_description) — nothing is fabricated. When the
+ * final inline slide is already the CTA but body-less, the cta_slide's text
+ * backfills it; otherwise the cta_slide is appended as the closing slide.
+ * No `cta_slide` present → returns the blueprint unchanged (idempotent).
+ */
+export function normalizeCarouselBlueprintShape(
+  blueprint: Record<string, unknown>,
+): Record<string, unknown> {
+  const cta = safeObject(blueprint.cta_slide);
+  if (Object.keys(cta).length === 0) return blueprint;
+  const slides = toArrayOfObjects(blueprint.slides);
+  const ctaBody = String(cta.body_text ?? cta.cta_text ?? cta.urgency_element ?? '').trim();
+  const ctaHeadline = String(cta.headline ?? '').trim();
+
+  const last = slides.length > 0 ? safeObject(slides[slides.length - 1]) : null;
+  const lastIsCta = last != null && (
+    String(last.role ?? '').toLowerCase() === 'cta' ||
+    (ctaHeadline !== '' && normalizeSlideText(last.headline) === normalizeSlideText(ctaHeadline))
+  );
+
+  const { cta_slide: _dropped, ...rest } = blueprint;
+  if (lastIsCta) {
+    // Backfill missing fields on the existing inline CTA slide from cta_slide.
+    const merged = { ...last } as Record<string, unknown>;
+    if (!String(merged.body_text ?? '').trim() && ctaBody) merged.body_text = ctaBody;
+    if (!String(merged.headline ?? '').trim() && ctaHeadline) merged.headline = ctaHeadline;
+    if (!String(merged.visual_description ?? merged.visual ?? '').trim() && String(cta.visual_description ?? '').trim()) {
+      merged.visual_description = cta.visual_description;
+    }
+    return { ...rest, slides: [...slides.slice(0, -1), merged] };
+  }
+  // Append the cta_slide as the closing slide (real content only).
+  const appended: Record<string, unknown> = {
+    slide_number: slides.length + 1,
+    role: 'cta',
+    headline: ctaHeadline,
+    body_text: ctaBody,
+    visual_description: cta.visual_description ?? cta.visual ?? '',
+    ...(cta.cta_text != null ? { cta_text: cta.cta_text } : {}),
+    ...(cta.color_accent != null ? { color_accent: cta.color_accent } : {}),
+    ...(cta.design_note != null ? { design_note: cta.design_note } : {}),
+  };
+  return { ...rest, slides: [...slides, appended] };
+}
+
 /** Complete when slide count matches the template AND every slide is complete. */
 export function carouselBlueprintIsComplete(
   blueprint: Record<string, unknown>,
