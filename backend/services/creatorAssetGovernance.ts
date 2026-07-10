@@ -237,6 +237,17 @@ export function autoCorrectVisualCopy(input: {
       // word-count chop, so overlay/slide copy always reads as finished.
       next = trimCopyToWordBudget(next, maxWords);
     }
+    // Profiles that forbid paragraph overlays (single-hero images / banners) must
+    // carry ONE sentence per field — a MULTI-sentence block is flagged as a
+    // paragraph and fails the render manifest CLOSED. Collapse to the first
+    // sentence so legitimate multi-sentence AI copy renders instead of hard-
+    // failing generation. (Word budget above already bounds length; we do NOT
+    // impose a char cap here — that would override profiles like brand_card whose
+    // word budget legitimately exceeds the paragraph char threshold.)
+    if (!profile.allowParagraphs && next && /[.!?]\s+\S/.test(next)) {
+      const firstSentence = next.match(/[^.!?]+[.!?]?/)?.[0]?.trim();
+      if (firstSentence && firstSentence !== next) { next = firstSentence; corrections.push('collapsed_to_single_line'); }
+    }
     return next;
   }).filter(Boolean);
   return { textBlocks, corrections: [...new Set(corrections)] };

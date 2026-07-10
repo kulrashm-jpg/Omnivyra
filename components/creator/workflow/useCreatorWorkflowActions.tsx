@@ -279,8 +279,16 @@ export function useCreatorWorkflowActions(
   // grounded in the Template Content / Writer source / topic. Authored copy is
   // never overwritten; the user can still regenerate any field with its "+AI".
   const OVERLAY_AUTOFILL_FIELDS = React.useMemo(
-    () => ['hook', 'headline', 'supportingText', 'keyInsight'] as Array<keyof WriterOverlayText>,
-    [],
+    () =>
+      // A single IMAGE is a hero — filling hook + headline + supporting + key
+      // insight exceeds the image render's text-density profile (the render fails
+      // closed with paragraph_overlay_forbidden / text_density_exceeds_profile).
+      // Fill only the headline + one supporting line for images; carousels and
+      // infographics render per slide/section and can carry the fuller set.
+      (activeTemplate?.assetFamily === 'image'
+        ? ['headline', 'supportingText']
+        : ['hook', 'headline', 'supportingText', 'keyInsight']) as Array<keyof WriterOverlayText>,
+    [activeTemplate?.assetFamily],
   );
   const autoFilledOverlayRef = React.useRef<string | null>(null);
   React.useEffect(() => {
