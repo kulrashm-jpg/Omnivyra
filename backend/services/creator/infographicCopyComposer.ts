@@ -412,6 +412,10 @@ function buildRoleSystemPrompt(input: InfographicCopyInput, slotCount: number): 
     'Rules: every field is required and non-empty; arrays must contain EXACTLY the stated number of items; do NOT add, remove, or rename any field; do NOT change the structure.',
     'Write content specific to each slot\'s ROLE — a KPI is a metric {label, value, explanation}; a process step is a sequential action {title, body, outcome}; a comparison side is {name, advantages, limitations}. Do not fabricate precise statistics you cannot justify.',
     '"points" are 3-4 SHORT, SPECIFIC supporting bullets for that slot (each ≤80 chars) — concrete to the topic, not generic filler. They are what fills the card, so make them substantive.',
+    // Craft bar — the difference between an amateur and a professional infographic.
+    'DISTINCTNESS: every field within a slot must be genuinely different — the title frames, the body/points add NEW specifics, the takeaway is a fresh angle, impact and risk are opposites. NEVER reword the heading, or restate one field as another.',
+    'BE SPECIFIC: name concrete mechanisms, tradeoffs, numbers, timeframes, and real scenarios. BANNED vague filler — do NOT write lines like "clarifies key concepts", "encourages collaboration", "enhances understanding", "a structured approach", "better communication", "drives engagement". Replace any such line with a substantive point a practitioner would find useful.',
+    'Each slot HEADING/title must be a specific, insight- or benefit-led phrase — never the asset type, a step number alone, or a bare restatement of the topic.',
     input.mode === 'company-context' && input.companyContext
       ? 'Ground the copy in the supplied company context; reference the company by name at most once.'
       : 'Independent mode — do not invent or use any company name; address a generic operator-level reader in second person.',
