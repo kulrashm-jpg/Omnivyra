@@ -223,8 +223,10 @@ export function buildFieldAssistMessages(
     `You are a marketing copy assistant for a ${template.assetFamily} asset ("${template.name}").`,
     'You ONLY produce text for the specific fields requested. You NEVER return a whole asset, extra fields, commentary, or markdown.',
     'Return STRICT JSON of the shape {"updates":[{"scope":"flat|slide|section|overlay|brief","field_key":"...","index":<number|optional>,"value":"..."}]}.',
+    'Produce EXACTLY ONE update object per requested field, and echo back that field\'s EXACT scope, field_key, and index as shown in the list. The index is 0-BASED — copy the `index=` value verbatim; do NOT renumber, start at 1, or skip any index.',
     'Keep each value within its max length. Match the platform-native, concise tone of social creative copy.',
     'Every field on an asset must be DISTINCT: never repeat or lightly reword another field. A subheadline must ADD new information or angle, not restate the headline; a CTA is an action, not a headline. If a value would duplicate a sibling field shown below, write something genuinely different.',
+    'On a carousel/infographic slide, the title/headline is the ONE scroll-stopping claim of that slide; the body/description must ADVANCE it with a concrete detail, proof point, benefit, or example — it must NEVER restate or lightly reword the title.',
     // Brand voice (communication style) — canonical, server-resolved.
     ...(brandVoiceLines.length ? ['Write in the brand voice:', ...brandVoiceLines] : []),
     // Ground copy in the company's ACTUAL business — never invent company facts.
@@ -232,8 +234,13 @@ export function buildFieldAssistMessages(
   ].join(' ');
 
   const fieldLines = resolved.map(({ target, field }) => {
-    const where = target.scope === 'slide' ? ` (slide ${Number(target.index) + 1})`
-      : target.scope === 'section' ? ` (section ${Number(target.index) + 1})`
+    // Emit the 0-based index the mapper expects and tell the model this is the
+    // Nth slide for context — without this the model returns 1-based indices and
+    // the first slide (index 0) never maps back (it degrades to a placeholder).
+    const idxPart = (target.scope === 'slide' || target.scope === 'section') && typeof target.index === 'number'
+      ? ` index=${target.index}` : '';
+    const where = target.scope === 'slide' ? ` (this is slide ${Number(target.index) + 1} of the deck)`
+      : target.scope === 'section' ? ` (this is section ${Number(target.index) + 1})`
         : '';
     // Carousel/infographic slides carry a narrative-arc role so each slide advances the story.
     const roleHint = target.role
@@ -241,7 +248,7 @@ export function buildFieldAssistMessages(
       : '';
     const max = field.maxLength ? `, max ${field.maxLength} chars` : '';
     const cur = target.currentValue ? ` — current: "${target.currentValue}"` : ' — current: (empty)';
-    return `- scope=${target.scope} field_key=${field.key}${where}${roleHint}: "${field.label}"${max}${cur}`;
+    return `- scope=${target.scope} field_key=${field.key}${idxPart}${where}${roleHint}: "${field.label}"${max}${cur}`;
   }).join('\n');
 
   // When the batch spans a slide arc, tell the model to treat it as ONE narrative sequence.
@@ -305,10 +312,10 @@ export function deterministicTransform(
     // duplicate. Offer/headline/body/brief legitimately restate the topic.
     if (key.includes('audience')) return '';                     // don't guess "who" — leave for the operator/LLM
     if (key.includes('tone') || key.includes('voice')) return 'Confident and clear';
-    // A creative brief / description is a sentence, not the bare goal label —
-    // keep it distinct from the short "offer" field.
-    if (key.includes('freetext') || key.includes('brief') || key.includes('description')) {
-      return topic ? `${capitalize(topic)} — a clear, benefit-led message for the right audience.` : field.label;
+    // A creative brief / description / slide body is a sentence that EXPANDS the
+    // headline — never the bare goal label, and distinct from the short title.
+    if (key.includes('freetext') || key.includes('brief') || key.includes('description') || key.includes('body')) {
+      return topic ? `${capitalize(topic)} — the detail that makes it land for your audience.` : field.label;
     }
     if (key.includes('metric')) return '100%';
     if (key.includes('year') || key.includes('date')) return '2024';
