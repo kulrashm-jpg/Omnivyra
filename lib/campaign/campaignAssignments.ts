@@ -155,6 +155,15 @@ export function isAssignmentLocked(a: Pick<CampaignAssignment, 'status'>): boole
   return LOCKED_ASSIGNMENT_STATUSES.includes(a.status);
 }
 
+/** P5 — publish failure, represented SEPARATELY from lifecycle state so a
+ *  failed publish never destroys the assignment's progression. */
+export interface AssignmentExecutionFailure {
+  message: string | null;
+  code: string | null;
+  occurred_at: string | null;
+  scheduled_post_id: string | null;
+}
+
 export interface CampaignAssignment {
   id: string;
   /** The owning campaign (draft or existing). Kept ON the entity so the layer
@@ -178,6 +187,15 @@ export interface CampaignAssignment {
   ordering: number;
   created_at: string;
   updated_at: string;
+  /* ── Execution-owned fields (P5) — written ONLY by the execution sync
+   *    (applyExecutionEvents); the planner never sets or edits them, and
+   *    they exist on the object only once execution has produced them. ── */
+  /** The existing scheduled_posts id this assignment's slot resolved to. */
+  scheduled_post_id?: string | null;
+  /** Latest publish failure — separate from status (lifecycle preserved). */
+  execution_failure?: AssignmentExecutionFailure | null;
+  /** When the execution sync last touched this assignment. */
+  execution_synced_at?: string | null;
 }
 
 /** Injectable id/clock so every operation is testable + replay-safe. */
@@ -210,7 +228,7 @@ export function normalizeAssignments(raw: unknown): CampaignAssignment[] {
     const assetId = str(r.asset_id);
     const structureId = str(r.structure_id);
     if (!id || !assetId || !structureId) continue;
-    out.push({
+    const parsed: CampaignAssignment = {
       id,
       campaign_id: str(r.campaign_id),
       asset_id: assetId,
@@ -226,7 +244,21 @@ export function normalizeAssignments(raw: unknown): CampaignAssignment[] {
       ordering: num(r.ordering) ?? 0,
       created_at: str(r.created_at) ?? new Date(0).toISOString(),
       updated_at: str(r.updated_at) ?? str(r.created_at) ?? new Date(0).toISOString(),
-    });
+    };
+    // Execution-owned fields (P5) survive reload but appear ONLY when
+    // execution produced them — legacy assignments stay byte-identical.
+    if (str(r.scheduled_post_id)) parsed.scheduled_post_id = str(r.scheduled_post_id);
+    if (r.execution_failure && typeof r.execution_failure === 'object' && !Array.isArray(r.execution_failure)) {
+      const f = r.execution_failure as Record<string, unknown>;
+      parsed.execution_failure = {
+        message: str(f.message),
+        code: str(f.code),
+        occurred_at: str(f.occurred_at),
+        scheduled_post_id: str(f.scheduled_post_id),
+      };
+    }
+    if (str(r.execution_synced_at)) parsed.execution_synced_at = str(r.execution_synced_at);
+    out.push(parsed);
   }
   return out;
 }

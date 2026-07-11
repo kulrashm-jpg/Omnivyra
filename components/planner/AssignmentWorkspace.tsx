@@ -42,10 +42,12 @@ import {
   assignmentsForSlot,
   deriveStructureSlots,
   isAssignmentLocked,
+  normalizeAssignments,
   type AssignmentStatus,
   type CampaignAssignment,
   type StructureSlot,
 } from '../../lib/campaign/campaignAssignments';
+import { applyExecutionEvents, type ExecutionEvent } from '../../lib/campaign/assignmentExecutionSync';
 import {
   assessExecutionReadiness,
   detectAssignmentConflicts,
@@ -111,6 +113,57 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
   useEffect(() => {
     installServerCreatorAssetBackend(companyId);
   }, [companyId]);
+
+  // ── P5: Execution Lifecycle Synchronization ─────────────────────────────
+  // On load (and on manual refresh — never a timer): recover assignments
+  // from the campaign's server draft state when the local session is empty
+  // (campaign reload / another device), then fold the EXISTING execution
+  // events onto them. The reducer is idempotent and forward-only, so
+  // repeated syncs are safe and never regress or touch planning fields.
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const syncExecution = useCallback(async () => {
+    if (!campaignId) return;
+    try {
+      const res = await fetchWithAuth(
+        `/api/campaigns/${encodeURIComponent(campaignId)}/assignment-execution-events`,
+      );
+      if (!res.ok) return;
+      const data = await res.json().catch(() => null);
+      const events: ExecutionEvent[] = Array.isArray(data?.events) ? data.events : [];
+      if (events.length > 0) {
+        setAssignments((current) => applyExecutionEvents(current, events).assignments);
+      }
+      setLastSyncAt(new Date().toISOString());
+    } catch { /* offline — the next open or manual refresh re-derives */ }
+  }, [campaignId, setAssignments]);
+
+  const recoveredForRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    if (!campaignId || recoveredForRef.current === campaignId) return;
+    recoveredForRef.current = campaignId;
+    let cancelled = false;
+    (async () => {
+      try {
+        if ((state.assignments ?? []).length === 0) {
+          const res = await fetchWithAuth(
+            `/api/campaigns/${encodeURIComponent(campaignId)}/planner-draft-state`,
+          );
+          if (res.ok) {
+            const data = await res.json().catch(() => null);
+            const recovered = normalizeAssignments(
+              (data?.planner_state as { assignments?: unknown } | null)?.assignments,
+            );
+            if (!cancelled && recovered.length > 0) {
+              setAssignments((current) => (current.length > 0 ? current : recovered));
+            }
+          }
+        }
+      } catch { /* recovery is best-effort */ }
+      if (!cancelled) await syncExecution();
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId]);
 
   const loadAssets = useCallback(async () => {
     if (!companyId) return;
@@ -211,7 +264,32 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
             {readiness.schedule_imbalance.map((m) => (
               <div key={m} className="text-amber-700 mt-0.5">{m}</div>
             ))}
+            {readiness.failed_publishing.length > 0 && (
+              <div className="text-red-700 mt-0.5">
+                {readiness.failed_publishing.length} assignment{readiness.failed_publishing.length === 1 ? '' : 's'} with publish failures — open the item for details.
+              </div>
+            )}
+            {readiness.stalled_execution.length > 0 && (
+              <div className="text-amber-700 mt-0.5">
+                {readiness.stalled_execution.length} materialized item{readiness.stalled_execution.length === 1 ? '' : 's'} not yet scheduled while others progressed.
+              </div>
+            )}
+            {readiness.execution_coverage.total > 0 && (
+              <div className="text-gray-400 mt-0.5">
+                Execution: {readiness.execution_coverage.scheduled} scheduled · {readiness.execution_coverage.publishing} publishing · {readiness.execution_coverage.published} published · {readiness.execution_coverage.archived} archived
+              </div>
+            )}
           </div>
+          {campaignId && (
+            <button
+              type="button"
+              onClick={() => void syncExecution()}
+              title={lastSyncAt ? `Last synced ${new Date(lastSyncAt).toLocaleTimeString()}` : 'Sync lifecycle from execution'}
+              className="ml-auto flex-shrink-0 flex items-center gap-1 text-[11px] font-medium text-gray-500 hover:text-gray-800"
+            >
+              <RefreshCw className="h-3 w-3" /> Sync
+            </button>
+          )}
         </div>
         {conflicts.length > 0 && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 space-y-1">
@@ -290,6 +368,14 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${STATUS_STYLE[a.status]}`}>
                                   {a.status}
                                 </span>
+                                {a.execution_failure && (
+                                  <span
+                                    title={a.execution_failure.message ?? 'Publish failed'}
+                                    className="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 bg-red-100 text-red-700"
+                                  >
+                                    publish failed
+                                  </span>
+                                )}
                               </button>
                               {locked ? (
                                 <span title="In execution — this item is locked; other assignments stay editable" className="flex-shrink-0 p-1 text-indigo-400">
@@ -332,6 +418,25 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                                 {asset?.url && (
                                   // eslint-disable-next-line @next/next/no-img-element
                                   <img src={asset.url} alt={asset.title} className="max-h-32 rounded border border-gray-200 object-contain" />
+                                )}
+                                {/* P5 — synchronized execution state (read-only view of the engine) */}
+                                {(a.scheduled_post_id || a.execution_failure || a.execution_synced_at) && (
+                                  <div className="text-[11px] text-gray-500 space-y-0.5">
+                                    <div>
+                                      <span className="font-medium text-gray-600">Execution:</span>{' '}
+                                      {isAssignmentLocked(a) ? a.status : 'not yet handed off'}
+                                      {a.scheduled_post_id ? <> · scheduled post <span className="font-mono">{a.scheduled_post_id}</span></> : ' · not scheduled'}
+                                    </div>
+                                    {a.execution_failure && (
+                                      <div className="text-red-700">
+                                        Publish failed{a.execution_failure.code ? ` (${a.execution_failure.code})` : ''}
+                                        {a.execution_failure.message ? `: ${a.execution_failure.message}` : ''} — lifecycle preserved; the engine retries.
+                                      </div>
+                                    )}
+                                    {a.execution_synced_at && (
+                                      <div className="text-gray-400">Synced {new Date(a.execution_synced_at).toLocaleString()}</div>
+                                    )}
+                                  </div>
                                 )}
                                 {locked ? (
                                   <div className="text-[11px] text-indigo-600 flex items-center gap-1.5">

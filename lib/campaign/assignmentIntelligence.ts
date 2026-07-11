@@ -218,6 +218,20 @@ export interface ExecutionReadinessReport {
   missing_assets: string[];
   /** Weeks with structure but zero assigned content while others have some. */
   schedule_imbalance: string[];
+  /** P5 — assignments carrying a publish failure (lifecycle preserved). */
+  failed_publishing: string[];
+  /** P5 — items stuck at 'materialized' while siblings progressed (no
+   *  timers: "stalled" is relative to sibling progress, not wall-clock). */
+  stalled_execution: string[];
+  /** P5 — execution coverage across the synchronized lifecycle. */
+  execution_coverage: {
+    total: number;
+    materialized: number;
+    scheduled: number;
+    publishing: number;
+    published: number;
+    archived: number;
+  };
   /** True when at least one assignment is confirmed and nothing blocks it. */
   ready: boolean;
   summary: string;
@@ -259,6 +273,26 @@ export function assessExecutionReadiness(
   }
 
   const materializedCount = assignments.filter((a) => isAssignmentLocked(a)).length;
+
+  // P5 — read-only execution reporting (synchronized by the sync layer;
+  // this only OBSERVES the resulting state, it never modifies lifecycle).
+  const failedPublishing = assignments.filter((a) => a.execution_failure).map((a) => a.id);
+  const byStatus = (s: CampaignAssignment['status']) => assignments.filter((a) => a.status === s).length;
+  const executionCoverage = {
+    total: materializedCount,
+    materialized: byStatus('materialized'),
+    scheduled: byStatus('scheduled'),
+    publishing: byStatus('publishing'),
+    published: byStatus('published'),
+    archived: byStatus('archived'),
+  };
+  const siblingsProgressed = assignments.some(
+    (a) => a.status === 'scheduled' || a.status === 'publishing' || a.status === 'published' || a.status === 'archived',
+  );
+  const stalledExecution = siblingsProgressed
+    ? assignments.filter((a) => a.status === 'materialized').map((a) => a.id)
+    : [];
+
   const ready = confirmed.length > 0 && conflicts.length === 0 && missingAssets.length === 0;
   const summary = ready
     ? `${confirmed.length} confirmed assignment${confirmed.length === 1 ? '' : 's'} ready to materialize into execution.`
@@ -275,6 +309,9 @@ export function assessExecutionReadiness(
     conflicts,
     missing_assets: missingAssets,
     schedule_imbalance: scheduleImbalance,
+    failed_publishing: failedPublishing,
+    stalled_execution: stalledExecution,
+    execution_coverage: executionCoverage,
     ready,
     summary,
   };
