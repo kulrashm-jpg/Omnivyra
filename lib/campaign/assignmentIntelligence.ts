@@ -10,6 +10,7 @@ import {
   type CampaignAssignment,
   type StructureSlot,
   assignmentsForSlot,
+  isAssignmentLocked,
 } from './campaignAssignments';
 
 /** The slice of a library asset the advisor needs — metadata only, no payloads. */
@@ -202,4 +203,79 @@ export function recommendAssignments(
     if (best) recommendations.push(best);
   }
   return recommendations;
+}
+
+/* ── P4: execution readiness (assist-only — reports, never modifies) ── */
+
+export interface ExecutionReadinessReport {
+  total_slots: number;
+  assigned_slots: number;
+  confirmed_count: number;
+  materialized_count: number;
+  gaps: AssignmentGap[];
+  conflicts: AssignmentConflict[];
+  /** Confirmed assignments whose asset is not in the library snapshot. */
+  missing_assets: string[];
+  /** Weeks with structure but zero assigned content while others have some. */
+  schedule_imbalance: string[];
+  /** True when at least one assignment is confirmed and nothing blocks it. */
+  ready: boolean;
+  summary: string;
+}
+
+/**
+ * Assess how ready the campaign's assignments are for the execution handoff.
+ * Deterministic and read-only: the report names what is missing, imbalanced,
+ * or conflicting; acting on any of it stays a human decision.
+ */
+export function assessExecutionReadiness(
+  slots: StructureSlot[],
+  assignments: CampaignAssignment[],
+  assets: AssignableAsset[],
+): ExecutionReadinessReport {
+  const gaps = detectAssignmentGaps(slots, assignments);
+  const conflicts = detectAssignmentConflicts(slots, assignments, assets);
+  const assetIds = new Set(assets.map((a) => a.id));
+  const confirmed = assignments.filter((a) => a.status === 'confirmed');
+  const missingAssets = confirmed.filter((a) => !assetIds.has(a.asset_id)).map((a) => a.id);
+
+  const assignedSlotIds = new Set(assignments.map((a) => a.structure_id));
+  const weeksWithSlots = new Map<number, { slots: number; assigned: number }>();
+  for (const slot of slots) {
+    const wk = slot.week ?? 0;
+    const entry = weeksWithSlots.get(wk) ?? { slots: 0, assigned: 0 };
+    entry.slots += 1;
+    if (assignedSlotIds.has(slot.structure_id)) entry.assigned += 1;
+    weeksWithSlots.set(wk, entry);
+  }
+  const anyAssigned = Array.from(weeksWithSlots.values()).some((w) => w.assigned > 0);
+  const scheduleImbalance: string[] = [];
+  if (anyAssigned) {
+    for (const [week, entry] of Array.from(weeksWithSlots.entries()).sort((a, b) => a[0] - b[0])) {
+      if (entry.assigned === 0) {
+        scheduleImbalance.push(`Week ${week || '?'} has ${entry.slots} publishing slot${entry.slots === 1 ? '' : 's'} but no assigned content.`);
+      }
+    }
+  }
+
+  const materializedCount = assignments.filter((a) => isAssignmentLocked(a)).length;
+  const ready = confirmed.length > 0 && conflicts.length === 0 && missingAssets.length === 0;
+  const summary = ready
+    ? `${confirmed.length} confirmed assignment${confirmed.length === 1 ? '' : 's'} ready to materialize into execution.`
+    : confirmed.length === 0
+      ? 'No confirmed assignments yet — confirm assignments to include them in the execution handoff.'
+      : `${conflicts.length + missingAssets.length} blocking issue${conflicts.length + missingAssets.length === 1 ? '' : 's'} before the handoff is clean.`;
+
+  return {
+    total_slots: slots.length,
+    assigned_slots: slots.filter((s) => assignedSlotIds.has(s.structure_id)).length,
+    confirmed_count: confirmed.length,
+    materialized_count: materializedCount,
+    gaps,
+    conflicts,
+    missing_assets: missingAssets,
+    schedule_imbalance: scheduleImbalance,
+    ready,
+    summary,
+  };
 }

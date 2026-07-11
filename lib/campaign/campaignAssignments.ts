@@ -108,7 +108,52 @@ export function deriveStructureSlots(calendarPlan: CalendarPlanLike | null | und
 
 /* ── The Assignment entity ── */
 
-export type AssignmentStatus = 'draft' | 'ready' | 'confirmed';
+/**
+ * P4 lifecycle: draft → ready → confirmed → materialized → scheduled →
+ * publishing → published → archived. The first three are PLANNING states
+ * (fully editable); 'confirmed' is the handoff gate — only confirmed
+ * assignments materialize into execution. From 'materialized' onward the
+ * item is in a PROTECTED execution state and becomes immutable (per-item
+ * lock — deterministic, purely a function of status; there is no
+ * blueprint-wide freeze at this layer).
+ */
+export type AssignmentStatus =
+  | 'draft'
+  | 'ready'
+  | 'confirmed'
+  | 'materialized'
+  | 'scheduled'
+  | 'publishing'
+  | 'published'
+  | 'archived';
+
+export const ASSIGNMENT_LIFECYCLE: readonly AssignmentStatus[] = [
+  'draft',
+  'ready',
+  'confirmed',
+  'materialized',
+  'scheduled',
+  'publishing',
+  'published',
+  'archived',
+];
+
+/** Planning states — the user may set these freely via metadata edits. */
+export const PLANNING_STATUSES: readonly AssignmentStatus[] = ['draft', 'ready', 'confirmed'];
+
+/** Protected execution states — per-item lock (SPEC-001: planning stays
+ *  editable until execution begins; only items IN execution freeze). */
+export const LOCKED_ASSIGNMENT_STATUSES: readonly AssignmentStatus[] = [
+  'materialized',
+  'scheduled',
+  'publishing',
+  'published',
+  'archived',
+];
+
+export function isAssignmentLocked(a: Pick<CampaignAssignment, 'status'>): boolean {
+  return LOCKED_ASSIGNMENT_STATUSES.includes(a.status);
+}
 
 export interface CampaignAssignment {
   id: string;
@@ -150,7 +195,7 @@ function mintAssignmentId(ctx?: AssignmentOpContext): string {
   return `asg_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 }
 
-const VALID_STATUS: readonly AssignmentStatus[] = ['draft', 'ready', 'confirmed'];
+const VALID_STATUS: readonly AssignmentStatus[] = ASSIGNMENT_LIFECYCLE;
 
 /** Defensive parse for assignments arriving from persisted planner state
  *  (server snapshot or localStorage cache). Unknown shapes are dropped, never
@@ -253,18 +298,20 @@ export function bulkAssign(
 }
 
 /** Remove a relationship. The ASSET IS NEVER DELETED — it stays in the
- *  library and in every other assignment that references it. */
+ *  library and in every other assignment that references it. Locked items
+ *  (in protected execution states) are kept — detaching them would desync
+ *  planning from live execution. */
 export function unassignAssignment(list: CampaignAssignment[], assignmentId: string): CampaignAssignment[] {
-  return list.filter((a) => a.id !== assignmentId);
+  return list.filter((a) => a.id !== assignmentId || isAssignmentLocked(a));
 }
 
 export function bulkUnassign(list: CampaignAssignment[], assignmentIds: string[]): CampaignAssignment[] {
   const drop = new Set(assignmentIds);
-  return list.filter((a) => !drop.has(a.id));
+  return list.filter((a) => !drop.has(a.id) || isAssignmentLocked(a));
 }
 
 /** Move an assignment to a different structure slot (same identity, new
- *  placement — history/notes/status travel with it). */
+ *  placement — history/notes/status travel with it). Locked items don't move. */
 export function moveAssignment(
   list: CampaignAssignment[],
   assignmentId: string,
@@ -273,7 +320,7 @@ export function moveAssignment(
 ): CampaignAssignment[] {
   const ordering = nextOrdering(list, targetSlot.structure_id);
   return list.map((a) =>
-    a.id === assignmentId
+    a.id === assignmentId && !isAssignmentLocked(a)
       ? {
           ...a,
           structure_id: targetSlot.structure_id,
@@ -316,13 +363,17 @@ export function duplicateAssignment(
     platform: placement.platform,
     content_type: placement.content_type,
     ordering: nextOrdering(list, placement.structure_id),
+    // A duplicate is a NEW planning relationship — it never inherits a
+    // protected execution state from its source.
+    status: PLANNING_STATUSES.includes(source.status) ? source.status : 'draft',
     created_at: now,
     updated_at: now,
   };
   return { assignments: [...list, copy], assignment: copy };
 }
 
-/** Replace the CONTENT of an assignment (new asset, same placement). */
+/** Replace the CONTENT of an assignment (new asset, same placement).
+ *  Locked items keep their materialized content. */
 export function replaceAssignmentAsset(
   list: CampaignAssignment[],
   assignmentId: string,
@@ -331,14 +382,16 @@ export function replaceAssignmentAsset(
   ctx?: AssignmentOpContext,
 ): CampaignAssignment[] {
   return list.map((a) =>
-    a.id === assignmentId
+    a.id === assignmentId && !isAssignmentLocked(a)
       ? { ...a, asset_id: newAssetId, asset_version: newAssetVersion ?? null, updated_at: nowOf(ctx) }
       : a,
   );
 }
 
 /** Reorder a slot's assignments to the given id order (dense, 0-based).
- *  Ids not listed keep their relative order after the listed ones. */
+ *  Ids not listed keep their relative order after the listed ones. A slot
+ *  containing a locked assignment does not reorder (its materialized order
+ *  is part of the execution handoff). */
 export function reorderAssignments(
   list: CampaignAssignment[],
   structureId: string,
@@ -346,6 +399,7 @@ export function reorderAssignments(
   ctx?: AssignmentOpContext,
 ): CampaignAssignment[] {
   const slotItems = assignmentsForSlot(list, structureId);
+  if (slotItems.some((a) => isAssignmentLocked(a))) return list;
   const rank = new Map<string, number>();
   orderedIds.forEach((id, i) => rank.set(id, i));
   const sorted = [...slotItems].sort((a, b) => {
@@ -378,11 +432,37 @@ export function updateAssignmentMetadata(
   ctx?: AssignmentOpContext,
 ): CampaignAssignment[] {
   return list.map((a) => {
-    if (a.id !== assignmentId) return a;
+    if (a.id !== assignmentId || isAssignmentLocked(a)) return a;
     const next = { ...a, updated_at: nowOf(ctx) };
-    if (patch.status && VALID_STATUS.includes(patch.status)) next.status = patch.status;
+    // Users may only set PLANNING statuses here; execution states are
+    // reached exclusively through advanceAssignmentStatus (the lifecycle).
+    if (patch.status && PLANNING_STATUSES.includes(patch.status)) next.status = patch.status;
     if (typeof patch.notes === 'string') next.notes = patch.notes;
     if (patch.slot !== undefined) next.slot = str(patch.slot);
     return next;
+  });
+}
+
+/**
+ * Advance an assignment along the lifecycle (draft → … → archived).
+ * FORWARD-ONLY and deterministic: a backward or unknown transition is a
+ * no-op. This is the sole doorway into (and through) the protected
+ * execution states — the lock never blocks the lifecycle itself.
+ */
+export function advanceAssignmentStatus(
+  list: CampaignAssignment[],
+  assignmentIds: string | string[],
+  next: AssignmentStatus,
+  ctx?: AssignmentOpContext,
+): CampaignAssignment[] {
+  const ids = new Set(Array.isArray(assignmentIds) ? assignmentIds : [assignmentIds]);
+  const nextRank = ASSIGNMENT_LIFECYCLE.indexOf(next);
+  if (nextRank < 0) return list;
+  const now = nowOf(ctx);
+  return list.map((a) => {
+    if (!ids.has(a.id)) return a;
+    const currentRank = ASSIGNMENT_LIFECYCLE.indexOf(a.status);
+    if (nextRank <= currentRank) return a; // forward-only
+    return { ...a, status: next, updated_at: now };
   });
 }

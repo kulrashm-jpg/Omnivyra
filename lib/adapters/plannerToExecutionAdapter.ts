@@ -50,6 +50,14 @@ export interface PlannerActivityInput {
   funnel_stage?: string | null;
   /** Campaign phase label. */
   phase?: string | null;
+  /**
+   * Strategic Mix P4 — materialized Assignment payload (asset reference from
+   * the Asset Library). Passed through inside the content JSON; the execution
+   * scheduler already consumes it as an asset override.
+   */
+  creator_asset?: Record<string, unknown> | null;
+  /** READY_FOR_PROMOTION when an assignment materialized onto this slot. */
+  content_status?: string | null;
 }
 
 export interface AdapterInput {
@@ -160,6 +168,15 @@ function buildContentJson(
   if (activity.angle)       payload.angle = activity.angle;
   if (activity.funnel_stage) payload.funnel_stage = activity.funnel_stage;
   if (activity.phase)       payload.phase = activity.phase;
+  // Strategic Mix P4 — Assignment materialization passthrough. The scheduler
+  // already reads `creator_asset` from the content JSON as an asset override,
+  // so a materialized assignment flows through the EXISTING engine untouched.
+  if (activity.creator_asset && typeof activity.creator_asset === 'object' && !Array.isArray(activity.creator_asset)) {
+    payload.creator_asset = activity.creator_asset;
+  }
+  if (typeof activity.content_status === 'string' && activity.content_status.trim()) {
+    payload.content_status = activity.content_status.trim();
+  }
   return JSON.stringify(payload);
 }
 

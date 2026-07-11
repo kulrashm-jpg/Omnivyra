@@ -18,9 +18,11 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  CheckCircle2,
   Copy,
   Image as ImageIcon,
   Lightbulb,
+  Lock,
   RefreshCw,
   Replace,
   Search,
@@ -39,11 +41,13 @@ import {
   updateAssignmentMetadata,
   assignmentsForSlot,
   deriveStructureSlots,
+  isAssignmentLocked,
   type AssignmentStatus,
   type CampaignAssignment,
   type StructureSlot,
 } from '../../lib/campaign/campaignAssignments';
 import {
+  assessExecutionReadiness,
   detectAssignmentConflicts,
   detectAssignmentGaps,
   recommendAssignments,
@@ -78,6 +82,12 @@ const STATUS_STYLE: Record<AssignmentStatus, string> = {
   draft: 'bg-gray-100 text-gray-600',
   ready: 'bg-amber-100 text-amber-700',
   confirmed: 'bg-emerald-100 text-emerald-700',
+  // P4 — protected execution states (per-item lock)
+  materialized: 'bg-indigo-100 text-indigo-700',
+  scheduled: 'bg-blue-100 text-blue-700',
+  publishing: 'bg-violet-100 text-violet-700',
+  published: 'bg-teal-100 text-teal-700',
+  archived: 'bg-slate-200 text-slate-600',
 };
 
 interface Props {
@@ -138,6 +148,12 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
     () => (showSuggestions ? recommendAssignments(slots, assignableAssets, assignments) : []),
     [showSuggestions, slots, assignableAssets, assignments],
   );
+  // P4 — execution readiness (assist-only report; finalize consumes the
+  // confirmed assignments, this just tells the user where they stand).
+  const readiness = useMemo(
+    () => assessExecutionReadiness(slots, assignments, assignableAssets),
+    [slots, assignments, assignableAssets],
+  );
 
   // ── Assignment mutations (all through the pure model, all user-initiated) ──
   const doAssign = useCallback(
@@ -179,6 +195,24 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
     <div className="flex-1 min-h-0 flex gap-3 p-3">
       {/* ── Structure + assignments (left) ── */}
       <div className="flex-1 min-w-0 overflow-y-auto space-y-4 pr-1">
+        {/* P4 — readiness strip (report only; nothing here mutates) */}
+        <div className={`rounded-lg border px-3 py-2 flex items-start gap-2 text-xs ${
+          readiness.ready ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-gray-200 bg-white text-gray-600'
+        }`}>
+          {readiness.ready
+            ? <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+            : <Lightbulb className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-gray-400" />}
+          <div className="min-w-0">
+            <span className="font-medium">{readiness.summary}</span>
+            <span className="text-gray-400">
+              {' '}{readiness.assigned_slots}/{readiness.total_slots} slots assigned
+              {readiness.materialized_count > 0 ? ` · ${readiness.materialized_count} in execution` : ''}
+            </span>
+            {readiness.schedule_imbalance.map((m) => (
+              <div key={m} className="text-amber-700 mt-0.5">{m}</div>
+            ))}
+          </div>
+        </div>
         {conflicts.length > 0 && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 space-y-1">
             {conflicts.map((c, i) => (
@@ -233,12 +267,15 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                       {slotAssignments.map((a, idx) => {
                         const asset = assetById.get(a.asset_id);
                         const expanded = expandedAssignmentId === a.id;
+                        // P4 per-item lock: items in protected execution
+                        // states are immutable; everything else stays editable.
+                        const locked = isAssignmentLocked(a);
                         return (
                           <div
                             key={a.id}
-                            draggable
-                            onDragStart={(e) => e.dataTransfer.setData('application/x-omnivyra-assignment', a.id)}
-                            className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1.5 cursor-grab"
+                            draggable={!locked}
+                            onDragStart={(e) => !locked && e.dataTransfer.setData('application/x-omnivyra-assignment', a.id)}
+                            className={`rounded-md border px-2 py-1.5 ${locked ? 'border-indigo-100 bg-indigo-50/50' : 'border-gray-200 bg-gray-50 cursor-grab'}`}
                           >
                             <div className="flex items-center gap-2">
                               <button
@@ -254,6 +291,11 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                                   {a.status}
                                 </span>
                               </button>
+                              {locked ? (
+                                <span title="In execution — this item is locked; other assignments stay editable" className="flex-shrink-0 p-1 text-indigo-400">
+                                  <Lock className="h-3 w-3" />
+                                </span>
+                              ) : (
                               <div className="flex items-center gap-0.5 flex-shrink-0">
                                 <button type="button" title="Move up" disabled={idx === 0}
                                   onClick={() => setAssignments((cur) => reorderAssignments(cur, slot.structure_id, slotAssignments.map((s, i) => (i === idx - 1 ? a.id : i === idx ? slotAssignments[idx - 1].id : s.id))))}
@@ -282,6 +324,7 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                                   <X className="h-3 w-3" />
                                 </button>
                               </div>
+                              )}
                             </div>
 
                             {expanded && (
@@ -290,6 +333,13 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                                   // eslint-disable-next-line @next/next/no-img-element
                                   <img src={asset.url} alt={asset.title} className="max-h-32 rounded border border-gray-200 object-contain" />
                                 )}
+                                {locked ? (
+                                  <div className="text-[11px] text-indigo-600 flex items-center gap-1.5">
+                                    <Lock className="h-3 w-3" />
+                                    This assignment is {a.status} — it entered execution and is immutable. Unaffected assignments remain editable.
+                                  </div>
+                                ) : (
+                                <>
                                 <div className="flex items-center gap-2">
                                   <label className="text-[11px] text-gray-500">Status</label>
                                   <select
@@ -324,6 +374,8 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                                   placeholder="Assignment notes…"
                                   className="w-full text-xs border border-gray-300 rounded px-2 py-1"
                                 />
+                                </>
+                                )}
                               </div>
                             )}
                           </div>

@@ -118,6 +118,43 @@ export function installServerCreatorAssetBackend(companyId: string | null | unde
   return true;
 }
 
+/**
+ * Strategic Mix P4 — resolve the library into the payload slices Assignment
+ * materialization needs (id/title/url/files/type/version). Read-only; the
+ * empty map on failure makes finalize degrade to an unmaterialized (but
+ * still valid) handoff instead of blocking.
+ */
+export async function fetchLibraryMaterializableAssets(
+  companyId: string | null | undefined,
+): Promise<Map<string, { id: string; title: string | null; url: string | null; files?: unknown[] | null; creatorType: string | null; version: number | null }>> {
+  const out = new Map<string, { id: string; title: string | null; url: string | null; files?: unknown[] | null; creatorType: string | null; version: number | null }>();
+  const cid = typeof companyId === 'string' ? companyId.trim() : '';
+  if (!cid) return out;
+  try {
+    const res = await fetchWithAuth(`${base}?company_id=${encodeURIComponent(cid)}&limit=500`);
+    if (!res.ok) return out;
+    const data = await res.json().catch(() => null);
+    const entries: Array<{ asset: CreatorAsset }> = Array.isArray(data?.assets) ? data.assets : [];
+    for (const entry of entries) {
+      const envelope = entry?.asset;
+      if (!isEnvelope(envelope)) continue;
+      const current =
+        envelope.versions?.find((v) => v.version === envelope.currentVersion) ??
+        envelope.versions?.[envelope.versions.length - 1];
+      const payload = current?.payload;
+      out.set(envelope.id, {
+        id: envelope.id,
+        title: typeof payload?.title === 'string' ? payload.title : null,
+        url: typeof payload?.url === 'string' ? payload.url : null,
+        files: Array.isArray(payload?.files) ? payload.files : null,
+        creatorType: typeof payload?.creatorType === 'string' ? payload.creatorType : envelope.metadata?.assetType ?? null,
+        version: typeof envelope.currentVersion === 'number' ? envelope.currentVersion : null,
+      });
+    }
+  } catch { /* offline → empty map → unmaterialized handoff */ }
+  return out;
+}
+
 /** Fire-and-forget server usage tracking (attach/reuse events). */
 export function reportLibraryAssetUsage(companyId: string | null | undefined, assetId: string): void {
   const cid = typeof companyId === 'string' ? companyId.trim() : '';

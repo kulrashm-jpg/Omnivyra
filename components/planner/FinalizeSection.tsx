@@ -17,6 +17,8 @@ import type { PaidRecommendation } from '../../lib/ads/paidAmplificationEngine';
 import type { SimulatorBasePlan } from '../../lib/simulation/scenarioSimulator';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
+import { materializeAssignments, type MaterializationResult } from '../../lib/campaign/assignmentMaterialization';
+import { fetchLibraryMaterializableAssets } from '../../lib/content/creatorAssetServerBackend';
 
 export interface FinalizeSectionProps {
   companyId?: string | null;
@@ -31,7 +33,7 @@ export function FinalizeSection({
   onFinalize,
   onGeneratePreview,
 }: FinalizeSectionProps) {
-  const { state, setCampaignStructure, setCalendarPlan } = usePlannerSession();
+  const { state, setCampaignStructure, setCalendarPlan, setAssignments } = usePlannerSession();
   const [generating, setGenerating] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
@@ -179,6 +181,32 @@ export function FinalizeSection({
     setFinalizing(true);
     setFinalizeError(null);
     try {
+      // ── Strategic Mix P4: Execution Handoff ──────────────────────────────
+      // Confirmed Assignments are THE source for execution: resolve their
+      // library assets and materialize them into the calendar activities the
+      // existing pipeline consumes. Partial campaigns are fine — unassigned
+      // slots and non-confirmed assignments pass through untouched, and a
+      // failed library read degrades to an unmaterialized (still valid)
+      // finalize rather than blocking.
+      let materialization: MaterializationResult | null = null;
+      const hasConfirmedAssignments = (state.assignments ?? []).some((a) => a.status === 'confirmed');
+      if (hasConfirmedAssignments && calendarPlan) {
+        const assets = await fetchLibraryMaterializableAssets(companyId);
+        if (assets.size > 0) {
+          materialization = materializeAssignments({
+            campaignId: campaignId ?? state.draft_campaign_id ?? null,
+            calendarPlan,
+            assignments: state.assignments ?? [],
+            assets,
+          });
+          const blocked = materialization.issues.filter((i) => i.severity === 'error');
+          if (blocked.length > 0) {
+            console.warn('[strategic-mix][P4] assignments skipped at materialization:', blocked);
+          }
+        }
+      }
+      const calendarPlanForFinalize = materialization?.calendar_plan ?? calendarPlan;
+
       const res = await fetchWithAuth('/api/campaigns/planner-finalize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -192,8 +220,13 @@ export function FinalizeSection({
           account_context: state.account_context ?? null,
           campaign_validation: campaignValidation ?? null,
           paid_recommendation: paidRecommendation ?? null,
-          execution_handoff: handoff,
-          ...(calendarPlan ? { calendar_plan: calendarPlan } : {}),
+          execution_handoff: {
+            ...handoff,
+            // P4 — the assignment relationships behind this execution (the
+            // server records them in the version snapshot for audit/recovery).
+            ...(materialization ? { assignments: materialization.assignments } : {}),
+          },
+          ...(calendarPlanForFinalize ? { calendar_plan: calendarPlanForFinalize } : {}),
           ...(ENABLE_UNIFIED_CAMPAIGN_WIZARD
             ? {
                 cross_platform_sharing: {
@@ -208,6 +241,12 @@ export function FinalizeSection({
       if (!res.ok) throw new Error(data?.error || 'Finalize failed');
       const cid = data?.campaign_id;
       if (cid) {
+        // P4 — record the lifecycle advance (confirmed → materialized) in
+        // planner state; the draft seam autosave/cache persists it so a
+        // resumed session shows the locked, materialized items.
+        if (materialization && materialization.materialized_ids.length > 0) {
+          setAssignments(materialization.assignments);
+        }
         onFinalize?.(cid);
         window.location.href = `/campaign-calendar/${cid}`;
       }

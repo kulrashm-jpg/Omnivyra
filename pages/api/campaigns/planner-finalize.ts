@@ -429,6 +429,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (handoff.idea_spine && typeof handoff.idea_spine === 'object' && !Array.isArray(handoff.idea_spine)) {
       planningContext.idea_spine = handoff.idea_spine;
     }
+    // Strategic Mix P4 — record the Assignment relationships that produced
+    // this execution (audit + recovery). Purely additive snapshot data.
+    if (Array.isArray(handoff.assignments) && handoff.assignments.length > 0) {
+      planningContext.assignments = handoff.assignments;
+    }
 
     let campaignId = existingCampaignId && typeof existingCampaignId === 'string' ? existingCampaignId : null;
 
@@ -643,7 +648,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // EXISTING FLOW — completely unchanged; skipped only when adapter succeeded
     // -------------------------------------------------------------------------
     if (!adapterHandledSlots && useCalendarPlanPath && hasCalendarPlan) {
-      const activities = (bodyCalendarPlan as { activities: Array<{ week_number?: number; day?: string; platform?: string; content_type?: string; title?: string; theme?: string; execution_id?: string }> }).activities;
+      const activities = (bodyCalendarPlan as { activities: Array<{ week_number?: number; day?: string; platform?: string; content_type?: string; title?: string; theme?: string; execution_id?: string; creator_asset?: Record<string, unknown> | null; content_status?: string }> }).activities;
 
       // FIX 3: Duplicate slot protection
       const { data: existingSlots } = await supabase
@@ -690,6 +695,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           content: JSON.stringify({
             placeholder: true,
             label,
+            // Strategic Mix P4 — Assignment materialization passthrough: the
+            // scheduler already consumes `creator_asset` from the content JSON
+            // as an asset override (same field the adapter path carries).
+            ...(act.creator_asset && typeof act.creator_asset === 'object' && !Array.isArray(act.creator_asset)
+              ? { creator_asset: act.creator_asset }
+              : {}),
+            ...(typeof act.content_status === 'string' && act.content_status.trim()
+              ? { content_status: act.content_status.trim() }
+              : {}),
           }),
           status: 'planned',
           ai_generated: false,
