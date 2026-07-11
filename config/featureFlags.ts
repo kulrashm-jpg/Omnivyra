@@ -30,3 +30,16 @@ export const ENABLE_PLANNER_ADAPTER =
   typeof window === 'undefined'
     ? process.env.ENABLE_PLANNER_ADAPTER !== 'false'
     : true;
+
+/**
+ * Strategic Mix R2-P2 — per-item blueprint lock doctrine (SPEC-001 §2).
+ * When enabled, assertBlueprintMutable evaluates individual scheduled items
+ * (publishing/published, or inside their OWN 24h freeze window) instead of
+ * the legacy campaign-wide freeze. Defaults OFF — legacy behavior stays
+ * byte-identical until validation completes; switching is configuration-
+ * only. Read lazily (a function, not a const) so runtime config changes
+ * and tests take effect without module reloads. Server-only.
+ */
+export function blueprintPerItemLocksEnabled(): boolean {
+  return typeof window === 'undefined' && process.env.BLUEPRINT_PER_ITEM_LOCKS === 'true';
+}

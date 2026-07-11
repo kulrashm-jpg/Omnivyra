@@ -5,6 +5,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import { BLUEPRINT_FREEZE_WINDOW_HOURS } from '../governance/GovernanceConfig';
+import { blueprintPerItemLocksEnabled } from '../../config/featureFlags';
 import { memoRequest } from './requestScopedMemo';
 
 /** Stage 11: Deterministic guard — campaign must have duration_weeks set before blueprint resolution. */
@@ -42,14 +43,35 @@ export class BlueprintExecutionFreezeError extends Error {
   }
 }
 
+/** R2-P2 — optional scoping for the mutability check. `affectedSlots` are
+ *  the EXISTING execution identifiers (daily_content_plans.execution_id)
+ *  a scoped operation touches; whole-campaign operations omit it and
+ *  evaluate every item. Additive — existing callers pass nothing. */
+export interface BlueprintMutabilityOptions {
+  affectedSlots?: string[];
+}
+
 /**
  * Assert blueprint is mutable before any mutation (update-duration, regenerate, negotiate, etc).
+ *
+ * LEGACY doctrine (default — BLUEPRINT_PER_ITEM_LOCKS unset/false):
  * Throws BlueprintImmutableError when campaign is ACTIVE or has scheduled/published posts.
  * Throws BlueprintExecutionFreezeError when first scheduled post is within freeze window.
  * Allows mutation only when blueprint_status === 'INVALIDATED' or execution_status === 'PAUSED',
  * and no scheduled post within BLUEPRINT_FREEZE_WINDOW_HOURS.
+ *
+ * CANONICAL doctrine (BLUEPRINT_PER_ITEM_LOCKS=true — SPEC-001 §2, R2-P2):
+ * immutability is PER-ITEM, never campaign-wide. An item protects the
+ * blueprint only when it is publishing/published, or when it is live
+ * (scheduled/failed-retryable) inside ITS OWN freeze window. Campaign-level
+ * scheduling never freezes unrelated items; cancelled/draft/blocked items
+ * never protect anything. Same guard API, same error types — only the
+ * decision model changes, via configuration.
  */
-export async function assertBlueprintMutable(campaignId: string): Promise<void> {
+export async function assertBlueprintMutable(
+  campaignId: string,
+  options?: BlueprintMutabilityOptions,
+): Promise<void> {
   const { data: campaign, error: campError } = await supabase
     .from('campaigns')
     .select('execution_status, blueprint_status, duration_weeks')
@@ -62,6 +84,10 @@ export async function assertBlueprintMutable(campaignId: string): Promise<void> 
   const durationWeeks = (campaign as { duration_weeks?: number | null }).duration_weeks;
   if (durationWeeks == null) {
     return;
+  }
+
+  if (blueprintPerItemLocksEnabled()) {
+    return assertPerItemLocksNotBreached(campaignId, options);
   }
 
   const executionStatus = String(campaign.execution_status ?? 'ACTIVE').toUpperCase();
@@ -89,6 +115,70 @@ export async function assertBlueprintMutable(campaignId: string): Promise<void> 
 
   if (!schedError && scheduled) {
     throw new BlueprintImmutableError('Blueprint cannot be modified while campaign is in execution.');
+  }
+}
+
+/**
+ * R2-P2 — the canonical per-item evaluation. Deterministic precedence:
+ * any publishing/published item → BlueprintImmutableError; else any live
+ * item inside its own window → BlueprintExecutionFreezeError (reporting
+ * the nearest item). No protected items → mutable, regardless of campaign
+ * status or how many future posts exist.
+ */
+async function assertPerItemLocksNotBreached(
+  campaignId: string,
+  options?: BlueprintMutabilityOptions,
+): Promise<void> {
+  const affected = (options?.affectedSlots ?? []).map((s) => String(s).trim()).filter(Boolean);
+
+  let postIdFilter: string[] | null = null;
+  if (affected.length > 0) {
+    // Scoped operation: evaluate ONLY the items its slots resolve to
+    // (existing execution_id → scheduled_post_id linkage on the plan rows).
+    const { data: planRows, error: planError } = await supabase
+      .from('daily_content_plans')
+      .select('scheduled_post_id')
+      .eq('campaign_id', campaignId)
+      .in('execution_id', affected);
+    if (planError) return; // fail-open matches the legacy guard's error posture
+    postIdFilter = (Array.isArray(planRows) ? planRows : [])
+      .map((r) => (r as { scheduled_post_id?: unknown }).scheduled_post_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    if (postIdFilter.length === 0) return; // affected slots have no live items
+  }
+
+  let query = supabase
+    .from('scheduled_posts')
+    .select('id, status, scheduled_at')
+    .eq('campaign_id', campaignId);
+  if (postIdFilter) query = query.in('id', postIdFilter);
+  const { data: posts, error: postsError } = await query;
+  if (postsError || !Array.isArray(posts) || posts.length === 0) return;
+
+  const now = Date.now();
+  let nearestFrozenHours: number | null = null;
+  for (const post of posts as Array<{ status?: string | null; scheduled_at?: string | null }>) {
+    const status = String(post.status ?? '').toLowerCase();
+    if (status === 'publishing' || status === 'published') {
+      throw new BlueprintImmutableError(
+        'Blueprint cannot be modified: an item is publishing or already published. Unaffected items remain editable via scoped operations.',
+      );
+    }
+    // Live items (scheduled, or failed awaiting retry) lock only inside
+    // their OWN window; cancelled/draft/blocked never protect anything.
+    if (status !== 'scheduled' && status !== 'failed') continue;
+    if (!post.scheduled_at) continue;
+    const hoursUntil = (new Date(post.scheduled_at).getTime() - now) / 3600000;
+    if (hoursUntil <= BLUEPRINT_FREEZE_WINDOW_HOURS) {
+      nearestFrozenHours = nearestFrozenHours === null ? hoursUntil : Math.min(nearestFrozenHours, hoursUntil);
+    }
+  }
+  if (nearestFrozenHours !== null) {
+    throw new BlueprintExecutionFreezeError(
+      `Blueprint modifications are locked within ${BLUEPRINT_FREEZE_WINDOW_HOURS} hours of an item's execution.`,
+      nearestFrozenHours,
+      BLUEPRINT_FREEZE_WINDOW_HOURS,
+    );
   }
 }
 
@@ -124,9 +214,12 @@ async function assertFreezeWindowNotBreached(campaignId: string): Promise<void> 
  * Check if blueprint is mutable (read-only, never throws).
  * Used by campaign-status API for UI visibility.
  */
-export async function isBlueprintMutable(campaignId: string): Promise<boolean> {
+export async function isBlueprintMutable(
+  campaignId: string,
+  options?: BlueprintMutabilityOptions,
+): Promise<boolean> {
   try {
-    await assertBlueprintMutable(campaignId);
+    await assertBlueprintMutable(campaignId, options);
     return true;
   } catch {
     return false;
@@ -140,9 +233,12 @@ export type BlueprintBlockReason = 'IMMUTABLE' | 'FROZEN' | null;
  * Get why blueprint mutation is blocked. Returns null when mutable.
  * Used by campaign-status API for UI (blueprintImmutable vs blueprintFrozen).
  */
-export async function getBlueprintBlockReason(campaignId: string): Promise<BlueprintBlockReason> {
+export async function getBlueprintBlockReason(
+  campaignId: string,
+  options?: BlueprintMutabilityOptions,
+): Promise<BlueprintBlockReason> {
   try {
-    await assertBlueprintMutable(campaignId);
+    await assertBlueprintMutable(campaignId, options);
     return null;
   } catch (err) {
     if (err instanceof BlueprintExecutionFreezeError) return 'FROZEN';
