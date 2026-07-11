@@ -17,13 +17,33 @@ type Row = Record<string, unknown>;
 let campaignRow: Row | null = null;
 let planRows: Row[] = [];
 let postRows: Row[] = [];
+let versionRow: { id: string; campaign_snapshot: Row } | null = null;
+let versionUpdateRejected = false; // simulate a concurrent revision move
+const versionUpdates: Array<{ payload: Row; filters: Array<[string, unknown]> }> = [];
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: {
     from: (table: string) => {
       const builder: any = {};
       for (const op of ['select', 'eq', 'order', 'limit']) builder[op] = () => builder;
-      builder.maybeSingle = () => Promise.resolve({ data: table === 'campaigns' ? campaignRow : null, error: null });
+      builder.maybeSingle = () =>
+        Promise.resolve({
+          data: table === 'campaigns' ? campaignRow : table === 'campaign_versions' ? versionRow : null,
+          error: null,
+        });
+      builder.update = (payload: Row) => {
+        const record = { payload, filters: [] as Array<[string, unknown]> };
+        if (table === 'campaign_versions') versionUpdates.push(record);
+        const upd: any = {
+          eq: (col: string, val: unknown) => { record.filters.push([col, val]); return upd; },
+          select: () =>
+            Promise.resolve({
+              data: versionUpdateRejected ? [] : [{ id: versionRow?.id ?? 'v-1' }],
+              error: null,
+            }),
+        };
+        return upd;
+      };
       builder.then = (res: any) =>
         Promise.resolve({
           data: table === 'daily_content_plans' ? planRows : table === 'scheduled_posts' ? postRows : [],
@@ -243,7 +263,11 @@ describe('GET /api/campaigns/[id]/assignment-execution-events — read-only rout
     campaignRow = { execution_status: 'ACTIVE' };
     planRows = [{ execution_id: 'ex-1', scheduled_post_id: 'sp-1', content_status: 'scheduled' }];
     postRows = [{ id: 'sp-1', status: 'published', error_message: null, error_code: null, published_at: '2026-07-12T08:00:00Z' }];
+    versionRow = null;
+    versionUpdateRejected = false;
+    versionUpdates.length = 0;
     jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
   it('derives events from records and reports what it read', async () => {
@@ -266,6 +290,118 @@ describe('GET /api/campaigns/[id]/assignment-execution-events — read-only rout
     res = mockRes();
     await eventsHandler({ method: 'POST', query: { id: 'camp-1' } } as any, res);
     expect(res.statusCode).toBe(405);
+  });
+});
+
+describe('P7 — durable execution state persistence (cached projection, never an authority)', () => {
+  function mockRes() {
+    const res: any = { statusCode: 0, body: undefined };
+    res.status = (code: number) => { res.statusCode = code; return res; };
+    res.json = (payload: unknown) => { res.body = payload; return res; };
+    return res;
+  }
+
+  /** Snapshot with two stored materialized assignments: ex-1 will advance to
+   *  published from the records; ex-2 has no events and must stay untouched. */
+  function seedSnapshot() {
+    const stored = materialized();
+    versionRow = {
+      id: 'v-1',
+      campaign_snapshot: {
+        planner_state: {
+          idea_spine: { title: 'Keep me' },
+          assignments: JSON.parse(JSON.stringify(stored)),
+        },
+        planner_state_revision: 7,
+        planner_draft: true,
+      },
+    };
+    return stored;
+  }
+
+  beforeEach(() => {
+    campaignRow = { execution_status: 'ACTIVE' };
+    planRows = [{ execution_id: 'ex-1', scheduled_post_id: 'sp-1', content_status: 'scheduled' }];
+    postRows = [{ id: 'sp-1', status: 'published', error_message: null, error_code: null, published_at: '2026-07-12T08:00:00Z' }];
+    versionRow = null;
+    versionUpdateRejected = false;
+    versionUpdates.length = 0;
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it('persists the folded projection when it changed — execution fields only, revision untouched', async () => {
+    seedSnapshot();
+    const res = mockRes();
+    await eventsHandler({ method: 'GET', query: { id: 'camp-1' } } as any, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.persistence).toEqual({ persisted: 1, skipped: '' });
+
+    expect(versionUpdates).toHaveLength(1);
+    const written = versionUpdates[0].payload.campaign_snapshot as {
+      planner_state: { idea_spine: unknown; assignments: CampaignAssignment[] };
+      planner_state_revision: number;
+      planner_draft: boolean;
+    };
+    const [synced, untouched] = written.planner_state.assignments;
+    // execution-owned fields written
+    expect(synced).toMatchObject({ status: 'published', scheduled_post_id: 'sp-1' });
+    // planning-owned fields preserved verbatim
+    expect(synced).toMatchObject({ asset_id: 'car-1', structure_id: 'ex-1', notes: '', ordering: 0 });
+    // sibling with no events untouched
+    expect(untouched.status).toBe('materialized');
+    // the rest of the snapshot survives; the revision is NOT bumped
+    expect(written.planner_state.idea_spine).toEqual({ title: 'Keep me' });
+    expect(written.planner_state_revision).toBe(7);
+    expect(written.planner_draft).toBe(true);
+    // optimistic guard on the unchanged revision
+    expect(versionUpdates[0].filters).toEqual(expect.arrayContaining([
+      ['id', 'v-1'],
+      ['campaign_snapshot->>planner_state_revision', '7'],
+    ]));
+  });
+
+  it('idempotent: a second sync of the same records writes NOTHING', async () => {
+    seedSnapshot();
+    let res = mockRes();
+    await eventsHandler({ method: 'GET', query: { id: 'camp-1' } } as any, res);
+    expect(res.body.persistence.persisted).toBe(1);
+
+    // adopt the persisted state as the new stored snapshot, then sync again
+    versionRow = {
+      id: 'v-1',
+      campaign_snapshot: versionUpdates[0].payload.campaign_snapshot as Row,
+    };
+    res = mockRes();
+    await eventsHandler({ method: 'GET', query: { id: 'camp-1' } } as any, res);
+    expect(res.body.persistence).toEqual({ persisted: 0, skipped: 'unchanged' });
+    expect(versionUpdates).toHaveLength(1); // still just the first write
+  });
+
+  it('a concurrent planner save wins: revision moved → skip, no lost update', async () => {
+    seedSnapshot();
+    versionUpdateRejected = true;
+    const res = mockRes();
+    await eventsHandler({ method: 'GET', query: { id: 'camp-1' } } as any, res);
+    expect(res.body.persistence).toEqual({ persisted: 0, skipped: 'revision_moved' });
+    expect(res.statusCode).toBe(200); // events still served
+  });
+
+  it('legacy campaigns (no stored assignments) are never written to', async () => {
+    versionRow = { id: 'v-1', campaign_snapshot: { planner_state: { idea_spine: {} }, planner_state_revision: 1 } };
+    const res = mockRes();
+    await eventsHandler({ method: 'GET', query: { id: 'camp-1' } } as any, res);
+    expect(res.body.persistence).toEqual({ persisted: 0, skipped: 'no_assignments' });
+    expect(versionUpdates).toHaveLength(0);
+    expect(res.body.events.length).toBeGreaterThan(0); // clients still get events
+  });
+
+  it('no snapshot at all → derivation still serves events (persistence skipped)', async () => {
+    const res = mockRes();
+    await eventsHandler({ method: 'GET', query: { id: 'camp-1' } } as any, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.persistence.persisted).toBe(0);
+    expect(versionUpdates).toHaveLength(0);
   });
 });
 
