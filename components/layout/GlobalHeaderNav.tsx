@@ -158,7 +158,7 @@ export const HEADER_NAV_ITEMS: HeaderNavItem[] = [
         description: 'Unified mix for text and creator-dependent campaign planning.',
       },
       {
-        label: 'Strategy Mix',
+        label: 'Strategic Mix',
         href: '/campaign-planner?mode=direct',
         description: 'Direct strategic campaign planning workflow.',
       },

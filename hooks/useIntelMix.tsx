@@ -1,6 +1,13 @@
 /**
- * Command Center → Intelligent Mix Strategy
+ * @deprecated DEAD CODE — QUARANTINED (Strategic Mix P0, 2026-07-11).
  *
+ * Companion hook of the quarantined `components/IntelMixView.tsx` — rendered
+ * by NO route since `intelligent-mix-strategy.tsx` switched to
+ * `<BoltCombinedStrategyPage/>`. Verified zero importers at quarantine time.
+ * Do not re-wire; see IntelMixView.tsx banner for the full rationale.
+ *
+ * ── Original header ──
+ * Command Center → Intelligent Mix Strategy
  * Collects: goals, audience, format mix (text + creator), per-format frequency,
  * campaign start date and duration (1–12 weeks) — then hands off to the
  * Trend Campaigns page where AI enriches the plan further.

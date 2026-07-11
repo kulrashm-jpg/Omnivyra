@@ -1,9 +1,10 @@
 /**
  * BoltPlatformPicker — shared chip-row UI for BOLT platform selection.
  * ──────────────────────────────────────────────────────────────────────────
- * Renders the picker section consistently across all BOLT modes (Text /
- * Creator / Intelligent Mix / Strategy Mix). Purely presentational — the
- * caller owns selection state and persistence.
+ * Renders the picker section consistently across all BOLT generator modes
+ * (Text / Creator / Intelligent Mix). Purely presentational — the caller owns
+ * selection state and persistence. (Strategic Mix is NOT a BOLT mode — its
+ * canonical shell is the Campaign Planner; see STRATEGIC-MIX-SPEC-001.)
  *
  * Contract (Round-6 Phase 4):
  *   - supported platforms render as toggleable chips

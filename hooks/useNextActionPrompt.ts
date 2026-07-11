@@ -141,7 +141,7 @@ export function useNextActionPrompt() {
     if (isCampaign && pathVisits <= 2 && !isBoltTextFlow && !isBoltCreatorFlow && !isIntelligentMixFlow && !isStrategyPlannerFlow) {
       candidates.push({
         id: 'campaign-strategy-mix',
-        label: 'Open Strategy Mix',
+        label: 'Open Strategic Mix',
         description: 'Use the direct planner to build a practical campaign instead of browsing here first.',
         href: '/campaign-planner?mode=direct',
         icon: Rocket,

@@ -10,8 +10,10 @@
  * Round-6 Phase 4 — single source for fetch + log emission across:
  *   - useBoltStrategy        (BOLT Text)
  *   - useBoltCreator         (BOLT Creator)
- *   - useIntelMix            (Intelligent Mix)
- *   - bolt-combined-strategy (Strategy Mix, inline page)
+ *   - useIntelMix            (legacy, deprecated — route renders BoltCombined)
+ *   - bolt-combined-strategy (Intelligent Mix / combined, inline page)
+ * (Strategic Mix is NOT a BOLT mode — its canonical shell is the Campaign
+ * Planner; see STRATEGIC-MIX-SPEC-001.)
  */
 
 import { useEffect, useState } from 'react';

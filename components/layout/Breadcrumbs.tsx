@@ -12,7 +12,7 @@ const ROUTE_LABELS: Record<string, string> = {
   'content-studio': 'Content Studio',
   'content-creation': 'Content',
   campaigns: 'Campaigns',
-  'campaign-planner': 'Campaign Planner',
+  'campaign-planner': 'Strategic Mix Planner',
   'campaign-details': 'Campaign Details',
   engagement: 'Engagement',
   reports: 'Reports',

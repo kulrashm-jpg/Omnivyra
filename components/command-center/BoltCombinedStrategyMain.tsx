@@ -282,8 +282,8 @@ export default function BoltCombinedStrategyPage() {
                 hidden={platformPicker.hidden}
                 selected={selectedPlatforms}
                 onToggle={togglePlatform}
-                hint="Strategy Mix targets every connected platform that's registered for publishing."
-                emptyMessage="No registered platforms connected yet. Connect your social accounts to enable Strategy Mix."
+                hint="Intelligent Mix targets every connected platform that's registered for publishing."
+                emptyMessage="No registered platforms connected yet. Connect your social accounts to enable Intelligent Mix."
               />
             </div>
 

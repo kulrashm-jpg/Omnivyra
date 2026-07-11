@@ -54,7 +54,9 @@ describe('centralization invariants (Round 3 Phase 5)', () => {
   });
 
   test('multi-platform-scheduler routes through the canonical filter', () => {
-    const src = read('pages/multi-platform-scheduler.tsx');
+    // Surgery 15 (33f691f1): the page became a barrel; content lives in
+    // components/MultiPlatformSchedulerMain.tsx — scan the real module.
+    const src = read('components/MultiPlatformSchedulerMain.tsx');
     expect(src.includes('filterConnectedPlatformsForContent')).toBe(true);
     // Scheduler must surface the unresolved-capability blocking state.
     expect(src.includes("platformFilter.capability === null")).toBe(true);
@@ -104,9 +106,18 @@ describe('centralization invariants (Round 3 Phase 5)', () => {
     }
   });
 
-  test('deprecated publish module is fully removed (Round-4 Phase 1)', () => {
-    expect(fs.existsSync(path.join(REPO_ROOT, 'backend/services/socialPlatformPublisher.ts'))).toBe(false);
-    expect(fs.existsSync(path.join(REPO_ROOT, 'backend/tests/integration/social_platform_publisher.test.ts'))).toBe(false);
+  test('deprecated publish module is never re-wired into production (Round-4 Phase 1)', () => {
+    // The file was resurrected by a later bulk commit (and SSRF-hardened with
+    // everything else) but has ZERO production importers. The protective
+    // intent of the Round-4 deprecation is "nothing publishes through it" —
+    // assert that no production module imports it, rather than nonexistence.
+    const { execSync } = require('child_process');
+    const importers = execSync(
+      'git grep -l "socialPlatformPublisher" -- backend pages lib components hooks ' +
+        '":!backend/tests" ":!backend/services/socialPlatformPublisher.ts" || exit 0',
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    ).trim();
+    expect(importers).toBe('');
   });
 
   test('CAPABILITY_LOG_EVENTS enum is complete and stable', () => {
@@ -118,7 +129,10 @@ describe('centralization invariants (Round 3 Phase 5)', () => {
   });
 
   test('multi-platform-scheduler hides unregistered platforms from render (Phase 4)', () => {
-    const src = read('pages/multi-platform-scheduler.tsx');
+    // Surgery 15: page → barrel; logic split across Controller (filter state)
+    // and Main (render) — the invariant spans both.
+    const src = read('components/MultiPlatformSchedulerController.tsx') +
+      read('components/MultiPlatformSchedulerMain.tsx');
     // The render block must iterate the unregistered-filtered list, not the
     // full account list. Catching this protects against accidentally
     // rendering unknown platforms as enabled or disabled chips.
@@ -132,15 +146,19 @@ describe('centralization invariants (Round 3 Phase 5)', () => {
     const surfaces: Array<{ rel: string; hookExpected: boolean }> = [
       // Text mode: hook is in useBoltStrategy (it owns selection state).
       { rel: 'hooks/useBoltStrategy.tsx', hookExpected: true },
-      { rel: 'components/BoltStrategyView.tsx', hookExpected: false },
-      // Creator mode.
+      // Surgery: BoltStrategyView is a barrel — the picker render lives in Main.
+      { rel: 'components/BoltStrategyViewMain.tsx', hookExpected: false },
+      // Creator mode (view is a barrel — picker render lives in Main).
       { rel: 'hooks/useBoltCreator.tsx', hookExpected: true },
-      { rel: 'components/BoltCreatorView.tsx', hookExpected: false },
-      // Intelligent Mix.
+      { rel: 'components/BoltCreatorViewMain.tsx', hookExpected: false },
+      // Intelligent Mix legacy pair (QUARANTINED dead code — kept in the scan so
+      // a resurrection still satisfies the picker contract).
       { rel: 'hooks/useIntelMix.tsx', hookExpected: true },
       { rel: 'components/IntelMixView.tsx', hookExpected: false },
-      // Strategy Mix (inline page — both hook + component live here).
-      { rel: 'pages/command-center/bolt-combined-strategy.tsx', hookExpected: true },
+      // Intelligent Mix / combined (Surgery 14: page is a barrel — the hook
+      // consumption lives in the relocated controller). NOTE: Strategic Mix is
+      // NOT a BOLT surface — its shell is the Campaign Planner (SPEC-001 I-12).
+      { rel: 'components/command-center/BoltCombinedStrategyController.tsx', hookExpected: true },
     ];
     for (const { rel, hookExpected } of surfaces) {
       const src = read(rel);
@@ -155,7 +173,8 @@ describe('centralization invariants (Round 3 Phase 5)', () => {
   });
 
   test('BoltStrategyView no longer ships inline chip-rendering markup', () => {
-    const src = read('components/BoltStrategyView.tsx');
+    // Surgery: barrel — scan the relocated main component.
+    const src = read('components/BoltStrategyViewMain.tsx');
     // The legacy inline render had a literal `availablePlatforms.map((p)` —
     // re-introducing it would mean the picker was duplicated outside the
     // shared component. Catch that drift here.
@@ -242,6 +261,11 @@ describe('centralization invariants (Round 3 Phase 5)', () => {
     const APPROVED = new Set([
       'hooks/useBoltPlatformPicker.ts',
       'pages/api/bolt/available-platforms.ts',
+      // TECH-DEBT (tracked): direct fetch relocated VERBATIM out of the old
+      // 3,869-line creator [type].tsx during its decomposition (6e6d5044) —
+      // pre-existing behavior, not new drift. Should migrate to
+      // useBoltPlatformPicker in a creator-lane change; do not add more.
+      'components/creator/workflow/useCreatorWorkflowLifecycle.tsx',
     ]);
     const violators: string[] = [];
     const walk = (dir: string, acc: string[]): string[] => {

@@ -52,7 +52,11 @@ export const CONTENT_TYPES: ContentType[] = [
   // Campaign
   { id: 'bolt-creator-campaign', label: 'Creator Campaign', lane: 'campaign', entryRoute: '/command-center/bolt-creator-strategy' },
   { id: 'intelligent-mix-campaign', label: 'Intelligent Mix Campaign', lane: 'campaign', entryRoute: '/command-center/bolt-combined-strategy' },
-  { id: 'strategic-mix-campaign', label: 'Strategic Mix Campaign', lane: 'campaign', entryRoute: '/command-center/bolt-combined-strategy' },
+  // Strategic Mix P0 (STRATEGIC-MIX-SPEC-001 §0, invariant I-12): the Campaign
+  // Planner is THE canonical Strategic Mix shell. Previously this pointed at the
+  // BOLT Combined single-form builder (Intelligent Mix's page), creating two
+  // products under one name. Exactly one route may claim Strategic Mix.
+  { id: 'strategic-mix-campaign', label: 'Strategic Mix Campaign', lane: 'campaign', entryRoute: '/campaign-planner?mode=direct' },
 ];
 
 export const CONTENT_TYPE_BY_ID: Record<string, ContentType> = Object.fromEntries(CONTENT_TYPES.map((c) => [c.id, c]));

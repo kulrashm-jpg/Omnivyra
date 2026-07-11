@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { ArrowLeft, LayoutGrid, FileText, CalendarDays, Sparkles, RocketIcon, Lock, MessageSquare, Layers } from 'lucide-react';
 import DesignSystemPanel from '../components/planner/DesignSystemPanel';
@@ -621,6 +622,15 @@ function CampaignPlannerWithSession() {
 }
 
 export default function CampaignPlannerPage() {
-  return <CampaignPlannerWithSession />;
+  return (
+    <>
+      {/* Strategic Mix P0 (SPEC-001 §0): this page is THE canonical Strategic
+          Mix shell — the tab/browser identity carries the product name. */}
+      <Head>
+        <title>Strategic Mix — Campaign Planner | Omnivyra</title>
+      </Head>
+      <CampaignPlannerWithSession />
+    </>
+  );
 }
 

@@ -1,6 +1,19 @@
 /**
- * Command Center → Intelligent Mix Strategy
+ * @deprecated DEAD CODE — QUARANTINED (Strategic Mix P0, 2026-07-11).
  *
+ * This view is rendered by NO route. `intelligent-mix-strategy.tsx` renders
+ * `<BoltCombinedStrategyPage/>` directly (see its lines ~167-184), and the
+ * `IntelligentMixState` type consumed by recommendations lives in that PAGE,
+ * not here. Verified zero importers (type or value) at quarantine time.
+ *
+ * DO NOT wire this back into a route: it predates the combined pipeline's
+ * server-side caps and would resurrect a capless builder (CAMPAIGN-AUDIT-002
+ * §2, AUDIT-003 §9). Removal is deferred until characterization coverage of
+ * the intelligent-mix route exists (per P0 rules); until then this banner is
+ * the guard.
+ *
+ * ── Original header ──
+ * Command Center → Intelligent Mix Strategy
  * Collects: goals, audience, format mix (text + creator), per-format frequency,
  * campaign start date and duration (1–12 weeks) — then hands off to the
  * Trend Campaigns page where AI enriches the plan further.
