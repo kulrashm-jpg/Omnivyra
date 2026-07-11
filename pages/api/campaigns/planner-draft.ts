@@ -23,6 +23,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
+import { resolveCampaignStage } from '../../../lib/campaign/campaignStage';
 
 /** Thread-id marker identifying Strategic Mix planner drafts (resume key). */
 const PLANNER_DRAFT_THREAD_PREFIX = 'planner_draft_';
@@ -43,9 +44,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // ── RESUME: newest open draft for (company, user) ──────────────────────
+    // NOTE: `.eq('status', 'draft')` is the physical RESUME-KEY filter (row
+    // lookup), not lifecycle interpretation — interpretation happens below
+    // through the canonical read model only (R2-P4).
     const { data: existing } = await supabase
       .from('campaigns')
-      .select('id, updated_at')
+      .select('id, updated_at, status, current_stage, execution_status, thread_id')
       .eq('company_id', companyId)
       .eq('user_id', access.userId)
       .eq('status', 'draft')
@@ -55,7 +59,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .maybeSingle();
 
     if (existing?.id) {
-      return res.status(200).json({ campaign_id: existing.id, resumed: true });
+      return res.status(200).json({
+        campaign_id: existing.id,
+        resumed: true,
+        stage: resolveCampaignStage(existing as Record<string, unknown>).stage,
+      });
     }
 
     // ── CREATE ─────────────────────────────────────────────────────────────
@@ -99,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn('[planner-draft] campaign_versions insert failed:', cvErr.message);
     }
 
-    return res.status(201).json({ campaign_id: campaignId, resumed: false });
+    return res.status(201).json({ campaign_id: campaignId, resumed: false, stage: 'draft' });
   } catch (error) {
     console.error('[planner-draft] error:', error);
     return res.status(500).json({ error: 'Failed to create or resume draft' });

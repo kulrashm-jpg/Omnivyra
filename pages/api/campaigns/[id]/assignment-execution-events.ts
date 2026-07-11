@@ -35,6 +35,7 @@ import {
   type ScheduledPostFact,
 } from '../../../../lib/campaign/assignmentExecutionSync';
 import { normalizeAssignments } from '../../../../lib/campaign/campaignAssignments';
+import { resolveCampaignStage } from '../../../../lib/campaign/campaignStage';
 
 /** Fold events onto the snapshot's stored assignments and persist the result
  *  iff the projection changed. Never creates assignments, never bumps the
@@ -106,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const [{ data: campaign }, { data: planRows }, { data: posts }] = await Promise.all([
-      supabase.from('campaigns').select('execution_status').eq('id', campaignId).maybeSingle(),
+      supabase.from('campaigns').select('status, current_stage, execution_status').eq('id', campaignId).maybeSingle(),
       supabase
         .from('daily_content_plans')
         .select('execution_id, scheduled_post_id, content_status')
@@ -117,12 +118,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq('campaign_id', campaignId),
     ]);
 
+    // R2-P4 — lifecycle interpretation goes through the canonical read
+    // model only (never raw status-field comparisons).
+    const campaignCompleted = resolveCampaignStage(campaign as Record<string, unknown> | null).stage === 'completed';
     const events = deriveExecutionEvents({
       campaignId,
       planRows: (Array.isArray(planRows) ? planRows : []) as ExecutionPlanRowFact[],
       posts: (Array.isArray(posts) ? posts : []) as ScheduledPostFact[],
-      campaignCompleted:
-        String((campaign as { execution_status?: unknown } | null)?.execution_status ?? '').toUpperCase() === 'COMPLETED',
+      campaignCompleted,
     });
 
     // P7 — durable projection: fold + persist server-side (write-on-change
@@ -139,8 +142,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       derived_from: {
         plan_rows: Array.isArray(planRows) ? planRows.length : 0,
         scheduled_posts: Array.isArray(posts) ? posts.length : 0,
-        campaign_completed:
-          String((campaign as { execution_status?: unknown } | null)?.execution_status ?? '').toUpperCase() === 'COMPLETED',
+        campaign_completed: campaignCompleted,
       },
     });
   } catch (err) {

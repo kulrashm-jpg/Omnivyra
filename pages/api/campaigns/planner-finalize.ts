@@ -25,6 +25,7 @@ import {
   type PlannerActivityInput,
 } from '../../../lib/adapters/plannerToExecutionAdapter';
 import { saveCampaignContextSnapshot } from '../../../backend/services/campaignContextService';
+import { isFinalizedStage, resolveCampaignStage } from '../../../lib/campaign/campaignStage';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -480,12 +481,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       if (cvErr) console.warn('campaign_versions insert failed:', cvErr.message);
     } else {
-      const existing = await getCampaignById<{ id?: string; start_date?: string; duration_weeks?: number; status?: string }>(campaignId, 'id, start_date, duration_weeks, status');
+      const existing = await getCampaignById<{ id?: string; start_date?: string; duration_weeks?: number; status?: string; current_stage?: string; execution_status?: string }>(campaignId, 'id, start_date, duration_weeks, status, current_stage, execution_status');
       if (!existing) {
         return res.status(404).json({ error: 'Campaign not found' });
       }
-      // FIX 10: Prevent repeated finalize
-      if (existing.status === 'execution_ready') {
+      // FIX 10 (repaired in R2-P4): prevent repeated finalize via the
+      // canonical stage read model. The original check compared
+      // campaigns.status to 'execution_ready' — a value finalize writes to
+      // current_stage, never to status — so it could never fire; the
+      // selector interprets the axes correctly (duplicate-slot protection
+      // below remains as the second net).
+      if (isFinalizedStage(resolveCampaignStage(existing).stage)) {
         return res.status(400).json({ error: 'Campaign already finalized' });
       }
       const start = existing.start_date;
