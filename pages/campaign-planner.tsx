@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
-import { ArrowLeft, LayoutGrid, FileText, CalendarDays, Sparkles, RocketIcon, Lock, MessageSquare, Layers } from 'lucide-react';
+import { ArrowLeft, LayoutGrid, FileText, CalendarDays, Sparkles, RocketIcon, Lock, MessageSquare, Layers, Link2 } from 'lucide-react';
 import DesignSystemPanel from '../components/planner/DesignSystemPanel';
 import { familyForCreatorType, type TemplateAssetFamily } from '../lib/creator-templates';
 import type { RequestedFamilyFrequency } from '../lib/creator-templates/designSystemCoverage';
@@ -30,6 +30,7 @@ import { AccountInsightPanel } from '../components/planner/AccountInsightPanel';
 import { SkeletonBuilderPanel } from '../components/planner/SkeletonBuilderPanel';
 import { WeekDailyPlanPanel } from '../components/planner/WeekDailyPlanPanel';
 import { CreateCampaignAndBuild } from '../components/planner/CreateCampaignAndBuild';
+import { AssignmentWorkspace } from '../components/planner/AssignmentWorkspace';
 import { PlannerOrchestrationStrip } from '../components/orchestration/PlannerOrchestrationStrip';
 import { weeksToCalendarPlan } from '../components/planner/calendarPlanConverter';
 import styles from '../styles/planner-layout.module.css';
@@ -63,10 +64,11 @@ function CampaignPlannerLayout({
   // branch then UPGRADES the draft row in place instead of creating a second
   // campaign. Read-panels intentionally keep the context campaignId only.
   const finalizeCampaignId = campaignId ?? state.draft_campaign_id ?? null;
-  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'build' | 'design'>(() => {
+  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'alignment' | 'build' | 'design'>(() => {
     if (typeof window !== 'undefined') {
       const tab = new URLSearchParams(window.location.search).get('tab');
       if (tab === 'strategy') return 'strategy';
+      if (tab === 'alignment') return 'alignment';
       if (tab === 'build') return 'build';
       if (tab === 'design') return 'design';
     }
@@ -173,6 +175,26 @@ function CampaignPlannerLayout({
         >
           <Sparkles className="h-4 w-4" />
           Strategy
+        </button>
+        {/* Strategic Mix P3 — Alignment: the Assignment workspace, where
+            Structure (slots) and Content (Asset Library) are linked. Available
+            as soon as the skeleton defines publishing opportunities. */}
+        <button
+          type="button"
+          onClick={() => hasSkeletonDraft && setActiveTab('alignment')}
+          disabled={!hasSkeletonDraft}
+          title={!hasSkeletonDraft ? 'Build the campaign skeleton first' : undefined}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'alignment'
+              ? 'border-indigo-600 text-indigo-700 bg-indigo-50'
+              : hasSkeletonDraft
+              ? 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              : 'border-transparent text-gray-400 cursor-not-allowed'
+          }`}
+        >
+          <Link2 className="h-4 w-4" />
+          Alignment
+          {!hasSkeletonDraft && <Lock className="h-3 w-3 ml-1 text-gray-400" />}
         </button>
         <button
           type="button"
@@ -348,6 +370,14 @@ function CampaignPlannerLayout({
               />
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Tab: Alignment — Strategic Mix P3 Assignment workspace (the only
+          place structure↔content relationships are edited) */}
+      {activeTab === 'alignment' && (
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <AssignmentWorkspace companyId={companyId} campaignId={finalizeCampaignId} />
         </div>
       )}
 

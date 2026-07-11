@@ -36,6 +36,9 @@ export function serializePlannerState(s: PlannerSessionState): PlannerDraftState
     focus_modules: s.focus_modules ?? [],
     strategic_themes: s.strategic_themes ?? [],
     strategic_card: s.strategic_card ?? null,
+    // Strategic Mix P3 — Assignment owns every structure↔content link; the
+    // array persists through this same canonical seam (no new substrate, I-7).
+    assignments: s.assignments ?? [],
   };
 }
 

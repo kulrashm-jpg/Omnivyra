@@ -21,6 +21,7 @@ import {
   serializePlannerState,
   type PlannerDraftState,
 } from './plannerDraftPersistence';
+import { normalizeAssignments, type CampaignAssignment } from '../../lib/campaign/campaignAssignments';
 
 const PLANNER_STORAGE_KEY_PREFIX = 'omnivyra_planner_session_';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -212,6 +213,12 @@ export interface PlannerSessionState {
    * changes behavior. Null until the draft bootstrap completes.
    */
   draft_campaign_id?: string | null;
+  /**
+   * Strategic Mix P3 — Assignment layer. The ONLY relationship between
+   * Structure (calendar slots) and Content (Asset Library ids). Persisted
+   * through the same canonical seam as the rest of the planner state.
+   */
+  assignments?: CampaignAssignment[];
 }
 
 const defaultStrategyContext: StrategyContext = {
@@ -239,6 +246,7 @@ const defaultState: PlannerSessionState = {
   company_context_mode: 'full_company_context',
   focus_modules: [],
   draft_campaign_id: null,
+  assignments: [],
 };
 
 type PlannerSessionContextValue = {
@@ -268,6 +276,9 @@ type PlannerSessionContextValue = {
   clearStrategicThemes: () => void;
   setHealthReport: (report: Record<string, unknown> | null) => void;
   setAccountContext: (context: AccountContext | null) => void;
+  setAssignments: (
+    next: CampaignAssignment[] | ((current: CampaignAssignment[]) => CampaignAssignment[]),
+  ) => void;
   reset: () => void;
 };
 
@@ -335,6 +346,7 @@ function loadPersistedSession(storageKey: string): Partial<PlannerSessionState> 
       source_ids: campaignId ? { campaign_id: campaignId } : {},
       campaign_structure: cs && typeof cs === 'object' ? (cs as CampaignStructure) : null,
       calendar_plan: cp && typeof cp === 'object' ? (cp as CalendarPlan) : null,
+      assignments: normalizeAssignments(parsed.assignments),
       draft_campaign_id: typeof parsed.draft_campaign_id === 'string' && parsed.draft_campaign_id ? parsed.draft_campaign_id : null,
       ...(company_context_mode ? { company_context_mode } : {}),
       ...(focus_modules ? { focus_modules } : {}),
@@ -365,6 +377,7 @@ function persistSession(s: PlannerSessionState, storageKey: string): void {
       focus_modules: s.focus_modules ?? [],
       strategic_themes: s.strategic_themes ?? [],
       strategic_card: s.strategic_card ?? null,
+      assignments: s.assignments ?? [],
       draft_campaign_id: s.draft_campaign_id ?? null,
       stored_at: Date.now(),
     };
@@ -713,6 +726,20 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
     setState((prev) => ({ ...prev, account_context: context }));
   }, []);
 
+  // Strategic Mix P3 — Assignment layer. Takes an updater so every mutation
+  // goes through the pure operations in lib/campaign/campaignAssignments and
+  // composes safely with concurrent state changes; persists via the same
+  // autosave seam as everything else.
+  const setAssignments = useCallback(
+    (next: CampaignAssignment[] | ((current: CampaignAssignment[]) => CampaignAssignment[])) => {
+      setState((prev) => ({
+        ...prev,
+        assignments: typeof next === 'function' ? next(prev.assignments ?? []) : next,
+      }));
+    },
+    [],
+  );
+
   const reset = useCallback(() => {
     // Strategic Mix P1: keep the draft id through a reset so the emptied
     // state AUTOSAVES to the server draft (otherwise the old server copy
@@ -769,6 +796,7 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
     clearStrategicThemes,
     setHealthReport,
     setAccountContext,
+    setAssignments,
     reset,
   };
 
