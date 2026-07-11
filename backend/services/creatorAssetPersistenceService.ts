@@ -707,3 +707,260 @@ export async function deleteCreatorAssetRecord(input: {
     deletedAttachments,
   };
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Strategic Mix P2 — Asset Library (SPEC-001 §1 "Asset" entity).
+ *
+ * The `library` jsonb column holds the client CreatorAsset envelope
+ * (versions[] / currentVersion / selectedVariant / discovery metadata) — the
+ * client library logic (register / version / duplicate / restore / rename)
+ * is pure over a storage backend, and these functions make the SERVER that
+ * backend. ONE asset model: rows stay the canonical flat asset (every
+ * existing reader unchanged); the envelope is its version history.
+ *
+ * Legacy rows (library IS NULL) are surfaced by SYNTHESIZING a v1 envelope
+ * from the flat columns, so every pre-P2 creator asset appears in the
+ * library with history from day one. Soft delete / archive / usage live on
+ * flat columns.
+ * ════════════════════════════════════════════════════════════════════════ */
+
+export interface LibraryAssetRecord {
+  /** The client CreatorAsset envelope (authoritative version history). */
+  envelope: Record<string, unknown>;
+  /** Server-owned facts the client cannot fabricate. */
+  serverMeta: {
+    archivedAt: string | null;
+    usageCount: number;
+    lastUsedAt: string | null;
+    updatedAt: string | null;
+    createdAt: string | null;
+  };
+}
+
+function rowToLibraryRecord(row: Record<string, unknown>): LibraryAssetRecord {
+  const lib = safeObject(row.library);
+  const hasEnvelope = Array.isArray(lib.versions) && lib.versions.length > 0;
+  const createdAt = typeof row.created_at === 'string' ? row.created_at : new Date().toISOString();
+  const envelope = hasEnvelope
+    ? lib
+    : (() => {
+        // Legacy row → synthesized v1 envelope from flat columns.
+        const metadata = safeObject(row.metadata);
+        const payload = {
+          id: String(row.id),
+          creatorType: String(row.creator_type || 'asset'),
+          title: String(row.title || 'Creator asset'),
+          url: typeof row.url === 'string' ? row.url : undefined,
+          files: Array.isArray(row.files) ? (row.files as unknown[]).map(String) : undefined,
+          previewKind: typeof row.preview_kind === 'string' ? row.preview_kind : undefined,
+          platformContext: typeof row.platform_context === 'string' ? row.platform_context : undefined,
+          renderIdentityHash: typeof row.render_identity_hash === 'string' ? row.render_identity_hash : undefined,
+          metadata,
+          createdAt,
+        };
+        return {
+          id: String(row.id),
+          currentVersion: 1,
+          versions: [{ version: 1, op: 'generate', payload, createdAt }],
+          selectedVariant: null,
+          metadata: {
+            organizationId: typeof row.company_id === 'string' ? row.company_id : null,
+            campaignId: null,
+            creatorSource: 'creator',
+            assetType: String(row.creator_type || 'asset'),
+            templateId: typeof metadata.template_id === 'string' ? metadata.template_id : null,
+            createdBy: typeof row.user_id === 'string' ? row.user_id : null,
+            createdAt,
+            tags: Array.isArray(metadata.tags) ? (metadata.tags as unknown[]).map(String).filter(Boolean) : [],
+            status: 'ready',
+            platform: typeof row.platform_context === 'string' ? row.platform_context : null,
+            version: 1,
+          },
+          createdAt,
+          updatedAt: typeof row.updated_at === 'string' ? row.updated_at : createdAt,
+        };
+      })();
+  return {
+    envelope,
+    serverMeta: {
+      archivedAt: typeof row.archived_at === 'string' ? row.archived_at : null,
+      usageCount: Number(row.usage_count ?? 0),
+      lastUsedAt: typeof row.last_used_at === 'string' ? row.last_used_at : null,
+      updatedAt: typeof row.updated_at === 'string' ? row.updated_at : null,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : null,
+    },
+  };
+}
+
+/** Current-version payload of an envelope (for flat-column sync). */
+function envelopeCurrentPayload(envelope: Record<string, unknown>): Record<string, unknown> {
+  const versions = Array.isArray(envelope.versions) ? (envelope.versions as Record<string, unknown>[]) : [];
+  const current = Number(envelope.currentVersion ?? versions.length);
+  const hit = versions.find((v) => Number(v.version) === current) ?? versions[versions.length - 1];
+  return safeObject(hit?.payload);
+}
+
+/** Write (upsert) a library envelope. Flat columns sync from the CURRENT
+ *  version so every legacy reader (reuse picker, workflow recent-8, GET list)
+ *  reflects library edits. The row `metadata` column is NOT overwritten for
+ *  rows that already carry the reconstruction envelope. */
+export async function libraryWriteAsset(input: {
+  companyId: string;
+  userId: string;
+  envelope: Record<string, unknown>;
+}): Promise<LibraryAssetRecord> {
+  const availability = await checkCreatorPersistenceAvailability();
+  if (!availability.available) {
+    throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
+  }
+  const id = compact(input.envelope.id);
+  if (!id) throw new Error('library asset envelope requires an id');
+  const payload = envelopeCurrentPayload(input.envelope);
+  const nowIso = new Date().toISOString();
+
+  const { data: existing } = await ownedDbTable('creator_assets')
+    .select('id, metadata')
+    .eq('id', id)
+    .eq('company_id', input.companyId)
+    .maybeSingle();
+
+  const row: Record<string, unknown> = {
+    id,
+    tenant_id: input.companyId,
+    company_id: input.companyId,
+    user_id: input.userId,
+    creator_type: compact(payload.creatorType) || 'asset',
+    title: compact(payload.title) || 'Creator asset',
+    url: typeof payload.url === 'string' ? payload.url : null,
+    files: normalizeFiles(payload.files as string[] | undefined),
+    preview_kind: compact(payload.previewKind) || null,
+    platform_context: compact(payload.platformContext) || null,
+    render_identity_hash: compact(payload.renderIdentityHash) || null,
+    library: input.envelope,
+    updated_at: nowIso,
+  };
+  if (!existing) {
+    // Brand-new library-origin row: give it a minimal metadata column so the
+    // legacy list mapper has something coherent to read.
+    row.metadata = { ...safeObject(payload.metadata), companyId: input.companyId, userId: input.userId };
+    row.source_type = null;
+    row.source_id = null;
+  }
+
+  const { data, error } = await ownedDbTable('creator_assets')
+    .upsert(row, { onConflict: 'id' })
+    .select()
+    .single();
+  if (error) throw new Error(`Failed to persist library asset: ${error.message}`);
+  return rowToLibraryRecord(data as Record<string, unknown>);
+}
+
+export async function libraryReadAsset(input: {
+  companyId: string;
+  assetId: string;
+}): Promise<LibraryAssetRecord | null> {
+  const availability = await checkCreatorPersistenceAvailability();
+  if (!availability.available) {
+    throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
+  }
+  const { data, error } = await ownedDbTable('creator_assets')
+    .select('*')
+    .eq('id', input.assetId)
+    .eq('company_id', input.companyId)
+    .is('deleted_at', null)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to load library asset: ${error.message}`);
+  return data ? rowToLibraryRecord(data as Record<string, unknown>) : null;
+}
+
+export async function libraryListAssets(input: {
+  companyId: string;
+  q?: string;
+  creatorTypes?: string[];
+  tags?: string[];
+  includeArchived?: boolean;
+  limit?: number;
+}): Promise<LibraryAssetRecord[]> {
+  const availability = await checkCreatorPersistenceAvailability();
+  if (!availability.available) {
+    throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
+  }
+  let query = ownedDbTable('creator_assets')
+    .select('*')
+    .eq('company_id', input.companyId)
+    .is('deleted_at', null)
+    .order('updated_at', { ascending: false })
+    .limit(input.limit ?? 200);
+  if (!input.includeArchived) query = query.is('archived_at', null);
+  if (input.creatorTypes && input.creatorTypes.length > 0) {
+    query = query.in('creator_type', Array.from(new Set(input.creatorTypes)));
+  }
+  if (input.q && input.q.trim()) {
+    query = query.ilike('title', `%${input.q.trim().replace(/[%_]/g, '')}%`);
+  }
+  const { data, error } = await query;
+  if (error) throw new Error(`Failed to list library assets: ${error.message}`);
+  let records = ((data || []) as Record<string, unknown>[]).map(rowToLibraryRecord);
+  if (input.tags && input.tags.length > 0) {
+    const want = new Set(input.tags.map((t) => t.toLowerCase()));
+    records = records.filter((r) => {
+      const tags = safeObject(r.envelope.metadata).tags;
+      return Array.isArray(tags) && (tags as unknown[]).some((t) => want.has(String(t).toLowerCase()));
+    });
+  }
+  return records;
+}
+
+/** Hard remove — used ONLY by identity convergence (temp-id → canonical id).
+ *  User-facing deletion is soft (softDeleteLibraryAsset). */
+export async function libraryRemoveAsset(input: { companyId: string; assetId: string }): Promise<boolean> {
+  const result = await deleteCreatorAssetRecord({ assetId: input.assetId, companyId: input.companyId });
+  return result.deletedAsset;
+}
+
+export async function archiveLibraryAsset(input: {
+  companyId: string;
+  assetId: string;
+  archived: boolean;
+}): Promise<boolean> {
+  const { data, error } = await ownedDbTable('creator_assets')
+    .update({ archived_at: input.archived ? new Date().toISOString() : null, updated_at: new Date().toISOString() })
+    .eq('id', input.assetId)
+    .eq('company_id', input.companyId)
+    .select('id');
+  if (error) throw new Error(`Failed to ${input.archived ? 'archive' : 'unarchive'} asset: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+export async function softDeleteLibraryAsset(input: {
+  companyId: string;
+  assetId: string;
+}): Promise<boolean> {
+  const { data, error } = await ownedDbTable('creator_assets')
+    .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq('id', input.assetId)
+    .eq('company_id', input.companyId)
+    .select('id');
+  if (error) throw new Error(`Failed to delete asset: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+export async function recordLibraryAssetUsage(input: {
+  companyId: string;
+  assetId: string;
+}): Promise<void> {
+  // Read-then-write increment; usage is a coarse indicator, races are fine.
+  const { data } = await ownedDbTable('creator_assets')
+    .select('usage_count')
+    .eq('id', input.assetId)
+    .eq('company_id', input.companyId)
+    .maybeSingle();
+  if (!data) return;
+  await ownedDbTable('creator_assets')
+    .update({
+      usage_count: Number((data as { usage_count?: number }).usage_count ?? 0) + 1,
+      last_used_at: new Date().toISOString(),
+    })
+    .eq('id', input.assetId)
+    .eq('company_id', input.companyId);
+}

@@ -16,6 +16,11 @@ import {
 } from '../../lib/content/creatorAssetResolver';
 import { attachUsage, type AssetConsumer } from '../../lib/content/creatorAssetUsageGraph';
 import type { WriterAttachedAsset } from '../../lib/content/writerCreatorAssetLaunch';
+import {
+  installServerCreatorAssetBackend,
+  reportLibraryAssetUsage,
+} from '../../lib/content/creatorAssetServerBackend';
+import { useCompanyContext } from '../CompanyContext';
 
 /**
  * Reuse Existing Asset — the FIRST runtime consumer of the Creator Asset Catalog.
@@ -39,6 +44,11 @@ type Mode = 'type' | 'recent' | 'search' | 'tags';
 interface Row { ref: CreatorAssetRef; metadata: CreatorAssetMetadata | null }
 
 export default function AssetReusePicker({ consumer, assetType, onAttached, onClose }: Props) {
+  // Strategic Mix P2: the catalog/resolver read through the asset backend —
+  // install the SERVER backend so discovery sees the full library (not the
+  // cap-50 localStorage cache) and pre-P2 local assets migrate up.
+  const { selectedCompanyId } = useCompanyContext() ?? { selectedCompanyId: null };
+  useEffect(() => { installServerCreatorAssetBackend(selectedCompanyId); }, [selectedCompanyId]);
   const [mode, setMode] = useState<Mode>(assetType ? 'type' : 'recent');
   const [query, setQuery] = useState('');
   const [tags, setTags] = useState('');
@@ -90,6 +100,9 @@ export default function AssetReusePicker({ consumer, assetType, onAttached, onCl
     setAttaching(true);
     try {
       await attachUsage(selected.ref, consumer, { role: 'attachment' });
+      // P2 usage tracking (server, fire-and-forget) — powers the library's
+      // usage indicator; losses are acceptable.
+      reportLibraryAssetUsage(selectedCompanyId, selected.ref.assetId);
       onAttached();
       onClose();
     } finally {

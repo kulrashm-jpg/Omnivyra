@@ -169,6 +169,13 @@ export default function CreatorContentPage() {
           <div className="hidden items-center gap-3 md:flex">
             <button
               type="button"
+              onClick={() => router.push('/command-center/creator-content/library')}
+              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+            >
+              Asset Library
+            </button>
+            <button
+              type="button"
               onClick={() => router.push('/command-center/creator-content/visual-review')}
               className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
             >
