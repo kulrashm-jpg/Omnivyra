@@ -58,6 +58,11 @@ function CampaignPlannerLayout({
 }: CampaignPlannerLayoutProps) {
   const { state, setAccountContext } = usePlannerSession();
   const router = useRouter();
+  // Strategic Mix P1: finalize against the server Draft Campaign when this
+  // session owns one (direct mode). planner-finalize's existingCampaignId
+  // branch then UPGRADES the draft row in place instead of creating a second
+  // campaign. Read-panels intentionally keep the context campaignId only.
+  const finalizeCampaignId = campaignId ?? state.draft_campaign_id ?? null;
   const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'build' | 'design'>(() => {
     if (typeof window !== 'undefined') {
       const tab = new URLSearchParams(window.location.search).get('tab');
@@ -415,7 +420,7 @@ function CampaignPlannerLayout({
                   return (
                     <div className="flex-1 min-h-0 flex flex-col">
                       <div className="flex-shrink-0 pb-3">
-                        <CreateCampaignAndBuild companyId={companyId} campaignId={campaignId} />
+                        <CreateCampaignAndBuild companyId={companyId} campaignId={finalizeCampaignId} />
                       </div>
                       <div className="flex-shrink-0 flex items-center gap-2 pb-3">
                         <span className="text-xs font-medium text-gray-500">Planning week</span>
@@ -446,7 +451,7 @@ function CampaignPlannerLayout({
                   />
                   <FinalizeSection
                     companyId={companyId}
-                    campaignId={campaignId}
+                    campaignId={finalizeCampaignId}
                     onFinalize={onFinalize ?? (() => {})}
                     onGeneratePreview={onRefresh}
                   />
@@ -614,8 +619,33 @@ function CampaignPlannerWithSession() {
     selectedCompanyId ||
     null;
 
+  // ── Strategic Mix P1 (SPEC-001 I-1): server Draft Campaign persistence ──
+  // Enabled ONLY for the canonical Strategic Mix entry (mode=direct with no
+  // source ids) — recommendation/opportunity/turbo/existing-campaign entries
+  // are untouched. The draft id rides its OWN query param (`draftId`, not
+  // `campaignId`) so PlannerEntryRouter keeps resolving 'direct' mode.
+  const q = router.query ?? {};
+  const serverDraftEnabled =
+    router.isReady &&
+    q.mode === 'direct' &&
+    typeof q.campaignId !== 'string' &&
+    typeof q.recommendationId !== 'string' &&
+    typeof q.opportunityId !== 'string';
+  const urlDraftId = typeof q.draftId === 'string' && q.draftId.trim() ? q.draftId.trim() : null;
+  const onDraftIdChange = (id: string) => {
+    if (typeof q.draftId === 'string' && q.draftId === id) return;
+    router.replace(
+      { pathname: router.pathname, query: { ...q, draftId: id } },
+      undefined,
+      { shallow: true },
+    ).catch(() => { /* navigation races are non-fatal */ });
+  };
+
   return (
-    <PlannerSessionProvider companyId={companyId}>
+    <PlannerSessionProvider
+      companyId={companyId}
+      serverDraft={{ enabled: serverDraftEnabled, urlDraftId, onDraftIdChange }}
+    >
       <CampaignPlannerContent />
     </PlannerSessionProvider>
   );

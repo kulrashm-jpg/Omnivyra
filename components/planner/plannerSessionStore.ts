@@ -14,6 +14,13 @@ import { hydrateWizardFromPlannerSession } from '../../lib/wizard/campaignWizard
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
 import { AccountContext } from '../../lib/shared/accountContext';
 import { type PlannerStrategicCard, syncPlannerStrategicCardThemes } from '../../lib/plannerStrategicCard';
+import {
+  createOrResumePlannerDraft,
+  fetchPlannerDraftState,
+  savePlannerDraftState,
+  serializePlannerState,
+  type PlannerDraftState,
+} from './plannerDraftPersistence';
 
 const PLANNER_STORAGE_KEY_PREFIX = 'omnivyra_planner_session_';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -198,6 +205,13 @@ export interface PlannerSessionState {
   health_report?: Record<string, unknown> | null;
   /** Account context for planning influence (maturity, performance, recommendations). */
   account_context?: AccountContext | null;
+  /**
+   * Strategic Mix P1 — the server Draft Campaign that OWNS this session
+   * (SPEC-001 I-1/I-2). Distinct from source_ids.campaign_id (an EXISTING
+   * campaign opened in 'campaign' entry mode) so no existing-campaign branch
+   * changes behavior. Null until the draft bootstrap completes.
+   */
+  draft_campaign_id?: string | null;
 }
 
 const defaultStrategyContext: StrategyContext = {
@@ -224,6 +238,7 @@ const defaultState: PlannerSessionState = {
   calendar_plan: null,
   company_context_mode: 'full_company_context',
   focus_modules: [],
+  draft_campaign_id: null,
 };
 
 type PlannerSessionContextValue = {
@@ -320,6 +335,7 @@ function loadPersistedSession(storageKey: string): Partial<PlannerSessionState> 
       source_ids: campaignId ? { campaign_id: campaignId } : {},
       campaign_structure: cs && typeof cs === 'object' ? (cs as CampaignStructure) : null,
       calendar_plan: cp && typeof cp === 'object' ? (cp as CalendarPlan) : null,
+      draft_campaign_id: typeof parsed.draft_campaign_id === 'string' && parsed.draft_campaign_id ? parsed.draft_campaign_id : null,
       ...(company_context_mode ? { company_context_mode } : {}),
       ...(focus_modules ? { focus_modules } : {}),
       ...(strategic_themes ? { strategic_themes } : {}),
@@ -349,6 +365,7 @@ function persistSession(s: PlannerSessionState, storageKey: string): void {
       focus_modules: s.focus_modules ?? [],
       strategic_themes: s.strategic_themes ?? [],
       strategic_card: s.strategic_card ?? null,
+      draft_campaign_id: s.draft_campaign_id ?? null,
       stored_at: Date.now(),
     };
     localStorage.setItem(storageKey, JSON.stringify(payload));
@@ -361,14 +378,39 @@ export interface PlannerSessionProviderProps {
   children: React.ReactNode;
   /** Company ID for session isolation. Passed explicitly by parent. */
   companyId?: string | null;
+  /**
+   * Strategic Mix P1 — server Draft Campaign persistence. When enabled, a
+   * Draft Campaign is created/resumed on entry and becomes the SOURCE OF
+   * TRUTH for planner state; localStorage remains a cache only. Disabled
+   * (default) → behavior is byte-identical to before.
+   */
+  serverDraft?: {
+    enabled: boolean;
+    /** Draft id from the URL (?draftId=) for deep-link/refresh recovery. */
+    urlDraftId?: string | null;
+    /** Called when the draft id is established (page mirrors it to the URL). */
+    onDraftIdChange?: (id: string) => void;
+  };
 }
 
-export function PlannerSessionProvider({ children, companyId }: PlannerSessionProviderProps) {
+/** In-flight create-or-resume per company — survives StrictMode double-mount
+ *  and concurrent effects so at most ONE draft is created per entry. */
+const draftBootstrapInFlight = new Map<string, Promise<{ campaignId: string; resumed: boolean } | null>>();
+
+export function PlannerSessionProvider({ children, companyId, serverDraft }: PlannerSessionProviderProps) {
   const storageKey = getPlannerStorageKey(companyId ?? null);
 
   const [state, setState] = useState<PlannerSessionState>(defaultState);
   const [selectedActivity, setSelectedActivityState] = useState<CalendarPlanActivity | null>(null);
   const hasLoadedFromStorage = useRef(false);
+  // ── Strategic Mix P1 refs (server draft sync) ───────────────────────────
+  const [restoreTick, setRestoreTick] = useState(0);
+  const localDraftIdRef = useRef<string | null>(null);
+  const serverRevisionRef = useRef(0);
+  const serverReadyRef = useRef(false);
+  const lastSavedJsonRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftIdRef = useRef<string | null>(null);
 
   const setSelectedActivity = useCallback((value: CalendarPlanActivity | null) => {
     setSelectedActivityState(value);
@@ -385,6 +427,7 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
   useEffect(() => {
     const restored = loadPersistedSession(storageKey);
     hasLoadedFromStorage.current = true;
+    localDraftIdRef.current = (restored?.draft_campaign_id as string | null) ?? null;
     if (restored) {
       setState({
         ...defaultState,
@@ -400,7 +443,126 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
         }
       }
     }
+    setRestoreTick((t) => t + 1);
   }, [storageKey]);
+
+  // ── Strategic Mix P1: Draft Campaign bootstrap + server hydrate ─────────
+  // Runs once per entry (after the localStorage cache restore). Order of
+  // truth: URL draftId > cached draft id > create-or-resume on the server.
+  // With an id, the SERVER state wins over the local cache whenever the
+  // server has any saved planner_state (SPEC-001: server = source of truth;
+  // browser storage = cache). A fresh/empty server draft keeps the local
+  // state, and the first autosave migrates it up (pre-P1 sessions migrate
+  // transparently).
+  const serverDraftEnabled = serverDraft?.enabled === true;
+  const urlDraftId = serverDraft?.urlDraftId ?? null;
+  const onDraftIdChange = serverDraft?.onDraftIdChange;
+  useEffect(() => {
+    if (!serverDraftEnabled || !companyId || restoreTick === 0) return;
+    if (draftIdRef.current) return; // already bootstrapped for this entry
+    let cancelled = false;
+
+    const adoptServerState = (plannerState: PlannerDraftState | null, revision: number, id: string) => {
+      serverRevisionRef.current = revision;
+      draftIdRef.current = id;
+      if (plannerState) {
+        const restoredServer = { ...plannerState, draft_campaign_id: id, stored_at: Date.now() };
+        // Reuse the SAME normalizer as the localStorage cache so server and
+        // cache payloads are interchangeable by construction.
+        const normalized = ((): Partial<PlannerSessionState> | null => {
+          try {
+            localStorage.setItem(`${storageKey}__server_tmp`, JSON.stringify(restoredServer));
+            const out = loadPersistedSession(`${storageKey}__server_tmp`);
+            localStorage.removeItem(`${storageKey}__server_tmp`);
+            return out;
+          } catch { return null; }
+        })();
+        if (normalized) {
+          lastSavedJsonRef.current = JSON.stringify(serializePlannerState({ ...defaultState, ...normalized } as PlannerSessionState));
+          setState((prev) => ({
+            ...prev,
+            ...normalized,
+            draft_campaign_id: id,
+            // Entry-context fields stay owned by the live entry, not the draft.
+            planner_entry_mode: prev.planner_entry_mode,
+            source_ids: prev.source_ids,
+            account_context: prev.account_context ?? (normalized as PlannerSessionState).account_context ?? null,
+          }));
+        } else {
+          setState((prev) => ({ ...prev, draft_campaign_id: id }));
+        }
+      } else {
+        lastSavedJsonRef.current = null; // fresh draft — first autosave migrates local state up
+        setState((prev) => ({ ...prev, draft_campaign_id: id }));
+      }
+      serverReadyRef.current = true;
+      onDraftIdChange?.(id);
+    };
+
+    (async () => {
+      let id = urlDraftId || localDraftIdRef.current;
+      if (!id) {
+        let inFlight = draftBootstrapInFlight.get(companyId);
+        if (!inFlight) {
+          inFlight = createOrResumePlannerDraft(companyId);
+          draftBootstrapInFlight.set(companyId, inFlight);
+          inFlight.finally(() => draftBootstrapInFlight.delete(companyId));
+        }
+        const created = await inFlight;
+        if (cancelled || !created) return; // offline → planner works on cache; next entry retries
+        id = created.campaignId;
+      }
+      const server = await fetchPlannerDraftState(id);
+      if (cancelled) return;
+      adoptServerState(server?.plannerState ?? null, server?.revision ?? 0, id);
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverDraftEnabled, companyId, urlDraftId, restoreTick, storageKey]);
+
+  // ── Strategic Mix P1: debounced autosave (server = source of truth) ─────
+  // Deterministic conflict handling: a 409 means another tab/device advanced
+  // the revision first — adopt the server copy wholesale and continue from
+  // its revision. Offline/failed saves retry on the next state change.
+  useEffect(() => {
+    if (!serverDraftEnabled || !serverReadyRef.current || !draftIdRef.current) return;
+    const draftId = draftIdRef.current;
+    const payload = serializePlannerState(state);
+    const json = JSON.stringify(payload);
+    if (json === lastSavedJsonRef.current) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      const result = await savePlannerDraftState(draftId, payload, serverRevisionRef.current);
+      if (result.ok) {
+        serverRevisionRef.current = result.revision;
+        lastSavedJsonRef.current = json;
+      } else if (result.conflict === true) {
+        serverRevisionRef.current = result.revision;
+        if (result.plannerState) {
+          const incoming = { ...result.plannerState, draft_campaign_id: draftId, stored_at: Date.now() };
+          try {
+            localStorage.setItem(`${storageKey}__server_tmp`, JSON.stringify(incoming));
+            const normalized = loadPersistedSession(`${storageKey}__server_tmp`);
+            localStorage.removeItem(`${storageKey}__server_tmp`);
+            if (normalized) {
+              lastSavedJsonRef.current = JSON.stringify(serializePlannerState({ ...defaultState, ...normalized } as PlannerSessionState));
+              setState((prev) => ({
+                ...prev,
+                ...normalized,
+                draft_campaign_id: draftId,
+                planner_entry_mode: prev.planner_entry_mode,
+                source_ids: prev.source_ids,
+              }));
+            }
+          } catch { /* keep local; next change retries */ }
+        }
+      }
+      // !ok && !conflict → transient/offline: retried on the next state change.
+    }, 1500);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, serverDraftEnabled, storageKey]);
 
   useEffect(() => {
     if (!hasLoadedFromStorage.current) return;
@@ -552,7 +714,10 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
   }, []);
 
   const reset = useCallback(() => {
-    setState(defaultState);
+    // Strategic Mix P1: keep the draft id through a reset so the emptied
+    // state AUTOSAVES to the server draft (otherwise the old server copy
+    // would resurrect on the next entry via create-or-resume).
+    setState((prev) => ({ ...defaultState, draft_campaign_id: prev.draft_campaign_id ?? null }));
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem(storageKey);
