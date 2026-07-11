@@ -421,24 +421,46 @@ export function useBoltCombinedStrategyController() {
   function toggleFocus(f: string) { setStrategicFocus((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f]); }
   function toggleAudience(a: string) { setAudience((p) => p.includes(a) ? p.filter((x) => x !== a) : [...p, a]); }
 
+  // CAMPAIGN-IMPL-001 — Intelligent Mix business limits (mirror of the server
+  // authority in formatGovernance.CAMPAIGN_LIMITS): ≤2 types per lane, ≤3/week
+  // per type, ≤5/week per lane combined.
+  const MIX_MAX_TYPES = 2;
+  const MIX_MAX_PER_TYPE = 3;
+  const MIX_MAX_LANE_TOTAL = 5;
+  // Default frequency for a newly-added type: fill the remaining lane budget,
+  // capped at the per-type max, so adding a 2nd type can't push the lane past 5.
+  const defaultFreqForAdd = (others: number) => Math.max(1, Math.min(MIX_MAX_PER_TYPE, MIX_MAX_LANE_TOTAL - others));
+
   function toggleTextFormat(f: TextFormat) {
     setTextFormats((prev) => {
       if (prev.includes(f)) { setTextFrequency((fq) => { const n = { ...fq }; delete n[f]; return n; }); return prev.filter((x) => x !== f); }
-      if (prev.length >= 3) return prev;
-      setTextFrequency((fq) => ({ ...fq, [f]: fq[f] ?? 3 }));
+      if (prev.length >= MIX_MAX_TYPES) return prev;
+      setTextFrequency((fq) => ({ ...fq, [f]: fq[f] ?? defaultFreqForAdd(prev.reduce((s, x) => s + (fq[x] ?? MIX_MAX_PER_TYPE), 0)) }));
       return [...prev, f];
     });
   }
   function toggleCreatorFormat(f: CreatorFormat) {
     setCreatorFormats((prev) => {
       if (prev.includes(f)) { setCreatorFrequency((fq) => { const n = { ...fq }; delete n[f]; return n; }); return prev.filter((x) => x !== f); }
-      if (prev.length >= 2) return prev;
-      setCreatorFrequency((fq) => ({ ...fq, [f]: fq[f] ?? 3 }));
+      if (prev.length >= MIX_MAX_TYPES) return prev;
+      setCreatorFrequency((fq) => ({ ...fq, [f]: fq[f] ?? defaultFreqForAdd(prev.reduce((s, x) => s + (fq[x] ?? MIX_MAX_PER_TYPE), 0)) }));
       return [...prev, f];
     });
   }
-  function setTextFreq(f: TextFormat, delta: number) { setTextFrequency((p) => ({ ...p, [f]: Math.min(7, Math.max(1, (p[f] ?? 3) + delta)) })); }
-  function setCreatorFreq(f: CreatorFormat, delta: number) { setCreatorFrequency((p) => ({ ...p, [f]: Math.min(7, Math.max(1, (p[f] ?? 3) + delta)) })); }
+  function setTextFreq(f: TextFormat, delta: number) {
+    setTextFrequency((p) => {
+      const others = textFormats.filter((x) => x !== f).reduce((s, x) => s + (p[x] ?? MIX_MAX_PER_TYPE), 0);
+      const cap = Math.max(1, MIX_MAX_LANE_TOTAL - others);
+      return { ...p, [f]: Math.min(MIX_MAX_PER_TYPE, cap, Math.max(1, (p[f] ?? MIX_MAX_PER_TYPE) + delta)) };
+    });
+  }
+  function setCreatorFreq(f: CreatorFormat, delta: number) {
+    setCreatorFrequency((p) => {
+      const others = creatorFormats.filter((x) => x !== f).reduce((s, x) => s + (p[x] ?? MIX_MAX_PER_TYPE), 0);
+      const cap = Math.max(1, MIX_MAX_LANE_TOTAL - others);
+      return { ...p, [f]: Math.min(MIX_MAX_PER_TYPE, cap, Math.max(1, (p[f] ?? MIX_MAX_PER_TYPE) + delta)) };
+    });
+  }
 
   function applySuggestion(s: Suggestion) { setTopic(s.suggested_campaign_title || s.topic); setDuration(s.suggested_duration || 4); }
 

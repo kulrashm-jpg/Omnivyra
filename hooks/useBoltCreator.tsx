@@ -637,7 +637,8 @@ export function useBoltCreator() {
   }
 
   function setFreq(f: CreatorContentFormat, delta: number) {
-    setFormatFrequency((prev) => ({ ...prev, [f]: Math.min(7, Math.max(1, (prev[f] ?? 3) + delta)) }));
+    // CAMPAIGN-IMPL-001: creator content types run at most 3×/week.
+    setFormatFrequency((prev) => ({ ...prev, [f]: Math.min(3, Math.max(1, (prev[f] ?? 3) + delta)) }));
   }
 
   function applySuggestion(s: Suggestion) {

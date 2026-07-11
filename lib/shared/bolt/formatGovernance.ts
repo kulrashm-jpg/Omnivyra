@@ -174,6 +174,172 @@ export function validateExecutionConfigFormats(
   };
 }
 
+/* ── Campaign business-rule limits (CAMPAIGN-IMPL-001) ─────────────────────
+ * Canonical numeric limits. These are the SINGLE source of truth for the
+ * server validator, the planner clamp, and the campaign-builder UIs.
+ *
+ *   Writer campaign : ≤2 writer types, each ≤3/week.
+ *   Creator campaign: ≤2 creator types, each ≤3/week.
+ *   Intelligent Mix : ≤2 writer + ≤2 creator types; ≤5 writer TOTAL/week and
+ *                     ≤5 creator TOTAL/week (the combined-lane caps).
+ * The lane-total cap applies only to the mix (combined) — writer-only and
+ * creator-only campaigns are bounded by (2 types × 3) alone. */
+export const CAMPAIGN_LIMITS = {
+  MAX_TYPES_PER_LANE: 2,
+  MAX_FREQUENCY_PER_TYPE: 3,
+  MAX_MIX_LANE_TOTAL: 5,
+} as const;
+
+/** Read the format_frequency object off an execution config, canonicalising
+ *  keys (feed_post → post, …) so lookups match the resolved format lists. */
+function normalizedFrequencyMap(ec: Record<string, unknown>): Map<string, number> {
+  const raw = ec.format_frequency;
+  const ff = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const map = new Map<string, number>();
+  for (const [k, v] of Object.entries(ff)) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    const key = normalizeTextFormat(k); // creator keys pass through lowercased/unaliased
+    map.set(key, Math.max(map.get(key) ?? 0, Math.round(n)));
+  }
+  return map;
+}
+
+export interface CampaignLimitViolation {
+  code: 'WRITER_TYPE_COUNT' | 'CREATOR_TYPE_COUNT' | 'PER_TYPE_FREQUENCY' | 'WRITER_TOTAL_FREQUENCY' | 'CREATOR_TOTAL_FREQUENCY';
+  message: string;
+  field?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface CampaignLimitsResult {
+  ok: boolean;
+  violations: CampaignLimitViolation[];
+  writerTypes: string[];
+  creatorTypes: string[];
+  writerTotal: number;
+  creatorTotal: number;
+}
+
+/**
+ * Validate the canonical campaign business rules against an execution config.
+ * Pure — no DB, no throw. Returns every violation so the caller can surface
+ * the first precisely. Only the lanes that apply to `campaignMode` are checked.
+ */
+export function validateCampaignLimits(
+  executionConfig: Record<string, unknown> | null | undefined,
+  campaignMode: BoltCampaignMode,
+): CampaignLimitsResult {
+  const ec = executionConfig ?? {};
+  const writerTypes = campaignMode === 'text' || campaignMode === 'combined'
+    ? getTextFormatsFromExecutionConfig(ec)
+    : [];
+  // In combined mode the creator getter returns text formats too (merged
+  // content_formats) — strip them so we only count real creator types.
+  const creatorTypes = campaignMode === 'creator' || campaignMode === 'combined'
+    ? getCreatorFormatsFromExecutionConfig(ec).filter((f) => !isSupportedTextFormat(f))
+    : [];
+
+  const freq = normalizedFrequencyMap(ec);
+  const freqOf = (t: string): number => freq.get(normalizeTextFormat(t)) ?? 1; // planner floors selected types to 1
+  const writerTotal = writerTypes.reduce((s, t) => s + freqOf(t), 0);
+  const creatorTotal = creatorTypes.reduce((s, t) => s + freqOf(t), 0);
+
+  const violations: CampaignLimitViolation[] = [];
+  const { MAX_TYPES_PER_LANE, MAX_FREQUENCY_PER_TYPE, MAX_MIX_LANE_TOTAL } = CAMPAIGN_LIMITS;
+
+  if (writerTypes.length > MAX_TYPES_PER_LANE) {
+    violations.push({
+      code: 'WRITER_TYPE_COUNT', field: 'text_formats',
+      message: `At most ${MAX_TYPES_PER_LANE} writer content types are allowed (received ${writerTypes.length}: ${writerTypes.join(', ')}).`,
+      details: { writer_types: writerTypes, max: MAX_TYPES_PER_LANE },
+    });
+  }
+  if (creatorTypes.length > MAX_TYPES_PER_LANE) {
+    violations.push({
+      code: 'CREATOR_TYPE_COUNT', field: 'creator_formats',
+      message: `At most ${MAX_TYPES_PER_LANE} creator content types are allowed (received ${creatorTypes.length}: ${creatorTypes.join(', ')}).`,
+      details: { creator_types: creatorTypes, max: MAX_TYPES_PER_LANE },
+    });
+  }
+  // Per-type frequency: only flag an explicitly-set value over the cap.
+  for (const t of [...writerTypes, ...creatorTypes]) {
+    const set = freq.get(normalizeTextFormat(t));
+    if (set != null && set > MAX_FREQUENCY_PER_TYPE) {
+      violations.push({
+        code: 'PER_TYPE_FREQUENCY', field: 'format_frequency',
+        message: `"${t}" is set to ${set}/week; the maximum is ${MAX_FREQUENCY_PER_TYPE}/week.`,
+        details: { format: t, frequency: set, max: MAX_FREQUENCY_PER_TYPE },
+      });
+    }
+  }
+  // Lane totals apply ONLY to Intelligent Mix (combined).
+  if (campaignMode === 'combined') {
+    if (writerTotal > MAX_MIX_LANE_TOTAL) {
+      violations.push({
+        code: 'WRITER_TOTAL_FREQUENCY', field: 'format_frequency',
+        message: `Writer output is ${writerTotal}/week; Intelligent Mix allows at most ${MAX_MIX_LANE_TOTAL} writer posts/week.`,
+        details: { writer_total: writerTotal, max: MAX_MIX_LANE_TOTAL },
+      });
+    }
+    if (creatorTotal > MAX_MIX_LANE_TOTAL) {
+      violations.push({
+        code: 'CREATOR_TOTAL_FREQUENCY', field: 'format_frequency',
+        message: `Creator output is ${creatorTotal}/week; Intelligent Mix allows at most ${MAX_MIX_LANE_TOTAL} creator posts/week.`,
+        details: { creator_total: creatorTotal, max: MAX_MIX_LANE_TOTAL },
+      });
+    }
+  }
+
+  return { ok: violations.length === 0, violations, writerTypes, creatorTypes, writerTotal, creatorTotal };
+}
+
+/**
+ * Planner defence-in-depth: clamp a format_frequency map down to the business
+ * limits so the planner can NEVER generate an invalid campaign even if a
+ * payload bypasses the server validator (internal re-execution, an existing
+ * over-limit saved campaign). Drops types beyond the lane cap, clamps per-type
+ * frequency to ≤3, and (for a mix — both lanes present, or `combined`) trims
+ * each lane total to ≤5. Returns a NEW object; never mutates the input.
+ */
+export function clampCampaignFormatFrequency(
+  formatFrequency: Record<string, number> | null | undefined,
+  campaignMode?: BoltCampaignMode,
+): Record<string, number> | null {
+  if (!formatFrequency || typeof formatFrequency !== 'object' || Array.isArray(formatFrequency)) return null;
+  const { MAX_TYPES_PER_LANE, MAX_FREQUENCY_PER_TYPE, MAX_MIX_LANE_TOTAL } = CAMPAIGN_LIMITS;
+  const entries: Array<[string, number]> = [];
+  for (const [k, v] of Object.entries(formatFrequency)) {
+    const n = Math.round(Number(v));
+    if (Number.isFinite(n) && n > 0) entries.push([k, n]);
+  }
+  const writer = entries.filter(([k]) => isSupportedTextFormat(k));
+  const creator = entries.filter(([k]) => !isSupportedTextFormat(k));
+  // A mix if the mode says so, or both lanes are populated.
+  const isMix = campaignMode === 'combined' || (writer.length > 0 && creator.length > 0);
+
+  const clampLane = (lane: Array<[string, number]>): Array<[string, number]> => {
+    // Keep at most N types (preserve selection order), clamp each to ≤ per-type max.
+    let kept: Array<[string, number]> = lane.slice(0, MAX_TYPES_PER_LANE)
+      .map(([k, v]) => [k, Math.min(MAX_FREQUENCY_PER_TYPE, v)] as [string, number]);
+    if (isMix) {
+      let sum = kept.reduce((s, [, v]) => s + v, 0);
+      // Trim the currently-largest value by 1 until the lane total fits.
+      while (sum > MAX_MIX_LANE_TOTAL && kept.some(([, v]) => v > 1)) {
+        let maxIdx = 0;
+        for (let i = 1; i < kept.length; i += 1) if (kept[i][1] > kept[maxIdx][1]) maxIdx = i;
+        kept[maxIdx][1] -= 1;
+        sum -= 1;
+      }
+    }
+    return kept.filter(([, v]) => v > 0);
+  };
+
+  const out: Record<string, number> = {};
+  for (const [k, v] of [...clampLane(writer), ...clampLane(creator)]) out[k] = v;
+  return out;
+}
+
 /**
  * Determine the campaign mode from execution config.
  * Defaults to 'text' when missing — preserves prior behavior of

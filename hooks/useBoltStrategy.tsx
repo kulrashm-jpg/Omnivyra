@@ -901,9 +901,10 @@ export function useBoltStrategy() {
   }
 
   function setFreq(f: ContentFormat, delta: number) {
+    // CAMPAIGN-IMPL-001: writer content types run at most 3×/week.
     setFormatFrequency((prev) => ({
       ...prev,
-      [f]: Math.min(7, Math.max(1, (prev[f] ?? 3) + delta)),
+      [f]: Math.min(3, Math.max(1, (prev[f] ?? 3) + delta)),
     }));
   }
 

@@ -165,7 +165,7 @@ export default function BoltCombinedStrategyPage() {
               <div className="grid grid-cols-2 gap-4">
                 {/* Text */}
                 <div>
-                  <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wide mb-2">✍️ Text <span className="font-normal text-gray-400">(max 3)</span></p>
+                  <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wide mb-2">✍️ Text <span className="font-normal text-gray-400">(max 2)</span></p>
                   <div className="flex flex-col gap-1.5">
                     {TEXT_FORMATS.map((fmt) => {
                       const sel = textFormats.includes(fmt.value);
@@ -173,7 +173,7 @@ export default function BoltCombinedStrategyPage() {
                       return (
                         <div key={fmt.value} className="flex flex-col gap-0.5">
                           <button type="button" onClick={() => toggleTextFormat(fmt.value)}
-                            disabled={!sel && (textFormats.length >= 3 || !capable)}
+                            disabled={!sel && (textFormats.length >= 2 || !capable)}
                             title={!capable ? `No connected platform supports ${fmt.label}. Connect a compatible platform to enable it.` : fmt.hint}
                             className={`flex items-center gap-2 text-xs px-2.5 py-2 rounded-xl border-2 font-medium transition-all text-left disabled:opacity-40 ${sel ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-gray-200 text-gray-600 hover:border-amber-300 hover:bg-amber-50/40'}`}>
                             <span>{fmt.icon}</span>{fmt.label}

@@ -11,6 +11,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorCodes';
 import { validateDailyPlanRow } from '../../../lib/shared/bolt/validateDailyPlanRow';
 import { filterPlatformsForFormat } from '../../../lib/shared/bolt/formatPlatformBinding';
+import { clampCampaignFormatFrequency } from '../../../lib/shared/bolt/formatGovernance';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -185,11 +186,24 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       postsPerWeekBody != null && Number.isFinite(Number(postsPerWeekBody))
         ? Math.max(2, Math.min(20, Math.floor(Number(postsPerWeekBody))))  // raised 7→14→20 to support up to 20 activity cards/week
         : undefined;
-  // Resolve format_frequency: Record<string, number> or null
-  const formatFrequency: Record<string, number> | null =
+  // Resolve format_frequency: Record<string, number> or null.
+  // Defence-in-depth (CAMPAIGN-IMPL-001): clamp to the canonical business
+  // limits (≤2 types/lane, ≤3/week per type, ≤5/week per lane in a mix) so the
+  // planner can NEVER emit an over-limit campaign even if a payload bypasses the
+  // server validator (internal re-execution, an existing over-limit saved
+  // campaign). The server validator rejects such payloads up front; this is the
+  // graceful floor for anything that slips past it.
+  const rawFormatFrequency: Record<string, number> | null =
     formatFrequencyBody && typeof formatFrequencyBody === 'object' && !Array.isArray(formatFrequencyBody)
       ? (formatFrequencyBody as Record<string, number>)
       : null;
+  const formatFrequency: Record<string, number> | null = clampCampaignFormatFrequency(rawFormatFrequency);
+  if (rawFormatFrequency && JSON.stringify(rawFormatFrequency) !== JSON.stringify(formatFrequency)) {
+    console.warn('[weekly-structure][limits-clamp] format_frequency clamped to business limits', {
+      before: rawFormatFrequency,
+      after: formatFrequency,
+    });
+  }
   // Resolve cross_platform_sharing: true = shared (same day), false = unique (staggered)
   const crossPlatformShared: boolean =
     typeof crossPlatformSharingBody === 'boolean'

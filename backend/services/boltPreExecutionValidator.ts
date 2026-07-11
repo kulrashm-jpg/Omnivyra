@@ -31,6 +31,7 @@ import {
 } from '../../lib/shared/campaignDuration';
 import {
   validateExecutionConfigFormats,
+  validateCampaignLimits,
   resolveCampaignMode,
   type BoltCampaignMode,
 } from '../../lib/shared/bolt/formatGovernance';
@@ -201,6 +202,19 @@ export async function validateBoltPreExecution(
       message: `Unsupported text format: ${formatResult.unsupportedText.join(', ')}.`,
       details: { unsupported_formats: formatResult.unsupportedText },
     });
+  }
+
+  // ── 4b. Campaign business-rule limits (CAMPAIGN-IMPL-001) ──────
+  // Authoritative type-count + frequency enforcement. Frontend caps are
+  // cosmetic; this is the layer that actually rejects an over-limit payload
+  // (≤2 writer + ≤2 creator types, each ≤3/week; Intelligent Mix ≤5 writer
+  // and ≤5 creator posts/week combined).
+  const limitsResult = validateCampaignLimits(ec, campaignMode);
+  for (const v of limitsResult.violations) {
+    const code = v.code === 'WRITER_TYPE_COUNT' || v.code === 'CREATOR_TYPE_COUNT'
+      ? BOLT_ERROR_CODES.STRATEGY_TOO_MANY_TYPES
+      : BOLT_ERROR_CODES.STRATEGY_FREQUENCY_EXCEEDED;
+    errors.push({ code, message: v.message, field: v.field, details: { violation: v.code, ...v.details } });
   }
 
   // ── 5. Selected platforms (when the caller supplies them) ─────
