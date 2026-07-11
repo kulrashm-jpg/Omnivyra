@@ -42,11 +42,14 @@ import {
   assignmentsForSlot,
   deriveStructureSlots,
   isAssignmentLocked,
+  setAssignmentApproval,
+  type AssignmentApprovalState,
   type AssignmentStatus,
   type CampaignAssignment,
   type StructureSlot,
 } from '../../lib/campaign/campaignAssignments';
 import { useAssignmentExecutionSync } from './useAssignmentExecutionSync';
+import { useApprovalSettings } from './useApprovalSettings';
 import {
   assessExecutionReadiness,
   detectAssignmentConflicts,
@@ -78,6 +81,13 @@ function envelopeToCard(envelope: CreatorAsset): AssetCard | null {
     tags: Array.isArray(envelope.metadata?.tags) ? envelope.metadata.tags : [],
   };
 }
+
+const APPROVAL_STYLE: Record<AssignmentApprovalState, string> = {
+  not_required: 'bg-gray-50 text-gray-400',
+  pending: 'bg-amber-100 text-amber-700',
+  approved: 'bg-emerald-100 text-emerald-700',
+  rejected: 'bg-red-100 text-red-700',
+};
 
 const STATUS_STYLE: Record<AssignmentStatus, string> = {
   draft: 'bg-gray-100 text-gray-600',
@@ -120,6 +130,10 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
     assignments,
     setAssignments,
   });
+
+  // ── R2-P1: company approval enablement + display filter ──
+  const { approvalsEnabled } = useApprovalSettings(companyId);
+  const [approvalFilter, setApprovalFilter] = useState<'all' | AssignmentApprovalState>('all');
 
   const loadAssets = useCallback(async () => {
     if (!companyId) return;
@@ -167,9 +181,17 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
   // ── Assignment mutations (all through the pure model, all user-initiated) ──
   const doAssign = useCallback(
     (assetId: string, slot: StructureSlot) => {
-      setAssignments((current) => assignAsset(current, { campaignId: campaignId ?? null, assetId, slot }).assignments);
+      setAssignments((current) =>
+        assignAsset(current, {
+          campaignId: campaignId ?? null,
+          assetId,
+          slot,
+          // R2-P1 — approval-required companies review every new link.
+          ...(approvalsEnabled ? { approval: 'pending' as const } : {}),
+        }).assignments,
+      );
     },
-    [campaignId, setAssignments],
+    [campaignId, setAssignments, approvalsEnabled],
   );
 
   const onSlotDrop = useCallback(
@@ -236,16 +258,32 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
               </div>
             )}
           </div>
-          {campaignId && (
-            <button
-              type="button"
-              onClick={() => void syncExecution()}
-              title={lastSyncAt ? `Last synced ${new Date(lastSyncAt).toLocaleTimeString()}` : 'Sync lifecycle from execution'}
-              className="ml-auto flex-shrink-0 flex items-center gap-1 text-[11px] font-medium text-gray-500 hover:text-gray-800"
-            >
-              <RefreshCw className="h-3 w-3" /> Sync
-            </button>
-          )}
+          <div className="ml-auto flex-shrink-0 flex items-center gap-2">
+            {approvalsEnabled && (
+              <select
+                value={approvalFilter}
+                onChange={(e) => setApprovalFilter(e.target.value as typeof approvalFilter)}
+                title="Filter assignments by approval state"
+                className="text-[11px] border border-gray-300 rounded px-1.5 py-0.5 bg-white text-gray-600"
+              >
+                <option value="all">all approvals</option>
+                <option value="pending">pending</option>
+                <option value="approved">approved</option>
+                <option value="rejected">rejected</option>
+                <option value="not_required">not required</option>
+              </select>
+            )}
+            {campaignId && (
+              <button
+                type="button"
+                onClick={() => void syncExecution()}
+                title={lastSyncAt ? `Last synced ${new Date(lastSyncAt).toLocaleTimeString()}` : 'Sync lifecycle from execution'}
+                className="flex items-center gap-1 text-[11px] font-medium text-gray-500 hover:text-gray-800"
+              >
+                <RefreshCw className="h-3 w-3" /> Sync
+              </button>
+            )}
+          </div>
         </div>
         {conflicts.length > 0 && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 space-y-1">
@@ -298,7 +336,10 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                     </div>
                   ) : (
                     <div className="mt-2 space-y-1.5">
-                      {slotAssignments.map((a, idx) => {
+                      {(approvalFilter === 'all'
+                        ? slotAssignments
+                        : slotAssignments.filter((a) => (a.approval ?? 'not_required') === approvalFilter)
+                      ).map((a, idx) => {
                         const asset = assetById.get(a.asset_id);
                         const expanded = expandedAssignmentId === a.id;
                         // P4 per-item lock: items in protected execution
@@ -332,6 +373,16 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                                     publish failed
                                   </span>
                                 )}
+                                {(approvalsEnabled || (a.approval && a.approval !== 'not_required')) && (() => {
+                                  // Unset approval under an approval-required company gates as
+                                  // pending (mirrors the materializer), so display it as such.
+                                  const shown = a.approval ?? (approvalsEnabled ? 'pending' : 'not_required');
+                                  return (
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${APPROVAL_STYLE[shown]}`}>
+                                      {shown.replace('_', ' ')}
+                                    </span>
+                                  );
+                                })()}
                               </button>
                               {locked ? (
                                 <span title="In execution — this item is locked; other assignments stay editable" className="flex-shrink-0 p-1 text-indigo-400">
@@ -339,12 +390,12 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                                 </span>
                               ) : (
                               <div className="flex items-center gap-0.5 flex-shrink-0">
-                                <button type="button" title="Move up" disabled={idx === 0}
+                                <button type="button" title="Move up" disabled={idx === 0 || approvalFilter !== 'all'}
                                   onClick={() => setAssignments((cur) => reorderAssignments(cur, slot.structure_id, slotAssignments.map((s, i) => (i === idx - 1 ? a.id : i === idx ? slotAssignments[idx - 1].id : s.id))))}
                                   className="p-1 text-gray-400 hover:text-gray-700 disabled:opacity-30">
                                   <ArrowUp className="h-3 w-3" />
                                 </button>
-                                <button type="button" title="Move down" disabled={idx === slotAssignments.length - 1}
+                                <button type="button" title="Move down" disabled={idx === slotAssignments.length - 1 || approvalFilter !== 'all'}
                                   onClick={() => setAssignments((cur) => reorderAssignments(cur, slot.structure_id, slotAssignments.map((s, i) => (i === idx + 1 ? a.id : i === idx ? slotAssignments[idx + 1].id : s.id))))}
                                   className="p-1 text-gray-400 hover:text-gray-700 disabled:opacity-30">
                                   <ArrowDown className="h-3 w-3" />
@@ -401,6 +452,26 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
                                   </div>
                                 ) : (
                                 <>
+                                {approvalsEnabled && (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[11px] text-gray-500">Approval</span>
+                                    <button type="button"
+                                      onClick={() => setAssignments((cur) => setAssignmentApproval(cur, a.id, 'approved'))}
+                                      className="text-[11px] font-medium rounded-full border border-emerald-200 text-emerald-700 px-2 py-0.5 hover:bg-emerald-50">
+                                      Approve
+                                    </button>
+                                    <button type="button"
+                                      onClick={() => setAssignments((cur) => setAssignmentApproval(cur, a.id, 'rejected'))}
+                                      className="text-[11px] font-medium rounded-full border border-red-200 text-red-700 px-2 py-0.5 hover:bg-red-50">
+                                      Reject
+                                    </button>
+                                    <button type="button"
+                                      onClick={() => setAssignments((cur) => setAssignmentApproval(cur, a.id, 'pending'))}
+                                      className="text-[11px] font-medium rounded-full border border-amber-200 text-amber-700 px-2 py-0.5 hover:bg-amber-50">
+                                      Return to pending
+                                    </button>
+                                  </div>
+                                )}
                                 <div className="flex items-center gap-2">
                                   <label className="text-[11px] text-gray-500">Status</label>
                                   <select

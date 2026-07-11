@@ -94,6 +94,16 @@ export interface CampaignBoardProjection {
     failures: Array<{ assignment_id: string; message: string | null }>;
     stalled: string[];
   };
+  /** R2-P1 — approval summary (planning-owned states; counts only). */
+  approvals: {
+    enabled: boolean;
+    pending: number;
+    approved: number;
+    rejected: number;
+    not_required: number;
+    /** Confirmed assignments the approval gate blocks from materializing. */
+    blocking: string[];
+  };
   issues: BoardIssue[];
   health: CampaignHealth;
   /** The full readiness report (already assist-only) for drill-down. */
@@ -111,8 +121,10 @@ export function projectCampaignBoard(params: {
   slots: StructureSlot[];
   assignments: CampaignAssignment[];
   assets: AssignableAsset[];
+  /** R2-P1 — company approval enablement (default false ⇒ pre-R2 output). */
+  requireApproval?: boolean;
 }): CampaignBoardProjection {
-  const { slots, assignments, assets } = params;
+  const { slots, assignments, assets, requireApproval = false } = params;
 
   // Single-source judgements (never re-derived here).
   const readiness = assessExecutionReadiness(slots, assignments, assets);
@@ -159,8 +171,39 @@ export function projectCampaignBoard(params: {
     .filter((a) => a.execution_failure)
     .map((a) => ({ assignment_id: a.id, message: a.execution_failure?.message ?? null }));
 
+  // ── R2-P1 approval aggregation (planning-owned; the board only counts) ──
+  const approvalOf = (a: CampaignAssignment) => a.approval ?? 'not_required';
+  const approvalBlocking = requireApproval
+    ? assignments
+        .filter((a) => a.status === 'confirmed' && approvalOf(a) !== 'approved' && approvalOf(a) !== 'not_required')
+        .map((a) => a.id)
+    : [];
+  const approvals = {
+    enabled: requireApproval,
+    pending: assignments.filter((a) => approvalOf(a) === 'pending').length,
+    approved: assignments.filter((a) => approvalOf(a) === 'approved').length,
+    rejected: assignments.filter((a) => approvalOf(a) === 'rejected').length,
+    not_required: assignments.filter((a) => approvalOf(a) === 'not_required').length,
+    blocking: approvalBlocking,
+  };
+
   // ── Issues (each linked to where it is resolved) ──
   const issues: BoardIssue[] = [];
+  if (requireApproval) {
+    for (const id of approvalBlocking) {
+      const a = assignments.find((x) => x.id === id);
+      issues.push({
+        severity: 'blocking',
+        code: a?.approval === 'rejected' ? 'approval_rejected' : 'approval_pending',
+        message:
+          a?.approval === 'rejected'
+            ? 'Assignment was rejected — replace the asset or return it to pending.'
+            : 'Assignment awaits approval before it can enter execution.',
+        target: 'alignment',
+        ref_id: id,
+      });
+    }
+  }
   for (const c of conflicts) {
     issues.push({ severity: 'blocking', code: c.kind, message: c.message, target: 'alignment', ref_id: c.assignment_ids[0] });
   }
@@ -234,6 +277,7 @@ export function projectCampaignBoard(params: {
       failures,
       stalled: readiness.stalled_execution,
     },
+    approvals,
     issues,
     health,
     readiness,
@@ -270,6 +314,16 @@ export function summarizeCampaignBoard(p: CampaignBoardProjection): string[] {
   }
   if (p.execution.failures.length > 0) {
     out.push(`${p.execution.failures.length} publish failure${p.execution.failures.length === 1 ? '' : 's'} need attention (lifecycle preserved; the engine retries).`);
+  }
+  // R2-P1 — approval progress (summary only; approving stays a human act).
+  if (p.approvals.enabled) {
+    const reviewed = p.approvals.approved + p.approvals.rejected;
+    const total = reviewed + p.approvals.pending;
+    out.push(
+      p.approvals.blocking.length > 0
+        ? `Approvals gate the handoff: ${p.approvals.pending} pending, ${p.approvals.rejected} rejected (${p.approvals.approved} approved of ${total} reviewed-or-waiting).`
+        : `Approvals are clear — ${p.approvals.approved} approved, nothing blocking the handoff.`,
+    );
   }
   if (p.execution.stalled.length > 0) {
     out.push(`${p.execution.stalled.length} materialized item${p.execution.stalled.length === 1 ? ' is' : 's are'} not yet scheduled while others progressed.`);

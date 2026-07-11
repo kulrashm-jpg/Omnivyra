@@ -34,6 +34,7 @@ import {
 } from '../../lib/campaign/campaignBoardProjection';
 import { usePlannerSession } from './plannerSessionStore';
 import { useAssignmentExecutionSync } from './useAssignmentExecutionSync';
+import { useApprovalSettings } from './useApprovalSettings';
 
 const HEALTH_STYLE: Record<string, string> = {
   ready: 'border-emerald-200 bg-emerald-50 text-emerald-800',
@@ -82,10 +83,13 @@ export function CampaignBoardTab({ companyId, campaignId, onNavigate }: Props) {
   }, [companyId]);
   useEffect(() => { void loadAssets(); }, [loadAssets]);
 
+  // ── R2-P1: company approval enablement (board displays + toggles) ──
+  const { approvalsEnabled, setEnabled: setApprovalsEnabled } = useApprovalSettings(companyId);
+
   // ── The projection (pure; the board owns nothing) ──
   const board = useMemo(
-    () => projectCampaignBoard({ slots, assignments, assets }),
-    [slots, assignments, assets],
+    () => projectCampaignBoard({ slots, assignments, assets, requireApproval: approvalsEnabled }),
+    [slots, assignments, assets, approvalsEnabled],
   );
   const insights = useMemo(() => summarizeCampaignBoard(board), [board]);
 
@@ -251,6 +255,37 @@ export function CampaignBoardTab({ companyId, campaignId, onNavigate }: Props) {
                 <div className="text-red-600">{board.content.missing_asset_ids.length} referenced but missing</div>
               )}
             </div>
+          </div>
+
+          {/* R2-P1 — Approvals (planning-owned; the board counts and links) */}
+          <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Approvals</h3>
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-500 cursor-pointer" title="Require approval before assignments can enter execution (company-wide)">
+                <input
+                  type="checkbox"
+                  checked={approvalsEnabled}
+                  onChange={(e) => void setApprovalsEnabled(e.target.checked)}
+                  className="h-3 w-3"
+                />
+                required
+              </label>
+            </div>
+            {board.approvals.enabled ? (
+              <div className="mt-2 space-y-1 text-xs text-gray-600">
+                <div className="flex items-center justify-between"><span>Pending</span><span className={board.approvals.pending > 0 ? 'text-amber-600 font-medium' : ''}>{board.approvals.pending}</span></div>
+                <div className="flex items-center justify-between"><span>Approved</span><span className="text-emerald-600">{board.approvals.approved}</span></div>
+                <div className="flex items-center justify-between"><span>Rejected</span><span className={board.approvals.rejected > 0 ? 'text-red-600 font-medium' : ''}>{board.approvals.rejected}</span></div>
+                {board.approvals.blocking.length > 0 && (
+                  <button type="button" onClick={() => onNavigate('alignment')}
+                    className="mt-1 w-full text-left text-[11px] font-medium text-red-700 hover:text-red-900">
+                    {board.approvals.blocking.length} assignment{board.approvals.blocking.length === 1 ? '' : 's'} blocked from execution — review in Alignment →
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-gray-400">Approvals are off — assignments enter execution when confirmed.</p>
+            )}
           </div>
 
           <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">

@@ -155,6 +155,23 @@ export function isAssignmentLocked(a: Pick<CampaignAssignment, 'status'>): boole
   return LOCKED_ASSIGNMENT_STATUSES.includes(a.status);
 }
 
+/**
+ * R2-P1 — Assignment approval (SPEC-001 §5.2). PLANNING-OWNED: approval
+ * belongs exclusively to the Assignment (never to assets, structure, or
+ * scheduling) and is editable only while the assignment is planner-owned —
+ * the per-item execution lock covers it like every planning field. The
+ * field is OPTIONAL and absent on legacy assignments (⇔ 'not_required'),
+ * so companies with approvals disabled behave byte-identically.
+ */
+export type AssignmentApprovalState = 'not_required' | 'pending' | 'approved' | 'rejected';
+
+export const APPROVAL_STATES: readonly AssignmentApprovalState[] = [
+  'not_required',
+  'pending',
+  'approved',
+  'rejected',
+];
+
 /** P5 — publish failure, represented SEPARATELY from lifecycle state so a
  *  failed publish never destroys the assignment's progression. */
 export interface AssignmentExecutionFailure {
@@ -185,6 +202,9 @@ export interface CampaignAssignment {
   notes: string;
   /** Position among the slot's assignments (0-based, dense). */
   ordering: number;
+  /** R2-P1 — planning-owned approval state; ABSENT ⇔ 'not_required'
+   *  (legacy assignments stay byte-identical). */
+  approval?: AssignmentApprovalState;
   created_at: string;
   updated_at: string;
   /* ── Execution-owned fields (P5) — written ONLY by the execution sync
@@ -245,6 +265,10 @@ export function normalizeAssignments(raw: unknown): CampaignAssignment[] {
       created_at: str(r.created_at) ?? new Date(0).toISOString(),
       updated_at: str(r.updated_at) ?? str(r.created_at) ?? new Date(0).toISOString(),
     };
+    // R2-P1 — approval survives reload; emitted only when present.
+    if (APPROVAL_STATES.includes(r.approval as AssignmentApprovalState)) {
+      parsed.approval = r.approval as AssignmentApprovalState;
+    }
     // Execution-owned fields (P5) survive reload but appear ONLY when
     // execution produced them — legacy assignments stay byte-identical.
     if (str(r.scheduled_post_id)) parsed.scheduled_post_id = str(r.scheduled_post_id);
@@ -288,6 +312,9 @@ export interface AssignAssetInput {
   publicationSlot?: string | null;
   status?: AssignmentStatus;
   notes?: string;
+  /** R2-P1 — initial approval state (companies with approvals enabled
+   *  create assignments as 'pending'). Omitted ⇒ field absent (legacy). */
+  approval?: AssignmentApprovalState;
 }
 
 /** Assign an asset to a structure slot. The asset may already be assigned
@@ -312,6 +339,7 @@ export function assignAsset(
     status: input.status ?? 'draft',
     notes: input.notes ?? '',
     ordering: nextOrdering(list, input.slot.structure_id),
+    ...(input.approval && APPROVAL_STATES.includes(input.approval) ? { approval: input.approval } : {}),
     created_at: now,
     updated_at: now,
   };
@@ -473,6 +501,27 @@ export function updateAssignmentMetadata(
     if (patch.slot !== undefined) next.slot = str(patch.slot);
     return next;
   });
+}
+
+/**
+ * R2-P1 — set an assignment's approval state (approve / reject / return to
+ * pending / not_required). Planning-owned: locked (execution-owned)
+ * assignments are untouched, and this is the ONLY door — approval is not
+ * part of the metadata patch, so the operation stays intentional. AI has
+ * no path here: every call traces to an explicit user action in the UI.
+ */
+export function setAssignmentApproval(
+  list: CampaignAssignment[],
+  assignmentId: string,
+  approval: AssignmentApprovalState,
+  ctx?: AssignmentOpContext,
+): CampaignAssignment[] {
+  if (!APPROVAL_STATES.includes(approval)) return list;
+  return list.map((a) =>
+    a.id === assignmentId && !isAssignmentLocked(a)
+      ? { ...a, approval, updated_at: nowOf(ctx) }
+      : a,
+  );
 }
 
 /**

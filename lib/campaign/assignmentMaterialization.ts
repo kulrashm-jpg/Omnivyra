@@ -41,7 +41,9 @@ export type MaterializationIssueCode =
   | 'ownership_mismatch'
   | 'content_type_mismatch'
   | 'duplicate_asset_platform_day'
-  | 'secondary_assignment';
+  | 'secondary_assignment'
+  | 'approval_pending'
+  | 'approval_rejected';
 
 export interface MaterializationIssue {
   severity: 'error' | 'warning';
@@ -74,14 +76,36 @@ export function validateAssignmentsForExecution(params: {
   slots: StructureSlot[];
   assignments: CampaignAssignment[];
   assets: Map<string, MaterializableAsset>;
+  /** R2-P1 — company-level approval enablement. When true, only APPROVED
+   *  confirmed assignments may materialize; pending/rejected/unset become
+   *  approval issues. Default false ⇒ behavior byte-identical to pre-R2. */
+  requireApproval?: boolean;
 }): MaterializationIssue[] {
-  const { campaignId, slots, assignments, assets } = params;
+  const { campaignId, slots, assignments, assets, requireApproval } = params;
   const issues: MaterializationIssue[] = [];
   const slotById = new Map(slots.map((s) => [s.structure_id, s]));
   const confirmed = assignments.filter((a) => a.status === 'confirmed');
 
   const placementSeen = new Map<string, string>();
   for (const a of confirmed) {
+    // R2-P1 approval gate — approval is PLANNING-owned; execution only
+    // refuses to consume unapproved links, it never changes them. An
+    // explicit 'not_required' bypasses (that assignment doesn't require
+    // approval); an UNSET field under an approval-required company is
+    // treated as pending (nothing materializes un-reviewed by default).
+    if (requireApproval && a.approval !== 'approved' && a.approval !== 'not_required') {
+      if (a.approval === 'rejected') {
+        issues.push({
+          severity: 'error', code: 'approval_rejected', assignment_id: a.id,
+          message: 'Assignment was rejected — replace the asset or return it to pending for re-review.',
+        });
+      } else {
+        issues.push({
+          severity: 'error', code: 'approval_pending', assignment_id: a.id,
+          message: 'Assignment awaits approval — it stays in planning until approved.',
+        });
+      }
+    }
     if (!assets.has(a.asset_id)) {
       issues.push({
         severity: 'error', code: 'missing_asset', assignment_id: a.id,
@@ -180,11 +204,15 @@ export function materializeAssignments(params: {
   calendarPlan: CalendarPlanLike;
   assignments: CampaignAssignment[];
   assets: Map<string, MaterializableAsset>;
+  /** R2-P1 — when the company requires approvals, unapproved confirmed
+   *  assignments are SKIPPED (they surface as approval issues and remain
+   *  editable planning items). */
+  requireApproval?: boolean;
   now?: string;
 }): MaterializationResult {
-  const { campaignId, calendarPlan, assignments, assets, now } = params;
+  const { campaignId, calendarPlan, assignments, assets, requireApproval, now } = params;
   const slots = deriveStructureSlots(calendarPlan);
-  const issues = validateAssignmentsForExecution({ campaignId, slots, assignments, assets });
+  const issues = validateAssignmentsForExecution({ campaignId, slots, assignments, assets, requireApproval });
   const blockedIds = new Set(issues.filter((i) => i.severity === 'error').map((i) => i.assignment_id));
 
   // Primary confirmed assignment per slot (lowest ordering wins; ties by id).

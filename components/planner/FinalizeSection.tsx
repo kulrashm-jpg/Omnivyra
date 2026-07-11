@@ -19,6 +19,7 @@ import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 import { materializeAssignments, type MaterializationResult } from '../../lib/campaign/assignmentMaterialization';
 import { fetchLibraryMaterializableAssets } from '../../lib/content/creatorAssetServerBackend';
+import { fetchRequireAssignmentApproval } from './useApprovalSettings';
 
 export interface FinalizeSectionProps {
   companyId?: string | null;
@@ -191,13 +192,19 @@ export function FinalizeSection({
       let materialization: MaterializationResult | null = null;
       const hasConfirmedAssignments = (state.assignments ?? []).some((a) => a.status === 'confirmed');
       if (hasConfirmedAssignments && calendarPlan) {
-        const assets = await fetchLibraryMaterializableAssets(companyId);
+        const [assets, requireApproval] = await Promise.all([
+          fetchLibraryMaterializableAssets(companyId),
+          // R2-P1 — approval-required companies only materialize approved
+          // assignments; the read fails closed to false (today's behavior).
+          fetchRequireAssignmentApproval(companyId),
+        ]);
         if (assets.size > 0) {
           materialization = materializeAssignments({
             campaignId: campaignId ?? state.draft_campaign_id ?? null,
             calendarPlan,
             assignments: state.assignments ?? [],
             assets,
+            requireApproval,
           });
           const blocked = materialization.issues.filter((i) => i.severity === 'error');
           if (blocked.length > 0) {
