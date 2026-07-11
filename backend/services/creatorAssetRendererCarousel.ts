@@ -197,7 +197,33 @@ export function stripPromptDirectives(raw: string | null | undefined): string {
   return result;
 }
 
-function normalizeStructuredItems(
+/**
+ * Renderer-level guard: derive a distinct, role-appropriate headline for a
+ * carousel slide whose title duplicates an earlier slide's (AUDIT-004 RC-3).
+ * The deck path has no cross-slide dedupe, so a generator that emits duplicate
+ * slide titles otherwise renders identical-looking slides. Never drops a slide;
+ * the durable fix is distinct upstream generation.
+ */
+const ROLE_HEADLINE: Record<string, (topic: string) => string> = {
+  hook: (t) => `Start here: ${t}`,
+  insight: (t) => `The key insight on ${t}`,
+  proof: (t) => `Why ${t} matters`,
+  example: (t) => `${t} in practice`,
+  content: (t) => `How ${t} works`,
+  cta: (t) => `Your next step with ${t}`,
+  summary: (t) => `The takeaway on ${t}`,
+  problem: (t) => `The problem with ${t}`,
+  solution: (t) => `A better way with ${t}`,
+};
+function distinctHeadlineForRole(original: string, role: string, metadata: Record<string, unknown>): string {
+  const topic = compactText(String(metadata.topic || original)) || original;
+  const roleKey = String(role || '').toLowerCase().replace(/_\d+$/, '').replace(/[^a-z]/g, '');
+  const make = ROLE_HEADLINE[roleKey];
+  const derived = make ? make(topic) : `${String(role).replace(/_/g, ' ')}: ${original}`;
+  return compactText(derived) || `${original} — ${String(role).replace(/_/g, ' ')}`;
+}
+
+export function normalizeStructuredItems(
   items: Array<Record<string, unknown>>,
   fallbackLabel: string,
   fileNamePrefix: string,
@@ -226,12 +252,23 @@ function normalizeStructuredItems(
   const templateArc = resolveCarouselTemplateArc(metadata);
   const effectiveArc = templateArc && templateArc.length > 0 ? templateArc : slideArcRoles;
 
-  const clean = items.map((item, index) => ({
-    role: compactText(item.role || item.section_type || item.type || `Slide ${index + 1}`),
-    headline: compactText(stripPromptDirectives(String(item.headline || item.title || item.heading || `Slide ${index + 1}`))),
-    body: compactText(stripPromptDirectives(String(item.body_text || item.body || item.text || item.summary || fallbackLabel))),
-    designNote: compactText(item.design_note || item.visual_description || item.visual || ''),
-  })).filter((item) => item.headline || item.body);
+  const clean = items.map((item, index) => {
+    // RC-2 (AUDIT-004): stripPromptDirectives can wipe a directive-shaped body to
+    // '' — the `||` chain already resolved to the raw directive, so the label
+    // fallback was bypassed and the slide rendered a BLANK body region. Re-fall
+    // back to real campaign copy (summary/objective/topic); the generic label
+    // only as a last resort, so no slide ever renders an empty body.
+    const strippedBody = compactText(stripPromptDirectives(String(item.body_text || item.body || item.text || item.summary || '')));
+    const body = strippedBody
+      || compactText(String(metadata.summary || metadata.objective || metadata.topic || ''))
+      || fallbackLabel;
+    return {
+      role: compactText(item.role || item.section_type || item.type || `Slide ${index + 1}`),
+      headline: compactText(stripPromptDirectives(String(item.headline || item.title || item.heading || `Slide ${index + 1}`))),
+      body,
+      designNote: compactText(item.design_note || item.visual_description || item.visual || ''),
+    };
+  }).filter((item) => item.headline || item.body);
 
   if (clean.length > 0) {
     // Carousel slide-limit removal — render EXACTLY the slides supplied by the
@@ -254,12 +291,21 @@ function normalizeStructuredItems(
     // on short decks. See fitSlideArcToCount.
     const baseArc = effectiveArc && effectiveArc.length > 0 ? effectiveArc : ['hook', 'insight', 'proof', 'content', 'cta'];
     const fittedRoles = fitSlideArcToCount(baseArc, sliced.length);
-    return sliced.map((item, index) => ({
-      role: fittedRoles[index] || item.role || `slide_${index + 1}`,
-      headline: item.headline,
-      body: item.body,
-      designNote: item.designNote,
-    }));
+    // RC-3 (AUDIT-004): no cross-slide dedupe exists on the deck path, so
+    // duplicate upstream titles (observed: slides 1 & 2 both "Unlock Thought
+    // Leadership") render as identical slides. Differentiate — never drop — a
+    // slide whose headline repeats an earlier one, using its distinct role.
+    const seenHeadlines = new Set<string>();
+    const normKey = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    return sliced.map((item, index) => {
+      const role = fittedRoles[index] || item.role || `slide_${index + 1}`;
+      let headline = item.headline;
+      if (normKey(headline) && seenHeadlines.has(normKey(headline))) {
+        headline = distinctHeadlineForRole(headline, role, metadata);
+      }
+      seenHeadlines.add(normKey(headline));
+      return { role, headline, body: item.body, designNote: item.designNote };
+    });
   }
 
   // Empty-LLM fallback. When a purpose strategy is present, scaffold
