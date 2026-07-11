@@ -86,6 +86,46 @@ export type SaveDraftResult =
   | { ok: false; conflict: true; plannerState: PlannerDraftState | null; revision: number }
   | { ok: false; conflict: false };
 
+/* ── R2-P5: Draft Status indicator (SPEC-001 §6.2 "Always saved") ─────────
+ * A pure reducer over the EXISTING persistence lifecycle's events — the
+ * provider emits what already happens (debounce armed, PUT resolved,
+ * conflict adopted, bootstrap hydrating); no second persistence tracker.
+ */
+
+export type DraftSaveStatus = 'saving' | 'saved' | 'syncing' | 'sync_failed' | 'offline';
+
+export type DraftSaveEvent =
+  | 'bootstrap_start' // draft create-or-resume + server hydrate began
+  | 'bootstrap_done'  // server state adopted (or fresh draft ready)
+  | 'dirty'           // local edit — autosave debounce armed
+  | 'save_ok'         // PUT stored, revision advanced
+  | 'save_conflict'   // 409 — server copy adopted (deterministic winner)
+  | 'save_failed';    // transient/offline failure — retried on next change
+
+export function nextDraftSaveStatus(
+  _current: DraftSaveStatus,
+  event: DraftSaveEvent,
+  online: boolean = true,
+): DraftSaveStatus {
+  switch (event) {
+    case 'bootstrap_start':
+      return online ? 'syncing' : 'offline';
+    case 'bootstrap_done':
+      return 'saved';
+    case 'dirty':
+      return online ? 'saving' : 'offline';
+    case 'save_ok':
+      return 'saved';
+    case 'save_conflict':
+      // The server copy won and was adopted — the session is in sync.
+      return 'saved';
+    case 'save_failed':
+      return online ? 'sync_failed' : 'offline';
+    default:
+      return _current;
+  }
+}
+
 export async function savePlannerDraftState(
   campaignId: string,
   plannerState: PlannerDraftState,

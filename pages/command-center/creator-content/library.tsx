@@ -184,9 +184,17 @@ export default function AssetLibraryPage() {
       <Head><title>Asset Library | Omnivyra</title></Head>
       <div className="min-h-screen bg-gray-50">
         <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
-          <button onClick={() => router.push('/command-center/creator-content')} className="flex items-center gap-2 text-gray-600 hover:text-gray-900">
-            <ArrowLeft className="h-5 w-5" /> Back
-          </button>
+          {/* R2-P5 two-door entry: arriving through Strategic Mix's Content
+              door keeps the way back to the (already saved) draft campaign. */}
+          {router.query.from === 'strategic-mix' ? (
+            <button onClick={() => router.push('/campaign-planner?mode=direct')} className="flex items-center gap-2 text-indigo-600 hover:text-indigo-800 font-medium">
+              <ArrowLeft className="h-5 w-5" /> Back to Strategic Mix
+            </button>
+          ) : (
+            <button onClick={() => router.push('/command-center/creator-content')} className="flex items-center gap-2 text-gray-600 hover:text-gray-900">
+              <ArrowLeft className="h-5 w-5" /> Back
+            </button>
+          )}
           <h1 className="text-lg font-bold text-gray-900">Asset Library</h1>
           <button onClick={() => void load()} className="text-gray-500 hover:text-gray-800" title="Refresh">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />

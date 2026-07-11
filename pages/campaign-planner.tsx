@@ -58,7 +58,7 @@ function CampaignPlannerLayout({
   onRefresh,
   onFinalize,
 }: CampaignPlannerLayoutProps) {
-  const { state, setAccountContext } = usePlannerSession();
+  const { state, setAccountContext, draft_save } = usePlannerSession();
   const router = useRouter();
   // Strategic Mix P1: finalize against the server Draft Campaign when this
   // session owns one (direct mode). planner-finalize's existingCampaignId
@@ -86,6 +86,20 @@ function CampaignPlannerLayout({
   const [selectedThemeWeek, setSelectedThemeWeek] = useState<number | null>(null);
   const [canvasTab, setCanvasTab] = useState<'calendar' | 'daily' | 'content'>('calendar');
   const hasAdvancedRef = useRef(false);
+  // R2-P5 (Part A) — Board-as-home. Any explicit user navigation latches
+  // this ref so automatic landings never fight the user's choice; the
+  // new-campaign flow (Structure → Content → Alignment → Board) stays
+  // untouched because its confirm actions latch before state effects run.
+  const userNavigatedRef = useRef(
+    typeof window !== 'undefined' && Boolean(new URLSearchParams(window.location.search).get('tab')),
+  );
+  const navigateTab = (tab: typeof activeTab) => {
+    userNavigatedRef.current = true;
+    setActiveTab(tab);
+  };
+  // R2-P5 (Part C) — two-door entry state: fresh sessions present Structure
+  // and Content as unordered peers until a door is chosen.
+  const [structureDoorOpened, setStructureDoorOpened] = useState(false);
 
   // Load account context on mount; bust cache when returning from OAuth (connected=*)
   useEffect(() => {
@@ -138,17 +152,29 @@ function CampaignPlannerLayout({
     return Array.from(byFam.entries()).map(([family, frequency]) => ({ family, frequency }));
   }, [state]);
 
-  // When the skeleton becomes final, switch to the Strategy view so the user
-  // can work on content through the weekly cards. Driven by the skeleton_confirmed
-  // false→true transition so it fires every time the skeleton is (re)confirmed —
-  // not just once per page load — and also when resuming a confirmed session.
+  // When the skeleton becomes final, advance. Driven by the skeleton_confirmed
+  // false→true transition so it fires on every (re)confirm AND on resume.
+  // R2-P5 (Part A): the two cases now land differently — a RESUMED confirmed
+  // session (no user navigation yet) is an existing campaign and lands on the
+  // BOARD (SPEC-001 §6.4 "Board is home"); a mid-session confirm (the user
+  // just clicked, which latched userNavigatedRef) keeps the new-campaign flow.
   useEffect(() => {
     const wasConfirmed = hasAdvancedRef.current;
     hasAdvancedRef.current = hasSkeleton;
     if (hasSkeleton && !wasConfirmed) {
-      setActiveTab(hasStrategy ? 'build' : 'strategy');
+      if (!userNavigatedRef.current) setActiveTab('board');
+      else setActiveTab(hasStrategy ? 'build' : 'strategy');
     }
   }, [hasSkeleton, hasStrategy]);
+
+  // R2-P5 (Part A) — existing-campaign entries (campaign mode) open directly
+  // on the Board; ?tab= overrides via the latch initializer.
+  useEffect(() => {
+    if (!campaignId || userNavigatedRef.current) return;
+    userNavigatedRef.current = true;
+    setActiveTab('board');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId]);
 
   return (
     <div className={`${styles.plannerPage} flex-1 flex flex-col min-h-0`}>
@@ -156,7 +182,7 @@ function CampaignPlannerLayout({
       <div className="flex-shrink-0 flex gap-1 border-b border-gray-200 px-3 pt-2">
         <button
           type="button"
-          onClick={() => setActiveTab('skeleton')}
+          onClick={() => navigateTab('skeleton')}
           className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
             activeTab === 'skeleton'
               ? 'border-indigo-600 text-indigo-700 bg-indigo-50'
@@ -168,7 +194,7 @@ function CampaignPlannerLayout({
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab('strategy')}
+          onClick={() => navigateTab('strategy')}
           className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
             activeTab === 'strategy'
               ? 'border-indigo-600 text-indigo-700 bg-indigo-50'
@@ -183,7 +209,7 @@ function CampaignPlannerLayout({
             as soon as the skeleton defines publishing opportunities. */}
         <button
           type="button"
-          onClick={() => hasSkeletonDraft && setActiveTab('alignment')}
+          onClick={() => hasSkeletonDraft && navigateTab('alignment')}
           disabled={!hasSkeletonDraft}
           title={!hasSkeletonDraft ? 'Build the campaign skeleton first' : undefined}
           className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
@@ -203,7 +229,7 @@ function CampaignPlannerLayout({
             Alignment; opens with the skeleton like Alignment does. */}
         <button
           type="button"
-          onClick={() => hasSkeletonDraft && setActiveTab('board')}
+          onClick={() => hasSkeletonDraft && navigateTab('board')}
           disabled={!hasSkeletonDraft}
           title={!hasSkeletonDraft ? 'Build the campaign skeleton first' : undefined}
           className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
@@ -220,7 +246,7 @@ function CampaignPlannerLayout({
         </button>
         <button
           type="button"
-          onClick={() => canBuild && setActiveTab('build')}
+          onClick={() => canBuild && navigateTab('build')}
           disabled={!canBuild}
           title={!canBuild ? 'Complete both Skeleton and Strategy first' : undefined}
           className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
@@ -237,7 +263,7 @@ function CampaignPlannerLayout({
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab('design')}
+          onClick={() => navigateTab('design')}
           className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
             activeTab === 'design'
               ? 'border-indigo-600 text-indigo-700 bg-indigo-50'
@@ -247,10 +273,68 @@ function CampaignPlannerLayout({
           <Layers className="h-4 w-4" />
           Design System
         </button>
+        {/* R2-P5 (Part B) — Draft Status: the existing persistence lifecycle,
+            surfaced. Only rendered when the server draft owns this session. */}
+        {draft_save.enabled && (
+          <span
+            title={draft_save.lastSavedAt ? `Last saved ${new Date(draft_save.lastSavedAt).toLocaleTimeString()}` : undefined}
+            className={`ml-auto self-center mr-2 text-[11px] font-medium px-2.5 py-1 rounded-full ${
+              draft_save.status === 'saved' ? 'bg-emerald-50 text-emerald-700'
+              : draft_save.status === 'sync_failed' ? 'bg-red-50 text-red-700'
+              : draft_save.status === 'offline' ? 'bg-gray-100 text-gray-600'
+              : 'bg-amber-50 text-amber-700'
+            }`}
+          >
+            {draft_save.status === 'saving' ? 'Saving…'
+              : draft_save.status === 'syncing' ? 'Syncing…'
+              : draft_save.status === 'sync_failed' ? 'Sync failed — retrying'
+              : draft_save.status === 'offline' ? 'Offline'
+              : 'Draft · saved'}
+          </span>
+        )}
       </div>
 
+      {/* R2-P5 (Part C) — two-door entry (SPEC-001 §6.1): a fresh session
+          presents Structure and Content as unordered peers. Both doors share
+          the SAME Draft Campaign (the provider bootstrapped it on entry);
+          both converge on the Board once structure exists (Part A). */}
+      {activeTab === 'skeleton' && !structureDoorOpened && !hasSkeletonDraft && !state.idea_spine && (state.assignments ?? []).length === 0 && !campaignId ? (
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="max-w-2xl w-full">
+            <h2 className="text-center text-lg font-semibold text-gray-900">Where do you want to start?</h2>
+            <p className="mt-1 text-center text-sm text-gray-500">
+              Structure and content are independent — begin with either. Your draft campaign is already saved.
+            </p>
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setStructureDoorOpened(true)}
+                className="rounded-2xl border border-gray-200 bg-white p-6 text-left transition hover:border-indigo-300 hover:shadow-md"
+              >
+                <CalendarDays className="h-6 w-6 text-indigo-600" />
+                <div className="mt-3 text-sm font-semibold text-gray-900">Start from Structure</div>
+                <p className="mt-1 text-xs text-gray-500">
+                  Define platforms, cadence, and publishing slots — the campaign skeleton.
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push('/command-center/creator-content/library?from=strategic-mix')}
+                className="rounded-2xl border border-gray-200 bg-white p-6 text-left transition hover:border-indigo-300 hover:shadow-md"
+              >
+                <LayoutGrid className="h-6 w-6 text-indigo-600" />
+                <div className="mt-3 text-sm font-semibold text-gray-900">Start from Content</div>
+                <p className="mt-1 text-xs text-gray-500">
+                  Create and organize assets in the Library — assign them to structure whenever you're ready.
+                </p>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* Tab 1: Skeleton — social insight + builder (left) + calendar preview (right) */}
-      {activeTab === 'skeleton' && (
+      {activeTab === 'skeleton' && (structureDoorOpened || hasSkeletonDraft || Boolean(state.idea_spine) || (state.assignments ?? []).length > 0 || Boolean(campaignId)) && (
         <div className="flex-1 flex flex-col min-h-0 overflow-auto p-3 space-y-3">
           <AccountInsightPanel variant="social" />
           <div className="flex-1 flex gap-3 min-h-0" style={{ minHeight: '400px' }}>
@@ -259,7 +343,7 @@ function CampaignPlannerLayout({
               <SkeletonBuilderPanel
                 companyId={companyId}
                 onGenerate={onRefresh}
-                onConfirmed={() => setActiveTab(hasStrategy ? 'build' : 'strategy')}
+                onConfirmed={() => navigateTab(hasStrategy ? 'build' : 'strategy')}
                 canConfirm={hasSkeletonDraft}
                 strategyAlreadyConfirmed={hasStrategy}
               />
@@ -386,7 +470,7 @@ function CampaignPlannerLayout({
                   setSelectedThemeWeek(week);
                   setLeftPanelTab(week !== null ? 'week' : 'plan');
                 }}
-                onConfirmed={() => setActiveTab(hasSkeleton ? 'build' : 'skeleton')}
+                onConfirmed={() => navigateTab(hasSkeleton ? 'build' : 'skeleton')}
                 canConfirm={hasStrategyDraft}
                 skeletonAlreadyConfirmed={hasSkeleton}
               />
@@ -410,7 +494,7 @@ function CampaignPlannerLayout({
           <CampaignBoardTab
             companyId={companyId}
             campaignId={finalizeCampaignId}
-            onNavigate={(target) => setActiveTab(target)}
+            onNavigate={(target) => navigateTab(target)}
           />
         </div>
       )}

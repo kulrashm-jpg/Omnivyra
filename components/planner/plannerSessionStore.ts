@@ -19,6 +19,8 @@ import {
   fetchPlannerDraftState,
   savePlannerDraftState,
   serializePlannerState,
+  nextDraftSaveStatus,
+  type DraftSaveStatus,
   type PlannerDraftState,
 } from './plannerDraftPersistence';
 import { normalizeAssignments, type CampaignAssignment } from '../../lib/campaign/campaignAssignments';
@@ -280,6 +282,9 @@ type PlannerSessionContextValue = {
     next: CampaignAssignment[] | ((current: CampaignAssignment[]) => CampaignAssignment[]),
   ) => void;
   reset: () => void;
+  /** R2-P5 — Draft Status (SPEC-001 §6.2). Derived from the EXISTING
+   *  persistence lifecycle; `enabled` is false outside server-draft mode. */
+  draft_save: { enabled: boolean; status: DraftSaveStatus; lastSavedAt: string | null };
 };
 
 const PlannerSessionContext = createContext<PlannerSessionContextValue | null>(null);
@@ -415,6 +420,16 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
 
   const [state, setState] = useState<PlannerSessionState>(defaultState);
   const [selectedActivity, setSelectedActivityState] = useState<CalendarPlanActivity | null>(null);
+  // R2-P5 — Draft Status, folded from the existing persistence events.
+  const [draftSaveStatus, setDraftSaveStatus] = useState<DraftSaveStatus>('saved');
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const isOnline = () => (typeof navigator === 'undefined' ? true : navigator.onLine !== false);
+  const emitSaveEvent = useCallback((event: Parameters<typeof nextDraftSaveStatus>[1]) => {
+    setDraftSaveStatus((current) => nextDraftSaveStatus(current, event, isOnline()));
+    if (event === 'save_ok' || event === 'save_conflict' || event === 'bootstrap_done') {
+      setLastSavedAt(new Date().toISOString());
+    }
+  }, []);
   const hasLoadedFromStorage = useRef(false);
   // ── Strategic Mix P1 refs (server draft sync) ───────────────────────────
   const [restoreTick, setRestoreTick] = useState(0);
@@ -474,6 +489,7 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
     if (!serverDraftEnabled || !companyId || restoreTick === 0) return;
     if (draftIdRef.current) return; // already bootstrapped for this entry
     let cancelled = false;
+    emitSaveEvent('bootstrap_start');
 
     const adoptServerState = (plannerState: PlannerDraftState | null, revision: number, id: string) => {
       serverRevisionRef.current = revision;
@@ -509,6 +525,7 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
         setState((prev) => ({ ...prev, draft_campaign_id: id }));
       }
       serverReadyRef.current = true;
+      emitSaveEvent('bootstrap_done');
       onDraftIdChange?.(id);
     };
 
@@ -544,13 +561,16 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
     const payload = serializePlannerState(state);
     const json = JSON.stringify(payload);
     if (json === lastSavedJsonRef.current) return;
+    emitSaveEvent('dirty');
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       const result = await savePlannerDraftState(draftId, payload, serverRevisionRef.current);
       if (result.ok) {
         serverRevisionRef.current = result.revision;
         lastSavedJsonRef.current = json;
+        emitSaveEvent('save_ok');
       } else if (result.conflict === true) {
+        emitSaveEvent('save_conflict');
         serverRevisionRef.current = result.revision;
         if (result.plannerState) {
           const incoming = { ...result.plannerState, draft_campaign_id: draftId, stored_at: Date.now() };
@@ -570,8 +590,10 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
             }
           } catch { /* keep local; next change retries */ }
         }
+      } else {
+        // !ok && !conflict → transient/offline: retried on the next state change.
+        emitSaveEvent('save_failed');
       }
-      // !ok && !conflict → transient/offline: retried on the next state change.
     }, 1500);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -798,6 +820,7 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
     setAccountContext,
     setAssignments,
     reset,
+    draft_save: { enabled: serverDraftEnabled, status: draftSaveStatus, lastSavedAt },
   };
 
   return React.createElement(
