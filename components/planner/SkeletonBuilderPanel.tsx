@@ -16,6 +16,11 @@ import ChatVoiceButton from '../ChatVoiceButton';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 import { PLANNER_DURATIONS } from '../../lib/shared/campaignDuration';
+import {
+  extractSkeletonRequest,
+  buildBootstrapMatrix,
+  SKELETON_CHAT_NO_PLATFORMS_MESSAGE,
+} from '../../lib/campaign/skeletonPromptExtraction';
 
 const DEFAULT_DURATION_WEEKS = 4;
 const DURATION_OPTIONS = PLANNER_DURATIONS;
@@ -92,7 +97,7 @@ export function SkeletonBuilderPanel({
   canConfirm = false,
   strategyAlreadyConfirmed = false,
 }: SkeletonBuilderPanelProps) {
-  const { state, setStrategyContext, setCampaignStructure, setCalendarPlan, confirmSkeleton } = usePlannerSession();
+  const { state, setStrategyContext, setCampaignStructure, setCalendarPlan, setPlatformContentRequests, confirmSkeleton } = usePlannerSession();
   const prev = state.execution_plan?.strategy_context;
 
   const startDate = (prev?.planned_start_date && /^\d{4}-\d{2}-\d{2}$/.test(prev.planned_start_date))
@@ -263,8 +268,48 @@ export function SkeletonBuilderPanel({
         });
         setChatHistory((h) => [...h, { role: 'assistant', text: data.reply ?? 'Skeleton updated.' }]);
       } else {
-        // No skeleton yet — generate one from scratch
-        const strategyContext = prev ? {
+        // No skeleton yet — generate one from scratch.
+        //
+        // UX FIX — honor the placeholder: when the session has NO platforms
+        // configured (neither strategy_context nor the Schedule matrix),
+        // bootstrap the structured request from the user's own words via
+        // the canonical platform registry. If nothing is recognizable, show
+        // guidance instead of a doomed ai/plan call — the raw server
+        // validation error never reaches the user. Explicit user choices
+        // are never overwritten: any configured platform skips this path.
+        const hasConfiguredPlatforms =
+          (prev?.platforms?.length ?? 0) > 0 ||
+          (platform_content_requests !== null && Object.keys(platform_content_requests).length > 0);
+        let bootstrapMatrix: Record<string, Record<string, number>> | null = null;
+        let effectiveDurationWeeks = durationWeeks;
+        let extractedGoal = '';
+        if (!hasConfiguredPlatforms) {
+          const extraction = extractSkeletonRequest(text);
+          if (!extraction.confident) {
+            // Friendly guidance INSTEAD of a doomed ai/plan call — never the
+            // raw validation error, and not styled as a failure.
+            setChatHistory((h) => [...h, { role: 'assistant', text: SKELETON_CHAT_NO_PLATFORMS_MESSAGE }]);
+            setChatLoading(false);
+            return;
+          }
+          bootstrapMatrix = buildBootstrapMatrix(extraction);
+          if (extraction.durationWeeks) effectiveDurationWeeks = extraction.durationWeeks;
+          if (extraction.objective) extractedGoal = extraction.objective;
+          // Sync the planner NOW through its existing update paths — the
+          // Schedule matrix reflects the extraction immediately and the
+          // planner stays the single source of truth (fully editable).
+          setPlatformContentRequests(bootstrapMatrix);
+          setStrategyContext({
+            duration_weeks: effectiveDurationWeeks,
+            planned_start_date: startDate,
+            ...(extractedGoal ? { campaign_goal: extractedGoal } : {}),
+          });
+        }
+        const bootstrapStrategy = bootstrapMatrix
+          ? deriveStrategyFromMatrix(bootstrapMatrix, effectiveDurationWeeks, startDate, prev)
+          : null;
+        if (bootstrapStrategy && extractedGoal) bootstrapStrategy.campaign_goal = extractedGoal;
+        const strategyContext = bootstrapStrategy ?? (prev ? {
           ...prev,
           duration_weeks: durationWeeks,
           planned_start_date: startDate,
@@ -276,7 +321,8 @@ export function SkeletonBuilderPanel({
           content_mix: [],
           campaign_goal: '',
           target_audience: '',
-        };
+        });
+        const effectiveMatrix = bootstrapMatrix ?? platform_content_requests;
         const spine = ensureIdeaSpine(state.campaign_design?.idea_spine, strategyContext as StrategyContext);
         const handoff = buildPlannerExecutionHandoff({
           skeleton_confirmed: state.skeleton_confirmed,
@@ -287,7 +333,7 @@ export function SkeletonBuilderPanel({
           strategic_themes: state.strategic_themes,
           company_context_mode: state.campaign_design?.company_context_mode,
           focus_modules: state.campaign_design?.focus_modules,
-          platform_content_requests,
+          platform_content_requests: effectiveMatrix,
           calendar_plan: state.calendar_plan ?? state.execution_plan?.calendar_plan,
         });
         const body: Record<string, unknown> = {
@@ -305,8 +351,8 @@ export function SkeletonBuilderPanel({
           execution_handoff: handoff,
           prefilledPlanning: buildPlannerPrefilledPlanning(handoff),
         };
-        if (platform_content_requests && Object.keys(platform_content_requests).length > 0) {
-          body.platform_content_requests = platform_content_requests;
+        if (effectiveMatrix && Object.keys(effectiveMatrix).length > 0) {
+          body.platform_content_requests = effectiveMatrix;
         }
         const res = await fetchWithAuth('/api/campaigns/ai/plan', {
           method: 'POST',
