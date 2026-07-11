@@ -42,12 +42,11 @@ import {
   assignmentsForSlot,
   deriveStructureSlots,
   isAssignmentLocked,
-  normalizeAssignments,
   type AssignmentStatus,
   type CampaignAssignment,
   type StructureSlot,
 } from '../../lib/campaign/campaignAssignments';
-import { applyExecutionEvents, type ExecutionEvent } from '../../lib/campaign/assignmentExecutionSync';
+import { useAssignmentExecutionSync } from './useAssignmentExecutionSync';
 import {
   assessExecutionReadiness,
   detectAssignmentConflicts,
@@ -114,56 +113,13 @@ export function AssignmentWorkspace({ companyId, campaignId }: Props) {
     installServerCreatorAssetBackend(companyId);
   }, [companyId]);
 
-  // ── P5: Execution Lifecycle Synchronization ─────────────────────────────
-  // On load (and on manual refresh — never a timer): recover assignments
-  // from the campaign's server draft state when the local session is empty
-  // (campaign reload / another device), then fold the EXISTING execution
-  // events onto them. The reducer is idempotent and forward-only, so
-  // repeated syncs are safe and never regress or touch planning fields.
-  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
-  const syncExecution = useCallback(async () => {
-    if (!campaignId) return;
-    try {
-      const res = await fetchWithAuth(
-        `/api/campaigns/${encodeURIComponent(campaignId)}/assignment-execution-events`,
-      );
-      if (!res.ok) return;
-      const data = await res.json().catch(() => null);
-      const events: ExecutionEvent[] = Array.isArray(data?.events) ? data.events : [];
-      if (events.length > 0) {
-        setAssignments((current) => applyExecutionEvents(current, events).assignments);
-      }
-      setLastSyncAt(new Date().toISOString());
-    } catch { /* offline — the next open or manual refresh re-derives */ }
-  }, [campaignId, setAssignments]);
-
-  const recoveredForRef = React.useRef<string | null>(null);
-  useEffect(() => {
-    if (!campaignId || recoveredForRef.current === campaignId) return;
-    recoveredForRef.current = campaignId;
-    let cancelled = false;
-    (async () => {
-      try {
-        if ((state.assignments ?? []).length === 0) {
-          const res = await fetchWithAuth(
-            `/api/campaigns/${encodeURIComponent(campaignId)}/planner-draft-state`,
-          );
-          if (res.ok) {
-            const data = await res.json().catch(() => null);
-            const recovered = normalizeAssignments(
-              (data?.planner_state as { assignments?: unknown } | null)?.assignments,
-            );
-            if (!cancelled && recovered.length > 0) {
-              setAssignments((current) => (current.length > 0 ? current : recovered));
-            }
-          }
-        }
-      } catch { /* recovery is best-effort */ }
-      if (!cancelled) await syncExecution();
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignId]);
+  // ── P5: Execution Lifecycle Synchronization (shared hook — recovery on
+  // campaign reload, on-load event fold, manual refresh; never a timer). ──
+  const { sync: syncExecution, lastSyncAt } = useAssignmentExecutionSync({
+    campaignId,
+    assignments,
+    setAssignments,
+  });
 
   const loadAssets = useCallback(async () => {
     if (!companyId) return;

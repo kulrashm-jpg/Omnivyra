@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
-import { ArrowLeft, LayoutGrid, FileText, CalendarDays, Sparkles, RocketIcon, Lock, MessageSquare, Layers, Link2 } from 'lucide-react';
+import { ArrowLeft, LayoutGrid, FileText, CalendarDays, Sparkles, RocketIcon, Lock, MessageSquare, Layers, Link2, Gauge } from 'lucide-react';
 import DesignSystemPanel from '../components/planner/DesignSystemPanel';
 import { familyForCreatorType, type TemplateAssetFamily } from '../lib/creator-templates';
 import type { RequestedFamilyFrequency } from '../lib/creator-templates/designSystemCoverage';
@@ -31,6 +31,7 @@ import { SkeletonBuilderPanel } from '../components/planner/SkeletonBuilderPanel
 import { WeekDailyPlanPanel } from '../components/planner/WeekDailyPlanPanel';
 import { CreateCampaignAndBuild } from '../components/planner/CreateCampaignAndBuild';
 import { AssignmentWorkspace } from '../components/planner/AssignmentWorkspace';
+import { CampaignBoardTab } from '../components/planner/CampaignBoardTab';
 import { PlannerOrchestrationStrip } from '../components/orchestration/PlannerOrchestrationStrip';
 import { weeksToCalendarPlan } from '../components/planner/calendarPlanConverter';
 import styles from '../styles/planner-layout.module.css';
@@ -64,11 +65,12 @@ function CampaignPlannerLayout({
   // branch then UPGRADES the draft row in place instead of creating a second
   // campaign. Read-panels intentionally keep the context campaignId only.
   const finalizeCampaignId = campaignId ?? state.draft_campaign_id ?? null;
-  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'alignment' | 'build' | 'design'>(() => {
+  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'alignment' | 'board' | 'build' | 'design'>(() => {
     if (typeof window !== 'undefined') {
       const tab = new URLSearchParams(window.location.search).get('tab');
       if (tab === 'strategy') return 'strategy';
       if (tab === 'alignment') return 'alignment';
+      if (tab === 'board') return 'board';
       if (tab === 'build') return 'build';
       if (tab === 'design') return 'design';
     }
@@ -194,6 +196,26 @@ function CampaignPlannerLayout({
         >
           <Link2 className="h-4 w-4" />
           Alignment
+          {!hasSkeletonDraft && <Lock className="h-3 w-3 ml-1 text-gray-400" />}
+        </button>
+        {/* Strategic Mix P6 — Campaign Board: the operational projection over
+            structure/content/assignments/execution. Primary workspace after
+            Alignment; opens with the skeleton like Alignment does. */}
+        <button
+          type="button"
+          onClick={() => hasSkeletonDraft && setActiveTab('board')}
+          disabled={!hasSkeletonDraft}
+          title={!hasSkeletonDraft ? 'Build the campaign skeleton first' : undefined}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'board'
+              ? 'border-indigo-600 text-indigo-700 bg-indigo-50'
+              : hasSkeletonDraft
+              ? 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              : 'border-transparent text-gray-400 cursor-not-allowed'
+          }`}
+        >
+          <Gauge className="h-4 w-4" />
+          Board
           {!hasSkeletonDraft && <Lock className="h-3 w-3 ml-1 text-gray-400" />}
         </button>
         <button
@@ -378,6 +400,18 @@ function CampaignPlannerLayout({
       {activeTab === 'alignment' && (
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           <AssignmentWorkspace companyId={companyId} campaignId={finalizeCampaignId} />
+        </div>
+      )}
+
+      {/* Tab: Board — Strategic Mix P6 Master Campaign Board (a projection
+          over the canonical entities; owns no data, edits nothing) */}
+      {activeTab === 'board' && (
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <CampaignBoardTab
+            companyId={companyId}
+            campaignId={finalizeCampaignId}
+            onNavigate={(target) => setActiveTab(target)}
+          />
         </div>
       )}
 
