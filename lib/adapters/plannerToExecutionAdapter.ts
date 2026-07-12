@@ -58,6 +58,14 @@ export interface PlannerActivityInput {
   creator_asset?: Record<string, unknown> | null;
   /** READY_FOR_PROMOTION when an assignment materialized onto this slot. */
   content_status?: string | null;
+  /**
+   * Strategic Mix R3-P1 — planning-time content from the Content Workspace.
+   * Passed through inside the content JSON (read-only for the execution
+   * engine in this phase; content adoption at scheduling is a later phase).
+   */
+  draft_content?: { body?: string; source?: string; updated_at?: string } | null;
+  /** Planning-only lifecycle (draft | review | approved) from the workspace. */
+  content_planning_status?: string | null;
 }
 
 export interface AdapterInput {
@@ -176,6 +184,21 @@ function buildContentJson(
   }
   if (typeof activity.content_status === 'string' && activity.content_status.trim()) {
     payload.content_status = activity.content_status.trim();
+  }
+  // Strategic Mix R3-P1 — Content Workspace passthrough. Planning-approved
+  // copy rides into the row's content JSON (additive; absent when the
+  // workspace wrote nothing, so legacy rows stay byte-identical). The
+  // execution engine does not read these fields in this phase.
+  const draft = activity.draft_content;
+  if (draft && typeof draft === 'object' && typeof draft.body === 'string' && draft.body.trim()) {
+    payload.draft_content = {
+      body: draft.body,
+      ...(typeof draft.source === 'string' && draft.source ? { source: draft.source } : {}),
+      ...(typeof draft.updated_at === 'string' && draft.updated_at ? { updated_at: draft.updated_at } : {}),
+    };
+  }
+  if (typeof activity.content_planning_status === 'string' && activity.content_planning_status.trim()) {
+    payload.content_planning_status = activity.content_planning_status.trim();
   }
   return JSON.stringify(payload);
 }

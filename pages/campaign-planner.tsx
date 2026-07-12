@@ -23,6 +23,7 @@ import {
   AIPlanningAssistantTab,
   StrategySetupPanel,
   ContentTab,
+  ContentWorkspace,
 } from '../components/planner';
 import { StrategicThemeCards } from '../components/planner/StrategicThemeCards';
 import { StrategyAIChat } from '../components/planner/StrategyAIChat';
@@ -65,10 +66,11 @@ function CampaignPlannerLayout({
   // branch then UPGRADES the draft row in place instead of creating a second
   // campaign. Read-panels intentionally keep the context campaignId only.
   const finalizeCampaignId = campaignId ?? state.draft_campaign_id ?? null;
-  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'alignment' | 'board' | 'build' | 'design'>(() => {
+  const [activeTab, setActiveTab] = useState<'skeleton' | 'strategy' | 'content' | 'alignment' | 'board' | 'build' | 'design'>(() => {
     if (typeof window !== 'undefined') {
       const tab = new URLSearchParams(window.location.search).get('tab');
       if (tab === 'strategy') return 'strategy';
+      if (tab === 'content') return 'content';
       if (tab === 'alignment') return 'alignment';
       if (tab === 'board') return 'board';
       if (tab === 'build') return 'build';
@@ -203,6 +205,26 @@ function CampaignPlannerLayout({
         >
           <Sparkles className="h-4 w-4" />
           Strategy
+        </button>
+        {/* Strategic Mix R3-P1 — Content Workspace: build the campaign's
+            copy per activity (manual / AI-assisted / generated) at campaign,
+            week or activity scope. Opens with the skeleton, like Alignment. */}
+        <button
+          type="button"
+          onClick={() => hasSkeletonDraft && navigateTab('content')}
+          disabled={!hasSkeletonDraft}
+          title={!hasSkeletonDraft ? 'Build the campaign skeleton first' : undefined}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'content'
+              ? 'border-indigo-600 text-indigo-700 bg-indigo-50'
+              : hasSkeletonDraft
+              ? 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              : 'border-transparent text-gray-400 cursor-not-allowed'
+          }`}
+        >
+          <FileText className="h-4 w-4" />
+          Content
+          {!hasSkeletonDraft && <Lock className="h-3 w-3 ml-1 text-gray-400" />}
         </button>
         {/* Strategic Mix P3 — Alignment: the Assignment workspace, where
             Structure (slots) and Content (Asset Library) are linked. Available
@@ -476,6 +498,15 @@ function CampaignPlannerLayout({
               />
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Tab: Content — Strategic Mix R3-P1 Content Workspace (campaign /
+          week / activity scoped orchestration over the EXISTING generation
+          seam; planning lifecycle draft → review → approved) */}
+      {activeTab === 'content' && (
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <ContentWorkspace companyId={companyId} campaignId={finalizeCampaignId} />
         </div>
       )}
 

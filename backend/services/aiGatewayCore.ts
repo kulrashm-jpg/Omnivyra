@@ -81,6 +81,9 @@ export const FEATURE_AREA_MAP: Record<string, string> = {
   regenerateContent:                 'Activity Workspace',
   generateContentBlueprint:          'Activity Workspace',
   generatePlatformVariants:          'Activity Workspace',
+
+  // Strategic Mix — Content Workspace (R3-P1 assist verbs; proposal→apply)
+  campaignContentAssist:             'Content Workspace',
   parsePlatformCustomization:        'Activity Workspace',
   contentSuggestions:                'Activity Workspace',
 

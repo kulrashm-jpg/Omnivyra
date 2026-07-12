@@ -282,3 +282,46 @@ describe('P4 — Assignment materialization rides the SAME pipeline (no second p
     expect(snapshot?.planning_context?.assignments).toEqual(assignments);
   });
 });
+
+describe('R3-P1 — Content Workspace copy rides the SAME pipeline (additive passthrough)', () => {
+  const DRAFT = { body: 'Approved LinkedIn copy.\n\n#launch', source: 'ai', updated_at: '2026-07-12T09:00:00.000Z' };
+  const draftedActivity = () => activity({ draft_content: DRAFT, content_planning_status: 'approved' });
+
+  it('ADAPTER path passes draft_content + content_planning_status through the content JSON', async () => {
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody({ source: 'planner', calendar_plan: { activities: [draftedActivity()] } })), res);
+    expect(res.statusCode).toBe(200);
+    const content = JSON.parse(String(saveWeekPlansCalls[0].rows[0].content));
+    expect(content.placeholder).toBe(true); // the engine gate is intact
+    expect(content.draft_content).toEqual(DRAFT);
+    expect(content.content_planning_status).toBe('approved');
+  });
+
+  it('INLINE path passes draft_content + content_planning_status identically', async () => {
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody({ calendar_plan: { activities: [draftedActivity()] } })), res);
+    expect(res.statusCode).toBe(200);
+    const content = JSON.parse(String(saveWeekPlansCalls[0].rows[0].content));
+    expect(content).toMatchObject({ placeholder: true, draft_content: DRAFT, content_planning_status: 'approved' });
+  });
+
+  it('activities WITHOUT workspace content keep the exact pre-R3 placeholder shape', async () => {
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody()), res);
+    expect(res.statusCode).toBe(200);
+    const content = JSON.parse(String(saveWeekPlansCalls[0].rows[0].content));
+    expect(content.draft_content).toBeUndefined();
+    expect(content.content_planning_status).toBeUndefined();
+  });
+
+  it('empty draft bodies are dropped, never persisted', async () => {
+    const res = mockRes();
+    await finalizeHandler(post(finalizeBody({
+      calendar_plan: { activities: [activity({ draft_content: { body: '   ' }, content_planning_status: 'draft' })] },
+    })), res);
+    expect(res.statusCode).toBe(200);
+    const content = JSON.parse(String(saveWeekPlansCalls[0].rows[0].content));
+    expect(content.draft_content).toBeUndefined();
+    expect(content.content_planning_status).toBe('draft');
+  });
+});

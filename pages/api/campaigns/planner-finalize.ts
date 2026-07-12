@@ -654,7 +654,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // EXISTING FLOW — completely unchanged; skipped only when adapter succeeded
     // -------------------------------------------------------------------------
     if (!adapterHandledSlots && useCalendarPlanPath && hasCalendarPlan) {
-      const activities = (bodyCalendarPlan as { activities: Array<{ week_number?: number; day?: string; platform?: string; content_type?: string; title?: string; theme?: string; execution_id?: string; creator_asset?: Record<string, unknown> | null; content_status?: string }> }).activities;
+      const activities = (bodyCalendarPlan as { activities: Array<{ week_number?: number; day?: string; platform?: string; content_type?: string; title?: string; theme?: string; execution_id?: string; creator_asset?: Record<string, unknown> | null; content_status?: string; draft_content?: { body?: string; source?: string; updated_at?: string } | null; content_planning_status?: string }> }).activities;
 
       // FIX 3: Duplicate slot protection
       const { data: existingSlots } = await supabase
@@ -709,6 +709,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               : {}),
             ...(typeof act.content_status === 'string' && act.content_status.trim()
               ? { content_status: act.content_status.trim() }
+              : {}),
+            // Strategic Mix R3-P1 — Content Workspace passthrough (additive;
+            // mirrors the adapter path). Execution does not read these fields
+            // in this phase; absent when the workspace wrote nothing.
+            ...(act.draft_content && typeof act.draft_content === 'object' &&
+                typeof act.draft_content.body === 'string' && act.draft_content.body.trim()
+              ? {
+                  draft_content: {
+                    body: act.draft_content.body,
+                    ...(typeof act.draft_content.source === 'string' && act.draft_content.source ? { source: act.draft_content.source } : {}),
+                    ...(typeof act.draft_content.updated_at === 'string' && act.draft_content.updated_at ? { updated_at: act.draft_content.updated_at } : {}),
+                  },
+                }
+              : {}),
+            ...(typeof act.content_planning_status === 'string' && act.content_planning_status.trim()
+              ? { content_planning_status: act.content_planning_status.trim() }
               : {}),
           }),
           status: 'planned',

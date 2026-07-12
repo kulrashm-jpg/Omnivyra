@@ -105,6 +105,15 @@ export interface CalendarPlanActivity {
   creator_asset?: Record<string, unknown> | null;
   /** READY_FOR_PROMOTION when creator asset uploaded */
   content_status?: string;
+  /**
+   * Strategic Mix R3-P1 — planning-time content (Content Workspace). Rides
+   * calendar_plan through the existing persistence seam wholesale; absent on
+   * legacy activities (byte-identical reload). Mutated ONLY via the pure ops
+   * in lib/campaign/campaignContentModel.
+   */
+  draft_content?: { body: string; source: 'manual' | 'ai'; manually_edited?: boolean; ai_operation?: string; updated_at: string } | null;
+  /** Planning-only content lifecycle: draft → review → approved (reversible). */
+  content_planning_status?: 'draft' | 'review' | 'approved';
 }
 
 export interface CalendarPlanDay {

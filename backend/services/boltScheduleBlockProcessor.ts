@@ -41,6 +41,11 @@ import {
 // diagnostics model — every drop here emits planner.item.dropped{reason} through
 // the HARDEN-001 observability registry (fail-safe).
 import { emitPlannerDrop, emitLifecycleTransition } from './campaign/plannerMetrics';
+// R3-P2 — Content Workspace adoption. ONE pure resolver decides when a row's
+// planner-approved copy is the canonical publishing source (approved →
+// generation fallback; review/draft are planning-only, R3-P2.1). Mirrors the
+// creator_asset override seam.
+import { resolveWorkspaceContent } from '../../lib/campaign/workspaceContentResolution';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -507,6 +512,21 @@ async function executeBlockScheduleRuntime(
         continue;
       }
 
+      // ── R3-P2: Content Workspace adoption ────────────────────────────────
+      // APPROVED workspace copy is the CANONICAL publishing source for its
+      // row; generation is fallback only. When every row in the card adopts,
+      // the master + variant LLM calls are skipped entirely. Review, draft
+      // and legacy rows resolve not-adopted (R3-P2.1: review is planning-
+      // only) and flow through the exact pre-R3-P2 path below.
+      const adoptedByRowId = new Map<string, { body: string; tier: 'approved' }>();
+      for (const r of topicRows) {
+        const resolution = resolveWorkspaceContent(tryParseJson<ParsedContent>(r.content));
+        if (resolution.adopted && resolution.body && resolution.tier) {
+          adoptedByRowId.set(r.id, { body: resolution.body, tier: resolution.tier });
+        }
+      }
+      const allRowsAdopted = topicRows.length > 0 && adoptedByRowId.size === topicRows.length;
+
       // ── 4a. Generate master content ──────────────────────────────────────
       const enriched: Record<string, unknown> = {
         topic: firstRow.topic || firstRow.title || '',
@@ -519,7 +539,18 @@ async function executeBlockScheduleRuntime(
 
       let master: { id: string; content: string; generation_status: string; generation_source: 'ai'; generated_at: string };
       try {
-        if (reuseExisting) {
+        if (allRowsAdopted) {
+          // Workspace copy IS the master — no LLM call. Long-form blog
+          // creation below therefore records the canonical workspace body.
+          const topicId = String(enriched.execution_id ?? enriched.id ?? firstRow.id ?? 'topic').slice(0, 40);
+          master = {
+            id: `master-workspace-${topicId}`,
+            generated_at: new Date().toISOString(),
+            content: adoptedByRowId.get(firstRow.id)?.body ?? adoptedByRowId.values().next().value!.body,
+            generation_status: 'generated',
+            generation_source: 'ai',
+          };
+        } else if (reuseExisting) {
           const topicId = String(enriched.execution_id ?? enriched.id ?? firstRow.id ?? 'topic').slice(0, 40);
           master = {
             id: `master-${topicId}`,
@@ -581,11 +612,13 @@ async function executeBlockScheduleRuntime(
         reused: reuseExisting,
         contentPreview: master.content?.slice(0, 80),
       });
-      emit?.({ phase: 'topic-master', contentType, topic, reused: reuseExisting });
+      emit?.({ phase: 'topic-master', contentType, topic, reused: reuseExisting || allRowsAdopted });
 
       // ── 4b. Build platform variants (all platforms in one call) ──────────
+      // R3-P2: fully adopted cards never adapt — each row publishes its own
+      // workspace body verbatim, so the variant LLM call is skipped too.
       let variantByKey = new Map<string, string>();
-      try {
+      if (!allRowsAdopted) try {
         const baseItem = buildItemFromEnriched(enriched, platformTargets, companyId) as Parameters<typeof generateMasterContentFromIntent>[0];
         // Closure Pass — Phase 4. Enrich item with governance.
         const { enrichItemWithGovernance } = await import('./creator/governanceItemEnricher');
@@ -660,10 +693,16 @@ async function executeBlockScheduleRuntime(
 
         const rowContentType = String(row.content_type || 'post').toLowerCase();
         const variantKey     = `${platform}::${rowContentType}`;
-        const content        = variantByKey.get(variantKey) ?? (masterValid ? master.content : null);
+        // R3-P2 canonical resolution: workspace copy first (verbatim — the
+        // workspace already produced platform-native copy; adapting it again
+        // would duplicate adaptation), then the pre-existing variant→master
+        // chain, byte-identical for non-adopted rows.
+        const adopted        = adoptedByRowId.get(row.id) ?? null;
+        const content        = adopted?.body ?? variantByKey.get(variantKey) ?? (masterValid ? master.content : null);
 
         console.log('[block-processor] row content', {
           platform, topic, variantKey,
+          contentSource: adopted ? `workspace:${adopted.tier}` : 'generation',
           hasVariant: variantByKey.has(variantKey),
           masterValid,
           contentNull: !content,
@@ -815,6 +854,10 @@ async function executeBlockScheduleRuntime(
           total_distributions:  Number.isFinite(Number(rowParsed.total_distributions)) ? Number(rowParsed.total_distributions) : topicRows.length,
           source_execution_id:  String(rowParsed.source_execution_id || rowParsed.execution_id || '').trim() || undefined,
           distribution_mode:    (Number(rowParsed.total_distributions) || topicRows.length) > 1 ? 'shared' : 'unique',
+          // R3-P2 — audit marker: this row published Content Workspace copy.
+          // Planner-owned fields themselves ride through the ...rowParsed
+          // spread above, untouched (execution never rewrites them).
+          ...(adopted ? { content_source: 'workspace', content_source_tier: adopted.tier } : {}),
         };
         // Link the plan row to the scheduled post it produced. The calendar's
         // asset_type (the user-selected format, e.g. poll/short_story) is surfaced

@@ -17,6 +17,10 @@ import { buildPlatformVariantsFromMaster } from './contentGenerationPipeline';
 // the pipeline `item` so system prompts pick up the preamble.
 import { getProfile } from './companyProfileService';
 import { buildGovernancePromptContext } from './creator/strategyGovernancePromptContext';
+// R3-P2 — Content Workspace adoption. Same single resolver as
+// processBlockSchedule: APPROVED workspace copy is canonical; generation is
+// fallback only (review/draft are planning-only states, R3-P2.1).
+import { resolveWorkspaceContent } from '../../lib/campaign/workspaceContentResolution';
 
 /** Accepts DB shape where title/topic/scheduled_time may be null */
 type DailyPlanRow = {
@@ -223,6 +227,18 @@ export async function generateContentForDailyPlans(
     })).filter((t) => t.platform);
     if (platformTargets.length === 0) return [];
 
+    // R3-P2: resolve Content Workspace adoption per row BEFORE any generation.
+    // Fully adopted groups skip the master + variant LLM calls entirely;
+    // non-adopted rows flow through the exact pre-R3-P2 path.
+    const adoptedByRowId = new Map<string, { body: string; tier: 'approved' }>();
+    for (const r of rows) {
+      const resolution = resolveWorkspaceContent(tryParseJson<Record<string, unknown>>(r.content));
+      if (resolution.adopted && resolution.body && resolution.tier) {
+        adoptedByRowId.set(r.id, { body: resolution.body, tier: resolution.tier });
+      }
+    }
+    const allRowsAdopted = rows.length > 0 && adoptedByRowId.size === rows.length;
+
     // Merge row-level topic/title into parsed so buildItemFromEnriched can always resolve a topic.
     const enriched: Record<string, unknown> = {
       topic: first.topic || first.title || '',
@@ -265,7 +281,18 @@ export async function generateContentForDailyPlans(
       isReusableGeneratedText(existingContent);
 
     let master: { id: string; generated_at: string; content: string; generation_status: string; generation_source: 'ai' };
-    if (isValidExisting) {
+    if (allRowsAdopted) {
+      // R3-P2: workspace copy IS the master — no LLM call; blog creation
+      // below records the canonical workspace body for long-form rows.
+      const topicId = String(enriched.execution_id ?? enriched.id ?? first.id ?? 'topic').slice(0, 40);
+      master = {
+        id: `master-workspace-${topicId}`,
+        generated_at: new Date().toISOString(),
+        content: adoptedByRowId.get(first.id)?.body ?? adoptedByRowId.values().next().value!.body,
+        generation_status: 'generated',
+        generation_source: 'ai',
+      };
+    } else if (isValidExisting) {
       const topicId = String(enriched.execution_id ?? enriched.id ?? first.id ?? 'topic').slice(0, 40);
       master = {
         id: `master-${topicId}`,
@@ -279,7 +306,9 @@ export async function generateContentForDailyPlans(
     }
 
     (item as any).master_content = { ...master, generation_status: 'generated' };
-    const variants = await buildPlatformVariantsFromMaster(item);
+    // R3-P2: fully adopted groups never adapt — each row publishes its own
+    // workspace body verbatim (adaptation already happened at planning time).
+    const variants = allRowsAdopted ? [] : await buildPlatformVariantsFromMaster(item);
     const variantByKey = new Map<string, string>();
     for (const v of variants) {
       const key = `${String(v.platform).toLowerCase()}::${String(v.content_type).toLowerCase()}`;
@@ -335,8 +364,11 @@ export async function generateContentForDailyPlans(
       const platform = String(row.platform || '').trim().toLowerCase();
       const contentType = String(row.content_type || 'post').trim().toLowerCase();
       const key = `${platform}::${contentType}`;
-      // Prefer the platform-adapted variant; fall back to master content so calendar always shows real text
-      const content = variantByKey.get(key) ?? (masterIsValid ? master.content : undefined) ?? (isValidExisting ? existingContent : undefined);
+      // R3-P2 canonical resolution: workspace copy first (verbatim), then the
+      // pre-existing variant → master → existing chain, byte-identical for
+      // non-adopted rows.
+      const adopted = adoptedByRowId.get(row.id) ?? null;
+      const content = adopted?.body ?? variantByKey.get(key) ?? (masterIsValid ? master.content : undefined) ?? (isValidExisting ? existingContent : undefined);
       if (content && isReusableGeneratedText(content)) {
         contentMap.set(row.id, content);
         // Preserve existing JSON envelope if present; otherwise create a minimal one
@@ -357,6 +389,9 @@ export async function generateContentForDailyPlans(
             String(rowParsed.source_execution_id || rowParsed.execution_id || '').trim() || undefined,
           distribution_mode:
             (Number(rowParsed.total_distributions) || rows.length) > 1 ? 'shared' : 'unique',
+          // R3-P2 — audit marker: this row carries Content Workspace copy.
+          // Planner-owned fields ride through the ...p spread untouched.
+          ...(adopted ? { content_source: 'workspace', content_source_tier: adopted.tier } : {}),
         };
         updates.push({ id: row.id, content: JSON.stringify(updated) });
       }

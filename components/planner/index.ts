@@ -11,6 +11,7 @@ export { ExecutionSetupPanel } from './ExecutionSetupPanel';
 export { StrategicThemeCards } from './StrategicThemeCards';
 export { StructureTab } from './tabs/StructureTab';
 export { ContentTab } from './tabs/ContentTab';
+export { ContentWorkspace } from './ContentWorkspace';
 export { StrategyTab } from './tabs/StrategyTab';
 export { AIPlanningAssistantTab } from './AIPlanningAssistantTab';
 export { PlanningCanvas } from './PlanningCanvas';
