@@ -36,11 +36,22 @@ function pct(n: number | undefined): string {
   return typeof n === 'number' ? `${Math.round(n)}%` : '—';
 }
 
+export interface ValidationStatsView {
+  generated: number;
+  validated: number;
+  regenerated: number;
+  accepted: number;
+  adapted?: number;
+  dropped: number;
+}
+
 export default function CampaignPlannerDiagnostics({
   diagnostics,
+  validation,
   className = '',
 }: {
   diagnostics: PlannerDiagnosticsPayload | null | undefined;
+  validation?: ValidationStatsView | null;
   className?: string;
 }) {
   if (!diagnostics || diagnostics.planned <= 0) return null;
@@ -70,6 +81,19 @@ export default function CampaignPlannerDiagnostics({
         <Stat label="Generated" value={generated} tone="good" />
         <Stat label="Dropped" value={droppedCount} tone={droppedCount > 0 ? 'warn' : 'neutral'} />
       </div>
+
+      {validation && validation.generated > 0 && (
+        <div className="mt-3 border-t border-gray-100 pt-3" data-testid="validation-summary">
+          <p className="mb-1.5 text-xs font-medium text-gray-500">Semantic validation</p>
+          <div className="grid grid-cols-5 gap-2 text-center">
+            <Stat label="Generated" value={validation.generated} tone="neutral" />
+            <Stat label="Validated" value={validation.validated} tone="good" />
+            <Stat label="Regenerated" value={validation.regenerated} tone={validation.regenerated > 0 ? 'warn' : 'neutral'} />
+            <Stat label="Accepted" value={validation.accepted} tone="good" />
+            <Stat label="Dropped" value={validation.dropped} tone={validation.dropped > 0 ? 'warn' : 'neutral'} />
+          </div>
+        </div>
+      )}
 
       {droppedCount > 0 && (
         <div className="mt-3 border-t border-gray-100 pt-3">

@@ -21,6 +21,7 @@ import { emitPlannerMetrics, emitLifecycleTransition } from '../../../backend/se
 import { deriveMasterIdeaBundle, normalizeForFingerprint } from '../../../lib/shared/campaign/masterIdea';
 import { assessCampaignQuality, type CampaignQualityAssessment, type PlannedAsset } from '../../../lib/shared/campaign/campaignQuality';
 import { optimizeCampaign, applyOptimizedContext, DEFAULT_MAX_OPTIMIZATION_PASSES, type OptimizationResult } from '../../../lib/shared/campaign/campaignOptimizer';
+import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type ValidationStats, type GeneratedAsset } from '../../../lib/shared/campaign/semanticValidation';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -263,6 +264,8 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   campaign_quality?: CampaignQualityAssessment | null;
   /** CAMPAIGN-IMPL-006 — pre-generation optimization: before/after + changelog. */
   campaign_optimization?: OptimizationResult | null;
+  /** CAMPAIGN-IMPL-007 — pre-generation semantic-validation preview (idea-level). */
+  campaign_validation?: ValidationStats | null;
 }> {
   const {
     week,
@@ -1965,6 +1968,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   let plannerReconciliation: PlannerReconciliation | null = null;
   let campaignQuality: CampaignQualityAssessment | null = null;
   let campaignOptimization: OptimizationResult | null = null;
+  let campaignValidation: ValidationStats | null = null;
   if (allRowsToInsert.length > 0) {
     const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
     // Phase-2 Step-11: FIRST real generator cutover. Mode-gated source
@@ -2104,6 +2108,34 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       }
     } catch { /* advisory only — never block generation */ }
 
+    // ── CAMPAIGN-IMPL-007: pre-generation semantic-validation preview ──────
+    // The full content-level gate runs later in the block-processor (captions
+    // don't exist yet here). This preview validates the IDEA-level dimensions
+    // already available on the plan (semantic idea / headline / CTA / master-idea
+    // consistency / cross-platform) so the planner diagnostics can show
+    // Generated / Validated / Regenerated / Accepted / Dropped. Advisory, fail-safe.
+    try {
+      const vctx = new ValidationContext();
+      const stats = emptyValidationStats();
+      for (const row of persistRows as any[]) {
+        const pa = toPlannedAsset(row);
+        const genAsset: GeneratedAsset = {
+          content_type: pa.content_type,
+          platform: String(pa.platform ?? ''),
+          text: String(pa.topic_title ?? ''),
+          headline: pa.topic_title ?? null,
+          cta: pa.cta ?? null,
+          idea_fingerprint: pa.idea_fingerprint ?? null,
+          narrative_fingerprint: pa.narrative_fingerprint ?? null,
+          master_idea_id: pa.master_idea_id ?? null,
+        };
+        const vr = validateAsset(genAsset, vctx, { flagCrossPlatform: false });
+        tallyValidation(stats, vr);
+        if (vr.decision === 'ACCEPT' || vr.decision === 'ADAPT') vctx.commit(genAsset);
+      }
+      campaignValidation = stats;
+    } catch { /* preview only — never block generation */ }
+
     // ── CAMPAIGN-IMPL-002: planner-integrity reconciliation ────────────────
     // Invariant: planned === generated + dropped.length. Diff the user's
     // selection (rawFormatFrequency × weeks) against the persisted rows and
@@ -2207,6 +2239,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     planner_diagnostics: plannerDiagnosticsPayload,
     campaign_quality: campaignQuality,
     campaign_optimization: campaignOptimization,
+    campaign_validation: campaignValidation,
     week: weekNumbers.length === 1 ? weekNumbers[0] : undefined,
     weeks: weekNumbers.length > 1 ? weekNumbers : undefined,
     dailyPlan: allFinalItems,
