@@ -22,6 +22,7 @@ import { deriveMasterIdeaBundle, normalizeForFingerprint } from '../../../lib/sh
 import { assessCampaignQuality, type CampaignQualityAssessment, type PlannedAsset } from '../../../lib/shared/campaign/campaignQuality';
 import { optimizeCampaign, applyOptimizedContext, DEFAULT_MAX_OPTIMIZATION_PASSES, type OptimizationResult } from '../../../lib/shared/campaign/campaignOptimizer';
 import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type CampaignValidationLanes, type GeneratedAsset } from '../../../lib/shared/campaign/semanticValidation';
+import { emitQualityMetrics, emitOptimizationMetrics, emitCampaignRunMetrics } from '../../../backend/services/campaign/campaignObservability';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -345,6 +346,9 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       'campaignId and week (or weeks array) are required',
     );
   }
+
+  // CAMPAIGN-OPS-001: campaign execution timer (run duration + outcome).
+  const runStartedAt = Date.now();
 
   // CAMPAIGN-IMPL-003: deterministic drop capture. Every in-loop skip that used
   // to vanish behind a bare `continue` / `console.log` now records a STRUCTURED
@@ -2058,6 +2062,8 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     try {
       const preAssets = (persistRows as any[]).map(toPlannedAsset);
       campaignOptimization = optimizeCampaign(preAssets, { maxPasses: DEFAULT_MAX_OPTIMIZATION_PASSES });
+      // CAMPAIGN-OPS-001: Optimization Engine metrics (before/after/delta/passes/changes).
+      emitOptimizationMetrics(campaignOptimization, { mode: 'weekly' });
       if (campaignOptimization.improved) {
         campaignOptimization.assets.forEach((opt, i) => applyOptimizationToRow((persistRows as any[])[i], opt));
         if (process.env.NODE_ENV !== 'test') {
@@ -2103,6 +2109,8 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     try {
       const plannedAssets = (persistRows as any[]).map(toPlannedAsset);
       campaignQuality = assessCampaignQuality(plannedAssets);
+      // CAMPAIGN-OPS-001: Quality Engine metrics (score / grade / per-dimension).
+      emitQualityMetrics(campaignQuality, { mode: 'weekly' });
       if (process.env.NODE_ENV !== 'test') {
         console.log('[campaign-quality]', { campaignId, overall: campaignQuality.overall, grade: campaignQuality.grade, recommendations: campaignQuality.recommendations.length });
       }
@@ -2238,6 +2246,9 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           };
         })()
       : null;
+
+  // CAMPAIGN-OPS-001: emit campaign run duration + success on the reached-return path.
+  emitCampaignRunMetrics({ durationMs: Date.now() - runStartedAt, success: true }, { mode: 'weekly' });
 
   return {
     success: true,

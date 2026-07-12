@@ -48,6 +48,7 @@ import { buildStrategicContextString } from '../../lib/shared/campaign/campaignO
 import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type GeneratedAsset } from '../../lib/shared/campaign/semanticValidation';
 import { regenerateBeforeDrop } from '../../lib/shared/campaign/campaignLifecycle';
 import { recordRawCounter, recordRawHistogram } from '../observability';
+import { emitMetrics, buildGenerationDurationMetric } from './campaign/campaignObservability';
 // R3-P2 — Content Workspace adoption. ONE pure resolver decides when a row's
 // planner-approved copy is the canonical publishing source (approved →
 // generation fallback; review/draft are planning-only, R3-P2.1). Mirrors the
@@ -587,7 +588,10 @@ async function executeBlockScheduleRuntime(
           console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] Generating master for:`, {
             contentType, topic,
           });
+          const genStartedAt = Date.now();
           master = await generateMasterContentFromIntent(item);
+          // CAMPAIGN-OPS-001: text generation duration per content type + platform.
+          try { emitMetrics([buildGenerationDurationMetric(Date.now() - genStartedAt, { content_type: contentType, platform: platformTargets[0]?.platform })]); } catch { /* fail-safe */ }
         }
       } catch (err) {
         const errMsg = (err as Error)?.message ?? 'Master generation failed';
