@@ -1,7 +1,7 @@
 /**
  * CAMPAIGN-IMPL-006 — deterministic campaign optimizer.
  */
-import { optimizeCampaign, applyOptimizedContext, readCampaignContext, DEFAULT_MAX_OPTIMIZATION_PASSES } from '../../../lib/shared/campaign/campaignOptimizer';
+import { optimizeCampaign, applyOptimizedContext, readCampaignContext, buildStrategicContext, buildStrategicContextString, DEFAULT_MAX_OPTIMIZATION_PASSES } from '../../../lib/shared/campaign/campaignOptimizer';
 import { assessCampaignQuality, type PlannedAsset } from '../../../lib/shared/campaign/campaignQuality';
 
 const asset = (over: Partial<PlannedAsset> = {}): PlannedAsset => ({
@@ -198,5 +198,63 @@ describe('IMPL-006A — optimized values reach the fields the generators read', 
     const c = baseContent();
     applyOptimizedContext(c as any, r.assets[idx]);
     expect(c.desiredAction).toBe(r.assets[idx].cta);
+  });
+});
+
+describe('IMPL-006B — strategic context reaches the TEXT prompt via the existing slot', () => {
+  const richContent = (over: Record<string, any> = {}) => ({
+    dailyObjective: 'Explain onboarding',
+    funnel_stage: 'consideration',
+    intent: { objective: 'Explain onboarding', narrative: 'case study' },
+    master_idea: { id: 'mi_9', theme: 'Onboarding wins', narrative: 'customer success', core_message: 'value in a week', intent: 'show fast value', cta_strategy: 'Book a demo', audience: 'RevOps', buyer_journey_stage: 'consideration' },
+    campaign_context: 'optimized',
+    ...over,
+  });
+
+  it('extracts every strategic field from the content', () => {
+    const ctx = buildStrategicContext(richContent());
+    expect(ctx).not.toBeNull();
+    expect(ctx!).toMatchObject({
+      buyer_journey_stage: 'consideration',
+      strategic_theme: 'Onboarding wins',
+      narrative: 'customer success',
+      core_message: 'value in a week',
+      campaign_context: 'optimized',
+    });
+    expect(ctx!.master_idea).toMatchObject({ id: 'mi_9', theme: 'Onboarding wins', intent: 'show fast value', cta_strategy: 'Book a demo', audience: 'RevOps' });
+  });
+
+  it('serializes to a STRING (the extra_instruction slot requires a string)', () => {
+    const s = buildStrategicContextString(richContent());
+    expect(typeof s).toBe('string');
+    const parsed = JSON.parse(s);
+    expect(parsed.campaign_strategic_context.master_idea.id).toBe('mi_9');
+    expect(parsed.campaign_strategic_context.campaign_context).toBe('optimized');
+  });
+
+  it('records the injected context (optimized vs original) for traceability', () => {
+    expect(buildStrategicContext(richContent({ campaign_context: 'original' }))!.campaign_context).toBe('original');
+    expect(buildStrategicContext(richContent())!.campaign_context).toBe('optimized');
+  });
+
+  it('BACKWARD COMPAT: legacy content without a Master-Idea block injects nothing', () => {
+    expect(buildStrategicContext({ intent: { objective: 'x' } })).toBeNull();
+    expect(buildStrategicContextString({ intent: { objective: 'x' } })).toBe('');
+    expect(buildStrategicContextString(null)).toBe('');
+    // → item.extra_instruction stays unset → additional_guidance absent → prompt unchanged
+  });
+
+  it('is DETERMINISTIC — identical content yields an identical string', () => {
+    expect(buildStrategicContextString(richContent())).toBe(buildStrategicContextString(richContent()));
+  });
+
+  it('same content produces the SAME strategic context regardless of which builder reads it', () => {
+    // All three text builders call the one shared helper — consistency by construction.
+    const content = richContent();
+    const fromA = buildStrategicContextString(content);
+    const fromB = buildStrategicContextString(content);
+    const fromC = buildStrategicContextString(content);
+    expect(fromA).toBe(fromB);
+    expect(fromB).toBe(fromC);
   });
 });

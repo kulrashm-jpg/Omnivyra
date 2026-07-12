@@ -41,6 +41,9 @@ import {
 // diagnostics model — every drop here emits planner.item.dropped{reason} through
 // the HARDEN-001 observability registry (fail-safe).
 import { emitPlannerDrop, emitLifecycleTransition } from './campaign/plannerMetrics';
+// CAMPAIGN-IMPL-006B: expose the optimized strategic campaign context to the text
+// prompt via the EXISTING additional_guidance slot (item.extra_instruction).
+import { buildStrategicContextString } from '../../lib/shared/campaign/campaignOptimizer';
 // R3-P2 — Content Workspace adoption. ONE pure resolver decides when a row's
 // planner-approved copy is the canonical publishing source (approved →
 // generation fallback; review/draft are planning-only, R3-P2.1). Mirrors the
@@ -263,11 +266,13 @@ function buildItemFromEnriched(
   const topic  = String(enriched.topicTitle ?? enriched.topic ?? enriched.title ?? '').trim() || 'TBD';
   const intent = tryParseJson<Record<string, unknown>>(enriched.intent) ?? {};
   const brief  = tryParseJson<Record<string, unknown>>(enriched.writer_content_brief ?? enriched.writerBrief) ?? {};
+  const strategicContext = buildStrategicContextString(enriched);
   return {
     execution_id: String(enriched.execution_id ?? enriched.id ?? `topic-${topic.slice(0, 30).replace(/\s/g, '-')}`),
     topic,
     title: topic,
     company_id: companyId,
+    ...(strategicContext ? { extra_instruction: strategicContext } : {}),
     intent: {
       objective:       enriched.dailyObjective     ?? intent.objective       ?? 'Educate and engage the audience',
       pain_point:      enriched.whatProblemAreWeAddressing ?? intent.pain_point ?? 'Audience challenge relevant to topic',

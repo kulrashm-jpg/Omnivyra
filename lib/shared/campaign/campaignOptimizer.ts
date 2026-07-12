@@ -306,3 +306,52 @@ export function readCampaignContext(content: unknown): CampaignContextSource {
   if (content && typeof content === 'object' && (content as any).campaign_context === 'optimized') return 'optimized';
   return 'original';
 }
+
+/** The compact strategic-context block exposed to text generators (IMPL-006B). */
+export interface StrategicContext {
+  buyer_journey_stage: string;
+  strategic_theme: string;
+  narrative: string;
+  core_message: string;
+  master_idea: { id: string; theme: string; intent: string; cta_strategy: string; audience: string };
+  campaign_context: CampaignContextSource;
+}
+
+/**
+ * CAMPAIGN-IMPL-006B — read the strategic campaign intelligence out of a content
+ * envelope (the additive Master-Idea block + intent + traceability). Returns null
+ * for legacy rows without a Master-Idea block, so nothing is injected and
+ * generation is unchanged (backward compatible). Pure + deterministic.
+ */
+export function buildStrategicContext(content: unknown): StrategicContext | null {
+  if (!content || typeof content !== 'object') return null;
+  const c = content as Record<string, any>;
+  const mi = c.master_idea;
+  if (!mi || typeof mi !== 'object' || typeof mi.id !== 'string') return null;
+  const s = (v: unknown, d = ''): string => (v == null ? d : String(v)).trim() || d;
+  return {
+    buyer_journey_stage: s(mi.buyer_journey_stage ?? c.funnel_stage, 'awareness'),
+    strategic_theme: s(mi.theme),
+    narrative: s(mi.narrative),
+    core_message: s(mi.core_message),
+    master_idea: {
+      id: s(mi.id),
+      theme: s(mi.theme),
+      intent: s(mi.intent),
+      cta_strategy: s(mi.cta_strategy),
+      audience: s(mi.audience),
+    },
+    campaign_context: readCampaignContext(content),
+  };
+}
+
+/**
+ * Serialize the strategic context into the STRING the existing text prompt slot
+ * (`additional_guidance` ← `item.extra_instruction`) accepts. Returns '' when
+ * there is nothing to inject (legacy rows), so the prompt is byte-identical to
+ * before — no new prompt section, no duplicated instruction.
+ */
+export function buildStrategicContextString(content: unknown): string {
+  const ctx = buildStrategicContext(content);
+  return ctx ? JSON.stringify({ campaign_strategic_context: ctx }) : '';
+}

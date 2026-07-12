@@ -36,6 +36,8 @@ import {
   emitTypeIntegrityTelemetry,
   resolveLogicalContentType,
 } from '../../../lib/shared/contentTypeIntegrity';
+// CAMPAIGN-IMPL-006B: strategic context via the existing additional_guidance slot.
+import { buildStrategicContextString } from '../../../lib/shared/campaign/campaignOptimizer';
 import { validatePollStructure } from '../../../lib/shared/pollStructureValidator';
 import { validateArticleStructure } from '../../../lib/shared/articleStructureValidator';
 import { validateThreadStructure } from '../../../lib/shared/threadStructureValidator';
@@ -450,10 +452,12 @@ async function processBoltContentJobInner(job: Job): Promise<void> {
       // LLM call
       const intent = tryParseJson<Record<string, unknown>>(enriched.intent) ?? {};
       const brief  = tryParseJson<Record<string, unknown>>(enriched.writer_content_brief ?? enriched.writerBrief) ?? {};
+      const strategicContext = buildStrategicContextString(enriched);
       const item = {
         execution_id: String(enriched.execution_id ?? enriched.id ?? `topic-${topic.slice(0, 30).replace(/\s/g, '-')}`),
         topic: generationTopic,
         title: generationTitle,
+        ...(strategicContext ? { extra_instruction: strategicContext } : {}),
         original_topic: generationInputSelection.original_topic,
         original_title: generationInputSelection.original_title,
         generation_input_topic: generationTopic,

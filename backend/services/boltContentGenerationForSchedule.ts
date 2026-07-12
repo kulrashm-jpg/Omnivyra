@@ -12,6 +12,9 @@ import { supabase } from '../db/supabaseClient';
 import { updateActivity } from './executionPlannerPersistence';
 import { generateMasterContentFromIntent } from './contentGenerationPipeline';
 import { buildPlatformVariantsFromMaster } from './contentGenerationPipeline';
+// CAMPAIGN-IMPL-006B: expose the optimized strategic context via the existing
+// additional_guidance prompt slot (item.extra_instruction).
+import { buildStrategicContextString } from '../../lib/shared/campaign/campaignOptimizer';
 // Closure Pass — Phase 4. BOLT schedule generation now resolves
 // governance from the campaign's company profile and threads it onto
 // the pipeline `item` so system prompts pick up the preamble.
@@ -135,10 +138,12 @@ function buildItemFromEnriched(
   const topic = String(enriched.topicTitle ?? enriched.topic ?? enriched.title ?? '').trim() || 'TBD';
   const intent = tryParseJson<Record<string, unknown>>(enriched.intent) ?? {};
   const brief = tryParseJson<Record<string, unknown>>(enriched.writer_content_brief ?? enriched.writerBrief) ?? {};
+  const strategicContext = buildStrategicContextString(enriched);
   return {
     execution_id: String(enriched.execution_id ?? enriched.id ?? `topic-${topic.slice(0, 30).replace(/\s/g, '-')}`),
     topic,
     title: topic,
+    ...(strategicContext ? { extra_instruction: strategicContext } : {}),
     intent: {
       objective: enriched.dailyObjective ?? intent.objective ?? 'Educate and engage the audience',
       pain_point: enriched.whatProblemAreWeAddressing ?? intent.pain_point ?? 'Audience challenge relevant to topic',
