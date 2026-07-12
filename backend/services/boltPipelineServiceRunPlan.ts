@@ -68,6 +68,9 @@ import { BoltError, BOLT_ERROR_CODES } from '../../lib/shared/bolt/boltErrorCode
 import { FORMAT_EXCLUSIVE_PLATFORMS } from '../../lib/shared/bolt/formatPlatformBinding';
 // Phase 6G-1 — canonical content↔platform assignment authority (derive, don't duplicate).
 import { filterPlatformsForFormat, getSupportedPlatformsForFormat } from '../../lib/shared/bolt/contentPlatformAssignment';
+// CAMPAIGN-IMPL-003A: plan-request trims contribute to the same planner
+// diagnostics model (invalid pairs / no-eligible-platform dropped before planning).
+import { emitPlannerDrop } from './campaign/plannerMetrics';
 import {
   MAX_CAMPAIGN_DURATION_WEEKS,
   MAX_SHORT_CAMPAIGN_DURATION_WEEKS,
@@ -410,6 +413,18 @@ export async function runAiPlan(runId: string, campaignId: string, companyId: st
       supported_platform_count: configuredPlatforms.length,
       supported_format_count: formatsRequested.length,
     }));
+  }
+  // CAMPAIGN-IMPL-003A: attribute plan-request trims into the shared planner
+  // metrics so drops before the weekly stage are not invisible. Invalid
+  // {platform,content_type} pairs → platform_blocked; the remaining shortfall
+  // (video-only platforms excluded for text BOLT, exclusive-gate) →
+  // no_eligible_platform. Fail-safe, counts only.
+  {
+    const droppedTotal = Math.max(0, rawPlatformRequests.length - boltPlatformRequests.length);
+    const mode = isCombined ? 'mix' : requiresMediaFlow ? 'creator' : 'writer';
+    if (assignmentPairsRemoved > 0) emitPlannerDrop('platform_blocked', assignmentPairsRemoved, mode);
+    const noPlatform = Math.max(0, droppedTotal - assignmentPairsRemoved);
+    if (noPlatform > 0) emitPlannerDrop('no_eligible_platform', noPlatform, mode);
   }
 
   // Phase 6C-4A: Intelligent Mix (combined) is the extended-planning surface and

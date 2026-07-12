@@ -17,6 +17,7 @@ import { filterPlatformsForFormat } from '../../../lib/shared/bolt/contentPlatfo
 import { clampCampaignFormatFrequency } from '../../../lib/shared/bolt/formatGovernance';
 import { buildReconciliation, assertPlannerInvariant, summarizeDrops, publicDropReason, type DroppedItem, type DropReasonCode, type PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
 import { PlannerTrace, computePlannerMetrics, type PlannerMetrics } from '../../../lib/shared/campaign/campaignLifecycle';
+import { emitPlannerMetrics } from '../../../backend/services/campaign/plannerMetrics';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -787,10 +788,15 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           if (!currentTopic) continue;
           const key = currentTopic.toLowerCase();
           if (seenTopics.has(key)) {
-            // Duplicate topic — rewrite with content-type-specific angle
+            // Duplicate topic — rewrite with content-type-specific angle. This IS
+            // regenerate-before-drop for structural duplicates: a duplicate is
+            // never dropped, it is regenerated into a distinct on-format variation
+            // (deriveSubTopic, deterministic — no AI, no uniqueness engine).
+            // CAMPAIGN-IMPL-003A: record it so the regeneration shows in metrics.
             const derived = deriveSubTopic(currentTopic, ct, idx, synthAudience);
             slot.topic = derived;
             seenTopics.add(derived.toLowerCase());
+            plannerTrace.regenerated(1);
             console.log('[weekly-structure][dedupe]', {
               contentType: ct,
               slotIndex: idx,
@@ -2005,12 +2011,12 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       for (let i = 0; i < residual; i += 1) dropped.push({ content_type: 'unknown', platform: null, reason: 'unknown_error', stage: 'validation', detail: 'unattributed shortfall' });
       plannerReconciliation = buildReconciliation(plannedTotal, persistRows.length, dropped);
       assertPlannerInvariant(plannerReconciliation, (msg, meta) => console.warn(msg, meta));
+      // Observability: route planner integrity + success into the HARDEN-001
+      // registry (queryable via getObservabilitySnapshot), replacing standalone
+      // logging. Fail-safe — never blocks generation.
+      emitPlannerMetrics(plannerReconciliation, plannerTrace.getRegeneration(), { mode: 'weekly' });
       if (process.env.NODE_ENV !== 'test') {
-        const metrics = computePlannerMetrics(plannerReconciliation, plannerTrace.getRegeneration());
         console.log('[weekly-structure][planner-reconciliation]', { planned: plannerReconciliation.planned, generated: plannerReconciliation.generated, dropped: plannerReconciliation.dropped.length, ok: plannerReconciliation.ok });
-        // Observability: planner integrity + generation-success signal, greppable
-        // for dashboards/alerts (fail-safe — never blocks generation).
-        console.log('[planner-metrics]', { campaignId, weeks: weekNumbers, requested: metrics.requested, generated: metrics.generated, dropped: metrics.dropped, regenerated: metrics.regenerated, generation_success_pct: metrics.generation_success_pct, planner_integrity_pct: metrics.planner_integrity_pct, drop_reasons: metrics.drop_reasons });
       }
     }
   }

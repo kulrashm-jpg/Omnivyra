@@ -37,6 +37,10 @@ import {
   generateMasterContentFromIntent,
   buildPlatformVariantsFromMaster,
 } from './contentGenerationPipeline';
+// CAMPAIGN-IMPL-003A: bring the content-schedule path into the same planner
+// diagnostics model — every drop here emits planner.item.dropped{reason} through
+// the HARDEN-001 observability registry (fail-safe).
+import { emitPlannerDrop } from './campaign/plannerMetrics';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -548,6 +552,7 @@ async function executeBlockScheduleRuntime(
           platforms: platformTargets.map(t => t.platform),
           status: 'master_failed', error: errMsg, scheduledCount: 0,
         });
+        emitPlannerDrop('generation_failure', topicRows.length, 'weekly');
         blockSkipped += topicRows.length;
         continue;
       }
@@ -564,6 +569,7 @@ async function executeBlockScheduleRuntime(
           platforms: platformTargets.map(t => t.platform),
           status: 'master_failed', error: failReason, scheduledCount: 0,
         });
+        emitPlannerDrop('generation_failure', topicRows.length, 'weekly');
         blockSkipped += topicRows.length;
         continue;
       }
@@ -717,6 +723,7 @@ async function executeBlockScheduleRuntime(
           console.warn('[block-processor] DEDUP-skip — duplicate content already scheduled on this platform+type this week', {
             platform, contentType: rowContentType, topic: topic.slice(0, 60), date: row.date,
           });
+          emitPlannerDrop('duplicate_content', 1, 'weekly');
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
           continue;
