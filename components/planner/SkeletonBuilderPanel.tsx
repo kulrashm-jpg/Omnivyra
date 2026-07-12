@@ -19,6 +19,7 @@ import { PLANNER_DURATIONS } from '../../lib/shared/campaignDuration';
 import {
   extractSkeletonRequest,
   buildBootstrapMatrix,
+  resolvePlatformSelection,
   SKELETON_CHAT_NO_PLATFORMS_MESSAGE,
 } from '../../lib/campaign/skeletonPromptExtraction';
 
@@ -277,22 +278,30 @@ export function SkeletonBuilderPanel({
         // guidance instead of a doomed ai/plan call — the raw server
         // validation error never reaches the user. Explicit user choices
         // are never overwritten: any configured platform skips this path.
-        const hasConfiguredPlatforms =
-          (prev?.platforms?.length ?? 0) > 0 ||
-          (platform_content_requests !== null && Object.keys(platform_content_requests).length > 0);
+        const configuredPlatforms = new Set<string>([
+          ...(prev?.platforms ?? []),
+          ...Object.keys(platform_content_requests ?? {}),
+        ]);
+        const extraction = extractSkeletonRequest(text);
+        // "everything / all platforms" resolves against the planner's own
+        // connected-platform universe (the same set the Schedule strip and
+        // matrix show) — deterministic, no invented platform sets.
+        const connectedUniverse = (state.account_context?.platforms ?? [])
+          .map((pm) => String((pm as { platform?: unknown })?.platform ?? ''))
+          .filter(Boolean);
+        const resolvedPlatforms = resolvePlatformSelection(extraction, connectedUniverse);
         let bootstrapMatrix: Record<string, Record<string, number>> | null = null;
         let effectiveDurationWeeks = durationWeeks;
         let extractedGoal = '';
-        if (!hasConfiguredPlatforms) {
-          const extraction = extractSkeletonRequest(text);
-          if (!extraction.confident) {
+        if (configuredPlatforms.size === 0) {
+          if (resolvedPlatforms.length === 0) {
             // Friendly guidance INSTEAD of a doomed ai/plan call — never the
             // raw validation error, and not styled as a failure.
             setChatHistory((h) => [...h, { role: 'assistant', text: SKELETON_CHAT_NO_PLATFORMS_MESSAGE }]);
             setChatLoading(false);
             return;
           }
-          bootstrapMatrix = buildBootstrapMatrix(extraction);
+          bootstrapMatrix = buildBootstrapMatrix(extraction, resolvedPlatforms);
           if (extraction.durationWeeks) effectiveDurationWeeks = extraction.durationWeeks;
           if (extraction.objective) extractedGoal = extraction.objective;
           // Sync the planner NOW through its existing update paths — the
@@ -304,6 +313,26 @@ export function SkeletonBuilderPanel({
             planned_start_date: startDate,
             ...(extractedGoal ? { campaign_goal: extractedGoal } : {}),
           });
+        } else {
+          // MERGE — the planner already has explicit choices: never
+          // overwrite them; only ADD platforms the prompt names that are
+          // missing ("Also create Instagram posts"). No additions ⇒ the
+          // legacy path below runs byte-identically (zero writes).
+          const additions = resolvedPlatforms.filter((p) => !configuredPlatforms.has(p));
+          if (additions.length > 0) {
+            const merged = {
+              ...(platform_content_requests ?? {}),
+              ...buildBootstrapMatrix(extraction, additions),
+            };
+            bootstrapMatrix = merged;
+            setPlatformContentRequests(merged);
+            // Only fill MISSING values: the configured duration stands; the
+            // goal is adopted only when none exists yet.
+            if (extraction.objective && !(prev?.campaign_goal ?? '').trim()) {
+              extractedGoal = extraction.objective;
+              setStrategyContext({ campaign_goal: extractedGoal });
+            }
+          }
         }
         const bootstrapStrategy = bootstrapMatrix
           ? deriveStrategyFromMatrix(bootstrapMatrix, effectiveDurationWeeks, startDate, prev)

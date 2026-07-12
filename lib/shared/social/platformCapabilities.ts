@@ -80,8 +80,15 @@ const PLATFORM_KEY_ALIASES: Record<string, string> = {
   li: 'linkedin',
   fb: 'facebook',
   ig: 'instagram',
+  insta: 'instagram',
   meta: 'facebook',
 };
+
+/** The alias vocabulary, exported READ-ONLY so word-scanners (e.g. the
+ *  skeleton prompt extractor) can enumerate candidates from the registry
+ *  instead of maintaining a parallel list. Resolution still goes through
+ *  normalizePlatformKey — this is the single alias source. */
+export const PLATFORM_ALIAS_KEYS: readonly string[] = Object.keys(PLATFORM_KEY_ALIASES);
 
 export function normalizePlatformKey(platform: string | null | undefined): string {
   const raw = String(platform ?? '').trim().toLowerCase();

@@ -26,6 +26,14 @@ describe('CHARACTERIZATION — the seams the bootstrap relies on (pre-change)', 
     expect(normalizePlatformKey('  FACEBOOK ')).toBe('facebook');
   });
 
+  it('canonical alias map (the registry is the ONLY alias source)', () => {
+    expect(normalizePlatformKey('LI')).toBe('linkedin');
+    expect(normalizePlatformKey('FB')).toBe('facebook');
+    expect(normalizePlatformKey('IG')).toBe('instagram');
+    expect(normalizePlatformKey('tw')).toBe('x');
+    expect(normalizePlatformKey('meta')).toBe('facebook');
+  });
+
   it('capability facts that drive per-platform default content types', () => {
     expect(platformSupportsCapability('linkedin', 'text')).toBe(true);   // → post
     expect(platformSupportsCapability('instagram', 'text')).toBe(false);
@@ -47,6 +55,7 @@ import {
   extractSkeletonRequest,
   buildBootstrapMatrix,
   defaultContentTypeForPlatform,
+  resolvePlatformSelection,
   SKELETON_CHAT_NO_PLATFORMS_MESSAGE,
   DEFAULT_BOOTSTRAP_FREQUENCY,
 } from '../../../lib/campaign/skeletonPromptExtraction';
@@ -121,5 +130,165 @@ describe('buildBootstrapMatrix — capability-driven, never invented', () => {
     expect(defaulted).toEqual({ linkedin: { post: DEFAULT_BOOTSTRAP_FREQUENCY } });
     const reels = buildBootstrapMatrix(extractSkeletonRequest('Instagram reels daily'));
     expect(reels).toEqual({ instagram: { reel: 7 } });
+  });
+});
+
+/* ── PART 3 — HARDENING (realistic CMO prompts, deterministic rules) ── */
+
+describe('hardening — mixed objectives', () => {
+  it('"Create a 6-week LinkedIn thought leadership campaign with Instagram support."', () => {
+    const r = extractSkeletonRequest('Create a 6-week LinkedIn thought leadership campaign with Instagram support.');
+    expect(r.platforms).toEqual(['linkedin', 'instagram']);
+    expect(r.durationWeeks).toBe(6);
+    expect(r.objective).toBe('thought leadership');
+  });
+
+  it('"Generate a lead generation campaign for LinkedIn and Facebook."', () => {
+    const r = extractSkeletonRequest('Generate a lead generation campaign for LinkedIn and Facebook.');
+    expect(r.platforms).toEqual(['linkedin', 'facebook']);
+    expect(r.objective).toBe('lead generation');
+  });
+});
+
+describe('hardening — independent per-platform cadence (never averaged)', () => {
+  it('"LinkedIn 3 posts per week and Instagram daily."', () => {
+    const r = extractSkeletonRequest('LinkedIn 3 posts per week and Instagram daily.');
+    expect(r.requests).toEqual([
+      { platform: 'linkedin', frequencyPerWeek: 3, contentHint: 'post' },
+      { platform: 'instagram', frequencyPerWeek: 7, contentHint: null },
+    ]);
+    expect(r.frequencyPerWeek).toBeNull(); // multiple distinct — no global, no averaging
+    expect(buildBootstrapMatrix(r)).toEqual({ linkedin: { post: 3 }, instagram: { image: 7 } });
+  });
+
+  it('"Facebook twice a week, LinkedIn once a week."', () => {
+    const r = extractSkeletonRequest('Facebook twice a week, LinkedIn once a week.');
+    expect(buildBootstrapMatrix(r)).toEqual({ facebook: { post: 2 }, linkedin: { post: 1 } });
+  });
+
+  it('single stated cadence still applies to all platforms lacking their own', () => {
+    const r = extractSkeletonRequest('LinkedIn and Facebook, twice a week');
+    expect(buildBootstrapMatrix(r)).toEqual({ linkedin: { post: 2 }, facebook: { post: 2 } });
+  });
+});
+
+describe('hardening — aliases (registry-only, never invented)', () => {
+  it('IG / Insta / FB / LI / Twitter / X all resolve through the registry', () => {
+    expect(extractSkeletonRequest('IG and FB campaign').platforms).toEqual(['instagram', 'facebook']);
+    expect(extractSkeletonRequest('Insta reels, 3/week').platforms).toEqual(['instagram']);
+    expect(extractSkeletonRequest('LI thought leadership').platforms).toEqual(['linkedin']);
+    expect(extractSkeletonRequest('Twitter and X').platforms).toEqual(['x']); // same platform, deduped
+    // alias inside a longer word never matches
+    expect(extractSkeletonRequest('a big figure campaign').platforms).toEqual([]);
+  });
+});
+
+describe('hardening — content preferences (capability + taxonomy registries only)', () => {
+  it('per-platform hints bind to their segment', () => {
+    const r = extractSkeletonRequest('LinkedIn articles and Instagram reels, 3 per week');
+    // 'article' is not a BOLT planner format → LinkedIn falls to post;
+    // 'reel' is, and Instagram supports creator → reel.
+    expect(buildBootstrapMatrix(r)).toEqual({ linkedin: { post: 3 }, instagram: { reel: 3 } });
+  });
+
+  it('Facebook images / YouTube shorts / Pinterest pins', () => {
+    expect(buildBootstrapMatrix(extractSkeletonRequest('Facebook images weekly'))).toEqual({ facebook: { image: 1 } });
+    expect(buildBootstrapMatrix(extractSkeletonRequest('YouTube shorts, 2 per week'))).toEqual({ youtube: { short: 2 } });
+    // 'pins' has no canonical mapping → capability default (image on Pinterest)
+    expect(buildBootstrapMatrix(extractSkeletonRequest('Pinterest pins weekly'))).toEqual({ pinterest: { image: 1 } });
+  });
+
+  it('unsupported combinations reject into the nearest valid type', () => {
+    expect(buildBootstrapMatrix(extractSkeletonRequest('TikTok articles daily'))).toEqual({ tiktok: { video: 7 } });
+    expect(buildBootstrapMatrix(extractSkeletonRequest('LinkedIn reels weekly'))).toEqual({ linkedin: { post: 1 } });
+  });
+});
+
+describe('hardening — exclusions + universe resolution', () => {
+  const UNIVERSE = ['linkedin', 'x', 'facebook', 'instagram'];
+
+  it('"Everything except Facebook."', () => {
+    const r = extractSkeletonRequest('Everything except Facebook.');
+    expect(r).toMatchObject({ allPlatformsRequested: true, exclusions: ['facebook'], platforms: [], confident: true });
+    expect(resolvePlatformSelection(r, UNIVERSE)).toEqual(['linkedin', 'x', 'instagram']);
+  });
+
+  it('"All platforms except X."', () => {
+    const r = extractSkeletonRequest('All platforms except X.');
+    expect(resolvePlatformSelection(r, UNIVERSE)).toEqual(['linkedin', 'facebook', 'instagram']);
+  });
+
+  it('exclusion binds to its clause; explicit mentions elsewhere stay', () => {
+    const r = extractSkeletonRequest('LinkedIn and Instagram but not Facebook, 3 per week');
+    expect(r.platforms).toEqual(['linkedin', 'instagram']);
+    expect(r.exclusions).toEqual(['facebook']);
+  });
+
+  it('all-platforms with an empty universe resolves to nothing (guidance path)', () => {
+    expect(resolvePlatformSelection(extractSkeletonRequest('everything except x'), [])).toEqual([]);
+  });
+});
+
+describe('hardening — merge behavior (never overwrite; only add missing)', () => {
+  it('planner has LinkedIn; "Also create Instagram posts." adds Instagram only', () => {
+    const configured = { linkedin: { post: 5 } }; // explicit user choice
+    const extraction = extractSkeletonRequest('Also create Instagram posts.');
+    const additions = resolvePlatformSelection(extraction, []).filter((p) => !(p in configured));
+    expect(additions).toEqual(['instagram']);
+    const merged = { ...configured, ...buildBootstrapMatrix(extraction, additions) };
+    expect(merged.linkedin).toEqual({ post: 5 }); // untouched
+    expect(merged.instagram).toEqual({ image: DEFAULT_BOOTSTRAP_FREQUENCY });
+  });
+
+  it('prompt naming only configured platforms adds nothing (legacy path)', () => {
+    const configured = { linkedin: { post: 5 } };
+    const additions = resolvePlatformSelection(extractSkeletonRequest('make the LinkedIn posts punchier'), [])
+      .filter((p) => !(p in configured));
+    expect(additions).toEqual([]);
+  });
+});
+
+describe('hardening — ambiguity, long prompts, language, determinism, performance', () => {
+  it('ambiguous prompts never guess', () => {
+    for (const prompt of ['Post often.', 'Be active.', 'Increase posting.']) {
+      expect(extractSkeletonRequest(prompt).confident).toBe(false);
+    }
+    expect(SKELETON_CHAT_NO_PLATFORMS_MESSAGE).toContain('choose them in Schedule');
+  });
+
+  it('long CMO prompt: extracts only the supported facts, ignores the rest', () => {
+    const long = [
+      'We are launching a 6-week thought leadership campaign.',
+      'Persona: senior RevOps leaders at B2B SaaS companies, skeptical of hype, data-driven.',
+      'Tone: authoritative but approachable, no emojis, avoid buzzwords.',
+      'Audience: VP+ operators in NA/EMEA. CTA: book a demo of the forecasting suite.',
+      'Use hashtags #RevOps #Forecasting sparingly.',
+      'LinkedIn 3 posts per week and Instagram daily; everything ties back to the Q4 launch.',
+    ].join(' ');
+    const r = extractSkeletonRequest(long);
+    expect(r.platforms).toEqual(['linkedin', 'instagram']);
+    expect(r.durationWeeks).toBe(6);
+    expect(r.objective).toBe('thought leadership');
+    expect(r.requests.map((x) => x.frequencyPerWeek)).toEqual([3, 7]);
+  });
+
+  it('unsupported language: no partial guessing — brand names still recognized, the rest defaults', () => {
+    // Non-latin, no platform tokens → guidance path, nothing interpreted
+    expect(extractSkeletonRequest('每周发布三次内容的营销活动').confident).toBe(false);
+    // Latin-script language with universal brand names: platforms recognized,
+    // English-only cadence/duration patterns deliberately match nothing
+    const de = extractSkeletonRequest('LinkedIn Kampagne, drei Beiträge pro Woche');
+    expect(de.platforms).toEqual(['linkedin']);
+    expect(de.frequencyPerWeek).toBeNull(); // documented: defaults apply, never guessed
+  });
+
+  it('deterministic replay + effectively linear performance', () => {
+    const base = 'LinkedIn 3 posts per week and Instagram daily; 6-week thought leadership push. ';
+    const huge = base.repeat(150); // ~12k chars
+    const first = extractSkeletonRequest(huge);
+    const start = Date.now();
+    for (let i = 0; i < 20; i++) expect(extractSkeletonRequest(huge)).toEqual(first);
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(2000); // 20 × 12k chars — generous CI bound
   });
 });
