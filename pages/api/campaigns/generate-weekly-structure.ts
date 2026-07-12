@@ -15,7 +15,8 @@ import { validateDailyPlanRow } from '../../../lib/shared/bolt/validateDailyPlan
 // slip through at generation (AUDIT-004 mapping gap).
 import { filterPlatformsForFormat } from '../../../lib/shared/bolt/contentPlatformAssignment';
 import { clampCampaignFormatFrequency } from '../../../lib/shared/bolt/formatGovernance';
-import { buildReconciliation, assertPlannerInvariant, type DroppedItem, type DropReasonCode, type PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
+import { buildReconciliation, assertPlannerInvariant, summarizeDrops, publicDropReason, type DroppedItem, type DropReasonCode, type PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
+import { PlannerTrace, computePlannerMetrics, type PlannerMetrics } from '../../../lib/shared/campaign/campaignLifecycle';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -154,7 +155,13 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   auto_optimize_distribution: boolean;
   enable_campaign_waves: boolean;
   message: string;
-  planner_diagnostics?: PlannerReconciliation | null;
+  planner_diagnostics?: (PlannerReconciliation & {
+    metrics: PlannerMetrics;
+    /** Structured drop events captured at the actual drop sites (row-unit "where"). */
+    drop_events: DroppedItem[];
+    /** Per-reason count summary with public uppercase reason names (UI-ready). */
+    drop_summary: Array<{ reason: DropReasonCode; message: string; count: number; public_reason: string }>;
+  }) | null;
 }> {
   const {
     week,
@@ -234,6 +241,15 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       'campaignId and week (or weeks array) are required',
     );
   }
+
+  // CAMPAIGN-IMPL-003: deterministic drop capture. Every in-loop skip that used
+  // to vanish behind a bare `continue` / `console.log` now records a STRUCTURED
+  // drop here at the point it happens (row-unit). These events power the
+  // planner_diagnostics reason breakdown + observability; the piece-unit
+  // reconciliation invariant below stays the authoritative planned=generated+
+  // dropped accounting. Silent loss is impossible: a skip that records nothing
+  // would show up as an unattributed reconciliation residual.
+  const plannerTrace = new PlannerTrace();
 
     const { data: campaign } = await supabase
       .from('campaigns')
@@ -659,6 +675,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const plats = filterPlatformsForFormat(synthSlotPlatforms, contentType);
         if (plats.length === 0) {
           console.log('[weekly-structure][skip-format-no-eligible-platform]', { contentType, candidates: synthSlotPlatforms });
+          plannerTrace.drop({ content_type: String(contentType), platform: null, reason: 'no_eligible_platform', stage: 'structure_generation', detail: `synth: candidates=${synthSlotPlatforms.join(',') || 'none'}` });
           continue;
         }
         executionItems.push({ content_type: contentType, selected_platforms: plats, count_per_week: countPerType, topic_slots: buildTopicSlots(contentType, countPerType) });
@@ -703,6 +720,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         }
         if (plats.length === 0) {
           console.log('[weekly-structure][skip-format-no-eligible-platform]', { type, candidates: rawPlats });
+          plannerTrace.drop({ content_type: String(type), platform: null, reason: 'no_eligible_platform', stage: 'structure_generation', detail: `reconcile: candidates=${(rawPlats || []).join(',') || 'none'}` });
           continue;
         }
         reconciled.push({ content_type: type, selected_platforms: plats, count_per_week: desired, topic_slots: slots });
@@ -996,7 +1014,10 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         : useExecutionItems
           ? []
           : getDefaultPlatformTargets(weekBlueprint as any);
-      if (useExecutionItems && platforms.length === 0) continue;
+      if (useExecutionItems && platforms.length === 0) {
+        plannerTrace.drop({ content_type: String(item.contentType || 'unknown'), platform: null, reason: 'zero_platforms', stage: 'structure_generation', detail: 'execution item resolved to no platform targets' });
+        continue;
+      }
 
       for (const platform of platforms) {
         // Platform-aware day placement. Each platform tracks how many posts we've
@@ -1009,6 +1030,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const usedContent = usedContentByPlatform.get(platformKey) ?? new Set<string>();
         if (usedContent.has(contentKey)) {
           console.log('[weekly-structure][skip-duplicate-platform-content]', { platform: platformKey, contentKey });
+          plannerTrace.drop({ content_type: String(item.contentType || 'post'), platform: platformKey, reason: 'duplicate_platform_content', stage: 'structure_generation', detail: `already used ${contentKey} on ${platformKey}` });
           continue;
         }
 
@@ -1046,6 +1068,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           // than double-booking the platform on a day.
           if (!moved && conflictPolicy === 'skip') {
             console.log('[weekly-structure][skip-conflict-no-free-day]', { platform: platformKey, date });
+            plannerTrace.drop({ content_type: String(item.contentType || 'post'), platform: platformKey, reason: 'schedule_conflict', stage: 'scheduling', detail: `no free day on ${platformKey} (conflict_policy=skip)` });
             continue;
           }
         }
@@ -1943,6 +1966,26 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const ct = String((row as { content_type?: unknown }).content_type ?? '').toLowerCase().trim();
         if (ct) generatedByType.set(ct, (generatedByType.get(ct) ?? 0) + 1);
       }
+      // CAMPAIGN-IMPL-003: prefer the REAL reason captured at the drop site over
+      // the statistical guess. Per content_type, take the most-common structured
+      // reason the trace recorded during generation, so a shortfall is explained
+      // by what actually happened (duplicate / no-platform / conflict) instead of
+      // a blanket inference.
+      const capturedReasonByType = new Map<string, DropReasonCode>();
+      {
+        const perTypeReason = new Map<string, Map<DropReasonCode, number>>();
+        for (const d of plannerTrace.getDrops()) {
+          const t = String(d.content_type || '').toLowerCase().trim();
+          if (!t) continue;
+          const m = perTypeReason.get(t) ?? new Map<DropReasonCode, number>();
+          m.set(d.reason, (m.get(d.reason) ?? 0) + 1);
+          perTypeReason.set(t, m);
+        }
+        for (const [t, m] of perTypeReason) {
+          const best = [...m.entries()].sort((a, b) => b[1] - a[1])[0];
+          if (best) capturedReasonByType.set(t, best[0]);
+        }
+      }
       let plannedTotal = 0;
       for (const type of Object.keys(rawFormatFrequency)) {
         plannedTotal += perType(rawFormatFrequency, type) * weeksCount;
@@ -1952,24 +1995,57 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const shortfall = Math.max(0, perType(clampedFreq, type) * weeksCount - generatedForType);
         if (shortfall <= 0) continue;
         const eligible = candidatePlatforms.length > 0 ? filterPlatformsForFormat(candidatePlatforms, type) : null;
-        const reason: DropReasonCode = eligible !== null && eligible.length === 0
-          ? 'no_eligible_platform'
-          : (generatedForType === 0 ? 'generation_failure' : 'duplicate_content');
+        const reason: DropReasonCode = capturedReasonByType.get(type.toLowerCase())
+          ?? (eligible !== null && eligible.length === 0
+            ? 'no_eligible_platform'
+            : (generatedForType === 0 ? 'generation_failure' : 'duplicate_content'));
         for (let i = 0; i < shortfall; i += 1) dropped.push({ content_type: type, platform: eligible && eligible.length > 0 ? (eligible[0] ?? null) : null, reason, stage: 'structure_generation' });
       }
       const residual = plannedTotal - (persistRows.length + dropped.length);
-      for (let i = 0; i < residual; i += 1) dropped.push({ content_type: 'unknown', platform: null, reason: 'validation_failure', stage: 'validation', detail: 'unattributed shortfall' });
+      for (let i = 0; i < residual; i += 1) dropped.push({ content_type: 'unknown', platform: null, reason: 'unknown_error', stage: 'validation', detail: 'unattributed shortfall' });
       plannerReconciliation = buildReconciliation(plannedTotal, persistRows.length, dropped);
       assertPlannerInvariant(plannerReconciliation, (msg, meta) => console.warn(msg, meta));
       if (process.env.NODE_ENV !== 'test') {
+        const metrics = computePlannerMetrics(plannerReconciliation, plannerTrace.getRegeneration());
         console.log('[weekly-structure][planner-reconciliation]', { planned: plannerReconciliation.planned, generated: plannerReconciliation.generated, dropped: plannerReconciliation.dropped.length, ok: plannerReconciliation.ok });
+        // Observability: planner integrity + generation-success signal, greppable
+        // for dashboards/alerts (fail-safe — never blocks generation).
+        console.log('[planner-metrics]', { campaignId, weeks: weekNumbers, requested: metrics.requested, generated: metrics.generated, dropped: metrics.dropped, regenerated: metrics.regenerated, generation_success_pct: metrics.generation_success_pct, planner_integrity_pct: metrics.planner_integrity_pct, drop_reasons: metrics.drop_reasons });
       }
     }
   }
 
+  // CAMPAIGN-IMPL-003: assemble the explainable diagnostics payload. When the
+  // reconciliation ran, enrich it with metrics + the captured drop events + a
+  // UI-ready per-reason summary. When it did NOT run (AI-decides path, or a total
+  // wipeout where no rows were produced) but the trace still captured drops,
+  // surface those so a wipeout is never silent — planned is unknown there, so the
+  // reconciliation baseline is 0/0 and the drop_events carry the "where + why".
+  const capturedDrops = plannerTrace.getDrops();
+  const buildSummary = (items: DroppedItem[]) =>
+    summarizeDrops(items).map((s) => ({ ...s, public_reason: publicDropReason(s.reason) }));
+  const plannerDiagnosticsPayload = plannerReconciliation
+    ? {
+        ...plannerReconciliation,
+        metrics: computePlannerMetrics(plannerReconciliation, plannerTrace.getRegeneration()),
+        drop_events: capturedDrops,
+        drop_summary: buildSummary(plannerReconciliation.dropped),
+      }
+    : capturedDrops.length > 0
+      ? (() => {
+          const recon = buildReconciliation(0, 0, capturedDrops);
+          return {
+            ...recon,
+            metrics: computePlannerMetrics(recon, plannerTrace.getRegeneration()),
+            drop_events: capturedDrops,
+            drop_summary: buildSummary(capturedDrops),
+          };
+        })()
+      : null;
+
   return {
     success: true,
-    planner_diagnostics: plannerReconciliation,
+    planner_diagnostics: plannerDiagnosticsPayload,
     week: weekNumbers.length === 1 ? weekNumbers[0] : undefined,
     weeks: weekNumbers.length > 1 ? weekNumbers : undefined,
     dailyPlan: allFinalItems,
