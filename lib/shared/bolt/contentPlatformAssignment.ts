@@ -24,7 +24,7 @@ import {
   getSupportedPlatformsForContentType,
 } from '../social/platformCapabilities';
 import { normalizeContentCapability } from '../social/contentCapability';
-import { FORMAT_EXCLUSIVE_PLATFORMS } from './formatPlatformBinding';
+import { FORMAT_EXCLUSIVE_PLATFORMS, FORMAT_BLOCKED_PLATFORMS } from './formatPlatformBinding';
 import { CREATOR_GOVERNANCE_REGISTRY, normalizeCreatorFormat } from '../creatorGovernanceRegistry';
 import { BOLT_TEXT_CONTENT_TYPES } from '../../../backend/utils/boltTextContentConfig';
 
@@ -62,6 +62,16 @@ export function getSupportedPlatformsForFormat(
   if (exclusive) {
     const allow = new Set(exclusive.map((p) => p.toLowerCase()));
     supported = supported.filter((p) => allow.has(normPlatform(p)));
+  }
+  // Format-specific blocklist (e.g. poll↛X — X coerces a poll into a broken
+  // tweet). Compose with the capability + exclusivity checks so eligibility is
+  // capability ∩ exclusive ∩ NOT-blocked — the single correct authority. Without
+  // this, the generation-time filter allowed carousel→YouTube, reel→WhatsApp,
+  // etc. (capability ignored) or poll→X (blocklist ignored).
+  const blocked = FORMAT_BLOCKED_PLATFORMS[norm];
+  if (blocked && blocked.length > 0) {
+    const deny = new Set(blocked.map((p) => p.toLowerCase()));
+    supported = supported.filter((p) => !deny.has(normPlatform(p)));
   }
   return supported;
 }

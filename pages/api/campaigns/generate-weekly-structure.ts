@@ -10,7 +10,10 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorCodes';
 import { validateDailyPlanRow } from '../../../lib/shared/bolt/validateDailyPlanRow';
-import { filterPlatformsForFormat } from '../../../lib/shared/bolt/formatPlatformBinding';
+// Capability-aware eligibility (capability ∩ exclusive ∩ blocklist) — NOT the
+// blocklist-only leaf in formatPlatformBinding, which let carousel→YouTube etc.
+// slip through at generation (AUDIT-004 mapping gap).
+import { filterPlatformsForFormat } from '../../../lib/shared/bolt/contentPlatformAssignment';
 import { clampCampaignFormatFrequency } from '../../../lib/shared/bolt/formatGovernance';
 import { buildReconciliation, assertPlannerInvariant, type DroppedItem, type DropReasonCode, type PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
