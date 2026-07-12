@@ -27,6 +27,7 @@ export type DropReasonCode =
   | 'no_eligible_platform'        // format has no platform that can run it
   | 'platform_blocked'            // format explicitly blocked on the target platform (e.g. poll↛X)
   | 'exceeds_limit'               // trimmed by the business-rule clamp (IMPL-001)
+  | 'planner_rule'                // dropped by an explicit planner rule (distribution/cap policy)
   | 'duplicate_content'           // near-identical content already scheduled (same platform+type)
   | 'duplicate_platform_content'  // same content_type::topic already used on that platform
   | 'schedule_conflict'           // no free day on the platform (conflict policy = skip)
@@ -34,7 +35,35 @@ export type DropReasonCode =
   | 'validation_failure'          // structural row validation failed
   | 'generation_failure'          // AI master/content generation failed
   | 'creator_render_failure'      // creator asset render failed / not ready
-  | 'account_unavailable';        // no connected social account for the platform
+  | 'account_unavailable'         // no connected social account for the platform
+  | 'system_failure'              // an unexpected system/infra error aborted the piece
+  | 'unknown_error';              // fell through with no attributable cause (last resort)
+
+/**
+ * Public, uppercase reason name for the UI / external consumers, mapped from the
+ * internal code. Matches the CAMPAIGN-IMPL-003 canonical drop-reason vocabulary.
+ */
+export const PUBLIC_DROP_REASON: Record<DropReasonCode, string> = {
+  no_eligible_platform: 'NO_ELIGIBLE_PLATFORM',
+  platform_blocked: 'FORMAT_BLOCKED',
+  exceeds_limit: 'PLANNER_RULE',
+  planner_rule: 'PLANNER_RULE',
+  duplicate_content: 'DUPLICATE_CONTENT',
+  duplicate_platform_content: 'DUPLICATE_CONTENT',
+  schedule_conflict: 'PLANNER_RULE',
+  zero_platforms: 'NO_ELIGIBLE_PLATFORM',
+  validation_failure: 'VALIDATION_FAILED',
+  generation_failure: 'GENERATION_FAILED',
+  creator_render_failure: 'RENDER_FAILED',
+  account_unavailable: 'ACCOUNT_NOT_CONNECTED',
+  system_failure: 'SYSTEM_FAILURE',
+  unknown_error: 'UNKNOWN_ERROR',
+};
+
+/** Public uppercase reason name for a code (UI / logs). */
+export function publicDropReason(code: DropReasonCode): string {
+  return PUBLIC_DROP_REASON[code] ?? 'UNKNOWN_ERROR';
+}
 
 export interface DroppedItem {
   content_type: string;
@@ -58,6 +87,7 @@ const FRIENDLY: Record<DropReasonCode, string> = {
   no_eligible_platform: 'No selected platform can publish this format.',
   platform_blocked: 'This format is not allowed on the target platform.',
   exceeds_limit: 'Reduced to stay within the per-week limits.',
+  planner_rule: 'Removed by a planning rule (distribution or cap policy).',
   duplicate_content: 'Near-identical content was already scheduled this week.',
   duplicate_platform_content: 'This topic was already used on this platform.',
   schedule_conflict: 'No free day was available on this platform.',
@@ -66,6 +96,8 @@ const FRIENDLY: Record<DropReasonCode, string> = {
   generation_failure: 'Content generation failed for this piece.',
   creator_render_failure: 'The creator asset could not be rendered.',
   account_unavailable: 'No connected account for this platform.',
+  system_failure: 'An unexpected system error stopped this piece.',
+  unknown_error: 'This piece could not be scheduled (cause unknown).',
 };
 
 /** User-facing message for a drop reason. */
