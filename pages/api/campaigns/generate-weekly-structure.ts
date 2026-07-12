@@ -12,6 +12,7 @@ import { BoltError, BOLT_ERROR_CODES } from '../../../lib/shared/bolt/boltErrorC
 import { validateDailyPlanRow } from '../../../lib/shared/bolt/validateDailyPlanRow';
 import { filterPlatformsForFormat } from '../../../lib/shared/bolt/formatPlatformBinding';
 import { clampCampaignFormatFrequency } from '../../../lib/shared/bolt/formatGovernance';
+import { buildReconciliation, assertPlannerInvariant, type DroppedItem, type DropReasonCode, type PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -150,6 +151,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   auto_optimize_distribution: boolean;
   enable_campaign_waves: boolean;
   message: string;
+  planner_diagnostics?: PlannerReconciliation | null;
 }> {
   const {
     week,
@@ -1804,6 +1806,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     }
     }
 
+  let plannerReconciliation: PlannerReconciliation | null = null;
   if (allRowsToInsert.length > 0) {
     const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
     // Phase-2 Step-11: FIRST real generator cutover. Mode-gated source
@@ -1911,10 +1914,51 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       // with rollback on regression.
       void orch.evaluateAuthoritativeDaily(campaignId, persistRows.length).catch(() => {});
     } catch { /* observability only — never blocks generation */ }
+
+    // ── CAMPAIGN-IMPL-002: planner-integrity reconciliation ────────────────
+    // Invariant: planned === generated + dropped.length. Diff the user's
+    // selection (rawFormatFrequency × weeks) against the persisted rows and
+    // attribute every shortfall with a structured reason + stage — nothing may
+    // vanish silently. Only when the user supplied explicit per-format counts
+    // (BOLT / Intelligent Mix); the AI-decides path has no fixed planned count.
+    if (rawFormatFrequency && Object.keys(rawFormatFrequency).length > 0) {
+      const dropped: DroppedItem[] = [];
+      const weeksCount = Math.max(1, weekNumbers.length);
+      const clampedFreq = formatFrequency ?? rawFormatFrequency;
+      const perType = (ff: Record<string, number>, t: string) => Math.max(0, Math.round(Number(ff[t] ?? 0)));
+      const candidatePlatforms = Array.isArray(eligiblePlatforms) && eligiblePlatforms.length > 0 ? eligiblePlatforms : [];
+      const generatedByType = new Map<string, number>();
+      for (const row of persistRows) {
+        const ct = String((row as { content_type?: unknown }).content_type ?? '').toLowerCase().trim();
+        if (ct) generatedByType.set(ct, (generatedByType.get(ct) ?? 0) + 1);
+      }
+      let plannedTotal = 0;
+      for (const type of Object.keys(rawFormatFrequency)) {
+        plannedTotal += perType(rawFormatFrequency, type) * weeksCount;
+        const generatedForType = generatedByType.get(type) ?? 0;
+        const clampLost = Math.max(0, (perType(rawFormatFrequency, type) - perType(clampedFreq, type)) * weeksCount);
+        for (let i = 0; i < clampLost; i += 1) dropped.push({ content_type: type, platform: null, reason: 'exceeds_limit', stage: 'structure_generation' });
+        const shortfall = Math.max(0, perType(clampedFreq, type) * weeksCount - generatedForType);
+        if (shortfall <= 0) continue;
+        const eligible = candidatePlatforms.length > 0 ? filterPlatformsForFormat(candidatePlatforms, type) : null;
+        const reason: DropReasonCode = eligible !== null && eligible.length === 0
+          ? 'no_eligible_platform'
+          : (generatedForType === 0 ? 'generation_failure' : 'duplicate_content');
+        for (let i = 0; i < shortfall; i += 1) dropped.push({ content_type: type, platform: eligible && eligible.length > 0 ? (eligible[0] ?? null) : null, reason, stage: 'structure_generation' });
+      }
+      const residual = plannedTotal - (persistRows.length + dropped.length);
+      for (let i = 0; i < residual; i += 1) dropped.push({ content_type: 'unknown', platform: null, reason: 'validation_failure', stage: 'validation', detail: 'unattributed shortfall' });
+      plannerReconciliation = buildReconciliation(plannedTotal, persistRows.length, dropped);
+      assertPlannerInvariant(plannerReconciliation, (msg, meta) => console.warn(msg, meta));
+      if (process.env.NODE_ENV !== 'test') {
+        console.log('[weekly-structure][planner-reconciliation]', { planned: plannerReconciliation.planned, generated: plannerReconciliation.generated, dropped: plannerReconciliation.dropped.length, ok: plannerReconciliation.ok });
+      }
+    }
   }
 
   return {
     success: true,
+    planner_diagnostics: plannerReconciliation,
     week: weekNumbers.length === 1 ? weekNumbers[0] : undefined,
     weeks: weekNumbers.length > 1 ? weekNumbers : undefined,
     dailyPlan: allFinalItems,
