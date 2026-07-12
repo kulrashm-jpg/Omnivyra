@@ -38,25 +38,12 @@ export const FORMAT_BLOCKED_PLATFORMS: Partial<Record<string, string[]>> = Objec
 });
 
 /**
- * Canonical per-format platform filter used by the scheduler. Applies BOTH the
- * exclusive whitelist (format restricted to certain platforms, e.g. tweet→X) and
- * the blocklist (format forbidden on certain platforms, e.g. poll↛X). Returns the
- * surviving platforms; an empty result means the format cannot run on any of the
- * candidates and the caller should drop that piece.
+ * NOTE: this file is a DATA leaf only — it owns the format↔platform binding
+ * maps and nothing else. The per-format platform *filter* lives in the single
+ * canonical authority `lib/shared/bolt/contentPlatformAssignment.ts`
+ * (`filterPlatformsForFormat` / `getSupportedPlatformsForFormat`), which composes
+ * these maps with the platform-capability registry: eligibility =
+ * capability ∩ exclusive-whitelist ∩ NOT-blocklist. A former blocklist-only
+ * `filterPlatformsForFormat` used to live here; it was removed once every caller
+ * migrated to the canonical authority, so there is exactly one filter path.
  */
-export function filterPlatformsForFormat(platforms: readonly string[], format: string): string[] {
-  const fmt = String(format || '').trim().toLowerCase();
-  const norm = (p: string) => String(p || '').trim().toLowerCase();
-  let out = (platforms || []).map(norm).filter(Boolean);
-  const whitelist = FORMAT_EXCLUSIVE_PLATFORMS[fmt];
-  if (whitelist && whitelist.length) {
-    const allow = new Set(whitelist.map(norm));
-    out = out.filter((p) => allow.has(p));
-  }
-  const block = FORMAT_BLOCKED_PLATFORMS[fmt];
-  if (block && block.length) {
-    const deny = new Set(block.map(norm));
-    out = out.filter((p) => !deny.has(p));
-  }
-  return out;
-}
