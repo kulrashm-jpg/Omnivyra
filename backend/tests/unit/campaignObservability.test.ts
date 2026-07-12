@@ -59,6 +59,9 @@ describe('run + generation metrics', () => {
     const fail = buildCampaignRunMetrics({ durationMs: -5, success: false });
     expect(find(fail, 'campaign.run.duration_ms')[0].value).toBe(0); // clamped
     expect(find(fail, 'campaign.run.failure')).toHaveLength(1);
+    // CAMPAIGN-OPS-001A: a failed run emits failure only, never success.
+    expect(find(fail, 'campaign.run.success')).toHaveLength(0);
+    expect(find(ok, 'campaign.run.failure')).toHaveLength(0);
   });
 
   it('generation duration metric is labelled by content type + platform', () => {

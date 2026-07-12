@@ -2278,14 +2278,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // CAMPAIGN-OPS-001A: handler-level timer so a genuine generation failure emits
+  // campaign.run.failure (the success counter is emitted inside the function).
+  const handlerStartedAt = Date.now();
   try {
     const result = await generateWeeklyStructure((req.body || {}) as GenerateWeeklyStructureInput);
     return res.status(200).json(result);
   } catch (error) {
     const err = error as { code?: string };
     if (err?.code === 'WEEK_EXECUTION_LOCKED') {
+      // A lock is a blocked/skipped run, not a generation failure — do not count it.
       return res.status(423).json({ error: 'WEEK_EXECUTION_LOCKED', message: 'Week is executing; regeneration blocked.' });
     }
+    // Additive, fail-safe: a real error path emits campaign.run.failure.
+    emitCampaignRunMetrics({ durationMs: Date.now() - handlerStartedAt, success: false }, { mode: 'weekly' });
     console.error('Error in generate weekly structure API:', error);
     const msg = error instanceof Error ? error.message : 'Internal server error';
     return res.status(500).json({ error: msg });

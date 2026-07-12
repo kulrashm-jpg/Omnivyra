@@ -22,7 +22,7 @@ Generation → Semantic Validation → Creator Validation → Scheduling → Pub
 |---|---|---|---|---|---|
 | `campaign.run.duration_ms` | histogram | mode, campaign_type | Wall-clock of `generateWeeklyStructure` (skeleton build) | p95 < 30s | p95 > 120s |
 | `campaign.run.success` | counter | mode, campaign_type | Weekly-structure runs that reached the return | — | — |
-| `campaign.run.failure` | counter | mode, campaign_type | Reserved for run-level failures (stage failures also recorded by the pipeline) | — | success/(success+failure) < 0.9 |
+| `campaign.run.failure` | counter | mode, campaign_type | Emitted from the API handler catch on a genuine generation error (HTTP 500). A `WEEK_EXECUTION_LOCKED` (423) is a blocked/skipped run and is intentionally NOT counted. (CAMPAIGN-OPS-001A) | — | success/(success+failure) < 0.9 |
 
 Context (`campaign_id`, `company_id`, `week`, `generation_mode`) is in the
 `[campaign-quality]` / `[campaign-optimization]` / `[planner-metrics]` /
@@ -93,6 +93,12 @@ standalone counter.
 | `creator.validation.dropped` | counter | content_type | Creator assets dropped (duplicate slides/sections) | — | dropped spike |
 | `creator.validation.reason` | counter | reason | Creator failure-dimension distribution | — | duplicate_slide spike |
 
+Creator validation is emitted **per asset** at the orchestrator gate. A run-level
+validation aggregate is not available on `CreatorAssetGenerationResult` today
+(`rendered_count`/`failed_count` only), so per CAMPAIGN-OPS-001A no run-level
+aggregate metric was added — the per-asset counters above already aggregate in the
+registry by label.
+
 ## Scheduling / queue (stage: scheduling) — `existing`
 
 | Metric | Type | Labels | Meaning | Range | Alert |
@@ -100,10 +106,14 @@ standalone counter.
 | `queue.job.retry` | counter | queue | Job retries | — | retry rate spike |
 | `queue.job.dead_letter` | counter | queue | Jobs dead-lettered after final retry | 0 | any > 0 |
 | `queue.job.stalled` | counter | queue | Stalled jobs | 0 | sustained > 0 |
+| `scheduler.run.duration_ms` | histogram | job | Publish-scheduler run duration (already routed via `recordScheduler`) | — | p95 spike |
+| `scheduler.run.delay_ms` | histogram | job | Scheduling delay vs. target time | — | p95 spike |
 
-Publishing delay / queue depth / queue wait are BullMQ-native and observed via the
-queue's own instrumentation (`backend/observability/queueObservability.ts`) rather
-than a campaign-specific metric — see Remaining gaps in the phase report.
+Publish-scheduler timing already exists and is routed through the HARDEN registry
+(`scheduler.run.*`, emitted by `backend/scheduler/schedulerService.ts`). The
+per-post `enqueueScheduledPostAt` call during campaign generation is NOT separately
+timed today; per CAMPAIGN-OPS-001A that non-existent timing was intentionally NOT
+added (queue depth / publishing delay remain BullMQ-native).
 
 ---
 
