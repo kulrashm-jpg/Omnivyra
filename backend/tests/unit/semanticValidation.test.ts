@@ -7,6 +7,7 @@ import {
   InMemoryLedger,
   emptyValidationStats,
   tallyValidation,
+  creatorAssetToGenerated,
   type GeneratedAsset,
 } from '../../../lib/shared/campaign/semanticValidation';
 
@@ -138,6 +139,59 @@ describe('determinism + stats', () => {
     const mk = () => { const c = new ValidationContext(); c.commit(asset()); return c; };
     const dup = asset({ variant_id: 'cv_b', idea_fingerprint: 'x', narrative_fingerprint: 'y', opening: 'z', text: 't' }); // dup headline+cta
     expect(validateAsset(dup, mk()).decision).toBe(validateAsset(dup, mk()).decision);
+  });
+
+  it('creatorAssetToGenerated adapts a carousel into the canonical asset (IMPL-007A)', () => {
+    const g = creatorAssetToGenerated({
+      content_type: 'carousel',
+      platform: 'instagram',
+      asset_payload: {
+        slides: [
+          { headline: 'Hook', body_text: 'Why it matters' },
+          { headline: 'Proof', body_text: 'The evidence' },
+        ],
+        packaging: { cta: 'Book a demo' },
+        headline: 'Value in a week',
+      },
+      content: { master_idea: { id: 'mi_c', cta_strategy: 'Book a demo' }, fingerprint: { idea: 'if_c', narrative: 'nf_c' }, variant: { variant_id: 'cv_c' }, distribution_mode: 'unique' },
+    });
+    expect(g.content_type).toBe('carousel');
+    expect(g.slides).toHaveLength(2);
+    expect(g.master_idea_id).toBe('mi_c');
+    expect(g.idea_fingerprint).toBe('if_c');
+    expect(g.variant_id).toBe('cv_c');
+    expect(g.cta).toBe('Book a demo');
+  });
+
+  it('a carousel with two identical slides is caught (duplicate_slide → REGENERATE)', () => {
+    const g = creatorAssetToGenerated({
+      content_type: 'carousel',
+      platform: 'instagram',
+      asset_payload: { slides: [{ headline: 'A', body_text: 'same' }, { headline: 'B', body_text: 'x' }, { headline: 'A', body_text: 'same' }] },
+      content: { master_idea: { id: 'mi_d' }, fingerprint: {} },
+    });
+    const r = validateAsset(g, new ValidationContext());
+    expect(r.findings.some((f) => f.dimension === 'duplicate_slide')).toBe(true);
+    expect(r.decision).toBe('REGENERATE');
+  });
+
+  it('infographic sections map to slides for duplicate-section detection', () => {
+    const g = creatorAssetToGenerated({
+      content_type: 'infographic',
+      platform: 'linkedin',
+      asset_payload: { sections: [{ title: 'S1', body: 'one' }, { title: 'S1', body: 'one' }] },
+      content: {},
+    });
+    expect(g.slides).toHaveLength(2);
+    expect(validateAsset(g, new ValidationContext()).findings.some((f) => f.dimension === 'duplicate_slide')).toBe(true);
+  });
+
+  it('creatorAssetToGenerated is backward compatible with a legacy payload (no master_idea)', () => {
+    const g = creatorAssetToGenerated({ content_type: 'image', platform: 'x', asset_payload: { overlay_text: 'hello' }, content: {} });
+    expect(g.text).toBe('hello');
+    expect(g.master_idea_id).toBeNull();
+    expect(g.slides).toBeUndefined();
+    expect(() => validateAsset(g, new ValidationContext())).not.toThrow();
   });
 
   it('tallyValidation folds decisions into rates', () => {

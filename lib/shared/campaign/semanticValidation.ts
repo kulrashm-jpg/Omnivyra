@@ -222,6 +222,45 @@ function primaryReason(findings: ValidationFinding[], decision: ValidationDecisi
   return pick ? `${pick.dimension}: ${pick.detail}` : 'passes semantic validation';
 }
 
+/**
+ * CAMPAIGN-IMPL-007A — adapt a creator asset (carousel/pdf/slider/infographic/…)
+ * into the canonical GeneratedAsset the ONE engine validates. Multi-frame decks
+ * expose `slides`/`sections` (→ duplicate-slide / duplicate-section detection);
+ * campaign context (master_idea, fingerprints) is read from the row content JSON,
+ * exactly as the text path does. Pure — no I/O, deterministic.
+ */
+export function creatorAssetToGenerated(params: {
+  content_type: string;
+  platform: string;
+  asset_payload?: Record<string, any> | null;
+  content?: Record<string, any> | null;
+}): GeneratedAsset {
+  const payload = params.asset_payload && typeof params.asset_payload === 'object' ? params.asset_payload : {};
+  const content = params.content && typeof params.content === 'object' ? params.content : {};
+  const mi = content.master_idea && typeof content.master_idea === 'object' ? content.master_idea : {};
+  const fp = content.fingerprint && typeof content.fingerprint === 'object' ? content.fingerprint : {};
+  const rawFrames = Array.isArray(payload.slides) ? payload.slides : Array.isArray(payload.sections) ? payload.sections : [];
+  const slides = rawFrames
+    .map((s: any) => `${String(s?.headline ?? s?.title ?? '')} ${String(s?.body ?? s?.body_text ?? s?.text ?? s?.take ?? '')}`.trim())
+    .filter(Boolean);
+  const packaging = payload.packaging && typeof payload.packaging === 'object' ? payload.packaging : {};
+  const caption = String(payload.caption ?? payload.overlay_text ?? (slides.length ? slides.join(' \n ') : payload.body ?? '')).trim();
+  const variant = content.variant && typeof content.variant === 'object' ? content.variant : {};
+  return {
+    content_type: params.content_type,
+    platform: params.platform,
+    text: caption,
+    slides: slides.length > 0 ? slides : undefined,
+    headline: (String(payload.headline ?? payload.title ?? content.title ?? '').trim() || null),
+    cta: (String(packaging.cta ?? payload.cta ?? mi.cta_strategy ?? '').trim() || null),
+    idea_fingerprint: fp.idea ?? null,
+    narrative_fingerprint: fp.narrative ?? null,
+    master_idea_id: mi.id ?? null,
+    variant_id: variant.variant_id ?? null,
+    shared: String(content.distribution_mode ?? '').toLowerCase() === 'shared',
+  };
+}
+
 /** Running tallies for observability (validation pass/regen/accept/drop rates). */
 export interface ValidationStats {
   generated: number;
