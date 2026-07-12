@@ -44,6 +44,10 @@ import { emitPlannerDrop, emitLifecycleTransition } from './campaign/plannerMetr
 // CAMPAIGN-IMPL-006B: expose the optimized strategic campaign context to the text
 // prompt via the EXISTING additional_guidance slot (item.extra_instruction).
 import { buildStrategicContextString } from '../../lib/shared/campaign/campaignOptimizer';
+// CAMPAIGN-IMPL-007: centralized semantic validation gate + shared regeneration.
+import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type GeneratedAsset } from '../../lib/shared/campaign/semanticValidation';
+import { regenerateBeforeDrop } from '../../lib/shared/campaign/campaignLifecycle';
+import { recordRawCounter, recordRawHistogram } from '../observability';
 // R3-P2 — Content Workspace adoption. ONE pure resolver decides when a row's
 // planner-approved copy is the canonical publishing source (approved →
 // generation fallback; review/draft are planning-only, R3-P2.1). Mirrors the
@@ -480,6 +484,15 @@ async function executeBlockScheduleRuntime(
   // inter-card (two topics that generate near-identical text) repeats are caught.
   const seenContentByPlatform = new Set<string>();
 
+  // CAMPAIGN-IMPL-007: centralized semantic validation gate between generation and
+  // persistence. Every asset is validated (headline/opening/cta/idea/narrative/
+  // slide/same-platform/cross-platform/historical/master-idea consistency) before
+  // it can be scheduled. Fixable duplicates are regenerated via the SHARED
+  // regenerateBeforeDrop primitive; unfixable ones are dropped with a reason.
+  const validationCtx = new ValidationContext();
+  const valStats = emptyValidationStats();
+  const SEMANTIC_REGEN_ATTEMPTS = Math.max(0, Math.round(Number(process.env.SEMANTIC_VALIDATION_REGEN_ATTEMPTS ?? 1) || 0));
+
   for (let cardIdx = 0; cardIdx < activityQueue.length; cardIdx++) {
     const card = activityQueue[cardIdx]!;
     const contentType = card.contentType;
@@ -759,20 +772,68 @@ async function executeBlockScheduleRuntime(
           });
         }
 
-        // ── DEDUP enforcement — never schedule the same content twice on one
-        //    platform in the week. Same content on a different platform (same day
-        //    or not) is allowed, so this only skips true same-platform repeats.
-        const dedupKey = contentDedupKey(platform, rowContentType, finalContent);
-        if (seenContentByPlatform.has(dedupKey)) {
-          console.warn('[block-processor] DEDUP-skip — duplicate content already scheduled on this platform+type this week', {
-            platform, contentType: rowContentType, topic: topic.slice(0, 60), date: row.date,
-          });
-          emitPlannerDrop('duplicate_content', 1, 'weekly');
+        // ── CAMPAIGN-IMPL-007: semantic validation gate (replaces exact-text
+        //    dedup). Validate the asset across ten semantic dimensions; on a
+        //    fixable duplicate, regenerate via the shared regenerateBeforeDrop
+        //    primitive before dropping; unfixable → structured drop with reason.
+        let rowContentJson: any = {};
+        try { rowContentJson = row.content ? JSON.parse(row.content) : {}; } catch { rowContentJson = {}; }
+        const rowMi = rowContentJson.master_idea ?? {};
+        const rowFp = rowContentJson.fingerprint ?? {};
+        const buildAsset = (text: string): GeneratedAsset => ({
+          content_type: rowContentType,
+          platform,
+          text,
+          headline: rowContentJson.title ?? topic,
+          cta: rowMi.cta_strategy ?? rowContentJson.desiredAction ?? null,
+          idea_fingerprint: rowFp.idea ?? null,
+          narrative_fingerprint: rowFp.narrative ?? null,
+          master_idea_id: rowMi.id ?? null,
+          variant_id: rowContentJson.variant?.variant_id ?? null,
+          shared: String(rowContentJson.distribution_mode ?? '').toLowerCase() === 'shared',
+        });
+
+        let verdict = validateAsset(buildAsset(finalContent), validationCtx);
+        let wasRegenerated = false;
+        if (verdict.decision === 'REGENERATE' && SEMANTIC_REGEN_ATTEMPTS > 0 && !allRowsAdopted && masterValid) {
+          // Reuse the shared regenerate-before-drop primitive: rebuild this card's
+          // variants and re-validate, up to the configured budget.
+          const outcome = await regenerateBeforeDrop<string>(
+            async () => {
+              try {
+                const rItem = buildItemFromEnriched(enriched, platformTargets, companyId) as Parameters<typeof generateMasterContentFromIntent>[0];
+                (rItem as any).master_content = { ...master, generation_status: 'generated' };
+                const rVariants = await buildPlatformVariantsFromMaster(rItem);
+                const match = rVariants.find((v) => String(v.platform || '').toLowerCase() === platform && String(v.content_type || rowContentType).toLowerCase() === rowContentType)
+                  ?? rVariants.find((v) => String(v.platform || '').toLowerCase() === platform);
+                const t = String(match?.generated_content ?? '').trim();
+                return t && !isPlaceholder(t) ? (charLimit && t.length > charLimit ? t.slice(0, charLimit) : t) : null;
+              } catch { return null; }
+            },
+            (cand) => {
+              const d = validateAsset(buildAsset(cand), validationCtx).decision;
+              return d === 'ACCEPT' || d === 'ADAPT';
+            },
+            SEMANTIC_REGEN_ATTEMPTS,
+          );
+          if (outcome.result) {
+            finalContent = outcome.result;
+            wasRegenerated = outcome.regenerated;
+            verdict = validateAsset(buildAsset(finalContent), validationCtx);
+          }
+        }
+        tallyValidation(valStats, verdict, { regenerated: wasRegenerated });
+
+        if (verdict.decision === 'DROP' || verdict.decision === 'REGENERATE') {
+          console.warn('[block-processor] semantic-validation drop', { platform, contentType: rowContentType, topic: topic.slice(0, 60), reason: verdict.reason });
+          emitPlannerDrop(verdict.findings[0]?.dimension ?? 'duplicate_content', 1, 'weekly');
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
           continue;
         }
-        seenContentByPlatform.add(dedupKey);
+        // ACCEPT / ADAPT → record the asset so later assets are compared to it.
+        validationCtx.commit(buildAsset(finalContent));
+        seenContentByPlatform.add(contentDedupKey(platform, rowContentType, finalContent));
 
         // ── Insert scheduled_post immediately ───────────────────────────────
         // The deterministic idempotency_key + partial unique index makes
@@ -962,12 +1023,26 @@ async function executeBlockScheduleRuntime(
   const failed = activityResults.length - succeeded;
   console.log(`[block-processor] ═══ RESULT: ${succeeded}/${activityQueue.length} succeeded, ${failed} failed, ${totalScheduled} posts scheduled ═══\n`);
 
+  // CAMPAIGN-IMPL-007 observability: semantic-validation rates through the
+  // HARDEN-001 registry (fail-safe) + a structured summary line.
+  try {
+    const g = Math.max(1, valStats.generated);
+    recordRawHistogram('planner.validation.pass_pct', (100 * valStats.validated) / g, { mode: 'weekly' });
+    recordRawCounter('planner.validation.accepted', valStats.accepted, { mode: 'weekly' });
+    recordRawCounter('planner.validation.adapted', valStats.adapted, { mode: 'weekly' });
+    recordRawCounter('planner.validation.regenerated', valStats.regenerated, { mode: 'weekly' });
+    recordRawCounter('planner.validation.dropped', valStats.dropped, { mode: 'weekly' });
+    for (const [dim, n] of Object.entries(valStats.reasons)) recordRawCounter('planner.validation.reason', n, { mode: 'weekly', reason: dim });
+    console.log('[semantic-validation]', { generated: valStats.generated, validated: valStats.validated, regenerated: valStats.regenerated, accepted: valStats.accepted, adapted: valStats.adapted, dropped: valStats.dropped, reasons: valStats.reasons });
+  } catch { /* observability only — never blocks */ }
+
   return {
     scheduled_count:  totalScheduled,
     skipped_count:    totalSkipped,
     skipped_platforms: Array.from(new Set(skippedPlatforms)),
     activity_results:  activityResults,
-  } as BlockScheduleResult & { activity_results: ActivityResult[] };
+    validation_stats:  valStats,
+  } as BlockScheduleResult & { activity_results: ActivityResult[]; validation_stats: typeof valStats };
 }
 
 export { executeBlockScheduleRuntime as processBlockSchedule };
