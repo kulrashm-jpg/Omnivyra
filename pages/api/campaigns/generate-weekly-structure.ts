@@ -18,6 +18,7 @@ import { clampCampaignFormatFrequency } from '../../../lib/shared/bolt/formatGov
 import { buildReconciliation, assertPlannerInvariant, summarizeDrops, publicDropReason, type DroppedItem, type DropReasonCode, type PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
 import { PlannerTrace, computePlannerMetrics, type PlannerMetrics } from '../../../lib/shared/campaign/campaignLifecycle';
 import { emitPlannerMetrics, emitLifecycleTransition } from '../../../backend/services/campaign/plannerMetrics';
+import { deriveMasterIdeaBundle } from '../../../lib/shared/campaign/masterIdea';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -139,6 +140,39 @@ function isValidCreatorPlatformAssetCombo(
     case 'youtube':   return ['video', 'post_with_asset'].includes(a);
     default:          return false;
   }
+}
+
+/**
+ * CAMPAIGN-IMPL-004: stamp the additive Master-Idea bundle (idea identity +
+ * variant identity + semantic fingerprints) onto the enriched content envelope,
+ * derived from fields ALREADY on the item. Fail-safe (never blocks generation)
+ * and additive (older rows simply lack the block). ideaKey uses the planner's
+ * own topicReference so every asset gets exactly one deterministic Master Idea.
+ */
+function stampMasterIdea(enriched: any, campaignId: string, weekNumber: number, weekBlueprint: any, item: any): void {
+  try {
+    const platform = enriched?.platform
+      ?? (Array.isArray(item?.platformTargets) ? item.platformTargets[0] : undefined);
+    const bundle = deriveMasterIdeaBundle({
+      campaignId,
+      weekNumber,
+      ideaKey: String(item?.topicReference ?? item?.masterContentId ?? '') || undefined,
+      theme: weekBlueprint?.phase_label ?? weekBlueprint?.primary_objective,
+      narrative: item?.narrativeStyle,
+      audience: item?.whoAreWeWritingFor,
+      intent: item?.dailyObjective,
+      buyerJourneyStage: weekBlueprint?.funnel_stage ?? weekBlueprint?.buyer_journey_stage,
+      ctaStrategy: item?.ctaType ?? item?.desiredAction,
+      coreMessage: item?.briefSummary,
+      contentType: item?.contentType,
+      platform,
+      topicTitle: item?.topicTitle,
+    });
+    enriched.master_idea = bundle.master_idea;
+    enriched.variant = bundle.variant;
+    enriched.fingerprint = bundle.fingerprint;
+    enriched.master_idea_version = bundle.master_idea_version;
+  } catch { /* additive metadata — never block generation */ }
 }
 
 
@@ -1179,6 +1213,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         if ((item as any).masterContentId != null) {
           (enriched as any).master_content_id = (item as any).masterContentId;
         }
+        stampMasterIdea(enriched as any, String(campaignId), weekNumber, weekBlueprint, item);
         const creator_card = buildCreatorCard(weekBlueprint as any, item, enriched);
         if (Object.keys(creator_card).length > 0) {
           (enriched as any).creator_card = creator_card;
@@ -1665,6 +1700,12 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         }
         if ((entry.contentObj as any)?.creative_guidance != null) {
           (enriched as any).creative_guidance = (entry.contentObj as any).creative_guidance;
+        }
+        // CAMPAIGN-IMPL-004: platform adaptation is a downstream transformation —
+        // the Master Idea it derives from stays UNCHANGED. Carry the identity
+        // bundle forward untouched rather than re-deriving it.
+        for (const k of ['master_idea', 'variant', 'fingerprint', 'master_idea_version'] as const) {
+          if ((entry.contentObj as any)?.[k] != null) (enriched as any)[k] = (entry.contentObj as any)[k];
         }
 
         // ── Carry-forward creator payload stub ────────────────────────────

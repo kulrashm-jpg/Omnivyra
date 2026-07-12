@@ -110,4 +110,32 @@ describe('backward compatibility', () => {
     expect(read?.master_idea.id).toBe(bundle.master_idea.id);
     expect(read?.variant.variant_id).toBe(bundle.variant.variant_id);
   });
+
+  it('survives the real persistence path — JSON.stringify(enriched) → parse', () => {
+    // Mirrors generate-weekly-structure: content = JSON.stringify(enriched)
+    const enriched: Record<string, unknown> = { platform: 'linkedin', generated_content: 'body' };
+    const bundle = deriveMasterIdeaBundle({ ...base, contentType: 'carousel' });
+    enriched.master_idea = bundle.master_idea;
+    enriched.variant = bundle.variant;
+    enriched.fingerprint = bundle.fingerprint;
+    enriched.master_idea_version = bundle.master_idea_version;
+
+    const persisted = JSON.stringify(enriched);
+    const read = readMasterIdeaBundle(JSON.parse(persisted));
+    expect(read).not.toBeNull();
+    expect(read?.master_idea.id).toBe(bundle.master_idea.id);
+    expect(read?.variant.variant_type).toBe('carousel');
+    // Adaptation preserves it: a spread {...parsed} keeps the block intact.
+    const adapted = { ...JSON.parse(persisted), platform_variants: [{ platform: 'facebook' }] };
+    expect(readMasterIdeaBundle(adapted)?.master_idea.id).toBe(bundle.master_idea.id);
+  });
+
+  it('every asset belongs to exactly ONE master idea', () => {
+    const assets = ['blog', 'carousel', 'post', 'thread'].map((ct) =>
+      deriveMasterIdeaBundle({ ...base, contentType: ct }));
+    for (const a of assets) {
+      expect(a.variant.master_idea_id).toBe(a.master_idea.id); // variant points at exactly its idea
+      expect(a.master_idea.id).toMatch(/^mi_[0-9a-f]{8}$/);
+    }
+  });
 });
