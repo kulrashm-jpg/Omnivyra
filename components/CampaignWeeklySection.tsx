@@ -334,7 +334,7 @@ export default function CampaignWeeklySection({ d }: { d: S }) {
                   </button>
                 </div>
               </div>
-              <CampaignQualityPanel assessment={d.campaignQuality} className="mb-4" />
+              <CampaignQualityPanel assessment={d.campaignQuality} optimization={d.campaignOptimization} className="mb-4" />
               <CampaignPlannerDiagnostics diagnostics={d.plannerDiagnostics} className="mb-4" />
               <div className="space-y-4">
                 {Array.from({ length: durationWeeks }, (_, i) => i + 1).map(weekNumber => (

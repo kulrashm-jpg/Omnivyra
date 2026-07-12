@@ -20,6 +20,7 @@ import { PlannerTrace, computePlannerMetrics, type PlannerMetrics } from '../../
 import { emitPlannerMetrics, emitLifecycleTransition } from '../../../backend/services/campaign/plannerMetrics';
 import { deriveMasterIdeaBundle, normalizeForFingerprint } from '../../../lib/shared/campaign/masterIdea';
 import { assessCampaignQuality, type CampaignQualityAssessment, type PlannedAsset } from '../../../lib/shared/campaign/campaignQuality';
+import { optimizeCampaign, DEFAULT_MAX_OPTIMIZATION_PASSES, type OptimizationResult } from '../../../lib/shared/campaign/campaignOptimizer';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -210,6 +211,35 @@ function toPlannedAsset(row: any): PlannedAsset {
   };
 }
 
+/**
+ * CAMPAIGN-IMPL-006: apply an optimizer's metadata-only refinements back onto a
+ * persisted row's content JSON — ONLY the additive Master-Idea block + fingerprints
+ * (theme / buyer-journey stage / CTA strategy / audience / idea identity). It never
+ * touches content_type, platform, week/date, counts, or any typed DB column, so
+ * campaign structure + schedule stay invariant. Fail-safe; no-op on rows without a
+ * Master-Idea block (backward compatible).
+ */
+function applyOptimizationToRow(row: any, opt: PlannedAsset): void {
+  try {
+    if (typeof row?.content !== 'string') return;
+    const content = JSON.parse(row.content);
+    if (!content || typeof content !== 'object' || !content.master_idea) return;
+    content.master_idea.theme = opt.theme ?? content.master_idea.theme;
+    content.master_idea.buyer_journey_stage = String(opt.funnel_stage ?? content.master_idea.buyer_journey_stage ?? '').toLowerCase();
+    content.master_idea.cta_strategy = opt.cta ?? content.master_idea.cta_strategy;
+    content.master_idea.audience = opt.audience ?? content.master_idea.audience;
+    if (opt.master_idea_id) {
+      content.master_idea.id = opt.master_idea_id;
+      if (content.variant) content.variant.master_idea_id = opt.master_idea_id;
+    }
+    if (content.fingerprint) {
+      if (opt.idea_fingerprint) content.fingerprint.idea = opt.idea_fingerprint;
+      if (opt.cta_fingerprint) content.fingerprint.cta = opt.cta_fingerprint;
+    }
+    row.content = JSON.stringify(content);
+  } catch { /* metadata-only refinement — never block generation */ }
+}
+
 
 export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput): Promise<{
   success: boolean;
@@ -234,6 +264,8 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   }) | null;
   /** CAMPAIGN-IMPL-005 — advisory pre-generation campaign quality assessment. */
   campaign_quality?: CampaignQualityAssessment | null;
+  /** CAMPAIGN-IMPL-006 — pre-generation optimization: before/after + changelog. */
+  campaign_optimization?: OptimizationResult | null;
 }> {
   const {
     week,
@@ -1935,6 +1967,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
 
   let plannerReconciliation: PlannerReconciliation | null = null;
   let campaignQuality: CampaignQualityAssessment | null = null;
+  let campaignOptimization: OptimizationResult | null = null;
   if (allRowsToInsert.length > 0) {
     const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
     // Phase-2 Step-11: FIRST real generator cutover. Mode-gated source
@@ -2013,6 +2046,25 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         { details: { rejected_count: allRowsToInsert.length, sample_run_id: boltRunId ?? null } }
       );
     }
+    // ── CAMPAIGN-IMPL-006: pre-generation strategy optimization ────────────
+    // Deterministically rebalance the PLAN's strategic metadata (theme, buyer-
+    // journey stage, CTA, audience, Master-Idea grouping) to raise campaign
+    // quality BEFORE the block-processor generates content — applied to the
+    // additive Master-Idea block only, so structure/schedule/format mix stay
+    // invariant. Advisory-safe: fail-safe, and it only keeps score-improving
+    // changes. Runs before saveWeekPlans so the persisted plan carries the
+    // refinement.
+    try {
+      const preAssets = (persistRows as any[]).map(toPlannedAsset);
+      campaignOptimization = optimizeCampaign(preAssets, { maxPasses: DEFAULT_MAX_OPTIMIZATION_PASSES });
+      if (campaignOptimization.improved) {
+        campaignOptimization.assets.forEach((opt, i) => applyOptimizationToRow((persistRows as any[])[i], opt));
+        if (process.env.NODE_ENV !== 'test') {
+          console.log('[campaign-optimization]', { campaignId, before: campaignOptimization.before.overall, after: campaignOptimization.after.overall, changes: campaignOptimization.changes.length, passes: campaignOptimization.passes_run });
+        }
+      }
+    } catch { /* optimization is advisory + metadata-only — never block generation */ }
+
     const byWeek = new Map<number, typeof persistRows>();
     for (const row of persistRows) {
       const wn = Number((row as { week_number?: number })?.week_number) || 1;
@@ -2157,6 +2209,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     success: true,
     planner_diagnostics: plannerDiagnosticsPayload,
     campaign_quality: campaignQuality,
+    campaign_optimization: campaignOptimization,
     week: weekNumbers.length === 1 ? weekNumbers[0] : undefined,
     weeks: weekNumbers.length > 1 ? weekNumbers : undefined,
     dailyPlan: allFinalItems,

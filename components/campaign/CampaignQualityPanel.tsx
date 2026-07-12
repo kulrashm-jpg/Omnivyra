@@ -9,6 +9,7 @@
  */
 import React from 'react';
 import type { CampaignQualityAssessment, QualityGrade } from '../../lib/shared/campaign/campaignQuality';
+import type { OptimizationResult } from '../../lib/shared/campaign/campaignOptimizer';
 
 const GRADE_STYLE: Record<QualityGrade, { label: string; cls: string }> = {
   excellent: { label: 'Excellent', cls: 'bg-green-100 text-green-700' },
@@ -31,21 +32,24 @@ const SEVERITY_STYLE: Record<string, string> = {
 
 export default function CampaignQualityPanel({
   assessment,
+  optimization,
   className = '',
 }: {
   assessment: CampaignQualityAssessment | null | undefined;
+  optimization?: OptimizationResult | null;
   className?: string;
 }) {
   if (!assessment || assessment.asset_count <= 0) return null;
   const { overall, grade, dimensions, recommendations } = assessment;
   const g = GRADE_STYLE[grade];
+  const improved = optimization?.improved && optimization.changes.length > 0;
 
   return (
     <div className={`rounded-lg border border-gray-200 bg-white p-4 text-sm ${className}`} data-testid="campaign-quality">
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h4 className="font-semibold text-gray-800">Campaign quality</h4>
-          <span className="text-[11px] text-gray-400">advisory · pre-generation</span>
+          <span className="text-[11px] text-gray-400">pre-generation</span>
         </div>
         <div className="flex items-center gap-2">
           <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${g.cls}`}>{g.label}</span>
@@ -53,6 +57,23 @@ export default function CampaignQualityPanel({
           <span className="text-xs text-gray-400">/100</span>
         </div>
       </div>
+
+      {improved && optimization && (
+        <div className="mb-3 rounded-md bg-green-50 px-3 py-2" data-testid="optimization-summary">
+          <p className="text-[12px] font-medium text-green-800">
+            Optimized before generation: {optimization.before.overall} → {optimization.after.overall}
+            <span className="ml-1 text-green-600">(+{optimization.delta})</span>
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {optimization.changes.slice(0, 6).map((c, i) => (
+              <li key={`${c.pass}-${i}`} className="text-[11px] text-green-700">• {c.description}</li>
+            ))}
+            {optimization.changes.length > 6 && (
+              <li className="text-[11px] text-green-600">+{optimization.changes.length - 6} more refinement(s)</li>
+            )}
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
         {dimensions.map((d) => (
