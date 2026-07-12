@@ -18,7 +18,7 @@ import { clampCampaignFormatFrequency } from '../../../lib/shared/bolt/formatGov
 import { buildReconciliation, assertPlannerInvariant, summarizeDrops, publicDropReason, type DroppedItem, type DropReasonCode, type PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
 import { PlannerTrace, computePlannerMetrics, type PlannerMetrics } from '../../../lib/shared/campaign/campaignLifecycle';
 import { emitPlannerMetrics, emitLifecycleTransition } from '../../../backend/services/campaign/plannerMetrics';
-import { deriveMasterIdeaBundle } from '../../../lib/shared/campaign/masterIdea';
+import { deriveMasterIdeaBundle, normalizeForFingerprint } from '../../../lib/shared/campaign/masterIdea';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -156,7 +156,11 @@ function stampMasterIdea(enriched: any, campaignId: string, weekNumber: number, 
     const bundle = deriveMasterIdeaBundle({
       campaignId,
       weekNumber,
-      ideaKey: String(item?.topicReference ?? item?.masterContentId ?? '') || undefined,
+      // Planner-emitted Master-Idea seed wins: the normalized base business
+      // concept, shared by every format variant of one idea (cross-format
+      // grouping). Falls back to per-asset identity for legacy / AI-decide rows
+      // that predate planner emission (backward compatibility).
+      ideaKey: String(item?.masterIdeaSeed ?? item?.topicReference ?? item?.masterContentId ?? '') || undefined,
       theme: weekBlueprint?.phase_label ?? weekBlueprint?.primary_objective,
       narrative: item?.narrativeStyle,
       audience: item?.whoAreWeWritingFor,
@@ -655,6 +659,12 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         const baseTopic = synthTopics[globalTopicIdx % synthTopics.length]!;
         const topic = deriveSubTopic(baseTopic, contentType, k, synthTargetAudience);
         globalTopicIdx++;
+        // CAMPAIGN-IMPL-004A: the planner OWNS the Master-Idea seed. It is the
+        // normalized BASE business concept (before the per-format deriveSubTopic
+        // angle), so every format variant built from this base topic carries the
+        // same seed and resolves to ONE Master Idea id — cross-format grouping is
+        // intentional, decided here in the planner, not inferred per asset.
+        const masterIdeaSeed = normalizeForFingerprint(baseTopic);
         const requiresMediaBrief =
           ['video', 'reel', 'reels', 'carousel', 'infographic', 'story', 'stories', 'short', 'shorts', 'podcast', 'image'].includes(contentType) ||
           requiresCreatorCreativeGuidance(contentType);
@@ -665,6 +675,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
             objective: synthObjective,
             cta_type: synthCtaType,
             target_audience: synthTargetAudience,
+            master_idea_seed: masterIdeaSeed,
             brief_summary: `${topic}: ${synthObjective}`,
             pain_point: deriveSynthPainPoint(topic),
             outcome_promise: deriveSynthOutcomePromise(topic, contentType),
@@ -930,6 +941,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
                 ctaType,
                 kpiTarget: String((weekBlueprint as any)?.weekly_kpi_focus ?? 'Reach growth'),
                 ...(slotMasterContentId ? { masterContentId: slotMasterContentId } : {}),
+                ...((execIntent as any)?.master_idea_seed ? { masterIdeaSeed: String((execIntent as any).master_idea_seed) } : {}),
               };
               const p = platforms[pi]!;
               assertDailyExecutionIdentityNotMutated({
@@ -980,6 +992,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
               ctaType,
               kpiTarget: String((weekBlueprint as any)?.weekly_kpi_focus ?? 'Reach growth'),
               ...(slotMasterContentId ? { masterContentId: slotMasterContentId } : {}),
+              ...((execIntent as any)?.master_idea_seed ? { masterIdeaSeed: String((execIntent as any).master_idea_seed) } : {}),
             };
             for (const platform of item.platformTargets) {
               const p = normalizePlatformKey(platform);

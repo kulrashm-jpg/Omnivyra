@@ -72,6 +72,13 @@ export type DailyPlanItem = {
   kpiTarget: string;
   /** Stable id for one logical content piece (optional, backward compatible). */
   masterContentId?: string;
+  /**
+   * CAMPAIGN-IMPL-004A — planner-emitted Master-Idea seed: the normalized base
+   * business concept this asset was derived from. All format variants sharing a
+   * base concept carry the same seed so they resolve to one Master Idea id.
+   * Optional/backward compatible — absent on legacy + AI-decide rows.
+   */
+  masterIdeaSeed?: string;
 };
 
 export type CreativeGuidance = {

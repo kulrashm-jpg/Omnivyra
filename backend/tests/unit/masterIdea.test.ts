@@ -130,6 +130,23 @@ describe('backward compatibility', () => {
     expect(readMasterIdeaBundle(adapted)?.master_idea.id).toBe(bundle.master_idea.id);
   });
 
+  it('planner-emitted seed groups cross-format assets under ONE master idea (IMPL-004A)', () => {
+    // Simulate the planner: one base business concept → a shared seed. Each format
+    // derives its own topic/angle but references the SAME seed.
+    const seed = normalizeForFingerprint('How teams reach value in a week');
+    const blog = deriveMasterIdeaBundle({ campaignId: 'c1', weekNumber: 2, ideaKey: seed, contentType: 'blog', topicTitle: 'Deep dive: value in a week' });
+    const carousel = deriveMasterIdeaBundle({ campaignId: 'c1', weekNumber: 2, ideaKey: seed, contentType: 'carousel', topicTitle: 'Value in a week (5 slides)' });
+    const infographic = deriveMasterIdeaBundle({ campaignId: 'c1', weekNumber: 2, ideaKey: seed, contentType: 'infographic', topicTitle: 'Value in a week — one chart' });
+    // Same idea despite different formats + different derived topics
+    expect(carousel.master_idea.id).toBe(blog.master_idea.id);
+    expect(infographic.master_idea.id).toBe(blog.master_idea.id);
+    // Variants remain distinct
+    expect(new Set([blog.variant.variant_id, carousel.variant.variant_id, infographic.variant.variant_id]).size).toBe(3);
+    // A different base concept → a different idea, even in the same week
+    const other = deriveMasterIdeaBundle({ campaignId: 'c1', weekNumber: 2, ideaKey: normalizeForFingerprint('Cutting onboarding costs'), contentType: 'blog' });
+    expect(other.master_idea.id).not.toBe(blog.master_idea.id);
+  });
+
   it('every asset belongs to exactly ONE master idea', () => {
     const assets = ['blog', 'carousel', 'post', 'thread'].map((ct) =>
       deriveMasterIdeaBundle({ ...base, contentType: ct }));
