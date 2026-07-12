@@ -21,7 +21,7 @@ import { emitPlannerMetrics, emitLifecycleTransition } from '../../../backend/se
 import { deriveMasterIdeaBundle, normalizeForFingerprint } from '../../../lib/shared/campaign/masterIdea';
 import { assessCampaignQuality, type CampaignQualityAssessment, type PlannedAsset } from '../../../lib/shared/campaign/campaignQuality';
 import { optimizeCampaign, applyOptimizedContext, DEFAULT_MAX_OPTIMIZATION_PASSES, type OptimizationResult } from '../../../lib/shared/campaign/campaignOptimizer';
-import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type ValidationStats, type GeneratedAsset } from '../../../lib/shared/campaign/semanticValidation';
+import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type CampaignValidationLanes, type GeneratedAsset } from '../../../lib/shared/campaign/semanticValidation';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -265,7 +265,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   /** CAMPAIGN-IMPL-006 — pre-generation optimization: before/after + changelog. */
   campaign_optimization?: OptimizationResult | null;
   /** CAMPAIGN-IMPL-007 — pre-generation semantic-validation preview (idea-level). */
-  campaign_validation?: ValidationStats | null;
+  campaign_validation?: CampaignValidationLanes | null;
 }> {
   const {
     week,
@@ -1968,7 +1968,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   let plannerReconciliation: PlannerReconciliation | null = null;
   let campaignQuality: CampaignQualityAssessment | null = null;
   let campaignOptimization: OptimizationResult | null = null;
-  let campaignValidation: ValidationStats | null = null;
+  let campaignValidation: CampaignValidationLanes | null = null;
   if (allRowsToInsert.length > 0) {
     const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
     // Phase-2 Step-11: FIRST real generator cutover. Mode-gated source
@@ -2116,7 +2116,10 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     // Generated / Validated / Regenerated / Accepted / Dropped. Advisory, fail-safe.
     try {
       const vctx = new ValidationContext();
-      const stats = emptyValidationStats();
+      const combined = emptyValidationStats();
+      const textLane = emptyValidationStats();
+      const creatorLane = emptyValidationStats();
+      const CREATOR_TYPES = new Set(['carousel', 'infographic', 'image', 'banner', 'video', 'reel', 'short', 'story', 'slider', 'pdf', 'quote_card']);
       for (const row of persistRows as any[]) {
         const pa = toPlannedAsset(row);
         const genAsset: GeneratedAsset = {
@@ -2130,10 +2133,12 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           master_idea_id: pa.master_idea_id ?? null,
         };
         const vr = validateAsset(genAsset, vctx, { flagCrossPlatform: false });
-        tallyValidation(stats, vr);
+        const isCreator = String(row?.intent_type ?? '').toLowerCase() === 'creator' || CREATOR_TYPES.has(String(pa.content_type).toLowerCase());
+        tallyValidation(isCreator ? creatorLane : textLane, vr);
+        tallyValidation(combined, vr);
         if (vr.decision === 'ACCEPT' || vr.decision === 'ADAPT') vctx.commit(genAsset);
       }
-      campaignValidation = stats;
+      campaignValidation = { combined, text: textLane, creator: creatorLane };
     } catch { /* preview only — never block generation */ }
 
     // ── CAMPAIGN-IMPL-002: planner-integrity reconciliation ────────────────

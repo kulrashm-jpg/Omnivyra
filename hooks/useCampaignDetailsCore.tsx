@@ -65,7 +65,7 @@ import type { Campaign, WeeklyPlan, DailyPlan, ReadinessResponse, GateResponse, 
 import type { PlannerDiagnosticsPayload } from '../components/campaign/CampaignPlannerDiagnostics';
 import type { CampaignQualityAssessment } from '../lib/shared/campaign/campaignQuality';
 import type { OptimizationResult } from '../lib/shared/campaign/campaignOptimizer';
-import type { ValidationStats } from '../lib/shared/campaign/semanticValidation';
+import type { CampaignValidationLanes } from '../lib/shared/campaign/semanticValidation';
 
 export function useCampaignDetailsCore() {
   const router = useRouter();
@@ -134,7 +134,7 @@ export function useCampaignDetailsCore() {
   // CAMPAIGN-IMPL-006: pre-generation optimization (before/after + changelog).
   const [campaignOptimization, setCampaignOptimization] = useState<OptimizationResult | null>(null);
   // CAMPAIGN-IMPL-007: pre-generation semantic-validation preview counts.
-  const [campaignValidation, setCampaignValidation] = useState<ValidationStats | null>(null);
+  const [campaignValidation, setCampaignValidation] = useState<CampaignValidationLanes | null>(null);
   const [editedWeekDailyPlans, setEditedWeekDailyPlans] = useState<Record<number, DailyPlan[]>>({});
   const [isSavingWeekPlan, setIsSavingWeekPlan] = useState<number | null>(null);
   const [selectedWeekDay, setSelectedWeekDay] = useState<{ weekNumber: number; day: string } | null>(null);

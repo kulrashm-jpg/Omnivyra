@@ -45,13 +45,19 @@ export interface ValidationStatsView {
   dropped: number;
 }
 
+export interface ValidationLanesView {
+  combined: ValidationStatsView;
+  text: ValidationStatsView;
+  creator: ValidationStatsView;
+}
+
 export default function CampaignPlannerDiagnostics({
   diagnostics,
   validation,
   className = '',
 }: {
   diagnostics: PlannerDiagnosticsPayload | null | undefined;
-  validation?: ValidationStatsView | null;
+  validation?: ValidationLanesView | null;
   className?: string;
 }) {
   if (!diagnostics || diagnostics.planned <= 0) return null;
@@ -82,15 +88,19 @@ export default function CampaignPlannerDiagnostics({
         <Stat label="Dropped" value={droppedCount} tone={droppedCount > 0 ? 'warn' : 'neutral'} />
       </div>
 
-      {validation && validation.generated > 0 && (
+      {validation && validation.combined.generated > 0 && (
         <div className="mt-3 border-t border-gray-100 pt-3" data-testid="validation-summary">
           <p className="mb-1.5 text-xs font-medium text-gray-500">Semantic validation</p>
           <div className="grid grid-cols-5 gap-2 text-center">
-            <Stat label="Generated" value={validation.generated} tone="neutral" />
-            <Stat label="Validated" value={validation.validated} tone="good" />
-            <Stat label="Regenerated" value={validation.regenerated} tone={validation.regenerated > 0 ? 'warn' : 'neutral'} />
-            <Stat label="Accepted" value={validation.accepted} tone="good" />
-            <Stat label="Dropped" value={validation.dropped} tone={validation.dropped > 0 ? 'warn' : 'neutral'} />
+            <Stat label="Generated" value={validation.combined.generated} tone="neutral" />
+            <Stat label="Validated" value={validation.combined.validated} tone="good" />
+            <Stat label="Regenerated" value={validation.combined.regenerated} tone={validation.combined.regenerated > 0 ? 'warn' : 'neutral'} />
+            <Stat label="Accepted" value={validation.combined.accepted} tone="good" />
+            <Stat label="Dropped" value={validation.combined.dropped} tone={validation.combined.dropped > 0 ? 'warn' : 'neutral'} />
+          </div>
+          <div className="mt-1.5 space-y-0.5">
+            <ValidationLaneRow label="Text" lane={validation.text} />
+            <ValidationLaneRow label="Creator" lane={validation.creator} />
           </div>
         </div>
       )}
@@ -117,6 +127,20 @@ export default function CampaignPlannerDiagnostics({
           {metrics.average_regeneration_attempts ? ` (avg ${metrics.average_regeneration_attempts} attempts)` : ''}.
         </p>
       )}
+    </div>
+  );
+}
+
+function ValidationLaneRow({ label, lane }: { label: string; lane: ValidationStatsView }) {
+  if (!lane || lane.generated <= 0) return null;
+  return (
+    <div className="flex items-center justify-between text-[11px] text-gray-500">
+      <span className="font-medium text-gray-600">{label}</span>
+      <span>
+        {lane.generated} generated · {lane.validated} validated
+        {lane.regenerated > 0 ? ` · ${lane.regenerated} regenerated` : ''}
+        {lane.dropped > 0 ? ` · ${lane.dropped} dropped` : ''}
+      </span>
     </div>
   );
 }

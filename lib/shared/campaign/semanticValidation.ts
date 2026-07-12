@@ -276,6 +276,13 @@ export function emptyValidationStats(): ValidationStats {
   return { generated: 0, validated: 0, regenerated: 0, accepted: 0, adapted: 0, dropped: 0, reasons: {} };
 }
 
+/** Text / Creator / Combined validation lanes for the planner diagnostics UI. */
+export interface CampaignValidationLanes {
+  combined: ValidationStats;
+  text: ValidationStats;
+  creator: ValidationStats;
+}
+
 /** Fold one decision into the stats (pure). */
 export function tallyValidation(stats: ValidationStats, result: ValidationResult, opts: { regenerated?: boolean } = {}): ValidationStats {
   stats.generated += 1;
