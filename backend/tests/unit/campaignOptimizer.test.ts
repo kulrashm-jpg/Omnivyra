@@ -1,7 +1,7 @@
 /**
  * CAMPAIGN-IMPL-006 — deterministic campaign optimizer.
  */
-import { optimizeCampaign, DEFAULT_MAX_OPTIMIZATION_PASSES } from '../../../lib/shared/campaign/campaignOptimizer';
+import { optimizeCampaign, applyOptimizedContext, readCampaignContext, DEFAULT_MAX_OPTIMIZATION_PASSES } from '../../../lib/shared/campaign/campaignOptimizer';
 import { assessCampaignQuality, type PlannedAsset } from '../../../lib/shared/campaign/campaignQuality';
 
 const asset = (over: Partial<PlannedAsset> = {}): PlannedAsset => ({
@@ -133,5 +133,70 @@ describe('individual passes', () => {
     const r = optimizeCampaign(input);
     // re-assessing the optimized assets reproduces r.after
     expect(assessCampaignQuality(r.assets).overall).toBe(r.after.overall);
+  });
+});
+
+describe('IMPL-006A — optimized values reach the fields the generators read', () => {
+  const baseContent = () => ({
+    dailyObjective: 'Explain onboarding',
+    whoAreWeWritingFor: 'RevOps',
+    desiredAction: 'Book a demo',
+    intent: { objective: 'Explain onboarding', cta_type: 'Book a demo', target_audience: 'RevOps', pain_point: 'slow setup', outcome_promise: 'fast value' },
+    master_idea: { id: 'mi_1', theme: 'Onboarding', buyer_journey_stage: 'awareness', cta_strategy: 'Book a demo', audience: 'RevOps', core_message: 'value fast' },
+    variant: { variant_id: 'cv_1', master_idea_id: 'mi_1' },
+    fingerprint: { idea: 'i', narrative: 'n', cta: 'c', topic: 't' },
+    campaign_context: 'original',
+  });
+
+  it('writes optimized CTA into the flat field the text/BOLT builder reads (desiredAction → cta_type)', () => {
+    const c = baseContent();
+    applyOptimizedContext(c as any, asset({ cta: 'Get started', cta_fingerprint: 'cf2' }));
+    // buildItemFromEnriched: cta_type ← enriched.desiredAction
+    expect(c.desiredAction).toBe('Get started');
+    expect(c.intent.cta_type).toBe('Get started');
+    expect(c.master_idea.cta_strategy).toBe('Get started'); // creator prompt (blob)
+    expect(c.fingerprint.cta).toBe('cf2');
+  });
+
+  it('writes optimized audience into the flat field the builder reads (whoAreWeWritingFor → target_audience)', () => {
+    const c = baseContent();
+    applyOptimizedContext(c as any, asset({ audience: 'Founders' }));
+    expect(c.whoAreWeWritingFor).toBe('Founders');
+    expect(c.intent.target_audience).toBe('Founders');
+    expect(c.master_idea.audience).toBe('Founders');
+  });
+
+  it('stamps campaign_context=optimized for traceability', () => {
+    const c = baseContent();
+    applyOptimizedContext(c as any, asset({ cta: 'Learn more' }));
+    expect(c.campaign_context).toBe('optimized');
+    expect(readCampaignContext(c)).toBe('optimized');
+  });
+
+  it('readCampaignContext defaults to original for legacy/unoptimized content', () => {
+    expect(readCampaignContext(null)).toBe('original');
+    expect(readCampaignContext({})).toBe('original');
+    expect(readCampaignContext({ campaign_context: 'original' })).toBe('original');
+  });
+
+  it('is backward compatible — content without master_idea/intent does not throw', () => {
+    const legacy: any = { desiredAction: 'x', whoAreWeWritingFor: 'y' };
+    expect(() => applyOptimizedContext(legacy, asset({ cta: 'New CTA', audience: 'New Aud' }))).not.toThrow();
+    // still projects the flat fields the generator reads
+    expect(legacy.desiredAction).toBe('New CTA');
+    expect(legacy.whoAreWeWritingFor).toBe('New Aud');
+    expect(legacy.campaign_context).toBe('optimized');
+  });
+
+  it('end-to-end: optimizer changes are visible in the generator-facing fields', () => {
+    // Optimize a monotonous campaign, then project each optimized asset onto a
+    // matching content envelope — the flat fields must reflect the new values.
+    const r = optimizeCampaign(monotonous(9));
+    const changedCta = r.changes.find((c) => c.field === 'cta');
+    expect(changedCta).toBeDefined();
+    const idx = changedCta!.asset_index;
+    const c = baseContent();
+    applyOptimizedContext(c as any, r.assets[idx]);
+    expect(c.desiredAction).toBe(r.assets[idx].cta);
   });
 });

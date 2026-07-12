@@ -251,3 +251,58 @@ export function optimizeCampaign(
   const after = assessCampaignQuality(current);
   return { assets: current, changes, before, after, passes_run: passesRun, improved: after.overall > before.overall, delta: after.overall - before.overall };
 }
+
+/** Traceability marker recorded on every asset's content: which campaign context generated it. */
+export type CampaignContextSource = 'optimized' | 'original';
+
+/**
+ * CAMPAIGN-IMPL-006A — project an optimized asset's values onto a content
+ * envelope so the DOWNSTREAM GENERATORS actually consume them, WITHOUT touching
+ * prompts or generator code. It writes the optimized CTA + audience into the flat
+ * fields the text/BOLT prompt builders already read (`desiredAction` → cta_type,
+ * `whoAreWeWritingFor` → target_audience) and mirrors them into `intent.*`; it
+ * refreshes the additive `master_idea` block (which the creator prompt consumes as
+ * a full-content blob); and it stamps `campaign_context: 'optimized'` for
+ * traceability. Pure aside from the passed object; backward compatible (no-op
+ * fields left as-is); deterministic (field selection only, no randomness).
+ */
+export function applyOptimizedContext(content: Record<string, any>, asset: PlannedAsset): Record<string, any> {
+  if (!content || typeof content !== 'object') return content;
+  const intent = content.intent && typeof content.intent === 'object' ? content.intent : null;
+
+  // Master-Idea block — reaches the creator prompt (full-content blob) + identity.
+  if (content.master_idea && typeof content.master_idea === 'object') {
+    const mi = content.master_idea;
+    if (asset.theme != null) mi.theme = asset.theme;
+    if (asset.funnel_stage != null) mi.buyer_journey_stage = String(asset.funnel_stage).toLowerCase();
+    if (asset.cta != null) mi.cta_strategy = asset.cta;
+    if (asset.audience != null) mi.audience = asset.audience;
+    if (asset.master_idea_id) mi.id = asset.master_idea_id;
+  }
+  if (content.variant && typeof content.variant === 'object' && asset.master_idea_id) content.variant.master_idea_id = asset.master_idea_id;
+  if (content.fingerprint && typeof content.fingerprint === 'object') {
+    if (asset.idea_fingerprint) content.fingerprint.idea = asset.idea_fingerprint;
+    if (asset.cta_fingerprint) content.fingerprint.cta = asset.cta_fingerprint;
+  }
+
+  // Flat fields the TEXT/BOLT prompt builders actually read (buildItemFromEnriched:
+  // cta_type ← enriched.desiredAction, target_audience ← enriched.whoAreWeWritingFor).
+  if (asset.cta != null) {
+    content.desiredAction = asset.cta;
+    if (intent) intent.cta_type = asset.cta;
+  }
+  if (asset.audience != null) {
+    content.whoAreWeWritingFor = asset.audience;
+    if (intent) intent.target_audience = asset.audience;
+  }
+  if (asset.funnel_stage != null) content.funnel_stage = String(asset.funnel_stage).toLowerCase();
+
+  content.campaign_context = 'optimized' as CampaignContextSource;
+  return content;
+}
+
+/** Read the traceability marker; defaults to 'original' for legacy/unoptimized rows. */
+export function readCampaignContext(content: unknown): CampaignContextSource {
+  if (content && typeof content === 'object' && (content as any).campaign_context === 'optimized') return 'optimized';
+  return 'original';
+}

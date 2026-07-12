@@ -20,7 +20,7 @@ import { PlannerTrace, computePlannerMetrics, type PlannerMetrics } from '../../
 import { emitPlannerMetrics, emitLifecycleTransition } from '../../../backend/services/campaign/plannerMetrics';
 import { deriveMasterIdeaBundle, normalizeForFingerprint } from '../../../lib/shared/campaign/masterIdea';
 import { assessCampaignQuality, type CampaignQualityAssessment, type PlannedAsset } from '../../../lib/shared/campaign/campaignQuality';
-import { optimizeCampaign, DEFAULT_MAX_OPTIMIZATION_PASSES, type OptimizationResult } from '../../../lib/shared/campaign/campaignOptimizer';
+import { optimizeCampaign, applyOptimizedContext, DEFAULT_MAX_OPTIMIZATION_PASSES, type OptimizationResult } from '../../../lib/shared/campaign/campaignOptimizer';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -178,6 +178,9 @@ function stampMasterIdea(enriched: any, campaignId: string, weekNumber: number, 
     enriched.variant = bundle.variant;
     enriched.fingerprint = bundle.fingerprint;
     enriched.master_idea_version = bundle.master_idea_version;
+    // CAMPAIGN-IMPL-006A traceability: default context is the original plan; the
+    // optimizer flips this to 'optimized' on rows it refines.
+    if (enriched.campaign_context == null) enriched.campaign_context = 'original';
   } catch { /* additive metadata — never block generation */ }
 }
 
@@ -224,18 +227,12 @@ function applyOptimizationToRow(row: any, opt: PlannedAsset): void {
     if (typeof row?.content !== 'string') return;
     const content = JSON.parse(row.content);
     if (!content || typeof content !== 'object' || !content.master_idea) return;
-    content.master_idea.theme = opt.theme ?? content.master_idea.theme;
-    content.master_idea.buyer_journey_stage = String(opt.funnel_stage ?? content.master_idea.buyer_journey_stage ?? '').toLowerCase();
-    content.master_idea.cta_strategy = opt.cta ?? content.master_idea.cta_strategy;
-    content.master_idea.audience = opt.audience ?? content.master_idea.audience;
-    if (opt.master_idea_id) {
-      content.master_idea.id = opt.master_idea_id;
-      if (content.variant) content.variant.master_idea_id = opt.master_idea_id;
-    }
-    if (content.fingerprint) {
-      if (opt.idea_fingerprint) content.fingerprint.idea = opt.idea_fingerprint;
-      if (opt.cta_fingerprint) content.fingerprint.cta = opt.cta_fingerprint;
-    }
+    // CAMPAIGN-IMPL-006A: project the optimized values onto BOTH the additive
+    // Master-Idea block (creator prompt) AND the flat fields the text/BOLT prompt
+    // builders read (desiredAction → cta_type, whoAreWeWritingFor → target_audience),
+    // and stamp campaign_context='optimized'. Never touches content_type/platform/
+    // date/counts or typed columns.
+    applyOptimizedContext(content, opt);
     row.content = JSON.stringify(content);
   } catch { /* metadata-only refinement — never block generation */ }
 }
