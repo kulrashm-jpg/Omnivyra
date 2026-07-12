@@ -17,7 +17,7 @@ import { filterPlatformsForFormat } from '../../../lib/shared/bolt/contentPlatfo
 import { clampCampaignFormatFrequency } from '../../../lib/shared/bolt/formatGovernance';
 import { buildReconciliation, assertPlannerInvariant, summarizeDrops, publicDropReason, type DroppedItem, type DropReasonCode, type PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
 import { PlannerTrace, computePlannerMetrics, type PlannerMetrics } from '../../../lib/shared/campaign/campaignLifecycle';
-import { emitPlannerMetrics } from '../../../backend/services/campaign/plannerMetrics';
+import { emitPlannerMetrics, emitLifecycleTransition } from '../../../backend/services/campaign/plannerMetrics';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -2015,6 +2015,10 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       // registry (queryable via getObservabilitySnapshot), replacing standalone
       // logging. Fail-safe — never blocks generation.
       emitPlannerMetrics(plannerReconciliation, plannerTrace.getRegeneration(), { mode: 'weekly' });
+      // Drive the lifecycle through this execution boundary: everything that
+      // persisted reached GENERATED; everything dropped ended in DROPPED.
+      emitLifecycleTransition('GENERATING', 'GENERATED', plannerReconciliation.generated, 'weekly');
+      emitLifecycleTransition('ALLOCATED', 'DROPPED', plannerReconciliation.dropped.length, 'weekly');
       if (process.env.NODE_ENV !== 'test') {
         console.log('[weekly-structure][planner-reconciliation]', { planned: plannerReconciliation.planned, generated: plannerReconciliation.generated, dropped: plannerReconciliation.dropped.length, ok: plannerReconciliation.ok });
       }

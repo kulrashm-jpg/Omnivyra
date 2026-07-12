@@ -40,7 +40,7 @@ import {
 // CAMPAIGN-IMPL-003A: bring the content-schedule path into the same planner
 // diagnostics model — every drop here emits planner.item.dropped{reason} through
 // the HARDEN-001 observability registry (fail-safe).
-import { emitPlannerDrop } from './campaign/plannerMetrics';
+import { emitPlannerDrop, emitLifecycleTransition } from './campaign/plannerMetrics';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -793,6 +793,8 @@ async function executeBlockScheduleRuntime(
         }
 
         blockScheduled++;
+        // Drive the lifecycle through the real scheduling boundary.
+        emitLifecycleTransition('GENERATED', 'SCHEDULED', 1, 'weekly');
         emit?.({ phase: 'platform-done', contentType, topic, platform, scheduledFor: scheduledFor.toISOString() });
 
         // ── Build finalized JSON for daily_content_plans update ─────────────

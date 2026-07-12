@@ -62,6 +62,7 @@ import { useCampaignResume } from './useCampaignResume';
 import { PLATFORM_LABELS } from '../lib/shared/platforms';
 
 import type { Campaign, WeeklyPlan, DailyPlan, ReadinessResponse, GateResponse, GateRequiredAction, DiagnosticSummary, ViralityAssessmentResponse, RecommendationSummary, PerformanceSummary } from '../pages/campaign-details/types';
+import type { PlannerDiagnosticsPayload } from '../components/campaign/CampaignPlannerDiagnostics';
 
 export function useCampaignDetailsCore() {
   const router = useRouter();
@@ -122,6 +123,9 @@ export function useCampaignDetailsCore() {
   const [plannerQueryConsumed, setPlannerQueryConsumed] = useState(false);
   const [isGeneratingWeek, setIsGeneratingWeek] = useState<number | null>(null);
   const [isEnhancingAllWeeks, setIsEnhancingAllWeeks] = useState(false);
+  // CAMPAIGN-IMPL-003A: last weekly-generation planner diagnostics (Requested /
+  // Generated / Dropped / reasons / integrity), surfaced in the weekly section.
+  const [plannerDiagnostics, setPlannerDiagnostics] = useState<PlannerDiagnosticsPayload | null>(null);
   const [editedWeekDailyPlans, setEditedWeekDailyPlans] = useState<Record<number, DailyPlan[]>>({});
   const [isSavingWeekPlan, setIsSavingWeekPlan] = useState<number | null>(null);
   const [selectedWeekDay, setSelectedWeekDay] = useState<{ weekNumber: number; day: string } | null>(null);
@@ -562,6 +566,7 @@ export function useCampaignDetailsCore() {
     isAdmin,
     isEnhancingAllWeeks,
     isGeneratingWeek,
+    plannerDiagnostics,
     isLoading,
     isRegeneratingBlueprint,
     isSavingWeekPlan,
@@ -620,6 +625,7 @@ export function useCampaignDetailsCore() {
     setIsAdmin,
     setIsEnhancingAllWeeks,
     setIsGeneratingWeek,
+    setPlannerDiagnostics,
     setIsLoading,
     setIsRegeneratingBlueprint,
     setIsSavingWeekPlan,
@@ -704,6 +710,7 @@ export function useCampaignDetailsCore() {
     isAdmin,
     isEnhancingAllWeeks,
     isGeneratingWeek,
+    plannerDiagnostics,
     isLoading,
     isRegeneratingBlueprint,
     isSavingWeekPlan,
@@ -762,6 +769,7 @@ export function useCampaignDetailsCore() {
     setIsAdmin,
     setIsEnhancingAllWeeks,
     setIsGeneratingWeek,
+    setPlannerDiagnostics,
     setIsLoading,
     setIsRegeneratingBlueprint,
     setIsSavingWeekPlan,

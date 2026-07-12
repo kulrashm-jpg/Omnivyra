@@ -17,7 +17,7 @@
  * generation (the codebase convention even though the seam is itself fail-safe).
  */
 import { recordRawCounter, recordRawHistogram } from '../../observability';
-import { computePlannerMetrics } from '../../../lib/shared/campaign/campaignLifecycle';
+import { computePlannerMetrics, canTransition, type ContentLifecycleState } from '../../../lib/shared/campaign/campaignLifecycle';
 import type { PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
 
 export type PlannerMode = 'writer' | 'creator' | 'mix' | 'ai_decide' | 'partial_regen' | 'weekly' | 'unknown';
@@ -61,5 +61,27 @@ export function emitPlannerDrop(reason: string, count = 1, mode: PlannerMode = '
 export function emitPlannerRegeneration(count = 1, mode: PlannerMode = 'unknown'): void {
   try {
     recordRawCounter('planner.item.regenerated', Math.max(0, Math.round(count)), { mode });
+  } catch { /* fail-safe */ }
+}
+
+/**
+ * Drive the lifecycle state machine through actual execution: emit a counted,
+ * FSM-validated transition at a real stage boundary (generation → scheduled,
+ * allocated → dropped, …). `legal` records whether the transition is permitted
+ * by LIFECYCLE_TRANSITIONS so an illegal move (a planner bug) is visible in
+ * metrics rather than silent. This is what makes the lifecycle executed, not
+ * merely defined. Fail-safe.
+ */
+export function emitLifecycleTransition(
+  from: ContentLifecycleState,
+  to: ContentLifecycleState,
+  count = 1,
+  mode: PlannerMode = 'unknown',
+): void {
+  const n = Math.max(0, Math.round(count));
+  if (n === 0) return;
+  try {
+    const legal = canTransition(from, to) ? 'true' : 'false';
+    recordRawCounter('planner.lifecycle.transition', n, { mode, from, to, legal });
   } catch { /* fail-safe */ }
 }

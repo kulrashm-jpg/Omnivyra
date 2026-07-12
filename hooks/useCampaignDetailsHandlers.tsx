@@ -61,6 +61,7 @@ import { useCampaignWizard, createCampaignWizardStore } from '../store/campaignW
 import { hydrateWizardFromSnapshot, exportWizardToSaveWizardStatePayload, exportWizardToPlanningContext } from '../lib/wizard/campaignWizardAdapter';
 import { useCampaignResume } from './useCampaignResume';
 import { PLATFORM_LABELS } from '../lib/shared/platforms';
+import { formatDiagnosticsSummary } from '../lib/shared/campaign/plannerDiagnostics';
 
 import type { Campaign, WeeklyPlan, DailyPlan, ReadinessResponse, GateResponse, GateRequiredAction, DiagnosticSummary, ViralityAssessmentResponse, RecommendationSummary, PerformanceSummary } from '../pages/campaign-details/types';
 import type { useCampaignDetailsCore } from './useCampaignDetailsCore';
@@ -174,6 +175,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
     setIsAdmin,
     setIsEnhancingAllWeeks,
     setIsGeneratingWeek,
+    setPlannerDiagnostics,
     setIsLoading,
     setIsRegeneratingBlueprint,
     setIsSavingWeekPlan,
@@ -790,7 +792,24 @@ export function useCampaignDetailsHandlers(core: CoreState) {
           delete next[weekNumber];
           return next;
         });
-        notify('success', `Week ${weekNumber} has been enhanced with AI.`);
+        // CAMPAIGN-IMPL-003A: capture planner diagnostics so the weekly section
+        // shows Requested / Generated / Dropped / reasons, and never reports a
+        // bare success while pieces were silently dropped.
+        let msg = `Week ${weekNumber} has been enhanced with AI.`;
+        let hasDrops = false;
+        try {
+          const body = await response.json().catch(() => null);
+          const diag = body?.planner_diagnostics ?? null;
+          setPlannerDiagnostics(diag);
+          if (diag && Number(diag.planned) > 0) {
+            const summary = formatDiagnosticsSummary(diag);
+            if (summary) {
+              msg = `Week ${weekNumber} enhanced. ${summary}`;
+              hasDrops = Array.isArray(diag.dropped) && diag.dropped.length > 0;
+            }
+          }
+        } catch { /* diagnostics are best-effort — never block the success path */ }
+        notify(hasDrops ? 'info' : 'success', msg);
       } else {
         // Blueprint-based generation failed (no blueprint, no execution items, etc.)
         // Always fall back to AI generation regardless of error type.
