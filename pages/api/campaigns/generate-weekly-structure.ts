@@ -689,7 +689,15 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         }
         const rawPlats = existing && existing.selected_platforms.length > 0 ? existing.selected_platforms : synthSlotPlatforms;
         // Per-format platform eligibility (tweet→X only, poll↛X, etc.).
-        const plats = filterPlatformsForFormat(rawPlats, type);
+        let plats = filterPlatformsForFormat(rawPlats, type);
+        // Reassign, don't drop (AUDIT-004): when the AI assigned this format to
+        // platform(s) that BLOCK it (e.g. poll→X, which X coerces into a broken
+        // tweet), fall back to the user's FULL eligible platform set before
+        // dropping. A poll belongs on Facebook/LinkedIn — it must not be lost
+        // just because the blueprint happened to pick X.
+        if (plats.length === 0 && rawPlats !== synthSlotPlatforms) {
+          plats = filterPlatformsForFormat(synthSlotPlatforms, type);
+        }
         if (plats.length === 0) {
           console.log('[weekly-structure][skip-format-no-eligible-platform]', { type, candidates: rawPlats });
           continue;
