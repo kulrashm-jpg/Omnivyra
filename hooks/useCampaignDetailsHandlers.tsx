@@ -176,6 +176,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
     setIsEnhancingAllWeeks,
     setIsGeneratingWeek,
     setPlannerDiagnostics,
+    setCampaignQuality,
     setIsLoading,
     setIsRegeneratingBlueprint,
     setIsSavingWeekPlan,
@@ -801,6 +802,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
           const body = await response.json().catch(() => null);
           const diag = body?.planner_diagnostics ?? null;
           setPlannerDiagnostics(diag);
+          setCampaignQuality(body?.campaign_quality ?? null); // CAMPAIGN-IMPL-005 advisory
           if (diag && Number(diag.planned) > 0) {
             const summary = formatDiagnosticsSummary(diag);
             if (summary) {

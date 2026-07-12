@@ -66,6 +66,7 @@ import type { useCampaignDetailsState } from '../hooks/useCampaignDetailsState';
 type S = ReturnType<typeof useCampaignDetailsState>;
 import type { Campaign, WeeklyPlan, DailyPlan, ReadinessResponse, GateResponse, GateRequiredAction, DiagnosticSummary, ViralityAssessmentResponse, RecommendationSummary, PerformanceSummary } from '../pages/campaign-details/types';
 import CampaignPlannerDiagnostics from './campaign/CampaignPlannerDiagnostics';
+import CampaignQualityPanel from './campaign/CampaignQualityPanel';
 
 export default function CampaignWeeklySection({ d }: { d: S }) {
   const {
@@ -333,6 +334,7 @@ export default function CampaignWeeklySection({ d }: { d: S }) {
                   </button>
                 </div>
               </div>
+              <CampaignQualityPanel assessment={d.campaignQuality} className="mb-4" />
               <CampaignPlannerDiagnostics diagnostics={d.plannerDiagnostics} className="mb-4" />
               <div className="space-y-4">
                 {Array.from({ length: durationWeeks }, (_, i) => i + 1).map(weekNumber => (

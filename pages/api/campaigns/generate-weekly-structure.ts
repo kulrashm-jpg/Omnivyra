@@ -19,6 +19,7 @@ import { buildReconciliation, assertPlannerInvariant, summarizeDrops, publicDrop
 import { PlannerTrace, computePlannerMetrics, type PlannerMetrics } from '../../../lib/shared/campaign/campaignLifecycle';
 import { emitPlannerMetrics, emitLifecycleTransition } from '../../../backend/services/campaign/plannerMetrics';
 import { deriveMasterIdeaBundle, normalizeForFingerprint } from '../../../lib/shared/campaign/masterIdea';
+import { assessCampaignQuality, type CampaignQualityAssessment, type PlannedAsset } from '../../../lib/shared/campaign/campaignQuality';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -179,6 +180,36 @@ function stampMasterIdea(enriched: any, campaignId: string, weekNumber: number, 
   } catch { /* additive metadata — never block generation */ }
 }
 
+/**
+ * CAMPAIGN-IMPL-005: build the advisory quality-engine input from the rows about
+ * to be persisted (the PLAN, before AI content generation). Reads the additive
+ * Master-Idea + fingerprint block stamped above plus the row's own fields. Purely
+ * read-only — it feeds the advisory assessment and never alters a row.
+ */
+function toPlannedAsset(row: any): PlannedAsset {
+  let content: any = {};
+  try { content = typeof row?.content === 'string' ? JSON.parse(row.content) : (row?.content ?? {}); } catch { content = {}; }
+  const mi = content?.master_idea ?? {};
+  const fp = content?.fingerprint ?? {};
+  const intent = content?.intent ?? content?.writer_brief ?? {};
+  return {
+    content_type: String(row?.content_type ?? 'post'),
+    platform: row?.platform ?? null,
+    week: Number(row?.week_number ?? 1) || 1,
+    theme: mi.theme ?? null,
+    funnel_stage: mi.buyer_journey_stage ?? content?.funnel_stage ?? null,
+    cta: row?.cta ?? mi.cta_strategy ?? null,
+    audience: row?.target_audience ?? mi.audience ?? null,
+    master_idea_id: mi.id ?? content?.master_content_id ?? null,
+    idea_fingerprint: fp.idea ?? null,
+    narrative_fingerprint: fp.narrative ?? null,
+    cta_fingerprint: fp.cta ?? null,
+    topic_fingerprint: fp.topic ?? null,
+    topic_title: row?.title ?? row?.topic ?? null,
+    hook: intent?.hook ?? intent?.visual_hook ?? null,
+  };
+}
+
 
 export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput): Promise<{
   success: boolean;
@@ -201,6 +232,8 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     /** Per-reason count summary with public uppercase reason names (UI-ready). */
     drop_summary: Array<{ reason: DropReasonCode; message: string; count: number; public_reason: string }>;
   }) | null;
+  /** CAMPAIGN-IMPL-005 — advisory pre-generation campaign quality assessment. */
+  campaign_quality?: CampaignQualityAssessment | null;
 }> {
   const {
     week,
@@ -1901,6 +1934,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     }
 
   let plannerReconciliation: PlannerReconciliation | null = null;
+  let campaignQuality: CampaignQualityAssessment | null = null;
   if (allRowsToInsert.length > 0) {
     const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
     // Phase-2 Step-11: FIRST real generator cutover. Mode-gated source
@@ -2009,6 +2043,18 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       void orch.evaluateAuthoritativeDaily(campaignId, persistRows.length).catch(() => {});
     } catch { /* observability only — never blocks generation */ }
 
+    // ── CAMPAIGN-IMPL-005: advisory pre-generation quality assessment ──────
+    // Score the PLANNED campaign (structure built, AI content not yet generated)
+    // across nine strategic dimensions. Advisory only — returned in the response,
+    // never gating or altering generation. Fail-safe.
+    try {
+      const plannedAssets = (persistRows as any[]).map(toPlannedAsset);
+      campaignQuality = assessCampaignQuality(plannedAssets);
+      if (process.env.NODE_ENV !== 'test') {
+        console.log('[campaign-quality]', { campaignId, overall: campaignQuality.overall, grade: campaignQuality.grade, recommendations: campaignQuality.recommendations.length });
+      }
+    } catch { /* advisory only — never block generation */ }
+
     // ── CAMPAIGN-IMPL-002: planner-integrity reconciliation ────────────────
     // Invariant: planned === generated + dropped.length. Diff the user's
     // selection (rawFormatFrequency × weeks) against the persisted rows and
@@ -2110,6 +2156,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   return {
     success: true,
     planner_diagnostics: plannerDiagnosticsPayload,
+    campaign_quality: campaignQuality,
     week: weekNumbers.length === 1 ? weekNumbers[0] : undefined,
     weeks: weekNumbers.length > 1 ? weekNumbers : undefined,
     dailyPlan: allFinalItems,
