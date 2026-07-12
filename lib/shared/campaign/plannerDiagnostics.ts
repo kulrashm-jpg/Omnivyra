@@ -137,6 +137,21 @@ export function assertPlannerInvariant(
   return r.ok;
 }
 
+/**
+ * One-line human summary for a toast / notification. Always explains the gap:
+ * "Requested 10, generated 8 — 2 not scheduled (Near-identical content… ×2)."
+ * Returns '' when nothing was requested (nothing meaningful to report).
+ */
+export function formatDiagnosticsSummary(r: Pick<PlannerReconciliation, 'planned' | 'generated' | 'dropped'>): string {
+  if (!r || r.planned <= 0) return '';
+  const droppedCount = r.dropped.length;
+  if (droppedCount === 0) return `Requested ${r.planned}, generated ${r.generated} — all scheduled.`;
+  const top = summarizeDrops(r.dropped).slice(0, 2)
+    .map((s) => `${s.message} ×${s.count}`)
+    .join('; ');
+  return `Requested ${r.planned}, generated ${r.generated} — ${droppedCount} not scheduled (${top}).`;
+}
+
 /** Collapse a dropped[] list into a per-reason count summary for the UI. */
 export function summarizeDrops(dropped: DroppedItem[]): Array<{ reason: DropReasonCode; message: string; count: number }> {
   const counts = new Map<DropReasonCode, number>();

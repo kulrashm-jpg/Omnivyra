@@ -1,4 +1,5 @@
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { formatDiagnosticsSummary } from '../shared/campaign/plannerDiagnostics';
 import type { Campaign, DailyPlan, WeeklyPlan } from './types';
 
 type Notify = (type: 'success' | 'error' | 'info', message: string) => void;
@@ -76,7 +77,24 @@ export function useWeeklyAiActions({
           delete next[weekNumber];
           return next;
         });
-        notify('success', `Week ${weekNumber} has been enhanced with AI.`);
+        // CAMPAIGN-IMPL-003: never report success without explaining what
+        // happened to every requested piece. When the planner returned
+        // diagnostics with drops, surface the requested/generated/dropped
+        // breakdown instead of a bare "enhanced" message.
+        let msg = `Week ${weekNumber} has been enhanced with AI.`;
+        let hasDrops = false;
+        try {
+          const body = await response.json().catch(() => null);
+          const diag = body?.planner_diagnostics;
+          if (diag && Number(diag.planned) > 0) {
+            const summary = formatDiagnosticsSummary(diag);
+            if (summary) {
+              msg = `Week ${weekNumber} enhanced. ${summary}`;
+              hasDrops = Array.isArray(diag.dropped) && diag.dropped.length > 0;
+            }
+          }
+        } catch { /* diagnostics are best-effort — never block the success path */ }
+        notify(hasDrops ? 'info' : 'success', msg);
       } else {
         const fallbackRes = await fetchWithAuth('/api/campaigns/generate-ai-daily-plans', {
           method: 'POST',

@@ -7,6 +7,8 @@ import {
   assertPlannerInvariant,
   summarizeDrops,
   dropReasonMessage,
+  publicDropReason,
+  formatDiagnosticsSummary,
   type DroppedItem,
 } from '../../../lib/shared/campaign/plannerDiagnostics';
 
@@ -52,5 +54,31 @@ describe('drop reasons + summary', () => {
     ]);
     expect(summary[0]).toMatchObject({ reason: 'platform_blocked', count: 2 });
     expect(summary[1]).toMatchObject({ reason: 'duplicate_content', count: 1 });
+  });
+
+  it('maps every reason to a public uppercase name', () => {
+    expect(publicDropReason('platform_blocked')).toBe('FORMAT_BLOCKED');
+    expect(publicDropReason('duplicate_platform_content')).toBe('DUPLICATE_CONTENT');
+    expect(publicDropReason('account_unavailable')).toBe('ACCOUNT_NOT_CONNECTED');
+    expect(publicDropReason('unknown_error')).toBe('UNKNOWN_ERROR');
+  });
+});
+
+describe('formatDiagnosticsSummary — never hides the gap', () => {
+  it('explains drops with requested/generated/reason', () => {
+    const r = buildReconciliation(10, 8, [drop({ reason: 'duplicate_content' }), drop({ reason: 'duplicate_content' })]);
+    const s = formatDiagnosticsSummary(r);
+    expect(s).toMatch(/Requested 10/);
+    expect(s).toMatch(/generated 8/);
+    expect(s).toMatch(/2 not scheduled/);
+    expect(s).toMatch(/×2/);
+  });
+
+  it('confirms a clean run', () => {
+    expect(formatDiagnosticsSummary(buildReconciliation(6, 6, []))).toBe('Requested 6, generated 6 — all scheduled.');
+  });
+
+  it('is empty when nothing was requested', () => {
+    expect(formatDiagnosticsSummary(buildReconciliation(0, 0, []))).toBe('');
   });
 });
