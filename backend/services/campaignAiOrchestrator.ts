@@ -108,6 +108,8 @@ import {
   type RecommendationContext,
 } from './campaignAiOrchestrator/publicTypes';
 import { executeRunCampaignAiPlan } from './campaignAiOrchestrator/runCampaignAiPlanExecutor';
+// PMF-005 — reversible platform-runtime wiring (default legacy → unchanged).
+import { shouldRunPlatform } from './campaignCapability/campaignMigrationFlag';
 import {
   actionExpectationToDesiredAction,
   communicationStyleToTone,
@@ -1230,5 +1232,17 @@ async function runWithContext(
 export async function runCampaignAiPlan(
   input: CampaignAiPlanInput
 ): Promise<CampaignAiPlanResult> {
+  // PMF-005 — platform path (flag-gated). The Campaign Planner AIA agent orchestrates
+  // the capability graph; the definitive plan is produced by the existing engine
+  // (executeRunCampaignAiPlan) inside the AIC pipeline, and the exact plan is served
+  // (parity) with a safety net to the engine directly. Default 'legacy' = unchanged.
+  if (shouldRunPlatform()) {
+    const { runCampaignPlanViaPlatform } = await import('./campaignCapability/campaignPlatformRuntime');
+    return runCampaignPlanViaPlatform<CampaignAiPlanResult>({
+      companyId: (input as { companyId?: string }).companyId ?? '',
+      generate: () => executeRunCampaignAiPlan(input, runWithContext),
+      correlationId: input.campaignId,
+    });
+  }
   return executeRunCampaignAiPlan(input, runWithContext);
 }

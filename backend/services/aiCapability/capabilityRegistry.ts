@@ -144,6 +144,24 @@ REGISTRY_INTERNAL.CREATOR_ASSET.config.maxRetries = 0;       // pipeline owns re
 REGISTRY_INTERNAL.CREATOR_ASSET.config.partialAllowed = true;
 delete REGISTRY_INTERNAL.CREATOR_ASSET.config.fallbackModel;
 
+// PMF-005 — the Campaign Planner capability (the execution capability the Campaign
+// Planner AIA agent runs each graph node through). Definitive plan generation is
+// performed by the EXISTING planner engine inside an injected model runner (zero
+// prompt/quality change); AIC provides the pipeline (CKC knowledge, validation,
+// telemetry, recovery, output contract). Lenient + recovery off — the engine owns
+// planner-contract enforcement, capacity, and retries.
+REGISTRY_INTERNAL.CAMPAIGN_PLAN = def(
+  'CAMPAIGN_PLAN', 'Execute a Campaign Planner capability-graph node (plan via the planner engine).',
+  'CAMPAIGN_PLANNER', ['IDENTITY', 'AUDIENCE', 'POSITIONING', 'MARKETING', 'INDUSTRY', 'COMPETITORS', 'PRODUCTS', 'SERVICES'],
+  [], 'plan_then_execute', 'campaign_plan',
+  { grounding: false, business: false, policy: false, hallucination: false, confidenceThreshold: 0 },
+);
+REGISTRY_INTERNAL.CAMPAIGN_PLAN.supportedModels = ['gpt-4o-mini'];
+REGISTRY_INTERNAL.CAMPAIGN_PLAN.config.defaultModel = 'gpt-4o-mini';
+REGISTRY_INTERNAL.CAMPAIGN_PLAN.config.maxRetries = 0;       // engine owns retries/contract
+REGISTRY_INTERNAL.CAMPAIGN_PLAN.config.partialAllowed = true;
+delete REGISTRY_INTERNAL.CAMPAIGN_PLAN.config.fallbackModel;
+
 export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDefinition>> = REGISTRY_INTERNAL;
 export const REGISTERED_CAPABILITIES: ReadonlyArray<string> = Object.keys(REGISTRY_INTERNAL);
 

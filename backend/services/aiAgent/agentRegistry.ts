@@ -13,6 +13,8 @@
 
 import type { AgentId, AgentStep } from './agentContracts';
 import type { CapabilityId } from '../aiCapability/capabilityContracts';
+// PMF-005 — the Campaign Planner agent's steps are derived from the capability graph.
+import { CAMPAIGN_CAPABILITY_IDS, CAMPAIGN_CAPABILITY_GRAPH } from '../campaignCapability/campaignCapabilityGraph';
 
 export type AgentExecutionStrategy = 'sequential' | 'dependency_graph';
 export type MemoryStrategy = 'persistent' | 'ephemeral';
@@ -66,6 +68,14 @@ function def(
   };
 }
 
+/** PMF-005 — derive the Campaign Planner agent's steps from the capability graph. */
+function buildCampaignPlannerSteps(): AgentStep[] {
+  return CAMPAIGN_CAPABILITY_IDS.map((id) => {
+    const gNode = CAMPAIGN_CAPABILITY_GRAPH[id];
+    return step(id, 'CAMPAIGN_PLAN', { mode: 'parallel', dependsOn: gNode.dependsOn, requiresApproval: gNode.requiresApproval });
+  });
+}
+
 const REGISTRY_INTERNAL: Record<string, AgentDefinition> = {
   // Website intelligence → competitor intelligence (depends on the first).
   WEBSITE_INTELLIGENCE_AGENT: def('WEBSITE_INTELLIGENCE_AGENT', 'Analyze the company website and derive competitive intelligence.', [
@@ -92,6 +102,15 @@ const REGISTRY_INTERNAL: Record<string, AgentDefinition> = {
     step('growth', 'GROWTH_INTELLIGENCE', { mode: 'single' }),
     step('recommend', 'RECOMMENDATION_ENGINE', { mode: 'sequential', dependsOn: ['growth'] }),
   ]),
+
+  // PMF-005 — the Campaign Planner as an AIA agent. Steps + edges are DERIVED from
+  // the Campaign Capability Graph (single source), so the agent IS the execution
+  // graph. Every node executes through AIC (capability CAMPAIGN_PLAN); the definitive
+  // plan is produced by the existing planner engine inside an injected runner (zero
+  // quality change). The validation node gates on approval (§5). best_effort so a
+  // non-plan analysis node can degrade without failing the campaign.
+  CAMPAIGN_PLANNER_AGENT: def('CAMPAIGN_PLANNER_AGENT', 'Orchestrate campaign planning across the capability graph.',
+    buildCampaignPlannerSteps(), { completionStrategy: 'best_effort' }),
 };
 
 export const AGENT_REGISTRY: Readonly<Record<string, AgentDefinition>> = REGISTRY_INTERNAL;

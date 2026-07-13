@@ -28,6 +28,9 @@ export const OUTPUT_CONTRACTS: Record<string, string[]> = {
   // PMF-004 — the Content Creator asset result; no fixed top-level keys (the asset
   // pipeline owns its own governance/diagnostics).
   creator_asset: [],
+  // PMF-005 — the Campaign Planner result / capability-graph node output; no fixed
+  // top-level keys (the planner engine owns its own contract enforcement).
+  campaign_plan: [],
 };
 
 /** A custom rule returns null when satisfied, or a failure message. Pure/deterministic. */
