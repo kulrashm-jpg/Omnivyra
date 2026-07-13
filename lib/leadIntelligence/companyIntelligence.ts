@@ -12,13 +12,15 @@
 
 import type { CanonicalLeadView } from './types';
 import type { BuyingIntentProfile, DecisionStage, Interest } from './buyingIntent';
+// Canonical free/public-provider list (AUTH-001 Section 5) — superset of the
+// short local list this file previously carried.
+import { PUBLIC_EMAIL_DOMAINS as FREE_EMAIL_DOMAINS } from '../auth/publicEmailDomains';
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const clamp = (n: number, lo = 0, hi = 100): number => Math.max(lo, Math.min(hi, n));
 const leadMeta = (view: CanonicalLeadView): Record<string, unknown> => obj(obj(view.attribution.sourceMetadata).metadata);
 
-const FREE_EMAIL_DOMAINS = new Set(['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com', 'proton.me', 'protonmail.com', 'live.com', 'msn.com']);
 const SENIOR_TITLE = /\b(ceo|cto|cfo|coo|cmo|founder|owner|president|vp|vice president|director|head|chief)\b/i;
 const MID_TITLE = /\b(manager|lead|principal|senior|specialist|analyst|coordinator|architect)\b/i;
 const STAGE_ORDER: DecisionStage[] = ['awareness', 'interest', 'evaluation', 'shortlisting', 'decision', 'customer'];

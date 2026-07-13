@@ -15,6 +15,7 @@ import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 import { apiFetch } from '../lib/apiFetch';
 import { clearBrowserAuthState } from '../utils/authStorage';
+import CaptchaWidget from '../components/auth/CaptchaWidget';
 
 type Mode = 'password' | 'forgot' | 'magic-link';
 type ResumeSignupStatus = {
@@ -41,6 +42,7 @@ export default function LoginPage() {
   );
   const [resetSent,    setResetSent]    = useState(false);
   const [magicSent,    setMagicSent]    = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [noAccount,    setNoAccount]    = useState(false);
   const [resumeStatus, setResumeStatus] = useState<ResumeSignupStatus>({
     ready: false,
@@ -338,7 +340,7 @@ export default function LoginPage() {
       const response = await fetch('/api/auth/reset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: trimmed }),
+        body: JSON.stringify({ email: trimmed, captchaToken }),
       });
       const json = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -431,6 +433,16 @@ export default function LoginPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0 3.75h.008v.008H12v-.008Zm9-3.758a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                 </svg>
                 <p className="text-sm text-amber-800">{resumeSignupMessage}</p>
+              </div>
+            )}
+            {reason === 'verify_email' && (
+              <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <svg className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0 3.75h.008v.008H12v-.008Zm9-3.758a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+                <p className="text-sm text-amber-800">
+                  Please verify your email address first — check your inbox for the confirmation link.
+                </p>
               </div>
             )}
             {verified === 'signup' && (
@@ -626,6 +638,7 @@ export default function LoginPage() {
                       placeholder="you@company.com"
                       className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]" />
                   </div>
+                  <CaptchaWidget onToken={setCaptchaToken} />
                   {error && <ErrorBox message={error} />}
                   <button type="submit" disabled={!!loading}
                     className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed">

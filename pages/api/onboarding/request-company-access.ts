@@ -12,12 +12,23 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { checkRateLimit } from '../../../lib/auth/rateLimit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
+
+  // AUTH-001 §4 — per-user rate limit: each request fans out an in-app
+  // notification to every company admin, so cap the blast radius.
+  const rlUid = await checkRateLimit(user.id, { keyPrefix: 'rl:uid:request-company-access', limit: 5, windowSecs: 3600 });
+  if (!rlUid.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+
+  // AUTH-001 §1 — unverified sessions may not create join requests.
+  if (!user.emailVerified) {
+    return res.status(403).json({ error: 'Please verify your email address first.', code: 'EMAIL_NOT_VERIFIED' });
+  }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { companyId, fullName, department } = body as {

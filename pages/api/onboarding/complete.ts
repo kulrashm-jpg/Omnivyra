@@ -30,8 +30,15 @@ import { reviewableResults } from '../../../lib/auth/domainEligibilityModel';
 import {
   grantInitialFreeCredit,
   INITIAL_FREE_CREDIT_CATEGORY,
+  INITIAL_FREE_CREDIT_DEFAULT,
+  INITIAL_FREE_CREDIT_EXPIRY_DAYS_DEFAULT,
 } from '../../../backend/services/initialFreeCreditService';
 import { checkRateLimit, ONBOARDING_COMPLETE_LIMIT, ONBOARDING_UID_LIMIT } from '../../../lib/auth/rateLimit';
+import {
+  emitSignupEvent,
+  ensureSignupCorrelationId,
+  requestUserAgent,
+} from '../../../backend/services/signupEventService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -51,9 +58,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const supabaseUid: string = authResult.user.supabaseUid;
   const authEmail:   string = authResult.user.email;
 
+  // ── App-level email-verification gate (AUTH-001 §1) ──────────────────────
+  // This endpoint creates users/companies and grants credits — none of that
+  // may happen for a session whose auth identity is unconfirmed.
+  if (!authResult.user.emailVerified) {
+    return res.status(403).json({ error: 'Please verify your email address first.', code: 'EMAIL_NOT_VERIFIED' });
+  }
+
   // ── Post-auth UID rate limit ──────────────────────────────────────────────
   const rlUid = await checkRateLimit(supabaseUid, ONBOARDING_UID_LIMIT);
   if (!rlUid.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+
+  // Journey correlation (AUTH-001 §10).
+  const signupCorrelationId = await ensureSignupCorrelationId(authEmail);
 
   const supabase = supabaseAdmin;
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -118,17 +135,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ── 1. (no-op) Initial credit amount + expiry are now resolved by the
     //         shared grantInitialFreeCredit() service from
-    //         free_credit_config + sane defaults (50 / 14 days). Kept here
-    //         only so downstream free_credit_profiles inserts and the
-    //         response payload have an authoritative expected amount.
+    //         free_credit_config + the canonical defaults (300 / 30 days).
+    //         Kept here only so downstream free_credit_profiles inserts and
+    //         the response payload have an authoritative expected amount.
+    //         AUTH-001 §12: fallbacks now share the service's exported
+    //         constants instead of the stale 50/14 copies that could record
+    //         a different amount than what was actually granted.
     const { data: creditConfig } = await supabase
       .from('free_credit_config')
       .select('credits, expiry_days')
       .eq('category', INITIAL_FREE_CREDIT_CATEGORY)
       .eq('is_active', true)
       .maybeSingle();
-    const initialCredits = (creditConfig as { credits?: number } | null)?.credits ?? 50;
-    const expiryDays     = (creditConfig as { expiry_days?: number } | null)?.expiry_days ?? 14;
+    const initialCredits = (creditConfig as { credits?: number } | null)?.credits ?? INITIAL_FREE_CREDIT_DEFAULT;
+    const expiryDays     = (creditConfig as { expiry_days?: number } | null)?.expiry_days ?? INITIAL_FREE_CREDIT_EXPIRY_DAYS_DEFAULT;
     const expiryAt       = new Date(Date.now() + expiryDays * 86400 * 1000).toISOString();
 
     // ── 2. Domain eligibility ───────────────────────────────────────────────
@@ -287,6 +307,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (grantResult.granted === false && grantResult.reason === 'grant_failed') {
+      await emitSignupEvent({
+        event: 'SystemFailure', outcome: 'denied',
+        correlationId: signupCorrelationId,
+        email: authEmail, userId, companyId: orgId,
+        reason: 'CREDIT_GRANT_FAILED', ip, userAgent: requestUserAgent(req),
+      });
       return res.status(500).json({
         error: grantResult.message ?? 'Could not grant free credits. Please try again in a moment.',
         code:  'CREDIT_GRANT_FAILED',
@@ -303,6 +329,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('id', userId);
 
     if (grantResult.granted) {
+      // Canonical journey events (AUTH-001 §9).
+      await emitSignupEvent({
+        event: 'CreditsGranted', outcome: 'allowed',
+        correlationId: signupCorrelationId,
+        email: authEmail, userId, companyId: orgId,
+        reason: `initial_free_credit credits=${grantResult.credits}`,
+        ip, userAgent: requestUserAgent(req),
+      });
+      await emitSignupEvent({
+        event: 'OnboardingCompleted', outcome: 'allowed',
+        correlationId: signupCorrelationId,
+        email: authEmail, userId, companyId: orgId,
+        reason: 'onboarding_state=company_complete', ip, userAgent: requestUserAgent(req),
+      });
       return res.status(200).json({
         success:        true,
         credits:        grantResult.credits,

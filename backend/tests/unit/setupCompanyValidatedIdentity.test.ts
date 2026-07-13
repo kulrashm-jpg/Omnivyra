@@ -74,7 +74,11 @@ describe('Phase-8 source contract: no legitimacy validator remains', () => {
     expect(code).not.toMatch(/domainCanonicalService/);
     expect(code).not.toMatch(/domainEligibilityService/);
     expect(code).not.toMatch(/domainEventLogger/);
-    expect(code).not.toMatch(/from '\.\.\/\.\.\/\.\.\/lib\/auth\/rateLimit'/);
+    // Phase 8's concern was the domain-PROBING limiter that shipped with the
+    // removed legitimacy validator — not endpoint abuse limits. AUTH-001 §4
+    // added plain checkRateLimit (IP/UID) to this route, which is allowed;
+    // the probing limiter must stay gone.
+    expect(code).not.toMatch(/DOMAIN_RESOLUTION_LIMIT/);
   });
 
   it('does not call resolveDomain / checkDomainEligibility / validatePublicWebsite', () => {

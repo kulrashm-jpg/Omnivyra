@@ -37,6 +37,13 @@ import {
 } from '../../../backend/services/validatedWebsiteService';
 import { monitorCompanyIdentityDrift } from '../../../backend/services/companyIdentityDriftService';
 import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
+import { checkRateLimit } from '../../../lib/auth/rateLimit';
+import {
+  emitSignupEvent,
+  ensureSignupCorrelationId,
+  requestIp,
+  requestUserAgent,
+} from '../../../backend/services/signupEventService';
 
 // Phase 8: company-legitimacy validation (eligibility, live-website existence,
 // canonical/forwarding) is NO LONGER performed here. It is decided ONCE at
@@ -87,8 +94,45 @@ async function fetchAdminName(
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
   if (req.method !== 'POST') return res.status(405).end();
 
+  // ── Rate limiting (AUTH-001 §4) — this endpoint creates companies and
+  // grants credits; previously it had no rate limit at all (auth + DB
+  // idempotency only). IP gate before auth, UID gate after.
+  const ip = requestIp(req);
+  const ipRl = await checkRateLimit(ip, { keyPrefix: 'rl:onboarding:setup-company', limit: 10, windowSecs: 3600 });
+  if (!ipRl.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
+
+  const uidRl = await checkRateLimit(user.id, { keyPrefix: 'rl:uid:setup-company', limit: 5, windowSecs: 3600 });
+  if (!uidRl.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+
+  // ── App-level email-verification gate (AUTH-001 §1) ───────────────────────
+  // Company creation (and the credit grant below) must never run for a
+  // session whose auth identity is unconfirmed — regardless of the Supabase
+  // project's "Confirm email" dashboard setting.
+  if (!user.emailVerified) {
+    return res.status(403).json({ error: 'Please verify your email address first.', code: 'EMAIL_NOT_VERIFIED' });
+  }
+
+  // Journey correlation (AUTH-001 §10) — recovered from the signup intent.
+  const signupCorrelationId = await ensureSignupCorrelationId(user.email ?? '');
+  const emitCompanyEvent = (
+    event: Parameters<typeof emitSignupEvent>[0]['event'],
+    outcome: 'allowed' | 'denied',
+    reason?: string,
+    companyId?: string | null,
+  ) =>
+    emitSignupEvent({
+      event, outcome,
+      correlationId: signupCorrelationId,
+      email: user.email ?? null,
+      userId: user.id,
+      reason: reason ?? null,
+      companyId: companyId ?? null,
+      ip,
+      userAgent: requestUserAgent(req),
+    });
 
   /**
    * Rule 5 — a verified user from an already-claimed domain tried to create an
@@ -349,6 +393,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
       const adminName = await fetchAdminName(supabase, matched.company_id);
       await notifyClaimedDomain(matched.company_id, matched.company_name);
+      await emitCompanyEvent('CompanyExists', 'denied', 'MATCHED_EXISTING_COMPANY', matched.company_id);
       return res.status(200).json({
         companyExists:      true,
         matchedCompanyId:   matched.company_id,
@@ -431,6 +476,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         // company; everyone else must be invited by the company admin.
         const adminName = await fetchAdminName(supabase, domainCompany.id);
         await notifyClaimedDomain(domainCompany.id, domainCompany.name);
+        await emitCompanyEvent('CompanyExists', 'denied', 'DOMAIN_ALREADY_CLAIMED', domainCompany.id);
         return res.status(200).json({
           companyExists:      true,
           matchedCompanyId:   domainCompany.id,
@@ -489,12 +535,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }
 
     // ── Race condition: another request won the domain UNIQUE race ────────────
-    if (companyErr?.code === '23505' && adminEmailDomain) {
-      const { data: raceWinner } = await supabase
-        .from('companies')
-        .select('id, name')
-        .eq('admin_email_domain', adminEmailDomain)
-        .maybeSingle();
+    // 23505 can now fire on either partial unique index: admin_email_domain
+    // (20260322) or website_domain (20260713, AUTH-001 §8). Re-resolve the
+    // winner by whichever domain key we hold.
+    if (companyErr?.code === '23505' && (adminEmailDomain || websiteDomain)) {
+      const { data: raceWinnerByAdmin } = adminEmailDomain
+        ? await supabase
+            .from('companies')
+            .select('id, name')
+            .eq('admin_email_domain', adminEmailDomain)
+            .maybeSingle()
+        : { data: null };
+      const { data: raceWinnerByWebsite } = !raceWinnerByAdmin && websiteDomain
+        ? await supabase
+            .from('companies')
+            .select('id, name')
+            .eq('website_domain', websiteDomain)
+            .maybeSingle()
+        : { data: null };
+      const raceWinner = (raceWinnerByAdmin ?? raceWinnerByWebsite) as { id: string; name: string } | null;
 
       if (raceWinner) {
         // Another concurrent request won the INSERT race for this domain.
@@ -514,6 +573,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         // Different user won the race — treat as existing company.
         const adminName = await fetchAdminName(supabase, raceWinner.id);
         await notifyClaimedDomain(raceWinner.id, raceWinner.name);
+        await emitCompanyEvent('CompanyExists', 'denied', 'DOMAIN_UNIQUE_RACE_LOST', raceWinner.id);
         return res.status(200).json({
           companyExists:      true,
           matchedCompanyId:   raceWinner.id,
@@ -633,7 +693,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     // The service is idempotent at the DB layer (UNIQUE on
     // free_credit_claims.organization_id WHERE category='initial_free_credit')
     // so calling it from multiple onboarding paths is safe. Reads the amount
-    // and expiry from free_credit_config; defaults to 50 / 14 days.
+    // and expiry from free_credit_config; defaults to 300 / 30 days
+    // (INITIAL_FREE_CREDIT_DEFAULT in initialFreeCreditService).
     const grantResult = await grantInitialFreeCredit({
       orgId: companyId,
       userId: user.id,
@@ -641,7 +702,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     });
     if (grantResult.granted === false && grantResult.reason === 'grant_failed') {
       console.error('[setup-company] credit grant failed:', grantResult.message);
-      // Non-fatal — company is still created
+      await emitCompanyEvent('SystemFailure', 'denied', 'CREDIT_GRANT_FAILED', companyId);
+      // Non-fatal — company is still created; the login-time reconciler retries.
+    } else if (grantResult.granted === true) {
+      await emitCompanyEvent('CreditsGranted', 'allowed', 'initial_free_credit', companyId);
     }
 
     // ── 8. Mark profile_complete in setup progress ────────────────────────────
@@ -690,6 +754,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       website_domain:     websiteDomain,
       admin_email_domain: adminEmailDomain,
     });
+
+    // Canonical journey events (AUTH-001 §9): company creation is also the
+    // moment onboarding_state flips to 'company_complete' (step 4 above).
+    await emitCompanyEvent('CompanyCreated', 'allowed', undefined, companyId);
+    await emitCompanyEvent('OnboardingCompleted', 'allowed', 'onboarding_state=company_complete', companyId);
 
     return res.status(200).json({ companyId });
   } catch (err: any) {

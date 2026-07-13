@@ -11,28 +11,11 @@
  * wasted OTP rate limit quota on invalid email domains.
  */
 
-// Blocked personal email domains
-const BLOCKED_DOMAINS = new Set([
-  'gmail.com',
-  'yahoo.com',
-  'hotmail.com',
-  'outlook.com',
-  'aol.com',
-  'icloud.com',
-  'protonmail.com',
-  'mail.com',
-  'yandex.com',
-  '163.com',
-  'qq.com',
-  'foxmail.com',
-  '1and1.com',
-  'btinternet.com',
-  'gmx.com',
-  'mail.ru',
-  'tutanota.com',
-  'protonmail.ch',
-  'mailbox.org',
-]);
+// Canonical blocklist — single source of truth (AUTH-001 Section 5).
+import {
+  isPublicEmailDomain,
+  PUBLIC_EMAIL_PROVIDER_NAMES,
+} from './publicEmailDomains';
 
 /**
  * Validates if an email domain is allowed for public signup/login
@@ -71,16 +54,14 @@ export function validateEmailDomain(
   }
 
   // Check if domain is in blocked list
-  if (BLOCKED_DOMAINS.has(domain)) {
-    // Provide user-friendly error message
-    const capitalizedDomain = domain
-      .split('.')
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join('.');
-    
+  if (isPublicEmailDomain(domain)) {
+    // Provide user-friendly error message — use the provider's real name
+    // when we know it ("Gmail"), otherwise show the domain as typed.
+    const providerName = PUBLIC_EMAIL_PROVIDER_NAMES[domain] ?? domain;
+
     return {
       valid: false,
-      reason: `${capitalizedDomain} accounts not supported. Please use your work email address.`,
+      reason: `${providerName} accounts not supported. Please use your work email address.`,
     };
   }
 
@@ -98,17 +79,5 @@ export function validateEmailDomain(
 export function getBlockedDomainName(email: string): string | null {
   const domain = email.trim().toLowerCase().split('@')[1];
   if (!domain) return null;
-
-  const domainMap: Record<string, string> = {
-    'gmail.com': 'Gmail',
-    'yahoo.com': 'Yahoo',
-    'hotmail.com': 'Hotmail',
-    'outlook.com': 'Outlook',
-    'aol.com': 'AOL',
-    'icloud.com': 'iCloud',
-    'protonmail.com': 'ProtonMail',
-    'yandex.com': 'Yandex',
-  };
-
-  return domainMap[domain] || null;
+  return PUBLIC_EMAIL_PROVIDER_NAMES[domain] || null;
 }

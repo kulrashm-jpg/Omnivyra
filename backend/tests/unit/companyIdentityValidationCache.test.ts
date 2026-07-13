@@ -22,6 +22,9 @@ function harness(over: Partial<Parameters<typeof validateCompanyIdentity>[1]> = 
   const innerProbe = over.probeWebsite ?? (async (d: string) => live(d));
   const deps = {
     checkEligibility: async () => ({ result: 'DOMAIN_ELIGIBLE' as const, eligible: true }),
+    // AUTH-001 §7: stub the parked-domain probe so unit tests stay
+    // deterministic (the default implementation performs a real fetch).
+    probeParked: async () => ({ parked: false, checked: true }),
     lookupClaimedCompany: async () => null,
     now: () => clock,
     ...over,

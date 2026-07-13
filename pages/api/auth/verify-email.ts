@@ -24,6 +24,12 @@ import {
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
+import {
+  emitSignupEvent,
+  ensureSignupCorrelationId,
+  requestIp,
+  requestUserAgent,
+} from '../../../backend/services/signupEventService';
 
 type SuccessResponse = { success: true; route: string; requiresLogin?: boolean; email?: string | null };
 type ErrorResponse   = { error: string; code?: string };
@@ -51,6 +57,14 @@ export default async function handler(
   const user = authResult.user;
   if (user) seedRequestContextFromRequest(req, { userId: user.id });
 
+  // ── 1b. App-level verification gate (AUTH-001 §1) ─────────────────────────
+  // is_email_verified may only ever mirror the Supabase auth confirm state.
+  // A session whose auth identity is NOT confirmed cannot use this endpoint
+  // to self-verify — that would make the gate forgeable by any session holder.
+  if (user && !user.emailVerified) {
+    return res.status(403).json({ error: 'Email address is not verified yet.', code: 'EMAIL_NOT_VERIFIED' });
+  }
+
   const now = new Date().toISOString();
 
   // ── 1a. New user — token valid but no public.users row yet ────────────────
@@ -69,6 +83,13 @@ export default async function handler(
     const identity = await validateAuthToken(token);
     if (!identity) {
       return res.status(401).json({ error: 'Invalid or expired session', code: 'INVALID_SESSION' });
+    }
+
+    // AUTH-001 §1 — same gate for the first-verify path: the public.users row
+    // is only created (with is_email_verified=true) when Supabase itself says
+    // the email is confirmed.
+    if (!identity.emailVerified) {
+      return res.status(403).json({ error: 'Email address is not verified yet.', code: 'EMAIL_NOT_VERIFIED' });
     }
 
     const email = identity.email?.toLowerCase() ?? '';
@@ -118,6 +139,24 @@ export default async function handler(
     .from('users')
     .update(updatePayload)
     .eq('id', resolvedUserId);
+
+  // Canonical journey event (AUTH-001 §9). Idempotent-by-outcome: repeat
+  // verifies emit another allowed row for the same correlation ID, which is
+  // how operators see re-verification volume without any state change.
+  if (resolvedEmail) {
+    void ensureSignupCorrelationId(resolvedEmail).then((correlationId) =>
+      emitSignupEvent({
+        event:         'VerificationSucceeded',
+        outcome:       'allowed',
+        correlationId,
+        email:         resolvedEmail,
+        userId:        resolvedUserId,
+        reason:        currentState === 'pending_verification' ? 'first_verify' : 'repeat_verify',
+        ip:            requestIp(req),
+        userAgent:     requestUserAgent(req),
+      }),
+    );
+  }
 
   // ── 3. Complete any pending signup_intent for this email ──────────────────
   // sync-supabase-user's bootstrap already attempts to mark the intent

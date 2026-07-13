@@ -1,24 +1,49 @@
-
 /**
  * POST /api/auth/check-user
  * Body: { email: string }
  *
- * Checks whether an email is registered. Returns { exists: boolean }.
+ * DEPRECATED, NEUTRALIZED ORACLE (AUTH-001, Section 2).
  *
- * Strategy (fastest-first):
- *  1. public.users  — covers all users who completed onboarding
- *  2. Supabase Admin REST — covers super-admin accounts and users who signed up
- *     outside the normal onboarding flow
+ * This endpoint previously returned { exists: boolean } for any email —
+ * unauthenticated, un-rate-limited, and failing OPEN to a fabricated
+ * positive. That made it the clearest account-enumeration oracle on the
+ * signup surface,
+ * undermining the anti-enumeration work in resend-verification/reset.
+ * A repo-wide search found ZERO callers (login/magic-link pre-check via
+ * /api/auth/login and /api/auth/magic-link replaced it), so the contract
+ * is preserved in shape only:
+ *
+ *   - Rate limited: 20 requests / 15 min / IP (Redis, shared limiter).
+ *   - Constant response: always { exists: false } for well-formed input,
+ *     regardless of whether the account exists — no discovery possible.
+ *   - Constant work: exactly one indexed lookup on public.users runs on
+ *     every well-formed request (result only feeds the audit log), so
+ *     response timing does not depend on account existence. The previous
+ *     second path (Supabase Auth admin REST fallback) is removed.
+ *   - Fail CLOSED: unexpected errors return a generic 500 — never a
+ *     fabricated positive result.
+ *   - Audited: the real outcome is recorded via the existing security
+ *     audit trail (capability_audit_log) for operator visibility.
+ *
+ * New code must not call this endpoint.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { checkRateLimit } from '../../../lib/auth/rateLimit';
+import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<{ exists: boolean; error?: string }>
+  res: NextApiResponse<{ exists: boolean } | { error: string }>,
 ) {
-  if (req.method !== 'POST') return res.status(405).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown')
+    .split(',')[0]
+    .trim();
+  const rl = await checkRateLimit(ip, { keyPrefix: 'rl:auth:check-user', limit: 20, windowSecs: 15 * 60 });
+  if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 
   const { email } = (req.body ?? {}) as { email?: string };
   if (!email?.trim()) return res.status(200).json({ exists: false });
@@ -26,57 +51,33 @@ export default async function handler(
   const normalised = email.trim().toLowerCase();
 
   try {
-    const adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    );
-
-    // ── 1. Check public.users (fast path) ────────────────────────────────────
-    // Exclude soft-deleted rows: a deleted account should appear as "not found"
-    // so the login page doesn't reveal that an email was previously registered.
-    const { data: publicUsers } = await adminClient
+    // Constant-work lookup: runs on every well-formed request; the result is
+    // ONLY used for the audit row, never for the response.
+    const { data: rows, error } = await supabase
       .from('users')
       .select('id, is_deleted')
-      .ilike('email', normalised)
+      .eq('email', normalised)
       .limit(1);
 
-    if (Array.isArray(publicUsers) && publicUsers.length > 0) {
-      const row = publicUsers[0] as any;
-      // Treat soft-deleted as non-existent — the login flow will surface
-      // ACCOUNT_DELETED at the appropriate point (post-login-route).
-      if (row.is_deleted) {
-        return res.status(200).json({ exists: false });
-      }
-      return res.status(200).json({ exists: true });
+    if (error) {
+      // Fail CLOSED — a backend error must not fabricate an answer.
+      return res.status(500).json({ error: 'Unable to process request.' });
     }
 
-    // ── 2. Fallback: query auth.users via Supabase Admin REST API ────────────
-    //    Uses email filter param supported by Supabase Auth Admin endpoint.
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const serviceKey  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    const row = Array.isArray(rows) && rows.length > 0 ? (rows[0] as { is_deleted?: boolean }) : null;
+    const outcome = !row ? 'not_found' : row.is_deleted ? 'soft_deleted' : 'exists';
 
-    const authRes = await fetch(
-      `${supabaseUrl}/auth/v1/admin/users?filter=${encodeURIComponent(normalised)}`,
-      {
-        headers: {
-          apikey:        serviceKey,
-          Authorization: `Bearer ${serviceKey}`,
-        },
-      },
-    );
+    void logSecurityEvent({
+      capability: 'auth.check_user',
+      decision:   'allowed',
+      reason:     `check_user outcome=${outcome} (response constant)`,
+      ip,
+      userAgent:  typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
+    });
 
-    if (authRes.ok) {
-      const authJson = await authRes.json() as { users?: { email?: string }[] };
-      const found = authJson.users?.some(u => u.email?.toLowerCase() === normalised);
-      return res.status(200).json({ exists: !!found });
-    }
-
-    // Auth API failed — fail open so legitimate users aren't blocked
-    console.warn('[check-user] Auth admin API returned', authRes.status, '— failing open');
-    return res.status(200).json({ exists: true });
-
-  } catch (err) {
-    console.error('[check-user] Error:', err);
-    return res.status(200).json({ exists: true }); // fail open
+    // Constant response — the endpoint no longer discloses account existence.
+    return res.status(200).json({ exists: false });
+  } catch {
+    return res.status(500).json({ error: 'Unable to process request.' });
   }
 }

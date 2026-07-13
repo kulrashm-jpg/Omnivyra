@@ -248,7 +248,10 @@ export default async function handler(
     const existingUserId = (existingByUid as { id: string }).id;
     await supabase
       .from('users')
-      .update({ is_email_verified: true, last_sign_in_at: now, has_password: hasPassword })
+      // AUTH-001 §1: mirror the Supabase auth confirm state instead of
+      // unconditionally stamping true — the app-level verification gate
+      // reads this column and must not be forgeable by merely holding a session.
+      .update({ is_email_verified: identity.emailVerified, last_sign_in_at: now, has_password: hasPassword })
       .eq('supabase_uid', supabaseUid);
     // Lifecycle transition: a status='invited' row that successfully completes
     // Supabase auth has, by definition, "completed first authenticated session"
@@ -291,7 +294,7 @@ export default async function handler(
     // Restore active_company_id from existing role if missing (stateful login)
     const updatePayload: Record<string, unknown> = {
       supabase_uid:      supabaseUid,
-      is_email_verified: true,
+      is_email_verified: identity.emailVerified, // AUTH-001 §1 — mirror auth state
       last_sign_in_at:   now,
       has_password:      hasPassword,
     };
@@ -335,7 +338,7 @@ export default async function handler(
     .insert({
       supabase_uid:      supabaseUid,
       email:             normalizedEmail,
-      is_email_verified: true,
+      is_email_verified: identity.emailVerified, // AUTH-001 §1 — mirror auth state
       last_sign_in_at:   now,
       has_password:      hasPassword,
     })

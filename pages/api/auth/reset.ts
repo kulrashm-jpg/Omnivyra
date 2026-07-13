@@ -13,6 +13,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
+import { verifyCaptchaToken, CAPTCHA_FAILED_RESPONSE } from '../../../lib/auth/captcha';
 
 type SuccessResponse = { ok: true };
 type ErrorResponse = { error: string };
@@ -30,6 +31,10 @@ export default async function handler(
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   if (!email) return res.status(400).json({ error: 'email is required' });
+
+  // CAPTCHA (no-op until CAPTCHA_PROVIDER is configured — AUTH-001 §3).
+  const captcha = await verifyCaptchaToken(body.captchaToken, ip);
+  if (!captcha.ok) return res.status(400).json(CAPTCHA_FAILED_RESPONSE);
 
   return res.status(200).json({ ok: true });
 }

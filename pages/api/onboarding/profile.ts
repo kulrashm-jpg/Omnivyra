@@ -15,6 +15,12 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
 import { selectCompatibleCompanyRole } from '../../../backend/services/companyMembershipIntegrityService';
+import {
+  emitSignupEvent,
+  ensureSignupCorrelationId,
+  requestIp,
+  requestUserAgent,
+} from '../../../backend/services/signupEventService';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse   = { error: string; code?: string };
@@ -30,6 +36,13 @@ export default async function handler(
   if (userErr || !user) {
     const status = userErr === 'ACCOUNT_DELETED' ? 403 : 401;
     return res.status(status).json({ error: userErr ?? 'Invalid session', code: userErr ?? undefined });
+  }
+
+  // ── 1a. App-level email-verification gate (AUTH-001 §1) ───────────────────
+  // Onboarding may not continue for a session whose auth identity is
+  // unconfirmed — backstop for the Supabase "Confirm email" project setting.
+  if (!user.emailVerified) {
+    return res.status(403).json({ error: 'Please verify your email address first.', code: 'EMAIL_NOT_VERIFIED' });
   }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -84,6 +97,24 @@ export default async function handler(
   });
 
   const route = compatibleRole ? await getUserPreferenceRoute(user.id) : '/onboarding/company';
+
+  // Canonical journey event (AUTH-001 §9): the profile step is the first
+  // onboarding action after verification.
+  const eventEmail = user.email ?? null;
+  if (eventEmail) {
+    void ensureSignupCorrelationId(eventEmail).then((correlationId) =>
+      emitSignupEvent({
+        event:         'OnboardingStarted',
+        outcome:       'allowed',
+        correlationId,
+        email:         eventEmail,
+        userId:        user.id,
+        reason:        'onboarding_state=profile_complete',
+        ip:            requestIp(req),
+        userAgent:     requestUserAgent(req),
+      }),
+    );
+  }
 
   return res.status(200).json({ success: true, route });
 }

@@ -27,6 +27,9 @@ function deps(over: Partial<ValidateCompanyIdentityDeps> = {}): ValidateCompanyI
   return {
     checkEligibility: async () => ({ result: 'DOMAIN_ELIGIBLE', eligible: true }),
     probeWebsite: async (d) => liveCanonical(d),
+    // AUTH-001 §7: stub the parked-domain probe so unit tests stay
+    // deterministic (the default implementation performs a real fetch).
+    probeParked: async () => ({ parked: false, checked: true }),
     lookupClaimedCompany: async () => null,
     ...over,
   };

@@ -64,6 +64,18 @@ export default async function handler(
   const email: string = authResult.user.email;
   const userId: string = authResult.user.id;
 
+  // ── 1a. App-level email-verification gate (AUTH-001 §1) ──────────────────
+  // Backstop for the Supabase project "Confirm email" setting: a session
+  // whose auth identity is unconfirmed may not proceed into onboarding or
+  // the app. Normally unreachable (Supabase refuses password logins for
+  // unconfirmed users), so hitting this indicates the dashboard setting is
+  // off or a token was minted through an unexpected path.
+  if (!authResult.user.emailVerified) {
+    return res.status(200).json({
+      route: `/login?reason=verify_email&email=${encodeURIComponent(email)}`,
+    });
+  }
+
   // ── 2. Look up user-row fields needed for routing ─────────────────────────
   // Safe lookup by primary key (id is the uuid resolved above) — no .or() with
   // raw email/uid string interpolation.

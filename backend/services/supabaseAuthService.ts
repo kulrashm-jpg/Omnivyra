@@ -29,7 +29,7 @@ export const extractAccessToken = canonicalExtractAccessToken;
  */
 export const getSupabaseUserFromRequest = async (
   req: NextApiRequest,
-): Promise<{ user: { id: string; email?: string | null } | null; error: string | null }> => {
+): Promise<{ user: { id: string; email?: string | null; emailVerified: boolean } | null; error: string | null }> => {
   const result = await resolveAuthenticatedUser(req);
   if (result.error === null) {
     // Phase 2.B — invited users surface to legacy callers as INVALID_AUTH so
@@ -38,7 +38,13 @@ export const getSupabaseUserFromRequest = async (
     if (result.user.status === 'invited') {
       return { user: null, error: 'ACCOUNT_INVITED' };
     }
-    return { user: { id: result.user.id, email: result.user.email }, error: null };
+    // emailVerified mirrors auth.users.email_confirmed_at (AUTH-001 §1) so
+    // callers can enforce the app-level verification gate without a second
+    // token round-trip. Additive — existing callers ignore it.
+    return {
+      user: { id: result.user.id, email: result.user.email, emailVerified: result.user.emailVerified },
+      error: null,
+    };
   }
   if (result.error === 'NO_TOKEN') return { user: null, error: 'MISSING_AUTH' };
   if (result.error === 'ACCOUNT_DELETED') return { user: null, error: 'ACCOUNT_DELETED' };

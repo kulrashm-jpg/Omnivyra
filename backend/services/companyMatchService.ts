@@ -20,18 +20,10 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import { supabase } from '../db/supabaseClient';
-
-const FREE_EMAIL_DOMAINS = new Set([
-  'gmail.com', 'googlemail.com',
-  'yahoo.com', 'yahoo.co.uk', 'yahoo.co.in', 'yahoo.ca',
-  'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
-  'icloud.com', 'me.com', 'mac.com',
-  'protonmail.com', 'proton.me',
-  'aol.com', 'mail.com',
-  'zoho.com', 'yandex.com',
-  'gmx.com', 'gmx.net',
-  'tutanota.com',
-]);
+// Canonical free/public-provider list — single source of truth shared with
+// the signup validators (AUTH-001 Section 5). Previously this file carried
+// its own divergent copy.
+import { isPublicEmailDomain } from '../../lib/auth/publicEmailDomains';
 
 /** Extract the domain portion from a URL or email address, stripping www. */
 export function extractDomain(input: string): string | null {
@@ -54,7 +46,7 @@ export function extractDomain(input: string): string | null {
 
 /** True when the domain belongs to a free/public email provider. */
 export function isFreeEmailDomain(domain: string): boolean {
-  return FREE_EMAIL_DOMAINS.has(domain.toLowerCase().trim());
+  return isPublicEmailDomain(domain);
 }
 
 const PRIVATE_DOMAIN_PATTERNS = [

@@ -28,8 +28,10 @@ import { logger } from './logger';
 
 export const INITIAL_FREE_CREDIT_CATEGORY = 'initial_free_credit';
 // Canonical signup grant per approved credit policy: 300 FREE credits, 30-day validity.
-const INITIAL_FREE_CREDIT_DEFAULT = 300;
-const INITIAL_FREE_CREDIT_EXPIRY_DAYS_DEFAULT = 30;
+// Exported (AUTH-001 §12) so callers that pre-compute an "expected amount"
+// (onboarding/complete.ts) share these instead of drifting stale copies.
+export const INITIAL_FREE_CREDIT_DEFAULT = 300;
+export const INITIAL_FREE_CREDIT_EXPIRY_DAYS_DEFAULT = 30;
 
 export type InitialFreeCreditResult =
   | { granted: true; credits: number; expiresAt: string }

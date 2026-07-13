@@ -13,12 +13,12 @@
  */
 
 // ── Domain blocklist ──────────────────────────────────────────────────────────
-const BLOCKED_DOMAINS = new Set([
-  'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
-  'icloud.com', 'protonmail.com', 'mail.com', 'yandex.com', '163.com',
-  'qq.com', 'foxmail.com', '1and1.com', 'btinternet.com', 'gmx.com',
-  'mail.ru', 'tutanota.com', 'protonmail.ch', 'mailbox.org',
-]);
+// Canonical list lives in lib/auth/publicEmailDomains.ts (AUTH-001 Section 5) —
+// shared with the client pre-check and companyMatchService so the personal
+// blocklist truly has a single definition. Supports env extension via
+// PUBLIC_EMAIL_EXTRA_DOMAINS; DB extension (public_email_providers /
+// disposable_domains tables) is layered on by domainEligibilityService.
+import { isPublicEmailDomain } from './publicEmailDomains';
 
 /**
  * True if the domain is a known personal/consumer email provider. Shared with
@@ -26,7 +26,7 @@ const BLOCKED_DOMAINS = new Set([
  * blocklist has a single definition.
  */
 export function isPersonalEmailDomain(domain: string): boolean {
-  return BLOCKED_DOMAINS.has(domain.trim().toLowerCase());
+  return isPublicEmailDomain(domain);
 }
 
 export function validateWorkEmail(email: string): void {

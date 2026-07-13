@@ -15,9 +15,11 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 import { validateEmailDomain } from '../lib/auth/domainValidation';
+import { validatePassword as validatePasswordPolicy, PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH } from '../lib/auth/passwordPolicy';
 import { trackWebsiteEvent } from '../lib/websiteAnalytics';
 import { logoutCurrentSession } from '../lib/security/sessionClient';
 import { clearBrowserAuthState } from '../utils/authStorage';
+import CaptchaWidget from '../components/auth/CaptchaWidget';
 
 export default function CreateAccountPage() {
   const router = useRouter();
@@ -31,6 +33,7 @@ export default function CreateAccountPage() {
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState<string | null>(null);
   const [sent, setSent]               = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [claimed, setClaimed]   = useState<{
     alreadyReferred: boolean;
     adminEmailMasked: string | null;
@@ -66,8 +69,9 @@ export default function CreateAccountPage() {
   }
 
   function validatePassword(pw: string, cf: string): boolean {
-    if (pw.length < 8 || pw.length > 20) {
-      setError('Password must be 8–20 characters.');
+    const check = validatePasswordPolicy(pw);
+    if (!check.valid) {
+      setError(check.reason);
       return false;
     }
     if (pw !== cf) {
@@ -103,7 +107,7 @@ export default function CreateAccountPage() {
       const res  = await fetch('/api/auth/signup', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email: trimmed, companyName: trimmedCompany }),
+        body:    JSON.stringify({ email: trimmed, companyName: trimmedCompany, captchaToken }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -300,12 +304,12 @@ export default function CreateAccountPage() {
 
               <div>
                 <label htmlFor="password" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
-                  Password <span className="text-[#6B7C93] font-normal">(8–20 characters)</span>
+                  Password <span className="text-[#6B7C93] font-normal">(at least {PASSWORD_MIN_LENGTH} characters)</span>
                 </label>
                 <div className="relative">
                   <input
                     id="password" type={showPw ? 'text' : 'password'}
-                    autoComplete="new-password" required minLength={8} maxLength={20}
+                    autoComplete="new-password" required minLength={PASSWORD_MIN_LENGTH} maxLength={PASSWORD_MAX_LENGTH}
                     value={password} onChange={e => { setPassword(e.target.value); setError(null); }}
                     placeholder="Choose a strong password"
                     className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 pr-10 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
@@ -327,6 +331,8 @@ export default function CreateAccountPage() {
                   className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
                 />
               </div>
+
+              <CaptchaWidget onToken={setCaptchaToken} />
 
               {error && <ErrorBox message={error} />}
 

@@ -29,8 +29,13 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { logger } from '../../../backend/services/logger';
-import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
+import { verifyCaptchaToken, CAPTCHA_FAILED_RESPONSE } from '../../../lib/auth/captcha';
+import {
+  emitSignupEvent,
+  ensureSignupCorrelationId,
+  requestUserAgent,
+} from '../../../backend/services/signupEventService';
 
 type SuccessResponse = { ok: true };
 type ErrorResponse   = { error: string };
@@ -60,6 +65,10 @@ export default async function handler(
   const body  = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   if (!email) return res.status(400).json({ error: 'email is required' });
+
+  // CAPTCHA (no-op until CAPTCHA_PROVIDER is configured — AUTH-001 §3).
+  const captcha = await verifyCaptchaToken(body.captchaToken, ip);
+  if (!captcha.ok) return res.status(400).json(CAPTCHA_FAILED_RESPONSE);
 
   // Per-email gate: separate bucket so an attacker can't burn one user's
   // budget by spamming the email field.
@@ -113,14 +122,20 @@ export default async function handler(
   }
 
   // Audit the actual outcome — operators can see volume per branch
-  // even though the public response is constant.
-  void logSecurityEvent({
-    capability: 'mfa.view_factors',
-    decision:   outcome === 'sent' ? 'allowed' : 'denied',
-    reason:     `resend_verification outcome=${outcome} ip=${ip}`,
-    ip,
-    userAgent:  typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
-  });
+  // even though the public response is constant. Emitted as the canonical
+  // signup.VerificationSent event (AUTH-001 §9), correlated to the signup
+  // journey when one exists for this email.
+  void ensureSignupCorrelationId(email).then((correlationId) =>
+    emitSignupEvent({
+      event:         'VerificationSent',
+      outcome:       outcome === 'sent' ? 'allowed' : 'denied',
+      correlationId,
+      email,
+      reason:        `resend outcome=${outcome}`,
+      ip,
+      userAgent:     requestUserAgent(req),
+    }),
+  );
 
   return res.status(200).json({ ok: true });
 }

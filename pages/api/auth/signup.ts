@@ -33,6 +33,13 @@ import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { notifyAdminAndProspectOfClaimedDomain } from '../../../backend/services/claimedDomainNotifyService';
+import { verifyCaptchaToken, CAPTCHA_FAILED_RESPONSE } from '../../../lib/auth/captcha';
+import {
+  emitSignupEvent,
+  ensureSignupCorrelationId,
+  signupRejectionEventFor,
+  requestUserAgent,
+} from '../../../backend/services/signupEventService';
 
 type SuccessResponse = { proceed: true };
 type ErrorResponse = {
@@ -64,9 +71,19 @@ export default async function handler(
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-  const { email, companyName } = body as { email?: string; companyName?: string };
+  const { email, companyName, captchaToken } = body as {
+    email?: string;
+    companyName?: string;
+    captchaToken?: string | null;
+  };
 
   if (!email?.trim()) return res.status(400).json({ error: 'email is required' });
+
+  // ── 0. CAPTCHA (no-op until CAPTCHA_PROVIDER is configured) ──────────────
+  const captcha = await verifyCaptchaToken(captchaToken, ip);
+  if (!captcha.ok) {
+    return res.status(400).json(CAPTCHA_FAILED_RESPONSE);
+  }
 
   // Company name is required for self-serve signups (the user becomes the
   // COMPANY_ADMIN of this company on first email verify). Stored on the
@@ -79,6 +96,27 @@ export default async function handler(
   const normalizedEmail = email.trim().toLowerCase();
   const domain = normalizedEmail.split('@')[1] ?? '';
   if (!domain) return res.status(400).json({ error: 'Invalid email address' });
+
+  // ── 0.5. Journey correlation ID + attempt event (AUTH-001 §9/§10) ─────────
+  // Reuses the journey ID from an earlier attempt (persisted on the pending
+  // signup_intents row) so retries and later stages (verify, company, credits)
+  // group under one ID in capability_audit_log.resource_id.
+  const userAgent = requestUserAgent(req);
+  const correlationId = await ensureSignupCorrelationId(normalizedEmail);
+  const emitOutcome = (
+    event: Parameters<typeof emitSignupEvent>[0]['event'],
+    outcome: 'allowed' | 'denied',
+    reason?: string,
+    companyId?: string | null,
+  ) =>
+    emitSignupEvent({
+      event, outcome, correlationId,
+      email: normalizedEmail,
+      reason: reason ?? null,
+      companyId: companyId ?? null,
+      ip, userAgent,
+    });
+  await emitOutcome('SignupAttempted', 'allowed');
 
   // ── 1. Authoritative company-identity gate ───────────────────────────────
   // The single eligibility decision (personal-email, email capability, live
@@ -102,6 +140,7 @@ export default async function handler(
     .maybeSingle();
 
   if (existingUser && (existingUser as any).is_deleted) {
+    await emitOutcome('SignupRejected', 'denied', 'ACCOUNT_DELETED');
     return res.status(403).json({ error: 'This account has been deactivated.', code: 'ACCOUNT_DELETED' });
   }
 
@@ -115,12 +154,14 @@ export default async function handler(
       .maybeSingle();
 
     if (companyRole) {
+      await emitOutcome('SignupRejected', 'denied', 'ACCOUNT_EXISTS');
       return res.status(409).json({
         error: 'An account with this email already exists. Please log in.',
         code:  'ACCOUNT_EXISTS',
       });
     }
 
+    await emitOutcome('SignupRejected', 'denied', 'RESUME_SIGNUP');
     return res.status(409).json({
       error: 'We found an unfinished account for this email. Please sign in to continue setup.',
       code:  'RESUME_SIGNUP',
@@ -143,6 +184,7 @@ export default async function handler(
     if (rpcErr) {
       logger.warn('auth_signup_auth_confirmed_rpc_failed', { email: normalizedEmail, message: rpcErr.message });
     } else if (authConfirmed === true) {
+      await emitOutcome('SignupRejected', 'denied', 'RESUME_SIGNUP_ORPHANED_AUTH');
       return res.status(409).json({
         error: 'We found an unfinished account for this email. Please sign in to continue setup.',
         code:  'RESUME_SIGNUP',
@@ -220,7 +262,9 @@ export default async function handler(
         domain,
         companyId: company.id,
         alreadyReferred,
+        correlationId,
       });
+      await emitOutcome('CompanyExists', 'denied', 'CLAIMED_DOMAIN', company.id);
 
       return res.status(httpStatusFor('CLAIMED_DOMAIN')).json({
         error:            ELIGIBILITY_MESSAGES.CLAIMED_DOMAIN,
@@ -245,7 +289,8 @@ export default async function handler(
       lookupClaimedCompany: async () => null,
     });
   } catch (err: any) {
-    logger.error('auth_signup_identity_validation_threw', { email: normalizedEmail, message: err?.message });
+    logger.error('auth_signup_identity_validation_threw', { email: normalizedEmail, message: err?.message, correlationId });
+    await emitOutcome('SystemFailure', 'denied', 'IDENTITY_VALIDATION_UNAVAILABLE');
     return res.status(503).json({
       error: 'We could not verify your organization right now. Please try again in a moment.',
       code:  'IDENTITY_VALIDATION_UNAVAILABLE',
@@ -262,7 +307,10 @@ export default async function handler(
       email: normalizedEmail,
       reason,
       requiresManualReview: identity.requiresManualReview,
+      diagnostics: identity.diagnostics ?? null,
+      correlationId,
     });
+    await emitOutcome(signupRejectionEventFor(reason), 'denied', reason);
     return res.status(httpStatusFor(reason)).json({
       error: ELIGIBILITY_MESSAGES[reason],
       code:  reason,
@@ -280,6 +328,9 @@ export default async function handler(
     validated_website_url:    identity.websiteUrl,
     validated_at:             new Date().toISOString(),
     validation_version:       COMPANY_IDENTITY_VALIDATION_VERSION,
+    // AUTH-001 §10 — journey correlation ID; later stages (verify-email,
+    // setup-company, credits) recover it from here by email.
+    correlation_id:           correlationId,
   };
 
   const { data: existingIntent } = await supabase
@@ -300,7 +351,8 @@ export default async function handler(
     });
 
     if (insertErr) {
-      logger.error('auth_signup_intent_insert_failed', { email: normalizedEmail, message: insertErr.message });
+      logger.error('auth_signup_intent_insert_failed', { email: normalizedEmail, message: insertErr.message, correlationId });
+      await emitOutcome('SystemFailure', 'denied', 'INTENT_INSERT_FAILED');
       return res.status(500).json({ error: 'Failed to initiate signup' });
     }
   } else {
@@ -312,5 +364,6 @@ export default async function handler(
       .eq('id', (existingIntent as { id: string }).id);
   }
 
+  await emitOutcome('SignupValidated', 'allowed');
   return res.status(200).json({ proceed: true });
 }

@@ -10,6 +10,7 @@ import {
 } from '../../../backend/security/SessionAuthorityService';
 import { revokeForUser as revokeStepUpForUser } from '../../../backend/security/stepup/StepUpSessionService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
+import { validatePassword } from '../../../lib/auth/passwordPolicy';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse = { error: string; code?: string };
@@ -25,8 +26,9 @@ export default async function handler(
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
   const password = typeof body.password === 'string' ? body.password : '';
   const flow = body.flow === 'recovery' ? 'recovery' : 'signup';
-  if (password.length < 8 || password.length > 128) {
-    return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
+  const passwordCheck = validatePassword(password);
+  if (!passwordCheck.valid) {
+    return res.status(400).json({ error: passwordCheck.reason });
   }
 
   // resolveAuthenticatedUser returns BOTH public.users.id (user.id) and

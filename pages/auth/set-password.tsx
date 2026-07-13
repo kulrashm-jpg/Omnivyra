@@ -21,6 +21,7 @@ import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { clearBrowserAuthState } from '../../utils/authStorage';
 import { apiFetch } from '../../lib/apiFetch';
+import { validatePassword, PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH } from '../../lib/auth/passwordPolicy';
 
 type Stage = 'loading' | 'form' | 'success' | 'error';
 const AUTH_FLOW_SESSION_MARKER = 'auth_flow_session_established_v1';
@@ -161,7 +162,8 @@ export default function SetPasswordPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (password.length < 8 || password.length > 20) { setError('Password must be 8–20 characters.'); return; }
+    const pwCheck = validatePassword(password);
+    if (!pwCheck.valid) { setError(pwCheck.reason); return; }
     if (password !== confirm)  { setError('Passwords do not match.'); return; }
 
     setLoading(true);
@@ -237,12 +239,12 @@ export default function SetPasswordPage() {
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
                     <label htmlFor="password" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
-                      New password <span className="text-[#6B7C93] font-normal">(8–20 characters)</span>
+                      New password <span className="text-[#6B7C93] font-normal">(at least {PASSWORD_MIN_LENGTH} characters)</span>
                     </label>
                     <div className="relative">
                       <input
                         id="password" type={showPw ? 'text' : 'password'}
-                        autoComplete="new-password" autoFocus required minLength={8} maxLength={20}
+                        autoComplete="new-password" autoFocus required minLength={PASSWORD_MIN_LENGTH} maxLength={PASSWORD_MAX_LENGTH}
                         value={password} onChange={e => { setPassword(e.target.value); setError(null); }}
                         placeholder="Choose a strong password"
                         className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 pr-10 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"

@@ -31,10 +31,13 @@ describe('stability/billing signup -> credits contract', () => {
   test('signup.ts uses the unified eligibility gate, signup_intents upsert, and resume/exists codes', () => {
     const signup = readRepoFile('pages/api/auth/signup.ts');
 
-    // Work-email + domain gates are now the single eligibility engine + model.
+    // Work-email + domain gates are now the single authoritative identity
+    // engine (validateCompanyIdentity) + eligibility model. (Updated for
+    // Phase 4.5/8 — the old checkDomainEligibility call moved inside the
+    // engine — and re-locked under AUTH-001.)
     expectContainsAll(signup, [
-      'checkDomainEligibility',
-      'eligibility.eligible',
+      'validateCompanyIdentity',
+      'identity.eligible',
       'ELIGIBILITY_MESSAGES',
       "from('signup_intents')",
       ".from('signup_intents').insert({",

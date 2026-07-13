@@ -17,6 +17,7 @@ export type DomainEligibilityResult =
   | 'DISPOSABLE_EMAIL'
   | 'NO_EMAIL_CAPABILITY'
   | 'NO_WEBSITE_FOUND'
+  | 'PARKED_DOMAIN'
   | 'DOMAIN_MISMATCH'
   | 'FORWARDING_DOMAIN'
   | 'DOMAIN_NOT_CANONICAL'
@@ -40,6 +41,7 @@ export const reviewableResults: ReadonlySet<DomainEligibilityResult> = new Set<D
   'FORWARDING_DOMAIN',
   'DOMAIN_NOT_CANONICAL',
   'NO_WEBSITE_FOUND',
+  'PARKED_DOMAIN',
 ]);
 
 // Forwarding + non-canonical share this review-path copy by design.
@@ -64,6 +66,10 @@ export const ELIGIBILITY_MESSAGES: Record<DomainEligibilityResult, string> = {
     "We couldn't find a live website at your organization's email domain.\n\n" +
     'If your organization uses a different website domain than its email domain, ' +
     'please contact our team and we will review your request.',
+  PARKED_DOMAIN:
+    "The website at your organization's email domain appears to be a parked or " +
+    'inactive domain page.\n\n' +
+    'If this is a mistake, please contact our team and we will review your request.',
   DOMAIN_MISMATCH:
     'Your website domain does not match your email domain.\n\n' +
     "Please use a website on your organization's email domain.",

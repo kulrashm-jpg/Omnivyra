@@ -33,6 +33,7 @@
 import { supabase } from '../db/supabaseClient';
 import { checkDomainEligibility } from './domainEligibilityService';
 import { resolveDomain, type ResolveDomainResult } from './domainCanonicalService';
+import { detectParkedDomain, type ParkedDomainVerdict } from './parkedDomainDetectionService';
 import { normalizeCompanyDomain } from '../../lib/shared/domain/companyDomain';
 import type { DomainEligibilityResult } from '../../lib/auth/domainEligibilityModel';
 import {
@@ -63,6 +64,12 @@ export interface CompanyIdentity {
   /** True when the user should be routed to the manual-review queue, not hard-rejected. */
   requiresManualReview: boolean;
 
+  /**
+   * Validation diagnostics (AUTH-001 §7) — structured detail for operators;
+   * never surfaced to end users. Currently carries the parked-domain marker.
+   */
+  diagnostics?: { parkedMarker?: string } | null;
+
   /** Set when rule 5 matched — the org that already owns this domain. */
   existingCompany?: { id: string; name: string | null } | null;
 }
@@ -71,6 +78,8 @@ export interface CompanyIdentity {
 export interface ValidateCompanyIdentityDeps {
   checkEligibility?: (email: string) => Promise<{ result: DomainEligibilityResult; eligible: boolean }>;
   probeWebsite?: (domain: string) => Promise<ResolveDomainResult>;
+  /** AUTH-001 §7 — parked/expired-lander content check (defaults to the real detector). */
+  probeParked?: (finalDomain: string) => Promise<ParkedDomainVerdict>;
   lookupClaimedCompany?: (normalizedDomain: string) => Promise<{ id: string; name: string | null } | null>;
   /** Phase 11D cache seams (defaults wire to the in-memory success cache). */
   now?: () => number;
@@ -115,6 +124,7 @@ export async function validateCompanyIdentity(
     return { result: r.result, eligible: r.eligible };
   });
   const probeWebsite = deps.probeWebsite ?? resolveDomain;
+  const probeParked = deps.probeParked ?? detectParkedDomain;
   const lookupClaimedCompany = deps.lookupClaimedCompany ?? defaultLookupClaimedCompany;
   const now = deps.now ?? Date.now;
   const cacheGet = deps.cacheGet ?? getCachedDomainVerdict;
@@ -195,6 +205,18 @@ export async function validateCompanyIdentity(
   }
   if (resolution.is_forwarding) {
     return block(base, 'FORWARDING_DOMAIN', true);
+  }
+
+  // ── AUTH-001 §7: parked / expired-lander content check ─────────────────────
+  // Runs ONLY when every prior rule passed (one bounded extra GET on the
+  // account-creating path). Fail-open: an unchecked probe never blocks.
+  // A positive match routes to manual review, mirroring NO_WEBSITE_FOUND.
+  const parkedVerdict = await probeParked(resolution.final_domain);
+  if (parkedVerdict.parked) {
+    return {
+      ...block(base, 'PARKED_DOMAIN', true),
+      diagnostics: { parkedMarker: parkedVerdict.marker },
+    };
   }
 
   // All five rules satisfied — cache the SUCCESSFUL domain verdict (clean success

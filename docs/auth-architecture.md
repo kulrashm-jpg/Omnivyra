@@ -72,3 +72,79 @@ const res = await apiFetch('/api/whatever', { method: 'POST', body: JSON.stringi
 - `no-restricted-syntax` — bans inline `\`Bearer ${...}\`` template literals in client code.
 
 Carve-out files are listed at the bottom of the same config.
+
+## AUTH-001 — signup & security hardening layer (2026-07-13)
+
+### App-level email-verification gate
+
+`emailVerified` (mirrors `auth.users.email_confirmed_at`) is enforced in **application code** — the Supabase dashboard "Confirm email" setting is a first line, not the only line:
+
+| Enforcement point | Behavior when unverified |
+|---|---|
+| `pages/api/auth/post-login-route.ts` | routes to `/login?reason=verify_email` (amber banner on login) |
+| `pages/api/auth/verify-email.ts` | 403 `EMAIL_NOT_VERIFIED` — a session can never self-verify; `is_email_verified` only ever mirrors the auth confirm state |
+| `pages/api/onboarding/profile.ts`, `setup-company.ts`, `complete.ts`, `request-company-access.ts` | 403 `EMAIL_NOT_VERIFIED` — onboarding, company creation, and credit grants are all gated |
+| `pages/api/auth/sync-supabase-user.ts` | writes `is_email_verified: identity.emailVerified` (previously an unconditional `true`) |
+
+`getSupabaseUserFromRequest` (legacy facade) now returns `emailVerified` so legacy routes can gate without a second token round-trip.
+
+### Canonical signup events + correlation IDs
+
+`backend/services/signupEventService.ts` — the ONE signup event vocabulary
+(`SignupAttempted`, `SignupValidated`, rejection events, `VerificationSent/Succeeded`,
+`CompanyCreated`, `CompanyExists`, `CreditsGranted`, `OnboardingStarted/Completed`,
+`SystemFailure`) emitted into the EXISTING immutable audit trail
+(`capability_audit_log` via `SecurityAuditService`), capability = `signup.<Event>`.
+
+- The journey **correlation ID** is minted in `/api/auth/signup`, persisted at
+  `signup_intents.intent_data.correlation_id`, recovered by email at every later
+  stage, and stored in `capability_audit_log.resource_id`. Replay one journey:
+  `SELECT * FROM capability_audit_log WHERE resource_id = $1 ORDER BY occurred_at`.
+- Emission is fire-and-forget and never blocks a response.
+
+### CAPTCHA (config-gated, provider-agnostic)
+
+`lib/auth/captcha.ts` (server) + `components/auth/CaptchaWidget.tsx` (client).
+Providers: Turnstile / hCaptcha / reCAPTCHA — same verify contract, one URL per provider.
+**Disabled until configured**: set `CAPTCHA_PROVIDER` + `CAPTCHA_SECRET_KEY` (server)
+and `NEXT_PUBLIC_CAPTCHA_PROVIDER` + `NEXT_PUBLIC_CAPTCHA_SITE_KEY` (client) together.
+Enforced on `signup`, `resend-verification`, `reset`. Fail-closed on bad/missing token;
+fail-open on provider outage (same rationale as the rate-limiter SDR).
+
+### Validation single sources of truth
+
+| Concern | Canonical module | Notes |
+|---|---|---|
+| Public/free email providers | `lib/auth/publicEmailDomains.ts` | union of all prior lists + rediff; env extension `PUBLIC_EMAIL_EXTRA_DOMAINS`; DB layer (`public_email_providers`, `disposable_domains`) still applied by `domainEligibilityService` |
+| Password policy | `lib/auth/passwordPolicy.ts` | 8–128 length-only (NIST 800-63B); client + server import it |
+| Eligibility codes & copy | `lib/auth/domainEligibilityModel.ts` | added `PARKED_DOMAIN` (reviewable) |
+
+### Parked/expired-domain detection
+
+`backend/services/parkedDomainDetectionService.ts` — one bounded GET (256 KiB / 4 s,
+via `safeFetch`) on the identity-validation success path only; high-specificity
+markers; fail-open; positive match → `PARKED_DOMAIN` manual review with a
+`diagnostics.parkedMarker`. WHOIS expiry checks were deliberately not added
+(no client, blocked egress; DNS/MX gates already catch dropped domains).
+
+### Rate limits added by AUTH-001
+
+| Endpoint | Limit |
+|---|---|
+| `POST /api/auth/check-user` | 20 / 15 min / IP (endpoint also neutralized: constant response, fail-closed, single constant-work lookup, audited) |
+| `POST /api/onboarding/setup-company` | 10 / h / IP + 5 / h / UID |
+| `POST /api/onboarding/request-company-access` | 5 / h / UID |
+
+### Database hardening
+
+`supabase/migrations/20260713_auth001_signup_hardening.sql` —
+`idx_signup_intents_email_pending_unique` (one pending intent per email; older
+duplicates retired to `status='expired'`) and `idx_companies_website_domain_unique`
+(guarded: skipped with a WARNING if live duplicates exist; no data loss).
+`setup-company`'s 23505 race handler resolves winners by either domain key.
+
+### Tests
+
+`backend/tests/unit/auth001*.test.ts` (6 suites) + updated identity-validation
+suites (deterministic `probeParked` stub) + refreshed stability contract
+(`tests/stability/billing/signupCreditsContract.test.ts`).
