@@ -632,6 +632,11 @@ export async function buildOnboardingJourney(userId: string): Promise<Onboarding
       case 'website_cms':
         derived = signals.cms.done ? 'completed' : 'pending';
         detail = signals.cms.detail;
+        // §5 — surface the connected CMS platform structurally (not just in the
+        // detail string) so the Integration Experience can show which provider.
+        if (signals.cms.platform) {
+          providers = [{ platform: signals.cms.platform, state: 'connected' }];
+        }
         break;
       case 'google_analytics':
         derived = signals.ga.done ? 'completed' : signals.ga.anyRow ? 'in_progress' : 'pending';
