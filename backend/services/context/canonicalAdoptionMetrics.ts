@@ -47,11 +47,31 @@ export const WAVE2B_MIGRATED_CONSUMERS: readonly string[] = [
   'lib/newsletter/shared/pipeline.ts', // feeds all 7 newsletter formats
 ];
 
+/** Consumers migrated in Wave 2C — Campaign & Planner (CONTENT-INTELLIGENCE-007). */
+export const WAVE2C_MIGRATED_CONSUMERS: readonly string[] = [
+  'backend/jobs/dailyIntelligenceScheduler.ts',
+  'backend/services/campaignAiOrchestrator.ts',
+  'backend/services/campaignAiOrchestrator/resolveExecutionContext.ts',
+  'backend/services/campaignOptimizationService.ts',
+  'backend/services/campaignRecommendationService.ts',
+  'backend/services/campaignRecommendationExtensionService.ts',
+  'pages/api/campaign-planner/refine-idea.ts',
+  'pages/api/campaigns/health.ts',
+  'pages/api/campaigns/health-report.ts',
+  'pages/api/campaigns/optimize-week.ts',
+  'pages/api/campaigns/platform-plan.ts',
+  'pages/api/campaigns/recommendations/optimize-week.ts',
+  'pages/api/campaigns/regenerate-blueprint.ts',
+  'pages/api/campaigns/scheduler-payload.ts',
+  'pages/api/planner/generate-workspace-content.ts',
+];
+
 /** All consumers migrated onto canonical grounding across every landed wave. */
 export const MIGRATED_CONSUMERS: readonly string[] = [
   ...WAVE1_MIGRATED_CONSUMERS,
   ...WAVE2A_MIGRATED_CONSUMERS,
   ...WAVE2B_MIGRATED_CONSUMERS,
+  ...WAVE2C_MIGRATED_CONSUMERS,
 ];
 
 /**

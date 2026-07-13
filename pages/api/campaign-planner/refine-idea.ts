@@ -6,7 +6,7 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { refineCampaignIdea } from '../../../backend/services/ideaRefinementService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

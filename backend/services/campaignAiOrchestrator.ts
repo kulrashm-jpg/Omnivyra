@@ -22,7 +22,7 @@ import { saveStructuredCampaignPlanDayUpdate, savePlatformCustomizedContent } fr
 import { evaluateAndPersistCampaignHealth } from '../jobs/campaignHealthEvaluationJob';
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
 import { getCampaignById } from '../db/campaignStore';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { validateCampaignPlan, type CampaignValidation } from '../lib/validation/campaignValidator';
 import { generatePaidRecommendation, type PaidRecommendation } from '../lib/ads/paidAmplificationEngine';
 import {
