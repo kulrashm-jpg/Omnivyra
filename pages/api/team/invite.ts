@@ -5,6 +5,7 @@ import { checkRateLimit, LOGIN_LIMIT, INVITE_UID_LIMIT } from '../../../lib/auth
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
+import { isNonWorkEmailDomain } from '../../../backend/services/domainEligibilityService';
 
 const VALID_ROLES = new Set([
   'COMPANY_ADMIN',
@@ -95,6 +96,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     companyId = (roleRow as any).company_id;
+  }
+
+  // Bible rule: work email only. Non-super-admin (company-admin) invites must
+  // use a work email — no personal/free or disposable domains. SUPER_ADMIN
+  // (superAdminRow) is the deliberate backend override and is exempt.
+  if (!superAdminRow && (await isNonWorkEmailDomain(normalizedEmail.split('@')[1] ?? ''))) {
+    return res.status(400).json({
+      error: 'Team members must be invited with a work email address, not a personal or disposable one.',
+    });
   }
 
   const { data: existing } = await supabase

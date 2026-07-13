@@ -13,7 +13,7 @@ import {
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
-import { isPersonalEmailDomain } from '../../../lib/auth/serverValidation';
+import { isNonWorkEmailDomain } from '../../../backend/services/domainEligibilityService';
 
 import { ensureCompanyAccess, ensureCompanyAdminAccess, findOrCreateUserByEmail, insertAuditLog, mapAppRoleToRbac, normalizeInviteRole, upsertUserCompanyRole } from '../../../backend/apiHandlers/company/usersShared';
 
@@ -99,6 +99,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const normalizedEmail = String(email).trim().toLowerCase();
+    if (!normalizedEmail.includes('@')) {
+      return res.status(400).json({ error: 'A valid email address is required' });
+    }
     const desiredRole = normalizeInviteRole(String(role));
     const displayName = name ? String(name).trim() : '';
     const allowedRoles = [
@@ -113,12 +116,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Bible rule: work email only. Company-admin-initiated invites (any role)
-    // must use a work email — no gmail/outlook/disposable. SUPER_ADMIN is the
-    // deliberate backend override escape hatch and is exempt.
-    if (access.role !== Role.SUPER_ADMIN && isPersonalEmailDomain(normalizedEmail.split('@')[1] ?? '')) {
+    // must use a work email — no personal/free (gmail, outlook…) or disposable
+    // domains. SUPER_ADMIN is the deliberate backend override escape hatch.
+    if (access.role !== Role.SUPER_ADMIN && (await isNonWorkEmailDomain(normalizedEmail.split('@')[1] ?? ''))) {
       return res.status(400).json({
         error: 'PERSONAL_EMAIL_NOT_ALLOWED',
-        details: 'Team members must be invited with a work email address, not a personal one (gmail, outlook, etc.).',
+        details: 'Team members must be invited with a work email address, not a personal or disposable one.',
       });
     }
 

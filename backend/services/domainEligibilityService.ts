@@ -242,6 +242,36 @@ export async function checkDomainEligibility(
   return r;
 }
 
+/**
+ * Invite-path work-email gate. Returns true when `domain` is NOT a work email
+ * for invitation purposes: a personal/free provider (static blocklist OR the
+ * public_email_providers table) or a disposable domain.
+ *
+ * Unlike checkDomainEligibility, it deliberately does NOT require MX / a live
+ * website — invitees join an already-validated company and may use any
+ * legitimate work domain. Fail-open on DB errors: the static personal blocklist
+ * (isPersonalEmailDomain) is the HARD guarantee that always runs; the two DB
+ * lookups are best-effort hardening and must never let a transient DB blip
+ * reject a legitimate invite. SUPER_ADMIN/backend callers bypass this entirely
+ * (enforced at the route, not here).
+ */
+export async function isNonWorkEmailDomain(domain: string): Promise<boolean> {
+  const d = (domain || '').trim().toLowerCase();
+  if (!d) return false; // empty/malformed → caller handles format separately
+  // Static + env personal blocklist — synchronous, authoritative, no network.
+  if (isPersonalEmailDomain(d)) return true;
+  // Best-effort DB hardening: DB-extended public providers + disposable list.
+  try {
+    const [pub, disp] = await Promise.all([
+      ownedDbTable('public_email_providers').select('domain').eq('domain', d).maybeSingle(),
+      ownedDbTable('disposable_domains').select('domain').eq('domain', d).maybeSingle(),
+    ]);
+    return !!(pub.data || disp.data);
+  } catch {
+    return false; // fail-open — never block a real invite on a DB hiccup
+  }
+}
+
 /** Invalidate cache for a domain (call after admin approves/rejects/whitelists). */
 export async function invalidateDomainCache(domain: string): Promise<void> {
   await ownedDbTable('domain_eligibility_cache').delete().eq('domain', domain);

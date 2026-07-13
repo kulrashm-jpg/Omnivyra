@@ -74,11 +74,19 @@ export class WebsiteProbeTransientError extends Error {
  */
 export type DomainDnsClass = 'has_records' | 'transient' | 'no_records';
 
-async function classifyDomainDnsDefault(domain: string): Promise<DomainDnsClass> {
+export async function classifyDomainDnsDefault(
+  domain: string,
+  resolvers: {
+    resolve4?: (host: string) => Promise<string[]>;
+    resolve6?: (host: string) => Promise<string[]>;
+  } = {},
+): Promise<DomainDnsClass> {
+  const resolve4 = resolvers.resolve4 ?? ((h: string) => dns.resolve4(h));
+  const resolve6 = resolvers.resolve6 ?? ((h: string) => dns.resolve6(h));
   const hosts = [domain, `www.${domain}`];
   let sawTransient = false;
   for (const host of hosts) {
-    for (const lookup of [() => dns.resolve4(host), () => dns.resolve6(host)]) {
+    for (const lookup of [() => resolve4(host), () => resolve6(host)]) {
       try {
         const records = await lookup();
         if (records && records.length > 0) return 'has_records';
