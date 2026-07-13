@@ -58,6 +58,14 @@ export async function applyDownstreamInvalidation(
     }
   }
 
+  // CKC-001 — invalidate the assembled-context cache for this company (best-effort).
+  try {
+    const { invalidateKnowledgeContext } = await import('../knowledgeConsumption/companyKnowledgeConsumer');
+    await invalidateKnowledgeContext(companyId, 'downstream_invalidation');
+  } catch (err) {
+    logger.warn('downstream_invalidation_context_cache_failed', { companyId, message: err instanceof Error ? err.message : String(err) });
+  }
+
   void emitOrchestrationEvent({
     event: 'InvalidationPropagated', outcome: 'allowed', correlationId: cid, companyId,
     reason: `${plan.changedDomains.join(',') || 'none'}`,
