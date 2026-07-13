@@ -123,6 +123,7 @@ import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
 import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefreshJob';
 import { runIngestionForAllCompanies } from '../services/ingestionScheduler';
 import { refreshAnalyticsEnterpriseSnapshot } from '../services/analyticsEnterpriseSnapshotService';
+import { runReadinessSnapshotJob } from '../jobs/readinessSnapshotJob';
 import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
 import {
   getLeadThreadRecomputeQueue,
@@ -158,6 +159,8 @@ const BUYER_INTENT_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const OPPORTUNITY_SLOTS_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const GOVERNANCE_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const AUTO_OPTIMIZATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+// CSA-002 — daily Customer Readiness snapshot (activates readiness history).
+const READINESS_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 // Reclaim BOLT runs abandoned by a worker crash / queue interruption.
 // CronGuard already guarantees single-instance execution → no duplicate
 // recovery. Sweep itself is idempotent (only flips started/running→failed).
@@ -296,6 +299,7 @@ async function shouldRunPublishCycle(): Promise<boolean> {
 let lastOpportunitySlotsRun = 0;
 let lastGovernanceAuditRun = 0;
 let lastAutoOptimizationRun = 0;
+let lastReadinessSnapshotRun = 0; // CSA-002 — daily readiness snapshot
 let lastEngagementPollingEnqueue = 0;
 let lastIntelligencePollingEnqueue = 0;
 let lastSignalClusteringRun = 0;
@@ -849,6 +853,23 @@ async function runSchedulerCycle() {
       await runAutoOptimizationForEligibleCampaigns();
     } catch (error: unknown) {
       console.error('❌ Auto-optimization error:', formatCaughtError(error));
+    }
+  }
+
+  // CSA-002 — daily Customer Readiness snapshot. Persists ONE snapshot per
+  // company per day into customer_readiness_snapshots (idempotent), activating
+  // the readiness history the Evolution engine consumes. Reuses the existing
+  // readiness + snapshot authorities; single-instance via CronGuard; fail-safe.
+  if (shouldRunCronJob("readinessSnapshot", READINESS_SNAPSHOT_INTERVAL_MS, lastReadinessSnapshotRun)) {
+    lastReadinessSnapshotRun = Date.now();
+    try {
+      const snap = await runReadinessSnapshotJob();
+      console.log(
+        `✅ Readiness snapshot: total ${snap.total}, inserted ${snap.inserted}, skipped ${snap.skipped}` +
+        (snap.ok ? '' : ' (FAILED)')
+      );
+    } catch (error: unknown) {
+      console.error('❌ Readiness snapshot error:', formatCaughtError(error));
     }
   }
 

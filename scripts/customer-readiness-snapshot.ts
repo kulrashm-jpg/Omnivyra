@@ -9,14 +9,15 @@
  *   node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/customer-readiness-snapshot.ts
  */
 
-import { getCustomerReadiness } from '../backend/services/customerReadinessService';
-import { generateReadinessSnapshots } from '../backend/services/customerReadinessSnapshotService';
+// CSA-002: this manual entry point now delegates to the SAME job runner the
+// scheduler uses (backend/jobs/readinessSnapshotJob), so there is one snapshot
+// path whether run by cron or by hand — no duplicate orchestration.
+import { runReadinessSnapshotJob } from '../backend/jobs/readinessSnapshotJob';
 
 (async () => {
-  const takenAt = new Date().toISOString();
-  const { tenants } = await getCustomerReadiness({});
-  const res = await generateReadinessSnapshots(tenants, takenAt);
-  console.log(`[readiness-snapshot] ${takenAt} | total=${res.total} inserted=${res.inserted} skipped=${res.skipped} (already-today)`);
+  const res = await runReadinessSnapshotJob();
+  console.log(`[readiness-snapshot] ${res.takenAt} | total=${res.total} inserted=${res.inserted} skipped=${res.skipped} (already-today)`);
+  if (!res.ok) process.exit(1);
 })().catch((e) => {
   console.error('[readiness-snapshot] FAILED:', e?.message ?? e);
   process.exit(1);

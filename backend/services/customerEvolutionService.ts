@@ -5,10 +5,11 @@
  * Declining / UNKNOWN) by comparing readiness SNAPSHOTS over time. Pure delta math;
  * no writes, no delivery, no AI.
  *
- * IMPORTANT: the readiness model is currently computed live and NOT persisted, so no
- * readiness history exists yet. With < 2 snapshots the engine returns UNKNOWN — it
- * never guesses. It is built to produce correct deltas the moment snapshots are
- * persisted (see PHASE12G report "Known limitations").
+ * History source: CSA-002 activated the daily readiness snapshot job
+ * (backend/jobs/readinessSnapshotJob → customer_readiness_snapshots), so this
+ * engine now runs on real persisted history. With < 2 snapshots it still returns
+ * UNKNOWN — it never guesses — and produces correct deltas once ≥ 2 daily
+ * snapshots exist for a company.
  */
 
 import { supabase } from '../db/supabaseClient';
@@ -154,9 +155,11 @@ export function generatePortfolioEvolution(evolutions: CompanyEvolution[]): Port
 
 // ── Read-only history loader ─────────────────────────────────────────────────
 /**
- * Load persisted readiness snapshots per company. The `customer_readiness_snapshots`
- * table does NOT exist yet, so this defensively returns an empty map → every company
- * resolves to UNKNOWN (no guessing). Ready to light up when snapshotting is added.
+ * Load persisted readiness snapshots per company from the canonical history
+ * table `customer_readiness_snapshots` (the ONE historical-readiness authority,
+ * §5). Populated daily by the CSA-002 snapshot job. Fail-safe: if the table is
+ * unreadable/absent it returns an empty map → those companies resolve to UNKNOWN
+ * (no guessing).
  */
 export async function loadReadinessHistory(companyIds: string[]): Promise<Map<string, ReadinessSnapshot[]>> {
   const map = new Map<string, ReadinessSnapshot[]>();
