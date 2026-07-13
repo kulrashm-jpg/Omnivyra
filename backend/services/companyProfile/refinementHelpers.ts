@@ -5,6 +5,30 @@ import {
   hasDiscoveredSignal,
   type DiscoveredWebsiteMetadata,
 } from './websiteMetadataExtractor';
+// CKRE-001 — crawl-reuse cache, instrumentation, and deterministic change detection.
+import { fetchPageCached } from '../crawl/crawlResultCache';
+import {
+  emitCrawlEvent,
+  recordCrawlChangeMetric,
+  resolveCrawlCorrelationId,
+} from '../crawl/crawlEventService';
+import { computeWebsiteFingerprint, hasFingerprintSignal } from '../crawl/websiteFingerprintService';
+import { decideWebsiteChange } from '../crawl/changeDetectionService';
+import { getLatestWebsiteFingerprint, saveWebsiteFingerprint } from '../crawl/fingerprintStore';
+
+/**
+ * CKRE-001 — optional instrumentation/change-detection context for a crawl.
+ * Backward compatible: omit it and crawlWebsiteSources behaves exactly as
+ * before (no events, no fingerprints). Supplying companyId enables the
+ * deterministic fingerprint + change-detection foundation (no AI, no gating).
+ */
+export interface CrawlContext {
+  companyId?: string | null;
+  userId?: string | null;
+  email?: string | null;
+  correlationId?: string | null;
+  workflow?: string | null;
+}
 import {
   normalizeUrl,
   normalizeSocialUrl,
@@ -204,13 +228,13 @@ export const extractEvidenceFromHtml = (html: string): ExtractedEvidence => {
 export const fetchUrlSummary = async (url?: string | null): Promise<string | null> => {
   if (!url) return null;
   try {
-    // HARDEN-005: `url` is a user-supplied company/source website — fetch via
-    // the SSRF-safe fetcher (blocked internal URLs throw → null below).
-    const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
-    const response = await safeFetch(url, { method: 'GET' }, { timeoutMs: 5000, maxBytes: 5 * 1024 * 1024 });
-    if (!response.ok) return null;
-    const text = (await readCapped(response)).toString('utf8');
-    const evidence = extractEvidenceFromHtml(text);
+    // CKRE-001 §2/§7: route through the crawl-reuse cache so a page fetched
+    // earlier in the same workflow (e.g. the root page, or a page shared by the
+    // onboarding crawl and the profile-refinement crawl) is not fetched twice.
+    // Still SSRF-safe (HARDEN-005) — the cache wraps safeFetch.
+    const page = await fetchPageCached(url, { timeoutMs: 5000, maxBytes: 5 * 1024 * 1024 });
+    if (!page.ok) return null;
+    const evidence = extractEvidenceFromHtml(page.html);
     const parts = [
       evidence.title ? `Title: ${evidence.title}` : null,
       evidence.meta_description ? `Meta: ${evidence.meta_description}` : null,
@@ -227,7 +251,8 @@ export const fetchUrlSummary = async (url?: string | null): Promise<string | nul
 
 export const crawlWebsiteSources = async (
   websiteUrl: string,
-  existingUrls: Set<string>
+  existingUrls: Set<string>,
+  context?: CrawlContext,
 ): Promise<{
   urls: Array<{ label: string; url: string }>;
   summaries: Array<{ label: string; url: string; summary: string }>;
@@ -242,24 +267,55 @@ export const crawlWebsiteSources = async (
   const normalizedWebsite = normalizeUrl(websiteUrl);
   if (!normalizedWebsite) return { urls: [], summaries: [], social_links: {}, metadata: null };
 
+  // CKRE-001 §1 — crawl instrumentation (only when a context is supplied;
+  // omitting it preserves the exact prior behaviour). Correlation reuses the
+  // signup/onboarding journey ID. All emission is fire-and-forget.
+  const instrument = Boolean(context);
+  const workflow = context?.workflow ?? 'profile_crawl';
+  let correlationId: string | null = context?.correlationId ?? null;
+  const emit = async (
+    event: Parameters<typeof emitCrawlEvent>[0]['event'],
+    outcome: 'allowed' | 'denied',
+    reason?: string,
+    metadataExtra?: Record<string, unknown>,
+  ) => {
+    if (!instrument) return;
+    if (!correlationId) correlationId = await resolveCrawlCorrelationId(context?.email, context?.companyId ?? null);
+    await emitCrawlEvent({
+      event, outcome, correlationId,
+      companyId: context?.companyId ?? null,
+      userId: context?.userId ?? null,
+      workflow, target: normalizedWebsite,
+      reason: reason ?? null,
+      metadata: metadataExtra ?? null,
+    });
+  };
+
+  await emit('CrawlRequested', 'allowed');
+
   let rootHtml = '';
   let socialLinks: Record<string, string[]> = {
     linkedin: [], facebook: [], instagram: [], x: [], youtube: [], tiktok: [], reddit: [],
   };
   let metadata: DiscoveredWebsiteMetadata | null = null;
-  try {
-    // HARDEN-005: `websiteUrl` is user-supplied — SSRF-safe fetch (5MB cap).
-    const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
-    const response = await safeFetch(normalizedWebsite, { method: 'GET' }, { timeoutMs: 8000, maxBytes: 5 * 1024 * 1024 });
-    if (response.ok) {
-      rootHtml = (await readCapped(response)).toString('utf8');
-      socialLinks = extractSocialLinksFromHtml(rootHtml, normalizedWebsite);
-      // Reuse the fetched HTML for identity/brand/SEO discovery — zero extra fetches.
-      const discovered = extractWebsiteMetadata(rootHtml, normalizedWebsite);
-      metadata = hasDiscoveredSignal(discovered) ? discovered : null;
-    }
-  } catch {
-    /* SSRF-blocked or network error — leave rootHtml empty */
+  // CKRE-001 §2/§7: fetch the root through the crawl-reuse cache — a root
+  // fetched earlier in this workflow (onboarding step-5 vs step-5b, or the
+  // within-call root summary below) is reused, not re-fetched. SSRF-safe.
+  const rootFetch = await fetchPageCached(normalizedWebsite, { timeoutMs: 8000, maxBytes: 5 * 1024 * 1024 });
+  if (rootFetch.fromCache) {
+    await emit('CrawlSkipped', 'allowed', 'root_reused_from_workflow_cache');
+  } else if (!rootFetch.ok) {
+    await emit('CrawlFailed', 'denied', `root_fetch_status_${rootFetch.status}`);
+  } else {
+    await emit('CrawlStarted', 'allowed');
+  }
+  if (rootFetch.ok) {
+    rootHtml = rootFetch.html;
+    socialLinks = extractSocialLinksFromHtml(rootHtml, normalizedWebsite);
+    // Reuse the fetched HTML for identity/brand/SEO discovery — zero extra fetches.
+    const discovered = extractWebsiteMetadata(rootHtml, normalizedWebsite);
+    metadata = hasDiscoveredSignal(discovered) ? discovered : null;
+    if (metadata) await emit('MetadataExtracted', 'allowed');
   }
 
   const candidateLinks = extractLinksFromHtml(rootHtml, normalizedWebsite)
@@ -287,6 +343,43 @@ export const crawlWebsiteSources = async (
     label: url === normalizedWebsite ? 'website_root' : 'website_page',
     url,
   }));
+
+  // CKRE-001 §1 — social-discovery + completion events.
+  if (instrument) {
+    const socialCount = Object.values(socialLinks).reduce((n, arr) => n + (arr?.length ?? 0), 0);
+    await emit('SocialDiscoveryCompleted', 'allowed', undefined, { count: socialCount });
+    if (rootFetch.ok) {
+      await emit('CrawlCompleted', 'allowed', undefined, { pages: dedupedPageUrls.length });
+    }
+  }
+
+  // CKRE-001 §3/§4/§5 — deterministic fingerprint + change detection (no AI,
+  // no gating). Best-effort; a failure never affects the crawl result.
+  if (context?.companyId && rootFetch.ok && rootHtml) {
+    try {
+      const flatSocial = Object.values(socialLinks).flat().filter(Boolean);
+      const fingerprint = computeWebsiteFingerprint({
+        url: normalizedWebsite,
+        html: rootHtml,
+        headers: rootFetch.headers,
+        metadata,
+        socialLinks: flatSocial,
+      });
+      if (hasFingerprintSignal(fingerprint)) {
+        const prior = await getLatestWebsiteFingerprint(context.companyId);
+        const decision = decideWebsiteChange(prior, fingerprint);
+        recordCrawlChangeMetric(decision.verdict, workflow);
+        await emit('ChangeEvaluated', 'allowed', decision.verdict, {
+          score: decision.score,
+          changedLevels: decision.changedLevels,
+          reason: decision.reason,
+        });
+        await saveWebsiteFingerprint(context.companyId, fingerprint);
+      }
+    } catch {
+      /* fingerprinting is a foundation layer — never break the crawl */
+    }
+  }
 
   return {
     urls: sourceUrls,

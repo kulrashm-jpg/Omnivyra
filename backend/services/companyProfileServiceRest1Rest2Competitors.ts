@@ -267,7 +267,13 @@ const runProfileRefinement = async (
   let discoveredSources: Array<{ label: string; url: string }> = [];
   let discoveredSummaries: Array<{ label: string; url: string; summary: string }> = [];
   if (workingProfile.website_url) {
-    const crawlResult = await crawlWebsiteSources(workingProfile.website_url, existingSourceUrls);
+    // CKRE-001 §1 — instrument the refresh crawl (events + deterministic
+    // fingerprint/change detection). This does NOT change AI extraction or
+    // refinement; it only supplies crawl context for observability.
+    const crawlResult = await crawlWebsiteSources(workingProfile.website_url, existingSourceUrls, {
+      companyId,
+      workflow: 'profile_refresh',
+    });
     discoveredSources = crawlResult.urls;
     discoveredSummaries = crawlResult.summaries;
     workingProfile = mergeDiscoveredSocialProfiles(workingProfile, crawlResult.social_links);

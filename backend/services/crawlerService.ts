@@ -1,6 +1,9 @@
 import { supabase } from '../db/supabaseClient';
 import { ensureCanonicalDomain, hashKey, normalizeHost, normalizeUrl, resolveCompanyWebsite } from './ingestionUtils';
 import { ownedDbTable } from '../db/writeOwner';
+// CKRE-001 §1 — boundary instrumentation for the Website Intelligence crawl
+// (reuses the AUTH-001 event infra; correlation ties to the company journey).
+import { emitCrawlEvent, resolveCrawlCorrelationId } from './crawl/crawlEventService';
 
 /**
  * BETA-ROADMAP-EXEC-002 — static-parser evidence depth. Signals recovered from the SAME regex/static
@@ -452,6 +455,14 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
 
   const rootUrl = normalizeUrl(resolvedRootUrl);
 
+  // CKRE-001 §1 — crawl-started boundary event (fire-and-forget).
+  void resolveCrawlCorrelationId(null, input.companyId).then((correlationId) =>
+    emitCrawlEvent({
+      event: 'CrawlStarted', outcome: 'allowed', correlationId,
+      companyId: input.companyId, workflow: 'website_intelligence', target: rootUrl,
+    }),
+  );
+
   const maxPages = Math.max(1, Math.min(input.maxPages ?? 250, 1000));
   const timeoutMs = Math.max(2000, input.timeoutMs ?? 10000);
   const rootHost = normalizeHost(rootUrl);
@@ -511,6 +522,15 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
       queue.push({ url: link.url, depth: current.depth + 1 });
     }
   }
+
+  // CKRE-001 §1 — crawl-completed boundary event (fire-and-forget).
+  void resolveCrawlCorrelationId(null, input.companyId).then((correlationId) =>
+    emitCrawlEvent({
+      event: 'CrawlCompleted', outcome: 'allowed', correlationId,
+      companyId: input.companyId, workflow: 'website_intelligence', target: rootUrl,
+      metadata: { pagesProcessed, pagesInserted },
+    }),
+  );
 
   return {
     source: 'crawler',

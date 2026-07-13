@@ -39,6 +39,7 @@ import { monitorCompanyIdentityDrift } from '../../../backend/services/companyId
 import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 import { buildDiscoveredProvenance } from '../../../backend/services/companyProfile/enrichmentProvenance';
+import { emitCrawlEvent } from '../../../backend/services/crawl/crawlEventService';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import {
   emitSignupEvent,
@@ -645,7 +646,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     let discoveredMetadata: import('../../../backend/services/companyProfile/websiteMetadataExtractor').DiscoveredWebsiteMetadata | null = null;
     if (canonicalWebsite) {
       try {
-        const crawlResult = await crawlWebsiteSources(canonicalWebsite, new Set());
+        // CKRE-001 §1/§2/§7 — pass crawl context so this onboarding crawl is
+        // instrumented and its root fetch is reused (not re-fetched) by the
+        // profile-refinement crawl fired in step 5b below.
+        const crawlResult = await crawlWebsiteSources(canonicalWebsite, new Set(), {
+          companyId,
+          userId: user.id,
+          email: user.email ?? null,
+          workflow: 'onboarding',
+        });
         discoveredSocialProfile = mergeDiscoveredSocialProfiles(
           { company_id: companyId, website_url: canonicalWebsite } as any,
           crawlResult.social_links,
@@ -774,6 +783,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     // onboarding response and never fails setup. Only when a website exists,
     // since extraction needs a source to produce a non-zero score.
     if (canonicalWebsite) {
+      // CKRE-001 §1 — the eager AI refinement is the "enrichment" step; emit
+      // EnrichmentTriggered so the crawl→enrichment journey is fully observable.
+      // Reuses the crawl event infra; correlation ties to the signup journey.
+      void emitCrawlEvent({
+        event: 'EnrichmentTriggered', outcome: 'allowed',
+        correlationId: signupCorrelationId,
+        companyId, userId: user.id, workflow: 'onboarding', target: canonicalWebsite,
+        reason: 'eager_profile_refinement',
+      });
       void import('../../../backend/services/companyProfileService')
         .then(({ getProfile }) => getProfile(companyId, { autoRefine: true }))
         .catch((e) =>

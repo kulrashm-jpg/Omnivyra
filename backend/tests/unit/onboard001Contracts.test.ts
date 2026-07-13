@@ -30,9 +30,12 @@ describe('ONBOARD-001 §3/§7 — enrichment reuses the single crawl', () => {
   test('crawlWebsiteSources returns metadata from the already-fetched root HTML', () => {
     const src = read('backend/services/companyProfile/refinementHelpers.ts');
     containsAll(src, ['extractWebsiteMetadata', 'metadata: DiscoveredWebsiteMetadata | null']);
-    // Exactly one root fetch remains (the social+metadata shared fetch).
-    const rootFetches = (src.match(/safeFetch\(normalizedWebsite/g) ?? []).length;
+    // CKRE-001 §2/§7: the root now goes through the crawl-reuse cache
+    // (fetchPageCached), which de-duplicates fetches across the workflow. There
+    // must be exactly one root fetch and no direct safeFetch of the root.
+    const rootFetches = (src.match(/fetchPageCached\(normalizedWebsite/g) ?? []).length;
     expect(rootFetches).toBe(1);
+    expect(src.match(/safeFetch\(normalizedWebsite/g)).toBeNull();
   });
 
   test('setup-company persists discovered brand assets + metadata bundle + timezone', () => {
