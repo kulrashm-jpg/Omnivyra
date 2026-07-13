@@ -39,6 +39,7 @@ import { monitorCompanyIdentityDrift } from '../../../backend/services/companyId
 import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 import { buildDiscoveredProvenance } from '../../../backend/services/companyProfile/enrichmentProvenance';
+import { bootstrapCompanyProfile } from '../../../backend/services/companyBootstrapService';
 import { emitCrawlEvent } from '../../../backend/services/crawl/crawlEventService';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import {
@@ -758,6 +759,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       updated_at:  now,
     }, { onConflict: 'company_id' });
     // Non-fatal if profile insert fails — company + role are sufficient
+
+    // ── 5·bootstrap. Canonical company profile bootstrap (ONBOARD-004) ────────
+    // Immediately after company creation, run the ONE idempotent bootstrap
+    // authority. It fills ONLY still-empty canonical columns from the crawl
+    // metadata we already have (no re-crawl, no AI), ensures the discovered
+    // bundle exists, records the canonical completeness, and stamps an
+    // idempotency marker so verification-replay / resume / refresh never
+    // double-writes. Best-effort and fully non-fatal — a user must never start
+    // from an empty company, but a bootstrap hiccup must never fail setup.
+    try {
+      await bootstrapCompanyProfile(companyId, {
+        supabase,
+        discovered: discoveredMetadata,
+        verifiedWebsite: canonicalWebsite || null,
+        now,
+      });
+    } catch (error) {
+      console.warn('[setup-company] company bootstrap failed (non-fatal):', (error as Error)?.message ?? error);
+    }
 
     // ── 5a. Timezone capture (§3 "Timezone") ─────────────────────────────────
     // The browser sends its IANA timezone (Intl.DateTimeFormat().resolvedOptions()
