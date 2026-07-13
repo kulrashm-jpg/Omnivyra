@@ -47,6 +47,12 @@ import IORedis from 'ioredis';
 import { recordAnomalyEvent } from './anomalyDetector';
 import { logger } from '../../backend/services/logger';
 import { getInstrumentedStandaloneRedisClient } from '../../backend/queue/standaloneRedisClient';
+import { recordRawCounter } from '../../backend/observability';
+
+/** AUTH-001R §5 — fail-safe canonical counter alongside the anomaly event. */
+function countRateLimitTriggered(prefix: string): void {
+  try { recordRawCounter('signup.rate_limit_triggered', 1, { prefix }); } catch { /* fail-safe */ }
+}
 
 // ── In-memory fallback limiter ────────────────────────────────────────────────
 // Used ONLY when Redis is unavailable (fail-open path).
@@ -66,7 +72,10 @@ function fallbackRateLimit(key: string, config: RateLimitConfig, resetAt: number
   }
   bucket.count++;
   const allowed = bucket.count <= 50; // generous cap — stops flooding, not legitimate bursts
-  if (!allowed) recordAnomalyEvent('rate_limit_triggered');
+  if (!allowed) {
+    recordAnomalyEvent('rate_limit_triggered');
+    countRateLimitTriggered(config.keyPrefix);
+  }
   return { allowed, remaining: Math.max(0, 50 - bucket.count), resetAt, bypassed: true };
 }
 
@@ -178,6 +187,7 @@ export async function checkRateLimit(
 
     if (countBefore >= effectiveConfig.limit) {
       recordAnomalyEvent('rate_limit_triggered');
+      countRateLimitTriggered(effectiveConfig.keyPrefix);
       return {
         allowed: false,
         remaining: 0,

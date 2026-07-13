@@ -2,11 +2,22 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
+import {
+  deriveSignupLifecycle,
+  type SignupLifecycleState,
+} from '../../../backend/services/signupLifecycleService';
 
 type SuccessResponse = {
   exists: true;
   hasPassword: boolean;
   nextStep: 'set_password' | 'continue_signup';
+  /**
+   * AUTH-001R §2 — canonical journey state + server-derived resume step.
+   * ADDITIVE: legacy clients keep using exists/hasPassword/nextStep; new
+   * clients resume from the lifecycle instead of frontend routing.
+   */
+  lifecycleState?: SignupLifecycleState;
+  lifecycleNextStep?: string;
 };
 
 type ErrorResponse = { error: string; code?: string };
@@ -57,9 +68,16 @@ export default async function handler(
   }
 
   const hasPassword = (userRow as any).has_password === true;
+
+  // AUTH-001R §2 — canonical, deterministic journey derivation (pure read
+  // over the existing authorities; retry/refresh/replay safe). Best-effort:
+  // a derivation failure degrades to the legacy response, never a 500.
+  const lifecycle = await deriveSignupLifecycle(email);
+
   return res.status(200).json({
     exists: true,
     hasPassword,
     nextStep: hasPassword ? 'continue_signup' : 'set_password',
+    ...(lifecycle ? { lifecycleState: lifecycle.state, lifecycleNextStep: lifecycle.nextStep } : {}),
   });
 }

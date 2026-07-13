@@ -60,9 +60,11 @@ describe('AUTH-001 §9 — emitSignupEvent maps onto capability_audit_log', () =
     expect(row.resourceId).toBe('cid-123');
     expect(row.organizationId).toBe('org1');
     expect(row.principalUserId).toBe('u1');
-    expect(row.reason).toContain('event=CompanyCreated');
-    expect(row.reason).toContain('email=user@acme.com'); // normalized
-    expect(row.reason).toContain('reason=test');
+    // AUTH-001R §3/§4: reason now carries the versioned JSON envelope.
+    const envelope = JSON.parse(String(row.reason));
+    expect(envelope.event).toBe('CompanyCreated');
+    expect(envelope.email).toBe('user@acme.com'); // normalized
+    expect(envelope.reason).toBe('test');
   });
 
   test('never throws even when the audit layer throws (fire-and-forget)', async () => {

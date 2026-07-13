@@ -148,3 +148,91 @@ duplicates retired to `status='expired'`) and `idx_companies_website_domain_uniq
 `backend/tests/unit/auth001*.test.ts` (6 suites) + updated identity-validation
 suites (deterministic `probeParked` stub) + refreshed stability contract
 (`tests/stability/billing/signupCreditsContract.test.ts`).
+
+## AUTH-001R — signup lifecycle, event contract & observability (2026-07-13)
+
+### Canonical signup lifecycle
+
+`backend/services/signupLifecycleService.ts` — ONE deterministic vocabulary,
+transition map, and derivation. **Not a new state store**: the authority is a
+pure read over the existing stores (`signup_intents`, `users.onboarding_state`
+/ `is_email_verified`, `user_company_roles`); nothing new is written.
+
+```
+INITIATED → VALIDATING → VALIDATED → VERIFICATION_PENDING → VERIFIED
+  → ONBOARDING_STARTED → COMPANY_CREATED → ONBOARDING_COMPLETED
+failure edges → FAILED        stall edges → ABANDONED
+```
+
+(Adapted from the generic suggestion to this product's real order: the profile
+step precedes company creation, and company creation completes onboarding.)
+
+Rules: self-transitions always legal (idempotent retries); `FAILED`/`ABANDONED`
+recover into `VALIDATING`; `ONBOARDING_COMPLETED` is terminal. Guards:
+`canTransition(from, to)` / `assertTransition(from, to)` (throws
+`ILLEGAL_SIGNUP_LIFECYCLE_TRANSITION`). `VALIDATING`/`VALIDATED`/
+`COMPANY_CREATED` are request-scoped; the durable derivation can also observe
+`COMPANY_CREATED` when the membership row landed but the `onboarding_state`
+stamp did not (resumable partial write).
+
+### Journey recovery
+
+`deriveSignupLifecycle(email)` → `{ state, authority, nextStep }` — pure,
+deterministic, retry/refresh/replay safe, never throws (degrades to null).
+Surfaced server-side on `POST /api/auth/resume-status` as additive
+`lifecycleState` + `lifecycleNextStep` fields (legacy `exists`/`hasPassword`/
+`nextStep` unchanged). Recovery never relies on frontend routing alone:
+`post-login-route` re-derives from the same authorities on every login.
+
+### Event contract (schema v1.1)
+
+Every `signup.<Event>` row satisfies the full contract:
+
+| Contract field | Where |
+|---|---|
+| eventType | `capability` (`signup.<Event>`) |
+| timestamp | `occurred_at` |
+| correlationId | `resource_id` |
+| actor | `principal_user_id` / `principal_supabase_uid` (+ ip / user_agent) |
+| tenant | `organization_id` |
+| schemaVersion, journeyState, requestId, metadata, email, reason | JSON envelope in `reason` |
+
+`journeyState` defaults per event via `EVENT_IMPLIED_LIFECYCLE_STATE` (call
+sites may override). `requestId` defaults from the ambient request context.
+Rows remain immutable (DB triggers block UPDATE/DELETE).
+
+### Event versioning
+
+`SIGNUP_EVENT_SCHEMA_VERSION = '1.1'`. v1 rows (legacy `key=value` strings)
+remain valid history; `parseSignupEventReason()` normalizes ANY version into
+the envelope shape. Evolution rule: **additive only** — new envelope fields
+may be added, none renamed/removed; consumers ignore unknown fields; a
+breaking change requires a new major version + a parser branch, never a
+rewrite of old rows.
+
+### Observability (event-derived)
+
+Counters recorded through the existing HARDEN-001 registry
+(`recordRawCounter`), names prefixed `signup.`:
+
+| Metric | Derived from |
+|---|---|
+| signup_started / signup_completed / signup_failed | SignupAttempted / SignupValidated / any rejection or SystemFailure |
+| verification_sent | VerificationSent (allowed) |
+| verification_completed / verification_failed | VerificationSucceeded allowed / denied |
+| company_created / company_exists | CompanyCreated / CompanyExists |
+| captcha_failed | recorded inside `lib/auth/captcha.ts` (missing_token / rejected) |
+| rate_limit_triggered | recorded inside `lib/auth/rateLimit.ts` (labelled by keyPrefix), alongside the existing anomaly event |
+
+Events are the source of truth; counters are a fail-safe projection
+(`metricForSignupEvent`) that can never affect the event path.
+
+### Migration readiness
+
+`npm run verify:auth001-migration` (`scripts/verify-auth001-migration-readiness.js`)
+— READ-ONLY, rerunnable. Reports `companies.website_domain` duplicate groups
+(with company ids — these block the unique index), pending `signup_intents`
+duplicates (the migration retires these itself), and an overall
+READY / ACTION_REQUIRED verdict. Exit codes: 0 ready, 1 action required,
+2 environment error. Rerun after applying the migration to confirm zero
+duplicates remain.

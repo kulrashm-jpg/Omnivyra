@@ -26,6 +26,12 @@
 
 import { safeFetch } from '../security/safeFetch';
 import { logger } from '../../backend/services/logger';
+import { recordRawCounter } from '../../backend/observability';
+
+/** Fail-safe counter — CAPTCHA outcomes must never depend on metrics. */
+function countCaptchaFailed(reason: string): void {
+  try { recordRawCounter('signup.captcha_failed', 1, { reason }); } catch { /* fail-safe */ }
+}
 
 export type CaptchaProvider = 'turnstile' | 'hcaptcha' | 'recaptcha';
 
@@ -72,6 +78,7 @@ export async function verifyCaptchaToken(
   }
 
   if (!token || !String(token).trim()) {
+    countCaptchaFailed('missing_token');
     return { ok: false, reason: 'missing_token' };
   }
 
@@ -94,6 +101,7 @@ export async function verifyCaptchaToken(
     }
     const json = (await res.json()) as { success?: boolean; 'error-codes'?: string[] };
     if (json.success === true) return { ok: true, reason: 'verified' };
+    countCaptchaFailed('rejected');
     return { ok: false, reason: 'rejected' };
   } catch (err) {
     logger.warn('captcha_provider_unreachable', {

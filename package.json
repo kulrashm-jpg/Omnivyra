@@ -106,6 +106,7 @@
     "typecheck:ci": "node scripts/typecheck-baseline.js",
     "check:ssrf": "node scripts/check-outbound-ssrf.js",
     "check:authz": "node scripts/check-tenant-authz.js",
+    "verify:auth001-migration": "node scripts/verify-auth001-migration-readiness.js",
     "predeploy:check": "node scripts/predeploy-check.js",
     "verify:render-parity": "node scripts/verify-render-parity.js",
     "verify:vercel-render-parity": "node scripts/verify-vercel-render-parity.js",

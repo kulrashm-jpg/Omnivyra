@@ -62,6 +62,14 @@ export default async function handler(
   // A session whose auth identity is NOT confirmed cannot use this endpoint
   // to self-verify — that would make the gate forgeable by any session holder.
   if (user && !user.emailVerified) {
+    void ensureSignupCorrelationId(user.email ?? '').then((correlationId) =>
+      emitSignupEvent({
+        event: 'VerificationSucceeded', outcome: 'denied', correlationId,
+        email: user.email ?? null, userId: user.id, reason: 'EMAIL_NOT_VERIFIED',
+        journeyState: 'VERIFICATION_PENDING',
+        ip: requestIp(req), userAgent: requestUserAgent(req),
+      }),
+    );
     return res.status(403).json({ error: 'Email address is not verified yet.', code: 'EMAIL_NOT_VERIFIED' });
   }
 
@@ -89,6 +97,15 @@ export default async function handler(
     // is only created (with is_email_verified=true) when Supabase itself says
     // the email is confirmed.
     if (!identity.emailVerified) {
+      const unverifiedEmail = identity.email?.toLowerCase() ?? '';
+      void ensureSignupCorrelationId(unverifiedEmail).then((correlationId) =>
+        emitSignupEvent({
+          event: 'VerificationSucceeded', outcome: 'denied', correlationId,
+          email: unverifiedEmail || null, reason: 'EMAIL_NOT_VERIFIED',
+          journeyState: 'VERIFICATION_PENDING',
+          ip: requestIp(req), userAgent: requestUserAgent(req),
+        }),
+      );
       return res.status(403).json({ error: 'Email address is not verified yet.', code: 'EMAIL_NOT_VERIFIED' });
     }
 
