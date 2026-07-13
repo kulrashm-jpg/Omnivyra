@@ -50,6 +50,13 @@ jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn(),
 }));
 
+// CONTENT-INTELLIGENCE-005: regenerationExecutor now grounds via the canonical
+// adapter (getCanonicalProfile), same signature/return as getProfile. Mock that
+// module so the existing behavioural assertions apply to the real read path.
+jest.mock('../../services/context/canonicalProfileAdapter', () => ({
+  getCanonicalProfile: jest.fn(),
+}));
+
 jest.mock('../../services/auditEventService', () => ({
   recordAuditEvent: jest.fn(async () => undefined),
 }));
@@ -64,7 +71,7 @@ jest.mock('../../db/supabaseClient', () => ({
   },
 }));
 
-const { getProfile } = require('../../services/companyProfileService') as { getProfile: jest.Mock };
+const { getCanonicalProfile: getProfile } = require('../../services/context/canonicalProfileAdapter') as { getCanonicalProfile: jest.Mock };
 const { recordAuditEvent } = require('../../services/auditEventService') as { recordAuditEvent: jest.Mock };
 const { runCompletionWithOperation } = require('../../services/aiGateway') as { runCompletionWithOperation: jest.Mock };
 

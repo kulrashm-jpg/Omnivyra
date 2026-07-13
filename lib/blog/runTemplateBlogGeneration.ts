@@ -56,7 +56,7 @@ import {
   type CompanyIdentity,
 } from '../content/companyContextBlock';
 import { validateContentVariation } from '../content/contentVariationValidator';
-import { getProfile } from '../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildGovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
 
 export interface TemplateBlogGenerationParams {

@@ -40,7 +40,7 @@ import {
   emitPromptBudgetTelemetry,
 } from '../../backend/services/longForm/promptBudgetTelemetry';
 import { buildGovernanceExplainabilityMetadata } from '../../backend/services/creator/strategyGovernancePromptContext';
-import { getProfile } from '../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   extractCompanyIdentity,
   scoreCompanyContext,

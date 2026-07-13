@@ -29,6 +29,23 @@ export const WAVE1_MIGRATED_CONSUMERS: readonly string[] = [
   'backend/services/creator/governanceItemEnricher.ts',
 ];
 
+/** Consumers migrated in Wave 2A — Blog & Long-form generation (CONTENT-INTELLIGENCE-005). */
+export const WAVE2A_MIGRATED_CONSUMERS: readonly string[] = [
+  'lib/blog/runBlogGeneration.ts',
+  'lib/blog/runStandardBlogGeneration.ts',
+  'lib/blog/runTemplateBlogGeneration.ts',
+  'lib/blog/regenerationExecutor.ts',
+  'pages/api/blogs/improve-draft.ts',
+  'pages/api/blogs/enrich-block.ts',
+  'backend/services/longForm/longFormRecommendationEngine.ts',
+];
+
+/** All consumers migrated onto canonical grounding across every landed wave. */
+export const MIGRATED_CONSUMERS: readonly string[] = [
+  ...WAVE1_MIGRATED_CONSUMERS,
+  ...WAVE2A_MIGRATED_CONSUMERS,
+];
+
 /**
  * Total AI grounding consumers (getProfile / company_profiles reads) identified
  * by the CONTENT-INTELLIGENCE-002 audit. Baseline for adoption percentage.
@@ -45,14 +62,14 @@ export interface AdoptionStats {
 }
 
 export function getCanonicalAdoptionStats(): AdoptionStats {
-  const migrated = WAVE1_MIGRATED_CONSUMERS.length;
+  const migrated = MIGRATED_CONSUMERS.length;
   const total = TOTAL_GROUNDING_CONSUMERS;
   return {
     migrated,
     total,
     remaining: Math.max(0, total - migrated),
     adoptionPercent: Math.round((migrated / total) * 1000) / 10,
-    migratedConsumers: [...WAVE1_MIGRATED_CONSUMERS],
+    migratedConsumers: [...MIGRATED_CONSUMERS],
   };
 }
 
