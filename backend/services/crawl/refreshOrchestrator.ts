@@ -15,6 +15,9 @@ import { decideRefresh, type RefreshAction } from './refreshPolicyEngine';
 import { getKnowledgeState, recordRefresh } from './knowledgeVersionStore';
 import { emitRefreshEvent, recordTokenSavings, resolveRefreshCorrelationId, TOKENS_PER_REFRESH_ESTIMATE } from './refreshEventService';
 import { refreshDiscoveredMetadata, touchProfileRefreshedAt } from './incrementalMetadataStore';
+// CKRE-003 — capture an immutable Company Knowledge version on each successful
+// refresh (best-effort; composes the canonical knowledge model).
+import { captureKnowledgeVersion } from '../knowledge/companyKnowledgeService';
 
 export interface RefreshGateInput {
   companyId: string | null;
@@ -111,7 +114,14 @@ export async function evaluateRefreshGate(input: RefreshGateInput): Promise<Refr
         });
         recordTokenSavings(TOKENS_PER_REFRESH_ESTIMATE, workflow);
         await emit('MetadataRefreshed', 'allowed', 'cosmetic', { fields: meta.fields, tokensSaved: TOKENS_PER_REFRESH_ESTIMATE });
-        if (rec.created) await emit('KnowledgeVersionCreated', 'allowed', 'metadata', { version: rec.version });
+        if (rec.created && rec.version) {
+          await emit('KnowledgeVersionCreated', 'allowed', 'metadata', { version: rec.version });
+          // CKRE-003 — capture the immutable knowledge version (best-effort).
+          void captureKnowledgeVersion({
+            companyId, version: rec.version, refreshReason: decision.reason, refreshPolicy: decision.action,
+            dependencies: input.changeDecision?.affectedFingerprints ?? [],
+          });
+        }
         return { skipAi: true, action: decision.action, verdict, correlationId, metadataFields: meta.fields };
       }
       default: {
@@ -166,7 +176,14 @@ export async function finalizeAiRefresh(input: FinalizeAiRefreshInput): Promise<
 
     if (input.gate.action === 'REFRESH_BUSINESS_ONLY') await emit('BusinessRefreshed', 'business', { version: rec.version });
     await emit('RefreshCompleted', input.gate.action, { version: rec.version, executionMs: input.executionMs });
-    if (rec.created) await emit('KnowledgeVersionCreated', 'ai_refresh', { version: rec.version });
+    if (rec.created && rec.version) {
+      await emit('KnowledgeVersionCreated', 'ai_refresh', { version: rec.version });
+      // CKRE-003 — capture the immutable knowledge version (best-effort).
+      void captureKnowledgeVersion({
+        companyId, version: rec.version, refreshReason: input.gate.action, refreshPolicy: input.gate.action,
+        dependencies: [],
+      });
+    }
   } catch {
     /* fail-safe */
   }
