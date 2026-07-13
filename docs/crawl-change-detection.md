@@ -102,3 +102,88 @@ the source of truth; counters are a fail-safe projection.
 - **Sitemap/robots**: `crawlerService` fetches these; passing them into
   `computeWebsiteFingerprint` (already supported as optional inputs) extends
   Level-1 coverage.
+
+---
+
+# CKRE-001R — registry, dependency graph, explanation, session, replay
+
+## Canonical fingerprint registry (§1)
+
+`crawl/fingerprintRegistry.ts` centrally defines every fingerprint type
+(`HTTP_METADATA`, `HTML`, `NAVIGATION`, `LOGO`, `FAVICON`, `OPENGRAPH`,
+`SITEMAP`, `ROBOTS`, `SEO`, `SOCIAL`, `BUSINESS`, `STRUCTURED_DATA`, `CMS`).
+Each entry declares `{ id, section, schemaVersion, hashAlgorithm, producer,
+dependencies, freshnessPolicy, storageKey, produced }`. Nothing else hardcodes
+fingerprint identifiers. `SEO`/`CMS` are defined for graph completeness but not
+yet produced by the crawl. `websiteFingerprintService.extractRegistryHashes`
+maps a bundle to the registry vocabulary.
+
+## Dependency graph (§2)
+
+Pure, deterministic helpers: `dependenciesOf`, `dependentsOf`, `downstreamOf`
+(transitive dependents), `upstreamOf`, `topologicalOrder` (cycle-detecting),
+and `affectedByChanges(changed[])` → the changed types plus their transitive
+dependents (the surface future CKRE phases use to **skip** untouched
+calculations). Example: `BUSINESS` depends on `HTML`, `NAVIGATION`,
+`HTTP_METADATA`, `SOCIAL`, `STRUCTURED_DATA`.
+
+## Change explanation (§3)
+
+`decideWebsiteChange` now additionally returns (backward-compatible additions):
+`changedFingerprints` (registry ids), `affectedFingerprints` (graph closure),
+`changedSections` (http/structural/business), `reasonCodes` (e.g.
+`HTML_CHANGED`, `COMPANY_NAME_CHANGED`), and `recommendedAction`:
+
+| Verdict | recommendedAction |
+|---|---|
+| UNCHANGED | NO_ACTION |
+| COSMETIC_CHANGE | REFRESH_METADATA |
+| BUSINESS_CHANGE | REFRESH_BUSINESS |
+| MAJOR_CHANGE | REFRESH_ENRICHMENT |
+| UNKNOWN | UNKNOWN |
+
+All deterministic — no AI reasoning. CKRE-002 consumes `recommendedAction` to
+decide WHEN AI runs; CKRE-001R does not act on it.
+
+## Crawl session (§4)
+
+`crawl/crawlSession.ts` — `CrawlSession` aggregates correlation ID, `crawlId`,
+workflow, timings, session-local metrics, and the resulting fingerprint +
+decision. It is not a new workflow engine: it emits through the CKRE-001 event
+service and hands `toContext()` (a `CrawlContext` carrying the `crawlId`) to the
+unchanged `crawlWebsiteSources`. The `crawlId` is stamped onto every emitted
+event so one crawl's lifecycle is fully traceable.
+
+## Fingerprint provenance (§5)
+
+Every computed bundle carries `provenance { producer, schemaVersion, algorithm,
+generatedAt, sourceUrl, generationReason, workflow }` — reusing the existing
+top-level fields plus the crawl reason/workflow. Additive: absent on v1 bundles;
+readers tolerate its absence.
+
+## Replay (§6)
+
+`replayWebsiteChange(prev, next)` re-evaluates the decision + dependency closure
+from STORED fingerprints — **no HTTP requests, no AI**. Deterministic: the same
+stored bundles always replay to the same result. For debugging change decisions
+offline.
+
+## Determinism guarantees (§7)
+
+Fingerprints are identical across timezone, process restart, execution order,
+Node runtime, OS, and env. Invariants (documented in
+`websiteFingerprintService.ts`): no timestamp/random feeds any hash; text is
+whitespace-normalized (no locale transforms); lists are de-duplicated and
+sorted with the code-unit comparator; URL fields are canonicalized (scheme+host
+lowercased, default ports / trailing slash / fragment stripped). The fingerprint
+schema version was bumped to `ckre-fp-v2`; a prev/next **version mismatch
+deterministically yields UNKNOWN**, so a bump never fabricates a change.
+
+## Future CKRE extension points (updated)
+
+- `recommendedAction` + `affectedFingerprints` are the hooks for CKRE-002 to gate
+  and scope AI enrichment (this refinement does not gate).
+- `produced: false` registry types (`SEO`, `CMS`) are the next fingerprint
+  producers to wire in.
+- `CrawlSession.snapshot()` + `replayWebsiteChange` provide the debugging spine
+  for CKRE-002 decision auditing.

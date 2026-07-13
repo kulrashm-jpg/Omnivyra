@@ -23,20 +23,64 @@
 import { createHash } from 'crypto';
 import type { DiscoveredWebsiteMetadata } from '../companyProfile/websiteMetadataExtractor';
 
-export const WEBSITE_FINGERPRINT_VERSION = 'ckre-fp-v1';
+// CKRE-001R §7 — version bumped to v2 with the stronger URL/list normalization
+// below. The change engine treats a prev/next version mismatch as UNKNOWN, so a
+// bump never produces a spurious "change" against an older stored bundle.
+export const WEBSITE_FINGERPRINT_VERSION = 'ckre-fp-v2';
 export const WEBSITE_FINGERPRINT_ALGORITHM = 'sha256';
 export const WEBSITE_FINGERPRINT_SOURCE = 'website_crawl';
 
+/**
+ * CKRE-001R §7 — DETERMINISM INVARIANTS. Fingerprints must be identical across
+ * timezone, process restart, execution order, Node runtime, OS, and env:
+ *   1. No timestamps, Date.now(), or Math.random() feed any hash (computedAt is
+ *      metadata only, never hashed).
+ *   2. All text is normalized (collapse whitespace + trim) before hashing; no
+ *      locale-dependent transforms (no toLocaleLowerCase / Intl).
+ *   3. All lists are de-duplicated and sorted with the default (code-unit)
+ *      comparator — stable across platforms/locales — before joining.
+ *   4. URL-valued fields are canonicalized (scheme+host lowercased, default
+ *      ports and trailing slash and fragment stripped) so cosmetic URL diffs
+ *      don't register as changes.
+ *   5. sha256 hex — same output on every platform.
+ */
 function sha(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex');
 }
 const norm = (v: string | null | undefined): string => String(v ?? '').replace(/\s+/g, ' ').trim();
+
+/** Canonicalize a URL for hashing (§7 invariant 4). Falls back to trimmed text. */
+function normalizeAssetUrl(v: string | null | undefined): string {
+  const raw = norm(v);
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    u.protocol = u.protocol.toLowerCase();
+    u.hostname = u.hostname.toLowerCase();
+    u.hash = '';
+    if ((u.protocol === 'https:' && u.port === '443') || (u.protocol === 'http:' && u.port === '80')) u.port = '';
+    let out = u.toString();
+    if (out.endsWith('/') && u.pathname === '/') out = out.slice(0, -1);
+    return out;
+  } catch {
+    return raw.replace(/\/+$/, '');
+  }
+}
+
 function hashOf(v: string | null | undefined): string | null {
   const s = norm(v);
   return s ? sha(s) : null;
 }
+function hashUrl(v: string | null | undefined): string | null {
+  const s = normalizeAssetUrl(v);
+  return s ? sha(s) : null;
+}
 function hashList(items: Array<string | null | undefined>): string | null {
   const cleaned = Array.from(new Set(items.map((i) => norm(i)).filter(Boolean))).sort();
+  return cleaned.length ? sha(cleaned.join('\n')) : null;
+}
+function hashUrlList(items: Array<string | null | undefined>): string | null {
+  const cleaned = Array.from(new Set(items.map((i) => normalizeAssetUrl(i)).filter(Boolean))).sort();
   return cleaned.length ? sha(cleaned.join('\n')) : null;
 }
 
@@ -65,6 +109,22 @@ export interface Level2Fingerprint {
   structuredData: string | null;
 }
 
+/**
+ * CKRE-001R §5 — full provenance stored with every fingerprint. Reuses the
+ * existing top-level fields (version→schemaVersion, computedAt→generatedAt,
+ * url→sourceUrl, source→producer) plus the two new signals (generationReason,
+ * workflow). Additive: absent on CKRE-001 bundles; readers tolerate its absence.
+ */
+export interface FingerprintProvenance {
+  producer: string;
+  schemaVersion: string;
+  algorithm: string;
+  generatedAt: string;
+  sourceUrl: string;
+  generationReason: string;
+  workflow: string | null;
+}
+
 export interface WebsiteFingerprint {
   version: string;
   algorithm: string;
@@ -74,6 +134,8 @@ export interface WebsiteFingerprint {
   level0: Level0Fingerprint;
   level1: Level1Fingerprint;
   level2: Level2Fingerprint;
+  /** CKRE-001R §5 — provenance (optional for backward compat with v1 bundles). */
+  provenance?: FingerprintProvenance;
 }
 
 export interface FingerprintInput {
@@ -86,6 +148,13 @@ export interface FingerprintInput {
   /** Optional — supplied only by crawlers that fetch them (crawlerService). */
   sitemapXml?: string | null;
   robotsTxt?: string | null;
+}
+
+/** CKRE-001R §5 — provenance context supplied by the crawl session/caller. */
+export interface FingerprintProvenanceInput {
+  generationReason?: string;
+  workflow?: string | null;
+  producer?: string;
 }
 
 // ── Level 1 helpers (pure HTML derivations, no extraction dependency) ─────────
@@ -154,7 +223,11 @@ function contactSignature(html: string): string | null {
  * timestamp (metadata only — never part of any hash), which may be injected
  * for deterministic tests.
  */
-export function computeWebsiteFingerprint(input: FingerprintInput, computedAt: string = new Date().toISOString()): WebsiteFingerprint {
+export function computeWebsiteFingerprint(
+  input: FingerprintInput,
+  computedAt: string = new Date().toISOString(),
+  provenanceMeta: FingerprintProvenanceInput = {},
+): WebsiteFingerprint {
   const html = input.html ?? '';
   const meta = input.metadata ?? null;
 
@@ -166,9 +239,9 @@ export function computeWebsiteFingerprint(input: FingerprintInput, computedAt: s
 
   const level1: Level1Fingerprint = {
     htmlHash: html ? sha(structuralHtml(html)) : null,
-    navHash: hashList(navSignature(html)),
-    faviconHash: hashOf(meta?.faviconUrl),
-    logoHash: hashOf(meta?.logoUrl),
+    navHash: hashUrlList(navSignature(html)),
+    faviconHash: hashUrl(meta?.faviconUrl),   // §7 — URL-canonicalized
+    logoHash: hashUrl(meta?.logoUrl),         // §7 — URL-canonicalized
     ogHash: meta && meta.openGraph && Object.keys(meta.openGraph).length
       ? hashList(Object.entries(meta.openGraph).map(([k, v]) => `${k}=${v}`))
       : null,
@@ -185,7 +258,7 @@ export function computeWebsiteFingerprint(input: FingerprintInput, computedAt: s
     services: sdTypes.some((t) => /service/i.test(t)) ? hashList(sdTypes.filter((t) => /service/i.test(t))) : null,
     primaryCta: hashOf(primaryCtaText(html)),
     contact: hashOf(contactSignature(html)),
-    socialLinks: hashList(input.socialLinks ?? []),
+    socialLinks: hashUrlList(input.socialLinks ?? []),  // §7 — URL-canonicalized
     brandColors: hashOf(meta?.brandColor),
     structuredData: hashList(sdTypes),
   };
@@ -199,6 +272,42 @@ export function computeWebsiteFingerprint(input: FingerprintInput, computedAt: s
     level0,
     level1,
     level2,
+    // §5 — provenance reuses the fields above + the caller's reason/workflow.
+    provenance: {
+      producer: provenanceMeta.producer ?? WEBSITE_FINGERPRINT_SOURCE,
+      schemaVersion: WEBSITE_FINGERPRINT_VERSION,
+      algorithm: WEBSITE_FINGERPRINT_ALGORITHM,
+      generatedAt: computedAt,
+      sourceUrl: input.url,
+      generationReason: provenanceMeta.generationReason ?? 'crawl',
+      workflow: provenanceMeta.workflow ?? null,
+    },
+  };
+}
+
+/**
+ * CKRE-001R §1 — map a fingerprint bundle to the canonical registry types.
+ * Returns a hash (or null) per registry id, so the change engine, replay, and
+ * future CKRE skip-calculation all speak the registry vocabulary rather than
+ * bundle-internal field paths. Pure.
+ */
+export function extractRegistryHashes(fp: WebsiteFingerprint): Record<import('./fingerprintRegistry').FingerprintTypeId, string | null> {
+  const httpToken = [fp.level0.etag, fp.level0.lastModified, fp.level0.contentLength].filter(Boolean).join('|') || null;
+  const businessAgg = hashList(Object.values(fp.level2));
+  return {
+    HTTP_METADATA:   httpToken,
+    HTML:            fp.level1.htmlHash,
+    NAVIGATION:      fp.level1.navHash,
+    LOGO:            fp.level1.logoHash,
+    FAVICON:         fp.level1.faviconHash,
+    OPENGRAPH:       fp.level1.ogHash,
+    SITEMAP:         fp.level1.sitemapHash,
+    ROBOTS:          fp.level1.robotsHash,
+    STRUCTURED_DATA: fp.level2.structuredData,
+    SOCIAL:          fp.level2.socialLinks,
+    SEO:             null, // defined in the registry; not yet produced
+    CMS:             null, // produced by the CMS layer, not the crawl
+    BUSINESS:        businessAgg,
   };
 }
 

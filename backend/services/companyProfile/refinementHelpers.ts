@@ -28,6 +28,8 @@ export interface CrawlContext {
   email?: string | null;
   correlationId?: string | null;
   workflow?: string | null;
+  /** CKRE-001R §4 — crawl-session id, stamped onto every emitted event. */
+  crawlId?: string;
 }
 import {
   normalizeUrl,
@@ -287,7 +289,8 @@ export const crawlWebsiteSources = async (
       userId: context?.userId ?? null,
       workflow, target: normalizedWebsite,
       reason: reason ?? null,
-      metadata: metadataExtra ?? null,
+      // CKRE-001R §4 — stamp the crawl-session id when present.
+      metadata: { ...(context?.crawlId ? { crawlId: context.crawlId } : {}), ...(metadataExtra ?? {}) },
     });
   };
 
@@ -358,13 +361,18 @@ export const crawlWebsiteSources = async (
   if (context?.companyId && rootFetch.ok && rootHtml) {
     try {
       const flatSocial = Object.values(socialLinks).flat().filter(Boolean);
-      const fingerprint = computeWebsiteFingerprint({
-        url: normalizedWebsite,
-        html: rootHtml,
-        headers: rootFetch.headers,
-        metadata,
-        socialLinks: flatSocial,
-      });
+      const fingerprint = computeWebsiteFingerprint(
+        {
+          url: normalizedWebsite,
+          html: rootHtml,
+          headers: rootFetch.headers,
+          metadata,
+          socialLinks: flatSocial,
+        },
+        undefined,
+        // CKRE-001R §5 — provenance: why + which workflow produced this bundle.
+        { generationReason: 'crawl', workflow, producer: 'crawlWebsiteSources' },
+      );
       if (hasFingerprintSignal(fingerprint)) {
         const prior = await getLatestWebsiteFingerprint(context.companyId);
         const decision = decideWebsiteChange(prior, fingerprint);
