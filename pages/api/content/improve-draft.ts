@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import type { ImprovementArea } from '../../../lib/content/contentImprovementEngine';
 import { runOwnedImprovement } from '../../../lib/content/runOwnedImprovement';
 import type { ContentBlock } from '../../../lib/blog/blockTypes';

@@ -6,7 +6,7 @@ import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '@/backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '@/backend/services/billing/phase2EnforcementGate';
-import { getProfile } from '@/backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import type { CompanyProfile } from '@/backend/services/companyProfile/types';
 
 type CompanyContext = {

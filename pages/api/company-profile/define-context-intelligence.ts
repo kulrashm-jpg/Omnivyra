@@ -5,7 +5,7 @@ import {
   getCompanyContextIntelligence,
   type CompanyContextIntelligence,
 } from '../../../backend/services/companyContextIntelligenceService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 
 function summarizeContext(context: CompanyContextIntelligence | null): string {
   if (!context) return 'No context intelligence is saved yet.';

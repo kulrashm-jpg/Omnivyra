@@ -13,7 +13,7 @@ import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 import { getScheduledPost } from '../db/queries';
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { evaluateEngagement } from './communityAiOmnivyraService';
 
 export type EvaluatePostEngagementResult = {

@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletion } from '../../../backend/services/aiGateway';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 
 // Commercial fields collected in Phase 1. Field naming matches company_profiles DB columns.

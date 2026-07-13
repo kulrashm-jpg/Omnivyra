@@ -1,6 +1,6 @@
 /** Market Pulse V2 — pulse assembly engine + service entrypoints — split from marketPulseV2Service.ts (barrel preserved; importers unchanged). */
 import { supabase } from '../db/supabaseClient';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildCompanyContext } from './companyContextService';
 import { getCompanyContextIntelligence } from './companyContextIntelligenceService';
 import { ownedDbTable } from '../db/writeOwner';

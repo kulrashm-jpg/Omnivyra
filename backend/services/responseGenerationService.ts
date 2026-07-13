@@ -6,7 +6,7 @@
 import { runCompletionWithOperation } from './aiGateway';
 import { parseTemplateStructure, blocksToPromptStructure } from './taggedResponseInterpreter';
 import { getPlatformFormatRules } from './platformResponseFormatter';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { getThreadMemory } from './conversationMemoryService';
 import {
   getTopReplyIntelligence,

@@ -8,7 +8,7 @@
 import { evaluateCommunityAiEngagement, isOmnivyraEnabled } from './omnivyraClientV1';
 import { getThreadMessages } from './engagementMessageService';
 import { supabase } from '../db/supabaseClient';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { runCompletionWithOperation } from './aiGateway';
 import { isDmMessageType, stripSenderColonPrefix } from '../../lib/engagement/messageRoles';
 import { config } from '@/config';

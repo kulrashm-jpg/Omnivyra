@@ -13,7 +13,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveCompanyAccess } from '../../backend/services/contentArchitectService';
 import { supabase } from '../../backend/db/supabaseClient';
-import { getProfile } from '../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   createDraft, updateDraft, previewBrand, publishDraft, rollbackPublished,
   createSupabaseBrandIdentityStore, BrandWriteError,

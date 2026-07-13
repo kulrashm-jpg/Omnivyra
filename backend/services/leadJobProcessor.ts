@@ -6,7 +6,7 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildUnifiedContext } from './contextResolver';
 import { getConnector } from './postDiscoveryConnectors';
 import type { RawPost } from './postDiscoveryConnectors/types';

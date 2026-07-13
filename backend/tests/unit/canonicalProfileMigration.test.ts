@@ -6,7 +6,7 @@
  */
 import { overlayCanonicalOntoProfile } from '../../services/context/canonicalProfileOverlay';
 import { assimilateContext } from '../../services/context/contextAssimilationEngine';
-import { getCanonicalAdoptionStats, MIGRATED_CONSUMERS, WAVE1_MIGRATED_CONSUMERS, WAVE2A_MIGRATED_CONSUMERS, WAVE2B_MIGRATED_CONSUMERS, WAVE2C_MIGRATED_CONSUMERS, WAVE2D_MIGRATED_CONSUMERS, WAVE2E_MIGRATED_CONSUMERS, recordCanonicalRead, getCanonicalReadCounts } from '../../services/context/canonicalAdoptionMetrics';
+import { getCanonicalAdoptionStats, MIGRATED_CONSUMERS, WAVE1_MIGRATED_CONSUMERS, WAVE2A_MIGRATED_CONSUMERS, WAVE2B_MIGRATED_CONSUMERS, WAVE2C_MIGRATED_CONSUMERS, WAVE2D_MIGRATED_CONSUMERS, WAVE2E_MIGRATED_CONSUMERS, WAVE2F_MIGRATED_CONSUMERS, recordCanonicalRead, getCanonicalReadCounts } from '../../services/context/canonicalAdoptionMetrics';
 
 const NOW = Date.parse('2026-07-14T00:00:00Z');
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
@@ -81,11 +81,13 @@ describe('adoption metrics', () => {
     expect(WAVE2C_MIGRATED_CONSUMERS.length).toBe(15);
     expect(WAVE2D_MIGRATED_CONSUMERS.length).toBe(4);
     expect(WAVE2E_MIGRATED_CONSUMERS.length).toBe(14);
+    expect(WAVE2F_MIGRATED_CONSUMERS.length).toBe(38);
     expect(s.migrated).toBe(MIGRATED_CONSUMERS.length);
-    expect(s.migrated).toBe(58); // 15 + 7 + 3 + 15 + 4 + 14
-    expect(s.total).toBeGreaterThanOrEqual(s.migrated);
-    expect(s.remaining).toBe(s.total - s.migrated);
-    expect(s.adoptionPercent).toBeCloseTo((s.migrated / s.total) * 100, 1);
+    expect(s.migrated).toBe(96); // 15 + 7 + 3 + 15 + 4 + 14 + 38
+    // Final wave: every getProfile() grounding consumer migrated → 100% adoption.
+    expect(s.total).toBe(96);
+    expect(s.remaining).toBe(0);
+    expect(s.adoptionPercent).toBe(100);
   });
 
   it('records runtime canonical reads', () => {

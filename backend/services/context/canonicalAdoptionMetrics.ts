@@ -92,6 +92,50 @@ export const WAVE2E_MIGRATED_CONSUMERS: readonly string[] = [
   'pages/api/recommendations/long-form/handoff.ts',
 ];
 
+/** Consumers migrated in Wave 2F — final wave: Creator/Brand/Community/Reports/
+ *  company-profile API surface + remaining utility/helper grounding consumers
+ *  (CONTENT-INTELLIGENCE-010). This eliminates the last getProfile() grounding reads. */
+export const WAVE2F_MIGRATED_CONSUMERS: readonly string[] = [
+  'backend/apiHandlers/recommendations/detectedOpportunitiesShared.ts',
+  'backend/services/brand/brandRuntime.ts',
+  'backend/services/companyPlatformService.ts',
+  'backend/services/competitiveDatasetBootstrapService.ts',
+  'backend/services/competitorDiscoveryEngineService.ts',
+  'backend/services/engagementAiAssistantService.ts',
+  'backend/services/engagementConversationIntelligenceService.ts',
+  'backend/services/engagementEvaluationService.ts',
+  'backend/services/externalApi/internalHelpers.ts',
+  'backend/services/leadJobProcessor.ts',
+  'backend/services/marketPulseV2ServiceEngine.ts',
+  'backend/services/marketPulseV2ServiceModel.ts',
+  'backend/services/reportInputResolver.ts',
+  'backend/services/responseGenerationService.ts',
+  'backend/services/trackingLinkService.ts',
+  'backend/services/unifiedCompetitorIntelligenceService.ts',
+  'pages/api/active-leads/context.ts',
+  'pages/api/admin/blog/brief-suggestions.ts',
+  'pages/api/brand-identity.ts',
+  'pages/api/community-ai/export.ts',
+  'pages/api/community-ai/utils.ts',
+  'pages/api/company-profile/company-facts-lookup.ts',
+  'pages/api/company-profile/context.ts',
+  'pages/api/company-profile/define-campaign-purpose.ts',
+  'pages/api/company-profile/define-context-intelligence.ts',
+  'pages/api/company-profile/define-marketing-intelligence.ts',
+  'pages/api/company-profile/define-target-customer.ts',
+  'pages/api/company-profile/forced-context.ts',
+  'pages/api/company-profile/infer-problem-transformation.ts',
+  'pages/api/company-profile/intelligence-context.ts',
+  'pages/api/company-profile/intelligence-enrichment.ts',
+  'pages/api/company-profile/suggest-competitors.ts',
+  'pages/api/company/blog/brief-suggestions.ts',
+  'pages/api/competitors/feedback.ts',
+  'pages/api/content/improve-draft.ts',
+  'pages/api/content/quick-platform-adapt.ts',
+  'pages/api/creator-intelligence/recommended-purpose-options.ts',
+  'pages/api/trends/drift-check.ts',
+];
+
 /** All consumers migrated onto canonical grounding across every landed wave. */
 export const MIGRATED_CONSUMERS: readonly string[] = [
   ...WAVE1_MIGRATED_CONSUMERS,
@@ -100,14 +144,17 @@ export const MIGRATED_CONSUMERS: readonly string[] = [
   ...WAVE2C_MIGRATED_CONSUMERS,
   ...WAVE2D_MIGRATED_CONSUMERS,
   ...WAVE2E_MIGRATED_CONSUMERS,
+  ...WAVE2F_MIGRATED_CONSUMERS,
 ];
 
 /**
- * Total AI grounding consumers (getProfile / company_profiles reads) identified
- * by the CONTENT-INTELLIGENCE-002 audit. Baseline for adoption percentage.
- * Update as later waves land.
+ * Total getProfile() grounding consumers — the VERIFIED final count after Wave 2F.
+ * Every getProfile() grounding read across the codebase has been migrated, so
+ * migrated === total and adoption === 100%. (Three direct company_profiles
+ * grounding reads are intentionally retained — see CI-010 report — and are not
+ * getProfile() consumers, so they are outside this metric.)
  */
-export const TOTAL_GROUNDING_CONSUMERS = 110;
+export const TOTAL_GROUNDING_CONSUMERS = 96;
 
 export interface AdoptionStats {
   migrated: number;

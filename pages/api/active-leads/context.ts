@@ -3,7 +3,7 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getPlatformsWithTokensForOrg } from '../../../backend/services/platformTokenService';
 import { getPublicListeningPlatforms } from '../../../backend/services/postDiscoveryConnectors';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 
 type ExternalApiRow = {
   id: string;
