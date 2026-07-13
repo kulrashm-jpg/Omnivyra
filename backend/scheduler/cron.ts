@@ -124,6 +124,7 @@ import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefre
 import { runIngestionForAllCompanies } from '../services/ingestionScheduler';
 import { refreshAnalyticsEnterpriseSnapshot } from '../services/analyticsEnterpriseSnapshotService';
 import { runReadinessSnapshotJob } from '../jobs/readinessSnapshotJob';
+import { runHealthSnapshotJob } from '../jobs/healthSnapshotJob';
 import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
 import {
   getLeadThreadRecomputeQueue,
@@ -161,6 +162,8 @@ const GOVERNANCE_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const AUTO_OPTIMIZATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 // CSA-002 — daily Customer Readiness snapshot (activates readiness history).
 const READINESS_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+// CSA-003 — daily Customer Health snapshot (canonical health time-series).
+const HEALTH_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 // Reclaim BOLT runs abandoned by a worker crash / queue interruption.
 // CronGuard already guarantees single-instance execution → no duplicate
 // recovery. Sweep itself is idempotent (only flips started/running→failed).
@@ -300,6 +303,7 @@ let lastOpportunitySlotsRun = 0;
 let lastGovernanceAuditRun = 0;
 let lastAutoOptimizationRun = 0;
 let lastReadinessSnapshotRun = 0; // CSA-002 — daily readiness snapshot
+let lastHealthSnapshotRun = 0;    // CSA-003 — daily health snapshot
 let lastEngagementPollingEnqueue = 0;
 let lastIntelligencePollingEnqueue = 0;
 let lastSignalClusteringRun = 0;
@@ -870,6 +874,24 @@ async function runSchedulerCycle() {
       );
     } catch (error: unknown) {
       console.error('❌ Readiness snapshot error:', formatCaughtError(error));
+    }
+  }
+
+  // CSA-003 — daily Customer Health snapshot. Persists ONE canonical health
+  // snapshot per company per day into customer_health_snapshots (idempotent),
+  // building the health time-series from the existing authorities (readiness,
+  // evolution, usage, integrations, Platform Ready). Same scheduler / CronGuard;
+  // fail-safe.
+  if (shouldRunCronJob("healthSnapshot", HEALTH_SNAPSHOT_INTERVAL_MS, lastHealthSnapshotRun)) {
+    lastHealthSnapshotRun = Date.now();
+    try {
+      const snap = await runHealthSnapshotJob();
+      console.log(
+        `✅ Health snapshot: total ${snap.total}, inserted ${snap.inserted}, skipped ${snap.skipped}` +
+        (snap.ok ? '' : ' (FAILED)')
+      );
+    } catch (error: unknown) {
+      console.error('❌ Health snapshot error:', formatCaughtError(error));
     }
   }
 
