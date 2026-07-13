@@ -9,6 +9,8 @@ import type { CalendarActivity } from './DashboardPage.types';
 import DashboardOverviewSection from './dashboard/DashboardOverviewSection';
 import CreditAdvisorBanner from './credit-advisor/CreditAdvisorBanner';
 import CreditAdvisorExecutivePopup from './credit-advisor/CreditAdvisorExecutivePopup';
+// ONBOARD-002 §3 — persistent onboarding card / Platform Ready banner (journey-backed).
+import DashboardOnboardingCard from './onboarding/DashboardOnboardingCard';
 
 // HARDEN-002 — lazy rendering. Overlays (chat panel, day drawer, post preview)
 // and non-default tabs are conditionally RENDERED but were statically IMPORTED,
@@ -97,6 +99,9 @@ export default function DashboardPage() {
       <CreditAdvisorExecutivePopup orgId={selectedCompanyId} />
       <div className="mx-auto max-w-7xl px-4 pt-4 sm:px-6 lg:px-8">
         <CreditAdvisorBanner orgId={selectedCompanyId} />
+        {/* ONBOARD-002 §3 — onboarding guidance (persistent card while incomplete;
+            Platform Ready banner once complete). Server-derived journey authority. */}
+        <DashboardOnboardingCard />
       </div>
       {showCompanyFactReviewPrompt && isCompanyAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4">

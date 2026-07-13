@@ -39,6 +39,7 @@ import { useCredits, type CreditsStatus } from '@/hooks/useCredits';
 import { useTour } from '../tour/TourContext';
 import { TourOverlay } from '../tour/TourOverlay';
 import { NotificationBell } from '../NotificationBell';
+import ResumeSetupLink from '../onboarding/ResumeSetupLink';
 import {
   SETTINGS_ROUTE_COMPANY_ADMIN_ACCESS,
   SETTINGS_ROUTE_SECURITY,
@@ -428,6 +429,10 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
           </nav>
 
           <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* ONBOARD-002 §4 — global "Resume setup" entry point (renders only when
+                onboarding is incomplete; server-derived journey authority; also covers
+                Command Center, which shares this global header). */}
+            {isAuthenticated ? <ResumeSetupLink className="hidden sm:inline-flex" /> : null}
             {isAuthenticated ? <NotificationBell /> : null}
             {isAuthenticated ? (
               <CreditPill status={creditsStatus} total={totalCredits} remaining={remainingCredits} />

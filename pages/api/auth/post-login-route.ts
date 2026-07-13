@@ -20,6 +20,9 @@ import { recordAnomalyEvent } from '../../../lib/auth/anomalyDetector';
 import { getPostLoginRoute as getUserPreferenceRoute, upsertUserPreferences } from '../../../backend/services/userPreferencesService';
 import { extractDomain } from '../../../backend/services/companyMatchService';
 import { selectCompatibleCompanyRole } from '../../../backend/services/companyMembershipIntegrityService';
+// ONBOARD-002 §1/§7 — the single server-derived onboarding authority. Post-login
+// routing consumes platformReady from here; it never recomputes readiness.
+import { buildOnboardingJourney } from '../../../backend/services/onboardingJourneyService';
 import { sendAuthError } from '../../../backend/services/sendAuthError';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 
@@ -105,23 +108,13 @@ export default async function handler(
     return;
   }
 
-  const onboardingState = String((userRow as any).onboarding_state ?? '');
   const hasPassword = (userRow as any).has_password === true;
 
   if (!hasPassword) {
     return res.status(200).json({ route: '/auth/set-password' });
   }
 
-  // ── 3. New user: no name set yet → complete profile ───────────────────────
-  if (
-    !(userRow as any).name ||
-    onboardingState === 'verified' ||
-    onboardingState === 'pending_verification'
-  ) {
-    return res.status(200).json({ route: '/onboarding/profile' });
-  }
-
-  // ── 4. Active company membership lookup → company setup if missing ───────
+  // ── 3. Role lookup (for SUPER_ADMIN precedence + preferred landing) ───────
   // Authority: user_company_roles is the canonical role + active-org store.
   // We do NOT back-fill users.company_id / users.role any more — both are
   // deprecated runtime authorities.
@@ -155,17 +148,7 @@ export default async function handler(
     });
   }
 
-  if (!roleRow) {
-    return res.status(200).json({ route: '/onboarding/company' });
-  }
-
-  // ── 5. Validate role exists (safety fallback) ──────────────────────────────
-  // If role is missing/invalid, default to command center for safety
-  const resolvedRole = roleRow.role;
-  if (!resolvedRole) {
-    console.warn('[post-login-route] Invalid or missing role', { userId });
-    return res.status(200).json({ route: '/command-center' });
-  }
+  const resolvedRole = roleRow?.role;
 
   // ── 5a. Platform-operator routing — SUPER_ADMIN takes precedence ─────────
   // SUPER_ADMINs are platform operators, not tenant users. They MUST land
@@ -183,12 +166,30 @@ export default async function handler(
     return res.status(200).json({ route: '/super-admin/dashboard' });
   }
 
-  // ── 6. Check user preferences for post-login landing page ────────────────
-  // Default: first-time users → /command-center
-  // Returning users: check if they've dismissed the command center
-  const preferredRoute = await getUserPreferenceRoute(userId);
+  // ── 6. ONBOARD-002 §1/§7 — Platform Ready controls routing. Consume the ONE
+  // server-derived journey authority (never recompute readiness here):
+  //   platformReady  → the workspace (user-preferred landing)
+  //   not ready      → the canonical journey, which resumes exactly where the
+  //                    user stopped (works before profile/company exist too).
+  // Every incomplete state (verify / profile / company / integrations) converges
+  // on /onboarding/journey — the single visible onboarding experience.
+  let platformReady = false;
+  try {
+    const journey = await buildOnboardingJourney(userId);
+    platformReady = journey.platformReady;
+  } catch (err) {
+    // Fail-open to the journey — never trap the user; the journey re-derives and
+    // routes forward on its own.
+    console.warn('[post-login-route] journey_build_failed', { userId, message: err instanceof Error ? err.message : String(err) });
+    return res.status(200).json({ route: '/onboarding/journey' });
+  }
 
-  // Create/update preferences if this is first time (auto-upsert)
+  if (!platformReady) {
+    return res.status(200).json({ route: '/onboarding/journey' });
+  }
+
+  // ── 7. Platform Ready → user-preferred workspace landing (command_center | dashboard) ──
+  const preferredRoute = await getUserPreferenceRoute(userId);
   await upsertUserPreferences(userId, {
     default_landing: preferredRoute === '/command-center' ? 'command_center' : 'dashboard',
     command_center_pinned: preferredRoute === '/command-center',
