@@ -13,11 +13,8 @@ import type { DiscoveredWebsiteMetadata } from '../companyProfile/websiteMetadat
 import { getRefreshPolicyConfig, type CompanyTier, type PlatformState } from './refreshPolicyConfig';
 import { decideRefresh, type RefreshAction } from './refreshPolicyEngine';
 import { getKnowledgeState, recordRefresh } from './knowledgeVersionStore';
-import { emitRefreshEvent, recordTokenSavings, resolveRefreshCorrelationId } from './refreshEventService';
+import { emitRefreshEvent, recordTokenSavings, resolveRefreshCorrelationId, TOKENS_PER_REFRESH_ESTIMATE } from './refreshEventService';
 import { refreshDiscoveredMetadata, touchProfileRefreshedAt } from './incrementalMetadataStore';
-
-/** Rough per-refresh AI cost estimate (≈5–6 uncached completions), for savings telemetry. */
-const TOKENS_PER_REFRESH_ESTIMATE = 5000;
 
 export interface RefreshGateInput {
   companyId: string | null;

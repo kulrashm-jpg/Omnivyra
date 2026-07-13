@@ -98,6 +98,9 @@ export async function emitRefreshEvent(e: RefreshEvent): Promise<void> {
   }
 }
 
+/** Rough per-refresh AI cost estimate (≈5–6 uncached completions) for savings telemetry + simulation. */
+export const TOKENS_PER_REFRESH_ESTIMATE = 5000;
+
 /** Record an estimated token-savings metric (§9). Fail-safe. */
 export function recordTokenSavings(estimatedTokens: number, workflow?: string | null): void {
   if (!(estimatedTokens > 0)) return;

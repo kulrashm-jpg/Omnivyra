@@ -280,3 +280,82 @@ FREE}`), `CKRE_REFRESH_HISTORY_LIMIT`.
   cross-instance dedup.
 - Rollback: `knowledge_version.rollback` carries the prior version — a restore
   path can consume it.
+
+---
+
+# CKRE-002R — policy rule registry, reason model, trace, budgets, sections, simulation
+
+Completes the Refresh Policy Engine as the permanent deterministic authority.
+All additive — the original `action`/`reason`/`requiresAi`/`affectedFingerprints`
+outputs are preserved byte-for-byte (verified by the CKRE-002 tests).
+
+## Policy rule registry (§1)
+
+`crawl/refreshPolicyRegistry.ts` centrally defines every policy rule
+(`ADMIN_OVERRIDE`, `PENDING_REFRESH`, `PLATFORM_DEGRADED`, `GATING_DISABLED`,
+`MANUAL_REFRESH`, `WITHIN_COOLDOWN`, `UNCHANGED_SITE`, `FIRST_REFRESH`,
+`COSMETIC_CHANGE`, `BUSINESS_CHANGE`, `MAJOR_CHANGE`, `UNKNOWN`, `TOKEN_BUDGET`,
+`NETWORK_BUDGET`, `CRAWL_BUDGET`, `TIME_BUDGET`) with `{ id, priority, phase,
+action, description, configSource, extensibility }`. `decideRefresh` iterates
+`REFRESH_RULE_ORDER` (priority ascending) — no rule is hardcoded elsewhere.
+
+## Evaluation order & precedence
+
+Fixed order by priority: pre-emptive guards (admin → pending → degraded →
+gating-off → manual → cooldown) → verdict rules (unchanged/first/cosmetic/
+business/major/unknown) → budget rules (ai/network/crawl/time). First matching
+pre/verdict rule wins; a budget rule can override a chosen AI action to DEFER.
+
+## Reason model (§2)
+
+Every decision now carries: `reasonCodes`, `triggeredRules`, `suppressedRules`
+(rules that matched but were overridden, e.g. a verdict rule suppressed by a
+budget), `selectedRule`, `decisionPriority`, `evaluationSummary`
+(evaluated/passed/triggered/skipped), and a deterministic `explanation` string.
+
+## Evaluation trace (§3)
+
+`decision.trace` = `{ entries[], selectedRule, finalAction }`, one entry per rule
+in evaluation order with `status: triggered | passed | skipped` + a detail.
+Deterministic and replayable (it is a pure function of the inputs) — the spine
+for future policy dashboards. No new tracing framework.
+
+## Refresh budgets (§4)
+
+Generalized beyond tokens: `RefreshBudget { type: 'ai'|'network'|'crawl'|'time'|…,
+remaining }`. The engine evaluates all provided budgets through one abstraction;
+any exhausted budget defers an AI action (with a distinct reason code). The
+legacy `tokenBudgetRemaining` is mapped to an `ai` budget (backward compatible).
+
+## Section-level refresh (§5)
+
+`decision.refreshSections` — deterministic scopes (`METADATA`, `BRAND`, `SEO`,
+`SOCIAL`, `PRODUCTS`, `SERVICES`, `AUDIENCE`, `COMPETITORS`, `MARKETING`, `FULL`)
+derived from the change decision's `affectedFingerprints` (the CKRE-001R graph
+closure — no duplicate dependency calc). FULL for major/execute; [] for
+skip/defer; the metadata/business subset for incremental actions.
+(`AUDIENCE`/`COMPETITORS`/`MARKETING` are AI-derived and appear only under FULL.)
+
+## Refresh simulation (§6)
+
+`crawl/refreshSimulation.simulateRefresh(prevFp, nextFp, config, ctx?)` predicts
+the decision, affected sections, estimated scope, AI execution, network work, and
+token savings — reusing `decideWebsiteChange → decideRefresh`, with **no AI and
+no crawling**. A simulation always matches what the live engine would decide.
+
+## Determinism guarantees (§7)
+
+Identical inputs → identical decision, trace, sections, explanation, and
+simulation, independent of timezone / Node / OS / process restart / execution
+order. Invariants (documented in `refreshPolicyEngine.ts`): the only clock is the
+injected `input.now` (cooldown arithmetic only); no random; fixed registry
+evaluation order; all list outputs sorted.
+
+## Future CKRE-003 extension points
+
+- New budget types plug in via `RefreshBudget.type` + a registry rule — no engine
+  change.
+- New policy rules are added to the registry with a priority; the engine picks
+  them up automatically.
+- The evaluation trace + simulation are the debugging/what-if spine CKRE-003 can
+  build dashboards on without revisiting policy decisions.
