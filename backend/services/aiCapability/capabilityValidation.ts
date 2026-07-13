@@ -31,6 +31,9 @@ export const OUTPUT_CONTRACTS: Record<string, string[]> = {
   // PMF-005 — the Campaign Planner result / capability-graph node output; no fixed
   // top-level keys (the planner engine owns its own contract enforcement).
   campaign_plan: [],
+  // PMF-006 — the Strategic Mix result / decision-graph node output; no fixed
+  // top-level keys (the strategic-mix engine owns its own rules).
+  strategic_mix: [],
 };
 
 /** A custom rule returns null when satisfied, or a failure message. Pure/deterministic. */

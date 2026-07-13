@@ -113,7 +113,31 @@ import {
 import { AI_PLAN_TIMEOUT_MS, GENERATE_WEEKLY_TIMEOUT_MS, GENERATE_WEEKLY_HEARTBEAT_MS, withTimeout, type BoltStage, type BoltPayload, updateRun, logEvent, checkStageCompleted, getCompletedStagePlan, assertCampaignValid, runSourceRecommendation } from './boltPipelineServiceModel';
 
 
-export async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[], requiresMediaFlow?: boolean, isCombined?: boolean): Promise<{ plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> }> {
+type RunAiPlanResult = { plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> };
+
+/**
+ * PMF-006 — the Strategic (Intelligent) Mix seam. Default 'legacy' runs the existing
+ * mix engine core byte-identically. On the platform path (flag-gated, combined mode
+ * only) the SAME core runs inside the Strategic Mix AIA agent, which orchestrates the
+ * Decision Graph (dependency-ordered waves, checkpoints, resume, approval, recovery);
+ * the mix node executes through AIC (CKC knowledge, validation, telemetry) with this
+ * core as the backend, and the EXACT core result is served (parity) with a safety net.
+ * Strategic Mix is the `isCombined` branch, so only that path migrates.
+ */
+export async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[], requiresMediaFlow?: boolean, isCombined?: boolean): Promise<RunAiPlanResult> {
+  const { shouldRunPlatform } = await import('./strategicMixCapability/strategicMixMigrationFlag');
+  if (isCombined && shouldRunPlatform()) {
+    const { runStrategicMixViaPlatform } = await import('./strategicMixCapability/strategicMixPlatformRuntime');
+    return runStrategicMixViaPlatform<RunAiPlanResult>({
+      companyId,
+      generate: () => runAiPlanCore(runId, campaignId, companyId, payload, eligiblePlatforms, requiresMediaFlow, isCombined),
+      correlationId: runId,
+    });
+  }
+  return runAiPlanCore(runId, campaignId, companyId, payload, eligiblePlatforms, requiresMediaFlow, isCombined);
+}
+
+async function runAiPlanCore(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[], requiresMediaFlow?: boolean, isCombined?: boolean): Promise<RunAiPlanResult> {
   const snapshot = payload.sourceStrategicTheme as Record<string, unknown>;
   const normalizedTheme = normalizeStoredStrategicTheme(snapshot);
   const basePayload = (snapshot?.context_payload && typeof snapshot.context_payload === 'object')

@@ -15,6 +15,8 @@ import type { AgentId, AgentStep } from './agentContracts';
 import type { CapabilityId } from '../aiCapability/capabilityContracts';
 // PMF-005 — the Campaign Planner agent's steps are derived from the capability graph.
 import { CAMPAIGN_CAPABILITY_IDS, CAMPAIGN_CAPABILITY_GRAPH } from '../campaignCapability/campaignCapabilityGraph';
+// PMF-006 — the Strategic Mix agent's steps are derived from the decision graph.
+import { STRATEGIC_MIX_NODE_IDS, STRATEGIC_MIX_GRAPH } from '../strategicMixCapability/strategicMixDecisionGraph';
 
 export type AgentExecutionStrategy = 'sequential' | 'dependency_graph';
 export type MemoryStrategy = 'persistent' | 'ephemeral';
@@ -76,6 +78,14 @@ function buildCampaignPlannerSteps(): AgentStep[] {
   });
 }
 
+/** PMF-006 — derive the Strategic Mix agent's steps from the decision graph. */
+function buildStrategicMixSteps(): AgentStep[] {
+  return STRATEGIC_MIX_NODE_IDS.map((id) => {
+    const gNode = STRATEGIC_MIX_GRAPH[id];
+    return step(id, 'STRATEGIC_MIX_DECISION', { mode: 'parallel', dependsOn: gNode.dependsOn, requiresApproval: gNode.requiresApproval });
+  });
+}
+
 const REGISTRY_INTERNAL: Record<string, AgentDefinition> = {
   // Website intelligence → competitor intelligence (depends on the first).
   WEBSITE_INTELLIGENCE_AGENT: def('WEBSITE_INTELLIGENCE_AGENT', 'Analyze the company website and derive competitive intelligence.', [
@@ -111,6 +121,15 @@ const REGISTRY_INTERNAL: Record<string, AgentDefinition> = {
   // non-plan analysis node can degrade without failing the campaign.
   CAMPAIGN_PLANNER_AGENT: def('CAMPAIGN_PLANNER_AGENT', 'Orchestrate campaign planning across the capability graph.',
     buildCampaignPlannerSteps(), { completionStrategy: 'best_effort' }),
+
+  // PMF-006 — Strategic Mix as an AIA agent. Steps + edges are DERIVED from the
+  // Strategic Mix Decision Graph (single source), so the agent IS the decision graph.
+  // Every node executes through AIC (capability STRATEGIC_MIX_DECISION); the definitive
+  // mix is produced by the existing engine inside an injected runner (zero strategy
+  // change). FINAL_RECOMMENDATION gates on approval (§6). best_effort so a non-mix
+  // analysis node can degrade without failing the recommendation.
+  STRATEGIC_MIX_AGENT: def('STRATEGIC_MIX_AGENT', 'Orchestrate the strategic mix across the decision graph.',
+    buildStrategicMixSteps(), { completionStrategy: 'best_effort' }),
 };
 
 export const AGENT_REGISTRY: Readonly<Record<string, AgentDefinition>> = REGISTRY_INTERNAL;

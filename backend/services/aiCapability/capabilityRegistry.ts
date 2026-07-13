@@ -162,6 +162,24 @@ REGISTRY_INTERNAL.CAMPAIGN_PLAN.config.maxRetries = 0;       // engine owns retr
 REGISTRY_INTERNAL.CAMPAIGN_PLAN.config.partialAllowed = true;
 delete REGISTRY_INTERNAL.CAMPAIGN_PLAN.config.fallbackModel;
 
+// PMF-006 — the Strategic Mix capability (the execution capability the Strategic Mix
+// AIA agent runs each Decision Graph node through). The definitive mix is produced by
+// the EXISTING strategic-mix engine inside an injected model runner (zero strategy/
+// recommendation change); AIC provides the pipeline (CKC knowledge, validation,
+// telemetry, recovery, output contract). Lenient + recovery off — the engine owns its
+// platform-authority / format-binding / distribution-floor rules and retries.
+REGISTRY_INTERNAL.STRATEGIC_MIX_DECISION = def(
+  'STRATEGIC_MIX_DECISION', 'Execute a Strategic Mix Decision Graph node (mix via the strategic-mix engine).',
+  'STRATEGIC_MIX', ['MARKETING', 'AUDIENCE', 'POSITIONING', 'INDUSTRY', 'SOCIAL'],
+  [], 'single_pass', 'strategic_mix',
+  { grounding: false, business: false, policy: false, hallucination: false, confidenceThreshold: 0 },
+);
+REGISTRY_INTERNAL.STRATEGIC_MIX_DECISION.supportedModels = ['gpt-4o-mini'];
+REGISTRY_INTERNAL.STRATEGIC_MIX_DECISION.config.defaultModel = 'gpt-4o-mini';
+REGISTRY_INTERNAL.STRATEGIC_MIX_DECISION.config.maxRetries = 0;       // engine owns retries/rules
+REGISTRY_INTERNAL.STRATEGIC_MIX_DECISION.config.partialAllowed = true;
+delete REGISTRY_INTERNAL.STRATEGIC_MIX_DECISION.config.fallbackModel;
+
 export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDefinition>> = REGISTRY_INTERNAL;
 export const REGISTERED_CAPABILITIES: ReadonlyArray<string> = Object.keys(REGISTRY_INTERNAL);
 
