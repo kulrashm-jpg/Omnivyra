@@ -19,6 +19,25 @@ export type JourneyStageStatus =
   | 'not_started' | 'pending' | 'in_progress' | 'completed'
   | 'skipped' | 'dismissed' | 'blocked';
 
+/** Provider/social state for integration stages (§6). */
+export type ProviderState =
+  | 'connected' | 'detected' | 'pending' | 'expired' | 'reconnect_required' | 'failed';
+
+/** Deterministic setup guidance for a stage (§4). */
+export interface StageGuidance {
+  /** What becomes available once this stage is completed. */
+  unlocks: string;
+  /** What stays blocked/unavailable until this stage is completed. */
+  blockedWithout: string;
+}
+
+/** A stage's dependency, resolved to a human-readable title + met flag (§3). */
+export interface StageDependency {
+  id: string;
+  title: string;
+  met: boolean;
+}
+
 export interface JourneyStage {
   id: string;
   title: string;
@@ -30,6 +49,14 @@ export interface JourneyStage {
   href: string;
   status: JourneyStageStatus;
   detail: string | null;
+  /** Provider breakdown for integration stages (social / analytics). */
+  providers?: Array<{ platform: string; state: ProviderState }>;
+  /** Rough effort estimate in minutes (§2). */
+  estimatedMinutes?: number;
+  /** Human-readable dependencies with resolution state (§2/§3). */
+  dependencies?: StageDependency[];
+  /** Deterministic "unlocks / blocked without" guidance (§4). */
+  guidance?: StageGuidance;
 }
 
 export interface JourneyReadiness {

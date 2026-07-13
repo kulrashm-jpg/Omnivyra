@@ -1,57 +1,28 @@
 'use client';
 
 /**
- * /onboarding/journey — the guided onboarding journey (ONBOARD-001 §5/§12).
+ * /onboarding/journey — the progressive setup experience (ONBOARD-005).
  *
- * One resumable, skippable, dismissible view over the canonical journey
- * authority (/api/onboarding/journey). It renders the server-derived truth —
- * it does NOT compute progress itself — so browser refresh, new login, and
- * partial completion all resume identically. Each stage shows why it matters,
- * its dependencies, and its live status.
+ * ONE resumable, server-derived view over the canonical journey authority
+ * (/api/onboarding/journey → onboardingJourneyService). It renders the
+ * server-derived truth through the reusable SetupCard (§2) and never computes
+ * progress, completion, or dependencies itself — so refresh, new login, and
+ * partial completion all resume identically. Stages are grouped by state so the
+ * user always sees what is complete, what is next, what is blocked, what is
+ * optional, and what to do to reach Platform Ready.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { apiFetch } from '../../lib/apiFetch';
+import SetupCard, { type SetupCardAction } from '../../components/onboarding/SetupCard';
+import type { JourneyStage, OnboardingJourney } from '../../hooks/useOnboardingJourney';
 
-type StageStatus =
-  | 'not_started' | 'pending' | 'in_progress' | 'completed'
-  | 'skipped' | 'dismissed' | 'blocked';
-
-interface StageView {
-  id: string;
-  title: string;
-  why: string;
-  mandatory: boolean;
-  skippable: boolean;
-  dismissible: boolean;
-  dependsOn: string[];
-  href: string;
-  status: StageStatus;
-  detail: string | null;
-  providers?: Array<{ platform: string; state: string }>;
-}
-
-interface Journey {
-  stages: StageView[];
-  currentStep: string;
-  platformReady: boolean;
-  companyId: string | null;
-}
-
-const STATUS_META: Record<StageStatus, { label: string; cls: string }> = {
-  completed:   { label: 'Completed',   cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  in_progress: { label: 'In progress', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-  pending:     { label: 'Pending',     cls: 'bg-blue-50 text-blue-700 border-blue-200' },
-  not_started: { label: 'Not started', cls: 'bg-gray-50 text-gray-600 border-gray-200' },
-  skipped:     { label: 'Skipped',     cls: 'bg-gray-50 text-gray-500 border-gray-200' },
-  dismissed:   { label: 'Dismissed',   cls: 'bg-gray-50 text-gray-400 border-gray-200' },
-  blocked:     { label: 'Blocked',     cls: 'bg-gray-100 text-gray-400 border-gray-200' },
-};
+const RESOLVED = new Set(['completed', 'skipped', 'dismissed']);
 
 export default function OnboardingJourneyPage() {
-  const [journey, setJourney] = useState<Journey | null>(null);
+  const [journey, setJourney] = useState<OnboardingJourney | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +31,7 @@ export default function OnboardingJourneyPage() {
     try {
       const res = await apiFetch('/api/onboarding/journey');
       if (!res.ok) { setError('Could not load your onboarding progress.'); setLoading(false); return; }
-      setJourney(await res.json());
+      setJourney((await res.json()) as OnboardingJourney);
     } catch {
       setError('Network error loading onboarding.');
     } finally {
@@ -70,7 +41,7 @@ export default function OnboardingJourneyPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const act = useCallback(async (stage: string, action: 'skip' | 'dismiss' | 'reopen') => {
+  const act = useCallback(async (stage: string, action: SetupCardAction) => {
     setBusy(`${stage}:${action}`);
     setError(null);
     try {
@@ -79,7 +50,7 @@ export default function OnboardingJourneyPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stage, action }),
       });
-      if (res.ok) setJourney(await res.json());
+      if (res.ok) setJourney((await res.json()) as OnboardingJourney);
       else {
         const j = await res.json().catch(() => ({}));
         setError(j.error ?? 'Could not update that step.');
@@ -90,6 +61,40 @@ export default function OnboardingJourneyPage() {
       setBusy(null);
     }
   }, []);
+
+  // Progressive grouping — derived only for display order; the authority owns
+  // status/currentStep/platformReady (§7). "Up next" = the current step; then
+  // the remaining actionable stages; optional resolved (skipped/dismissed);
+  // finally completed.
+  const groups = useMemo(() => {
+    const stages = journey?.stages ?? [];
+    const current = journey?.currentStep;
+    const upNext: JourneyStage[] = [];
+    const todo: JourneyStage[] = [];
+    const blocked: JourneyStage[] = [];
+    const resolvedOptional: JourneyStage[] = [];
+    const done: JourneyStage[] = [];
+    for (const s of stages) {
+      if (s.status === 'completed') { done.push(s); continue; }
+      if (s.status === 'skipped' || s.status === 'dismissed') { resolvedOptional.push(s); continue; }
+      if (s.status === 'blocked') { blocked.push(s); continue; }
+      if (s.id === current) upNext.push(s);
+      else todo.push(s);
+    }
+    return { upNext, todo, blocked, resolvedOptional, done };
+  }, [journey]);
+
+  const pct = journey?.readiness?.completionPercentage ?? 0;
+
+  const renderCard = (s: JourneyStage) => (
+    <SetupCard
+      key={s.id}
+      stage={s}
+      isCurrent={journey?.currentStep === s.id}
+      busy={busy}
+      onAction={act}
+    />
+  );
 
   return (
     <>
@@ -108,6 +113,24 @@ export default function OnboardingJourneyPage() {
             Complete the essentials, then connect the tools that make Omnivyra smarter. You can skip optional steps and come back anytime.
           </p>
 
+          {/* Progress — straight from the authority (§7). */}
+          {journey && !loading && (
+            <div className="mt-5" aria-label="Setup progress">
+              <div className="flex items-center justify-between text-xs font-medium text-[#6B7C93]">
+                <span>{journey.platformReady ? 'Setup complete' : journey.readiness.reason}</span>
+                <span>{pct}%</span>
+              </div>
+              <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                <div className="h-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] transition-all" style={{ width: `${pct}%` }} />
+              </div>
+              {!journey.platformReady && (
+                <p className="mt-1.5 text-[11px] text-[#9AA7B8]">
+                  Estimated time left: {journey.readiness.estimatedRemainingTime}
+                </p>
+              )}
+            </div>
+          )}
+
           {journey?.platformReady && (
             <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4">
               <p className="text-sm font-semibold text-emerald-800">🎉 Your platform is ready.</p>
@@ -118,73 +141,40 @@ export default function OnboardingJourneyPage() {
           {error && <p className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</p>}
           {loading && <p className="mt-8 text-sm text-[#6B7C93]">Loading your progress…</p>}
 
-          <ol className="mt-6 space-y-3">
-            {journey?.stages.map((stage) => {
-              const meta = STATUS_META[stage.status];
-              const isCurrent = journey.currentStep === stage.id;
-              const actionable = stage.status !== 'completed' && stage.status !== 'blocked';
-              return (
-                <li key={stage.id}
-                  className={`rounded-2xl border bg-white p-5 transition ${isCurrent ? 'border-[#0A66C2] shadow-[0_4px_16px_rgba(10,102,194,0.12)]' : 'border-gray-100'}`}>
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-semibold text-[#0B1F33]">{stage.title}</h3>
-                        <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${meta.cls}`}>{meta.label}</span>
-                        {stage.mandatory && <span className="text-[11px] font-medium text-[#6B7C93]">Required</span>}
-                      </div>
-                      <p className="mt-1 text-xs leading-relaxed text-[#6B7C93]">{stage.why}</p>
-                      {stage.detail && <p className="mt-1.5 text-xs text-[#0B1F33]/70">{stage.detail}</p>}
-                      {stage.status === 'blocked' && (
-                        <p className="mt-1.5 text-xs text-gray-400">Complete the earlier steps first.</p>
-                      )}
-                      {stage.providers && stage.providers.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {stage.providers.map((p) => (
-                            <span key={p.platform} className="rounded-md bg-gray-50 px-2 py-0.5 text-[11px] text-[#6B7C93]">
-                              {p.platform}: {p.state.replace('_', ' ')}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    {stage.status === 'completed' && (
-                      <svg className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                      </svg>
-                    )}
-                  </div>
-
-                  {actionable && (
-                    <div className="mt-4 flex flex-wrap items-center gap-2">
-                      <Link href={stage.href}
-                        className="rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:opacity-95">
-                        {stage.status === 'in_progress' ? 'Continue' : 'Set up'}
-                      </Link>
-                      {stage.skippable && (
-                        <button disabled={!!busy} onClick={() => act(stage.id, 'skip')}
-                          className="text-xs text-[#6B7C93] hover:text-[#0A66C2] disabled:opacity-50">
-                          {busy === `${stage.id}:skip` ? 'Skipping…' : 'Skip for now'}
-                        </button>
-                      )}
-                      {stage.dismissible && (
-                        <button disabled={!!busy} onClick={() => act(stage.id, 'dismiss')}
-                          className="text-xs text-[#6B7C93]/70 hover:text-[#0A66C2] disabled:opacity-50">
-                          {busy === `${stage.id}:dismiss` ? 'Dismissing…' : "Don't need this"}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {(stage.status === 'skipped' || stage.status === 'dismissed') && (
-                    <button disabled={!!busy} onClick={() => act(stage.id, 'reopen')}
-                      className="mt-3 text-xs text-[#0A66C2] hover:underline disabled:opacity-50">
-                      {busy === `${stage.id}:reopen` ? 'Reopening…' : 'Reopen this step'}
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ol>
+          {journey && !loading && (
+            <div className="mt-6 space-y-8">
+              {groups.upNext.length > 0 && (
+                <section>
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#0A66C2]">Up next</h2>
+                  <div className="space-y-3">{groups.upNext.map(renderCard)}</div>
+                </section>
+              )}
+              {groups.todo.length > 0 && (
+                <section>
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#6B7C93]">To do</h2>
+                  <div className="space-y-3">{groups.todo.map(renderCard)}</div>
+                </section>
+              )}
+              {groups.blocked.length > 0 && (
+                <section>
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#9AA7B8]">Blocked — finish the steps above first</h2>
+                  <div className="space-y-3">{groups.blocked.map(renderCard)}</div>
+                </section>
+              )}
+              {groups.resolvedOptional.length > 0 && (
+                <section>
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#9AA7B8]">Skipped — you can reopen these</h2>
+                  <div className="space-y-3">{groups.resolvedOptional.map(renderCard)}</div>
+                </section>
+              )}
+              {groups.done.length > 0 && (
+                <section>
+                  <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-700">Completed</h2>
+                  <div className="space-y-3">{groups.done.map(renderCard)}</div>
+                </section>
+              )}
+            </div>
+          )}
         </main>
       </div>
     </>

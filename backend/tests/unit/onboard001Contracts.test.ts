@@ -68,7 +68,10 @@ describe('ONBOARD-001 §5/§12 — journey endpoint', () => {
   });
 
   test('the guided journey page renders from the server truth, not client math', () => {
+    // ONBOARD-005: the page renders the server-derived journey through the
+    // reusable SetupCard; the skip/dismiss controls live in the card.
     const src = read('pages/onboarding/journey.tsx');
-    containsAll(src, ["apiFetch('/api/onboarding/journey')", 'platformReady', 'Skip for now']);
+    containsAll(src, ["apiFetch('/api/onboarding/journey')", 'platformReady', 'SetupCard']);
+    containsAll(read('components/onboarding/SetupCard.tsx'), ['Skip for now', "Don't need this"]);
   });
 });

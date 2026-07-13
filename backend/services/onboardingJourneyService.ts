@@ -36,6 +36,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import { buildActivationReadiness } from './activationReadinessService';
+import { listCmsProviders } from './cms/registry';
 import type { ConnectionState } from './integrations/connectionState';
 import { logger } from './logger';
 import {
@@ -115,19 +116,86 @@ export const JOURNEY_STAGES: ReadonlyArray<JourneyStageDefinition> = [
   {
     id: 'google_analytics', title: 'Connect Google Analytics',
     why: 'Ties content performance to real traffic so reports show actual outcomes.',
-    mandatory: false, skippable: true, dismissible: true, dependsOn: ['company'], href: '/integrations?focus=data',
+    // ONBOARD-005 §3 — integration sequencing: analytics attaches to your site,
+    // so Website / CMS comes first. Skipping website resolves the dependency too.
+    mandatory: false, skippable: true, dismissible: true, dependsOn: ['website_cms'], href: '/integrations?focus=data',
   },
   {
     id: 'google_search_console', title: 'Connect Google Search Console',
     why: 'Surfaces the search queries you already rank for — fuel for content planning.',
-    mandatory: false, skippable: true, dismissible: true, dependsOn: ['company'], href: '/integrations?focus=data',
+    // ONBOARD-005 §3 — GSC also attaches to your site → depends on Website / CMS.
+    mandatory: false, skippable: true, dismissible: true, dependsOn: ['website_cms'], href: '/integrations?focus=data',
   },
+];
+
+/**
+ * ONBOARD-005 §4 — deterministic setup guidance. Static per-stage copy (no AI):
+ * what completing a stage UNLOCKS and what stays BLOCKED without it. Read-only
+ * copy the progressive setup cards render; it never influences status.
+ */
+export interface StageGuidance {
+  unlocks: string;
+  blockedWithout: string;
+}
+
+const STAGE_GUIDANCE: Readonly<Record<JourneyStageId, StageGuidance>> = {
+  email_verified: {
+    unlocks: 'Profile and company setup open up.',
+    blockedWithout: 'Nothing else can be set up until your email is verified.',
+  },
+  profile: {
+    unlocks: 'Company setup opens and your workspace is personalized.',
+    blockedWithout: 'Company setup stays locked until your profile is complete.',
+  },
+  company: {
+    unlocks: 'Your workspace, domain, free credits, and every optional integration.',
+    blockedWithout: 'Social, website, and analytics integrations stay locked.',
+  },
+  company_review: {
+    unlocks: 'Sharper, on-brand AI outputs grounded in your confirmed profile.',
+    blockedWithout: 'AI outputs rely on unconfirmed, auto-filled details.',
+  },
+  social_accounts: {
+    unlocks: 'Publishing, campaigns, and engagement monitoring across your channels.',
+    blockedWithout: 'You can’t publish or monitor channels until one is connected.',
+  },
+  website_cms: {
+    unlocks: 'Publishing blogs to your site, visitor tracking, and Google Analytics / Search Console.',
+    blockedWithout: 'Google Analytics and Search Console can’t attach to your site yet.',
+  },
+  google_analytics: {
+    unlocks: 'Real traffic and content-performance reporting on every blog.',
+    blockedWithout: 'Reports can’t show actual traffic outcomes.',
+  },
+  google_search_console: {
+    unlocks: 'The search queries you already rank for, as content-planning fuel.',
+    blockedWithout: 'Search-query insights stay unavailable.',
+  },
+};
+
+/** Social platforms Omnivyra can connect — used to map discovered URLs (§6). */
+const SOCIAL_URL_COLUMNS: ReadonlyArray<{ column: string; platform: string }> = [
+  { column: 'linkedin_url', platform: 'linkedin' },
+  { column: 'facebook_url', platform: 'facebook' },
+  { column: 'instagram_url', platform: 'instagram' },
+  { column: 'x_url', platform: 'x' },
+  { column: 'youtube_url', platform: 'youtube' },
+  { column: 'tiktok_url', platform: 'tiktok' },
+  { column: 'reddit_url', platform: 'reddit' },
+  { column: 'pinterest_url', platform: 'pinterest' },
+  { column: 'whatsapp_url', platform: 'whatsapp' },
 ];
 
 const STAGE_BY_ID = new Map(JOURNEY_STAGES.map((s) => [s.id, s]));
 
-/** §8 — provider-level connection summary mapped from the 9-state model. */
-export type ProviderJourneyState = 'connected' | 'pending' | 'expired' | 'reconnect_required' | 'failed';
+/**
+ * §8 — provider-level connection summary mapped from the 9-state model.
+ * `detected` (ONBOARD-005 §6) is NOT part of the 9-state model — it marks a
+ * social channel discovered from the website crawl (a company_profiles URL)
+ * that has no connected account yet. It never satisfies the stage.
+ */
+export type ProviderJourneyState =
+  | 'connected' | 'detected' | 'pending' | 'expired' | 'reconnect_required' | 'failed';
 
 export function providerJourneyState(state: ConnectionState | string | null | undefined): ProviderJourneyState {
   switch (state) {
@@ -158,6 +226,12 @@ export interface JourneyStageView {
   detail: string | null;
   /** Provider-level breakdown for integration stages (§8). */
   providers?: Array<{ platform: string; state: ProviderJourneyState }>;
+  /** ONBOARD-005 §2 — rough effort estimate in minutes. */
+  estimatedMinutes: number;
+  /** ONBOARD-005 §2/§3 — dependencies resolved to titles + met flag. */
+  dependencies: Array<{ id: JourneyStageId; title: string; met: boolean }>;
+  /** ONBOARD-005 §4 — deterministic unlocks / blocked-without guidance. */
+  guidance: StageGuidance;
   /** Set when status derives from a journey_state override. */
   overriddenAt?: string | null;
 }
@@ -209,6 +283,27 @@ function humanizeMinutes(mins: number): string {
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return m ? `~${h}h ${m}m` : `~${h}h`;
+}
+
+/** ONBOARD-005 §5 — pretty-print a CMS provider type/name (deterministic). */
+const CMS_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  wordpress: 'WordPress',
+  shopify: 'Shopify',
+  joomla: 'Joomla',
+  drupal: 'Drupal',
+  ghost: 'Ghost',
+  webflow: 'Webflow',
+  wix: 'Wix',
+  squarespace: 'Squarespace',
+  hubspot: 'HubSpot',
+  custom_blog_api: 'Custom',
+};
+
+function formatCmsPlatform(raw: string | null): string | null {
+  if (!raw) return null;
+  const key = raw.trim().toLowerCase();
+  if (!key) return null;
+  return CMS_DISPLAY_NAMES[key] ?? raw.trim();
 }
 
 const RESOLVED_STATUSES: ReadonlySet<JourneyStageStatus> = new Set(['completed', 'skipped', 'dismissed']);
@@ -307,7 +402,10 @@ interface JourneySignals {
   companyId: string | null;
   overrides: JourneyStateBlob;
   social: Array<{ platform: string; state: ProviderJourneyState }>;
-  cms: { done: boolean; anyRow: boolean; anyFailed: boolean; detail: string };
+  /** ONBOARD-005 §6 — social channels discovered from the crawl, not connected. */
+  socialDetected: string[];
+  /** ONBOARD-005 §5 — the connected CMS platform name, when one is connected. */
+  cms: { done: boolean; anyRow: boolean; anyFailed: boolean; detail: string; platform: string | null };
   ga: { done: boolean; anyRow: boolean; detail: string };
   gsc: { done: boolean; anyRow: boolean; detail: string };
 }
@@ -345,14 +443,17 @@ async function collectSignals(userId: string): Promise<JourneySignals> {
     companyId,
     overrides: {},
     social: [],
-    cms: { done: false, anyRow: false, anyFailed: false, detail: 'Not connected yet' },
+    socialDetected: [],
+    cms: { done: false, anyRow: false, anyFailed: false, detail: 'Not connected yet', platform: null },
     ga: { done: false, anyRow: false, detail: 'Not connected yet' },
     gsc: { done: false, anyRow: false, detail: 'Not connected yet' },
   };
 
   if (!companyId) return base;
 
-  const [overrides, socialRows, analyticsRows, activation] = await Promise.all([
+  const cmsProviderSet = new Set(listCmsProviders().map((p) => String(p).toLowerCase()));
+
+  const [overrides, socialRows, analyticsRows, activation, profileRow, cmsRows] = await Promise.all([
     readJourneyState(companyId),
     safeQuery<Array<{ platform: string; is_active: boolean; connection_state: string | null }>>(
       async () => {
@@ -369,6 +470,32 @@ async function collectSignals(userId: string): Promise<JourneySignals> {
       [],
     ),
     buildActivationReadiness(companyId).then((v) => v, () => null),
+    // ONBOARD-005 §6 — crawl-discovered social URLs (reuse ONBOARD-004 bootstrap
+    // columns; never re-crawl). Best-effort; absence just means "none detected".
+    safeQuery<Record<string, unknown> | null>(
+      async () => {
+        const r = await supabase
+          .from('company_profiles')
+          .select('linkedin_url, facebook_url, instagram_url, x_url, youtube_url, tiktok_url, reddit_url, pinterest_url, whatsapp_url')
+          .eq('company_id', companyId)
+          .maybeSingle();
+        return (r.data ?? null) as Record<string, unknown> | null;
+      },
+      null,
+    ),
+    // ONBOARD-005 §5 — the connected CMS integration's platform name (only source
+    // of a CMS name; the crawl never fingerprints CMS). Read-only, no re-crawl.
+    safeQuery<Array<{ type: string | null; name: string | null; status: string | null }>>(
+      async () => {
+        const r = await supabase
+          .from('company_integrations')
+          .select('type, name, status')
+          .eq('company_id', companyId)
+          .eq('status', 'connected');
+        return (r.data ?? []) as Array<{ type: string | null; name: string | null; status: string | null }>;
+      },
+      [],
+    ),
   ]);
 
   base.overrides = overrides;
@@ -376,18 +503,37 @@ async function collectSignals(userId: string): Promise<JourneySignals> {
   // §8 — social platforms via the canonical connection-state model.
   base.social = socialRows.map((row) => ({
     platform: row.platform,
-    state: row.is_active === false
+    state: (row.is_active === false
       ? 'failed'
-      : providerJourneyState(row.connection_state ?? (row.is_active ? 'CONNECTED' : 'DISCONNECTED')),
+      : providerJourneyState(row.connection_state ?? (row.is_active ? 'CONNECTED' : 'DISCONNECTED'))) as ProviderJourneyState,
   }));
+
+  // §6 — social channels discovered from the crawl (a company_profiles URL) with
+  // no connected account. Never fabricated — only surfaced when a URL exists.
+  const connectedPlatforms = new Set(base.social.map((s) => s.platform.toLowerCase()));
+  base.socialDetected = SOCIAL_URL_COLUMNS
+    .filter(({ column, platform }) => {
+      const v = profileRow?.[column];
+      return typeof v === 'string' && v.trim() !== '' && !connectedPlatforms.has(platform);
+    })
+    .map(({ platform }) => platform);
+
+  // §5 — the connected CMS platform name (first connected CMS integration).
+  const cmsIntegration = cmsRows.find((r) => cmsProviderSet.has(String(r.type ?? '').toLowerCase()));
+  const cmsPlatformName = cmsIntegration
+    ? formatCmsPlatform(cmsIntegration.name || cmsIntegration.type || null)
+    : null;
 
   // §9 — CMS via activation readiness (latched, reuses listCmsProviders counts).
   const cmsCheck = activation?.checks.find((c) => c.id === 'cms');
   base.cms = {
     done: cmsCheck?.done === true,
-    anyRow: false,
+    anyRow: !!cmsIntegration,
     anyFailed: false,
-    detail: cmsCheck?.detail ?? 'Not connected yet',
+    platform: cmsPlatformName,
+    detail: cmsPlatformName
+      ? `${cmsPlatformName} connected`
+      : cmsCheck?.detail ?? 'Not connected yet',
   };
 
   // §10 — GA via activation readiness's analytics check + integration rows.
@@ -457,7 +603,11 @@ export async function buildOnboardingJourney(userId: string): Promise<Onboarding
         detail = 'We prefilled this from your website — confirm or adjust it.';
         break;
       case 'social_accounts': {
-        providers = signals.social;
+        // §6 — connected accounts first, then crawl-detected (not connected) channels.
+        const detectedProviders = signals.socialDetected.map(
+          (platform) => ({ platform, state: 'detected' as ProviderJourneyState }),
+        );
+        providers = [...signals.social, ...detectedProviders];
         const connected = signals.social.filter((s) => s.state === 'connected');
         const needsAttention = signals.social.filter(
           (s) => s.state === 'expired' || s.state === 'reconnect_required',
@@ -470,6 +620,9 @@ export async function buildOnboardingJourney(userId: string): Promise<Onboarding
         } else if (signals.social.length > 0) {
           derived = 'in_progress';
           detail = signals.social.map((s) => `${s.platform}: ${s.state.replace('_', ' ')}`).join(', ');
+        } else if (detectedProviders.length > 0) {
+          derived = 'pending';
+          detail = `Detected on your website: ${signals.socialDetected.join(', ')} — connect to publish`;
         } else {
           derived = 'pending';
           detail = 'No channels connected yet';
@@ -496,7 +649,27 @@ export async function buildOnboardingJourney(userId: string): Promise<Onboarding
     const status: JourneyStageStatus =
       !depsMet && !RESOLVED.has(withOverride) ? 'blocked' : withOverride;
 
-    return { ...def, status, detail, providers, overriddenAt };
+    // §2/§3 — resolve dependencies to human-readable titles + met flag (reuses
+    // the SAME dependency graph and resolved-status set; no duplicate logic).
+    const dependencies = def.dependsOn.map((depId) => {
+      const depView = statuses.get(depId);
+      return {
+        id: depId,
+        title: STAGE_BY_ID.get(depId)?.title ?? depId,
+        met: depView ? RESOLVED.has(depView.status) : false,
+      };
+    });
+
+    return {
+      ...def,
+      status,
+      detail,
+      providers,
+      estimatedMinutes: STAGE_EST_MINUTES[def.id],
+      dependencies,
+      guidance: STAGE_GUIDANCE[def.id],
+      overriddenAt,
+    };
   };
 
   for (const def of JOURNEY_STAGES) {
