@@ -18,7 +18,7 @@ import type { ContentBlock } from '../../content/blockTypes';
 import { stripHtml } from './blockHelpers';
 import { enhanceNewsletterSystemPrompt } from './promptHelpers';
 import type { CompanyContext } from '../../blog/blogRunnerTypes';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { extractStrategyProfile } from '../../content/companyStrategyPerspective';
 import { buildGovernanceExplainabilityMetadata } from '../../../backend/services/creator/strategyGovernancePromptContext';
 

@@ -40,10 +40,18 @@ export const WAVE2A_MIGRATED_CONSUMERS: readonly string[] = [
   'backend/services/longForm/longFormRecommendationEngine.ts',
 ];
 
+/** Consumers migrated in Wave 2B — Post, Thread & Newsletter generation (CONTENT-INTELLIGENCE-006). */
+export const WAVE2B_MIGRATED_CONSUMERS: readonly string[] = [
+  'lib/post/runPostGeneration.ts',
+  'lib/thread/runThreadGeneration.ts',
+  'lib/newsletter/shared/pipeline.ts', // feeds all 7 newsletter formats
+];
+
 /** All consumers migrated onto canonical grounding across every landed wave. */
 export const MIGRATED_CONSUMERS: readonly string[] = [
   ...WAVE1_MIGRATED_CONSUMERS,
   ...WAVE2A_MIGRATED_CONSUMERS,
+  ...WAVE2B_MIGRATED_CONSUMERS,
 ];
 
 /**

@@ -6,7 +6,7 @@ import {
 } from '../../backend/services/contentGenerationPipeline';
 import { runTextGeneration } from '../../backend/services/content/textGenerationOrchestrator';
 import { getDefaultThreadTemplates } from './defaultThreadTemplates';
-import { getProfile } from '../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   extractCompanyIdentity,
   buildIdentityLock,
