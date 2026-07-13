@@ -125,6 +125,7 @@ import { runIngestionForAllCompanies } from '../services/ingestionScheduler';
 import { refreshAnalyticsEnterpriseSnapshot } from '../services/analyticsEnterpriseSnapshotService';
 import { runReadinessSnapshotJob } from '../jobs/readinessSnapshotJob';
 import { runHealthSnapshotJob } from '../jobs/healthSnapshotJob';
+import { runLifecycleSnapshotJob } from '../jobs/lifecycleSnapshotJob';
 import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
 import {
   getLeadThreadRecomputeQueue,
@@ -164,6 +165,8 @@ const AUTO_OPTIMIZATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const READINESS_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 // CSA-003 — daily Customer Health snapshot (canonical health time-series).
 const HEALTH_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+// CSA-004 — daily Customer Lifecycle snapshot (canonical lifecycle time-series).
+const LIFECYCLE_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 // Reclaim BOLT runs abandoned by a worker crash / queue interruption.
 // CronGuard already guarantees single-instance execution → no duplicate
 // recovery. Sweep itself is idempotent (only flips started/running→failed).
@@ -304,6 +307,7 @@ let lastGovernanceAuditRun = 0;
 let lastAutoOptimizationRun = 0;
 let lastReadinessSnapshotRun = 0; // CSA-002 — daily readiness snapshot
 let lastHealthSnapshotRun = 0;    // CSA-003 — daily health snapshot
+let lastLifecycleSnapshotRun = 0; // CSA-004 — daily lifecycle snapshot
 let lastEngagementPollingEnqueue = 0;
 let lastIntelligencePollingEnqueue = 0;
 let lastSignalClusteringRun = 0;
@@ -892,6 +896,24 @@ async function runSchedulerCycle() {
       );
     } catch (error: unknown) {
       console.error('❌ Health snapshot error:', formatCaughtError(error));
+    }
+  }
+
+  // CSA-004 — daily Customer Lifecycle snapshot. Persists ONE canonical lifecycle
+  // snapshot per company per day into customer_lifecycle_snapshots (idempotent),
+  // classifying the lifecycle stage + transition from the existing authorities
+  // (health, evolution, usage, readiness, Platform Ready). Same scheduler /
+  // CronGuard; fail-safe. Runs after the health snapshot so it reuses fresh health.
+  if (shouldRunCronJob("lifecycleSnapshot", LIFECYCLE_SNAPSHOT_INTERVAL_MS, lastLifecycleSnapshotRun)) {
+    lastLifecycleSnapshotRun = Date.now();
+    try {
+      const snap = await runLifecycleSnapshotJob();
+      console.log(
+        `✅ Lifecycle snapshot: total ${snap.total}, inserted ${snap.inserted}, skipped ${snap.skipped}` +
+        (snap.ok ? '' : ' (FAILED)')
+      );
+    } catch (error: unknown) {
+      console.error('❌ Lifecycle snapshot error:', formatCaughtError(error));
     }
   }
 
