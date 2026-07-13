@@ -137,6 +137,8 @@ import { COMPANY_PROFILES_TABLE, COMPANY_PROFILE_FALLBACK_COLUMNS, MARKET_PULSE_
 import { applyArchetypeContextToProfile, competitorValidationContextForProfile, buildRefineRecoveryContexts, buildPrioritizedRefineFallbackCandidates, discoverRefineCompetitorCandidates, inferBusinessModelLabel, textFromValue, normalizeFieldValueList, inferCompanyDomainShape, inferPartnershipPriorities, inferCriticalHiringFunctions, inferRegulatoryPolicySensitivity, inferMarketPulseCategories, withExistingList, withExistingText, buildIndustryReview, rankedMarketAlternativesForProfile, rankedCompetitorDetailsForProfile } from './companyProfileServiceRest1Enrich';
 
 import { rankedCompetitorIntelligenceForProfile, rankedCompetitorQualityForProfile, buildAiMarketPulseSettings, upsertCompanyProfilePayload, shouldRefineProfile, storeRefinementAudit, stripCompetitorFieldsFromReportSettings } from './companyProfileServiceRest1Rest2Pulse';
+// CKRE-002 §3 — refresh gate (orchestration only; does NOT modify AI prompts/models/extraction).
+import { evaluateRefreshGate, finalizeAiRefresh, type RefreshGateResult } from './crawl/refreshOrchestrator';
 
 export function sanitizeStoredCompetitorsForRead(profile: CompanyProfile | null): CompanyProfile | null {
   if (!profile) return null;
@@ -244,7 +246,7 @@ export async function refineProfileForPrompts(profile: CompanyProfile | null): P
 
 const runProfileRefinement = async (
   profile: CompanyProfile,
-  options?: { force?: boolean }
+  options?: { force?: boolean; manualRefresh?: boolean }
 ): Promise<{ profile: CompanyProfile; details: CompanyProfileRefinementDetails }> => {
   if (!options?.force && !shouldRefineProfile(profile.last_refined_at)) {
     const details: CompanyProfileRefinementDetails = {
@@ -266,6 +268,8 @@ const runProfileRefinement = async (
   console.info('[refine] phase=crawl start', { company: companyId, website: workingProfile.website_url });
   let discoveredSources: Array<{ label: string; url: string }> = [];
   let discoveredSummaries: Array<{ label: string; url: string; summary: string }> = [];
+  // CKRE-002 §3 — the refresh gate decides whether the AI chain below runs.
+  let refreshGate: RefreshGateResult | null = null;
   if (workingProfile.website_url) {
     // CKRE-001 §1 — instrument the refresh crawl (events + deterministic
     // fingerprint/change detection). This does NOT change AI extraction or
@@ -278,6 +282,33 @@ const runProfileRefinement = async (
     discoveredSummaries = crawlResult.summaries;
     workingProfile = mergeDiscoveredSocialProfiles(workingProfile, crawlResult.social_links);
     console.info('[refine] phase=crawl done', { elapsed: elapsed(), pages: discoveredSources.length });
+
+    // ── CKRE-002 §2/§3 — AI GATE (orchestration; no prompt/model/extraction change) ──
+    // Consult the Refresh Policy Engine. On SKIP/DEFER/METADATA_ONLY the LLM
+    // chain below is skipped (deterministic incremental refresh + savings);
+    // AI runs only when policy permits. Fail-open: an error runs the AI as before.
+    refreshGate = await evaluateRefreshGate({
+      companyId,
+      changeDecision: crawlResult.changeDecision ?? null,
+      metadata: crawlResult.metadata,
+      manualRefresh: options?.manualRefresh === true,
+      workflow: 'profile_refresh',
+    });
+    if (refreshGate.skipAi) {
+      // Merge any deterministic metadata written by the incremental path so the
+      // returned profile reflects it (persistence already happened in the gate).
+      if (refreshGate.action === 'REFRESH_METADATA_ONLY' && crawlResult.metadata) {
+        if (crawlResult.metadata.logoUrl) workingProfile.logo_url = crawlResult.metadata.logoUrl;
+        if (crawlResult.metadata.faviconUrl) workingProfile.favicon_url = crawlResult.metadata.faviconUrl;
+        if (crawlResult.metadata.country) workingProfile.geography = crawlResult.metadata.country;
+      }
+      console.info('[refine] phase=gate skip-ai', { action: refreshGate.action, verdict: refreshGate.verdict });
+      const skipDetails: CompanyProfileRefinementDetails = {
+        company_id: workingProfile.company_id, before_profile: profile, after_profile: workingProfile,
+        source_urls: discoveredSources, source_summaries: [], changed_fields: [], created_at: new Date().toISOString(),
+      };
+      return { profile: workingProfile, details: skipDetails };
+    }
   }
 
   const sourceList = [...discoveredSources, ...buildSourceList(workingProfile)];
@@ -453,6 +484,18 @@ const runProfileRefinement = async (
     missing_fields_questions: missingFieldQuestions,
   };
   await storeRefinementAudit(auditDetails);
+
+  // CKRE-002 §5/§6/§7 — finalize: create the knowledge version + completion
+  // events for this AI refresh. Best-effort; never affects the returned profile.
+  if (refreshGate) {
+    await finalizeAiRefresh({
+      companyId,
+      gate: refreshGate,
+      workflow: 'profile_refresh',
+      executionMs: Date.now() - t0,
+      affectedSections: refreshGate.verdict ? ['business'] : [],
+    });
+  }
 
   return { profile: data, details: auditDetails };
 };
@@ -755,7 +798,7 @@ async function buildRefinedPayload(
 
 export async function refineProfileWithAI(
   profile: CompanyProfile,
-  options?: { force?: boolean }
+  options?: { force?: boolean; manualRefresh?: boolean }
 ): Promise<CompanyProfile> {
   const result = await runProfileRefinement(profile, options);
   return result.profile;
@@ -763,7 +806,7 @@ export async function refineProfileWithAI(
 
 export async function refineProfileWithAIWithDetails(
   profile: CompanyProfile,
-  options?: { force?: boolean }
+  options?: { force?: boolean; manualRefresh?: boolean }
 ): Promise<{ profile: CompanyProfile; details: CompanyProfileRefinementDetails }> {
   return runProfileRefinement(profile, options);
 }

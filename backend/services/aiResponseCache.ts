@@ -184,7 +184,22 @@ export function buildNormalizedKey(
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+// CKRE-002 §4 — enrichment ops are cacheable only when the policy config opts
+// in (default off). This removes the blanket exclusion while keeping the
+// safe-by-default behaviour; invalidation/versioning use the existing
+// cacheVersion param + invalidateCacheByPrefix, TTL provides freshness.
+const ENRICHMENT_CACHE_OPS = new Set(['profileEnrichment', 'profileExtraction']);
+
 export function isCacheable(operation: string): boolean {
+  if (ENRICHMENT_CACHE_OPS.has(operation)) {
+    try {
+      // Lazy require to avoid a static cycle; fail-closed to uncached.
+      const { getRefreshPolicyConfig } = require('./crawl/refreshPolicyConfig') as typeof import('./crawl/refreshPolicyConfig');
+      return getRefreshPolicyConfig().enrichmentCacheEnabled;
+    } catch {
+      return false;
+    }
+  }
   return !NO_CACHE_OPS.has(operation);
 }
 

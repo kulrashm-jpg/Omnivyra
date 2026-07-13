@@ -187,3 +187,96 @@ deterministically yields UNKNOWN**, so a bump never fabricates a change.
   producers to wire in.
 - `CrawlSession.snapshot()` + `replayWebsiteChange` provide the debugging spine
   for CKRE-002 decision auditing.
+
+---
+
+# CKRE-002 — Refresh Policy Engine, incremental refresh, AI gating
+
+The intelligent execution layer that decides IF / WHEN / WHAT is refreshed. It
+orchestrates the existing systems (crawl, fingerprints, decision, enrichment) —
+it introduces no new crawler and no new AI pipeline.
+
+## Refresh Policy Engine (§1)
+
+`crawl/refreshPolicyEngine.ts` — PURE, deterministic, retry-safe.
+`decideRefresh(input)` maps the CKRE-001 change decision + refresh context
+(history, tier, cooldown, budget, overrides, platform state) to one action:
+`EXECUTE_REFRESH | SKIP_REFRESH | REFRESH_METADATA_ONLY | REFRESH_BUSINESS_ONLY
+| REFRESH_FULL | DEFER | UNKNOWN`. It performs no I/O, invokes no AI, reads no
+env (config is injected). Evaluation order is fixed: admin override → pending →
+degraded → gating-off → manual → cooldown → change verdict → token budget.
+
+## AI gating (§3)
+
+AI enrichment now runs ONLY when the policy permits it. The gate lives in
+`crawl/refreshOrchestrator.evaluateRefreshGate`, consulted by the profile
+refiner (`companyProfileServiceRest1Rest2Competitors.runProfileRefinement`)
+AFTER the (cheap) crawl and BEFORE the (expensive) LLM chain:
+
+| Change verdict | Policy action | AI? |
+|---|---|---|
+| UNCHANGED (+ baseline) | SKIP_REFRESH | never |
+| UNCHANGED (no baseline) | REFRESH_FULL | yes (first enrichment) |
+| COSMETIC_CHANGE | REFRESH_METADATA_ONLY | no (deterministic) |
+| BUSINESS_CHANGE | REFRESH_BUSINESS_ONLY | yes |
+| MAJOR_CHANGE | REFRESH_FULL | yes |
+| UNKNOWN / null | REFRESH_FULL | yes (safe default) |
+
+**No prompt, model, or extraction logic changed** — the gate only decides
+whether to invoke the unchanged chain. `manualRefresh` (the `/company-profile/
+refine` endpoint) bypasses the change gate. The master switch
+`CKRE_AI_GATING_ENABLED` (default ON) reverts to pre-CKRE-002 "AI always runs"
+when set false. Fail-open: any orchestration error runs the AI.
+
+## Incremental refresh (§2)
+
+`crawl/incrementalMetadataStore.refreshDiscoveredMetadata` writes ONLY the
+deterministic knowledge the crawl already produced (logo, favicon, country +
+the discovered_metadata bundle) on a `REFRESH_METADATA_ONLY` decision — no AI,
+no duplicate extraction, respects `user_locked_fields`. The dependency graph's
+`affectedFingerprints` scopes what changed.
+
+## Enrichment cache (§4)
+
+`aiResponseCache.isCacheable` is now config-aware for `profileEnrichment` /
+`profileExtraction`: cacheable only when `CKRE_ENRICHMENT_CACHE_ENABLED` (default
+OFF — opt-in). Rationale: the policy gate is the primary, provably-safe AI-work
+reducer; caching extraction responses risks near-match staleness on a genuine
+change, so it is opt-in. Versioning/invalidation reuse the existing
+`cacheVersion` param + `invalidateCacheByPrefix`; TTL provides freshness.
+
+## Refresh history + knowledge versioning (§5/§7)
+
+`crawl/knowledgeVersionStore` — additive in `company_profiles.report_settings`
+(NO new table). `report_settings.knowledge_version` holds
+`{ version, previousVersion, refreshReason, affectedSections, createdAt,
+rollback }`; `report_settings.refresh_history` is a bounded (default 20)
+newest-first array of `{ at, reason, action, verdict, knowledgeVersion,
+affectedSections, executionMs, tokens, cacheHit, cacheMiss }`. Every successful
+content refresh (AI or metadata-only) mints the next monotonic version.
+
+## Refresh events + observability (§6/§9)
+
+`crawl/refreshEventService` reuses the AUTH-001 envelope/sink/correlation/registry.
+Events: `RefreshRequested`, `RefreshSkipped`, `RefreshStarted`, `RefreshCompleted`,
+`RefreshDeferred`, `RefreshFailed`, `MetadataRefreshed`, `BusinessRefreshed`,
+`KnowledgeVersionCreated`. Metrics (`refresh.*`): requested / skipped / executed /
+deferred / failed / metadata_refreshed / business_refreshed /
+knowledge_version_created / tokens_saved_estimate.
+
+## Policy configuration (§8)
+
+`crawl/refreshPolicyConfig` — all rules are env-driven data, no hardcoded
+business logic: `CKRE_AI_GATING_ENABLED` (default true), `CKRE_ENRICHMENT_CACHE_
+ENABLED` (default false), per-tier cooldowns (`CKRE_COOLDOWN_MS_{ENTERPRISE,PRO,
+FREE}`), `CKRE_REFRESH_HISTORY_LIMIT`.
+
+## Future CKRE-003 extension points
+
+- Token budget is a policy input (defers AI when exhausted); wire a real budget
+  source.
+- Company tier defaults to `free`; wire subscription-tier resolution.
+- `pendingRefresh` is a policy input; wire a distributed in-flight lock for
+  cross-instance dedup.
+- Rollback: `knowledge_version.rollback` carries the prior version — a restore
+  path can consume it.

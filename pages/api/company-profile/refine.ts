@@ -109,7 +109,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         user_locked_fields: mergeLockedFields(profile.user_locked_fields, 'website_url'),
       };
     }
-    const refined = await refineProfileWithAIWithDetails(profile, { force: true });
+    // CKRE-002 §3 — this is the explicit user-triggered refresh; manualRefresh
+    // bypasses the change gate so a manual refine always runs the full AI chain.
+    const refined = await refineProfileWithAIWithDetails(profile, { force: true, manualRefresh: true });
     const responseProfile =
       access.role === 'COMPANY_ADMIN'
         ? toLimitedCompanyProfile(refined.profile) ?? refined.profile

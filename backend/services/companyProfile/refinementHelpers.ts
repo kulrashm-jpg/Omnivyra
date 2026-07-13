@@ -13,7 +13,7 @@ import {
   resolveCrawlCorrelationId,
 } from '../crawl/crawlEventService';
 import { computeWebsiteFingerprint, hasFingerprintSignal } from '../crawl/websiteFingerprintService';
-import { decideWebsiteChange } from '../crawl/changeDetectionService';
+import { decideWebsiteChange, type ChangeDecision } from '../crawl/changeDetectionService';
 import { getLatestWebsiteFingerprint, saveWebsiteFingerprint } from '../crawl/fingerprintStore';
 
 /**
@@ -265,6 +265,8 @@ export const crawlWebsiteSources = async (
    * failed or yielded no signal.
    */
   metadata: DiscoveredWebsiteMetadata | null;
+  /** CKRE-002 — deterministic change decision (null when not computed). */
+  changeDecision?: ChangeDecision | null;
 }> => {
   const normalizedWebsite = normalizeUrl(websiteUrl);
   if (!normalizedWebsite) return { urls: [], summaries: [], social_links: {}, metadata: null };
@@ -356,8 +358,10 @@ export const crawlWebsiteSources = async (
     }
   }
 
-  // CKRE-001 §3/§4/§5 — deterministic fingerprint + change detection (no AI,
-  // no gating). Best-effort; a failure never affects the crawl result.
+  // CKRE-001 §3/§4/§5 — deterministic fingerprint + change detection (no AI).
+  // CKRE-002: the change decision is now RETURNED (additive) so the Refresh
+  // Policy Engine can gate AI. Best-effort; a failure never affects the crawl.
+  let changeDecision: ChangeDecision | null = null;
   if (context?.companyId && rootFetch.ok && rootHtml) {
     try {
       const flatSocial = Object.values(socialLinks).flat().filter(Boolean);
@@ -375,12 +379,12 @@ export const crawlWebsiteSources = async (
       );
       if (hasFingerprintSignal(fingerprint)) {
         const prior = await getLatestWebsiteFingerprint(context.companyId);
-        const decision = decideWebsiteChange(prior, fingerprint);
-        recordCrawlChangeMetric(decision.verdict, workflow);
-        await emit('ChangeEvaluated', 'allowed', decision.verdict, {
-          score: decision.score,
-          changedLevels: decision.changedLevels,
-          reason: decision.reason,
+        changeDecision = decideWebsiteChange(prior, fingerprint);
+        recordCrawlChangeMetric(changeDecision.verdict, workflow);
+        await emit('ChangeEvaluated', 'allowed', changeDecision.verdict, {
+          score: changeDecision.score,
+          changedLevels: changeDecision.changedLevels,
+          reason: changeDecision.reason,
         });
         await saveWebsiteFingerprint(context.companyId, fingerprint);
       }
@@ -394,6 +398,8 @@ export const crawlWebsiteSources = async (
     summaries: summaries.filter((entry) => entry.summary) as Array<{ label: string; url: string; summary: string }>,
     social_links: socialLinks,
     metadata,
+    /** CKRE-002 — deterministic change decision for policy gating (null when uncomputed). */
+    changeDecision,
   };
 };
 
