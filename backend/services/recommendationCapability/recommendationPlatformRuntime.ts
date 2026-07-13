@@ -134,6 +134,26 @@ export async function runRecommendationsViaPlatform<T = any>(input: Recommendati
     return withExplanation(recs, explanation);
   };
 
+  // PMF-007R — additively attach the canonical Decision Object export under a reserved
+  // key (never mutates the recommendation payload; existing consumers ignore it).
+  const finalize = async (recs: T, runtime: 'platform'): Promise<T> => {
+    const out = serve(recs, runtime);
+    if (!attach || !out || typeof out !== 'object' || Array.isArray(out)) return out;
+    try {
+      const { produceDecisionsFromRecommendation } = await import('../decisionIntelligence/decisionIntelligenceService');
+      const produced = await produceDecisionsFromRecommendation(recs, {
+        companyId: input.companyId, knowledgeVersion: recKnowledgeVersion, createdAt: now, runtime, correlationId: input.correlationId,
+        // Attach the export only — keep the recommendation hot path free of extra event
+        // I/O and latency; DecisionCreated/Consumed events are emitted by the canonical
+        // decision service when a downstream module produces/consumes decisions (§7).
+        emitEvents: false,
+      });
+      return { ...(out as Record<string, unknown>), __decisions: produced.export } as unknown as T;
+    } catch {
+      return out; // fail-safe — decisions are additive, never block the recommendation
+    }
+  };
+
   try {
     const agentResult = await agentRunner(
       { agent: 'RECOMMENDATION_AGENT', companyId: input.companyId, userId: input.userId, runId, now, correlationId: input.correlationId,
@@ -147,7 +167,7 @@ export async function runRecommendationsViaPlatform<T = any>(input: Recommendati
         agentMs: agentResult.execution.durationMs, capabilities: agentResult.execution.completedSteps,
         checkpoints: agentResult.checkpoint.executionMetadata.checkpointCount, resumes: agentResult.checkpoint.executionMetadata.resumeCount,
       });
-      return serve(engineRecs as T, 'platform');
+      return finalize(engineRecs as T, 'platform');
     }
   } catch (err) {
     logger.warn('recommendation_platform_pipeline_error', { companyId: input.companyId, message: err instanceof Error ? err.message : String(err) });
@@ -156,5 +176,5 @@ export async function runRecommendationsViaPlatform<T = any>(input: Recommendati
   // ── Safety net: the producing node never ran the engine → run it directly ──
   if (!engineRan) engineRecs = await input.generate();
   recordRecommendationRuntime('platform', { qualityPassed: recQualityOutcome(engineRecs), confidence: recConfidence(engineRecs), knowledgeVersion: null });
-  return serve(engineRecs as T, 'platform');
+  return finalize(engineRecs as T, 'platform');
 }
