@@ -121,6 +121,10 @@ export async function evaluateRefreshGate(input: RefreshGateInput): Promise<Refr
             companyId, version: rec.version, refreshReason: decision.reason, refreshPolicy: decision.action,
             dependencies: input.changeDecision?.affectedFingerprints ?? [],
           });
+          // CKRE-004 — orchestrate downstream propagation (best-effort, never blocks).
+          void import('../orchestration/knowledgeOrchestrator')
+            .then(({ orchestrateKnowledgeChange }) => orchestrateKnowledgeChange({ companyId, changedDomains: ['WEBSITE'], correlationId, now: nowIso }))
+            .catch(() => {});
         }
         return { skipAi: true, action: decision.action, verdict, correlationId, metadataFields: meta.fields };
       }
@@ -183,6 +187,10 @@ export async function finalizeAiRefresh(input: FinalizeAiRefreshInput): Promise<
         companyId, version: rec.version, refreshReason: input.gate.action, refreshPolicy: input.gate.action,
         dependencies: [],
       });
+      // CKRE-004 — orchestrate downstream propagation (best-effort, never blocks).
+      void import('../orchestration/knowledgeOrchestrator')
+        .then(({ orchestrateKnowledgeChange }) => orchestrateKnowledgeChange({ companyId, changedDomains: ['WEBSITE'], correlationId: input.gate.correlationId, now }))
+        .catch(() => {});
     }
   } catch {
     /* fail-safe */
