@@ -22,6 +22,9 @@ export const OUTPUT_CONTRACTS: Record<string, string[]> = {
   // dynamic keys; schema validation only requires a non-empty object (enforced by
   // the hallucination check), so there are no fixed required keys.
   platform_variants: [],
+  // PMF-003 — the long-form engine's result (BlogGenerationResult union); no fixed
+  // top-level keys are required (the engine owns its own quality gates).
+  long_form: [],
 };
 
 /** A custom rule returns null when satisfied, or a failure message. Pure/deterministic. */

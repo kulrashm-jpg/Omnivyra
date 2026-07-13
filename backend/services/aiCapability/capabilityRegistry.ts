@@ -108,6 +108,24 @@ REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE.config.maxOutputTokens = 4000;
 REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE.config.maxRetries = 1;
 delete REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE.config.fallbackModel; // no model fallback (parity)
 
+// PMF-003 — the Long-form Content capability. Inference is performed by the EXISTING
+// engine inside an injected model runner (zero prompt/quality change); AIC provides
+// the pipeline (CKC knowledge, validation, telemetry, recovery, output contract).
+// Validation is lenient and recovery is disabled so AIC never rejects or re-runs an
+// engine result the legacy path would have returned (the engine owns its own repair).
+REGISTRY_INTERNAL.LONG_FORM_CONTENT = def(
+  'LONG_FORM_CONTENT', 'Generate long-form content (blog/article/guide/… via the long-form engine).',
+  'CONTENT_WRITER', ['IDENTITY', 'INDUSTRY', 'POSITIONING', 'BRAND', 'AUDIENCE', 'MARKETING', 'PRODUCTS', 'SERVICES'],
+  [], 'single_pass', 'long_form',
+  { grounding: false, business: false, policy: false, hallucination: false, confidenceThreshold: 0 },
+);
+REGISTRY_INTERNAL.LONG_FORM_CONTENT.supportedModels = ['gpt-4o-mini'];
+REGISTRY_INTERNAL.LONG_FORM_CONTENT.config.defaultModel = 'gpt-4o-mini';
+REGISTRY_INTERNAL.LONG_FORM_CONTENT.config.maxRetries = 0;       // engine owns retries/repair
+REGISTRY_INTERNAL.LONG_FORM_CONTENT.config.maxOutputTokens = 16384;
+REGISTRY_INTERNAL.LONG_FORM_CONTENT.config.partialAllowed = true;
+delete REGISTRY_INTERNAL.LONG_FORM_CONTENT.config.fallbackModel;
+
 export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDefinition>> = REGISTRY_INTERNAL;
 export const REGISTERED_CAPABILITIES: ReadonlyArray<string> = Object.keys(REGISTRY_INTERNAL);
 
