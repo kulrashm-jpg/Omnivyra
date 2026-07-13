@@ -1,6 +1,6 @@
 import type { CompanyContext } from '../blog/blogRunnerTypes';
 import type { CompanyProfile } from '../../backend/services/companyProfile/types';
-import { getProfile } from '../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildFormattedStyleInstructions } from './writingStyleEngine';
 import { computeCompanyContextCompleteness } from './companyContextCompleteness';
 

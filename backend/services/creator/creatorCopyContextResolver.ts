@@ -80,7 +80,7 @@ function buildIcp(profile: Record<string, unknown>): string | undefined {
 /** Resolve the canonical company context (business understanding). */
 export async function resolveCreatorCompanyContext(companyId: string): Promise<CreatorCompanyContext> {
   try {
-    const { getProfile } = await import('../companyProfileService');
+    const { getCanonicalProfile: getProfile } = await import('@/backend/services/context/canonicalProfileAdapter');
     const profile = (await getProfile(companyId, { autoRefine: false })) as Record<string, unknown> | null;
     if (!profile) return {};
     return {

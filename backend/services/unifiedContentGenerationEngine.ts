@@ -43,7 +43,7 @@ import {
   scoreCompanyContext,
 } from '../../lib/content/companyContextBlock';
 import { getContentValidationMode, validateContentVariation } from '../../lib/content/contentVariationValidator';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import type { StrategyProfile } from './companyProfile/types';
 
 // ── Company identity auto-fetch (5-min cache) ───────────────────────────────

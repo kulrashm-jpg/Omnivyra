@@ -5,7 +5,7 @@
  * (frequency, platforms, content mix) are injected as hard rules, not hints.
  */
 
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { listPlatformRules } from '../db/platformPromotionStore';
 import { ensureFallbackPlatformRules } from './platformRulesService';
 import type { PlanningGenerationInput } from '../types/campaignPlanning';

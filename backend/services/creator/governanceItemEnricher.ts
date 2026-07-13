@@ -22,7 +22,7 @@
  * can wire into this single resolution site.
  */
 
-import { getProfile } from '../companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildGovernancePromptContext } from './strategyGovernancePromptContext';
 import { auditRestrictedStrategySelected } from './strategyGovernanceAuditEvents';
 import type { CreatorTypeForVariant } from '../../../lib/variants/creatorStrategyMapping';

@@ -1,7 +1,7 @@
 import { computeCampaignPlanningQAState } from '../../chatGovernance';
 import { getAvailablePlatformsFromProfile } from '../../utils/platformEligibility';
 import { GATHER_ORDER, REQUIRED_EXECUTION_FIELDS } from '../../constants/campaignPlanningGatherOrder';
-import { getProfile } from '../companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { determineDistributionStrategy, type DistributionStrategy } from '../planningIntelligenceService';
 import { getStrategyMemory } from '../campaignStrategyMemoryService';
 import { getCachedStrategyProfile } from '../strategyProfileCache';

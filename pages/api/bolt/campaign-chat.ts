@@ -7,7 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
