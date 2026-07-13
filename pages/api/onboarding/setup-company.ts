@@ -37,6 +37,7 @@ import {
 } from '../../../backend/services/validatedWebsiteService';
 import { monitorCompanyIdentityDrift } from '../../../backend/services/companyIdentityDriftService';
 import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
+import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import {
   emitSignupEvent,
@@ -604,8 +605,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       .update({ active_company_id: companyId, onboarding_state: 'company_complete', updated_at: now })
       .eq('id', user.id);
 
+    // ── 4b. Canonical domain-registry dual-write (ONBOARD-001 §4) ────────────
+    // The legacy companies.website_domain / admin_email_domain columns are
+    // still written above (by createCompanyIdentity) for backward compatibility.
+    // Here we ALSO write the canonical company_domains row via the governed
+    // writer so the registry covers every self-serve company at creation time
+    // — completing the migration the audit flagged. saveDomainRecord is
+    // idempotent (same-company or brand-new), conflict-safe (never throws,
+    // returns a structured conflict), and 'system'-attributed. Best-effort:
+    // a registry write failure never blocks company creation (the backfill
+    // migration + drift monitor are the safety nets).
+    const registryDomain = websiteDomain ?? adminEmailDomain;
+    if (registryDomain) {
+      try {
+        const domainResult = await saveDomainRecord({
+          company_id:          companyId,
+          input_domain:        registryDomain,
+          final_domain:        registryDomain,
+          verification_status: 'unverified',
+          created_via:         'system',
+          is_primary:          true,
+        });
+        if (!domainResult.ok && domainResult.error !== 'DOMAIN_ALREADY_CLAIMED') {
+          console.warn('[setup-company] company_domains write failed (non-fatal):', domainResult.error);
+        }
+      } catch (e) {
+        console.warn('[setup-company] company_domains write threw (non-fatal):', (e as Error)?.message ?? e);
+      }
+    }
+
     // ── 5. Create company_profiles row ────────────────────────────────────────
+    // ONBOARD-001 §3/§7: the SAME root-page crawl that discovers social links
+    // now also returns identity/brand/SEO metadata (favicon, logo, OG, title,
+    // description, language, country, brand colour) — no second crawl. The AI
+    // refinement in step 5b (getProfile autoRefine) still enriches the deeper
+    // fields; this fills the cheap, deterministic ones immediately.
     let discoveredSocialProfile: any = {};
+    let discoveredMetadata: import('../../../backend/services/companyProfile/websiteMetadataExtractor').DiscoveredWebsiteMetadata | null = null;
     if (canonicalWebsite) {
       try {
         const crawlResult = await crawlWebsiteSources(canonicalWebsite, new Set());
@@ -613,9 +649,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           { company_id: companyId, website_url: canonicalWebsite } as any,
           crawlResult.social_links,
         );
+        discoveredMetadata = crawlResult.metadata;
       } catch (error) {
         console.warn('[setup-company] initial social crawl failed:', error);
       }
+    }
+
+    // Provenance (§3: "System Discovered / User Editable"). Discovered fields
+    // are listed here with source='system_discovered' and stored inside
+    // report_settings.discovered_metadata (below) — NOT in the field_confidence
+    // column, which is owned by the AI refiner (step 5b) and must not be
+    // pre-seeded lest it perturb the refiner's replacement logic. The existing
+    // user_locked_fields mechanism governs user edits (User Editable), so
+    // nothing here is ever overwritten once a user touches it.
+    const systemDiscoveredFields: string[] = [];
+    if (discoveredMetadata) {
+      if (discoveredMetadata.faviconUrl) systemDiscoveredFields.push('favicon_url');
+      if (discoveredMetadata.logoUrl) systemDiscoveredFields.push('logo_url');
+      if (discoveredMetadata.country) systemDiscoveredFields.push('geography');
+      if (discoveredMetadata.description) systemDiscoveredFields.push('description');
+      if (discoveredMetadata.language) systemDiscoveredFields.push('language');
+      if (discoveredMetadata.brandColor) systemDiscoveredFields.push('brand_color');
     }
 
     // PART A — upsert (not insert) so a profile row that was auto-created by a
@@ -627,7 +681,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       name:        companyName.trim(),
       website_url: canonicalWebsite || null,
       industry:    profileIndustry || null,
-      geography:   null,
+      // §3/§7 — system-discovered brand assets + country (deterministic, from
+      // the crawl HTML). AI refinement (step 5b) fills the rest and owns
+      // field_confidence.
+      geography:   discoveredMetadata?.country ?? null,
+      logo_url:    discoveredMetadata?.logoUrl ?? null,
+      favicon_url: discoveredMetadata?.faviconUrl ?? null,
       linkedin_url: discoveredSocialProfile.linkedin_url ?? null,
       facebook_url: discoveredSocialProfile.facebook_url ?? null,
       instagram_url: discoveredSocialProfile.instagram_url ?? null,
@@ -661,11 +720,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           pending_confirmation: Boolean(companySize.trim()),
           updated_at: now,
         },
+        // §3/§7 — full system-discovered metadata bundle (description,
+        // language, brand colour, OpenGraph, SEO keywords, title/site name).
+        // Values without a dedicated column live here; all marked discovered.
+        ...(discoveredMetadata ? {
+          discovered_metadata: {
+            source: 'system_discovered',
+            discovered_at: now,
+            discovered_fields: systemDiscoveredFields,
+            title: discoveredMetadata.title,
+            description: discoveredMetadata.description,
+            site_name: discoveredMetadata.siteName,
+            language: discoveredMetadata.language,
+            country: discoveredMetadata.country,
+            brand_color: discoveredMetadata.brandColor,
+            seo_keywords: discoveredMetadata.keywords,
+            open_graph: discoveredMetadata.openGraph,
+            logo_url: discoveredMetadata.logoUrl,
+            favicon_url: discoveredMetadata.faviconUrl,
+          },
+        } : {}),
       },
       created_at:  now,
       updated_at:  now,
     }, { onConflict: 'company_id' });
     // Non-fatal if profile insert fails — company + role are sufficient
+
+    // ── 5a. Timezone capture (§3 "Timezone") ─────────────────────────────────
+    // The browser sends its IANA timezone (Intl.DateTimeFormat().resolvedOptions()
+    // .timeZone). Persist it to the canonical home — company_scheduler_prefs —
+    // instead of the 'UTC' default. Best-effort; a bad/absent value leaves the
+    // default untouched.
+    const clientTimezone = String((body as { timezone?: string }).timezone ?? '').trim();
+    if (clientTimezone && /^[A-Za-z]+\/[A-Za-z0-9_+\-]+$/.test(clientTimezone)) {
+      await supabase.from('company_scheduler_prefs').upsert(
+        { company_id: companyId, timezone: clientTimezone, updated_at: now },
+        { onConflict: 'company_id' },
+      ).then(({ error }) => {
+        if (error) console.warn('[setup-company] timezone persist failed (non-fatal):', error.message);
+      });
+    }
 
     // ── 5b. Eager profile scoring trigger ─────────────────────────────────────
     // Profiles were previously only scored lazily, on a later getProfile()

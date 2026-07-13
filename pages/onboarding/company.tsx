@@ -229,6 +229,9 @@ export default function CompanySetupPage() {
           businessTypes,
           companySize: teamSize,
           refCode:     (() => { try { return localStorage.getItem('ref_code') ?? undefined; } catch { return undefined; } })(),
+          // ONBOARD-001 §3 — browser IANA timezone, persisted to
+          // company_scheduler_prefs so scheduling uses the real zone, not UTC.
+          timezone:    (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined; } catch { return undefined; } })(),
         }),
       });
 

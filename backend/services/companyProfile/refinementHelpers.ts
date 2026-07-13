@@ -1,6 +1,11 @@
 import { runCompletionWithOperation } from '../aiGateway';
 import { CompanyProfile, CompanyProfileExtractionOutput, ExtractedEvidence } from './types';
 import {
+  extractWebsiteMetadata,
+  hasDiscoveredSignal,
+  type DiscoveredWebsiteMetadata,
+} from './websiteMetadataExtractor';
+import {
   normalizeUrl,
   normalizeSocialUrl,
   isPlaceholderUrl,
@@ -227,14 +232,21 @@ export const crawlWebsiteSources = async (
   urls: Array<{ label: string; url: string }>;
   summaries: Array<{ label: string; url: string; summary: string }>;
   social_links: Record<string, string[]>;
+  /**
+   * ONBOARD-001 §3/§7 — identity/brand/SEO metadata extracted from the SAME
+   * root-page HTML fetched below (no extra crawl). null when the root fetch
+   * failed or yielded no signal.
+   */
+  metadata: DiscoveredWebsiteMetadata | null;
 }> => {
   const normalizedWebsite = normalizeUrl(websiteUrl);
-  if (!normalizedWebsite) return { urls: [], summaries: [], social_links: {} };
+  if (!normalizedWebsite) return { urls: [], summaries: [], social_links: {}, metadata: null };
 
   let rootHtml = '';
   let socialLinks: Record<string, string[]> = {
     linkedin: [], facebook: [], instagram: [], x: [], youtube: [], tiktok: [], reddit: [],
   };
+  let metadata: DiscoveredWebsiteMetadata | null = null;
   try {
     // HARDEN-005: `websiteUrl` is user-supplied — SSRF-safe fetch (5MB cap).
     const { safeFetch, readCapped } = await import('../../../lib/security/safeFetch');
@@ -242,6 +254,9 @@ export const crawlWebsiteSources = async (
     if (response.ok) {
       rootHtml = (await readCapped(response)).toString('utf8');
       socialLinks = extractSocialLinksFromHtml(rootHtml, normalizedWebsite);
+      // Reuse the fetched HTML for identity/brand/SEO discovery — zero extra fetches.
+      const discovered = extractWebsiteMetadata(rootHtml, normalizedWebsite);
+      metadata = hasDiscoveredSignal(discovered) ? discovered : null;
     }
   } catch {
     /* SSRF-blocked or network error — leave rootHtml empty */
@@ -277,6 +292,7 @@ export const crawlWebsiteSources = async (
     urls: sourceUrls,
     summaries: summaries.filter((entry) => entry.summary) as Array<{ label: string; url: string; summary: string }>,
     social_links: socialLinks,
+    metadata,
   };
 };
 
