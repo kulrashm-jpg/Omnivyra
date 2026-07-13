@@ -13,6 +13,7 @@ import {
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
+import { isPersonalEmailDomain } from '../../../lib/auth/serverValidation';
 
 import { ensureCompanyAccess, ensureCompanyAdminAccess, findOrCreateUserByEmail, insertAuditLog, mapAppRoleToRbac, normalizeInviteRole, upsertUserCompanyRole } from '../../../backend/apiHandlers/company/usersShared';
 
@@ -109,6 +110,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ];
     if (!(allowedRoles as readonly string[]).includes(desiredRole)) {
       return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
+    }
+
+    // Bible rule: work email only. Company-admin-initiated invites (any role)
+    // must use a work email — no gmail/outlook/disposable. SUPER_ADMIN is the
+    // deliberate backend override escape hatch and is exempt.
+    if (access.role !== Role.SUPER_ADMIN && isPersonalEmailDomain(normalizedEmail.split('@')[1] ?? '')) {
+      return res.status(400).json({
+        error: 'PERSONAL_EMAIL_NOT_ALLOWED',
+        details: 'Team members must be invited with a work email address, not a personal one (gmail, outlook, etc.).',
+      });
     }
 
     try {

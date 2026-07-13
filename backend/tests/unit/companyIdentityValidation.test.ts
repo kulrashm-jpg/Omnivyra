@@ -118,16 +118,38 @@ describe('validateCompanyIdentity — authoritative verdict', () => {
     expect(id.requiresManualReview).toBe(false);
   });
 
-  it('BLOCKS a domain with MX but no website → NO_WEBSITE_FOUND (review)', async () => {
+  const PROBE_FAILED = (d: string): ResolveDomainResult => ({
+    input_domain: d, final_domain: d, redirect_chain: [], is_forwarding: false,
+    resolution_failed: true,
+  });
+
+  it('HARD-REJECTS a domain with no website (definitive: no DNS records) → NO_WEBSITE_FOUND', async () => {
     const id = await validateCompanyIdentity('john@acme.com', deps({
-      probeWebsite: async (d) => ({
-        input_domain: d, final_domain: d, redirect_chain: [], is_forwarding: false,
-        resolution_failed: true,
-      }),
+      probeWebsite: async (d) => PROBE_FAILED(d),
+      classifyDomainDns: async () => 'no_records',
     }));
     expect(id.eligible).toBe(false);
     expect(id.validationReason).toBe('NO_WEBSITE_FOUND');
-    expect(id.requiresManualReview).toBe(true);
+    // Bible: definitive no-website is a HARD reject, not a review dead-end.
+    expect(id.requiresManualReview).toBe(false);
+  });
+
+  it('does NOT reject on a transient probe failure when the domain resolves → "try again" (throws)', async () => {
+    await expect(
+      validateCompanyIdentity('john@acme.com', deps({
+        probeWebsite: async (d) => PROBE_FAILED(d),
+        classifyDomainDns: async () => 'has_records',
+      })),
+    ).rejects.toThrow(/WEBSITE_PROBE_TRANSIENT/);
+  });
+
+  it('does NOT reject on a transient DNS failure → "try again" (throws)', async () => {
+    await expect(
+      validateCompanyIdentity('john@acme.com', deps({
+        probeWebsite: async (d) => PROBE_FAILED(d),
+        classifyDomainDns: async () => 'transient',
+      })),
+    ).rejects.toThrow(/WEBSITE_PROBE_TRANSIENT/);
   });
 
   it('routes a cross-domain redirect to DOMAIN_NOT_CANONICAL (review)', async () => {

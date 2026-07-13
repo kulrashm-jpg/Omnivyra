@@ -81,7 +81,7 @@ describe('Phase 11D — domain validation success cache', () => {
   });
 
   it('FAILURE never cached: resolution_failed (NO_WEBSITE_FOUND) re-probes every time', async () => {
-    const h = harness({ probeWebsite: async (d) => ({ ...live(d), resolution_failed: true }) });
+    const h = harness({ probeWebsite: async (d) => ({ ...live(d), resolution_failed: true }), classifyDomainDns: async () => 'no_records' });
     const r1 = await validateCompanyIdentity('john@acme.com', h.deps);
     expect(r1.validationReason).toBe('NO_WEBSITE_FOUND');
     expect(domainVerdictCacheSize()).toBe(0);

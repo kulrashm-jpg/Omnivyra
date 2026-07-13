@@ -70,7 +70,12 @@ export default function AuthCallback() {
 
         const { data, error } = await supabase.auth.verifyOtp({
           token_hash: tokenHash,
-          type: (otpType || 'magiclink') as 'magiclink' | 'email' | 'recovery' | 'invite',
+          // 'signup' + 'email' cover the prefetch-resistant email-confirmation
+          // link (…/auth/callback?token_hash=…&type=signup): the token is only
+          // consumed here when this JS runs verifyOtp, so a corporate mail
+          // scanner's plain GET can't burn it. 'magiclink'/'recovery'/'invite'
+          // remain for their respective flows.
+          type: (otpType || 'magiclink') as 'magiclink' | 'email' | 'recovery' | 'invite' | 'signup',
         });
 
         const user = data.session?.user;

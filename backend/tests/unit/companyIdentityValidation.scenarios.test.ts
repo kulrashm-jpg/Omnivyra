@@ -62,13 +62,23 @@ describe('Phase-4 evidence: validation scenarios', () => {
     expect(id.requiresManualReview).toBe(false);
   });
 
-  it('4. no website found (MX present, no live site) → BLOCK (NO_WEBSITE_FOUND), review', async () => {
+  it('4. no website found (MX present, definitively no live site) → HARD BLOCK (NO_WEBSITE_FOUND)', async () => {
     const id = await validateCompanyIdentity('john@acme.com', deps({
       probeWebsite: async (d) => ({ ...liveCanonical(d), resolution_failed: true }),
+      classifyDomainDns: async () => 'no_records', // apex + www have zero records → definitive
     }));
     expect(id.eligible).toBe(false);
     expect(id.validationReason).toBe('NO_WEBSITE_FOUND');
-    expect(id.requiresManualReview).toBe(true);
+    expect(id.requiresManualReview).toBe(false);
+  });
+
+  it('4b. transient probe failure (domain resolves) → NOT rejected, surfaces "try again"', async () => {
+    await expect(
+      validateCompanyIdentity('john@acme.com', deps({
+        probeWebsite: async (d) => ({ ...liveCanonical(d), resolution_failed: true }),
+        classifyDomainDns: async () => 'has_records',
+      })),
+    ).rejects.toThrow(/WEBSITE_PROBE_TRANSIENT/);
   });
 
   it('5. mismatched domain (acme.com vs acme.in) → distinct identity keys (never ALLOW-equal)', () => {

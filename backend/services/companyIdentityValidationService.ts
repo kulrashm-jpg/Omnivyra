@@ -30,6 +30,7 @@
  *   G    existing-company check                 → companies website/admin domain
  */
 
+import dns from 'dns/promises';
 import { supabase } from '../db/supabaseClient';
 import { checkDomainEligibility } from './domainEligibilityService';
 import { resolveDomain, type ResolveDomainResult } from './domainCanonicalService';
@@ -44,6 +45,56 @@ import {
 
 /** Bump when the validation semantics change; stored alongside the verdict. */
 export const COMPANY_IDENTITY_VALIDATION_VERSION = 'company-identity-v1';
+
+/**
+ * Thrown when the website probe fails for a domain that DOES resolve in DNS
+ * (or whose DNS was only transiently unavailable). Callers must treat this as
+ * "try again", NOT a rejection — hard-rejecting here would false-reject a
+ * legitimate company whose site is momentarily unreachable. signup.ts's
+ * try/catch maps any throw to a 503 IDENTITY_VALIDATION_UNAVAILABLE ("we could
+ * not verify your organization right now — try again").
+ */
+export class WebsiteProbeTransientError extends Error {
+  constructor(public readonly domain: string) {
+    super(`WEBSITE_PROBE_TRANSIENT:${domain}`);
+    this.name = 'WebsiteProbeTransientError';
+  }
+}
+
+/**
+ * Classifies a domain's DNS so we can tell a DEFINITIVE "no website exists"
+ * (apex + www both have zero A/AAAA records) from a TRANSIENT lookup problem.
+ *   - 'has_records' → the domain resolves; a failed HTTP probe is the site
+ *                     being momentarily down → transient.
+ *   - 'transient'   → DNS itself was transiently unavailable (ETIMEOUT /
+ *                     ESERVFAIL / EAI_AGAIN) → transient.
+ *   - 'no_records'  → NXDOMAIN / NODATA on both apex and www → definitively no
+ *                     website host → hard reject.
+ * Read-only DNS lookups; no outbound fetch, so no SSRF surface.
+ */
+export type DomainDnsClass = 'has_records' | 'transient' | 'no_records';
+
+async function classifyDomainDnsDefault(domain: string): Promise<DomainDnsClass> {
+  const hosts = [domain, `www.${domain}`];
+  let sawTransient = false;
+  for (const host of hosts) {
+    for (const lookup of [() => dns.resolve4(host), () => dns.resolve6(host)]) {
+      try {
+        const records = await lookup();
+        if (records && records.length > 0) return 'has_records';
+      } catch (err) {
+        const code = (err as { code?: string } | null)?.code ?? '';
+        // ENOTFOUND / ENODATA(NODATA) are definitive "no record for this host".
+        // Everything else (ETIMEOUT, ESERVFAIL, EAI_AGAIN, EREFUSED, …) is a
+        // transient resolver condition — never let it hard-reject.
+        if (code !== 'ENOTFOUND' && code !== 'ENODATA' && code !== 'NODATA') {
+          sawTransient = true;
+        }
+      }
+    }
+  }
+  return sawTransient ? 'transient' : 'no_records';
+}
 
 export interface CompanyIdentity {
   eligible: boolean;
@@ -81,6 +132,8 @@ export interface ValidateCompanyIdentityDeps {
   /** AUTH-001 §7 — parked/expired-lander content check (defaults to the real detector). */
   probeParked?: (finalDomain: string) => Promise<ParkedDomainVerdict>;
   lookupClaimedCompany?: (normalizedDomain: string) => Promise<{ id: string; name: string | null } | null>;
+  /** Transient-vs-definitive DNS classifier (defaults to the real resolver). */
+  classifyDomainDns?: (domain: string) => Promise<DomainDnsClass>;
   /** Phase 11D cache seams (defaults wire to the in-memory success cache). */
   now?: () => number;
   cacheGet?: (domain: string, nowMs: number) => CachedDomainVerdict | null;
@@ -126,6 +179,7 @@ export async function validateCompanyIdentity(
   const probeWebsite = deps.probeWebsite ?? resolveDomain;
   const probeParked = deps.probeParked ?? detectParkedDomain;
   const lookupClaimedCompany = deps.lookupClaimedCompany ?? defaultLookupClaimedCompany;
+  const classifyDomainDns = deps.classifyDomainDns ?? classifyDomainDnsDefault;
   const now = deps.now ?? Date.now;
   const cacheGet = deps.cacheGet ?? getCachedDomainVerdict;
   const cacheSet = deps.cacheSet ?? setCachedDomainVerdict;
@@ -197,8 +251,18 @@ export async function validateCompanyIdentity(
     return block(base, 'BLOCKED', false);
   }
   if (resolution.resolution_failed) {
-    // No reachable site (incl. fail-closed DNS/timeout) → manual review.
-    return block(base, 'NO_WEBSITE_FOUND', true);
+    // The resolver collapses DNS/timeout/network failures into one flag. Split
+    // them so the bible rule ("email domain must host a website") HARD-rejects
+    // only a DEFINITIVE absence, while a transient blip says "try again" rather
+    // than false-rejecting a legitimate company whose site is momentarily down.
+    const dnsClass = await classifyDomainDns(normalizedEmailDomain);
+    if (dnsClass === 'no_records') {
+      // Apex + www both have zero A/AAAA → there is definitively no website
+      // at the email domain → hard reject (NOT a review; requiresManualReview=false).
+      return block(base, 'NO_WEBSITE_FOUND', false);
+    }
+    // has_records | transient → do not reject on a transient condition.
+    throw new WebsiteProbeTransientError(normalizedEmailDomain);
   }
   if (resolution.input_domain !== resolution.final_domain) {
     return block(base, 'DOMAIN_NOT_CANONICAL', true);
