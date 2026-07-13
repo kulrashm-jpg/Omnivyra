@@ -19,6 +19,7 @@ import { seedRequestContextFromRequest } from '../../../backend/services/request
 import {
   buildOnboardingJourney,
   applyJourneyStageAction,
+  emitPlatformReadyOnce,
   type OnboardingJourney,
   type JourneyStageAction,
 } from '../../../backend/services/onboardingJourneyService';
@@ -77,6 +78,9 @@ export default async function handler(
 
     // Return the refreshed journey (post-action) in the same round-trip.
     const refreshed = await buildOnboardingJourney(user.id);
+    // §5 — emit PlatformReady/JourneyCompleted once if this action tipped the
+    // journey to ready (idempotent via the _milestones marker).
+    void emitPlatformReadyOnce({ companyId: journey.companyId, userId: user.id, journey: refreshed });
     return res.status(200).json(refreshed);
   }
 

@@ -97,3 +97,81 @@ Additive only: one JSONB column, one migration (backfill + column), new service
 + endpoint + page. No existing endpoint, table, or model changed shape. The
 three legacy status models (feature completion, activation readiness, setup
 registry) are untouched — the journey authority composes them.
+
+---
+
+# ONBOARD-001R — lifecycle, provenance, events, readiness explanation
+
+## Company lifecycle (§1)
+
+`backend/services/companyLifecycleService.ts` — one **derived** lifecycle
+(never persisted): `DISCOVERED → CREATED → PROFILE_ENRICHING → PROFILE_READY →
+ONBOARDING_ACTIVE → PLATFORM_READY → ACTIVE` + failure states `SUSPENDED` /
+`ARCHIVED`. `deriveCompanyLifecycle(companyId)` reads companies.status +
+company_profiles (enrichment) + membership and **reuses buildOnboardingJourney**
+for Platform Ready (no duplicate readiness). PLATFORM_READY vs ACTIVE is
+distinguished by whether readiness came from real integrations or only skips.
+`canTransition`/`assertTransition` make illegal transitions impossible;
+derivation only reports, never writes (fully backward compatible).
+
+## Enrichment provenance (§2)
+
+`backend/services/companyProfile/enrichmentProvenance.ts` — every discovered
+value carries `{ source, confidence, discoveredAt, lastVerified,
+verificationStatus, fieldOrigin }`. `buildDiscoveredProvenance()` stamps the
+crawl output; the map is stored under the existing
+`report_settings.discovered_metadata.provenance` (no new store).
+
+## Incremental enrichment (§3)
+
+Deterministic, configurable freshness (`ENRICHMENT_FRESHNESS_DAYS`, default 30).
+`isFieldStale` / `selectStaleFields` / `shouldRefreshDiscovery` decide which
+fields warrant a refresh — **user-edited fields are never stale** (never
+auto-overwritten). Callers reuse the existing single crawl for stale fields;
+no new crawler, no duplicate request.
+
+## Company Review (§4)
+
+`backend/services/companyProfileProvenanceService.ts` +
+`GET /api/onboarding/company-provenance` classify each editable field as
+**System Discovered / AI Enriched / User Edited** (with confidence + why),
+reading the existing columns (`discovered_metadata.provenance`, `field_confidence`
++ `source`, `user_locked_fields` — user edits win). It annotates the existing
+profile form; it does not duplicate it.
+
+## Onboarding events (§5)
+
+`backend/services/onboardingEventService.ts` **reuses the AUTH-001 event
+infrastructure** — same `capability_audit_log` sink, same `SignupEventEnvelope`
++ `SIGNUP_EVENT_SCHEMA_VERSION` (imported), same correlation
+(`ensureSignupCorrelationId` → shared `resource_id`), same metric registry.
+Only the `onboarding.<Event>` vocabulary is new: `StageStarted`,
+`StageCompleted`, `StageSkipped`, `StageDismissed`, `StageBlocked`,
+`StageReopened`, `JourneyCompleted`, `PlatformReady`. Stage actions emit from
+`applyJourneyStageAction`; `PlatformReady`/`JourneyCompleted` emit **exactly
+once** via a `journey_state._milestones` marker (idempotent across refreshes).
+
+## Analytics (§6)
+
+`metricForOnboardingEvent` maps events → `onboarding.*` counters
+(`stage_entry`, `stage_completion`, `stage_skipped`, `stage_dismissed`,
+`stage_blocked`, `journey_completed`, `platform_ready`) via the existing
+HARDEN-001 registry. Events remain the source of truth; rates (skip/dismiss/
+completion) and averages (completion time) are computed downstream from these
+event counters — no rate is stored as a counter.
+
+## Platform Ready explanation (§8)
+
+`buildOnboardingJourney().readiness` (from `explainPlatformReadiness`) exposes
+`platformReady`, `reason`, `blockingItems`, `remainingItems`,
+`completionPercentage`, `estimatedRemainingSteps`, `estimatedRemainingTime`,
+and `recommendations` — all derived from the already-computed stages (no
+readiness recalculation).
+
+## Domain reconciliation (§7)
+
+`npm run verify:onboard001-domains`
+(`scripts/verify-onboard001-domain-reconciliation.js`) — READ-ONLY, rerunnable.
+Reports missing mappings, drift (legacy vs canonical), duplicate ownership, and
+orphaned registry rows with actionable guidance and exit codes (0 reconciled,
+1 action required, 2 env error). No automatic repair.

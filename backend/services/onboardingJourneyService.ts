@@ -38,6 +38,10 @@ import { supabase } from '../db/supabaseClient';
 import { buildActivationReadiness } from './activationReadinessService';
 import type { ConnectionState } from './integrations/connectionState';
 import { logger } from './logger';
+import {
+  emitOnboardingEvent,
+  resolveOnboardingCorrelationId,
+} from './onboardingEventService';
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -158,6 +162,22 @@ export interface JourneyStageView {
   overriddenAt?: string | null;
 }
 
+/** ONBOARD-001R §8 — the Platform Ready explanation (derived, not recomputed). */
+export interface PlatformReadiness {
+  platformReady: boolean;
+  reason: string;
+  /** Mandatory stages not yet completed — these BLOCK platform ready. */
+  blockingItems: Array<{ id: JourneyStageId; title: string }>;
+  /** Optional stages not yet resolved (completable or skippable). */
+  remainingItems: Array<{ id: JourneyStageId; title: string }>;
+  completionPercentage: number;
+  estimatedRemainingSteps: number;
+  estimatedRemainingMinutes: number;
+  estimatedRemainingTime: string;
+  /** Next best actions, highest-value first (mandatory, then integrations). */
+  recommendations: Array<{ id: JourneyStageId; title: string; why: string; href: string }>;
+}
+
 export interface OnboardingJourney {
   generatedAt: string;
   userId: string;
@@ -167,12 +187,92 @@ export interface OnboardingJourney {
   currentStep: JourneyStageId | 'platform_ready';
   /** §11 — the single canonical Platform Ready decision. */
   platformReady: boolean;
+  /** §8 — human-readable explanation of the Platform Ready decision. */
+  readiness: PlatformReadiness;
+}
+
+/** Rough per-stage effort estimate (minutes) for the readiness explanation. */
+const STAGE_EST_MINUTES: Readonly<Record<JourneyStageId, number>> = {
+  email_verified: 1,
+  profile: 2,
+  company: 2,
+  company_review: 3,
+  social_accounts: 3,
+  website_cms: 5,
+  google_analytics: 3,
+  google_search_console: 3,
+};
+
+function humanizeMinutes(mins: number): string {
+  if (mins <= 0) return 'none';
+  if (mins < 60) return `~${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `~${h}h ${m}m` : `~${h}h`;
+}
+
+const RESOLVED_STATUSES: ReadonlySet<JourneyStageStatus> = new Set(['completed', 'skipped', 'dismissed']);
+
+/**
+ * §8 — pure derivation of the Platform Ready explanation from already-computed
+ * stages. No readiness recalculation — it reads the stage statuses.
+ */
+export function explainPlatformReadiness(
+  stages: JourneyStageView[],
+  platformReady: boolean,
+): PlatformReadiness {
+  const total = stages.length;
+  const resolved = stages.filter((s) => RESOLVED_STATUSES.has(s.status)).length;
+  const blocking = stages
+    .filter((s) => s.mandatory && s.status !== 'completed')
+    .map((s) => ({ id: s.id, title: s.title }));
+  const remaining = stages
+    .filter((s) => !s.mandatory && !RESOLVED_STATUSES.has(s.status))
+    .map((s) => ({ id: s.id, title: s.title }));
+
+  const unresolvedStages = stages.filter((s) => !RESOLVED_STATUSES.has(s.status));
+  const estMinutes = unresolvedStages.reduce((sum, s) => sum + (STAGE_EST_MINUTES[s.id] ?? 3), 0);
+
+  // Recommendations: mandatory-blocking first (only the actionable ones — not
+  // blocked-by-dependency), then remaining integrations in flow order.
+  const recommendations = [
+    ...stages.filter((s) => s.mandatory && s.status !== 'completed' && s.status !== 'blocked'),
+    ...stages.filter((s) => !s.mandatory && !RESOLVED_STATUSES.has(s.status) && s.status !== 'blocked'),
+  ].slice(0, 3).map((s) => ({ id: s.id, title: s.title, why: s.why, href: s.href }));
+
+  let reason: string;
+  if (platformReady) {
+    reason = 'All required steps are complete and every optional step is resolved.';
+  } else if (blocking.length > 0) {
+    reason = `Blocked by required step${blocking.length > 1 ? 's' : ''}: ${blocking.map((b) => b.title).join(', ')}.`;
+  } else {
+    reason = `Resolve ${remaining.length} optional step${remaining.length > 1 ? 's' : ''} (complete or skip) to finish setup.`;
+  }
+
+  return {
+    platformReady,
+    reason,
+    blockingItems: blocking,
+    remainingItems: remaining,
+    completionPercentage: total ? Math.round((resolved / total) * 100) : 0,
+    estimatedRemainingSteps: unresolvedStages.length,
+    estimatedRemainingMinutes: estMinutes,
+    estimatedRemainingTime: humanizeMinutes(estMinutes),
+    recommendations,
+  };
 }
 
 // ── journey_state overrides (company_setup_progress.journey_state) ───────────
 
 type StageOverride = { status: 'skipped' | 'dismissed' | 'completed'; at: string; by: string | null };
-type JourneyStateBlob = Partial<Record<JourneyStageId, StageOverride>>;
+/**
+ * journey_state blob: per-stage overrides + a reserved `_milestones` key
+ * (once-only markers for PlatformReady / JourneyCompleted emission — additive,
+ * ignored by stage derivation which only reads by stage id).
+ */
+type JourneyStateBlob = Partial<Record<JourneyStageId, StageOverride>> & {
+  _milestones?: { platform_ready_at?: string; journey_completed_at?: string };
+};
 
 /** Run a query, returning `fallback` on any error (Supabase builders are thenables). */
 async function safeQuery<T>(run: () => Promise<T>, fallback: T): Promise<T> {
@@ -424,6 +524,7 @@ export async function buildOnboardingJourney(userId: string): Promise<Onboarding
     stages,
     currentStep: firstUnresolved ? firstUnresolved.id : 'platform_ready',
     platformReady,
+    readiness: explainPlatformReadiness(stages, platformReady),
   };
 }
 
@@ -483,5 +584,77 @@ export async function applyJourneyStageAction(input: {
     });
     return { ok: false, code: 'WRITE_FAILED', error: 'Could not save your preference. Please try again.' };
   }
+
+  // §5 — emit the canonical stage-transition event (reuses AUTH-001 infra).
+  void emitStageActionEvent(input.companyId, input.userId, def.id, input.action);
   return { ok: true };
+}
+
+/** Map a stage action to its canonical onboarding event and emit it. Fire-and-forget. */
+async function emitStageActionEvent(
+  companyId: string,
+  userId: string,
+  stage: JourneyStageId,
+  action: JourneyStageAction,
+): Promise<void> {
+  const event =
+    action === 'skip' ? 'StageSkipped'
+    : action === 'dismiss' ? 'StageDismissed'
+    : action === 'complete' ? 'StageCompleted'
+    : 'StageReopened';
+  const correlationId = await resolveOnboardingCorrelationId(await resolveUserEmail(userId), companyId);
+  await emitOnboardingEvent({
+    event, outcome: 'allowed', correlationId, companyId, userId, stage, reason: `action=${action}`,
+  });
+}
+
+async function resolveUserEmail(userId: string): Promise<string | null> {
+  try {
+    const { data } = await supabase.from('users').select('email').eq('id', userId).maybeSingle();
+    return (data as { email?: string } | null)?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * §5 — emit PlatformReady + JourneyCompleted EXACTLY ONCE, when the journey
+ * first reaches platform-ready. Idempotency is enforced by the `_milestones`
+ * marker persisted in journey_state, so repeat calls (page refreshes, repeat
+ * POSTs) never re-emit. Reuses the AUTH-001 event + metric infrastructure.
+ * Best-effort; never throws.
+ */
+export async function emitPlatformReadyOnce(input: {
+  companyId: string;
+  userId: string;
+  journey: OnboardingJourney;
+}): Promise<void> {
+  if (!input.journey.platformReady || !input.companyId) return;
+  try {
+    const state = await readJourneyState(input.companyId);
+    if (state._milestones?.platform_ready_at) return; // already emitted
+
+    const now = new Date().toISOString();
+    const next: JourneyStateBlob = {
+      ...state,
+      _milestones: { platform_ready_at: now, journey_completed_at: now },
+    };
+    const { error } = await supabase
+      .from('company_setup_progress')
+      .upsert({ company_id: input.companyId, journey_state: next, updated_at: now }, { onConflict: 'company_id' });
+    if (error) return; // don't emit if the guard write failed — avoids double-emit on retry
+
+    const correlationId = await resolveOnboardingCorrelationId(await resolveUserEmail(input.userId), input.companyId);
+    await emitOnboardingEvent({
+      event: 'PlatformReady', outcome: 'allowed', correlationId,
+      companyId: input.companyId, userId: input.userId,
+      metadata: { completionPercentage: input.journey.readiness.completionPercentage },
+    });
+    await emitOnboardingEvent({
+      event: 'JourneyCompleted', outcome: 'allowed', correlationId,
+      companyId: input.companyId, userId: input.userId,
+    });
+  } catch {
+    /* fail-safe */
+  }
 }

@@ -38,6 +38,7 @@ import {
 import { monitorCompanyIdentityDrift } from '../../../backend/services/companyIdentityDriftService';
 import { createCompanyIdentity } from '../../../backend/services/companyIdentityWriter';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
+import { buildDiscoveredProvenance } from '../../../backend/services/companyProfile/enrichmentProvenance';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import {
   emitSignupEvent,
@@ -728,6 +729,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             source: 'system_discovered',
             discovered_at: now,
             discovered_fields: systemDiscoveredFields,
+            // ONBOARD-001R §2 — per-field provenance (source/confidence/
+            // discoveredAt/lastVerified/verificationStatus/fieldOrigin).
+            provenance: buildDiscoveredProvenance(discoveredMetadata, now),
             title: discoveredMetadata.title,
             description: discoveredMetadata.description,
             site_name: discoveredMetadata.siteName,
