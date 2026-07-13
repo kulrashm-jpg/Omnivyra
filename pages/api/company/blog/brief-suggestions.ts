@@ -3,6 +3,8 @@ import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { getProfile } from '@/backend/services/companyProfileService';
 import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { buildFormattedStyleInstructions } from '@/lib/content/writingStyleEngine';
+import { getCanonicalContext } from '@/backend/services/context/contextAssimilationEngine';
+import { toBriefGrounding } from '@/backend/services/context/canonicalContextAdapters';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '@/backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '@/backend/services/billing/phase2EnforcementGate';
@@ -75,11 +77,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const profile = await getProfile(company_id, { autoRefine: false, languageRefine: false });
     const styleInstructions = profile ? buildFormattedStyleInstructions(profile) : '';
 
+    // CONTENT-INTELLIGENCE-002: the GROUNDING SOURCE is now the canonical context
+    // engine (profile + website + content history + market signals), not a raw
+    // profile field. Prompt shape is unchanged — only the substance source moved.
+    // (getProfile above is retained ONLY for the style/voice adapter, which is
+    // the documented remaining profile dependency for this consumer.)
+    const canonical = await getCanonicalContext(company_id).catch(() => null);
+    const grounding = canonical ? toBriefGrounding(canonical) : null;
+
     const briefObj = (brief && typeof brief === 'object') ? (brief as Record<string, unknown>) : {};
 
     const promptContext = [
       `Topic: ${String(topic).trim()}`,
       reason && typeof reason === 'string' ? `Reason/context: ${reason.trim()}` : '',
+      grounding?.text ? `Company facts (ground every suggestion in these):\n${grounding.text}` : '',
       briefObj.company_context ? `Company context: ${String(briefObj.company_context)}` : '',
       briefObj.current_content ? `Current content context: ${String(briefObj.current_content)}` : '',
       briefObj.writing_style ? `Writing style hint: ${String(briefObj.writing_style)}` : '',
