@@ -17,6 +17,8 @@ import type { CapabilityId } from '../aiCapability/capabilityContracts';
 import { CAMPAIGN_CAPABILITY_IDS, CAMPAIGN_CAPABILITY_GRAPH } from '../campaignCapability/campaignCapabilityGraph';
 // PMF-006 — the Strategic Mix agent's steps are derived from the decision graph.
 import { STRATEGIC_MIX_NODE_IDS, STRATEGIC_MIX_GRAPH } from '../strategicMixCapability/strategicMixDecisionGraph';
+// PMF-007 — the Recommendation agent's steps are derived from the recommendation graph.
+import { RECOMMENDATION_NODE_IDS, RECOMMENDATION_GRAPH } from '../recommendationCapability/recommendationGraph';
 
 export type AgentExecutionStrategy = 'sequential' | 'dependency_graph';
 export type MemoryStrategy = 'persistent' | 'ephemeral';
@@ -86,6 +88,14 @@ function buildStrategicMixSteps(): AgentStep[] {
   });
 }
 
+/** PMF-007 — derive the Recommendation agent's steps from the recommendation graph. */
+function buildRecommendationSteps(): AgentStep[] {
+  return RECOMMENDATION_NODE_IDS.map((id) => {
+    const gNode = RECOMMENDATION_GRAPH[id];
+    return step(id, 'RECOMMENDATION_DECISION', { mode: 'parallel', dependsOn: gNode.dependsOn, requiresApproval: gNode.requiresApproval });
+  });
+}
+
 const REGISTRY_INTERNAL: Record<string, AgentDefinition> = {
   // Website intelligence → competitor intelligence (depends on the first).
   WEBSITE_INTELLIGENCE_AGENT: def('WEBSITE_INTELLIGENCE_AGENT', 'Analyze the company website and derive competitive intelligence.', [
@@ -130,6 +140,15 @@ const REGISTRY_INTERNAL: Record<string, AgentDefinition> = {
   // analysis node can degrade without failing the recommendation.
   STRATEGIC_MIX_AGENT: def('STRATEGIC_MIX_AGENT', 'Orchestrate the strategic mix across the decision graph.',
     buildStrategicMixSteps(), { completionStrategy: 'best_effort' }),
+
+  // PMF-007 — Recommendation Engine as an AIA agent. Steps + edges are DERIVED from the
+  // Recommendation Graph (single source), so the agent IS the recommendation graph.
+  // Every node executes through AIC (capability RECOMMENDATION_DECISION); the definitive
+  // recommendations are produced by the existing engine inside an injected runner (zero
+  // recommendation change). FINAL_RECOMMENDATIONS gates on approval (§6). best_effort so
+  // a non-producing analysis node can degrade without failing the recommendations.
+  RECOMMENDATION_AGENT: def('RECOMMENDATION_AGENT', 'Orchestrate recommendations across the recommendation graph.',
+    buildRecommendationSteps(), { completionStrategy: 'best_effort' }),
 };
 
 export const AGENT_REGISTRY: Readonly<Record<string, AgentDefinition>> = REGISTRY_INTERNAL;

@@ -180,6 +180,24 @@ REGISTRY_INTERNAL.STRATEGIC_MIX_DECISION.config.maxRetries = 0;       // engine 
 REGISTRY_INTERNAL.STRATEGIC_MIX_DECISION.config.partialAllowed = true;
 delete REGISTRY_INTERNAL.STRATEGIC_MIX_DECISION.config.fallbackModel;
 
+// PMF-007 — the Recommendation capability (the execution capability the Recommendation
+// Engine AIA agent runs each graph node through). The definitive recommendations are
+// produced by the EXISTING recommendation engine inside an injected model runner (zero
+// recommendation change); AIC provides the pipeline (CKC knowledge, validation,
+// telemetry, recovery, output contract). Lenient + recovery off — the engine owns its
+// ranking / dedup / thresholds and retries.
+REGISTRY_INTERNAL.RECOMMENDATION_DECISION = def(
+  'RECOMMENDATION_DECISION', 'Execute a Recommendation Graph node (recommendations via the recommendation engine).',
+  'RECOMMENDATION_ENGINE', ['IDENTITY', 'AUDIENCE', 'POSITIONING', 'MARKETING', 'PRODUCTS', 'SERVICES', 'COMPANY_INTELLIGENCE'],
+  [], 'single_pass', 'recommendation_node',
+  { grounding: false, business: false, policy: false, hallucination: false, confidenceThreshold: 0 },
+);
+REGISTRY_INTERNAL.RECOMMENDATION_DECISION.supportedModels = ['gpt-4o-mini'];
+REGISTRY_INTERNAL.RECOMMENDATION_DECISION.config.defaultModel = 'gpt-4o-mini';
+REGISTRY_INTERNAL.RECOMMENDATION_DECISION.config.maxRetries = 0;       // engine owns retries/ranking
+REGISTRY_INTERNAL.RECOMMENDATION_DECISION.config.partialAllowed = true;
+delete REGISTRY_INTERNAL.RECOMMENDATION_DECISION.config.fallbackModel;
+
 export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDefinition>> = REGISTRY_INTERNAL;
 export const REGISTERED_CAPABILITIES: ReadonlyArray<string> = Object.keys(REGISTRY_INTERNAL);
 

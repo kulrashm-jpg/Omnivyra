@@ -34,6 +34,11 @@ export const OUTPUT_CONTRACTS: Record<string, string[]> = {
   // PMF-006 — the Strategic Mix result / decision-graph node output; no fixed
   // top-level keys (the strategic-mix engine owns its own rules).
   strategic_mix: [],
+  // PMF-007 — the Recommendation Engine result / recommendation-graph node output; no
+  // fixed top-level keys (the recommendation engine owns its own ranking/dedup). A
+  // distinct contract (the base `recommendations` contract requires a key the rich
+  // RecommendationEngineResult does not carry at top level).
+  recommendation_node: [],
 };
 
 /** A custom rule returns null when satisfied, or a failure message. Pure/deterministic. */

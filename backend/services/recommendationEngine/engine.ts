@@ -120,7 +120,34 @@ export async function getRecommendedTopicsForCompany(
     .map(([t]) => t);
 }
 
+/**
+ * PMF-007 — the Recommendation Engine seam. Default 'legacy' runs the existing engine
+ * core byte-identically. On the platform path (flag-gated) the SAME core runs inside
+ * the Recommendation AIA agent, which orchestrates the Recommendation Graph
+ * (dependency-ordered waves, checkpoints, resume, approval, recovery); the producing
+ * node executes through AIC (CKC knowledge, validation, telemetry) with this core as
+ * the backend, and the EXACT core result is served (parity) — additively annotated
+ * with an explanation (§7) under a reserved key — with a safety net.
+ */
 export const generateRecommendations = async (
+  input: RecommendationEngineInput,
+  options?: {
+    onContext?: (context: Record<string, any>) => void;
+  }
+): Promise<RecommendationEngineResult> => {
+  const { shouldRunPlatform } = await import('../recommendationCapability/recommendationMigrationFlag');
+  if (shouldRunPlatform()) {
+    const { runRecommendationsViaPlatform } = await import('../recommendationCapability/recommendationPlatformRuntime');
+    return runRecommendationsViaPlatform<RecommendationEngineResult>({
+      companyId: input.companyId,
+      generate: () => generateRecommendationsCore(input, options),
+      correlationId: input.campaignId ?? undefined,
+    });
+  }
+  return generateRecommendationsCore(input, options);
+};
+
+const generateRecommendationsCore = async (
   input: RecommendationEngineInput,
   options?: {
     onContext?: (context: Record<string, any>) => void;
