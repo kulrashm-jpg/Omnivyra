@@ -1,7 +1,7 @@
 import { supabase } from '../db/supabaseClient';
 import { fetchTrendsFromApis, getCompanyDefaultApiIds } from './externalApiService';
 import { generateRecommendations } from './recommendationEngine';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { ownedDbTable } from '../db/writeOwner';
 
 type RefreshSource = 'manual' | 'auto_weekly' | 'profile_update';

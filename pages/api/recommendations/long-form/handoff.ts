@@ -40,7 +40,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { buildCompanyContextFoundation } from '../../../../backend/services/longForm/companyContextFoundation';
-import { getProfile } from '../../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   applyRecommendationToPlanningInput,
 } from '../../../../backend/services/longForm/longFormPlanningAdapter';

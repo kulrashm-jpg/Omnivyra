@@ -74,6 +74,24 @@ export const WAVE2D_MIGRATED_CONSUMERS: readonly string[] = [
   'pages/api/bolt/available-platforms.ts',
 ];
 
+/** Consumers migrated in Wave 2E — Recommendation & Strategy (CONTENT-INTELLIGENCE-009). */
+export const WAVE2E_MIGRATED_CONSUMERS: readonly string[] = [
+  'backend/services/recommendationEngine/engine.ts',
+  'backend/services/recommendationEngine/engineHelpers.ts',
+  'backend/services/recommendationConsolidator.ts',
+  'backend/services/recommendationCampaignBuilder.ts',
+  'backend/services/recommendationScheduler.ts',
+  'backend/services/recommendationSimulationService.ts',
+  'backend/services/strategicThemeEngine.ts',
+  'backend/services/strategyHistoryService.ts',
+  'backend/services/companyMissionContext.ts',
+  'backend/services/contextResolver.ts',
+  'pages/api/recommendations/generate.ts',
+  'pages/api/recommendations/detected-opportunities.ts',
+  'pages/api/recommendations/[id]/preview-strategy.ts',
+  'pages/api/recommendations/long-form/handoff.ts',
+];
+
 /** All consumers migrated onto canonical grounding across every landed wave. */
 export const MIGRATED_CONSUMERS: readonly string[] = [
   ...WAVE1_MIGRATED_CONSUMERS,
@@ -81,6 +99,7 @@ export const MIGRATED_CONSUMERS: readonly string[] = [
   ...WAVE2B_MIGRATED_CONSUMERS,
   ...WAVE2C_MIGRATED_CONSUMERS,
   ...WAVE2D_MIGRATED_CONSUMERS,
+  ...WAVE2E_MIGRATED_CONSUMERS,
 ];
 
 /**

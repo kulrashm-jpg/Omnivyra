@@ -1,6 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { runCampaignAiPlan } from './campaignAiOrchestrator';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { getCampaignPlanningInputs } from './campaignPlanningInputsService';
 import { buildStrategyInstructions, extractStrategyProfile } from '../../lib/content/companyStrategyPerspective';
 import { ownedDbTable } from '../db/writeOwner';

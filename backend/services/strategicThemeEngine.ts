@@ -11,7 +11,7 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { supabase } from '../db/supabaseClient';
 import { runCompletionWithOperation } from './aiGateway';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { generateThemeKey } from './themeKeyService';
 import type { OpportunityInput } from './opportunityService';
 import {

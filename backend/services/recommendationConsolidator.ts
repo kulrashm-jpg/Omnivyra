@@ -9,7 +9,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import { supabase } from '../db/supabaseClient';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import type { TrendRegionRecommendation } from './opportunityGenerators';
 import { runDiagnosticPrompt } from './llm/openaiAdapter';
 
