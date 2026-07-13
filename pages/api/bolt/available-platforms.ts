@@ -31,7 +31,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { getConnectedPlatformsForCompany } from '../../../backend/utils/platformEligibility';
 import { filterConnectedPlatformsForContent } from '../../../lib/shared/social/platformContentFilter';
 import {

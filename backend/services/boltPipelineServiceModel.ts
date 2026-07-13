@@ -12,7 +12,7 @@ import { trackEvent } from './telemetry/telemetryDispatcher';
 
 import { supabase } from '../db/supabaseClient';
 
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { runCampaignAiPlan } from './campaignAiOrchestrator';
 import { saveStructuredCampaignPlan, commitDraftBlueprint } from '../db/campaignPlanStore';
 import { fromStructuredPlan } from './campaignBlueprintAdapter';

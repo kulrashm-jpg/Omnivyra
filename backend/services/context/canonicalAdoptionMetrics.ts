@@ -66,12 +66,21 @@ export const WAVE2C_MIGRATED_CONSUMERS: readonly string[] = [
   'pages/api/planner/generate-workspace-content.ts',
 ];
 
+/** Consumers migrated in Wave 2D — BOLT execution (CONTENT-INTELLIGENCE-008). */
+export const WAVE2D_MIGRATED_CONSUMERS: readonly string[] = [
+  'backend/services/boltPipelineServiceModel.ts',
+  'backend/services/boltPipelineServiceRunExecOrchestrate.ts',
+  'backend/services/boltPipelineServiceRunExecWeekly.ts',
+  'pages/api/bolt/available-platforms.ts',
+];
+
 /** All consumers migrated onto canonical grounding across every landed wave. */
 export const MIGRATED_CONSUMERS: readonly string[] = [
   ...WAVE1_MIGRATED_CONSUMERS,
   ...WAVE2A_MIGRATED_CONSUMERS,
   ...WAVE2B_MIGRATED_CONSUMERS,
   ...WAVE2C_MIGRATED_CONSUMERS,
+  ...WAVE2D_MIGRATED_CONSUMERS,
 ];
 
 /**
