@@ -37,6 +37,14 @@ export interface CapabilityRuntimeDeps {
   modelRunner?: ModelRunner;
   /** Per-capability business/policy rules (composed by the validation framework). */
   rules?: Record<string, ValidationRules>;
+  /**
+   * Optional prompt assembler override (PMF-001 §6 — prompt selection behind the
+   * capability). When provided it replaces the default assembler, so a migrated
+   * capability supplies its EXACT existing prompt. Defaults preserved when omitted.
+   */
+  promptAssembler?: (def: CapabilityDefinition, request: CapabilityRequest, knowledge: KnowledgeContext | null, toolOutputs: Record<string, unknown>) => Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  /** Optional output parser override (PMF-001 §7 — output compatibility adapters). */
+  outputParser?: (def: CapabilityDefinition, text: string) => unknown;
   /** Wall clock (ms) for tool timing/duration. Injectable for determinism. */
   clockMs?: () => number;
   /** ISO clock for timestamps. Injectable for determinism. */
@@ -179,7 +187,7 @@ export async function executeCapability<T = unknown>(
 
   while (attempt < maxAttempts) {
     attempt++;
-    const messages = assemblePrompt(def, request, knowledge, tools.outputs);
+    const messages = (deps.promptAssembler ?? assemblePrompt)(def, request, knowledge, tools.outputs);
     if (!stages.includes('prompt_assembly')) stages.push('prompt_assembly');
 
     let failure: FailureKind = 'none';
@@ -194,7 +202,7 @@ export async function executeCapability<T = unknown>(
       tokens = { input: out.tokens.input || estimateTokens(messages), output: out.tokens.output || estimateTokens(out.text) };
       cacheUsed = out.cacheUsed;
       currentModel = out.model || currentModel;
-      parsed = parseOutput(def, out.text);
+      parsed = (deps.outputParser ?? parseOutput)(def, out.text);
     } catch (err) {
       failure = 'model_error';
       lastError = err instanceof Error ? err.message : String(err);

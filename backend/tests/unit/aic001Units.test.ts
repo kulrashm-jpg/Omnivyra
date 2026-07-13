@@ -19,7 +19,9 @@ describe('AIC-001 §2 — capability registry', () => {
       expect(def!.knowledge.domains.length).toBeGreaterThan(0);
       expect(def!.supportedModels.length).toBeGreaterThan(0);
     }
-    expect(REGISTERED_CAPABILITIES.length).toBe(9);
+    // 9 base capabilities; PMF-001 adds the migrated CONTENT_WRITER_WORKSPACE.
+    expect(REGISTERED_CAPABILITIES.length).toBeGreaterThanOrEqual(9);
+    expect(REGISTERED_CAPABILITIES).toContain('CONTENT_WRITER_WORKSPACE');
   });
   test('unknown capability → null; model support gate', () => {
     expect(resolveCapability('NOPE')).toBeNull();

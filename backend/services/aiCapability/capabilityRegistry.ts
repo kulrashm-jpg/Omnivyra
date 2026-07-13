@@ -90,6 +90,24 @@ const REGISTRY_INTERNAL: Record<string, CapabilityDefinition> = {
 // WEBSITE_INTELLIGENCE consumes the full knowledge object (not summarized).
 REGISTRY_INTERNAL.WEBSITE_INTELLIGENCE.knowledge.mode = 'full';
 
+// PMF-001 — the migrated workspace Content Writer (platform-native written variants).
+// Prompt + model + output parser are injected at call time (see backend/services/
+// contentWriter) so generation behavior matches the legacy path. Validation is
+// intentionally lenient (no confidence floor, no grounding gate) so the migrated
+// path never rejects an output the legacy path would have returned.
+REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE = def(
+  'CONTENT_WRITER_WORKSPACE', 'Generate platform-native written content variants.',
+  'CONTENT_WRITER', ['IDENTITY', 'INDUSTRY', 'POSITIONING', 'BRAND', 'AUDIENCE', 'MARKETING', 'PRODUCTS', 'SERVICES'],
+  [], 'single_pass', 'platform_variants',
+  { grounding: false, business: false, policy: false, confidenceThreshold: 0 },
+);
+REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE.supportedModels = ['gpt-4o-mini'];
+REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE.config.defaultModel = 'gpt-4o-mini';
+REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE.config.temperature = 0.72;
+REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE.config.maxOutputTokens = 4000;
+REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE.config.maxRetries = 1;
+delete REGISTRY_INTERNAL.CONTENT_WRITER_WORKSPACE.config.fallbackModel; // no model fallback (parity)
+
 export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDefinition>> = REGISTRY_INTERNAL;
 export const REGISTERED_CAPABILITIES: ReadonlyArray<string> = Object.keys(REGISTRY_INTERNAL);
 

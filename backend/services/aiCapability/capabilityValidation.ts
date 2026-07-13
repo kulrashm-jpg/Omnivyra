@@ -18,6 +18,10 @@ export const OUTPUT_CONTRACTS: Record<string, string[]> = {
   plan: ['items'],
   analysis: ['summary'],
   recommendations: ['recommendations'],
+  // PMF-001 — the workspace Content Writer returns a platform→content map with
+  // dynamic keys; schema validation only requires a non-empty object (enforced by
+  // the hallucination check), so there are no fixed required keys.
+  platform_variants: [],
 };
 
 /** A custom rule returns null when satisfied, or a failure message. Pure/deterministic. */
