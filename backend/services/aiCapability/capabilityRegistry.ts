@@ -126,6 +126,24 @@ REGISTRY_INTERNAL.LONG_FORM_CONTENT.config.maxOutputTokens = 16384;
 REGISTRY_INTERNAL.LONG_FORM_CONTENT.config.partialAllowed = true;
 delete REGISTRY_INTERNAL.LONG_FORM_CONTENT.config.fallbackModel;
 
+// PMF-004 — the Content Creator asset capability. Generation (LLM layout + render +
+// storage) is performed by the EXISTING asset pipeline inside an injected model
+// runner (zero prompt/quality change); AIC provides the pipeline (CKC knowledge,
+// validation, telemetry, recovery, output contract). Validation is lenient and
+// recovery is disabled so AIC never rejects or re-runs an asset the legacy path
+// would have returned (the pipeline owns its own governance/diagnostics).
+REGISTRY_INTERNAL.CREATOR_ASSET = def(
+  'CREATOR_ASSET', 'Generate a Content Creator visual asset (image/carousel/… via the asset pipeline).',
+  'CONTENT_CREATOR', ['IDENTITY', 'BRAND', 'AUDIENCE', 'PRODUCTS', 'SERVICES', 'SOCIAL'],
+  [], 'single_pass', 'creator_asset',
+  { grounding: false, business: false, policy: false, hallucination: false, confidenceThreshold: 0 },
+);
+REGISTRY_INTERNAL.CREATOR_ASSET.supportedModels = ['gpt-4o-mini'];
+REGISTRY_INTERNAL.CREATOR_ASSET.config.defaultModel = 'gpt-4o-mini';
+REGISTRY_INTERNAL.CREATOR_ASSET.config.maxRetries = 0;       // pipeline owns retries/governance
+REGISTRY_INTERNAL.CREATOR_ASSET.config.partialAllowed = true;
+delete REGISTRY_INTERNAL.CREATOR_ASSET.config.fallbackModel;
+
 export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDefinition>> = REGISTRY_INTERNAL;
 export const REGISTERED_CAPABILITIES: ReadonlyArray<string> = Object.keys(REGISTRY_INTERNAL);
 

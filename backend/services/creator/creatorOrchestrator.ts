@@ -35,6 +35,8 @@ import { validateCreatorExecutionOutput } from '../creatorExecutionContracts';
 import { validateAsset, ValidationContext, creatorAssetToGenerated } from '../../../lib/shared/campaign/semanticValidation';
 import { regenerateBeforeDrop } from '../../../lib/shared/campaign/campaignLifecycle';
 import { recordRawCounter } from '../../observability';
+// PMF-004 — reversible platform-runtime wiring (default legacy → unchanged).
+import { shouldRunPlatform } from '../creatorCapability/creatorMigrationFlag';
 import { enqueueDurableCreatorRenderJob } from '../creatorRenderDurableQueue';
 import { createCreatorAuditId } from '../creatorRenderObservability';
 import {
@@ -460,7 +462,30 @@ async function runRenderDispatch(input: {
 
 /* ── Public orchestrator entry point ────────────────────────────────── */
 
+/**
+ * PMF-004 — the canonical creator entry. Default 'legacy' runs the existing
+ * orchestration core byte-identically. On the platform path (flag-gated) the SAME
+ * core runs inside the AIC pipeline (CKC knowledge, validation, telemetry, recovery,
+ * output contract) via runCreatorCapability, which captures and serves the EXACT
+ * core result (parity) with a safety net to the core directly (zero regression).
+ * All three origins (direct/queue/bolt/fan-out) converge here, so this one seam
+ * migrates every creator flow.
+ */
 export async function runCreatorOrchestration(
+  input: CreatorOrchestrationInput,
+): Promise<CreatorOrchestrationResult> {
+  if (shouldRunPlatform()) {
+    const { runCreatorCapability } = await import('../creatorCapability/creatorPlatformRuntime');
+    return runCreatorCapability<CreatorOrchestrationResult>({
+      assetType: input.contentType,
+      companyId: input.companyId,
+      generate: () => runCreatorOrchestrationCore(input),
+    });
+  }
+  return runCreatorOrchestrationCore(input);
+}
+
+async function runCreatorOrchestrationCore(
   input: CreatorOrchestrationInput,
 ): Promise<CreatorOrchestrationResult> {
   if (!input.companyId) throw new Error('creator orchestrator: companyId required');

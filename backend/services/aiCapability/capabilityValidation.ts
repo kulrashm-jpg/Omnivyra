@@ -25,6 +25,9 @@ export const OUTPUT_CONTRACTS: Record<string, string[]> = {
   // PMF-003 — the long-form engine's result (BlogGenerationResult union); no fixed
   // top-level keys are required (the engine owns its own quality gates).
   long_form: [],
+  // PMF-004 — the Content Creator asset result; no fixed top-level keys (the asset
+  // pipeline owns its own governance/diagnostics).
+  creator_asset: [],
 };
 
 /** A custom rule returns null when satisfied, or a failure message. Pure/deterministic. */
