@@ -90,22 +90,47 @@ export interface UseOnboardingJourney {
 /** THE canonical onboarding destination — everything converges here (§2). */
 export const CANONICAL_JOURNEY_HREF = '/onboarding/journey';
 
+// ── request coalescing ────────────────────────────────────────────────────────
+// This hook is consumed by more than one component on the same page (the dashboard
+// onboarding card AND the global-header resume link), and each mount previously
+// fired its own GET /api/onboarding/journey — a heavy server build (~25 DB reads)
+// duplicated on every authenticated page load. Share ONE in-flight request across
+// concurrent mounts so the page makes a single call. In-flight ONLY (cleared the
+// moment the request settles) → every logical refresh, including after a stage
+// action, still fetches fresh data; only truly-concurrent duplicate GETs are merged.
+// No caching, no behavior change — purely request de-duplication.
+interface JourneyFetchResult { data: OnboardingJourney | null; error: string | null }
+
+let inFlightJourney: Promise<JourneyFetchResult> | null = null;
+
+function loadJourneyShared(): Promise<JourneyFetchResult> {
+  if (!inFlightJourney) {
+    inFlightJourney = apiFetch('/api/onboarding/journey')
+      .then(async (res): Promise<JourneyFetchResult> =>
+        res.ok
+          ? { data: (await res.json()) as OnboardingJourney, error: null }
+          : { data: null, error: 'Could not load onboarding progress.' },
+      )
+      .catch((): JourneyFetchResult => ({ data: null, error: 'Network error loading onboarding.' }))
+      .finally(() => { inFlightJourney = null; });
+  }
+  return inFlightJourney;
+}
+
 export function useOnboardingJourney(): UseOnboardingJourney {
   const [journey, setJourney] = useState<OnboardingJourney | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    try {
-      const res = await apiFetch('/api/onboarding/journey');
-      if (!res.ok) { setError('Could not load onboarding progress.'); return; }
-      setJourney((await res.json()) as OnboardingJourney);
+    const result = await loadJourneyShared();
+    if (result.error) {
+      setError(result.error);
+    } else {
+      setJourney(result.data);
       setError(null);
-    } catch {
-      setError('Network error loading onboarding.');
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
