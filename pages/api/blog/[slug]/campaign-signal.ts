@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET /api/blog/[slug]/campaign-signal
  *
@@ -185,4 +186,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]);
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]), { route: '/api/blog/:slug/campaign-signal' });

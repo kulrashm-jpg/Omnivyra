@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import {
@@ -6,7 +7,7 @@ import {
   deleteBlockTemplate,
 } from '../../../backend/services/blockTemplateService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = (req.query.company_id ?? req.body?.company_id) as string | undefined;
   if (!companyId) return res.status(400).json({ error: 'company_id required' });
 
@@ -68,3 +69,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/block-templates' });

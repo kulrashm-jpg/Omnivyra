@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
@@ -5,7 +6,7 @@ import { validateGuidanceActionCompletion } from '../../../../backend/services/g
 
 type AllowedActionStatus = 'in_progress' | 'completed';
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
@@ -89,3 +90,6 @@ export default async function handler(
     updated_at: updatedRow?.updated_at ?? now,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/intelligence/action/update' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
@@ -18,7 +19,7 @@ const requireSuperAdmin = async (
  * GET /api/super-admin/plans/list
  * Returns all active pricing plans with their limits (llm_tokens, external_api_calls, automation_executions, max_campaign_duration_weeks).
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -72,3 +73,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/plans/list' });

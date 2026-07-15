@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Phase 6 — Realtime channel directory.
  *
@@ -16,7 +17,7 @@ import {
 } from '../../../backend/services/realtimePublisherService';
 import { PROJECTION_PAYLOAD_VERSION } from '../../../backend/types/projectionSync';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -33,3 +34,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     channels,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/active-leads/realtime-channels' });

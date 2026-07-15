@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/admin/queue-config  — read current queue overrides
@@ -77,4 +78,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'admin-queue-config', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-queue-config', methods: ['POST'] }), { route: '/api/admin/queue-config' });

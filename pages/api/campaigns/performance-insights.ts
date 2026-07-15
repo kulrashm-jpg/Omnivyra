@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * Performance Insights API
@@ -26,7 +27,7 @@ import {
   updateCampaignMemory,
 } from '../../../backend/services/campaignContextService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -148,3 +149,6 @@ async function resolveCompanyId(campaignId: string): Promise<string | null> {
     return null;
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/performance-insights' });

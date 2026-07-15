@@ -23,44 +23,8 @@ export function getSchedulerConcurrency(): number {
   return Math.min(MAX_CONCURRENCY, Math.floor(raw));
 }
 
-// Non-union shape (the repo compiles with strict:false, where discriminated-
-// union narrowing is unreliable): exactly one of value/error is set, per `ok`.
-export interface ConcurrentResult<R> {
-  ok: boolean;
-  value?: R;
-  error?: Error;
-}
-
-/**
- * Run `fn` over `items` with at most `limit` in flight. Results come back in
- * INPUT ORDER (deterministic aggregation regardless of completion order), and
- * each item's failure is captured in its slot rather than rejecting the whole
- * batch — identical semantics to a sequential `for..of` with per-item
- * try/catch, just faster.
- */
-export async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<ConcurrentResult<R>[]> {
-  const results: ConcurrentResult<R>[] = new Array(items.length);
-  if (items.length === 0) return results;
-  const effectiveLimit = Math.max(1, Math.min(limit, items.length));
-  let next = 0;
-
-  async function runner(): Promise<void> {
-    while (true) {
-      const index = next++;
-      if (index >= items.length) return;
-      try {
-        const value = await fn(items[index], index);
-        results[index] = { ok: true, value };
-      } catch (err) {
-        results[index] = { ok: false, error: err instanceof Error ? err : new Error(String(err)) };
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: effectiveLimit }, () => runner()));
-  return results;
-}
+// F-08 (Foundation Batch C): the implementation was PROMOTED verbatim to the
+// platform concurrency kit — this re-export keeps every scheduler call site
+// unchanged while guaranteeing there is exactly ONE implementation.
+export { mapWithConcurrency } from '../../lib/platform/concurrency';
+export type { ConcurrentResult } from '../../lib/platform/concurrency';

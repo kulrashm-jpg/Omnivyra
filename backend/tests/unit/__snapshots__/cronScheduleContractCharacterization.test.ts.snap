@@ -38,6 +38,7 @@ exports[`cron.ts scheduling contract (source characterization) locks every timin
   "LEAD_THREAD_QUEUE_CLEANUP_INTERVAL_MS": "10 * 60 * 1000",
   "LEAD_THREAD_RECOMPUTE_SAFETYNET_MS": "5 * 60 * 1000",
   "LIFECYCLE_SNAPSHOT_INTERVAL_MS": "24 * 60 * 60 * 1000",
+  "LIFECYCLE_SWEEP_INTERVAL_MS": "6 * 60 * 60 * 1000",
   "NARRATIVE_ENGINE_INTERVAL_MS": "4 * 60 * 60 * 1000",
   "OFF_HOURS_INTERVAL_MS": "4 * 60 * 60 * 1000",
   "OPPORTUNITY_LEARNING_INTERVAL_MS": "30 * 60 * 1000",
@@ -65,7 +66,9 @@ exports[`cron.ts scheduling contract (source characterization) locks every timin
 }
 `;
 
-exports[`cron.ts scheduling contract (source characterization) locks the base-tick wiring (publish cycle cadence): base-tick 1`] = `"4 * 60 * 60 * 1000"`;
+exports[`cron.ts scheduling contract (source characterization) locks the base-tick wiring (W1-2 contract: fast tick, gated publish safety net): base-tick 1`] = `"4 * 60 * 60 * 1000"`;
+
+exports[`cron.ts scheduling contract (source characterization) locks the base-tick wiring (W1-2 contract: fast tick, gated publish safety net): cron-tick 1`] = `"(config.CRON_INTERVAL_SECONDS ?? 900) * 1000"`;
 
 exports[`cron.ts scheduling contract (source characterization) locks the cron-guard restore map (Redis persistence keys): cron-guard-restore-keys 1`] = `
 [
@@ -178,6 +181,10 @@ exports[`cron.ts scheduling contract (source characterization) locks the recurri
   {
     "interval": "COMMUNITY_AI_METRICS_ROLLUP_INTERVAL_MS",
     "label": "communityAiMetricsRollup",
+  },
+  {
+    "interval": "LIFECYCLE_SWEEP_INTERVAL_MS",
+    "label": "dataLifecycleSweep",
   },
 ]
 `;

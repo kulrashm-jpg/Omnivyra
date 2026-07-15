@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
@@ -8,7 +9,7 @@ import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
 // poison subscribers' caches. Resolve through the single canonical helper.
 const SITE_URL = getCanonicalAppUrl();
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).end();
   }
@@ -61,3 +62,6 @@ function escapeXml(s: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/blog/rss' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
@@ -97,4 +98,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALL_ROLES);
+export default __createApiRoute(withRBAC(handler, ALL_ROLES), { route: '/api/campaigns/health-report' });

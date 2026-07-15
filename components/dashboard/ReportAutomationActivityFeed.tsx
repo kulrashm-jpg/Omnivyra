@@ -111,7 +111,10 @@ export default function ReportAutomationActivityFeed({ companyId }: { companyId:
     }
 
     void load();
-    const timer = setInterval(load, 60_000);
+    // W5-6 (audit B-77): skip refreshes while the tab is hidden.
+    const timer = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') void load();
+    }, 60_000);
     return () => {
       cancelled = true;
       clearInterval(timer);

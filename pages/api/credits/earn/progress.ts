@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * GET /api/credits/earn/progress
@@ -15,7 +16,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getEarnProgress } from '../../../../backend/services/earnCreditsService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
@@ -92,3 +93,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/credits/earn/progress' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/super-admin/system-health-summary?windowHours=24
  *
@@ -33,7 +34,7 @@ const DEFAULT_WINDOW_HOURS = 24;
 const MAX_WINDOW_HOURS = 720;
 const STUCK_PUBLISHING_AGE_MS = 10 * 60 * 1000; // mirrors sweep-stuck-publishing default
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -216,3 +217,6 @@ async function aggregateLinkedinMedia(sinceIso: string) {
 function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/system-health-summary' });

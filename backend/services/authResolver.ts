@@ -23,6 +23,7 @@ import {
 
 import type { NextApiRequest } from 'next';
 import { supabase as db } from '../db/supabaseClient';
+import { singleFlight } from '../../lib/auth/singleFlightRefresh';
 import { logger } from './logger';
 import {
   getCachedValidation,
@@ -343,12 +344,18 @@ async function validateTokenWithSupabase(token: string): Promise<ValidatedAuthId
   const startedAt = Date.now();
   let result: Awaited<ReturnType<typeof db.auth.getUser>>;
   try {
-    result = await Promise.race([
+    // W2-2 (audit B-46): single-flight — concurrent validations of the SAME
+    // token (bursty multi-endpoint page loads on a cache miss) share ONE
+    // in-flight GoTrue call instead of each paying the round-trip. Pure
+    // dedupe: identical inputs, identical result, no auth-logic change.
+    // TTL alignment is operational: AUTH_VALIDATION_CACHE_TTL_MS (already
+    // capped to JWT exp in authValidationCache.ts).
+    result = await singleFlight(`auth:getUser:${token}`, () => Promise.race([
       db.auth.getUser(token),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Supabase auth timeout')), SUPABASE_AUTH_TIMEOUT_MS),
       ),
-    ]);
+    ]));
   } catch (error) {
     logger.warn('auth_resolver_supabase_lookup_failed', {
       message: error instanceof Error ? error.message : String(error),

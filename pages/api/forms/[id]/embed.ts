@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * Public endpoint — no auth required.
@@ -16,7 +17,7 @@ function setCors(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   setCors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -41,3 +42,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     origin: originDecision,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/forms/:id/embed' });

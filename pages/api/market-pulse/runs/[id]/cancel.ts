@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveCompanyAccess } from '../../../../../backend/services/contentArchitectService';
 import { supabase } from '../../../../../backend/db/supabaseClient';
@@ -7,7 +8,7 @@ const CANCELLED_ERROR = 'Cancelled by user';
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_warnings', 'failed', 'cancelled']);
 const TERMINAL_LEGACY_STATUSES = new Set(['COMPLETED', 'COMPLETED_WITH_WARNINGS', 'FAILED']);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -96,3 +97,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: (error as Error).message || 'Failed to cancel Market Pulse run' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/market-pulse/runs/:id/cancel' });

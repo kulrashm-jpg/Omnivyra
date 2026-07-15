@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/campaigns/:id/prediction        — fetch latest stored prediction
@@ -14,7 +15,7 @@ import { evaluatePredictionAccuracy } from '@/backend/services/predictionAccurac
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { supabase as adminSupabase } from '@/backend/db/supabaseClient';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = req.query.id as string;
   if (!campaignId) return res.status(400).json({ error: 'Campaign ID required' });
 
@@ -121,3 +122,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/:id/prediction' });

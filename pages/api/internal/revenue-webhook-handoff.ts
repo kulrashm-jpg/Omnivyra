@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
@@ -11,7 +12,7 @@ import { recordRevenueEvent, type CrmProvider } from '../../../backend/services/
  */
 const VALID: CrmProvider[] = ['hubspot', 'salesforce', 'zoho', 'csv_import', 'generic'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const companyId = typeof req.body?.company_id === 'string' ? req.body.company_id : null;
@@ -67,3 +68,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     : result.status === 'tampered' ? 400 : 500;
   return res.status(code).json(result);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/internal/revenue-webhook-handoff' });

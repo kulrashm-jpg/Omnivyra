@@ -24,6 +24,10 @@ import { validateCronEnv } from '../utils/validateEnv';
 import { config } from '@/config';
 import { CronGuard } from '../utils/cronGuard';
 import { cronInstr } from '../utils/cronInstrumentation';
+// W6-1 / W6-3 (Foundation Batch E)
+import { withLease, lockInstanceId } from '../../lib/platform/distributedLock';
+import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
+import { recordRawCounter, recordRawHistogram } from '../observability';
 import { shutdownAdminRuntimeConfig, getCronAdminConfig, shouldRunCronJob } from '../services/adminRuntimeConfig';
 import {
   warmIntentContext,
@@ -157,6 +161,7 @@ const RESPONSE_STRATEGY_LEARNING_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const OPPORTUNITY_LEARNING_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const INFLUENCER_LEARNING_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const INSIGHT_LEARNING_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const LIFECYCLE_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000; // W6-6: retention sweep (flag-gated no-op by default)
 const BUYER_INTENT_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const OPPORTUNITY_SLOTS_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const GOVERNANCE_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
@@ -227,11 +232,12 @@ const INTELLIGENCE_PATTERN_LEARN_INTERVAL_MS    = 12 * 60 * 1000;         // eve
 // posts whose BullMQ job was lost due to a Redis flush, or posts rescheduled
 // while the cron process was down.
 //
-// 4-hour tick is sufficient: a missed post is at most 4 hours late, which is
-// an acceptable SLA for the recovery path.  During off-hours the effective
-// interval is already 6 hours so we unify both to 4 h.
-const BASE_TICK_MS          = 4 * 60 * 60 * 1000;  // safety-net check every 4 hours
-const OFF_HOURS_INTERVAL_MS = 4 * 60 * 60 * 1000;  // same — no distinction needed
+// 4-hour cadence is sufficient for the SAFETY NET: a missed post is at most
+// 4 hours late, which is an acceptable SLA for the recovery path. W1-2: this
+// no longer drives the outer tick (that is CRON_INTERVAL_MS) — it only bounds
+// how often the publish safety net fires via shouldRunPublishCycle().
+const BASE_TICK_MS          = 4 * 60 * 60 * 1000;  // publish safety-net cadence (docs/log)
+const OFF_HOURS_INTERVAL_MS = 4 * 60 * 60 * 1000;  // off-hours floor for the safety net
 
 interface SchedulerPrefs {
   interval_minutes: number;
@@ -369,6 +375,41 @@ async function warmCronAdminConfig(): Promise<void> {
   await getCronAdminConfig().catch(() => { /* non-fatal */ });
 }
 
+// ── W6-1 / W6-3 (audit B-13): multi-replica safety for scheduleWorker ────────
+// These self-rescheduling timers were safe ONLY because numReplicas=1. Under
+// the 'distributed-timer-locks' flag each tick runs inside an F-15 lease
+// (`timer:<label>`) so exactly one replica fires it; denied replicas skip
+// (scheduling semantics preserved — same cadence, one executor). With locks
+// OFF, the 'replica-canary-detector' flag arms a NON-BLOCKING duplicate-
+// execution detector: a per-(label, interval-window) SET NX sentinel — a
+// second instance in the same window increments replica.duplicate_execution,
+// the Wave 6 canary's automatic-rollback trigger. Both flags default off.
+const DISTRIBUTED_TIMER_LOCKS_FLAG = defineRolloutFlag({
+  key: 'distributed-timer-locks',
+  description: 'W6-1: F-15 leases around every scheduleWorker tick (locks-before-replicas)',
+});
+const REPLICA_CANARY_DETECTOR_FLAG = defineRolloutFlag({
+  key: 'replica-canary-detector',
+  description: 'W6-3: duplicate-timer-execution detector for the replica canary',
+});
+
+async function detectDuplicateTick(label: string, intervalMs: number): Promise<void> {
+  try {
+    const { getStandaloneRedis } = await import('../../lib/redis/canonicalClient');
+    const client = await getStandaloneRedis('cron');
+    const windowBucket = Math.floor(Date.now() / Math.max(intervalMs, 1_000));
+    const sentinel = `omnivyra:canary:tick:${label}:${windowBucket}`;
+    const set = await client.set(sentinel, lockInstanceId(), 'EX', Math.max(2, Math.ceil(intervalMs / 1_000)), 'NX');
+    if (set !== 'OK') {
+      const holder = await client.get(sentinel);
+      if (holder && holder !== lockInstanceId()) {
+        recordRawCounter('replica.duplicate_execution', 1, { label });
+        console.error('[replica-canary] DUPLICATE timer execution detected — roll replicas back to 1', { label, holder });
+      }
+    }
+  } catch { /* detector is best-effort */ }
+}
+
 function scheduleWorker(
   fn: () => Promise<Record<string, number>>,
   intervalMs: number,
@@ -376,6 +417,28 @@ function scheduleWorker(
   logFields: string[],
   jitterMs = 0
 ): void {
+  // W6-1: lease-guarded execution of the original body (fn + logging intact).
+  const guardedFn = async (): Promise<Record<string, number>> => {
+    if (resolveRolloutSync(DISTRIBUTED_TIMER_LOCKS_FLAG).mode !== 'off') {
+      const ttlSeconds = Math.max(5, Math.min(Math.ceil(intervalMs / 1_000), 600));
+      const outcome = await withLease(`timer:${label}`, ttlSeconds, async (lease) => {
+        // CERT-FIX P3: consume the fencing token — recorded as a histogram
+        // per label, so a NON-MONOTONIC reading (a lower token observed
+        // after a higher one) is the stale-holder signal for the canary.
+        try {
+          if (typeof lease.fencingToken === 'number') {
+            recordRawHistogram('cron.timer.fence', lease.fencingToken, { label });
+          }
+        } catch { /* fail-safe */ }
+        return fn();
+      });
+      return outcome.ran ? (outcome.value ?? {}) : {};
+    }
+    if (resolveRolloutSync(REPLICA_CANARY_DETECTOR_FLAG).mode !== 'off') {
+      void detectDuplicateTick(label, intervalMs);
+    }
+    return fn();
+  };
   const tick = () => {
     const delay = intervalMs + Math.random() * jitterMs;
     const timer = setTimeout(async () => {
@@ -384,7 +447,7 @@ function scheduleWorker(
         // BUG#20 fix: warm admin config cache before each tick so shouldRunCronJob()
         // and per-activity overrides read a fresh value, not cold/stale cache.
         await warmCronAdminConfig();
-        const result = await fn();
+        const result = await guardedFn();
         const hasActivity = logFields.some((f) => (result[f] ?? 0) > 0);
         if (hasActivity) {
           const parts = logFields.map((f) => `${f}=${result[f] ?? 0}`).join(' ');
@@ -407,7 +470,7 @@ function scheduleWorker(
  */
 async function startCron() {
   console.log('[cron] starting scheduler loop');
-  console.log(`[cron] base tick: ${BASE_TICK_MS / 1000}s | default working-hours interval: ${CRON_INTERVAL_MS / 1000}s`);
+  console.log(`[cron] base tick: ${CRON_INTERVAL_MS / 1000}s | publish safety-net cadence: ${BASE_TICK_MS / 1000}s (working-hours gated)`);
 
   const redisReadyForQueues = await verifyRedisReadyForBackgroundRuntime('cron');
 
@@ -463,14 +526,22 @@ async function startCron() {
   _lastPublishCycleRun = Date.now();
   await runSchedulerCycle();
 
-  // Base tick fires every 15 min; the cycle only runs when the working-hours
-  // interval (or off-hours 6-hour gap) has elapsed.
+  // W1-2 (B-01 fix): base tick fires every CRON_INTERVAL_MS (default 15 min,
+  // env CRON_INTERVAL_SECONDS) — previously it fired at BASE_TICK_MS (4 h),
+  // which floored every sub-4h job interval inside the cycle to 4 h (the
+  // inline comment claimed 15 min; code said 4 h). Each tick runs the cycle
+  // so per-job shouldRunCronJob gates fire on their declared cadence; the
+  // publish safety net keeps its prior working-hours/≥4 h semantics via
+  // shouldRunPublishCycle + the includePublishSafetyNet flag.
   cronInterval = setInterval(async () => {
-    if (await shouldRunPublishCycle()) {
-      _lastPublishCycleRun = Date.now();
-      await runSchedulerCycle();
+    try {
+      const publishDue = await shouldRunPublishCycle();
+      if (publishDue) _lastPublishCycleRun = Date.now();
+      await runSchedulerCycle({ includePublishSafetyNet: publishDue });
+    } catch (error: unknown) {
+      console.error('❌ Cron tick error:', formatCaughtError(error));
     }
-  }, BASE_TICK_MS);
+  }, CRON_INTERVAL_MS);
 
   // All recurring workers — defined once via scheduleWorker(fn, intervalMs, label, logFields, jitterMs)
   // Safety-net: enqueue a BullMQ drain job every 5 min in case the event-driven
@@ -733,6 +804,19 @@ async function startCron() {
     ['rows_upserted', 'errors']
   );
 
+  // ── W6-6: data lifecycle sweep (registry-driven retention) ────────────────
+  // No-op while the 'data-lifecycle' flag is off (runLifecycleSweep gates
+  // internally), so registering unconditionally keeps the timer registry
+  // static and the flag flippable without a restart.
+  scheduleWorker(
+    async () => {
+      const { runLifecycleSweep } = await import('../services/dataLifecycle');
+      return runLifecycleSweep();
+    },
+    LIFECYCLE_SWEEP_INTERVAL_MS, 'dataLifecycleSweep',
+    ['policies', 'pruned']
+  );
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`\n Received ${signal}. Shutting down cron...`);
@@ -756,9 +840,22 @@ async function startCron() {
 }
 
 /**
- * Run one scheduler cycle
+ * Run one scheduler cycle.
+ *
+ * W1-2 (B-01 fix): the cycle now runs on every base tick (CRON_INTERVAL_MS,
+ * default 15 min / env CRON_INTERVAL_SECONDS) so the ~30 shouldRunCronJob-gated
+ * jobs inside actually fire at their declared intervals (token refresh 10 min,
+ * settlement sweep 10 min, engagement polling 10 min, …). Previously the only
+ * caller ticked at the 4-hour publish-safety-net cadence, silently flooring
+ * every sub-4h interval to 4 h — X tokens expire in 2 h, so refresh windows
+ * were guaranteed to lapse.
+ *
+ * The publish SAFETY NET (findDuePostsAndEnqueue) keeps its EXACT prior
+ * semantics — working-hours interval / ≥4 h off-hours via shouldRunPublishCycle
+ * — through the includePublishSafetyNet flag. Default true so direct callers
+ * (startup run, exported API, scripts) behave exactly as before.
  */
-async function runSchedulerCycle() {
+async function runSchedulerCycle(opts: { includePublishSafetyNet?: boolean } = {}) {
   // ── Distributed lock: skip cycle if another instance is already running ─────
   const lockAcquired = await cronGuard.tryAcquireLock(cronInstr.instanceId);
   if (!lockAcquired) {
@@ -773,7 +870,13 @@ async function runSchedulerCycle() {
   await warmIntentContext();
 
   const startTime = Date.now();
-  console.log(`\n🔄 Running scheduler cycle at ${new Date().toISOString()}`);
+  // W0-6: with the W1-2 fast tick this line would print every CRON_INTERVAL_MS
+  // even when nothing is due. Log it when the publish safety net runs (the
+  // meaningful cycle) or when CRON_VERBOSE is on; per-job logs are unchanged.
+  if (opts.includePublishSafetyNet !== false
+      || /^(1|true|yes|on)$/i.test(String(process.env.CRON_VERBOSE ?? ''))) {
+    console.log(`\n🔄 Running scheduler cycle at ${new Date().toISOString()}`);
+  }
 
   // ── Instrumentation: snapshot timestamps before any job runs ───────────────
   cronInstr.cycleStart();
@@ -811,19 +914,21 @@ async function runSchedulerCycle() {
     scheduledLeadHour:            lastScheduledLeadRunHour,
   };
 
-  try {
-    const result = await findDuePostsAndEnqueue();
-    const duration = Date.now() - startTime;
+  if (opts.includePublishSafetyNet !== false) {
+    try {
+      const result = await findDuePostsAndEnqueue();
+      const duration = Date.now() - startTime;
 
-    console.log(
-      `✅ Scheduler cycle completed in ${duration}ms. ` +
-      `Found ${result.found} due posts, ` +
-      `created ${result.created} new jobs, ` +
-      `skipped ${result.skipped} posts`
-    );
-  } catch (error: unknown) {
-    console.error('❌ Scheduler cycle error:', formatCaughtError(error));
-    // Don't throw - continue running on next interval
+      console.log(
+        `✅ Scheduler cycle completed in ${duration}ms. ` +
+        `Found ${result.found} due posts, ` +
+        `created ${result.created} new jobs, ` +
+        `skipped ${result.skipped} posts`
+      );
+    } catch (error: unknown) {
+      console.error('❌ Scheduler cycle error:', formatCaughtError(error));
+      // Don't throw - continue running on next interval
+    }
   }
 
   // Run opportunity slots task once per day

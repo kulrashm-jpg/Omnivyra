@@ -5,6 +5,19 @@ const nextConfig = {
   },
   experimental: {
     webpackBuildWorker: false,
+    // W5-1 (audit B-39): rewrite named imports from these heavy packages to
+    // per-module paths so tree-shaking drops the unused bulk. recharts (15
+    // consumers), react-markdown, tiptap and date-fns are NOT on Next's
+    // built-in list; lucide-react (426 consumers) is included explicitly so
+    // the behavior is pinned rather than version-dependent. No runtime
+    // behavior change — import-graph optimization only.
+    optimizePackageImports: [
+      'recharts',
+      'react-markdown',
+      '@tiptap/react',
+      'lucide-react',
+      'date-fns',
+    ],
   },
   // Force the vendored render fonts into the render-inline serverless function
   // bundle (PHASE 13Z). render-inline rasterizes infographic SVG <text> via

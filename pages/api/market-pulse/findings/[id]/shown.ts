@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 /**
  * POST /api/market-pulse/findings/[id]/shown
  *
@@ -17,7 +18,7 @@ import { resolveCompanyAccess } from '../../../../../backend/services/contentArc
 import { ownedDbTable } from '../../../../../backend/db/writeOwner';
 import { recordFindingShown } from '../../../../../backend/services/marketPulse/learningFeedbackService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const findingId = typeof req.query.id === 'string' ? req.query.id : '';
@@ -49,3 +50,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ ok: true, shown_id: result.shown_id, recorded: result.recorded });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/market-pulse/findings/:id/shown' });

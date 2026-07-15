@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET    /api/super-admin/platform-oauth-configs  — list all platforms with config status
@@ -48,7 +49,7 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
   quora:         { label: 'Quora',          authUrl: '', tokenUrl: '', scopes: [] },
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Split the gate by method. GET returns metadata only (which platforms
   // are configured, the enabled flag, the 6-char client_id preview, and
   // updated_at) — no secret material is decrypted into the response, so
@@ -174,3 +175,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/platform-oauth-configs' });

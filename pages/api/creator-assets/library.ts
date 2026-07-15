@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * /api/creator-assets/library — Strategic Mix P2: the server Asset Library
  * storage endpoint (the CreatorAssetBackend interface over HTTP).
@@ -27,7 +28,7 @@ function errStatus(message: string): number {
   return message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE') ? 503 : 500;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!['GET', 'PUT', 'DELETE'].includes(req.method || '')) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -80,3 +81,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(errStatus(message)).json({ error: message });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-assets/library' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * GET /api/companies/:id/intelligence
@@ -26,7 +27,7 @@ import { getEffectiveLearnings } from '@/backend/services/learningDecayService';
 import { injectGlobalPatternsIntoPrompt } from '@/backend/services/globalPatternService';
 import { PaymentRequiredError } from '@/backend/services/billing/phase2EnforcementGate';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user } = await getSupabaseUserFromRequest(req);
@@ -119,3 +120,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     throw e; // preserve prior behavior for non-billing errors (default 500)
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/companies/:id/intelligence' });

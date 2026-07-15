@@ -1,6 +1,7 @@
 /** Part 1/2 of MarketingLandingPage.tsx — verbatim split (barrel preserved; importers unchanged). */
 'use client';
 
+import Image from 'next/image'; // W5-3
 import Link from 'next/link';
 import { BarChart3, Home, LayoutGrid, Target } from 'lucide-react';
 import type { CSSProperties, ReactNode } from 'react';
@@ -268,10 +269,10 @@ export function OperationalConsequence() {
       </div>
       <div className="relative mx-auto max-w-[980px]">
         <div className="space-y-7">
-          <p className="max-w-[900px] text-[1.78rem] font-black leading-[1.08] tracking-tight sm:text-[2.9rem] lg:text-[3.2rem]" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+          <p className="max-w-[900px] text-[1.78rem] font-black leading-[1.08] tracking-tight sm:text-[2.9rem] lg:text-[3.2rem]" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
             AI visibility expanded across search, answer engines, AI assistants, and generative systems.
           </p>
-          <p className="max-w-[900px] pl-0 text-[1.78rem] font-black leading-[1.08] tracking-tight text-[#A9DAFF]/90 sm:pl-12 sm:text-[2.9rem] lg:text-[3.2rem]" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+          <p className="max-w-[900px] pl-0 text-[1.78rem] font-black leading-[1.08] tracking-tight text-[#A9DAFF]/90 sm:pl-12 sm:text-[2.9rem] lg:text-[3.2rem]" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
             Marketing operations became harder to understand coherently.
           </p>
         </div>
@@ -308,7 +309,7 @@ export function CinematicFooter() {
         <div className="mt-12 grid gap-12 lg:grid-cols-[1.22fr_1fr] lg:items-start">
           <div>
             <Link href="/" aria-label="Omnivyra home" className="inline-flex">
-              <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain" />
+              <Image src="/logo.png" alt="Omnivyra" width={898} height={278} className="h-12 w-auto object-contain" />
             </Link>
             <p className="mt-5 max-w-sm text-sm leading-7 text-[#5D6F83]">
               Connected intelligence for AI-era visibility and marketing operations.

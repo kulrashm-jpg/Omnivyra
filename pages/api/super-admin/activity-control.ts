@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * /api/super-admin/activity-control
@@ -233,7 +234,7 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
 // Handler
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!isSuperAdmin(req)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
@@ -241,3 +242,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'PATCH') return handlePatch(req, res);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/activity-control' });

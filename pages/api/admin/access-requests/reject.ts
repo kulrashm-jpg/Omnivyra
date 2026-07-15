@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * POST /api/admin/access-requests/reject
@@ -12,7 +13,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { IDENTITY_ADMIN_REVOKE } from '../../../../shared/contracts/security';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   // Reject is the access-grant counterpart; gate with IDENTITY_ADMIN_REVOKE
@@ -50,3 +51,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true, requestId });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/access-requests/reject' });

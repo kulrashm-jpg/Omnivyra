@@ -17,6 +17,16 @@
 import { randomUUID } from 'crypto';
 import { supabase } from '../../db/supabaseClient';
 import { openBillingOperation } from '../billing/enterpriseBillingOrchestrator';
+// W3-7: gzip-before-cap so the LARGEST outputs (full campaign plans,
+// long-form articles — exactly the ones RESUME exists for) fit under the
+// jsonb-hygiene cap instead of being silently excluded from resume.
+import { compressIfLarge, decompressIfNeeded } from '../../../lib/platform/cacheCore';
+import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
+
+const RESULT_STORE_COMPRESSION_FLAG = defineRolloutFlag({
+  key: 'result-store-compression',
+  description: 'W3-7: gzip large AI results before the resume-store size cap (audit B-63)',
+});
 
 /** Results larger than this are not cached (metadata jsonb hygiene). */
 const MAX_RESULT_JSON_CHARS = 100_000;
@@ -28,6 +38,14 @@ export interface StoredAiResult<T = unknown> {
   payload: T;
 }
 
+/** W3-7 envelope: payload stored as a gzip+base64 JSON string. */
+interface StoredAiResultV2 {
+  v: 2;
+  action: string;
+  saved_at: string;
+  payload_gz: string;
+}
+
 export async function loadAiExecutionResult<T = unknown>(
   idempotencyKey: string,
 ): Promise<StoredAiResult<T> | null> {
@@ -37,8 +55,15 @@ export async function loadAiExecutionResult<T = unknown>(
       .select('metadata')
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle();
-    const stored = (data?.metadata as { ai_result?: StoredAiResult<T> } | null)?.ai_result;
+    const stored = (data?.metadata as { ai_result?: StoredAiResult<T> | StoredAiResultV2 } | null)?.ai_result;
     if (stored && stored.v === 1 && 'payload' in stored) return stored;
+    // W3-7: v2 (compressed) entries are ALWAYS readable regardless of the
+    // flag — rolling the flag back must never orphan saved results.
+    if (stored && (stored as StoredAiResultV2).v === 2 && 'payload_gz' in (stored as StoredAiResultV2)) {
+      const v2 = stored as StoredAiResultV2;
+      const json = await decompressIfNeeded(v2.payload_gz);
+      return { v: 1, action: v2.action, saved_at: v2.saved_at, payload: JSON.parse(json) as T };
+    }
     return null;
   } catch {
     return null;
@@ -54,13 +79,26 @@ export async function saveAiExecutionResult(args: {
   payload: unknown;
 }): Promise<boolean> {
   try {
-    const envelope: StoredAiResult = {
+    let envelope: StoredAiResult | StoredAiResultV2 = {
       v: 1,
       action: args.action,
       saved_at: new Date().toISOString(),
       payload: args.payload,
     };
-    if (JSON.stringify(envelope).length > MAX_RESULT_JSON_CHARS) return false;
+    if (JSON.stringify(envelope).length > MAX_RESULT_JSON_CHARS) {
+      // W3-7: with the flag on, compress the payload and re-check the cap —
+      // large plans/articles typically compress 5–10× and become resumable.
+      // Flag off (default): reject exactly as before.
+      if (resolveRolloutSync(RESULT_STORE_COMPRESSION_FLAG).mode === 'off') return false;
+      const payloadGz = await compressIfLarge(JSON.stringify(args.payload));
+      envelope = {
+        v: 2,
+        action: args.action,
+        saved_at: envelope.saved_at,
+        payload_gz: payloadGz,
+      };
+      if (JSON.stringify(envelope).length > MAX_RESULT_JSON_CHARS) return false;
+    }
 
     // Ensure the operation row exists (M1 callers never opened one). The
     // upsert is keyed on idempotency_key; on conflict it returns the

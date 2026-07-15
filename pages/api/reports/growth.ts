@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -60,7 +61,7 @@ async function resolveCompanyId(userId: string, requestedCompanyId?: string): Pr
   return data?.company_id ?? null;
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<GrowthReportApiResponse>,
 ) {
@@ -96,10 +97,16 @@ export default async function handler(
       companyId,
       reportCategory: 'growth',
     });
-    const growthReport = await composeGrowthReport(companyId, { resolvedInput });
-    // Phase 18 — Website Intelligence becomes the foundation projection of this report (fail-open).
-    const website_intelligence = await getWebsiteReportSafe(companyId);
-    const lead_intelligence = await getLeadReportSafe(companyId);
+    // W2-9 (audit B-17): the three projections are independent of each other
+    // (only composeGrowthReport consumes resolvedInput) — run them in
+    // parallel instead of a serial waterfall. Same calls, same fail-open
+    // semantics (getWebsiteReportSafe/getLeadReportSafe are *Safe wrappers),
+    // report latency drops from sum(services) to max(services).
+    const [growthReport, website_intelligence, lead_intelligence] = await Promise.all([
+      composeGrowthReport(companyId, { resolvedInput }),
+      getWebsiteReportSafe(companyId),
+      getLeadReportSafe(companyId),
+    ]);
     const ctx = createCompositionContext(); const nowMs = Date.now(); // request-scoped: each plugin composes once
     const platform_intelligence = Object.fromEntries(
       await Promise.all(getPluginsForReport('growth').map(async (p) => [p.id, await composePluginSnapshotMemoized(p, companyId, nowMs, ctx).catch(() => null)] as const)),
@@ -113,3 +120,6 @@ export default async function handler(
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/reports/growth' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
@@ -57,4 +58,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALL_ROLES);
+export default __createApiRoute(withRBAC(handler, ALL_ROLES), { route: '/api/content/list' });

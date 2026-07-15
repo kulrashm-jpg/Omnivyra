@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/auth/magic-link
@@ -23,7 +24,7 @@ import { seedRequestContextFromRequest } from '../../../backend/services/request
 type SuccessResponse = { proceed: true };
 type ErrorResponse   = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -73,3 +74,6 @@ export default async function handler(
 
   return res.status(200).json({ proceed: true });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/magic-link' });

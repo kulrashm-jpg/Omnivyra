@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 /**
  * GET /api/billing/invoices/:id/pdf?org_id=<id>
  *
@@ -78,4 +79,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   doc.end();
 }
 
-export default withOrgAccess(handler);
+export default __createApiRoute(withOrgAccess(handler), { route: '/api/billing/invoices/:id/pdf' });

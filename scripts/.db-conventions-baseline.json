@@ -1,0 +1,2021 @@
+{
+  "selectStarTotal": 1067,
+  "countExactTotal": 198,
+  "files": [
+    {
+      "file": "backend/services/marketPulseCollaborationService.ts",
+      "stars": 22,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/marketPulseProductionHardeningServiceGuard.ts",
+      "stars": 22,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/marketPulseExecutiveExperienceService.ts",
+      "stars": 21,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/externalApi/dbHelpers.ts",
+      "stars": 15,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/externalApi/platformConfig.ts",
+      "stars": 13,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/intelligenceConfigService.ts",
+      "stars": 10,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/opportunityWorkflowService.ts",
+      "stars": 12,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/operationalSafetyRailsService.ts",
+      "stars": 11,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/productionSafeguardService.ts",
+      "stars": 11,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/replayCoordinationService.ts",
+      "stars": 11,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/asyncSemanticRuntimeService.ts",
+      "stars": 10,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/billing/exports/billingForensicsService.ts",
+      "stars": 10,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/disasterRecoveryService.ts",
+      "stars": 10,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/marketPulseBusinessImpactService.ts",
+      "stars": 10,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/marketPulseProductionHardeningServiceOps.ts",
+      "stars": 10,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/orchestration/distributed/supabaseExecutionQueue.ts",
+      "stars": 9,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/orchestration/distributed/supabaseWorkerRegistry.ts",
+      "stars": 10,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/productionRolloutService.ts",
+      "stars": 10,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/platformPromotionStore.ts",
+      "stars": 10,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/dlqReplayService.ts",
+      "stars": 9,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/retentionService.ts",
+      "stars": 7,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/supportSnapshotService.ts",
+      "stars": 9,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/analyticsIntegrationServiceSync.ts",
+      "stars": 8,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/analyticsWarehouseService.ts",
+      "stars": 8,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/companyContextIntelligenceService.ts",
+      "stars": 8,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/complianceEvidenceService.ts",
+      "stars": 8,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/crossSourceIdentityService.ts",
+      "stars": 8,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/enterpriseOnboardingService.ts",
+      "stars": 8,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/investigationWorkspaceService.ts",
+      "stars": 7,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/marketPulseSynthesisService.ts",
+      "stars": 8,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/websiteIntelligenceService.ts",
+      "stars": 8,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/campaign-summary.ts",
+      "stars": 4,
+      "exacts": 3
+    },
+    {
+      "file": "pages/api/external-apis/requests.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/alertRoutingService.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/creator/userTemplateService.ts",
+      "stars": 6,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/executionPartitionService.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/executiveReportingService.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/intelligenceIncidentService.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/marketplaceConnectorService.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/platformStabilizationService.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/projectionSyncService.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/websiteDashboardService.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/websiteService.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/contentAssetStore.ts",
+      "stars": 7,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/stage-availability-batch.ts",
+      "stars": 0,
+      "exacts": 6
+    },
+    {
+      "file": "pages/api/recommendations/strategy-signals.ts",
+      "stars": 3,
+      "exacts": 3
+    },
+    {
+      "file": "backend/services/adminObservabilityService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/analystMacroService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/configService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/connectorSandboxService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/featureFlagService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/governancePolicyService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/intelligence/snapshotRouteHandler.ts",
+      "stars": 0,
+      "exacts": 6
+    },
+    {
+      "file": "backend/services/intelligenceRbacService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/listeningExecutionService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/monetizationIncidentOpsService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/opportunityLifecycleService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/orchestration/persistence/supabaseIdempotencyStore.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/publishingJobService.ts",
+      "stars": 6,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/analystCollectionService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/analyticsIntegrationServiceProviders.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/campaignExecutionCheckpointService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/communityRecommendationService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/costGovernanceService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/creator/collectionService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/creatorAssetPersistenceService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/escalationService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/GovernanceAnalyticsService.ts",
+      "stars": 3,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/ingestionRunService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/ingestionScheduler.ts",
+      "stars": 0,
+      "exacts": 5
+    },
+    {
+      "file": "backend/services/ingestionThroughputService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/integrationCapabilityService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/integrationService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/intelligenceTrendService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/leadService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/listeningSourceService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/marketPulseV2ServiceModel.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/opportunityFeedService.ts",
+      "stars": 4,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/opportunityGraphService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/orchestration/persistence/supabaseExecutionStore.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/orchestration/persistence/supabaseLeaseStore.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/playbooks/playbookService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/structuredPlanSchedulerExecDaily.ts",
+      "stars": 4,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/tenantOnboardingRuntimeService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/websiteIntelligenceAlertService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/websiteSetupService.ts",
+      "stars": 5,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/index.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/weekly-refinement.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/[id]/progress.ts",
+      "stars": 2,
+      "exacts": 2
+    },
+    {
+      "file": "pages/api/campaigns/[id]/stage-availability.ts",
+      "stars": 0,
+      "exacts": 4
+    },
+    {
+      "file": "pages/api/external-apis/[id].ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/growth-intelligence/health.ts",
+      "stars": 0,
+      "exacts": 4
+    },
+    {
+      "file": "pages/api/super-admin/community-ai-metrics.ts",
+      "stars": 0,
+      "exacts": 4
+    },
+    {
+      "file": "pages/api/super-admin/companies.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/attributionReportingService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/auditExportService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/blogService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/campaignExecutionStateService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/consentLedgerService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/decisionIntelligenceService.ts",
+      "stars": 0,
+      "exacts": 4
+    },
+    {
+      "file": "backend/services/deploymentTelemetryService.ts",
+      "stars": 3,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/engagementDiagnosticsService.ts",
+      "stars": 0,
+      "exacts": 4
+    },
+    {
+      "file": "backend/services/engagementDigestService.ts",
+      "stars": 1,
+      "exacts": 3
+    },
+    {
+      "file": "backend/services/externalApi/userAccess.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/GovernanceSnapshotService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/intelligence/crossDomainAttributionService.ts",
+      "stars": 0,
+      "exacts": 4
+    },
+    {
+      "file": "backend/services/intelligence/leadIngestionDiagnosticsService.ts",
+      "stars": 0,
+      "exacts": 4
+    },
+    {
+      "file": "backend/services/intelligenceAlertService.ts",
+      "stars": 2,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/intentClusteringService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/linkedinEngagementWorkspaceService.ts",
+      "stars": 0,
+      "exacts": 4
+    },
+    {
+      "file": "backend/services/listeningConfigurationService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/marketPulseIntelligenceService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/marketPulseV2ServiceEngine.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/migrationDryRunService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/monitoringOrchestrationService.ts",
+      "stars": 3,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/orchestration/persistence/supabaseCheckpointStore.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/orgLearningMemoryService.ts",
+      "stars": 3,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/platformIntelligenceService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/publishReconciliationService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/publishSnapshotPersistence.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/recommendationAnalyticsService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/semanticIndexingService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/strategyTemplateService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/viralitySnapshotBuilder.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/websiteHealthScoreService.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/whatsappBroadcastService.ts",
+      "stars": 3,
+      "exacts": 1
+    },
+    {
+      "file": "backend/db/campaignVersionStore.ts",
+      "stars": 4,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/system/health.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "pages/api/campaigns/12week-plans/[planId].ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/get-strategy.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/weekly-alignments.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/community-ai/discovered-users.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/engagement/backfill-self-signals.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "pages/api/engagement/readiness.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "pages/api/external-apis/access.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/billing-alert-counts.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "pages/api/super-admin/community-ai-policy.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/curated-industry-sources.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/free-credits/requests.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/activityLogger.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/aiActivityQueueService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/aiInvestigationService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/analyticsService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/autonomousFeatureFlag.ts",
+      "stars": 1,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/billing/rollout/billingConsistencyVerifier.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "backend/services/campaignBlueprintService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/communityAiAutoRuleService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/companyContextEnrichmentService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/companyProfileServiceRest1Rest2Pulse.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/copilotService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/creator/campaignDesignSystemService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/creatorExecutionRateLimitService.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "backend/services/customerOperationsService.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/executionGuardrailService.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "backend/services/executionObservabilityService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/formIntelligenceService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/governanceConvergenceService.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/trackingDiagnosticsService.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "backend/services/intelligenceHealthService.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/leadIntelligence/leadIntelligenceRepository.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/llmProviderService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/longForm/supabaseBenchmarkPersistence.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/operationalResilienceService.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "backend/services/opportunityRadarService.ts",
+      "stars": 0,
+      "exacts": 3
+    },
+    {
+      "file": "backend/services/opportunityService.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/platformConnectorService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/platformTokenService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/productionCertificationService.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/providerAccountService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/regionRoutingService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/resilienceAdvisoryService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/resilienceValidationService.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/semanticRetrievalService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/sourceHealthService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/sreOperationsService.ts",
+      "stars": 2,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/wordpressPluginService.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/forecastStore.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/performanceStore.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/queries.ts",
+      "stars": 3,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/activity-workspace/[id]/render-image.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/access-requests/list.ts",
+      "stars": 1,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/admin/bootstrap-super-admin.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "pages/api/admin/opportunity-engine-health.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "pages/api/campaigns/content-stats.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "pages/api/campaigns/get-weekly-plans.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/hierarchical-navigation.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/save-daily-plan.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/[id]/approve-frequency-rebalance.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/[id]/performance.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/[id]/reject-frequency-rebalance.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/community-ai/actions/approve.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/community-ai/actions.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/external-apis/company-config.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/external-apis/presets.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/health/publish-loop.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "pages/api/leads/job/create.ts",
+      "stars": 1,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/recommendations/create-campaign-from-group.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/recommendations/[id]/create-campaign.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/billing-dashboard.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/free-credits/profiles.ts",
+      "stars": 1,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/virality/playbooks/index.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/virality/playbooks/[id].ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/websites/[id]/dashboard.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/whatsapp/broadcasts/index.ts",
+      "stars": 1,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/whatsapp/broadcasts/[id].ts",
+      "stars": 1,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/behaviorAlertService.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/behaviorAnalyticsService.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/billing/contracts/enterpriseContractResolver.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/billing/creditApprovalService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/billing/payments/subscriptionProjectionService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/blockTemplateService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/boltRowFailureDashboard.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/campaignRecommendationExtensionService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/companyIntelligenceConfigService.ts",
+      "stars": 1,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/creatorAuditTrailService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/engagementPlatformPreferenceService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/executionPlannerPersistence.ts",
+      "stars": 1,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/externalApiHealthService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/hybridSemanticRetrievalService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/insightViewService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/intelligence/resilienceAnalyticsService.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/intelligence/universalFunnelIntelligenceService.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/intelligenceExecutionController.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/leadIntelligence/attributionRepository.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/leadIntelligence/leadIntelligenceReadService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/leadIntelligence/legacySignalCompat.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/mediaService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/observabilityConvergenceService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/operationalReadiness.ts",
+      "stars": 0,
+      "exacts": 2
+    },
+    {
+      "file": "backend/services/operatorToolingService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/outcomeTrackingService.ts",
+      "stars": 1,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/platformRegistryService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/queueOperationsService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/recommendationAuditService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/recommendationCampaignBuilder.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/recommendationConsolidator.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/recommendationPolicyService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/reportCardServiceModel.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/signalIntelligenceEngine.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/slaMonitoringService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/strategicFeedbackService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/templateService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/tenantResolutionService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/threadRuntime/threadPublishOrchestrator.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/wordpressPluginSetupService.ts",
+      "stars": 2,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/accounts/[platform]/test.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/activity-workspace/[id]/shared-media.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/access-requests/approve.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/blog/[id].ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/config/[type].ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/consumption/infra-estimate.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/admin/credits/ledger.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/admin/delete-activity.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/delete-content.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/experiment/toggle.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/revenue-analytics.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/admin/website-intelligence/alerts.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/analytics/posts.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/analytics/whatsapp/broadcasts.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/blog/index.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/blog/[slug]/index.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/blogs/public.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/campaigns/campaign-summary-update.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/commit-daily-plan.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/metrics.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/pending/[id]/approve.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/performance-data.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/proposals/convert.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/proposals/[id].ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/update-platforms.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/weekly-performance.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/weekly-refinements.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/[id]/prediction.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/campaigns/[id]/propose-frequency-rebalance.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/command-center/company-state.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/company/billing/ledger.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/company/users.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/company-profile/guidance.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/company-profile/refinements.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/content-adapter/config.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/credits/earn/progress.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/credits/earn/setup-progress.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/external-apis/health-summary.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/external-apis/requests/[id].ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/external-apis/[id]/test.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/internal/render-health.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/internal/render-ops.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/market-pulse/personalization.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/onboarding/setup-company.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/opportunities/[id]/action.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/platform-intelligence/catalog.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/publishing/jobs/index.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/publishing/reconcile/jobs.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/recommendation-policy.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/recommendations/[id]/prepare-plan.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/recommendations/[id]/preview-strategy.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/recommendations/[id]/result.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/settings/intelligence-access.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/activity-cost-breakdown-v2.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/audit-logs.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/billing-forensics/timeline.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/credit-packages/index.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/free-credits/activity.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/super-admin/global-ledger.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/super-admin/system-health-summary.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/track/verify.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/voice/notes.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/website-events/track.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "pages/api/website-intelligence/audit-explorer.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/website-intelligence/operational-report.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "pages/api/whatsapp/templates/index.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/analyticsDataReadinessService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/apiConnectionTestService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/attributionResolverService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/auditLoggingService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/automation/automationConfigStore.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/autonomousCampaignAgent.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/autonomousDecisionLogger.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/billing/bootstrap/billingSchemaSpec.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/billing/exports/ledgerExportService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/boltPipelineServiceRunExecOrchestrate.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/campaignLearningsStore.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/campaignReadinessService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/canonicalReport/reportJourneyOrchestrator.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/communityAiScheduler.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/companyBootstrapService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/companyTrendRelevanceEngine.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/consumptionAnalyticsService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/contentOpportunityStorageService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/creator/media/sharedMediaRuntime.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/creatorQueueReliabilityService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/creditAdminGrantService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/curatedIndustrySourceService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/customerAcquisitionIntelligenceService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/customerOperationsCockpitService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/domainEligibilityService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/earnCreditsService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/engagementAuthorService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/engagementEvaluationService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/engagementGovernanceService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/engagementIngestionService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/engagementOpportunityService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/evidencePlatform/ingestion/providerEvidenceRepository.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/executionPlannerService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/externalApi/execution.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/externalApi/singleSourceFetcher.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/externalApi/usageLogging.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/featureCompletionSyncService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/globalPatternService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/governanceEnforcementService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/GovernanceProjectionService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/growthIntelligence/metrics/contentVelocity.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/growthIntelligence/metrics/opportunityActivation.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/insightIntelligenceService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/atomicLockService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/durableOrchestrationStore.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/embeddedFormIntegrationService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/landingPageIntegrationService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/leadCaptureTopologyService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/leadReplayReceiptService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/maturitySnapshotService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/predictiveOpsService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/rawReplayCaptureService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/intelligence/securityTelemetryService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/knowledge/companyKnowledgeService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/leadIntelligence/legacyLeadCompat.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/leadJobProcessor.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/metaDerivedAccountsService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/monetizationOpsService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/networkExpansion/networkActionCandidateService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/networkExpansion/userDiscoveryService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/networkIntelligence/networkIntelligenceService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/networkIntelligence/playbookEffectivenessService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/omnivyraGscAnalyticsService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/orgOwnershipRecoveryService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/performanceFeedbackService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/platformIntelligence/history/supabaseSnapshotStore.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/publishSnapshotSoakVerifier.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/recommendationExecutionService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/replyIntelligenceService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/reportAutomationService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/reportCardServiceAssembly.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/riskAssessor.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaQueueState.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaRetryQueue.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/runtimeObservabilityService.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/services/sourcePerformanceService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/teamService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/userManagementService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/userPreferencesService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/viralityAdvisorService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/viralityGateService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/websiteAnalyticsService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/whatsappTemplateService.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/workerSnapshotShadowHook.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/services/workerSnapshotShadowTelemetryStore.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/campaignApprovedVersionStore.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/campaignMemoryStore.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/campaignStore.ts",
+      "stars": 0,
+      "exacts": 1
+    },
+    {
+      "file": "backend/db/communityAiActionStore.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/imageMetadataStore.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/platformExecutionStore.ts",
+      "stars": 1,
+      "exacts": 0
+    },
+    {
+      "file": "backend/db/scheduledPostsStore.ts",
+      "stars": 1,
+      "exacts": 0
+    }
+  ]
+}

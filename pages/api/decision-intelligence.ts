@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../backend/services/userContextService';
 import { buildDecisionIntelligence, getDecisionIntelligencePresentation, getDecisionIntelligenceHtml } from '../../backend/services/decisionIntelligence/decisionIntelligencePlugin';
@@ -10,7 +11,7 @@ import '../../backend/services/platformIntelligence/plugins'; // auto-register e
  * platform engines build the executive summary, scores, dependency graph, roadmap,
  * recommendations, presentation model and HTML projection. No UI logic here.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'Method not allowed' }); }
   const user = await resolveUserContext(req);
   if (!user?.userId) return res.status(401).json({ error: 'authentication required' });
@@ -33,3 +34,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load decision intelligence' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/decision-intelligence' });

@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, X, CheckCheck, Users } from 'lucide-react';
+import { useVisibilityPolling } from '../lib/client/dataKit';
 import { apiFetch } from '../lib/apiFetch';
 import { runSharedPoll } from '../utils/pollingGuards';
 
@@ -61,12 +62,15 @@ export function NotificationBell() {
     return fetchInFlightRef.current;
   }, []);
 
-  // Initial fetch + 60 s poll
+  // Initial fetch + 60 s poll.
+  // W4-8 (audit B-53): the poll is now VISIBILITY-AWARE via the F-13 kit —
+  // hidden/background tabs stop polling entirely and refresh immediately on
+  // return. Same 60 s cadence while visible; same fetcher (in-flight dedupe
+  // above preserved).
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 60_000);
-    return () => clearInterval(interval);
   }, [fetchNotifications]);
+  useVisibilityPolling(fetchNotifications, 60_000);
 
   // Close on outside click
   useEffect(() => {

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 // Handle GET/POST requests to /api/campaigns
 import { NextApiRequest, NextApiResponse } from 'next';
@@ -545,11 +546,27 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
 
       let campaign: any = null;
-      const { data: campaignRow, error } = await supabase
-        .from('campaigns')
-        .select('*')
-        .eq('id', campaignId)
-        .maybeSingle();
+      // W2-9 (audit B-83): the campaigns row and the latest campaign_versions
+      // row are independent reads — fetch them in parallel (same queries,
+      // same fallback semantics, one round-trip of latency instead of two).
+      const [
+        { data: campaignRow, error },
+        { data: versionRow },
+      ] = await Promise.all([
+        supabase
+          .from('campaigns')
+          .select('*')
+          .eq('id', campaignId)
+          .maybeSingle(),
+        supabase
+          .from('campaign_versions')
+          .select('campaign_snapshot, campaign_types, campaign_weights')
+          .eq('company_id', companyId)
+          .eq('campaign_id', campaignId)
+          .order('version', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
 
       if (error) {
         console.warn('Campaigns table fetch failed, trying campaign_versions fallback:', error.message);
@@ -560,14 +577,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // Always fetch campaign_versions for recommendation context and prefilled planning
       let recommendationContext: { target_regions?: string[] | null; context_payload?: Record<string, unknown> | null; source_opportunity_id?: string | null } | null = null;
       let prefilledPlanning: Record<string, unknown> | null = null;
-      const { data: versionRow } = await supabase
-        .from('campaign_versions')
-        .select('campaign_snapshot, campaign_types, campaign_weights')
-        .eq('company_id', companyId)
-        .eq('campaign_id', campaignId)
-        .order('version', { ascending: false })
-        .limit(1)
-        .maybeSingle();
 
       const vRow = versionRow as { campaign_snapshot?: unknown; campaign_types?: string[]; campaign_weights?: Record<string, number> } | null;
       if (campaign && vRow) {
@@ -834,4 +843,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 // HARDEN-002: measurement only — HARDEN-001 API metrics (latency, payload,
 // per-request DB stats). No caching here: this route is mutated from many
 // pages, so even a short-lived private cache could serve a stale list.
-export default withApiObservability(handler, '/api/campaigns');
+export default __createApiRoute(withApiObservability(handler, '/api/campaigns'), { route: '/api/campaigns' });

@@ -41,8 +41,11 @@ import { trackLlmTokens } from '../../lib/redis/usageProtection';
 import { ownedDbTable } from '../db/writeOwner';
 import { recordAi, recordCache } from '../observability/metrics';
 
-import { UNKNOWN_ORG, FEATURE_AREA_MAP, type GatewayMetadata, type GatewayResponse, type GatewayRequest, GatewayAbortError, isAbortError, _inFlight, sleep, resolveProviderTimeoutMs, _pools, acquireSlot, releaseSlot, resolveLlmConfig, type NormalizedCompletion, callOpenAi, callAnthropic } from './aiGatewayCore';
+import { UNKNOWN_ORG, FEATURE_AREA_MAP, type GatewayMetadata, type GatewayResponse, type GatewayRequest, GatewayAbortError, isAbortError, _inFlight, sleep, resolveProviderTimeoutMs, _pools, acquireSlot, releaseSlot, resolveLlmConfig, type NormalizedCompletion, callOpenAi, callAnthropic, GATEWAY_OVERHEAD_FLAG } from './aiGatewayCore';
 import { guardAiRequest, providerFromModel } from './ai/aiRequestGuard';
+// W2-4 (audit B-58): hoisted from per-call dynamic import() sites.
+import { assertModelPricingExists, recordCostAnomaly } from './pricingService';
+import { resolveRolloutSync } from '../../lib/platform/rollout';
 
 import { type RetryTrackingContext, callProviderWithRetry, buildMetadata } from './aiGatewayProvidersRetry';
 
@@ -111,23 +114,31 @@ const executeGatewayCompletion = async (
 
   const environment = process.env.NODE_ENV || 'development';
   const isMock = environment === 'test' || !!process.env.JEST_WORKER_ID;
-  console.info('[campaign-ai][model-mode]', {
-    provider: activeProvider,
-    isByok: llmConfig.isByok,
-    isCompanyConfig: llmConfig.isCompanyConfig,
-    isMock,
-    environment,
-    modelName: activeModel,
-    requestedModel: request.model,
-    companyId: request.companyId ?? null,
-  });
-  console.info('[campaign-ai][llm-provider-call]', {
-    operation: request.operation,
-    provider: activeProvider,
-    modelName: activeModel,
-    isByok: llmConfig.isByok,
-    companyId: request.companyId ?? null,
-  });
+  // W2-4 (audit B-33 "repeated logging"): these two info lines fire on EVERY
+  // model call; the same facts land in metrics + audit metadata. With the
+  // overhead flag on they become opt-in (AI_GATEWAY_VERBOSE_LOGS); flag off
+  // (default) → unchanged.
+  const quietGatewayLogs = resolveRolloutSync(GATEWAY_OVERHEAD_FLAG).mode !== 'off'
+    && !/^(1|true|yes|on)$/i.test(String(process.env.AI_GATEWAY_VERBOSE_LOGS ?? ''));
+  if (!quietGatewayLogs) {
+    console.info('[campaign-ai][model-mode]', {
+      provider: activeProvider,
+      isByok: llmConfig.isByok,
+      isCompanyConfig: llmConfig.isCompanyConfig,
+      isMock,
+      environment,
+      modelName: activeModel,
+      requestedModel: request.model,
+      companyId: request.companyId ?? null,
+    });
+    console.info('[campaign-ai][llm-provider-call]', {
+      operation: request.operation,
+      provider: activeProvider,
+      modelName: activeModel,
+      isByok: llmConfig.isByok,
+      companyId: request.companyId ?? null,
+    });
+  }
 
   // ── GAP 4: In-flight coalescing — deduplicate concurrent identical requests ─
   // Build key from normalized inputs so GAP 1 normalization applies here too.
@@ -190,6 +201,8 @@ const executeGatewayCompletion = async (
     activeModel,
     request.messages,
     request.cache_version,
+    // W1-1 (B-04): tenant-scope the near-match index. companyId is the tenant.
+    request.companyId ?? null,
   );
   // HARDEN-001: AI response-cache hit/miss ratio (fail-safe, no behavior change).
   try { recordCache({ cache: 'ai_response', hit: cachedContent !== null }); } catch { /* fail-safe */ }
@@ -229,10 +242,10 @@ const executeGatewayCompletion = async (
   // assertion but before dispatch) is caught by the post-flight safe
   // wrapper in usageLedgerService and logged with null cost + critical anomaly.
   try {
-    const { assertModelPricingExists } = await import('./pricingService');
+    // W2-4 (audit B-58): static imports (hoisted below) — the per-call
+    // dynamic import() pair added module-resolution work on every request.
     await assertModelPricingExists(activeProvider, activeModel, 'completion');
   } catch (err: any) {
-    const { recordCostAnomaly } = await import('./pricingService');
     void recordCostAnomaly({
       organizationId: request.companyId ?? UNKNOWN_ORG,
       type:           'pricing_missing',
@@ -409,9 +422,13 @@ const executeGatewayCompletion = async (
     generateAdditionalStrategicThemes: 'additional_strategic_themes',
   };
   // ── Store result in cache — GAP 1+2+5 (fire-and-forget) ─────────────────────
-  void setCachedCompletion(request.operation, effectiveModel, request.messages, content, request.cache_version);
+  void setCachedCompletion(request.operation, effectiveModel, request.messages, content, request.cache_version, request.companyId ?? null);
 
-  try {
+  // W2-4 (audit B-57): with the overhead flag on, the audit-log insert no
+  // longer blocks the response — it becomes fire-and-forget like its sibling
+  // logUsageEvent (identical row written; failures logged, never surfaced).
+  // Flag off (default) → awaited exactly as before.
+  const auditWrite = async () => {
     await ownedDbTable('audit_logs').insert({
       action: 'AI_GATEWAY_CALL',
       actor_user_id: null,
@@ -440,8 +457,15 @@ const executeGatewayCompletion = async (
       },
       created_at: new Date().toISOString(),
     });
-  } catch (error) {
-    console.warn('AI_GATEWAY_AUDIT_LOG_FAILED', error);
+  };
+  if (resolveRolloutSync(GATEWAY_OVERHEAD_FLAG).mode !== 'off') {
+    void auditWrite().catch((error) => console.warn('AI_GATEWAY_AUDIT_LOG_FAILED', error));
+  } else {
+    try {
+      await auditWrite();
+    } catch (error) {
+      console.warn('AI_GATEWAY_AUDIT_LOG_FAILED', error);
+    }
   }
   return {
     output: content,

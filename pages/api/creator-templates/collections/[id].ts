@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
 import {
@@ -15,7 +16,7 @@ import {
  * PATCH  /api/creator-templates/collections/[id]   — { op: 'edit'|'add'|'remove'|'reorder', ... }
  * DELETE /api/creator-templates/collections/[id]
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const user = await resolveUserContext(req);
   if (!user?.userId) return res.status(401).json({ error: 'authentication required' });
   const id = String(req.query.id || '').trim();
@@ -61,3 +62,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, PATCH, DELETE');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-templates/collections/:id' });

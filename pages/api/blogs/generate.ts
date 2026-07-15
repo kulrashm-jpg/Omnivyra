@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/blogs/generate
  *
@@ -40,7 +41,7 @@ import type { BlogAngle } from '../../../lib/blog/blogGenerationEngine';
 import { isValidBlogFormat } from '../../../lib/blog/blogStructureTemplates';
 import { ThoughtLeadershipQualityGateError } from '../../../backend/services/longForm/thoughtLeadershipQualityGate';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -178,3 +179,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/blogs/generate' });

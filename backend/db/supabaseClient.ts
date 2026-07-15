@@ -75,10 +75,27 @@ function getAdminClient(): SupabaseClient {
   // Warn-only cross-environment contamination check. Never blocks startup.
   checkEnvIsolationOnce();
 
-  _client = createClient(url, key, {
+  // W6-4 (audit B-44): pooler READINESS — when SUPABASE_POOLER_URL is set,
+  // PostgREST traffic routes through it (supavisor/pgbouncer endpoint)
+  // instead of the direct project URL. No SQL or client-behavior change;
+  // unset (default) = today's direct URL byte-for-byte. The active mode is
+  // exported via getDbConnectionDiagnostics() for the scale-up runbook.
+  const poolerUrl = String(process.env.SUPABASE_POOLER_URL ?? '').trim();
+  _dbConnectionMode = poolerUrl ? 'pooler' : 'direct';
+  _client = createClient(poolerUrl || url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   return _client;
+}
+
+let _dbConnectionMode: 'direct' | 'pooler' = 'direct';
+
+/** W6-4 diagnostics: which connection path the admin client uses. */
+export function getDbConnectionDiagnostics(): { mode: 'direct' | 'pooler'; poolerConfigured: boolean } {
+  return {
+    mode: _dbConnectionMode,
+    poolerConfigured: Boolean(String(process.env.SUPABASE_POOLER_URL ?? '').trim()),
+  };
 }
 
 // Proxy so all existing `supabase.from(...)` call sites work unchanged.

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { getExecutionCategoryForContentType, executionCategoryToAiGenerated } from '../../../backend/services/plannerActivityCardService';
 // Phase-2 Step-2: centralized routing authority. requiresMediaIntent no
 // longer hard-codes a format list — it defers to the ONE routing engine
@@ -2273,7 +2274,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -2299,3 +2300,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 }
 
 // Removed legacy daily planning generator. Daily layer is execution-only.
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/generate-weekly-structure' });

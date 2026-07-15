@@ -8,6 +8,11 @@ export type RequestContext = {
   userId?: string;
   orgId?: string;
   idempotencyKey?: string;
+  // Foundation Batch A (F-03) — additive optional fields; existing readers are
+  // unaffected. traceId is the cross-boundary trace identifier (defaults to
+  // correlationId); meta is a small request-scoped metadata bag.
+  traceId?: string;
+  meta?: Record<string, unknown>;
 };
 
 const requestContextStore = new AsyncLocalStorage<RequestContext>();

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 /**
  * POST /api/admin/org/:id/control
  *
@@ -96,4 +97,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ ok: true, organization_id: orgId });
 }
 
-export default withIdempotency(handler, { scope: 'admin-org-control', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-org-control', methods: ['POST'] }), { route: '/api/admin/org/:id/control' });

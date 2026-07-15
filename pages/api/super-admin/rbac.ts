@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getRbacConfig, saveRbacConfig } from '../../../backend/services/rbacService';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
@@ -59,4 +60,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'super-admin-rbac', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-rbac', methods: ['POST'] }), { route: '/api/super-admin/rbac' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/auth/get-stored-phone
@@ -26,7 +27,7 @@ type Payload =
   | { phone: null; maskedPhone: null }
   | { error: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<Payload>
 ) {
@@ -50,3 +51,6 @@ export default async function handler(
     maskedPhone: maskPhone(data.phone_number),
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/get-stored-phone' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/creator-intelligence/variant-execution-plan
  *
@@ -44,7 +45,7 @@ import {
 import { planVariantExecution } from '../../../backend/services/creator/variantExecutionPlanner';
 import { getVariantOperatorControls } from '../../../backend/services/creator/variantOperatorControls';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
@@ -109,3 +110,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     operator_controls: controls,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-intelligence/variant-execution-plan' });

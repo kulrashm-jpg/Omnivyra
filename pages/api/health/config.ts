@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * Configuration Health Check Endpoint
@@ -40,7 +41,7 @@ interface HealthResponse {
   critical_issues: string[];
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<HealthResponse>
 ) {
@@ -133,3 +134,6 @@ export default async function handler(
   const statusCode = status === 'healthy' ? 200 : status === 'degraded' ? 503 : 500;
   res.status(statusCode).json(response);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/health/config' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { removeUser } from '../../../../backend/services/userManagementService';
@@ -29,4 +30,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ success: true });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN]);
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN]), { route: '/api/users/:userId' });

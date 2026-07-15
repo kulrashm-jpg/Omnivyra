@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/analytics/toggle-auto-optimize
  * Stage 37 — Toggle auto-optimization for a campaign. RBAC: COMPANY_ADMIN+
@@ -55,4 +56,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]);
+export default __createApiRoute(withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]), { route: '/api/analytics/toggle-auto-optimize' });

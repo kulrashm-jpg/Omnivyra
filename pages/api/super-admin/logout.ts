@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/super-admin/logout
  *
@@ -17,7 +18,7 @@ import {
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { logger } from '../../../backend/services/logger';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   // Best-effort canonical session revocation. Failure is non-fatal — the
@@ -79,3 +80,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/logout' });

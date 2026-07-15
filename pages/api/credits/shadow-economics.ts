@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/credits/shadow-economics?org_id=<id>&days=<7..365>
  *
@@ -32,4 +33,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withOrgAccess(handler);
+export default __createApiRoute(withOrgAccess(handler), { route: '/api/credits/shadow-economics' });

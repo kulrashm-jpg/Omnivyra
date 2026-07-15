@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Internal Render Health — Step-R6 operational health surface.
  *
@@ -21,7 +22,7 @@ import {
 
 const ACTIVE = ['claimed', 'rendering', 'processing', 'moderation'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -106,3 +107,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: false, code: 'HEALTH_PROBE_ERROR', error: e instanceof Error ? e.message : 'unexpected' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/internal/render-health' });

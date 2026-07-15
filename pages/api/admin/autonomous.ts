@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/admin/autonomous?company_id=   — get autonomous settings
@@ -18,7 +19,7 @@ import { logDecision } from '@/backend/services/autonomousDecisionLogger';
 
 const VALID_RISK = new Set(['aggressive', 'balanced', 'conservative']);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── Auth ──────────────────────────────────────────────────────────────────
   const auth = await requireAuth(req, res);
   if (!auth) return;
@@ -87,3 +88,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/autonomous' });

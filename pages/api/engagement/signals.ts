@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getEngagementSignalsDashboardData } from '../../../backend/services/engagementSignalIntelligenceService';
@@ -15,7 +16,7 @@ type EngagementSignalsApiResponse =
     }
   | { error: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<EngagementSignalsApiResponse>,
 ) {
@@ -49,3 +50,6 @@ export default async function handler(
     return res.status(500).json({ error: message });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/engagement/signals' });

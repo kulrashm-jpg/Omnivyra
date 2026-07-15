@@ -1,9 +1,10 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { evaluateWebsiteIntelligenceAlerts } from '../../../../backend/services/websiteIntelligenceAlertService';
 import { ownedDbTable } from '../../../../backend/db/writeOwner';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     typeof req.query.company_id === 'string' ? req.query.company_id :
     typeof req.body?.company_id === 'string' ? req.body.company_id : null;
@@ -31,3 +32,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/website-intelligence/alerts' });

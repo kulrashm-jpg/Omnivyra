@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/health/metrics
  *
@@ -19,7 +20,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { snapshotAuthMetrics } from '../../../backend/services/authMetrics';
 import { getAuthReadiness, bootAuthSubsystem } from '../../../backend/security/startup/authSubsystemBoot';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).end();
@@ -37,3 +38,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     authContractVersion: readiness?.fingerprint.authContractVersion ?? null,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/health/metrics' });

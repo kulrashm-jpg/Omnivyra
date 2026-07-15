@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { runManualSnapshot } from '../../../../backend/services/platformIntelligence/history/platformSnapshotScheduler';
 
@@ -6,7 +7,7 @@ import { runManualSnapshot } from '../../../../backend/services/platformIntellig
  * Service-role protected via the PLATFORM_HISTORY_RUN_SECRET header (cron/back-office only).
  * Composes every registered plugin once (shared context) and persists the batch.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'Method not allowed' }); }
   const secret = process.env.PLATFORM_HISTORY_RUN_SECRET;
   const provided = req.headers['x-platform-run-key'];
@@ -22,3 +23,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Snapshot job failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/platform/history/run' });

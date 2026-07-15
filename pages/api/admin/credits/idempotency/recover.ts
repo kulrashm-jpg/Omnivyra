@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 /**
  * POST /api/admin/credits/idempotency/recover
  *
@@ -84,4 +85,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json(result);
 }
 
-export default withIdempotency(handler, { scope: 'admin-idempotency-recover', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-idempotency-recover', methods: ['POST'] }), { route: '/api/admin/credits/idempotency/recover' });

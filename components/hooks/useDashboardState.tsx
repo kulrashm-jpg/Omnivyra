@@ -1,6 +1,6 @@
 /** useDashboardState — composition: core state hook + effects/handlers + the original return. */
 import React from 'react';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../CompanyContext';
 import { getAuthToken } from '../../utils/getAuthToken';
@@ -278,6 +278,11 @@ export function useDashboardState() {
           titleGroups.set(key, g);
         });
         for (const indices of titleGroups.values()) {
+          // W5-7 (audit B-55): singleton titles (the common case) already
+          // carry repurpose_index/total = 1/1 from construction — skip the
+          // sort + object-rewrite entirely for them. Multi-entry groups are
+          // processed exactly as before.
+          if (indices.length === 1) continue;
           // null/empty date sorts last so real scheduled posts always get lower indices
           const sorted = [...indices].sort((a, b) => {
             const dA = allItems[a].date || '9999-99-99';
@@ -295,7 +300,9 @@ export function useDashboardState() {
           if (!byDate[item.date]) byDate[item.date] = [];
           byDate[item.date].push(item);
         });
-        setCalendarActivityEvents(byDate);
+        // W5-7: commit the (large) calendar state as a non-urgent transition
+        // so month-flip interactions paint before the grid re-render.
+        startTransition(() => setCalendarActivityEvents(byDate));
       })
       .catch(() => setCalendarActivityEvents({}))
       .finally(() => setCalendarActivityEventsLoading(false));

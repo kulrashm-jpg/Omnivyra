@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/auth/post-login-route
@@ -29,7 +30,7 @@ import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCod
 type RouteResponse = { route: string };
 type ErrorResponse = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<RouteResponse | ErrorResponse>,
 ) {
@@ -197,3 +198,6 @@ export default async function handler(
 
   return res.status(200).json({ route: preferredRoute });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/post-login-route' });

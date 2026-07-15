@@ -8,7 +8,17 @@ import {
   Loader2, ArrowRight, AlertCircle, CheckCircle2, Sparkles,
   BookOpen, Eye, BarChart2, X, ChevronDown,
 } from 'lucide-react';
-import { RichTextEditor } from '../../../components/blog/RichTextEditor';
+// W5-2 (audit B-28): lazy tiptap chunk — loads when the editor mounts.
+import dynamic from 'next/dynamic';
+const RichTextEditor = dynamic(
+  () => import('../../../components/blog/RichTextEditor').then((m) => m.RichTextEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div aria-busy="true" aria-label="Loading editor" className="min-h-[400px] w-full animate-pulse rounded-md border border-gray-200 bg-gray-50" />
+    ),
+  },
+);
 import { sanitizeHtml } from '../../../lib/security/htmlSanitizer';
 
 // ── Types ──────────────────────────────────────────────────────────────────

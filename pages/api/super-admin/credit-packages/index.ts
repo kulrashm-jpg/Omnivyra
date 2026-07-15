@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * /api/super-admin/credit-packages
@@ -22,7 +23,7 @@ async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Pro
   return false;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireSuperAdmin(req, res))) return;
 
   // ── GET: list all packages ──────────────────────────────────────────────────
@@ -97,3 +98,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/credit-packages' });

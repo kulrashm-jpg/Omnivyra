@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/super-admin/free-credits/requests  — list access requests
@@ -16,7 +17,7 @@ import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecu
 import { requireCapability } from '@/backend/security/requireCapability';
 import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Phase: Platform Authority Isolation. billing.grant_free_credits is a
   // SUPER_ADMIN-only platform-tier capability; replaces the previous
   // BILLING_MANAGE gate which is per-tenant.
@@ -151,3 +152,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/free-credits/requests' });

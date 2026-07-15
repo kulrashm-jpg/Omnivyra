@@ -60,19 +60,35 @@ export function withApiObservability(handler: NextApiHandler, staticRoute?: stri
       route = staticRoute || normalizeRoute(req.url);
 
       // Tap res.json / res.send to size the body — additive, forwards verbatim.
-      const origJson = res.json.bind(res);
-      (res as NextApiResponse).json = (body: unknown) => {
+      // W0-1 transparency: the wrapper mirrors the original function's
+      // introspection state (jest mock `.mock` / `_isMockFunction`, or any
+      // properties a caller stashed on res.json) so replacing the function
+      // reference is invisible to code that inspects it after the call.
+      const mirror = <F extends (...args: never[]) => unknown>(orig: unknown, wrapped: F): F => {
+        try {
+          const src = orig as Record<string, unknown>;
+          const dst = wrapped as unknown as Record<string, unknown>;
+          for (const key of ['mock', '_isMockFunction', 'getMockName', 'mockName']) {
+            if (src && key in (src as object)) dst[key] = src[key];
+          }
+        } catch { /* fail-safe */ }
+        return wrapped;
+      };
+      const origJsonFn = res.json;
+      const origJson = origJsonFn.bind(res);
+      (res as NextApiResponse).json = mirror(origJsonFn, ((body: unknown) => {
         try { resBytes += Buffer.byteLength(typeof body === 'string' ? body : JSON.stringify(body ?? '')); } catch { /* ignore */ }
         return origJson(body);
-      };
-      const origSend = res.send.bind(res);
-      (res as NextApiResponse).send = (body: unknown) => {
+      }) as NextApiResponse['json']);
+      const origSendFn = res.send;
+      const origSend = origSendFn.bind(res);
+      (res as NextApiResponse).send = mirror(origSendFn, ((body: unknown) => {
         try {
           if (typeof body === 'string') resBytes += Buffer.byteLength(body);
           else if (Buffer.isBuffer(body)) resBytes += body.length;
         } catch { /* ignore */ }
         return origSend(body);
-      };
+      }) as NextApiResponse['send']);
 
       const finalize = (errored: boolean) => {
         if (recorded) return;

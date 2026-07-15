@@ -11,6 +11,7 @@
  * Wave 2C-C will polish the UX (loading states, error toasts, layout).
  */
 
+import { useVisibilityPolling } from '../../lib/client/dataKit'; // W5-6
 import React, { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
 import {
@@ -127,11 +128,10 @@ export default function SecuritySettingsPage() {
 
   // Periodic stale-session check: every 60s, refresh session snapshot.
   // Catches revoked-on-another-device cases without requiring user action.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const id = window.setInterval(() => { void reloadAuthState(); }, 60_000);
-    return () => window.clearInterval(id);
-  }, [reloadAuthState]);
+  // W5-6 (audit B-77): visibility-aware — hidden tabs stop polling and the
+  // check fires immediately on return (which is exactly when a revoked
+  // session matters). Same cadence while visible.
+  useVisibilityPolling(() => { void reloadAuthState(); }, 60_000);
 
   if (loading) {
     return <div style={{ padding: 24 }}>Loading security settings…</div>;

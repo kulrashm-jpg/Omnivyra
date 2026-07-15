@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/analytics/summary
  *
@@ -43,7 +44,7 @@ const EMPTY_PLATFORM = (): PlatformSummary => ({
   post_count: 0, avg_engagement_rate: 0, followers: 0,
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
@@ -143,3 +144,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     platform_breakdown: breakdown,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/analytics/summary' });

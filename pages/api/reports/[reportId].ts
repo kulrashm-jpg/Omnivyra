@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /** Route shell — reports/[reportId] API (Agent-B split: helpers/types in ../../../backend/apiHandlers/reports/reportIdShared). */
 /**
  * GET /api/reports/[reportId]?type=snapshot|performance|growth
@@ -47,7 +48,7 @@ import type { ReportViewPayload } from './reportViewPayloadTypes';
 // ── Task 6: canonical type derived from the intelligence engine ───────────────
 import { ReportApiRow, ReportIntelligenceData, STALE_THRESHOLD_MS, buildGeneratingPayload, buildPdfDownloadFilename, config, isPerformanceIntelligenceComposedReport, renderCurrentPerformanceHtml, requeueIncompleteReport, sanitizeFilenamePart } from '../../../backend/apiHandlers/reports/reportIdShared';
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ReportViewPayload | { error: string; code: string }>,
 ) {
@@ -432,3 +433,6 @@ export default async function handler(
 
   return res.status(200).json(sanitizedPayloadWithComparison);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/reports/:reportId' });

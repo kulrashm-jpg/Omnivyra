@@ -1,7 +1,8 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { registerWordPressPlugin } from '../../../backend/services/wordpressPluginService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const { company_id, website_id, site_url, plugin_site_id, connection_id } = req.body || {};
   if (!company_id || !website_id || !site_url || !plugin_site_id) {
@@ -16,3 +17,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   return res.status(201).json(result);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/wordpress-plugin/register' });

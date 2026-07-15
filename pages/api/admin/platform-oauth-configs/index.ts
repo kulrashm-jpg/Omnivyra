@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * /api/admin/platform-oauth-configs — REMOVED in Phase 2.
  *
@@ -31,7 +32,7 @@ function clientIp(req: NextApiRequest): string | null {
   return req.socket?.remoteAddress ?? null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ip = clientIp(req);
   const ua = (req.headers['user-agent'] as string | undefined) ?? null;
 
@@ -59,3 +60,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     canonical: CANONICAL_PATH,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/platform-oauth-configs' });

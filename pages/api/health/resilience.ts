@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * Enhanced health endpoint - Full resilience observability
@@ -105,7 +106,7 @@ interface ResilienceReport {
 /**
  * Handler function
  */
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ResilienceReport | Partial<ResilienceReport> | { error: string }>
 ) {
@@ -328,3 +329,6 @@ async function buildResilienceReport(): Promise<ResilienceReport> {
     recommendations,
   };
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/health/resilience' });

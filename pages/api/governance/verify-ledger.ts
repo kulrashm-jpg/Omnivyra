@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/governance/verify-ledger
  * Stage 31 — Verify company governance ledger. SUPER_ADMIN only.
@@ -26,4 +27,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN]), { route: '/api/governance/verify-ledger' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/admin/cache-management  — Returns cache stats for all layers
@@ -82,7 +83,7 @@ async function getRedisKeyStats(client: IORedis): Promise<{ prefix: string; coun
   return results;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireSuperAdmin(req, res))) return;
 
   // ── POST: flush a cache layer ────────────────────────────────────────────
@@ -197,3 +198,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     collected_at: new Date().toISOString(),
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/cache-management' });

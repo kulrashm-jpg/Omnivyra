@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 /**
  * POST /api/admin/credits/approvals/cancel
  *
@@ -69,4 +70,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withIdempotency(handler, { scope: 'admin-credits-approvals-cancel', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-credits-approvals-cancel', methods: ['POST'] }), { route: '/api/admin/credits/approvals/cancel' });

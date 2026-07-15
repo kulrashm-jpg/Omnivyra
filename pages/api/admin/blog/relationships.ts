@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
@@ -5,7 +6,7 @@ import { BLOG_PUBLISH_MANAGE } from '../../../../shared/contracts/security';
 
 const VALID_TYPES = new Set(['related', 'prerequisite', 'continuation']);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   // All methods on this route are mutations — gate on BLOG_PUBLISH_MANAGE.
   const guard = await requireCapability(req, res, {
     capability: BLOG_PUBLISH_MANAGE,
@@ -49,3 +50,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/blog/relationships' });

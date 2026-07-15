@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { simulateRecommendations } from '../../../backend/services/recommendationSimulationService';
 import { validatePolicy, RecommendationPolicyWeights } from '../../../backend/services/recommendationPolicyService';
@@ -31,4 +32,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN]), { route: '/api/recommendations/simulate' });

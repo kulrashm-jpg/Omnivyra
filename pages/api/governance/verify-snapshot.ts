@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/governance/verify-snapshot
  * Stage 30 — Verify snapshot integrity.
@@ -23,4 +24,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json(result);
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]);
+export default __createApiRoute(withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]), { route: '/api/governance/verify-snapshot' });

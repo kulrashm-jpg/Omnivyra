@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/super-admin/customer-readiness
  *
@@ -30,7 +31,7 @@ import {
 const STATUSES: TenantStatus[] = ['SIGNUP_STARTED', 'EMAIL_VERIFIED', 'COMPANY_CREATED', 'ACTIVE', 'DORMANT', 'INACTIVE'];
 const BUCKETS: ReadinessBucket[] = ['READY', 'PARTIAL', 'AT_RISK'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const guard = await requireCapability(req, res, {
@@ -103,3 +104,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Failed to load customer readiness' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/customer-readiness' });

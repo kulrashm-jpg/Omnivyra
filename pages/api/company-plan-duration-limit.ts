@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../backend/services/userContextService';
 import {
@@ -10,7 +11,7 @@ import {
  * Returns plan_key and max_campaign_duration_weeks for the company (companyId used as organization_id).
  * Used by AI chat to show plan-appropriate duration options and validate user input.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -36,3 +37,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/company-plan-duration-limit' });

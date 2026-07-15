@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET /api/super-admin/billing-forensics/timeline
  *
@@ -12,7 +13,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireAuthenticatedInternalUser } from '../../../../backend/services/requestAccessService';
 import { isFinanceAuditor } from '../../../../backend/services/billing/financeRbacService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const user = await requireAuthenticatedInternalUser(req, res);
   if (!user) return;
@@ -40,3 +41,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     events:         data ?? [],
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/billing-forensics/timeline' });

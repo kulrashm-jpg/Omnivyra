@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * POST /api/admin/billing/reconcile
  *   { scope: 'single'|'org'|'global', purchase_id?, org_id?, dry_run?: boolean }
@@ -10,7 +11,7 @@ import { requireCapability } from '@/backend/security/requireCapability';
 import { BILLING_PURCHASE } from '@/shared/contracts/security';
 import { reconcile, type ReconScopeKind } from '@/backend/services/billing/commercialReconciliationService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
   const scope = String(body.scope ?? 'global') as ReconScopeKind;
@@ -32,3 +33,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ ok: false, error: err?.message ?? 'reconcile_failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/billing/reconcile' });

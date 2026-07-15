@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * Company Intelligence Competitors API
  * Phase-3: Company Intelligence Configuration
@@ -84,4 +85,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALLOWED_ROLES);
+export default __createApiRoute(withRBAC(handler, ALLOWED_ROLES), { route: '/api/company/intelligence/competitors' });

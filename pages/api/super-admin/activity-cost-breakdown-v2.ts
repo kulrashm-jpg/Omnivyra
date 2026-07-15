@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * Activity Cost Breakdown API - v2 (Database Backed)
@@ -101,7 +102,7 @@ interface CostBreakdownResponse {
   cost_rates: typeof COST_RATES;
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<CostBreakdownResponse | { error: string }>
 ) {
@@ -386,3 +387,6 @@ function calculateResourceCosts(
 
   return { ...costs, total };
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/activity-cost-breakdown-v2' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
@@ -46,7 +47,7 @@ function cleanBrief(raw: unknown): BriefDraft {
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -157,3 +158,6 @@ Fill every brief field with your best inference so far; keep each concise. No ma
     return res.status(500).json({ error: error instanceof Error ? error.message : 'chat brief failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-templates/chat-brief' });

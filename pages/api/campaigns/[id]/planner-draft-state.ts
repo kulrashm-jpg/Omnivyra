@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET/PUT /api/campaigns/[id]/planner-draft-state — Strategic Mix P1.
  *
@@ -37,7 +38,7 @@ async function loadLatestVersion(campaignId: string) {
   return (data as { id: string; campaign_snapshot: Record<string, unknown> } | null) ?? null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   const campaignId = typeof id === 'string' ? id.trim() : '';
   if (!campaignId) return res.status(400).json({ error: 'Campaign ID is required' });
@@ -122,3 +123,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/:id/planner-draft-state' });

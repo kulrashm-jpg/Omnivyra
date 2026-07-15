@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
 
 /**
  * GET  /api/notifications       — fetch recent notifications for the current user
@@ -42,7 +43,7 @@ async function resolveUserId(req: NextApiRequest): Promise<string | null> {
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const userId = await resolveUserId(req);
   if (!userId) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
@@ -74,3 +75,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/notifications' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/campaigns/planner-draft — Strategic Mix P1 (SPEC-001 invariant I-1).
  *
@@ -29,7 +30,7 @@ import { resolveCampaignStage } from '../../../lib/campaign/campaignStage';
 const PLANNER_DRAFT_THREAD_PREFIX = 'planner_draft_';
 const DRAFT_PLACEHOLDER_NAME = 'Untitled Strategic Mix';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -113,3 +114,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Failed to create or resume draft' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/planner-draft' });

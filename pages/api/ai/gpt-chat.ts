@@ -1,9 +1,10 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
 import { bearerAuthorization } from '../../../lib/httpAuthHeaders';
 import { guardAiRequest, AiGuardError } from '../../../backend/services/ai/aiRequestGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -218,3 +219,6 @@ function getSystemPrompt(context: string): string {
 
   return prompts[context as keyof typeof prompts] || prompts.general;
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/ai/gpt-chat' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/analytics/campaign-roi
  * Stage 34 — Campaign ROI Intelligence. Read-only. RBAC: COMPANY_ADMIN+
@@ -67,4 +68,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json(intelligence);
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]);
+export default __createApiRoute(withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]), { route: '/api/analytics/campaign-roi' });

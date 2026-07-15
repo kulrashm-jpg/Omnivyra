@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /** Route shell — automation-activity API (Agent-B split: helpers/types in ../../../backend/apiHandlers/reports/automationActivityShared). */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -5,7 +6,7 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 
 import { AutomationContext, AutomationEvent, HighlightItem, HighlightTone, NotificationEvent, ScoredHighlight, buildAlertHighlights, buildAutomationHighlights, buildAutomationPrioritySignal, buildSnapshotPrioritySignal, formatDate, getReviewWindowCopy, isMissingTableError, readList, resolveCompanyId, timeAgo, toNumber } from '../../../backend/apiHandlers/reports/automationActivityShared';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
   }
@@ -128,3 +129,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     showSection,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/reports/automation-activity' });

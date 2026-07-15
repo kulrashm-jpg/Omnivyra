@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * POST /api/super-admin/credits/grant
@@ -220,4 +221,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withIdempotency(handler, { scope: 'super-admin-credits-grant' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-credits-grant' }), { route: '/api/super-admin/credits/grant' });

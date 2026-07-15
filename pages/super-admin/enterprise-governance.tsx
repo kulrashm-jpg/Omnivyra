@@ -15,6 +15,7 @@
  * design team can refine visuals; the data + actions are functional.
  */
 
+import { useVisibilityPolling } from '../../lib/client/dataKit'; // W5-6
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
 
@@ -131,11 +132,8 @@ export default function EnterpriseGovernancePage(): React.ReactElement {
   useEffect(() => { void refresh(); }, [refresh]);
 
   // Auto-refresh every 30s.
-  useEffect(() => {
-    if (!companyId) return;
-    const id = setInterval(() => { void refresh(); }, 30_000);
-    return () => clearInterval(id);
-  }, [companyId, refresh]);
+  // W5-6 (audit B-77): visibility-aware — hidden tabs stop the 30 s poll.
+  useVisibilityPolling(() => { if (companyId) void refresh(); }, companyId ? 30_000 : 0);
 
   // Load asset detail when selection changes.
   useEffect(() => {

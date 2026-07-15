@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import {
   getProfile,
@@ -8,7 +9,7 @@ import { resolveCompanyAccess } from '../../../backend/services/contentArchitect
 import { normalizeUserGuidedIntelligence } from '../../../backend/services/companyProfile/userGuidance';
 import type { CompanyProfile } from '../../../backend/services/companyProfile/types';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const companyId = String(req.body?.companyId || req.body?.company_id || req.query.companyId || '').trim();
@@ -52,3 +53,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ profile: responseProfile });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/company-profile/guidance' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/credits/advisor-impact?org_id=<id>&action=<key>&multiplier=<n>&variant=<label>
  *
@@ -35,4 +36,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withOrgAccess(handler);
+export default __createApiRoute(withOrgAccess(handler), { route: '/api/credits/advisor-impact' });

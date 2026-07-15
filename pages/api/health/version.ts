@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Version / Build / Environment Health Endpoint  (BETA-011 · RULE 3/4)
  *
@@ -19,7 +20,7 @@ export const runtime = 'nodejs';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { emitBootFingerprint } from '../../../backend/security/startup/bootFingerprint';
 
-export default function handler(_req: NextApiRequest, res: NextApiResponse) {
+function handler(_req: NextApiRequest, res: NextApiResponse) {
   try {
     const fp = emitBootFingerprint();
     res.status(200).json({
@@ -41,3 +42,6 @@ export default function handler(_req: NextApiRequest, res: NextApiResponse) {
     res.status(500).json({ status: 'error', error: err?.message || 'version probe failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/health/version' });

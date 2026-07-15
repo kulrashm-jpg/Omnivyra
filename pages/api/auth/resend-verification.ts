@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/auth/resend-verification
  *
@@ -40,7 +41,7 @@ import {
 type SuccessResponse = { ok: true };
 type ErrorResponse   = { error: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -139,3 +140,6 @@ export default async function handler(
 
   return res.status(200).json({ ok: true });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/resend-verification' });

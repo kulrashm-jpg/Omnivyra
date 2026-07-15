@@ -2,6 +2,9 @@
 /** TEMP2 — split from companyProfileServiceRest1.ts (barrel preserved; importers unchanged). */
 /** TEMP1 — split from companyProfileService.ts (barrel preserved; importers unchanged). */
 import { ownedDbTable } from '../db/writeOwner';
+// W4-5 (Batch D cache stack)
+import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
+import { memoRequest } from './requestScopedMemo';
 /**
  * companyProfileService.ts — orchestration only.
  * All helpers/types live in ./companyProfile/* sub-modules.
@@ -697,16 +700,37 @@ export async function deriveAndStoreStrategyProfile(
 
 // ─── getProfile ───────────────────────────────────────────────────────────────
 
+// W4-5 (audit B-35): getProfile is fetched 2–4× per generation pipeline and
+// its `autoRefine ?? true` default can insert a HIDDEN LLM refine into any
+// read path that forgot to pass false. Under the 'profile-cache' flag:
+//   1. the raw profile row is request-memoized (same-request re-reads hit the
+//      memo; zero staleness — one request sees one snapshot),
+//   2. autoRefine becomes OPT-IN on read paths (only callers that explicitly
+//      pass autoRefine:true trigger the staleness-driven LLM refine; the
+//      refresh cron / explicit refine flows are unaffected).
+// Flag off (default) = fetch-per-call + autoRefine-by-default, as before.
+// Kill: ROLLOUT_PROFILE_CACHE_KILL. Invalidation: writes happen through
+// updateProfile paths which always re-read (memo is request-scoped only —
+// no cross-request profile cache in this batch, freshness preserved).
+const PROFILE_CACHE_FLAG = defineRolloutFlag({
+  key: 'profile-cache',
+  description: 'W4-5: request-memoized profile reads + opt-in autoRefine (audit B-35)',
+});
+
 export async function getProfile(
   companyId?: string,
   options?: { autoRefine?: boolean; languageRefine?: boolean; includeStoredCompetitors?: boolean }
 ): Promise<CompanyProfile | null> {
   const resolvedCompanyId = normalizeCompanyId(companyId);
-  const profile = await fetchProfileRaw(resolvedCompanyId);
+  const cacheOn = resolveRolloutSync(PROFILE_CACHE_FLAG, { tenantId: resolvedCompanyId ?? undefined }).mode !== 'off';
+  const profile = cacheOn
+    ? await memoRequest(`profile:raw:${resolvedCompanyId}`, () => fetchProfileRaw(resolvedCompanyId))
+    : await fetchProfileRaw(resolvedCompanyId);
   if (!profile) return null;
 
   let result: CompanyProfile | null = profile;
-  if ((options?.autoRefine ?? true) && shouldRefineProfile(profile.last_refined_at)) {
+  const autoRefineDefault = cacheOn ? false : true; // W4-5: opt-in under the flag
+  if ((options?.autoRefine ?? autoRefineDefault) && shouldRefineProfile(profile.last_refined_at)) {
     result = await refineProfileWithAI(profile, { force: true });
   }
   if ((options?.languageRefine ?? false) && result) {

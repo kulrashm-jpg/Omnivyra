@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * /api/creator-intelligence/variant-experiment
  *
@@ -48,7 +49,7 @@ const VALID_STATES: ReadonlyArray<ExperimentLifecycleState> = [
   'created', 'generated', 'published', 'engaged', 'completed',
 ];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const user = await resolveUserContext(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' });
 
@@ -224,3 +225,6 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ success: false, error: `unknown action '${action}'`, code: 'INVALID_ACTION' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-intelligence/variant-experiment' });

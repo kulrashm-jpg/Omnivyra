@@ -199,7 +199,7 @@ function OperationalSynthesisFlow() {
           <div className="absolute -right-24 top-10 h-56 w-56 rounded-full bg-[#3FA9F5]/[0.12] blur-3xl" />
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#A9DAFF]">Live synthesis</p>
-            <h3 className="mt-3 text-2xl font-bold text-white" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+            <h3 className="mt-3 text-2xl font-bold text-white" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
               {OMNIVYRA_SYNTHESIS.title}
             </h3>
             <p className="mt-4 text-sm leading-7 text-[#F4FBFF]">{OMNIVYRA_SYNTHESIS.body}</p>
@@ -227,7 +227,7 @@ function OperationalSynthesisFlow() {
 
 export default function MarketingLandingPage() {
   return (
-    <div className="relative isolate min-h-screen overflow-x-hidden bg-[#F5F9FF]" style={{ fontFamily: "'Inter', sans-serif" }}>
+    <div className="relative isolate min-h-screen overflow-x-hidden bg-[#F5F9FF]" style={{ fontFamily: "var(--font-inter), sans-serif" }}>
       <OperationalContinuityField />
       <section
         className="relative z-10 overflow-hidden"
@@ -242,7 +242,7 @@ export default function MarketingLandingPage() {
             </p>
             <h1
               className="landing-reveal landing-delay-1 text-4xl font-bold leading-[1.04] tracking-tight text-white sm:text-5xl lg:text-[2.75rem] xl:text-[2.95rem] 2xl:text-[3.18rem]"
-              style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}
+              style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}
             >
               Fragmented marketing systems limit AI capabilities.
             </h1>
@@ -296,7 +296,7 @@ export default function MarketingLandingPage() {
         <div className="grid gap-10 lg:grid-cols-[0.82fr_1.18fr] lg:items-start">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#0A66C2]">The visibility shift</p>
-            <h2 className="mt-3 text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-5xl" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+            <h2 className="mt-3 text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-5xl" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
               Visibility is no longer just SEO.
             </h2>
           </div>
@@ -318,7 +318,7 @@ export default function MarketingLandingPage() {
           <p className="inline-flex rounded-full border border-white/[0.20] bg-white/[0.10] px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[#A9DAFF] shadow-sm">
             Free Digital Authority Snapshot
           </p>
-          <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-5xl" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+          <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-5xl" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
             Start with a public Digital Authority Snapshot.
           </h2>
           <p className="mt-5 text-base leading-8 text-[#DDF1FF]">
@@ -400,7 +400,7 @@ export default function MarketingLandingPage() {
           <p className="inline-flex rounded-full border border-[#0A66C2]/20 bg-[#EBF3FD] px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[#0A66C2]">
             Intelligence dimensions
           </p>
-          <h2 className="mt-3 text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-5xl" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+          <h2 className="mt-3 text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-5xl" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
             Omnivyra reads the layers that shape AI-era discoverability.
           </h2>
         </div>
@@ -411,7 +411,7 @@ export default function MarketingLandingPage() {
         <div className="grid gap-10 lg:grid-cols-[0.82fr_1.18fr] lg:items-start">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#A9DAFF]">Active Intelligence</p>
-            <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-5xl" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+            <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-5xl" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
               Reports observe. Active Intelligence guides action.
             </h2>
             <p className="mt-5 text-base leading-8 text-[#DDF1FF]">
@@ -464,7 +464,7 @@ export default function MarketingLandingPage() {
           <div className="flex flex-col justify-between rounded-[28px] border border-[#C9DDF3] bg-white p-7 shadow-[0_18px_42px_rgba(10,31,68,0.08)]">
             <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#0A66C2]">Progression</p>
-            <h2 className="mt-3 text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-5xl" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+            <h2 className="mt-3 text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-5xl" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
               The snapshot creates the baseline. Context makes it operational.
             </h2>
             <p className="mt-5 text-base leading-8 text-[#5D6F83]">
@@ -505,7 +505,7 @@ export default function MarketingLandingPage() {
           <div className="flex flex-col justify-between">
             <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#A9DAFF]">Operational system</p>
-            <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-5xl" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+            <h2 className="mt-3 text-3xl font-bold tracking-tight text-white sm:text-5xl" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
               Marketing work starts moving as one system.
             </h2>
             <p className="mt-5 text-base leading-8 text-[#DDF1FF]">
@@ -545,7 +545,7 @@ export default function MarketingLandingPage() {
         </div>
         <div className="relative mx-auto max-w-[980px] text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#0A66C2]">Start with authority</p>
-          <h2 className="mt-3 text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-5xl" style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}>
+          <h2 className="mt-3 text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-5xl" style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}>
             Start where intelligence can become operational.
           </h2>
           <p className="mx-auto mt-5 max-w-2xl text-base leading-8 text-[#5D6F83]">

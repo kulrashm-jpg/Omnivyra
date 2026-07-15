@@ -45,11 +45,18 @@ import { getMetricsSnapshot }        from '../services/metricsCollector';
 import { runPublishingWorker }       from '../services/publishingJobService';
 import { createCreatorRenderWorker, recoverOrphanedCreatorRenderJobs } from '../services/creatorRenderDurableQueue';
 import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcessor';
-import { startCreatorContentWorkers, startWhatsAppBroadcastWorker, startWhatsAppWebhookWorker, startAnalyticsIngestionWorker } from '../queue/contentGenerationQueues';
-import { processCreatorContentJob } from '../queue/jobProcessors/creatorContentProcessor';
-import { processWhatsAppBroadcastJob } from '../queue/jobProcessors/whatsappBroadcastProcessor';
-import { processWhatsAppWebhookJob } from '../queue/jobProcessors/whatsappWebhookProcessor';
-import { processAnalyticsIngestionJob } from '../queue/jobProcessors/analyticsIngestionProcessor';
+import { registerSharedConsumers, type SharedConsumerHandles } from '../queue/workerTopology';
+import { runWithJobTraceContext } from '../observability/traceKit';
+import { definePool } from '../../lib/platform/concurrency';
+import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
+
+/** W3-1: split ai-heavy off the shared CPU semaphore (audit B-20). */
+const HEAVY_SLOT_SCOPING_FLAG = defineRolloutFlag({
+  key: 'heavy-slot-scoping',
+  description: 'W3-1: ai-heavy uses its own slot pool; creator-render keeps the CPU semaphore',
+});
+/** Same default cap as HEAVY_JOB_CONCURRENCY (3) — no throughput increase. */
+const AI_HEAVY_POOL = definePool({ name: 'ai-heavy-slot', defaultLimit: 3, maxLimit: 8 });
 import { runRenderParityPreflight, logPreflightReport } from './renderParityPreflight';
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
 import { startCron } from '../scheduler/cron';
@@ -107,7 +114,8 @@ instrumentWorker(conversationMemoryRebuildWorker);
 // Engine worker (LEAD + MARKET_PULSE) — uses shared Redis config
 const engineWorker = new Worker(
   'engine-jobs',
-  async (job) => {
+  // W0-3: restore enqueuer trace context (additive ALS scoping; fail-safe).
+  async (job) => runWithJobTraceContext(job, async () => {
     const { type, jobId } = job.data;
     console.info('[engine-worker] processing', { type, jobId });
     if (type === 'LEAD') {
@@ -118,7 +126,7 @@ const engineWorker = new Worker(
       const { processMarketPulseJobV1 } = await import('../services/marketPulseJobProcessor');
       await processMarketPulseJobV1(jobId);
     }
-  },
+  }),
   {
     connection: getSharedRedisClient(),
     prefix: getQueuePrefix(),
@@ -138,7 +146,8 @@ engineWorker.on('error', (err) => console.error('[engine-worker] error:', err));
 // Campaign planning worker (ai-heavy queue)
 const campaignWorker = new Worker<CampaignPlanningJobPayload>(
   'ai-heavy',
-  async (job) => {
+  // W0-3: restore enqueuer trace context (plan-v2 stamps via safeEnqueue).
+  async (job) => runWithJobTraceContext(job, async () => {
     // Soak-only opt-in branch (additive; gated by WORKER_SOAK_MODE === '1'
     // AND job.data.__soak === true). Exercises the ai-heavy queue runtime,
     // withHeavyJobSlot concurrency cap, async-execution timing, and
@@ -157,11 +166,54 @@ const campaignWorker = new Worker<CampaignPlanningJobPayload>(
         return { soak: true, lane: 'ai-heavy', heldMs: Date.now() - t0, jobId: String(job.id) };
       });
     }
+    // W3-4 (audit B-05): async interactive planner. plan.ts (flag
+    // 'async-planner', per-tenant) enqueues the EXACT runCampaignAiPlan args
+    // it would have awaited inline; the result lands in the existing
+    // aiExecutionResultStore under the job's poll key and the client
+    // re-polls plan.ts for it. Billing/credits run INSIDE runCampaignAiPlan
+    // on this worker — the same code path as the inline call.
+    if (job.name === 'interactive-plan') {
+      const { pollKey, companyId, actorUserId, args } = job.data as unknown as {
+        pollKey: string; companyId: string; actorUserId: string; args: Record<string, unknown>;
+      };
+      const { runCampaignAiPlan } = await import('../services/campaignAiOrchestrator');
+      // F-14: result persistence via the generalized runway completion.
+      const { completeRunwayOperation } = await import('../../lib/platform/runway');
+      const run = async () => {
+        const result = await runCampaignAiPlan(args as never);
+        await completeRunwayOperation({
+          pollKey,
+          action: 'interactive_plan',
+          organizationId: companyId,
+          actorUserId,
+          module: 'planner',
+          payload: result,
+        });
+      };
+      if (resolveRolloutSync(HEAVY_SLOT_SCOPING_FLAG).mode !== 'off') {
+        await AI_HEAVY_POOL.run(run);
+      } else {
+        await withHeavyJobSlot(run);
+      }
+      return;
+    }
     if (job.name !== 'campaign-planning') return; // other job types skip
     // Heavy-job slot acquired AFTER the skip check so skipped jobs never
-    // hold a slot. Shared cap across ai-heavy + creator-render.
-    await withHeavyJobSlot(() => processCampaignPlanningJob(job));
-  },
+    // hold a slot.
+    //
+    // W3-1 (audit B-20): campaign planning is I/O-bound (its 240 s GPT calls
+    // hold no CPU) yet it shared the 3-slot CPU semaphore with creator-render
+    // — three concurrent campaigns could stall every carousel/PDF render for
+    // minutes. Under the 'heavy-slot-scoping' flag, campaign jobs take a slot
+    // from their OWN pool (same cap of 3 by default → total ai-heavy
+    // throughput unchanged) and creator-render keeps the CPU semaphore to
+    // itself. Flag off (default) = shared semaphore exactly as before.
+    if (resolveRolloutSync(HEAVY_SLOT_SCOPING_FLAG).mode !== 'off') {
+      await AI_HEAVY_POOL.run(() => processCampaignPlanningJob(job));
+    } else {
+      await withHeavyJobSlot(() => processCampaignPlanningJob(job));
+    }
+  }),
   {
     connection:     getSharedRedisClient(),
     prefix:         getQueuePrefix(),
@@ -223,6 +275,15 @@ async function ensureRedisReady(): Promise<void> {
 function startPublishingJobsLoop(): () => void {
   const workerId = `publishing-jobs-${process.pid}`;
   let running = false;
+  // W6-5 (audit B-48): idle backoff. The 30 s DB poll ran 2,880×/day even
+  // with zero due work. Under the 'publish-poll-backoff' flag, after 10
+  // consecutive zero-claim cycles the loop skips ticks down to an effective
+  // 5-minute cadence; ANY claimed work snaps it back to 30 s instantly.
+  // The safety net is unchanged: BullMQ-delayed jobs and the cron
+  // findDuePostsAndEnqueue path still cover due posts — this poll is the
+  // recovery sweep. Flag off (default) = 30 s always, byte-for-byte.
+  let idleCycles = 0;
+  let skipUntil = 0;
 
   const runOnce = async () => {
     if (running) return;
@@ -230,6 +291,7 @@ function startPublishingJobsLoop(): () => void {
     try {
       const result = await runPublishingWorker({ workerId, limit: 5 });
       const processed = result.published + result.retrying + result.failed + result.deadLettered;
+      idleCycles = result.claimed > 0 || processed > 0 ? 0 : idleCycles + 1;
       if (result.claimed > 0 || processed > 0) {
         console.info('[publishing-jobs] cycle completed', { workerId, ...result });
       }
@@ -241,9 +303,22 @@ function startPublishingJobsLoop(): () => void {
   };
 
   void runOnce();
-  const timer = setInterval(() => { void runOnce(); }, 30_000);
+  const timer = setInterval(() => {
+    if (resolveRolloutSync(PUBLISH_POLL_BACKOFF_FLAG).mode !== 'off') {
+      const now = Date.now();
+      if (now < skipUntil) return;
+      if (idleCycles >= 10) skipUntil = now + 5 * 60 * 1000 - 30_000;
+    }
+    void runOnce();
+  }, 30_000);
   return () => clearInterval(timer);
 }
+
+/** W6-5 rollout flag — see startPublishingJobsLoop. */
+const PUBLISH_POLL_BACKOFF_FLAG = defineRolloutFlag({
+  key: 'publish-poll-backoff',
+  description: 'W6-5: idle backoff for the 30 s publishing DB poll (audit B-48)',
+});
 
 function logBootProvenance(): void {
   const env = process.env;
@@ -310,59 +385,37 @@ async function main(): Promise<void> {
   await runCacheWarmup().catch((err) =>
     console.warn('[main] cache warmup failed (non-fatal):', err?.message));
 
-  // Creator content workers (creator-video / creator-carousel / creator-story).
-  // These consume the `bolt-creator-row:<id>` render jobs that
-  // runCreatorAssetGenerationRuntime enqueues. They were registered ONLY in the
-  // dev bootstrap (startWorkers.ts:187); without them in this production process
-  // those jobs sit in `waiting` until waitUntilFinished(300000) times out →
-  // CREATOR_ASSET_RENDER_FAILED → render_failed. Reuse the SAME authority +
-  // processor as dev — no second implementation. Non-fatal so a registration
-  // failure can't stop the other workers, but logged loudly so the gap is
-  // never silent again.
-  try {
-    await startCreatorContentWorkers(processCreatorContentJob);
-    console.info('[main] creator content workers registered', {
-      queues: ['creator-video', 'creator-carousel', 'creator-story'],
-    });
-  } catch (err) {
-    console.error('[main] startCreatorContentWorkers FAILED — creator asset rendering will NOT work:',
-      err instanceof Error ? err.message : String(err));
-  }
-
-  // Topology-parity remediation (PROD-QUEUE-CONTRACT-AUDIT verdict D): these
-  // three queues are enqueued/exposed in production (analytics-ingestion via
-  // the daily vercel.json cron; whatsapp-broadcast/-webhook via the shipped
-  // WhatsApp feature) but had NO prod consumer — only the dev bootstrap
-  // (startWorkers.ts) registered them, so prod jobs sat in `waiting`. Reuse the
-  // SAME authority + processor as dev (no second implementation). Non-fatal +
-  // loud, mirroring the creator block.
-  try {
-    await startWhatsAppBroadcastWorker(processWhatsAppBroadcastJob);
-    console.info('[main] whatsapp broadcast worker registered', { queues: ['whatsapp-broadcast'] });
-  } catch (err) {
-    console.error('[main] startWhatsAppBroadcastWorker FAILED — WhatsApp broadcasts will NOT send:',
-      err instanceof Error ? err.message : String(err));
-  }
-  try {
-    await startWhatsAppWebhookWorker(processWhatsAppWebhookJob);
-    console.info('[main] whatsapp webhook worker registered', { queues: ['whatsapp-webhook'] });
-  } catch (err) {
-    console.error('[main] startWhatsAppWebhookWorker FAILED — inbound WhatsApp events will NOT process:',
-      err instanceof Error ? err.message : String(err));
-  }
-  try {
-    await startAnalyticsIngestionWorker(processAnalyticsIngestionJob);
-    console.info('[main] analytics ingestion worker registered', { queues: ['analytics-ingestion'] });
-  } catch (err) {
-    console.error('[main] startAnalyticsIngestionWorker FAILED — analytics ingestion will NOT run:',
-      err instanceof Error ? err.message : String(err));
-  }
+  // F-07 / W1-3 — ALL shared consumers (creator content, whatsapp, analytics,
+  // content-* text family, planner-refinement, listening/semantic/replay) are
+  // registered through the ONE topology module both bootstraps use. This
+  // replaces the per-family remediation blocks (creator + whatsapp + analytics)
+  // AND closes the remaining dev-only gaps (B-02): content-* / planner-
+  // refinement / listening-executions / semantic-indexing / replay-partition
+  // had prod producers but no prod consumer — their jobs sat in `waiting`
+  // forever. Per-family non-fatal + loud semantics are preserved inside
+  // registerSharedConsumers. Manifest: backend/queue/workerTopologyManifest.ts.
+  const sharedConsumers: SharedConsumerHandles = await registerSharedConsumers({ bootstrap: 'prod' });
 
   // Scheduler — runs the 10-min social-account token refresh (X tokens
   // expire in 2h) plus all other cron cycles. Co-located in the worker
   // process so a single Railway service (Dockerfile.worker CMD = main.js)
   // covers both queues AND scheduled refresh. Non-fatal: a scheduler
   // failure must not stop queue workers from running.
+  //
+  // W6-2 (audit B-13): CRON_SERVICE_MODE separates scheduling from execution
+  // WITHOUT redesigning either:
+  //   'colocated'   (default) — exactly today's topology.
+  //   'worker-only' — this process runs queues ONLY; a dedicated single-
+  //                   replica cron service (Dockerfile.cron → worker:cron →
+  //                   cron.ts standalone entry, which already exists) owns
+  //                   scheduling. This is the prerequisite for raising
+  //                   worker numReplicas: workers scale, cron stays at 1
+  //                   (with W6-1 timer leases as the second seatbelt).
+  const cronServiceMode = String(process.env.CRON_SERVICE_MODE ?? 'colocated').toLowerCase();
+  if (cronServiceMode === 'worker-only') {
+    console.info('[main] CRON_SERVICE_MODE=worker-only — scheduler runs in the dedicated cron service');
+    setCronStatus('ok', 'external cron service (CRON_SERVICE_MODE=worker-only)');
+  } else
   startCron()
     .then(() => {
       // Cron successfully initialized — flip health to ok.
@@ -378,6 +431,13 @@ async function main(): Promise<void> {
       setCronStatus('degraded', reason);
       console.error('[main] startCron failed (non-fatal — token refresh/crons will NOT run):', reason);
     });
+
+  // W0-7: optional periodic baseline capture (env-gated, DEFAULT OFF).
+  let stopBaselineLoop: () => void = () => {};
+  try {
+    const { startBaselineCaptureLoop } = await import('../observability/baseline');
+    stopBaselineLoop = startBaselineCaptureLoop();
+  } catch { /* measurement must never break the worker */ }
 
   // Autoscaling monitor — fires signal when queue depth > 500 or latency > 10s
   const stopPublishingJobsLoop = startPublishingJobsLoop();
@@ -400,7 +460,12 @@ async function main(): Promise<void> {
              'intelligence-polling', 'ai-heavy', 'engine-jobs',
              'lead-thread-recompute', 'conversation-memory-rebuild', 'creator-render',
              'creator-video', 'creator-carousel', 'creator-story',
-             'publishing_jobs'],
+             'content-blog', 'content-post', 'content-whitepaper', 'content-story',
+             'content-newsletter', 'content-engagement', 'content-refinement',
+             'whatsapp-broadcast', 'whatsapp-webhook', 'analytics-ingestion',
+             'planner-refinement', 'listening-executions', 'semantic-indexing',
+             'replay-partition', 'publishing_jobs'],
+    sharedConsumerFailures: sharedConsumers.failures.map((f) => f.family),
     boltConcurrency,
     pid: process.pid,
   });
@@ -411,6 +476,7 @@ async function main(): Promise<void> {
     console.info(`[main] ${signal} received — shutting down gracefully`);
     stopMonitor();
     stopPublishingJobsLoop();
+    stopBaselineLoop();
     clearInterval(orphanRecoveryTimer);
     await Promise.allSettled([
       publishWorker.close(),
@@ -422,6 +488,10 @@ async function main(): Promise<void> {
       creatorRenderWorker.close(),
       leadThreadRecomputeWorker.close(),
       conversationMemoryRebuildWorker.close(),
+      // F-07: getWorker-based shared consumers (planner-refinement, listening,
+      // semantic, replay). Content/creator/whatsapp/analytics workers manage
+      // their own lifecycle inside contentGenerationQueues (unchanged).
+      ...sharedConsumers.workers.map((w) => w.close()),
     ]);
     await closeConnections();
     console.info('[main] shutdown complete');

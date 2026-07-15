@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/auth/accept-invite
@@ -23,7 +24,7 @@ type ErrorResponse   = { error: string; code?: string };
 
 const ACCEPT_INVITE_LIMIT = { ...LOGIN_LIMIT, keyPrefix: 'rl:accept-invite', limit: 10, windowSecs: 60 * 15 };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -119,3 +120,6 @@ export default async function handler(
 
   return res.status(200).json({ ok: true, email: (invitation as any).email });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/accept-invite' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { getCreatorObservabilityReport } from '../../../backend/services/creator/creatorObservabilityService';
@@ -10,7 +11,7 @@ import { enqueueUserTemplatePreview } from '../../../backend/services/creator/us
  *      — read-only operational retry (re-enqueues the EXISTING preview pipeline;
  *        idempotent, non-destructive).
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const user = await resolveUserContext(req);
   if (!user?.userId) return res.status(401).json({ error: 'authentication required' });
 
@@ -46,3 +47,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, POST');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-templates/observability' });

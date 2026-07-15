@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * GET /api/admin/access-requests/list
@@ -11,7 +12,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   // Read-only listing of access requests. Drops the dead profiles.is_super_admin
@@ -42,3 +43,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ requests: data, total: count, page: pageNum, limit: limitNum });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/access-requests/list' });

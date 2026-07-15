@@ -1,9 +1,10 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
 import { createWordPressSetupSession } from '../../../backend/services/wordpressPluginSetupService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const { company_id, website_id, connection_id, expected_domain, expires_in_minutes } = req.body || {};
   if (!company_id) return res.status(400).json({ error: 'company_id is required' });
@@ -22,3 +23,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   return res.status(201).json(result);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/wordpress-plugin/setup-session' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/auth/mfa-verify
  *
@@ -50,7 +51,7 @@ import { logger } from '../../../backend/services/logger';
 
 type Factor = 'totp' | 'webauthn' | 'recovery_code';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -240,3 +241,6 @@ function userAgent(req: NextApiRequest): string | null {
   const ua = req.headers['user-agent'];
   return typeof ua === 'string' ? ua : null;
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/mfa-verify' });

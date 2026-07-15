@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/super-admin/oauth-health
  *
@@ -183,7 +184,7 @@ async function recentAnalyticsIntegrationRows(limit: number): Promise<RecentInte
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<OAuthHealthResponse | { status: 'error'; message: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<OAuthHealthResponse | { status: 'error'; message: string }>) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ status: 'error', message: 'Method not allowed' });
@@ -243,3 +244,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     },
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/oauth-health' });

@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image'; // W5-3
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -67,7 +68,7 @@ export default function LandingNavbar() {
 
         {/* Logo */}
         <Link href="/" className="flex shrink-0 items-center" aria-label="Omnivyra home">
-          <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain sm:h-14" />
+          <Image src="/logo.png" alt="Omnivyra" width={898} height={278} priority className="h-12 w-auto object-contain sm:h-14" />
         </Link>
 
         {/* Center nav — desktop only */}

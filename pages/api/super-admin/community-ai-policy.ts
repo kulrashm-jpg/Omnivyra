@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -51,7 +52,7 @@ const resolveUpdatedByEmail = async (userId?: string | null) => {
   return data?.email || null;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     const admin = await requireSuperAdminRead(req, res);
     if (!admin) return;
@@ -168,3 +169,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const updatedByEmail = await resolveUpdatedByEmail(savedPolicy?.updated_by);
   return res.status(200).json({ policy: savedPolicy, updated_by_email: updatedByEmail });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/community-ai-policy' });

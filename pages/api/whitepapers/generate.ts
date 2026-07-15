@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/whitepapers/generate
  *
@@ -18,7 +19,7 @@ import {
 import type { BlogAngle } from '../../../lib/blog/blogGenerationEngine';
 import { isValidWhitepaperFormat } from '../../../lib/blog/blogStructureTemplates';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -149,3 +150,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // No mode — whitepapers always use the modal flow
   return res.status(400).json({ error: 'mode required (angles or full)' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/whitepapers/generate' });

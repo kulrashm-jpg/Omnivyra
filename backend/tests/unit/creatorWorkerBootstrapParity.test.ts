@@ -19,6 +19,11 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const mainTs = read('workers/main.ts');
 const startWorkersTs = read('queue/startWorkers.ts');
 const contentQueuesTs = read('queue/contentGenerationQueues.ts');
+// F-07 / W1-3: shared consumers now register through the ONE topology module
+// consumed by BOTH bootstraps. This suite's guarantee is unchanged — the
+// same authority + processor in dev and prod — the evidence just moved from
+// per-bootstrap inline blocks to workerTopology.ts.
+const topologyTs = read('queue/workerTopology.ts');
 
 const CREATOR_QUEUES = ['creator-video', 'creator-carousel', 'creator-story'];
 
@@ -29,18 +34,17 @@ describe('creator-content worker bootstrap parity (dev ↔ prod)', () => {
     for (const q of CREATOR_QUEUES) expect(contentQueuesTs).toContain(`'${q}'`);
   });
 
-  it('DEV bootstrap (startWorkers.ts) registers the creator-content workers', () => {
-    expect(startWorkersTs).toContain('startCreatorContentWorkers(processCreatorContentJob)');
+  it('the shared topology module registers creator content via the SAME authority + processor', () => {
+    expect(topologyTs).toContain('startCreatorContentWorkers(processCreatorContentJob)');
+    expect(topologyTs).toMatch(/import\s*\(\s*['"]\.\/jobProcessors\/creatorContentProcessor['"]\s*\)/);
   });
 
-  it('PROD bootstrap (main.ts) registers the creator-content workers via the SAME authority', () => {
-    // Imports the same authority + processor (no second implementation).
-    // startCreatorContentWorkers must be imported from contentGenerationQueues
-    // (co-imported with the other parity-remediation starters is fine).
-    expect(mainTs).toMatch(/import\s*\{[^}]*\bstartCreatorContentWorkers\b[^}]*\}\s*from\s*['"]\.\.\/queue\/contentGenerationQueues['"]/);
-    expect(mainTs).toMatch(/import\s*\{\s*processCreatorContentJob\s*\}\s*from\s*['"]\.\.\/queue\/jobProcessors\/creatorContentProcessor['"]/);
-    // And calls it.
-    expect(mainTs).toContain('startCreatorContentWorkers(processCreatorContentJob)');
+  it('DEV bootstrap (startWorkers.ts) registers shared consumers through the topology module', () => {
+    expect(startWorkersTs).toContain("registerSharedConsumers({ bootstrap: 'dev'");
+  });
+
+  it('PROD bootstrap (main.ts) registers shared consumers through the SAME topology module', () => {
+    expect(mainTs).toContain("registerSharedConsumers({ bootstrap: 'prod'");
   });
 
   it('PROD boot log advertises the creator queues (observability parity)', () => {

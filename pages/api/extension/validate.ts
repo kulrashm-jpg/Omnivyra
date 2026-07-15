@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
@@ -20,7 +21,7 @@ type ErrorResponse = {
   timestamp: number;
 };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>
 ) {
@@ -83,3 +84,6 @@ export default async function handler(
     timestamp: Date.now(),
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/extension/validate' });

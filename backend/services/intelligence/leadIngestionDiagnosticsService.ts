@@ -9,7 +9,7 @@
  * Ingestion flow it observes (unchanged):
  *   form_submit event → /api/leads (webhook/embed) → leads
  *     → recordLeadAttribution() → lead_attributions + form_conversions
- *     → leadQueue (BullMQ) → leadWorker
+ *     → engine-jobs (BullMQ jobQueue) → engine worker (LEAD jobs)
  */
 import { ownedDbTable } from '../../db/writeOwner';
 import {
@@ -114,7 +114,7 @@ export async function buildLeadIngestionDiagnostics(
 
   if (suspectedIngestionLoss > 0 && formSubmitEvents > 0) {
     issues.push(`${suspectedIngestionLoss} form_submit events have no matching lead (possible ingestion loss).`);
-    remediation.push('Verify form posts reach /api/leads (origin allow-list, webhook secret) and check leadQueue failures.');
+    remediation.push('Verify form posts reach /api/leads (origin allow-list, webhook secret) and check engine-jobs LEAD failures (lead-job-failed logs).');
   }
   if (orphanLeads > 0) {
     issues.push(`${orphanLeads} leads created without a visitor session (attribution loss).`);

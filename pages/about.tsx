@@ -396,7 +396,7 @@ export default function AboutPage() {
         />
       </Head>
 
-      <main className="relative isolate min-h-screen overflow-hidden bg-[#F5F9FF]" style={{ fontFamily: "'Inter', sans-serif" }}>
+      <main className="relative isolate min-h-screen overflow-hidden bg-[#F5F9FF]" style={{ fontFamily: "var(--font-inter), sans-serif" }}>
         <JourneyField />
         <section
           className="relative z-10 flex min-h-[calc(100svh-65px)] overflow-hidden text-white"

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/auth/verify-email
@@ -34,7 +35,7 @@ import {
 type SuccessResponse = { success: true; route: string; requiresLogin?: boolean; email?: string | null };
 type ErrorResponse   = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -243,3 +244,6 @@ export default async function handler(
     email: resolvedEmail,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/verify-email' });

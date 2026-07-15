@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/billing/fx — public read of the live FX config (rates + market
  * overrides) for multi-currency DISPLAY. Read-only; falls back to defaults
@@ -6,7 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getFxConfig } from '@/backend/services/pricingConfigService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
   try {
     const fx = await getFxConfig();
@@ -16,3 +17,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message ?? 'fx_failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/billing/fx' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/auth/login
@@ -16,7 +17,7 @@ import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 type SuccessResponse = { proceed: true };
 type ErrorResponse   = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -109,3 +110,6 @@ export default async function handler(
   // ── 2. Return proceed — frontend calls signInWithPassword() ───────────────
   return res.status(200).json({ proceed: true });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/login' });

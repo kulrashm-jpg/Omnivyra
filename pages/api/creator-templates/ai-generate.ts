@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { generateTemplateIntent } from '../../../backend/services/creator/aiTemplateIntentService';
@@ -13,7 +14,7 @@ import { familyForCreatorType } from '../../../lib/creator-templates';
  * Quality Inspector). The AI never produces a CreatorTemplate. Returns the
  * created draft so the client can open it in the existing editor.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -45,3 +46,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(201).json({ template: created, intent, intentSource: source });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-templates/ai-generate' });

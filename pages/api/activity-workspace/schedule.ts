@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/activity-workspace/schedule
@@ -38,7 +39,7 @@ import {
   checkScheduleCharLimitForNodes,
 } from '@/backend/scheduler/schedulingCharLimitGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   console.log('[schedule] method:', req.method, 'url:', req.url);
   if (req.method !== 'POST') {
     return res.status(405).json({ error: `Method not allowed: ${req.method}` });
@@ -560,3 +561,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message || 'Failed to schedule post' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/activity-workspace/schedule' });

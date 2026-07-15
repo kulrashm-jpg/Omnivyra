@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
@@ -14,7 +15,7 @@ import { recordComplianceAudit } from '../../../backend/services/audit/complianc
  * refactoring the public ingestion path. Double-gated: RBAC + internal HMAC
  * (LEAD_WEBHOOK_HANDOFF_SECRET).
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const companyId = typeof req.body?.company_id === 'string' ? req.body.company_id : null;
@@ -73,3 +74,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ status: 'recorded', attrNonce: attrNonce ?? null });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/internal/lead-webhook-handoff' });

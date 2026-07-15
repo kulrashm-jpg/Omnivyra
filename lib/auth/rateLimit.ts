@@ -114,7 +114,9 @@ export interface RateLimitResult {
   bypassed: boolean; // true when Redis was unavailable (fail-open path)
 }
 
-async function resolveEffectiveRateLimitConfig(config: RateLimitConfig): Promise<RateLimitConfig> {
+// Exported for W2-3 (Lua AI guard): the batched path must apply the SAME
+// admin overrides per keyPrefix as the per-layer JS path.
+export async function resolveEffectiveRateLimitConfig(config: RateLimitConfig): Promise<RateLimitConfig> {
   try {
     const { getRateLimitAdminConfig, getRateLimitOverride } = await import('../../backend/services/adminRuntimeConfig');
     await getRateLimitAdminConfig();

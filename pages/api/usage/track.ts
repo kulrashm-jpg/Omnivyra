@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/usage/track — the canonical, AUTHENTICATED customer usage ingestion
  * endpoint (CSA-001 §2). Reuses the existing auth + tenant guard (`withOrgAccess`
@@ -50,4 +51,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withOrgAccess(handler);
+export default __createApiRoute(withOrgAccess(handler), { route: '/api/usage/track' });

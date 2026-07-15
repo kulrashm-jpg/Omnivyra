@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getActiveProperty } from '../../../backend/services/analyticsIntegrationService';
 import { runIngestionForCompany } from '../../../backend/services/ingestionScheduler';
@@ -10,7 +11,7 @@ const POLL_INTERVAL_MS = 1_000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({
@@ -78,3 +79,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     message: 'Google Analytics refresh is running in the background.',
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/ga-sync' });

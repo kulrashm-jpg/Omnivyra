@@ -23,7 +23,27 @@ const AuthDevPanel = dynamic(
   { ssr: false }, // dev-only diagnostics — chunk is never requested in production
 );
 import PageLoader from '../components/PageLoader';
+// W5-4 (audit B-38): fonts move from a render-blocking Google Fonts CSS
+// @import (globals.css) to next/font — build-time self-hosted, subsetted,
+// preloaded, display:swap. SAME families and weights as the removed @import;
+// consumers reference the CSS variables exposed below (landing/about inline
+// styles migrated in this wave). Kills the fonts.googleapis.com round-trip
+// on first paint of every page.
+import { Inter, Poppins } from 'next/font/google';
 import { initClientPerf, markRouteChange } from '../lib/observability/clientPerf';
+
+const interFont = Inter({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700', '800'],
+  display: 'swap',
+  variable: '--font-inter',
+});
+const poppinsFont = Poppins({
+  subsets: ['latin'],
+  weight: ['600', '700', '800'],
+  display: 'swap',
+  variable: '--font-poppins',
+});
 import {
   WEBSITE_GA_MEASUREMENT_ID,
   flushQueuedWebsiteEvents,
@@ -299,6 +319,14 @@ function MyApp({ Component, pageProps }: AppProps) {
   return (
     <CompanyProvider>
       <TourProvider>
+        {/* W5-4: expose the self-hosted families as CSS variables globally.
+            styled-jsx global — no wrapper element, no cascade change. */}
+        <style jsx global>{`
+          :root {
+            --font-inter: ${interFont.style.fontFamily};
+            --font-poppins: ${poppinsFont.style.fontFamily};
+          }
+        `}</style>
         <Head>
           <link rel="icon" href="/favicon.jpg" />
           {isWebsiteAnalyticsEnabled() && (

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Phase 1 — Central trace transport endpoint.
  *
@@ -52,7 +53,7 @@ type PerEventResult = {
   reason?: string;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse): Promise<void> {
+async function handler(req: NextApiRequest, res: NextApiResponse): Promise<void> {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'METHOD_NOT_ALLOWED' });
     return;
@@ -156,3 +157,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // those are reported per-event so the client can drop them from its queue.
   res.status(200).json({ accepted, duplicate, rejected, results });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/threadRuntime/trace' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/domain/verification-status
  *
@@ -60,7 +61,7 @@ type SuccessResponse = {
 };
 type ErrorResponse = { error: string; code?: string; details?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -153,3 +154,6 @@ export default async function handler(
     },
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/domain/verification-status' });

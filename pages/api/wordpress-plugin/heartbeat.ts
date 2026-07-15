@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { recordWordPressPluginHeartbeat } from '../../../backend/services/wordpressPluginService';
 
@@ -6,7 +7,7 @@ function bearer(req: NextApiRequest): string {
   return header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const { registration_id, metadata, plugin_version, wp_version, php_version, health_status, settings, capabilities } = req.body || {};
   const token = bearer(req) || (typeof req.body?.access_token === 'string' ? req.body.access_token : undefined);
@@ -30,3 +31,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: err instanceof Error ? err.message : 'Heartbeat failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/wordpress-plugin/heartbeat' });

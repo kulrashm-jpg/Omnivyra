@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Phase 5 — /api/threadRuntime/introspect
  *
@@ -22,7 +23,7 @@ import { aggregateRuntimeAnalytics } from '@/backend/services/threadRuntime/runt
 import { computeRuntimeGovernanceScore } from '@/backend/services/threadRuntime/runtimeGovernanceScore';
 import { getDefaultPersistentTraceStore } from '@/backend/services/threadRuntime/persistentTraceStore';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.status(405).json({ error: 'METHOD_NOT_ALLOWED' });
     return;
@@ -74,3 +75,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ error: 'INTROSPECT_FAILED', reason: (err as Error).message });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/threadRuntime/introspect' });

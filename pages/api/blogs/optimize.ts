@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/blogs/optimize
  *
@@ -35,7 +36,7 @@ import {
 import type { ContentBlock } from '../../../lib/blog/blockTypes';
 import type { OptimizationAction } from '../../../lib/blog/optimizationEngine';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -142,3 +143,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     saved:          save,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/blogs/optimize' });

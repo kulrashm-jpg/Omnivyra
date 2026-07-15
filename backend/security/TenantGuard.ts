@@ -41,6 +41,9 @@ import { isPlatformSuperAdmin } from '../services/rbacService';
 import { logger } from '../services/logger';
 import { logSecurityEvent } from './audit/SecurityAuditService';
 import { seedRequestContextFromRequest } from '../services/requestContext';
+// W2-1 (Foundation primitives): rollout lifecycle + request-scoped memo.
+import { defineRolloutFlag, resolveRolloutSync, runWithRollout } from '../../lib/platform/rollout';
+import { memoRequest } from '../services/requestScopedMemo';
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -142,14 +145,154 @@ async function readSingleWithRetry<T>(
   return last;
 }
 
-export async function assertTenantAccess(input: {
+/**
+ * W2-1 (Guard Consolidation) rollout flag. Modes:
+ *   off (default) — the sequential path below runs exactly as always.
+ *   shadow        — sequential stays AUTHORITATIVE; the batched candidate runs
+ *                   alongside and decisions are compared (rollout.shadow
+ *                   metrics: match / divergence / candidate_error).
+ *   enforce       — batched path decides (per-tenant promotable). DO NOT set
+ *                   before a zero-divergence shadow soak (Gate C).
+ * Kill switches: ROLLOUT_KILL_SWITCH / ROLLOUT_TENANT_GUARD_BATCH_KILL.
+ */
+const TENANT_GUARD_BATCH_FLAG = defineRolloutFlag({
+  key: 'tenant-guard-batch',
+  description: 'W2-1: batched + request-memoized tenant guard (audit B-03)',
+});
+
+type TenantAccessInput = {
   userId: string | null;
   supabaseUid?: string | null;
   organizationId: string | null | undefined;
   options?: TenantAccessOptions;
   /** When true, platform-super-admin status is ALSO confirmed. Defaults true. */
   consultPlatformSuperAdmin?: boolean;
-}): Promise<TenantAccessResult> {
+};
+
+export async function assertTenantAccess(input: TenantAccessInput): Promise<TenantAccessResult> {
+  // Fast path: flag fully off (the overwhelming default) → zero new work.
+  const mode = resolveRolloutSync(TENANT_GUARD_BATCH_FLAG, {
+    tenantId: input.organizationId ?? undefined,
+  }).mode;
+  if (mode === 'off') return assertTenantAccessSequential(input);
+  return runWithRollout(TENANT_GUARD_BATCH_FLAG, {
+    tenantId: input.organizationId ?? undefined,
+    legacy: () => assertTenantAccessSequential(input),
+    candidate: () => assertTenantAccessBatched(input),
+    onDivergence: ({ legacy: l, candidate: c }) => {
+      try {
+        logger.warn('tenant_guard_shadow_divergence', {
+          userId: input.userId,
+          organizationId: input.organizationId,
+          legacy: { ok: l.ok, reason: (l as { reason?: string }).reason ?? null },
+          candidate: { ok: c.ok, reason: (c as { reason?: string }).reason ?? null },
+        });
+      } catch { /* diagnostics never throw */ }
+    },
+  });
+}
+
+/**
+ * W2-1 candidate: identical decision tree, but the three independent reads
+ * (platform-super-admin, membership, org status) run in ONE parallel batch
+ * and are request-memoized (identical re-reads within one request — the
+ * audit's 3×-membership pattern — hit the memo instead of the database).
+ * Guard latency becomes max(reads) instead of sum(reads).
+ */
+async function assertTenantAccessBatched(input: TenantAccessInput): Promise<TenantAccessResult> {
+  const userId = input.userId;
+  const organizationId = input.organizationId;
+
+  if (!userId) return { ok: false, reason: 'NO_AUTH', userId: null };
+  if (!organizationId) return { ok: false, reason: 'NO_ORG_ID', userId };
+
+  const [platformSuperAdmin, membership, org] = await Promise.all([
+    input.consultPlatformSuperAdmin !== false
+      ? memoRequest(`guard:superadmin:${userId}`, () => isPlatformSuperAdmin(userId))
+      : Promise.resolve(false),
+    memoRequest(`guard:membership:${userId}:${organizationId}`, () =>
+      readSingleWithRetry<{ role?: string | null; status?: string | null }>(
+        'user_company_roles',
+        () => supabase
+          .from('user_company_roles')
+          .select('role, status')
+          .eq('user_id', userId)
+          .eq('company_id', organizationId)
+          .limit(1)
+          .maybeSingle(),
+      )),
+    memoRequest(`guard:org:${organizationId}`, () =>
+      readSingleWithRetry<{ id?: string; status?: string | null }>(
+        'companies',
+        () => supabase
+          .from('companies')
+          .select('id, status')
+          .eq('id', organizationId)
+          .maybeSingle(),
+      )),
+  ]);
+
+  // Decision tree below is a line-for-line mirror of the sequential path.
+  if (platformSuperAdmin && !input.options?.noPlatformBypass) {
+    return {
+      ok: true,
+      access: {
+        userId,
+        supabaseUid: input.supabaseUid ?? '',
+        organizationId,
+        role: null,
+        bypass: true,
+        isPlatformSuperAdmin: true,
+      },
+    };
+  }
+
+  const { data: roleRow, error: roleErr } = membership;
+  if (roleErr) {
+    if (isDeterministicIdentityError(roleErr)) {
+      logger.warn('tenant_guard_identity_mismatch', {
+        userId, organizationId, code: roleErr.code ?? null,
+      });
+      return { ok: false, reason: 'NOT_A_MEMBER', userId };
+    }
+    logger.error('tenant_guard_db_error', { userId, organizationId, message: roleErr.message });
+    return { ok: false, reason: 'TENANT_LOOKUP_ERROR', userId };
+  }
+  if (!roleRow) return { ok: false, reason: 'NOT_A_MEMBER', userId };
+
+  const status = (roleRow as { status?: string | null }).status ?? null;
+  const role   = (roleRow as { role?: string | null }).role ?? null;
+  if (status !== 'active') return { ok: false, reason: 'STALE_MEMBERSHIP', userId };
+
+  if (input.options?.requireRoleIn && input.options.requireRoleIn.length > 0) {
+    const allowed = role && input.options.requireRoleIn.includes(role);
+    if (!allowed) return { ok: false, reason: 'INSUFFICIENT_ROLE', userId };
+  }
+
+  const { data: orgRow, error: orgErr } = org;
+  if (orgErr) {
+    if (isDeterministicIdentityError(orgErr)) return { ok: false, reason: 'ORG_NOT_FOUND', userId };
+    return { ok: false, reason: 'TENANT_LOOKUP_ERROR', userId };
+  }
+  if (!orgRow) return { ok: false, reason: 'ORG_NOT_FOUND', userId };
+  if ((orgRow as { status?: string | null }).status !== 'active') {
+    return { ok: false, reason: 'ORG_INACTIVE', userId };
+  }
+
+  return {
+    ok: true,
+    access: {
+      userId,
+      supabaseUid: input.supabaseUid ?? '',
+      organizationId,
+      role,
+      bypass: false,
+      isPlatformSuperAdmin: platformSuperAdmin,
+    },
+  };
+}
+
+async function assertTenantAccessSequential(input: TenantAccessInput): Promise<TenantAccessResult> {
   const userId = input.userId;
   const organizationId = input.organizationId;
 

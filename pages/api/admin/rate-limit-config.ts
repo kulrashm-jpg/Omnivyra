@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/admin/rate-limit-config  — read current overrides
@@ -67,4 +68,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'admin-rate-limit-config', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-rate-limit-config', methods: ['POST'] }), { route: '/api/admin/rate-limit-config' });

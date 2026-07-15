@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/onboarding/profile
@@ -25,7 +26,7 @@ import {
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse   = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -118,3 +119,6 @@ export default async function handler(
 
   return res.status(200).json({ success: true, route });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/onboarding/profile' });

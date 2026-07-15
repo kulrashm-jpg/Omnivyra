@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Promotion Drafts API (BLOG-PROMOTION hardening — durable persistence).
  *
@@ -43,7 +44,7 @@ function rowToDraft(row: PromotionDraftRow) {
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const rawCompanyId = req.method === 'GET' ? req.query.companyId : (req.body || {}).companyId;
   const companyId = String(rawCompanyId || '').trim();
   if (!companyId) {
@@ -124,3 +125,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, POST, DELETE');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/promotion-drafts' });

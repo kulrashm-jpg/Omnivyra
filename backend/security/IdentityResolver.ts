@@ -413,15 +413,18 @@ async function buildPrincipalFromAuth(
   const fingerprint = fingerprintRequest(req);
 
   // Parallel I/O for the remaining state.
-  const [memberships, activeOrgId, capabilities, mfa, device] = await Promise.all([
+  // W2-8 (audit B-15): fetchStepUpState joins the batch — its inputs
+  // (user.id, session.id) are both known before the Promise.all, so awaiting
+  // it afterwards was one pure serial round-trip of added latency. Same
+  // queries, same data, same decision inputs.
+  const [memberships, activeOrgId, capabilities, mfa, device, stepUp] = await Promise.all([
     fetchOrgMemberships(user.id),
     fetchActiveCompanyId(user.id),
     resolveUserCapabilities(user.id),
     fetchMfaState(user.id),
     fetchDeviceState(user.id, fingerprint),
+    fetchStepUpState(user.id, session?.id ?? null),
   ]);
-
-  const stepUp = await fetchStepUpState(user.id, session?.id ?? null);
 
   const now = new Date();
   return {

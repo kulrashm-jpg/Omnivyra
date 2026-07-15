@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * Unified API for AI topic suggestions.
@@ -5,7 +6,7 @@
  * POST with suggestions: save (no-op in mock)
  * POST with count/category/platforms: generate new topics (parametric)
  */
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method === 'GET') {
     return handleGetSuggestions(req, res);
   } else if (req.method === 'POST') {
@@ -123,3 +124,6 @@ async function handleSaveSuggestions(req, res) {
     res.status(500).json({ success: false, error: 'Failed to save topic suggestions' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/ai/topic-suggestions' });

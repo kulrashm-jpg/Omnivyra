@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/campaigns/[id]/outcomes  — fetch or compute outcome score
@@ -20,7 +21,7 @@ async function getCompanyId(campaignId: string): Promise<string | null> {
   return (data as any)?.company_id ?? null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = req.query.id as string;
   if (!campaignId) return res.status(400).json({ error: 'Campaign ID required' });
 
@@ -55,3 +56,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/:id/outcomes' });

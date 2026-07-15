@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
 /**
  * Health check endpoint that verifies Next.js is fully ready
  * Use this to gate incoming traffic until compilation is complete
@@ -14,7 +15,7 @@ const CANDIDATE_MANIFESTS = [
   '.next/build-manifest.json',
 ];
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const manifestReady = CANDIDATE_MANIFESTS.some((rel) =>
       fs.existsSync(path.join(process.cwd(), rel))
@@ -42,3 +43,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/ready' });

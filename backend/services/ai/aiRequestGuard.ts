@@ -31,10 +31,24 @@
  * (429 for rate/burst, 413 for oversize) so API routes and the gateway can
  * surface a standardized throttle response without changing contracts.
  */
-import { checkRateLimit } from '../../../lib/auth/rateLimit';
+import { checkRateLimit, resolveEffectiveRateLimitConfig } from '../../../lib/auth/rateLimit';
 import { getRequestContext } from '../requestContext';
 import { recordRawCounter } from '../../observability';
 import { logger } from '../logger';
+// W2-3: Lua-batched limiter (one round-trip for all layers) + rollout gate.
+import { checkLayersLua } from './aiGuardLua';
+import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
+
+/**
+ * W2-3 rollout flag. off (default) = sequential JS path exactly as before;
+ * enforce = Lua-batched path with automatic JS fallback on any error.
+ * Shadow is intentionally not meaningful here (the check mutates counters).
+ * Kill: ROLLOUT_LUA_AI_GUARD_KILL / ROLLOUT_KILL_SWITCH.
+ */
+const LUA_AI_GUARD_FLAG = defineRolloutFlag({
+  key: 'lua-ai-guard',
+  description: 'W2-3: single-round-trip Lua limiter for the AI guard (audit B-10)',
+});
 
 export type AiGuardProvider = 'openai' | 'anthropic' | 'gemini' | 'other';
 
@@ -244,6 +258,66 @@ export async function guardAiRequest(ctx: AiGuardContext): Promise<void> {
   // (per-user, per-company, per-IP, burst) but keep provider-protection layers.
   // Inferred when the caller passes no user identity at all.
   const background = ctx.background ?? (!userId && !ctx.ip);
+
+  // W2-3 (audit B-10): Lua-batched path — all eligible layers in ONE Redis
+  // round-trip instead of ~8 sequential MULTIs. Flag-gated (default off);
+  // ANY failure falls back to the sequential JS path below (fail-open
+  // preserved). Shadow mode is unsupported for this flag by design: the
+  // check mutates counters, so dual-running would double-record requests.
+  if (resolveRolloutSync(LUA_AI_GUARD_FLAG).mode !== 'off') {
+    try {
+      const eligible: Array<{ label: string; keyPrefix: string; id: string; limit: number; window: number; burst: boolean }> = [];
+      if (userId && !background && limits.burstUserPer10s > 0) {
+        eligible.push({ label: 'burst_user', keyPrefix: 'ai:burst:user', id: userId, limit: limits.burstUserPer10s, window: 10, burst: true });
+      }
+      const layerDefs: Array<{ label: string; prefix: string; id: string | null; limit: number; window: number; scope: 'user' | 'platform' }> = [
+        { label: 'user_min',      prefix: 'ai:rl:user:min',  id: userId,    limit: limits.userPerMin,      window: 60,   scope: 'user' },
+        { label: 'user_hour',     prefix: 'ai:rl:user:hr',   id: userId,    limit: limits.userPerHour,     window: 3600, scope: 'user' },
+        { label: 'company_min',   prefix: 'ai:rl:co:min',    id: companyId, limit: limits.companyPerMin,   window: 60,   scope: 'user' },
+        { label: 'company_hour',  prefix: 'ai:rl:co:hr',     id: companyId, limit: limits.companyPerHour,  window: 3600, scope: 'user' },
+        { label: 'operation_min', prefix: 'ai:rl:op:min',    id: operation, limit: limits.operationPerMin, window: 60,   scope: 'platform' },
+        { label: 'provider_min',  prefix: 'ai:rl:prov:min',  id: provider,  limit: limits.providerPerMin,  window: 60,   scope: 'platform' },
+        { label: 'ip_min',        prefix: 'ai:rl:ip:min',    id: ctx.ip ?? null, limit: limits.ipPerMin,   window: 60,   scope: 'user' },
+      ];
+      for (const l of layerDefs) {
+        if (!l.id) continue;
+        if (background && l.scope === 'user') continue;
+        if (l.limit <= 0) continue; // 0 = layer disabled (checkLayer parity)
+        eligible.push({ label: l.label, keyPrefix: l.prefix, id: l.id, limit: l.limit, window: l.window, burst: false });
+      }
+      // Apply the SAME per-prefix admin overrides the JS path applies.
+      const resolved = await Promise.all(eligible.map(async (l) => {
+        const eff = await resolveEffectiveRateLimitConfig({ keyPrefix: l.keyPrefix, limit: l.limit, windowSecs: l.window });
+        return { ...l, limit: eff.limit, window: eff.windowSecs };
+      }));
+      const nowMs = Date.now();
+      const result = await checkLayersLua(
+        resolved.map((l) => ({ key: `${l.keyPrefix}:${l.id}`, limit: l.limit, windowSecs: l.window })),
+        nowMs,
+      );
+      if (result.blockedIndex > 0) {
+        const blocked = resolved[result.blockedIndex - 1];
+        const resetAt = Math.ceil((nowMs + blocked.window * 1_000) / 1_000);
+        const retryAfterSecs = Math.max(1, resetAt - Math.floor(nowMs / 1_000));
+        countThrottled(blocked.label, operation);
+        countBlocked(blocked.label, operation, provider);
+        throw new AiGuardError(
+          blocked.burst ? 'AI_BURST_LIMIT' : 'AI_RATE_LIMIT',
+          blocked.burst
+            ? 'AI request burst limit exceeded. Please slow down.'
+            : `AI rate limit exceeded (${blocked.label}). Try again shortly.`,
+          429,
+          { retryAfterSecs, layer: blocked.label },
+        );
+      }
+      countAllowed(operation, provider);
+      return;
+    } catch (err) {
+      if (err instanceof AiGuardError) throw err;
+      // Automatic fallback: script/Redis failure → sequential JS path below.
+      logger.warn('ai_guard_lua_fallback', { operation, message: (err as Error)?.message });
+    }
+  }
 
   try {
     // 2. Burst protection — tight 10s window per user smooths sudden spikes.

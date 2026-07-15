@@ -560,7 +560,10 @@ export default function RedisEfficiencyPanel() {
 
   useEffect(() => {
     load();
-    timerRef.current = setInterval(load, 60_000);
+    // W5-6 (audit B-77): skip refreshes while the tab is hidden.
+    timerRef.current = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') load();
+    }, 60_000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [load]);
 

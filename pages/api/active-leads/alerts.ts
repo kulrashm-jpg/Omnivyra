@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Phase 5 — Alert center API.
  *
@@ -20,7 +21,7 @@ import {
 import type { AlertSeverity, AlertType } from '../../../backend/types/alert';
 import { ALERT_SEVERITIES, ALERT_TYPES } from '../../../backend/types/alert';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
   if (req.method === 'POST') return handleAck(req, res);
   if (req.method === 'PUT') return handleUpsertRule(req, res);
@@ -109,3 +110,6 @@ async function handleUpsertRule(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: err?.message ?? 'Rule upsert failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/active-leads/alerts' });

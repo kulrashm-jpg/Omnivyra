@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /** Route shell — company users API (Agent-B split: helpers/types in ../../../backend/apiHandlers/company/usersShared). */
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -344,4 +345,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'company-users', methods: ['POST', 'PUT', 'DELETE'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'company-users', methods: ['POST', 'PUT', 'DELETE'] }), { route: '/api/company/users' });

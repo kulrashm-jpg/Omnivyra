@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/auth/check-user
  * Body: { email: string }
@@ -33,7 +34,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<{ exists: boolean } | { error: string }>,
 ) {
@@ -81,3 +82,6 @@ export default async function handler(
     return res.status(500).json({ error: 'Unable to process request.' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/check-user' });

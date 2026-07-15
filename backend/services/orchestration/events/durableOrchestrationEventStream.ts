@@ -17,7 +17,7 @@
  */
 
 import Redis from 'ioredis';
-import { getConnectionConfig } from '../../../queue/bullmqClient';
+import { getRawConnectionOptions } from '../../../queue/bullmqClient'; // CERT-FIX P2: raw options — this file SPREADS into new Redis(); a shared client instance (W2-7 mode) would silently fall back to localhost
 import { isOrchestrationEvent, type OrchestrationEvent } from './orchestrationEventTypes';
 
 const LOG = (tag: string, payload: Record<string, unknown>) => {
@@ -51,7 +51,7 @@ class DurableOrchestrationEventStream {
       return false;
     }
     try {
-      this.client = new Redis({ ...getConnectionConfig(), lazyConnect: true, maxRetriesPerRequest: 2 } as never);
+      this.client = new Redis({ ...getRawConnectionOptions(), lazyConnect: true, maxRetriesPerRequest: 2 } as never);
       this.client.on('error', (e) => {
         this.available = false;
         LOG('DURABLE_EVENT_RECOVERY_FAIL', { reason: (e as Error)?.message ?? 'redis_error', recovery_success: false });

@@ -13,7 +13,7 @@
  * without any new transport or telemetry pipeline.
  */
 
-import { leadDeadLetterQueue } from './leadQueueHardening';
+import { getLeadDeadLetterQueue } from './leadQueueHardening';
 import { jobQueue } from './jobQueue';
 
 export const FAILURE_CATEGORIES = [
@@ -172,7 +172,7 @@ export type LeadQueueObservabilitySnapshot = {
 export async function getLeadQueueObservabilitySnapshot(): Promise<LeadQueueObservabilitySnapshot> {
   const [engineCounts, dlqCounts] = await Promise.all([
     jobQueue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed'),
-    leadDeadLetterQueue.getJobCounts('waiting', 'failed'),
+    getLeadDeadLetterQueue().getJobCounts('waiting', 'failed'),
   ]);
 
   return {

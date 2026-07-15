@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
 
 /**
  * GET /api/feature-completion
@@ -29,7 +30,7 @@ interface ApiResponse {
  * - sync=true: Force sync before returning (auto-compute latest)
  * - company_id: Optional to override (requires admin)
  */
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ApiResponse>
 ) {
@@ -121,3 +122,6 @@ export default async function handler(
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/feature-completion' });

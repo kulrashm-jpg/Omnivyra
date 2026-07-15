@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * Company Intelligence Signals API
  * Phase-4: Dashboard-ready aggregated signals by category
@@ -52,4 +53,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALLOWED_ROLES);
+export default __createApiRoute(withRBAC(handler, ALLOWED_ROLES), { route: '/api/company/intelligence/signals' });

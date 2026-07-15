@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
@@ -55,4 +56,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(201).json(plan);
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.CONTENT_CREATOR]);
+export default __createApiRoute(withRBAC(handler, [Role.COMPANY_ADMIN, Role.CONTENT_CREATOR]), { route: '/api/collaboration-plans' });

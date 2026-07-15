@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
 import { resolveVisitorSession, persistCampaignTouchpoint } from '../../../backend/services/attributionResolverService';
@@ -43,7 +44,7 @@ function setCors(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   setCors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -145,3 +146,6 @@ function categoryForEvent(eventName: string): 'navigation' | 'engagement' | 'con
   if (eventName === 'cta_click' || eventName === 'form_submit' || eventName === 'outbound_click') return 'conversion';
   return 'engagement';
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/website-events/track' });

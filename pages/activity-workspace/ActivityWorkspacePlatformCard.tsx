@@ -1,7 +1,7 @@
 import React from 'react';
 import { AlertCircle, CheckCircle2, Loader2, MessageSquare, Sparkles, X } from 'lucide-react';
 import ContentRenderer from '@/components/ContentRenderer';
-import RichTextEditor from '@/components/RichTextEditor';
+import RichTextEditor from '@/components/RichTextEditorLazy'; // W5-2: lazy tiptap chunk
 import PlatformIcon from '@/components/ui/PlatformIcon';
 import ImagePicker from './ImagePicker';
 import type { RefineChatMessage, ScheduleItem, WorkspacePayload } from './types';

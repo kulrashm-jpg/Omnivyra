@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET   /api/admin/feedback          — list all feedback submissions (super admin)
@@ -20,7 +21,7 @@ async function requireSuperAdmin(req: NextApiRequest): Promise<string | null> {
   return (await isPlatformSuperAdmin(user.id)) ? user.id : null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const adminId = await requireSuperAdmin(req);
   if (!adminId) return res.status(403).json({ error: 'Super admin only' });
 
@@ -104,3 +105,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, PATCH');
   return res.status(405).end();
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/feedback' });

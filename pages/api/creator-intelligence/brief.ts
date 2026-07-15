@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { buildCreatorPerformanceIntelligenceBrief } from '../../../backend/services/creatorPerformanceIntelligenceBridgeService';
@@ -11,7 +12,7 @@ type BriefResponse = {
   code?: string;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<BriefResponse>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<BriefResponse>) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ success: false, error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
@@ -44,3 +45,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     brief,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-intelligence/brief' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { evaluateCampaignReadiness } from '../../../backend/services/campaignReadinessService';
@@ -217,4 +218,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default handler;
+export default __createApiRoute(handler, { route: '/api/campaigns/:id' });

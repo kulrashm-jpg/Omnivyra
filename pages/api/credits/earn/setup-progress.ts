@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * PATCH /api/credits/earn/setup-progress
@@ -33,7 +34,7 @@ const VALID_STEPS = [
 
 type SetupStep = typeof VALID_STEPS[number];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PATCH') return res.status(405).end();
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
@@ -118,3 +119,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true, setup_credits, website_credits });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/credits/earn/setup-progress' });

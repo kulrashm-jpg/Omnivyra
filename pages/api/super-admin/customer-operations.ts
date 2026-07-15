@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/super-admin/customer-operations
  *
@@ -21,7 +22,7 @@ const TIERS: PriorityTier[] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'READ_ONLY']
 const BUCKETS: ReadinessBucket[] = ['READY', 'PARTIAL', 'AT_RISK'];
 const TRAJ: Trajectory[] = ['IMPROVING', 'STABLE', 'DECLINING', 'UNKNOWN'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const guard = await requireCapability(req, res, {
@@ -51,3 +52,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Failed to load customer operations' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/customer-operations' });

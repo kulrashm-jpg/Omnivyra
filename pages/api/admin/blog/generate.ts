@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * POST /api/admin/blog/generate
  *
@@ -43,7 +44,7 @@ import { wirePhase2Route } from '../../../../backend/services/billing/phase2Rout
 import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
 import { ThoughtLeadershipQualityGateError } from '../../../../backend/services/longForm/thoughtLeadershipQualityGate';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -155,3 +156,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     throw err;
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/blog/generate' });

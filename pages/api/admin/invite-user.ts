@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -126,4 +127,4 @@ async function handler(
   }
 }
 
-export default withIdempotency(handler, { scope: 'admin-invite-user' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-invite-user' }), { route: '/api/admin/invite-user' });

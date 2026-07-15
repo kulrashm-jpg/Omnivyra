@@ -148,7 +148,10 @@ export default function SuperAdminPanel() {
       } catch { /* badge is non-critical */ }
     };
     void pull();
-    const h = setInterval(pull, 5 * 60 * 1000);
+    // W5-6 (audit B-77): skip badge refreshes while the tab is hidden.
+    const h = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') pull();
+    }, 5 * 60 * 1000);
     return () => { active = false; clearInterval(h); };
   }, []);
 

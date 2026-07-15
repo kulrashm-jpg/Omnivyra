@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/campaigns/content-stats?companyId=...
@@ -54,4 +55,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // HARDEN-002: measurement only (HARDEN-001 API metrics).
-export default withApiObservability(handler, '/api/campaigns/content-stats');
+export default __createApiRoute(withApiObservability(handler, '/api/campaigns/content-stats'), { route: '/api/campaigns/content-stats' });

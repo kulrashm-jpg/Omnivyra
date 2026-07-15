@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * PUT    /api/provider-accounts/[id]  — update credentials, limits, priority
  * DELETE /api/provider-accounts/[id]  — soft delete (is_active = false)
@@ -17,7 +18,7 @@ import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/sec
 
 // ── Handler ────────────────────────────────────────────────────────────────────
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Account ID required' });
@@ -134,3 +135,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/provider-accounts/:id' });

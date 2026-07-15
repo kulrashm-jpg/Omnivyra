@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 /**
  * POST /api/market-pulse/findings/[id]/action
  *
@@ -26,7 +27,7 @@ const ALLOWED_ACTIONS = new Set<ActionType>([
   'resolve', 'reopen', 'snooze', 'unsnooze', 'escalate', 'promote', 'share', 'feedback',
 ]);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -142,3 +143,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ ok: true, finding_id: findingId, action, applied: updates });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/market-pulse/findings/:id/action' });

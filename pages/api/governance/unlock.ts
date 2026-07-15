@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/governance/unlock
  * Stage 29 — Release governance lockdown. SUPER_ADMIN only.
@@ -23,4 +24,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ success: true });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN]), { route: '/api/governance/unlock' });

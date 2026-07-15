@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import {
   validateStrategicContentTransformation,
@@ -8,7 +9,7 @@ type ErrorResponse = {
   error: string;
 };
 
-export default function handler(
+function handler(
   req: NextApiRequest,
   res: NextApiResponse<StrategicContentTransformationValidationResult | ErrorResponse>,
 ) {
@@ -30,3 +31,6 @@ export default function handler(
 
   return res.status(200).json(result);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/validate/strategic-content-transformation' });

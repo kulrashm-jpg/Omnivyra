@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { config } from '@/config';
 import {
@@ -20,7 +21,7 @@ function isAuthorized(req: NextApiRequest): boolean {
   return presented === secret || bearer === secret;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -73,3 +74,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     executionId: outcome.ctx.executionId,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/cron/monetization-reservation-reconcile' });

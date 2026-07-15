@@ -1,8 +1,9 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { ownedDbTable } from '../../../../backend/db/writeOwner';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = typeof req.query.company_id === 'string' ? req.query.company_id : null;
   if (!companyId) return res.status(400).json({ error: 'company_id is required' });
   const access = await enforceCompanyAccess({ req, res, companyId });
@@ -20,3 +21,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (error) return res.status(500).json({ error: error.message });
   return res.status(200).json({ jobs: data ?? [] });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/publishing/jobs' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
@@ -9,7 +10,7 @@ import { ingestReplay } from '../../../backend/services/intelligence/replayIngre
  * scoped) and (2) internal HMAC over the exact body (REPLAY_INGRESS_SECRET).
  * Never reuses public ingress. POST only.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const companyId =
@@ -46,3 +47,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     result.status === 'failed' ? 502 : 200;
   return res.status(code).json(result);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/internal/replay-ingress' });

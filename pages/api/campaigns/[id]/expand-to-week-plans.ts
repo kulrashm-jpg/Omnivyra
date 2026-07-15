@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
@@ -10,7 +11,7 @@ import { requireCampaignAccess } from '../../../../backend/services/campaignAcce
  * Converts 12-week blueprint into detailed weekly_content_refinements.
  * Call this after 12-week plan exists; creates/upserts one refinement per week.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -107,3 +108,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/:id/expand-to-week-plans' });

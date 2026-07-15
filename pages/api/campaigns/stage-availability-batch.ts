@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -137,4 +138,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // HARDEN-002: measurement only (HARDEN-001 API metrics).
-export default withApiObservability(handler, '/api/campaigns/stage-availability-batch');
+export default __createApiRoute(withApiObservability(handler, '/api/campaigns/stage-availability-batch'), { route: '/api/campaigns/stage-availability-batch' });

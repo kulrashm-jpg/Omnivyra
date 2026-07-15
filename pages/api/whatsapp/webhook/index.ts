@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET  /api/whatsapp/webhook   — Meta webhook verification (hub.challenge)
  * POST /api/whatsapp/webhook   — Incoming Meta webhook events (async)
@@ -45,7 +46,7 @@ function verifySignature(rawBody: Buffer, signature: string): boolean {
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── GET: hub.challenge verification ──────────────────────────────────────
   if (req.method === 'GET') {
@@ -95,3 +96,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', ['GET', 'POST']);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/whatsapp/webhook' });

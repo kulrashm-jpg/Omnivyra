@@ -1,3 +1,9 @@
+import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
+// W4-1/W4-7 (Batch D cache stack): F-12 client + shared flag + SWR headers.
+import { registerCacheNamespace } from '../../lib/platform/cacheCore';
+import { createCache } from '../../lib/platform/cacheClient';
+import { RESPONSE_CACHE_FLAG, setSwrCacheHeaders } from '../../lib/platform/responseCache';
+import { resolveRolloutSync } from '../../lib/platform/rollout';
 
 /**
  * GET /api/readiness-score
@@ -34,8 +40,11 @@ interface ApiResponse {
   };
 }
 
-// Optional: Simple in-memory cache (for 5-10 min cache pattern)
-// In production, use Redis or similar
+// W4-1 (audit B-40): the per-process Map ("In production, use Redis" — its
+// own words) is replaced by the F-12 cache client under the shared
+// 'response-cache' flag: tenant-isolated Redis keys, 5-min TTL, gzip,
+// hit/miss metrics, kill switch CACHE_KILL_OMNIVYRA_RESP_READINESS_SCORE.
+// Flag off (default) = the historical in-memory Map, byte-for-byte.
 const scoreCache = new Map<
   string,
   { data: ReadinessScoreResponse; timestamp: number }
@@ -43,13 +52,35 @@ const scoreCache = new Map<
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+const READINESS_NS = registerCacheNamespace({
+  prefix: 'omnivyra:resp:readiness-score',
+  description: 'W4-1 readiness score response cache (audit B-40)',
+  version: 1,
+  defaultTtlSeconds: 300,
+  requireTenant: true,
+});
+const readinessCache = createCache(READINESS_NS);
+
+function redisCacheEnabled(): boolean {
+  try {
+    return resolveRolloutSync(RESPONSE_CACHE_FLAG).mode !== 'off';
+  } catch {
+    return false;
+  }
+}
+
 function getCacheKey(companyId: string): string {
   return `readiness-score:${companyId}`;
 }
 
-function getCachedScore(companyId: string):
+async function getCachedScore(companyId: string): Promise<
   | { data: ReadinessScoreResponse; cached: true }
-  | { data: null; cached: false } {
+  | { data: null; cached: false }
+> {
+  if (redisCacheEnabled()) {
+    const hit = await readinessCache.get<ReadinessScoreResponse>({ tenantId: companyId, parts: ['score'] });
+    return hit ? { data: hit, cached: true } : { data: null, cached: false };
+  }
   const cacheKey = getCacheKey(companyId);
   const cached = scoreCache.get(cacheKey);
 
@@ -66,6 +97,10 @@ function getCachedScore(companyId: string):
 }
 
 function setCachedScore(companyId: string, data: ReadinessScoreResponse): void {
+  if (redisCacheEnabled()) {
+    void readinessCache.set({ tenantId: companyId, parts: ['score'], value: data }).catch(() => {});
+    return;
+  }
   const cacheKey = getCacheKey(companyId);
   scoreCache.set(cacheKey, { data, timestamp: Date.now() });
 }
@@ -78,7 +113,7 @@ function setCachedScore(companyId: string, data: ReadinessScoreResponse): void {
  * - recommendations=true: Include actionable recommendations
  * - no_cache=true: Skip cache and recompute
  */
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ApiResponse>
 ) {
@@ -130,11 +165,14 @@ export default async function handler(
     let wasCached = false;
 
     if (!noCache) {
-      const cached = getCachedScore(companyId);
+      const cached = await getCachedScore(companyId);
       if (cached.cached) {
         scoreData = cached.data;
         wasCached = true;
       }
+      // W4-7: idempotent per-user readiness read — browser may reuse briefly
+      // and revalidate in the background. Never applied on no_cache requests.
+      setSwrCacheHeaders(res, { maxAgeSeconds: 60, staleWhileRevalidateSeconds: 300 });
     }
 
     // Recompute if not cached
@@ -180,3 +218,6 @@ export default async function handler(
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/readiness-score' });

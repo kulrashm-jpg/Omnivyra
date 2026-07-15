@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/admin/cron-config  — read current cron overrides
@@ -85,4 +86,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'admin-cron-config', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-cron-config', methods: ['POST'] }), { route: '/api/admin/cron-config' });

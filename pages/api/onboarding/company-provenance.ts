@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/onboarding/company-provenance — field-level provenance for Company
  * Review (ONBOARD-001R §4).
@@ -20,7 +21,7 @@ import {
 
 type ErrorResponse = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<CompanyProfileProvenance | ErrorResponse>,
 ) {
@@ -43,3 +44,6 @@ export default async function handler(
   const provenance = await getCompanyProfileProvenance(journey.companyId);
   return res.status(200).json(provenance);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/onboarding/company-provenance' });

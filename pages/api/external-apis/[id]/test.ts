@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { buildExternalApiRequest, executeExternalApiRequest } from '../../../../backend/services/externalApiService';
@@ -180,7 +181,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default async function wrappedHandler(req: NextApiRequest, res: NextApiResponse) {
+async function wrappedHandler(req: NextApiRequest, res: NextApiResponse) {
   const platformScopeRequested = req.query?.scope === 'platform';
   const companyId =
     (req.query?.companyId as string | undefined) ||
@@ -192,3 +193,6 @@ export default async function wrappedHandler(req: NextApiRequest, res: NextApiRe
   }
   return withRBAC(handler, [Role.SUPER_ADMIN])(req, res);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(wrappedHandler, { route: '/api/external-apis/:id/test' });

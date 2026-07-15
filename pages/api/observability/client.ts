@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/observability/client
  *
@@ -22,7 +23,7 @@ const VALID_KINDS = new Set([
   'activation', // PERF-002: time-to-authenticated-interactive
 ]);
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -44,3 +45,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   // Always 204: the client neither reads nor retries on the response.
   return res.status(204).end();
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/observability/client' });

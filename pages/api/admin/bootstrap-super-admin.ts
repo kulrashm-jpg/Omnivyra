@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/admin/bootstrap-super-admin
  *
@@ -79,7 +80,7 @@ import { resetSuperAdminIdentityCache } from '../../../backend/security/startup/
 
 const SUPER_ADMIN_ROLE = 'SUPER_ADMIN';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -597,3 +598,6 @@ function recordEnvCredentialFailure(ip: string | null): void {
 export function _resetEnvCredentialRateLimit(): void {
   envCredentialFailures.clear();
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/bootstrap-super-admin' });

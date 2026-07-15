@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/domain/regenerate-token
  *
@@ -46,7 +47,7 @@ const REGEN_RATE_LIMIT = {
 type SuccessResponse = { ok: true; token: string; final_domain: string };
 type ErrorResponse = { error: string; details?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -179,3 +180,6 @@ export default async function handler(
     final_domain: domainRow.final_domain,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/domain/regenerate-token' });

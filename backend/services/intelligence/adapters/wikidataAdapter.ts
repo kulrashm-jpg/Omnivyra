@@ -15,6 +15,10 @@ import type {
 } from '../providerInterfaces';
 import { unavailableEvidence } from '../providerInterfaces';
 import { logProviderCall } from '../productionPrimitives';
+// W4-6 (Batch D cache stack)
+import { registerCacheNamespace } from '../../../../lib/platform/cacheCore';
+import { createCache } from '../../../../lib/platform/cacheClient';
+import { defineRolloutFlag, resolveRolloutSync } from '../../../../lib/platform/rollout';
 
 const WIKIDATA_SEARCH_URL = 'https://www.wikidata.org/w/api.php';
 const WIKIDATA_ENTITY_URL = 'https://www.wikidata.org/wiki/Special:EntityData';
@@ -179,6 +183,27 @@ function revenueRange(entity: WikidataEntity): string | null {
  * Returns nulls when the company isn't on Wikidata (typical for small companies)
  * — the caller then lets the user fill the fields manually. Fail-soft.
  */
+// W4-6 (audit B-41): firmographics are GLOBAL REFERENCE DATA (public
+// Wikidata facts about a brand — identical for every tenant), previously
+// re-fetched (2 external calls) on every invocation. Under the
+// 'external-knowledge-cache' flag results cache for 24 h in an explicitly
+// SHARED namespace (requireTenant:false — deliberate: no tenant data is in
+// the key or the value). Kill: CACHE_KILL_OMNIVYRA_EXT_WIKIDATA;
+// TTL: WIKIDATA_CACHE_TTL_SECONDS. Empty results also cache (negative
+// caching — small companies aren't on Wikidata; re-asking daily suffices).
+const EXTERNAL_KNOWLEDGE_FLAG = defineRolloutFlag({
+  key: 'external-knowledge-cache',
+  description: 'W4-6: deterministic external reference-data caches (audit B-41/B-68)',
+});
+const WIKIDATA_NS = registerCacheNamespace({
+  prefix: 'omnivyra:ext:wikidata',
+  description: 'W4-6 Wikidata firmographics (global public reference data)',
+  version: 1,
+  defaultTtlSeconds: Math.max(300, Number(process.env.WIKIDATA_CACHE_TTL_SECONDS) || 24 * 3600),
+  requireTenant: false, // global by design — public facts, no tenant dimension
+});
+const wikidataCache = createCache(WIKIDATA_NS);
+
 export async function lookupCompanyFirmographicsFromWikidata(brandName: string): Promise<{
   founded_year: string | null;
   team_size: string | null;
@@ -189,20 +214,26 @@ export async function lookupCompanyFirmographicsFromWikidata(brandName: string):
   if (process.env.WIKIDATA_ENABLED === 'false') return empty;
   const name = String(brandName || '').trim();
   if (!name) return empty;
-  try {
-    const hit = await searchEntity(name);
-    if (!hit) return empty;
-    const entity = await fetchEntity(hit.id);
-    if (!entity || !entityIsOrganization(entity)) return empty;
-    return {
-      founded_year: inceptionYear(entity),
-      team_size: employeeCount(entity),
-      revenue_range: revenueRange(entity),
-      matched_label: entity.labels?.['en']?.value ?? hit.label ?? null,
-    };
-  } catch {
-    return empty;
+  const load = async () => {
+    try {
+      const hit = await searchEntity(name);
+      if (!hit) return empty;
+      const entity = await fetchEntity(hit.id);
+      if (!entity || !entityIsOrganization(entity)) return empty;
+      return {
+        founded_year: inceptionYear(entity),
+        team_size: employeeCount(entity),
+        revenue_range: revenueRange(entity),
+        matched_label: entity.labels?.['en']?.value ?? hit.label ?? null,
+      };
+    } catch {
+      return empty;
+    }
+  };
+  if (resolveRolloutSync(EXTERNAL_KNOWLEDGE_FLAG).mode !== 'off') {
+    return wikidataCache.getOrLoad({ parts: ['firmographics', name.toLowerCase()], load });
   }
+  return load();
 }
 
 export class WikidataAdapter implements KnowledgeGraphProvider {

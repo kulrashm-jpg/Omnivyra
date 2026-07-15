@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET /api/super-admin/bolt-failures
  *
@@ -18,7 +19,7 @@ function strOrUndef(value: unknown): string | undefined {
   return t ? t : undefined;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const auth = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
@@ -43,3 +44,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/bolt-failures' });

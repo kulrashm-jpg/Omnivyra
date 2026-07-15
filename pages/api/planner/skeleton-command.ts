@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/planner/skeleton-command
@@ -102,7 +103,7 @@ function applyRemoveFilter(actList: Activity[], filter: RemoveFilter): Set<strin
   return new Set(matched.map((a) => a.execution_id ?? '').filter(Boolean));
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -323,3 +324,6 @@ Use null in delete_filter for fields not specified. Use [] for unused arrays.`;
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/planner/skeleton-command' });

@@ -1,4 +1,12 @@
-import SystemStateDashboard from '../components/analytics/SystemStateDashboard';
+// W5-2 (audit B-29): the analytics dashboard statically pulled recharts
+// (~90–130 KB gz incl. d3) into the route's initial JS via this barrel.
+// dynamic() defers the chart bundle to mount; ssr:false (charts are
+// client-measured anyway) with a layout-preserving fallback.
+import dynamic from 'next/dynamic';
+const SystemStateDashboard = dynamic(
+  () => import('../components/analytics/SystemStateDashboard'),
+  { ssr: false, loading: () => <div aria-busy="true" className="min-h-[480px] w-full animate-pulse rounded-md bg-gray-50" /> },
+);
 import { useCompanyContext } from '../components/CompanyContext';
 
 export default function AnalyticsPage() {

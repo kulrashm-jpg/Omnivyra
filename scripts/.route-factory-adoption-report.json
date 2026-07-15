@@ -1,0 +1,102 @@
+{
+  "adopted": 1252,
+  "alreadyCovered": 5,
+  "skipped": [
+    {
+      "file": "pages\\api\\activity-workspace\\content.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\analytics\\v1\\system-state.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\campaigns\\weekly-structure-helpers.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\command-center\\creator-content\\generate.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\community-ai\\connectors\\utils.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\community-ai\\utils.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\growth-intelligence\\community.ts",
+      "reason": "multiline-or-anonymous-default"
+    },
+    {
+      "file": "pages\\api\\growth-intelligence\\company-summary.ts",
+      "reason": "multiline-or-anonymous-default"
+    },
+    {
+      "file": "pages\\api\\growth-intelligence\\content-velocity.ts",
+      "reason": "multiline-or-anonymous-default"
+    },
+    {
+      "file": "pages\\api\\growth-intelligence\\engagement.ts",
+      "reason": "multiline-or-anonymous-default"
+    },
+    {
+      "file": "pages\\api\\growth-intelligence\\health.ts",
+      "reason": "multiline-or-anonymous-default"
+    },
+    {
+      "file": "pages\\api\\growth-intelligence\\opportunity-activation.ts",
+      "reason": "multiline-or-anonymous-default"
+    },
+    {
+      "file": "pages\\api\\growth-intelligence\\publishing-success.ts",
+      "reason": "multiline-or-anonymous-default"
+    },
+    {
+      "file": "pages\\api\\growth-intelligence\\summary.ts",
+      "reason": "multiline-or-anonymous-default"
+    },
+    {
+      "file": "pages\\api\\intelligence\\snapshot.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\recommendations\\detected-opportunities.ts",
+      "reason": "multiline-or-anonymous-default"
+    },
+    {
+      "file": "pages\\api\\reports\\reportComparisonAttachment.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\reports\\reportComposedMapper.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\reports\\reportComposedTypes.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\reports\\reportViewPayloadTypes.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\reports\\reportViewSectionBuilders.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\reports\\reportViewTypes.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\reports\\reportViewUtils.ts",
+      "reason": "no-default-export"
+    },
+    {
+      "file": "pages\\api\\super-admin\\users\\create.ts",
+      "reason": "multiline-or-anonymous-default"
+    }
+  ]
+}

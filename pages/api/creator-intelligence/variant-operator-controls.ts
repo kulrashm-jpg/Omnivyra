@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET / POST /api/creator-intelligence/variant-operator-controls
  *
@@ -30,7 +31,7 @@ import {
   setVariantOperatorControls,
 } from '../../../backend/services/creator/variantOperatorControls';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const user = await resolveUserContext(req);
   if (!user) return res.status(401).json({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' });
 
@@ -68,3 +69,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET,POST');
   return res.status(405).json({ success: false, error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-intelligence/variant-operator-controls' });

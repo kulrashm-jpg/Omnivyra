@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET /api/campaigns/[id]/continuity
  *
@@ -386,4 +387,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default handler;
+export default __createApiRoute(handler, { route: '/api/campaigns/:id/continuity' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
@@ -9,7 +10,7 @@ import { saveToken as saveCommunityAiToken } from '../../../../backend/services/
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { logOAuthEvent, safeHost } from '../../../../backend/auth/oauthTelemetry';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -311,3 +312,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/youtube/callback' });

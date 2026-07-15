@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * POST /api/admin/experiment/toggle
@@ -14,7 +15,7 @@ import { invalidateConfigCache } from '@/backend/services/configService';
 import { requireCapability } from '@/backend/security/requireCapability';
 import { INTELLIGENCE_OVERRIDE_MANAGE } from '@/shared/contracts/security';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const guard = await requireCapability(req, res, {
     capability: INTELLIGENCE_OVERRIDE_MANAGE,
@@ -76,3 +77,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/experiment/toggle' });

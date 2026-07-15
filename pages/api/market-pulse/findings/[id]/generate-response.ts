@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 /**
  * POST /api/market-pulse/findings/[id]/generate-response
  *
@@ -25,7 +26,7 @@ import { ownedDbTable } from '../../../../../backend/db/writeOwner';
 
 const HANDOFF_TOKEN = 'market_pulse_finding_bridge';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const findingId = typeof req.query.id === 'string' ? req.query.id : '';
@@ -166,3 +167,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/market-pulse/findings/:id/generate-response' });

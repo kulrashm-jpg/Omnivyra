@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 /**
  * POST /api/super-admin/users/[id]/force-logout
  *
@@ -35,7 +36,7 @@ import {
 import { logAuthEvent } from '../../../../../lib/auth/auditLog';
 import { invalidateUserSessionsAndSignOut } from '../../../../../backend/services/lifecycleGovernance';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -138,3 +139,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       'Sessions revoked. JWTs issued before this point are no longer valid. The user may sign in again.',
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/users/:id/force-logout' });

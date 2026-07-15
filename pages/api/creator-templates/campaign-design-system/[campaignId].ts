@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
 import {
@@ -20,7 +21,7 @@ import { familyForCreatorType } from '../../../../lib/creator-templates';
  * POST   → { op: 'upgrade', company_id }          (re-pin to latest)
  * DELETE → detach
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const user = await resolveUserContext(req);
   if (!user?.userId) return res.status(401).json({ error: 'authentication required' });
   const campaignId = String(req.query.campaignId || '').trim();
@@ -84,3 +85,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, PUT, POST, DELETE');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-templates/campaign-design-system/:campaignId' });

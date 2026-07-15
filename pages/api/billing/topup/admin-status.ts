@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET /api/billing/topup/admin-status?org_id=<id>&limit=<n>
  *
@@ -52,4 +53,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withOrgAccess(handler);
+export default __createApiRoute(withOrgAccess(handler), { route: '/api/billing/topup/admin-status' });

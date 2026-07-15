@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
@@ -11,7 +12,7 @@ import type { CmsProvider } from '../../../backend/services/cms/types';
  * lineage; idempotent on `event_id`. Double-gated: RBAC + HMAC over the
  * canonical body using CMS_RECONCILIATION_WEBHOOK_SECRET.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const companyId = typeof req.body?.company_id === 'string' ? req.body.company_id : null;
   if (!companyId) return res.status(400).json({ error: 'company_id is required' });
@@ -55,3 +56,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const code = result.status === 'recorded' || result.status === 'deduped' ? 200 : 500;
   return res.status(code).json(result);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/internal/cms-reconciliation-webhook' });

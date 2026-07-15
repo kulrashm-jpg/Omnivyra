@@ -20,7 +20,7 @@
  */
 
 import Redis from 'ioredis';
-import { getConnectionConfig } from '../../../queue/bullmqClient';
+import { getRawConnectionOptions } from '../../../queue/bullmqClient'; // CERT-FIX P2: raw options — this file SPREADS into new Redis(); a shared client instance (W2-7 mode) would silently fall back to localhost
 import {
   getInProcessOrchestrationTransport,
   registerOrchestrationEventTransport,
@@ -60,7 +60,7 @@ class DistributedOrchestrationEventTransport implements OrchestrationEventTransp
   private readonly seen = new Map<string, Set<string>>(); // campaign → recent keys
 
   private redisOptions() {
-    const base = getConnectionConfig();
+    const base = getRawConnectionOptions();
     return {
       ...base,
       lazyConnect: true,

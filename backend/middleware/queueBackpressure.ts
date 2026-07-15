@@ -92,7 +92,12 @@ export async function safeEnqueue<T extends Record<string, unknown>>(
 ): Promise<{ id?: string | null } | null> {
   try {
     await assertQueueHasCapacity(queue, queueName, opts);
-    const job = await queue.add(jobName, payload, {
+    // W0-3 (trace adoption): stamp the caller's trace context onto the job
+    // payload (additive `_trace` field; absent when no context is active).
+    // The worker-side getWorker() factory restores it into the RequestContext
+    // ALS, linking api → queue → worker series.
+    const { withTraceMeta } = await import('../observability/traceKit');
+    const job = await queue.add(jobName, withTraceMeta(payload), {
       jobId: opts?.jobId,
       delay: opts?.delay,
       priority: opts?.priority,

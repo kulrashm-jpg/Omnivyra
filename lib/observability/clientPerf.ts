@@ -32,7 +32,11 @@ let flushTimer: ReturnType<typeof setInterval> | null = null;
 function enabled(): boolean {
   try {
     if (typeof window === 'undefined') return false;
-    return /^(1|true|yes|on)$/i.test(String(process.env.NEXT_PUBLIC_OBSERVABILITY_CLIENT ?? ''));
+    // W0-4 (Gate A): Web Vitals collection is ON BY DEFAULT. Explicit
+    // NEXT_PUBLIC_OBSERVABILITY_CLIENT=0/false/off is the kill switch.
+    // Collection is bounded (MAX_BUFFER cap, idle-flush beacons) and the
+    // ingest endpoint records into the HARDEN-001 registry — no new system.
+    return /^(1|true|yes|on)$/i.test(String(process.env.NEXT_PUBLIC_OBSERVABILITY_CLIENT ?? '1'));
   } catch { return false; }
 }
 

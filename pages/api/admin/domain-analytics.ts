@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/admin/domain-analytics
  *
@@ -23,7 +24,7 @@ import {
 } from '../../../backend/services/domainAnalyticsService';
 import { logger } from '../../../backend/services/logger';
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
@@ -65,3 +66,6 @@ function clampInt(raw: string | undefined, dflt: number, min: number, max: numbe
   if (Number.isNaN(n)) return dflt;
   return Math.min(max, Math.max(min, n));
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/domain-analytics' });

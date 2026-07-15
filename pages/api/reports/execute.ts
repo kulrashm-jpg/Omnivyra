@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -278,4 +279,4 @@ async function handler(
   }
 }
 
-export default handler;
+export default __createApiRoute(handler, { route: '/api/reports/execute' });

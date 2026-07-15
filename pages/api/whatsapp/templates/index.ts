@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET  /api/whatsapp/templates   — list templates for a company
  * POST /api/whatsapp/templates   — submit a new template version to Meta
@@ -14,7 +15,7 @@ import {
   type CreateTemplateInput,
 } from '../../../../backend/services/whatsappTemplateService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── GET: list templates ───────────────────────────────────────────────────
   if (req.method === 'GET') {
     const { company_id, status, active_only } = req.query as Record<string, string>;
@@ -81,3 +82,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', ['GET', 'POST']);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/whatsapp/templates' });

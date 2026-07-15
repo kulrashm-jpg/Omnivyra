@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
@@ -10,7 +11,7 @@ import { buildLeadIngestionDiagnostics } from '../../../backend/services/intelli
  * ingestion). No mutation, no provider/tracker calls — safe to poll.
  * GET /api/website-intelligence/intelligence-diagnostics?company_id=...
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const companyId = typeof req.query.company_id === 'string' ? req.query.company_id : null;
@@ -38,3 +39,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/website-intelligence/intelligence-diagnostics' });

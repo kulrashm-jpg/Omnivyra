@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/company/llm-config?companyId=...
  *   Returns the company's current LLM config + all available active providers/models.
@@ -68,7 +69,7 @@ async function requireCompanyLlmAccess(
   return { userId: user.id, role };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── GET ────────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
     const companyId = (req.query.companyId as string)?.trim();
@@ -169,3 +170,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/company/llm-config' });

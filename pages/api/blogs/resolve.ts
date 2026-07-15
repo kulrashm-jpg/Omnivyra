@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/blogs/resolve?slug=<slug>&company_id=<uuid>
  *
@@ -15,7 +16,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const slug      = typeof req.query.slug       === 'string' ? req.query.slug.trim()       : null;
@@ -45,3 +46,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     status:  data.status,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/blogs/resolve' });

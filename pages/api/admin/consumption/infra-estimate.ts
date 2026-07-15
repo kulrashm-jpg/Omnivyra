@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * GET /api/admin/consumption/infra-estimate
@@ -23,7 +24,7 @@ async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Pro
   return guard.ok === true;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   if (!(await requireSuperAdmin(req, res))) return;
 
@@ -56,3 +57,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     perHeadUsd: activeOrgs > 0 ? Math.round((estimate.totalMonthlyEstimate / activeOrgs) * 10000) / 10000 : 0,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/consumption/infra-estimate' });

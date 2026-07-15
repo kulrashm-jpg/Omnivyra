@@ -1,4 +1,5 @@
 /** Part 2/2 of GlobalHeader.tsx — verbatim split (barrel preserved; importers unchanged). */
+import Image from 'next/image'; // W5-3
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -401,7 +402,10 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
       <header className="sticky top-0 z-[70] border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-screen-xl items-center gap-3 px-3 sm:px-4 lg:px-6">
           <Link href="/command-center" className="shrink-0" title="Command Center">
-            <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
+            {/* W5-3 (audit B-30): next/image resizes the 898×278/187 KB source
+                to the rendered 36 px height + serves AVIF/WebP — this header
+                ships on every authenticated page. priority: above the fold. */}
+            <Image src="/logo.png" alt="Omnivyra" width={898} height={278} priority className="h-9 w-auto object-contain" />
           </Link>
 
           <div className="hidden h-5 w-px shrink-0 bg-slate-200 md:block" />

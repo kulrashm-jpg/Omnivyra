@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
@@ -8,7 +9,7 @@ import { isContentArchitectSession } from '../../../backend/services/contentArch
  * Every company is identified by company_id and can be accessed by ID, name, or website URL.
  * Returns { companies, campaigns, recommendations } so Content Architect can open by ID.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -237,3 +238,6 @@ async function searchRecommendations(
   }
   return merged.slice(0, limit);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/content-architect/search' });

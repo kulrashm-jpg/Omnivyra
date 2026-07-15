@@ -8,11 +8,14 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { supabase } from '../db/supabaseClient';
 import {
-
   generateTopicEmbedding,
+  generateTopicEmbeddingsBatch,
+  EMBEDDING_BATCH_MAX,
   cosineSimilarity,
   embeddingToPgVector,
 } from './signalEmbeddingService';
+import { chunk } from '../../lib/platform/dbConventions';
+import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
 
 const WINDOW_HOURS = 6;
 const SIMILARITY_THRESHOLD = 0.75;
@@ -184,6 +187,59 @@ async function ensureSignalEmbedding(signal: SignalRow): Promise<SignalRow> {
   } catch (e) {
     return signal;
   }
+}
+
+/** W3-6 rollout flag — see the pre-pass note at the clustering loop. */
+const EMBEDDING_BATCH_FLAG = defineRolloutFlag({
+  key: 'embedding-batch',
+  description: 'W3-6: chunked array-input embedding generation for signal clustering (audit B-36)',
+});
+
+/**
+ * W3-6: batch-generate missing topic embeddings. Returns signals with
+ * embeddings attached (same rows, same order); persists each row via the
+ * SAME update statement the single path uses. Per-chunk failures leave those
+ * signals untouched so the legacy per-signal path can retry them.
+ */
+async function batchEnsureSignalEmbeddings(signals: SignalRow[]): Promise<SignalRow[]> {
+  if (resolveRolloutSync(EMBEDDING_BATCH_FLAG).mode === 'off') return signals;
+  const out = signals.map((s) => {
+    const emb = parseEmbedding((s as any).topic_embedding);
+    return emb && emb.length > 0 ? { ...s, topic_embedding: emb } : { ...s };
+  });
+  const missingByCompany = new Map<string, number[]>();
+  out.forEach((s, i) => {
+    if (!s.topic?.trim()) return;
+    if (Array.isArray(s.topic_embedding) && s.topic_embedding.length > 0) return;
+    const list = missingByCompany.get(s.company_id) ?? [];
+    list.push(i);
+    missingByCompany.set(s.company_id, list);
+  });
+  for (const [companyId, indexes] of missingByCompany) {
+    for (const chunkIdx of chunk(indexes, EMBEDDING_BATCH_MAX)) {
+      try {
+        const embeddings = await generateTopicEmbeddingsBatch(
+          chunkIdx.map((i) => out[i]!.topic!.trim()),
+          {
+            companyId,
+            system: true,
+            metadata: { caller: 'signalClusterEngine.batchEnsureSignalEmbeddings', batch: chunkIdx.length },
+          },
+        );
+        for (let j = 0; j < chunkIdx.length; j++) {
+          const i = chunkIdx[j]!;
+          const emb = embeddings[j]!;
+          try {
+            await ownedDbTable('intelligence_signals')
+              .update({ topic_embedding: embeddingToPgVector(emb) } as any)
+              .eq('id', out[i]!.id);
+            out[i] = { ...out[i]!, topic_embedding: emb };
+          } catch { /* leave for the per-signal path */ }
+        }
+      } catch { /* chunk failed — legacy per-signal path retries these */ }
+    }
+  }
+  return out;
 }
 
 /**
@@ -388,7 +444,15 @@ export async function clusterRecentSignals(): Promise<ClusterRecentSignalsResult
   const remaining: SignalRow[] = [];
   const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
 
-  for (const signal of signals) {
+  // W3-6 (audit B-36): batch pre-pass — with the 'embedding-batch' flag on,
+  // all missing embeddings are generated in chunked ARRAY calls (grouped by
+  // company for cost attribution) and persisted row-by-row exactly as the
+  // single path does, so the per-signal ensureSignalEmbedding below becomes
+  // a no-op passthrough. Flag off (default) = per-signal calls as before.
+  // Failures degrade per-chunk to the legacy per-signal path (fail-open).
+  const enriched = await batchEnsureSignalEmbeddings(signals);
+
+  for (const signal of enriched) {
     const signalWithEmb = await ensureSignalEmbedding(signal);
     const topic = signalWithEmb.topic ?? '';
     let assigned = false;

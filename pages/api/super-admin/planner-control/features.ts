@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * Planner feature governance control.
  *
@@ -29,7 +30,7 @@ import {
 const ALLOWED_SCOPE_TYPES: FeatureScopeType[] = ['global', 'org', 'env', 'instance', 'percent'];
 const ALLOWED_EFFECTS = ['on', 'off', 'default'] as const;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const auth = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
     reason: 'planner_feature_governance',
@@ -108,3 +109,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Internal server error' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/planner-control/features' });

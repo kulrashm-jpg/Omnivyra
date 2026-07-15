@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { ensureHistoryStore } from '../../../backend/services/platformIntelligence/history/historyStoreBootstrap';
@@ -9,7 +10,7 @@ import { detectAnomalies, detectTimelineAnomalies } from '../../../backend/servi
  * GET /api/platform/history — read persisted Historical Intelligence. Never recomputes
  * plugins. ?mode=timeline|history|latest|previous|trend|anomalies, ?plugin=<id>.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); return res.status(405).json({ error: 'Method not allowed' }); }
   const user = await resolveUserContext(req);
   if (!user?.userId) return res.status(401).json({ error: 'authentication required' });
@@ -35,3 +36,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load history' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/platform/history' });

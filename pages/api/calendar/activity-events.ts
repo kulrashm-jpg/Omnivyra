@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/calendar/activity-events
@@ -370,4 +371,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 // HARDEN-002: measurement only — records latency/payload into the HARDEN-001
 // registry so before/after dashboard numbers are observable in production.
-export default withApiObservability(handler, '/api/calendar/activity-events');
+export default __createApiRoute(withApiObservability(handler, '/api/calendar/activity-events'), { route: '/api/calendar/activity-events' });

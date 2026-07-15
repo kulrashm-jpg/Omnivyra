@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * POST /api/webhooks/payments/:provider   (razorpay | cashfree)
  *
@@ -43,7 +44,7 @@ function readRawBody(req: NextApiRequest): Promise<string> {
   });
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end();
   const provider = String(req.query.provider ?? '').trim() as PaymentProviderId;
   if (provider !== 'razorpay' && provider !== 'cashfree') return res.status(404).json({ error: 'unknown_provider' });
@@ -81,3 +82,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ ok: false, error: 'webhook_error' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/webhooks/payments/:provider' });

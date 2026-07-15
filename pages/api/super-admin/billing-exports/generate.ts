@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * POST /api/super-admin/billing-exports/generate
  *
@@ -109,4 +110,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withIdempotency(handler, { scope: 'admin-billing-exports-generate', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-billing-exports-generate', methods: ['POST'] }), { route: '/api/super-admin/billing-exports/generate' });

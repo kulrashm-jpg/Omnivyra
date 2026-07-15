@@ -19,6 +19,58 @@ import { saveStructuredCampaignPlan, commitDraftBlueprint } from '../db/campaign
 import { fromStructuredPlan } from './campaignBlueprintAdapter';
 import { scheduleStructuredPlan } from './structuredPlanScheduler';
 import { retryWithBackoff } from '../utils/retryWithBackoff';
+// W3-3 (F-09): single retry authority for the plan draft, flag-gated.
+import { retryWithBudget, createOperationBudget, classifyForRetry } from '../../lib/platform/retryBudget';
+import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
+
+const RETRY_BUDGET_PLANNER_FLAG = defineRolloutFlag({
+  key: 'retry-budget-planner',
+  description: 'W3-3: budgeted single-authority retry for the planner draft (audit B-09)',
+});
+
+// ── W3-8 (audit B-37): short-TTL planner intelligence-context cache ──────────
+// Tenant-scoped via the F-05 SDK (requireTenant — no company id, no cache);
+// caches ONLY the deterministic resolver output, never generated AI content.
+// In-process store (the planner runs on the long-lived worker); TTL 120 s via
+// env PLANNER_CONTEXT_CACHE_TTL_MS. Kill: CACHE_KILL_OMNIVYRA_PLANNER_CTX or
+// the rollout flag. Flag off (default) = resolve on every run.
+import { registerCacheNamespace, buildCacheKey, isCacheNamespaceEnabled, noteCacheHit, noteCacheMiss } from '../../lib/platform/cacheCore';
+
+const PLANNER_CONTEXT_CACHE_FLAG = defineRolloutFlag({
+  key: 'planner-context-cache',
+  description: 'W3-8: short-TTL reuse of the deterministic planning intelligence context',
+});
+const PLANNER_CTX_NS = registerCacheNamespace({
+  prefix: 'omnivyra:planner_ctx',
+  description: 'W3-8 planner intelligence context (deterministic, tenant-scoped)',
+  version: 1,
+  defaultTtlSeconds: 120,
+  requireTenant: true,
+});
+const _plannerCtxStore = new Map<string, { value: unknown; expiresAt: number }>();
+
+async function resolvePlanningIntelligenceCached(companyId: string): Promise<Awaited<ReturnType<typeof resolveIntelligenceContext>>> {
+  const ttlMs = Math.max(10_000, Number(process.env.PLANNER_CONTEXT_CACHE_TTL_MS) || PLANNER_CTX_NS.defaultTtlSeconds * 1_000);
+  const enabled = resolveRolloutSync(PLANNER_CONTEXT_CACHE_FLAG).mode !== 'off' && isCacheNamespaceEnabled(PLANNER_CTX_NS);
+  const key = enabled ? buildCacheKey(PLANNER_CTX_NS, { tenantId: companyId, parts: ['intel'] }) : null;
+  if (key) {
+    const hit = _plannerCtxStore.get(key);
+    if (hit && hit.expiresAt > Date.now()) {
+      noteCacheHit(PLANNER_CTX_NS);
+      return hit.value as Awaited<ReturnType<typeof resolveIntelligenceContext>>;
+    }
+    noteCacheMiss(PLANNER_CTX_NS);
+  }
+  const value = await resolveIntelligenceContext({ companyId });
+  if (key) {
+    _plannerCtxStore.set(key, { value, expiresAt: Date.now() + ttlMs });
+    if (_plannerCtxStore.size > 500) {
+      const oldest = _plannerCtxStore.keys().next().value as string;
+      _plannerCtxStore.delete(oldest);
+    }
+  }
+  return value;
+}
 import { getUserFriendlyMessage } from '../utils/userFriendlyErrors';
 import { getConnectedPlatformsForCompany, CONTENT_PLATFORM_AFFINITY } from '../utils/platformEligibility';
 import { sanitizeBoltPlanForTextOnly } from '../utils/boltTextContentConfig';
@@ -605,7 +657,13 @@ async function runAiPlanCore(runId: string, campaignId: string, companyId: strin
   const planningIntelMode = normalizePlanningIntelligenceMode(process.env.INTELLIGENT_MIX_PLANNING_INTELLIGENCE_MODE);
   if (shouldResolvePlanningIntelligence(planningIntelMode, isCombined === true)) {
     const intelStartedAt = Date.now();
-    const intel = await resolveIntelligenceContext({ companyId });
+    // W3-8 (audit B-37): the intelligence context is DETERMINISTIC company
+    // signal state (issues/opportunities/recommendations derived from DB —
+    // never generated AI output), re-resolved on every plan run. Under the
+    // 'planner-context-cache' flag it is reused for a short TTL per company;
+    // regenerating within the window sees identical signals (they change on
+    // cron cadence, not per-plan). Flag off (default) = resolve every run.
+    const intel = await resolvePlanningIntelligenceCached(companyId);
     const formatted = formatIntelligenceForPlanning(intel);
     const enrich = shouldEnrichPlanning(planningIntelMode) && !!formatted;
     if (enrich && formatted) {
@@ -630,28 +688,47 @@ async function runAiPlanCore(runId: string, campaignId: string, companyId: strin
   // Single retry on ai/plan. Each attempt is bounded by AI_PLAN_TIMEOUT_MS (120s); 3 retries
   // turned a slow OpenAI call into ~8 min of wall time, blowing past the UI polling deadline
   // without measurably improving success rate.
-  const result = await retryWithBackoff(
-    () =>
-      withTimeout(
-        runCampaignAiPlan({
-          campaignId,
-          mode: 'generate_plan',
-          message: planMessage,
-          // No conversationHistory — BOLT is not conversational. Passing history triggers
-          // the gather-phase Q&A loop which ignores collectedPlanningContext and returns
-          // a conversational prompt instead of a plan.
-          recommendationContext,
-          collectedPlanningContext,
-          variantMetadata: withBoltMetadata({}, { runId }).variantMetadata,
-          onSubStage: onAiPlanSubStage,
-          // 6D-B: combined-only, advisory/active-only; omitted entirely otherwise.
-          ...(planningIntelligence ? { previous_performance_insights: planningIntelligence } : {}),
+  //
+  // W3-3 (audit B-09): under the 'retry-budget-planner' flag this seam becomes
+  // the SINGLE retry authority for the plan draft, using the F-09 budget:
+  //   - cumulative ceiling of 2 attempts / 2×timeout+backoff wall-clock,
+  //   - a TIMED-OUT attempt is NOT retried (the underlying call may still be
+  //     running — retrying multiplied cost without improving success; only
+  //     transient provider errors requeue),
+  //   - denials + attempts land on retry_budget.* metrics.
+  // Flag off (default) = legacy retryWithBackoff exactly as before.
+  const runPlanAttempt = () =>
+    withTimeout(
+      runCampaignAiPlan({
+        campaignId,
+        mode: 'generate_plan',
+        message: planMessage,
+        // No conversationHistory — BOLT is not conversational. Passing history triggers
+        // the gather-phase Q&A loop which ignores collectedPlanningContext and returns
+        // a conversational prompt instead of a plan.
+        recommendationContext,
+        collectedPlanningContext,
+        variantMetadata: withBoltMetadata({}, { runId }).variantMetadata,
+        onSubStage: onAiPlanSubStage,
+        // 6D-B: combined-only, advisory/active-only; omitted entirely otherwise.
+        ...(planningIntelligence ? { previous_performance_insights: planningIntelligence } : {}),
+      }),
+      AI_PLAN_TIMEOUT_MS,
+      'ai/plan'
+    );
+  const result = resolveRolloutSync(RETRY_BUDGET_PLANNER_FLAG).mode !== 'off'
+    ? await retryWithBudget(runPlanAttempt, {
+        budget: createOperationBudget({
+          name: 'planner-draft',
+          maxAttempts: 2,
+          maxTotalMs: AI_PLAN_TIMEOUT_MS * 2 + 5_000,
         }),
-        AI_PLAN_TIMEOUT_MS,
-        'ai/plan'
-      ),
-    { maxRetries: 1, initialDelayMs: 2000 }
-  );
+        layer: 'bolt-run-plan',
+        maxRetries: 1,
+        initialDelayMs: 2_000,
+        retryOn: (err) => classifyForRetry(err) === 'retryable_transient',
+      })
+    : await retryWithBackoff(runPlanAttempt, { maxRetries: 1, initialDelayMs: 2000 });
 
   // Diagnostic: log what came back so we can tell if it's a capacity block,
   // QA block, or AI failure. Correlation fields stamped for cross-instance

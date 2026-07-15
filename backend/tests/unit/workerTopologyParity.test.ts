@@ -1,104 +1,165 @@
 /**
- * PARITY GATE — worker topology parity (dev ↔ prod).
+ * PARITY GATE — worker topology parity (dev ↔ prod). F-07 / W1-3 edition.
  *
- * The original incident class: a queue is consumed on localhost (dev:full →
- * startWorkers.ts) but NOT by the production worker (main.ts → Dockerfile.worker
- * CMD), so jobs are produced in prod and never processed — invisible until the
- * feature is used. The creator-content queues were one instance; an audit found
- * four more (whatsapp-*, analytics-ingestion, bolt-content-jobs).
+ * The incident class: a queue is consumed on localhost (dev:full →
+ * startWorkers.ts) but NOT by the production worker (main.ts), so prod jobs
+ * sit in `waiting` forever — invisible until the feature is used. Creator
+ * content was one instance; the W1-3 audit found seven more families
+ * (content-*, planner-refinement, listening/semantic/replay).
  *
- * This manifest is the SINGLE SOURCE OF TRUTH for which queues the production
- * worker must consume. The test asserts main.ts matches the manifest exactly:
- *   - prodConsumed:true  → main.ts MUST register it (a consumer cannot silently vanish).
- *   - prodConsumed:false → main.ts MUST NOT register it (so wiring a consumer
- *     trips this test and forces a conscious manifest update + sign-off).
+ * The manifest now lives in SOURCE (backend/queue/workerTopologyManifest.ts —
+ * pure data, importable here without side effects) and shared consumers are
+ * registered by ONE module (workerTopology.ts) called from BOTH bootstraps.
+ * This gate asserts:
+ *   1. both bootstraps invoke registerSharedConsumers(),
+ *   2. every `consumedVia:'shared'` queue is registered by the shared module
+ *      (via mapped evidence tokens — same string-literal technique as before),
+ *   3. every `consumedVia:'inline'` queue appears in the bootstrap(s) that
+ *      the manifest declares consume it,
+ *   4. `consumedVia:'none'` queues are never registered anywhere,
+ *   5. REMOVED infrastructure stays removed (orphan files do not return).
  *
- * KNOWN GAPS are pinned as status:'PENDING_REVIEW' (owner deciding which features
- * are live in prod). They are tracked, not silently tolerated. When one is wired
- * into main.ts, flip prodConsumed→true and status→'OK' in the same change.
- *
- * Source-level assertions only (no Redis / BullMQ imports). Detection = exact
- * queue-name string literal presence in main.ts, which is reliable (regex
- * enumeration of `new Worker` forms is NOT — do not use it here).
+ * Wiring or unwiring ANY consumer requires updating the manifest in the same
+ * change — that is the contract.
  */
 import fs from 'fs';
 import path from 'path';
+import {
+  QUEUE_TOPOLOGY,
+  sharedConsumedQueues,
+  neverConsumedQueues,
+} from '../../queue/workerTopologyManifest';
 
 const ROOT = path.join(__dirname, '..', '..');
-const mainTs = fs.readFileSync(path.join(ROOT, 'workers', 'main.ts'), 'utf8');
+const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+const exists = (rel: string) => fs.existsSync(path.join(ROOT, rel));
 
-type Status = 'OK' | 'PENDING_REVIEW' | 'SUPERSEDED';
+const mainTs = read('workers/main.ts');
+const startWorkersTs = read('queue/startWorkers.ts');
+const topologyTs = read('queue/workerTopology.ts');
+const contentQueuesTs = read('queue/contentGenerationQueues.ts');
 
-interface QueueTopology {
-  queue: string;
-  /** Where prod code enqueues to it (evidence the queue is real/active). */
-  enqueuedBy: string;
-  /** Whether the PRODUCTION worker (main.ts) is expected to consume it. */
-  prodConsumed: boolean;
-  status: Status;
-  note?: string;
+const hasLiteral = (src: string, queue: string): boolean =>
+  src.includes(`'${queue}'`) || src.includes(`"${queue}"`);
+
+/**
+ * Inline-consumption evidence in a bootstrap: the queue-name literal, or the
+ * shared factory call for queues whose literal lives in the factory module
+ * (intelligence-polling → getIntelligencePollingWorker, creator-render →
+ * createCreatorRenderWorker).
+ */
+function bootstrapConsumes(src: string, queue: string): boolean {
+  if (hasLiteral(src, queue)) return true;
+  if (queue === 'intelligence-polling') {
+    return src.includes('getIntelligencePollingWorker(')
+      && hasLiteral(read('workers/intelligencePollingWorker.ts'), queue);
+  }
+  if (queue === 'creator-render') {
+    return src.includes('createCreatorRenderWorker(')
+      && hasLiteral(read('services/creatorRenderDurableQueue.ts'), queue);
+  }
+  return false;
 }
 
-/** Returns true iff main.ts references the queue-name literal. */
-function mainConsumes(queue: string): boolean {
-  return mainTs.includes(`'${queue}'`) || mainTs.includes(`"${queue}"`);
+/**
+ * Evidence that the SHARED registrar actually covers a queue. Registration
+ * goes through helper authorities, so per-queue evidence is either a queue
+ * literal or the authority call in workerTopology.ts plus the queue literal
+ * in the authority's module (contentGenerationQueues.ts).
+ */
+function sharedRegistrarCovers(queue: string): boolean {
+  if (hasLiteral(topologyTs, queue)) return true; // e.g. 'planner-refinement'
+  if (queue.startsWith('content-')) {
+    return topologyTs.includes('startContentWorkers(') && hasLiteral(contentQueuesTs, queue);
+  }
+  if (queue.startsWith('creator-')) {
+    return topologyTs.includes('startCreatorContentWorkers(') && hasLiteral(contentQueuesTs, queue);
+  }
+  if (queue === 'whatsapp-broadcast') {
+    return topologyTs.includes('startWhatsAppBroadcastWorker(') && hasLiteral(contentQueuesTs, queue);
+  }
+  if (queue === 'whatsapp-webhook') {
+    return topologyTs.includes('startWhatsAppWebhookWorker(') && hasLiteral(contentQueuesTs, queue);
+  }
+  if (queue === 'analytics-ingestion') {
+    return topologyTs.includes('startAnalyticsIngestionWorker(') && hasLiteral(contentQueuesTs, queue);
+  }
+  if (queue === 'listening-executions') {
+    return topologyTs.includes('LISTENING_EXECUTION_QUEUE_NAME')
+      && hasLiteral(read('queue/listeningExecutionQueue.ts'), queue);
+  }
+  if (queue === 'semantic-indexing') {
+    return topologyTs.includes('SEMANTIC_PARTITION_QUEUE_NAME')
+      && hasLiteral(read('types/semanticIndexingPartition.ts'), queue);
+  }
+  if (queue === 'replay-partition') {
+    return topologyTs.includes('REPLAY_PARTITION_QUEUE_NAME')
+      && hasLiteral(read('types/replayPartition.ts'), queue);
+  }
+  return false;
 }
 
-const QUEUE_TOPOLOGY: QueueTopology[] = [
-  // ── Verified consumed by the prod worker (regression guard) ──
-  { queue: 'publish', enqueuedBy: 'publishing pipeline', prodConsumed: true, status: 'OK' },
-  { queue: 'bolt-execution', enqueuedBy: 'boltPipelineService', prodConsumed: true, status: 'OK' },
-  { queue: 'engagement-polling', enqueuedBy: 'engagement scheduler', prodConsumed: true, status: 'OK' },
-  { queue: 'lead-thread-recompute', enqueuedBy: 'DB-insert trigger', prodConsumed: true, status: 'OK' },
-  { queue: 'conversation-memory-rebuild', enqueuedBy: 'DB-insert trigger', prodConsumed: true, status: 'OK' },
-  { queue: 'engine-jobs', enqueuedBy: 'lead/market-pulse enqueue', prodConsumed: true, status: 'OK' },
-  { queue: 'ai-heavy', enqueuedBy: 'campaign planning enqueue', prodConsumed: true, status: 'OK' },
-  { queue: 'creator-video', enqueuedBy: 'boltCreatorQueueBridge', prodConsumed: true, status: 'OK' },
-  { queue: 'creator-carousel', enqueuedBy: 'boltCreatorQueueBridge', prodConsumed: true, status: 'OK' },
-  { queue: 'creator-story', enqueuedBy: 'boltCreatorQueueBridge', prodConsumed: true, status: 'OK' },
-
-  // ── Resolved by WORKER-TOPOLOGY-PARITY-REMEDIATION (per PROD-QUEUE-CONTRACT-AUDIT) ──
-  // REQUIRED_IN_PRODUCTION: enqueued/exposed in prod; now wired into main.ts via
-  // the same authority used by dev (startWorkers.ts).
-  { queue: 'whatsapp-broadcast', enqueuedBy: 'whatsappBroadcastService.ts:202,358', prodConsumed: true, status: 'OK', note: 'wired into main.ts (remediation)' },
-  { queue: 'whatsapp-webhook', enqueuedBy: 'pages/api/whatsapp/webhook', prodConsumed: true, status: 'OK', note: 'wired into main.ts (remediation)' },
-  { queue: 'analytics-ingestion', enqueuedBy: 'pages/api/cron/analytics-ingestion (vercel.json daily cron)', prodConsumed: true, status: 'OK', note: 'wired into main.ts (remediation)' },
-
-  // SUPERSEDED: producer queueBoltContentJobs is run_id-gated and NO caller
-  // passes run_id → never enqueued in dev OR prod. Consumed by NEITHER bootstrap
-  // after remediation (removed from startWorkers.ts). Inline processBlockSchedule
-  // is the live scheduling path. Must NOT be wired into main.ts.
-  { queue: 'bolt-content-jobs', enqueuedBy: 'structuredPlanScheduler.ts:951 (run_id-gated; never enqueued)', prodConsumed: false, status: 'SUPERSEDED', note: 'removed from dev bootstrap; inline path supersedes it' },
-];
-
-describe('worker topology parity (prod main.ts ↔ manifest)', () => {
-  it.each(QUEUE_TOPOLOGY.filter((q) => q.prodConsumed))(
-    'prod consumes "$queue" (declared prodConsumed:true)',
-    ({ queue }) => {
-      expect(mainConsumes(queue)).toBe(true);
-    },
-  );
-
-  it.each(QUEUE_TOPOLOGY.filter((q) => !q.prodConsumed))(
-    'prod does NOT consume "$queue" (declared prodConsumed:false)',
-    ({ queue }) => {
-      // If this fails, someone wired a consumer into main.ts WITHOUT updating
-      // the manifest. Update QUEUE_TOPOLOGY (prodConsumed:true, status:'OK').
-      expect(mainConsumes(queue)).toBe(false);
-    },
-  );
-
-  it('all topology gaps resolved — 0 PENDING_REVIEW', () => {
-    const pending = QUEUE_TOPOLOGY.filter((q) => q.status === 'PENDING_REVIEW');
-    expect(pending.length).toBe(0);
+describe('worker topology parity (manifest ↔ bootstraps)', () => {
+  it('manifest queue names are unique and fully classified', () => {
+    const names = QUEUE_TOPOLOGY.map((q) => q.queue);
+    expect(new Set(names).size).toBe(names.length);
+    for (const q of QUEUE_TOPOLOGY) {
+      expect(['inline', 'shared', 'none']).toContain(q.consumedVia);
+      expect(['OK', 'DORMANT', 'SUPERSEDED', 'REMOVED']).toContain(q.status);
+    }
   });
 
-  it('bolt-content-jobs is SUPERSEDED and consumed by NEITHER bootstrap (parity)', () => {
-    const entry = QUEUE_TOPOLOGY.find((q) => q.queue === 'bolt-content-jobs');
-    expect(entry?.status).toBe('SUPERSEDED');
-    expect(entry?.prodConsumed).toBe(false);
-    expect(mainConsumes('bolt-content-jobs')).toBe(false);
-    const startWorkersTs = fs.readFileSync(path.join(ROOT, 'queue', 'startWorkers.ts'), 'utf8');
+  it('BOTH bootstraps register shared consumers through the ONE topology module', () => {
+    expect(mainTs).toContain("registerSharedConsumers({ bootstrap: 'prod'");
+    expect(startWorkersTs).toContain("registerSharedConsumers({ bootstrap: 'dev'");
+  });
+
+  it.each(sharedConsumedQueues())(
+    'shared registrar covers "$queue" (consumedVia:shared)',
+    ({ queue }) => {
+      expect(sharedRegistrarCovers(queue)).toBe(true);
+    },
+  );
+
+  it.each(QUEUE_TOPOLOGY.filter((q) => q.consumedVia === 'inline' && q.prodConsumed))(
+    'prod bootstrap consumes inline queue "$queue"',
+    ({ queue }) => {
+      expect(bootstrapConsumes(mainTs, queue)).toBe(true);
+    },
+  );
+
+  it.each(QUEUE_TOPOLOGY.filter((q) => q.consumedVia === 'inline' && q.devConsumed))(
+    'dev bootstrap consumes inline queue "$queue"',
+    ({ queue }) => {
+      expect(bootstrapConsumes(startWorkersTs, queue)).toBe(true);
+    },
+  );
+
+  it.each(neverConsumedQueues())(
+    '"$queue" is consumed by NEITHER bootstrap (status: $status)',
+    ({ queue }) => {
+      // Registration evidence would be the literal in a bootstrap or the
+      // shared registrar. (Manifest/doc references live elsewhere.)
+      expect(hasLiteral(topologyTs, queue)).toBe(false);
+      expect(hasLiteral(mainTs, queue)).toBe(false);
+      expect(hasLiteral(startWorkersTs, queue)).toBe(false);
+    },
+  );
+
+  it('bolt-content-jobs stays SUPERSEDED — startBoltContentWorkers wired nowhere', () => {
+    expect(mainTs).not.toContain('startBoltContentWorkers');
     expect(startWorkersTs).not.toContain('startBoltContentWorkers');
+    expect(topologyTs).not.toContain('startBoltContentWorkers');
+  });
+
+  it('W1-4 removed orphan infrastructure stays removed', () => {
+    // lead-jobs: no producer, no consumer; module-level Redis connection at
+    // import time. Deleted in W1-4 — must not return without a manifest change.
+    expect(exists('queue/leadQueue.ts')).toBe(false);
+    expect(exists('workers/leadWorker.ts')).toBe(false);
+    // Legacy duplicate engine-jobs worker (untuned, double-consume risk).
+    expect(exists('queue/worker.ts')).toBe(false);
+    const removed = QUEUE_TOPOLOGY.filter((q) => q.status === 'REMOVED').map((q) => q.queue);
+    expect(removed).toContain('lead-jobs');
   });
 });

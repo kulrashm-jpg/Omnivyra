@@ -10,7 +10,13 @@ const AnswerExtractionFunnel = dynamic(() => import('@/components/reports/geo-ae
 const EntityAuthorityMap = dynamic(() => import('@/components/reports/geo-aeo/EntityAuthorityMap'), { ssr: false });
 import KeywordGapAnalysis from '@/components/reports/competitor/KeywordGapAnalysis';
 import AiAnswerGapAnalysis from '@/components/reports/competitor/AiAnswerGapAnalysis';
-import CanonicalReportSections from '@/components/reports/canonical/CanonicalReportSections';
+// W5-2 (audit B-75): BUILD-OPT-002 lazy-loaded 5 chart sections but this one
+// stayed static, re-importing recharts into the route chunk and negating the
+// split. Completing the pass — same dynamic() treatment as its siblings.
+const CanonicalReportSections = dynamic(
+  () => import('@/components/reports/canonical/CanonicalReportSections'),
+  { ssr: false, loading: () => <div aria-busy="true" className="min-h-[240px] w-full animate-pulse rounded-md bg-gray-50" /> },
+);
 import ProgressIndicatorBars from '@/components/reports/shared/ProgressIndicatorBars';
 import {
   MarketPulseConfidenceBadge,

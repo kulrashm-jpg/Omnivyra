@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/auth/sync-supabase-user
@@ -63,7 +64,7 @@ type ErrorResponse   = {
   conflicting_company_id?: string;
 };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -689,3 +690,6 @@ async function notifyAdminAndProspectOfClaimedDomain(input: {
     }
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/sync-supabase-user' });

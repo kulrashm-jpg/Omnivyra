@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * /api/super-admin/settlement-ops — HIDDEN settlement-operations governance.
  *
@@ -19,7 +20,7 @@ import { BILLING_PLATFORM_MANAGE } from '../../../shared/contracts/security/Secu
 import { aggregateSettlementMetrics } from '../../../backend/services/billing/payments/settlementMetrics';
 import { listSettlementLocks } from '../../../backend/services/billing/payments/settlementRuntimeLock';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'method_not_allowed' });
@@ -41,3 +42,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ metrics, locks });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/settlement-ops' });

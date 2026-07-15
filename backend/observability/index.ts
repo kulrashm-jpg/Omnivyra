@@ -26,3 +26,9 @@ export { runWithRequestDbScope, getRequestDbStats } from './requestScope';
 export { observeExternalCall } from './externalObservability';
 export { getObservabilitySnapshot } from './snapshot';
 export type { ObservabilitySnapshot } from './snapshot';
+// Foundation Batch A (F-02) — exporter + trace propagation kit.
+export { renderPrometheusText, PROMETHEUS_CONTENT_TYPE } from './promExporter';
+export {
+  TRACE_JOB_FIELD, traceMetaForEnqueue, withTraceMeta, runWithJobTraceContext,
+} from './traceKit';
+export type { JobTraceMeta, JobLike } from './traceKit';

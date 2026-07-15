@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET/PUT company-level API configuration (company_api_configs).
@@ -63,7 +64,7 @@ async function requireCompanyAccess(
   return { userId: user.id, canManage };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = (req.query.companyId as string) || (req.body?.companyId as string);
   const apiSourceId = (req.query.api_source_id as string) || (req.body?.api_source_id as string);
 
@@ -201,3 +202,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, PUT, DELETE');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/external-apis/company-config' });

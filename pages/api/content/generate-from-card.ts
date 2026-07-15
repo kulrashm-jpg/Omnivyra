@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/content/generate-from-card
  *
@@ -53,7 +54,7 @@ const VALID_CONTENT_TYPES: ContentType[] = ['blog', 'article', 'whitepaper', 'po
 const VALID_GOALS: ContentGoal[] = ['awareness', 'authority', 'conversion', 'retention'];
 const VALID_ANGLE_TYPES: AngleType[] = ['strategic', 'contrarian', 'analytical'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -210,3 +211,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     depth_insight_report: null,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/content/generate-from-card' });

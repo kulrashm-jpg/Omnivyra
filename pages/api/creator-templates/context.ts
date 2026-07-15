@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { resolveCreatorCopyContext } from '../../../backend/services/creator/creatorCopyContextResolver';
@@ -12,7 +13,7 @@ import { resolveCreatorCopyContext } from '../../../backend/services/creator/cre
  * summary fields used for deterministic scoring. Company maturity is derived
  * deterministically from the available canonical signals.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -64,3 +65,6 @@ function deriveMaturity(s: { products: number; pillars: number; objectives: numb
   const signals = s.products + s.pillars + s.objectives + (s.hasDiff ? 1 : 0);
   return signals >= 6 ? 'mature' : signals >= 2 ? 'growth' : 'early';
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-templates/context' });

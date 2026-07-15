@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
@@ -13,7 +14,7 @@ const CLAUDE_CHAT_LIMIT = {
 
 type CredentialMode = 'platform' | 'byok';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -363,3 +364,6 @@ function getSystemPrompt(context: string): string {
 
   return prompts.general;
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/ai/claude-chat' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * /api/onboarding/journey — the canonical onboarding journey (ONBOARD-001 §5/§12).
  *
@@ -26,7 +27,7 @@ import {
 
 type ErrorResponse = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<OnboardingJourney | ErrorResponse>,
 ) {
@@ -86,3 +87,6 @@ export default async function handler(
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/onboarding/journey' });

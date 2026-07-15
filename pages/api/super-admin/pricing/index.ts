@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * Super-Admin pricing management.
  *   GET  → { fx, planPricing }   (current config)
@@ -13,7 +14,7 @@ import {
 } from '@/backend/services/pricingConfigService';
 import type { Currency } from '@/lib/billing/currency';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const guard = await requireCapability(req, res, {
     capability: BILLING_PURCHASE,
     reason: 'manage pricing configuration',
@@ -47,3 +48,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).end();
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/pricing' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/calendar/message-counts?campaignId=...&dates=2025-03-01,2025-03-02,...
@@ -62,4 +63,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // HARDEN-002: measurement only (HARDEN-001 API metrics).
-export default withApiObservability(handler, '/api/calendar/message-counts');
+export default __createApiRoute(withApiObservability(handler, '/api/calendar/message-counts'), { route: '/api/calendar/message-counts' });

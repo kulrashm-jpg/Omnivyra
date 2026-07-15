@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Phase 5 — /api/threadRuntime/timeline
  *
@@ -16,7 +17,7 @@ import {
 } from '@/backend/services/threadRuntime/threadRuntimeTimelineBuilder';
 import { getDefaultPersistentTraceStore } from '@/backend/services/threadRuntime/persistentTraceStore';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') { res.status(405).json({ error: 'METHOD_NOT_ALLOWED' }); return; }
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
   if (authError || !user?.id) { res.status(401).json({ error: 'UNAUTHORIZED' }); return; }
@@ -46,3 +47,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ error: 'TIMELINE_FAILED', reason: (err as Error).message });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/threadRuntime/timeline' });

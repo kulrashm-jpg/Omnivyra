@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/track/angle-industry-matrix?industry=saas
@@ -47,7 +48,7 @@ function normaliseIndustry(raw: string): string {
   return raw.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── GET: fetch matrix for an industry ────────────────────────────────────
   if (req.method === 'GET') {
     const rawIndustry = typeof req.query.industry === 'string' ? req.query.industry.trim() : '';
@@ -139,3 +140,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/track/angle-industry-matrix' });

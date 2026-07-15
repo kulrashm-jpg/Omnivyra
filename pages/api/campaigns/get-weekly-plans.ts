@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -7,7 +8,7 @@ import type { WeekPlanLike } from '../../../backend/services/executionMomentumTr
 import { computeExecutionHealthScore, type ExecutionPressure, type ExecutionMomentum, type ExecutionDrift } from '../../../backend/services/executionHealthScorer';
 import { runWithRequestMemo } from '../../../backend/services/requestScopedMemo';
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+function handler(req: NextApiRequest, res: NextApiResponse) {
   // PERF-001: seed a request-scoped memo (dedupes blueprint loads in-request).
   return runWithRequestMemo(() => handlerImpl(req, res));
 }
@@ -193,3 +194,6 @@ async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/get-weekly-plans' });

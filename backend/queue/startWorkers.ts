@@ -29,28 +29,20 @@ import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcesso
 import { processPublishJob } from './jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from './jobProcessors/engagementPollingProcessor';
 import { processBoltJob } from './jobProcessors/boltProcessor';
-import { processContentGenerationJob } from './jobProcessors/contentGenerationProcessor';
-import { processCreatorContentJob } from './jobProcessors/creatorContentProcessor';
-import { processWhatsAppBroadcastJob } from './jobProcessors/whatsappBroadcastProcessor';
-import { processWhatsAppWebhookJob } from './jobProcessors/whatsappWebhookProcessor';
-import { processAnalyticsIngestionJob } from './jobProcessors/analyticsIngestionProcessor';
 import { getIntelligencePollingWorker } from '../workers/intelligencePollingWorker';
-import { initializeContentQueues, startContentWorkers, startCreatorContentWorkers, startWhatsAppBroadcastWorker, startWhatsAppWebhookWorker, startAnalyticsIngestionWorker } from './contentGenerationQueues';
+import { registerSharedConsumers, type SharedConsumerHandles } from './workerTopology';
 
 let publishWorker: ReturnType<typeof getWorker>;
 let boltWorker: ReturnType<typeof getWorker>;
 let engagementWorker: ReturnType<typeof getWorker>;
 let engineWorker: ReturnType<typeof getWorker>;
 let intelligencePollingWorker: ReturnType<typeof getIntelligencePollingWorker>;
-let listeningExecutionWorker: ReturnType<typeof getWorker>;
-let semanticIndexingWorker: ReturnType<typeof getWorker>;
-let replayPartitionWorker: ReturnType<typeof getWorker>;
 let creatorRenderWorker: ReturnType<typeof createCreatorRenderWorker> | null = null;
-// Async planner refinement worker. Started AFTER usage protection is ready
-// so its first job sees the same gating as inline planner calls. Graceful
-// drain on shutdown — `worker.close()` waits for in-flight refinements to
-// complete before exiting so we never half-write a refined plan.
-let refinementWorker: ReturnType<typeof getWorker> | null = null;
+// F-07 / W1-3: shared consumers (content-*, creator-*, whatsapp-*, analytics,
+// planner-refinement, listening/semantic/replay) are registered via the ONE
+// topology module both bootstraps use. getWorker-based handles come back for
+// graceful shutdown (incl. planner-refinement drain semantics).
+let sharedConsumers: SharedConsumerHandles | null = null;
 
 const shutdown = async () => {
   await publishWorker?.close?.();
@@ -58,20 +50,17 @@ const shutdown = async () => {
   await boltWorker?.close?.();
   await engineWorker?.close?.();
   await intelligencePollingWorker?.close?.();
-  await listeningExecutionWorker?.close?.();
-  await semanticIndexingWorker?.close?.();
-  await replayPartitionWorker?.close?.();
   if (creatorRenderWorker) {
     try { await creatorRenderWorker.close(); } catch { /* best-effort */ }
   }
-  // Refinement worker close MUST be awaited last so other queues drain first
-  // (their failure paths can enqueue refinement jobs). close() with no args
-  // performs graceful drain — waits for active jobs, refuses new ones.
-  if (refinementWorker) {
+  // Shared consumers close LAST so other queues drain first (their failure
+  // paths can enqueue refinement jobs). close() with no args performs a
+  // graceful drain — waits for active jobs, refuses new ones.
+  for (const worker of sharedConsumers?.workers ?? []) {
     try {
-      await refinementWorker.close();
+      await worker.close();
     } catch (err) {
-      console.warn('[planner-refinement] worker close failed:', (err as Error)?.message);
+      console.warn('[workers] shared consumer close failed:', (err as Error)?.message);
     }
   }
   process.exit(0);
@@ -183,91 +172,18 @@ export async function startWorkers(): Promise<void> {
   try { await getUsageProtectionReady(); _diag('startWorkers:after-getUsageProtectionReady'); }
   catch (e) { _diag('startWorkers:getUsageProtectionReady-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
-  // Initialize content generation queues (pre-flight checks, rate limiting, backpressure)
-  try { await initializeContentQueues(); _diag('startWorkers:after-initializeContentQueues'); }
-  catch (e) { _diag('startWorkers:initializeContentQueues-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
-
-  // Start content generation workers (unified processor for all text content types)
-  try { await startContentWorkers(processContentGenerationJob); _diag('startWorkers:after-startContentWorkers'); }
-  catch (e) { _diag('startWorkers:startContentWorkers-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
-
-  // Start creator content workers (video, carousel, story)
-  try { await startCreatorContentWorkers(processCreatorContentJob); _diag('startWorkers:after-startCreatorContentWorkers'); }
-  catch (e) { _diag('startWorkers:startCreatorContentWorkers-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
-
-  // NOTE: bolt-content-jobs worker intentionally NOT registered. Per
-  // PROD-QUEUE-CONTRACT-AUDIT it is SUPERSEDED — the producer queueBoltContentJobs
-  // is gated on options.run_id and NO caller passes run_id (boltPipelineService
-  // omits it for the inline path; both campaign API endpoints omit it), so the
-  // queue is never enqueued in dev OR prod. Removing the dev consumer aligns
-  // local↔prod topology (prod never registered it either). The inline
-  // processBlockSchedule path handles structured scheduling.
-
-  // Start WhatsApp broadcast workers (batched sends, tier-aware chunking)
-  try { await startWhatsAppBroadcastWorker(processWhatsAppBroadcastJob); _diag('startWorkers:after-startWhatsAppBroadcastWorker'); }
-  catch (e) { _diag('startWorkers:startWhatsAppBroadcastWorker-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
-
-  // Start WhatsApp webhook event workers (async processing of Meta webhook payloads)
-  try { await startWhatsAppWebhookWorker(processWhatsAppWebhookJob); _diag('startWorkers:after-startWhatsAppWebhookWorker'); }
-  catch (e) { _diag('startWorkers:startWhatsAppWebhookWorker-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
-
-  // Start analytics ingestion worker (daily growth + post-metric polls)
-  try { await startAnalyticsIngestionWorker(processAnalyticsIngestionJob); _diag('startWorkers:after-startAnalyticsIngestionWorker'); }
-  catch (e) { _diag('startWorkers:startAnalyticsIngestionWorker-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
+  // F-07 / W1-3 — shared consumers: content queue init + content-* text
+  // family + creator content + whatsapp ×2 + analytics + planner-refinement +
+  // listening-executions + semantic-indexing + replay-partition, registered
+  // via the ONE topology module both bootstraps use (per-family non-fatal +
+  // loud; see backend/queue/workerTopologyManifest.ts). NOTE preserved from
+  // the removed inline blocks: bolt-content-jobs is SUPERSEDED and must not
+  // be registered (manifest entry documents why); planner-refinement attaches
+  // even while ASYNC_REFINEMENT_ENABLED is off so queued jobs drain.
+  sharedConsumers = await registerSharedConsumers({ bootstrap: 'dev', onStage: _diag });
 
   publishWorker = getWorker('publish', processPublishJob);
   boltWorker = getWorker('bolt-execution', processBoltJob, { concurrency: boltConcurrency });
-
-  // ── PLANNER REFINEMENT WORKER ────────────────────────────────────────────
-  // Async refinement is the off-path pass that polishes the alignment-recovered
-  // plan after the synchronous planner returned the base. Concurrency is
-  // intentionally low — refinement is a single LLM call and we don't want to
-  // amplify cost. Stalled jobs are recovered by BullMQ's lock-renewal
-  // mechanism (default 30s; we set a 60s lock duration to comfortably cover
-  // the gateway provider timeout).
-  //
-  // Gated by ASYNC_REFINEMENT_ENABLED; when false we still attach the worker
-  // (so any in-queue jobs from a prior enabled period drain), but the enqueue
-  // side won't add new ones.
-  try {
-    const { processAsyncRefinementJob } =
-      await import('./jobProcessors/asyncRefinementProcessor');
-    const refinementConcurrency = Math.max(1, Number(process.env.PLANNER_REFINEMENT_CONCURRENCY || 2));
-    // getWorker only exposes `concurrency`; BullMQ defaults for lockDuration
-    // (30s) and stalledInterval (30s) are adequate for refinement, which is
-    // a single sub-30s LLM call. Stalled-job recovery uses BullMQ's built-in
-    // mechanism — if a worker dies mid-job, the lock expires and BullMQ
-    // marks it stalled for retry.
-    refinementWorker = getWorker(
-      'planner-refinement',
-      async (job) => {
-        await processAsyncRefinementJob(job as any);
-      },
-      { concurrency: refinementConcurrency },
-    );
-    refinementWorker.on('error', (err) => {
-      console.error('[planner-refinement] worker error:', err?.message ?? err);
-    });
-    refinementWorker.on('failed', (job, err) => {
-      console.warn('[planner-refinement] job failed:', {
-        job_id: job?.id,
-        attempts: job?.attemptsMade,
-        error: err?.message,
-      });
-    });
-    refinementWorker.on('stalled', (jobId) => {
-      console.warn('[planner-refinement] job stalled, will retry:', { job_id: jobId });
-    });
-    _diag('startWorkers:planner-refinement-registered', { concurrency: refinementConcurrency });
-  } catch (err) {
-    _diag('startWorkers:planner-refinement-register-error', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    console.warn(
-      '[planner-refinement] worker registration skipped:',
-      (err as Error)?.message ?? err,
-    );
-  }
 
   // ── DISTRIBUTED PLANNER EVENT PROPAGATION ────────────────────────────────
   // Env-gated via DISTRIBUTED_EVENTS_ENABLED. When enabled, this worker
@@ -462,70 +378,10 @@ export async function startWorkers(): Promise<void> {
   }
   intelligencePollingWorker = getIntelligencePollingWorker();
 
-  // Phase 3 — listening-executions worker. Bounded; one execution per source
-  // at a time per the DB UNIQUE partial index. Concurrency 2 across the org
-  // pool keeps a single rogue source from starving others.
-  try {
-    const { LISTENING_EXECUTION_QUEUE_NAME } = await import('./listeningExecutionQueue');
-    const { processListeningExecution } = await import('../services/listeningExecutionService');
-    listeningExecutionWorker = getWorker(
-      LISTENING_EXECUTION_QUEUE_NAME,
-      async (job) => {
-        const data = job.data as { executionId?: string } | undefined;
-        if (!data?.executionId) return;
-        await processListeningExecution(data.executionId);
-      },
-      { concurrency: 2 },
-    );
-    console.log('[workers] listening-executions worker started');
-  } catch (e) {
-    _diag('startWorkers:listeningExecutionWorker-attach-failed', {
-      error: e instanceof Error ? e.message : String(e),
-    });
-  }
-
-  // Phase 9 — semantic indexing partition worker. Bounded concurrency so a
-  // single large job cannot starve the rest of the system; per-partition
-  // jobId is deterministic so re-enqueue is idempotent.
-  try {
-    const { SEMANTIC_PARTITION_QUEUE_NAME } = await import('./semanticIndexingQueue');
-    const { processSemanticPartition } = await import('../services/asyncSemanticRuntimeService');
-    semanticIndexingWorker = getWorker(
-      SEMANTIC_PARTITION_QUEUE_NAME,
-      async (job) => {
-        const data = job.data as { partitionId?: string } | undefined;
-        if (!data?.partitionId) return;
-        await processSemanticPartition(data.partitionId);
-      },
-      { concurrency: 2 },
-    );
-    console.log('[workers] semantic-indexing worker started');
-  } catch (e) {
-    _diag('startWorkers:semanticIndexingWorker-attach-failed', {
-      error: e instanceof Error ? e.message : String(e),
-    });
-  }
-
-  // Phase 9 — replay partition worker. Same bounded-concurrency model;
-  // partitions hold their own checkpoints so failures are recoverable.
-  try {
-    const { REPLAY_PARTITION_QUEUE_NAME } = await import('./replayPartitionQueue');
-    const { processReplayPartition } = await import('../services/replayCoordinationService');
-    replayPartitionWorker = getWorker(
-      REPLAY_PARTITION_QUEUE_NAME,
-      async (job) => {
-        const data = job.data as { partitionId?: string } | undefined;
-        if (!data?.partitionId) return;
-        await processReplayPartition(data.partitionId);
-      },
-      { concurrency: 2 },
-    );
-    console.log('[workers] replay-partition worker started');
-  } catch (e) {
-    _diag('startWorkers:replayPartitionWorker-attach-failed', {
-      error: e instanceof Error ? e.message : String(e),
-    });
-  }
+  // listening-executions / semantic-indexing / replay-partition workers are
+  // registered by registerSharedConsumers() above (F-07 / W1-3) — previously
+  // dev-only inline blocks here, which is exactly the parity gap class the
+  // topology module eliminates.
 
   // ── CREATOR-RENDER DURABLE WORKER ───────────────────────────────────────
   // Carousel / infographic / pdf / slider rendering goes through the

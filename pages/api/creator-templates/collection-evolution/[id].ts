@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
 import { analyzeCollectionEvolution, acceptEvolutionRecommendation } from '../../../../backend/services/creator/designEvolutionService';
@@ -9,7 +10,7 @@ import type { EvolutionRecommendation } from '../../../../lib/creator-templates/
  * POST /api/creator-templates/collection-evolution/[id]  { recommendation }
  *      — accept a recommendation → NEW collection version (existing versioning).
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const user = await resolveUserContext(req);
   if (!user?.userId) return res.status(401).json({ error: 'authentication required' });
   const id = String(req.query.id || '').trim();
@@ -38,3 +39,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, POST');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-templates/collection-evolution/:id' });

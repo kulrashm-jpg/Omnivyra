@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Analytics system-state API — route shell.
  *
@@ -17,7 +18,7 @@ import { enforceCompanyAccess, resolveUserContext } from '../../../backend/servi
 
 import { BillingUsageItem, GenericRow, HealthState, IntegrationApi, IntegrationPlatform, OverviewMetric, PLATFORM_LABELS, SystemStateDataError, SystemStateResponse, TimelinePoint, TrafficState, ZERO_UUID, buildTimeline, buildWeeklyTimeline, classifyApiStatus, classifyContentType, fetchRows, formatShortDate, hasText, integrationMatches, mostRecentDate, safeNumber, startOfDay } from '../../../backend/apiHandlers/analytics/systemStateShared';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<SystemStateResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<SystemStateResponse | { error: string }>) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -485,3 +486,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   return res.status(200).json(response);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/analytics/system-state' });

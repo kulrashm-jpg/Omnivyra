@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * POST /api/campaigns/proposals/convert
@@ -12,7 +13,7 @@ import { fromStructuredPlan } from '../../../../backend/services/campaignBluepri
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -155,3 +156,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     proposal_id: proposalId,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/proposals/convert' });

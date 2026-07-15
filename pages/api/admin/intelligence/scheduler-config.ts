@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/admin/intelligence/scheduler-config
@@ -20,7 +21,7 @@ import {
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { SUPER_ADMIN_DASHBOARD_VIEW, INTELLIGENCE_OVERRIDE_MANAGE } from '../../../../shared/contracts/security';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   // GET = read; PUT = mutation.
   const cap = req.method === 'PUT' ? INTELLIGENCE_OVERRIDE_MANAGE : SUPER_ADMIN_DASHBOARD_VIEW;
   const guard = await requireCapability(req, res, {
@@ -88,3 +89,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/intelligence/scheduler-config' });

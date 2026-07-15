@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 
 /**
  * POST /api/campaigns/pending/:id/approve
@@ -15,7 +16,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { logDecision } from '@/backend/services/autonomousDecisionLogger';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const auth = await requireAuth(req, res);
@@ -141,3 +142,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     campaign_id: campaignId,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/pending/:id/approve' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/usage/summary — authenticated read over the canonical usage authority
  * (CSA-001 §4). Reuses the existing auth + tenant guard (`withOrgAccess`) and the
@@ -32,4 +33,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json(summary);
 }
 
-export default withOrgAccess(handler);
+export default __createApiRoute(withOrgAccess(handler), { route: '/api/usage/summary' });

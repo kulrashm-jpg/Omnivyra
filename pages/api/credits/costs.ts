@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/credits/costs
@@ -9,9 +10,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getCreditCostTiers } from '../../../backend/services/creditDeductionService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
   const tiers = await getCreditCostTiers();
   return res.status(200).json(tiers);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/credits/costs' });

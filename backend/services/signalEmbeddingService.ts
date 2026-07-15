@@ -137,6 +137,100 @@ export async function generateTopicEmbedding(
 }
 
 /**
+ * W3-6 (audit B-36) — batched embedding generation. The provider accepts an
+ * ARRAY input: N texts in ONE round-trip, same model, same dimensions —
+ * output for each text is identical to the single-input call. Billing
+ * parity: the provider bills the same total tokens; ONE usage event carries
+ * the batch's total tokens/cost (attribution granularity per-batch instead
+ * of per-item, same organization — recorded in metadata.batch_size).
+ * Order-preserving via the response's index field. Callers chunk to
+ * EMBEDDING_BATCH_MAX (bounded request size).
+ */
+export const EMBEDDING_BATCH_MAX = 64;
+
+export async function generateTopicEmbeddingsBatch(
+  texts: string[],
+  opts: Parameters<typeof generateTopicEmbedding>[1],
+): Promise<number[][]> {
+  if (texts.length === 0) return [];
+  if (texts.length === 1) return [await generateTopicEmbedding(texts[0]!, opts)];
+  if (texts.length > EMBEDDING_BATCH_MAX) {
+    throw new Error(`generateTopicEmbeddingsBatch: max ${EMBEDDING_BATCH_MAX} texts per batch`);
+  }
+  if (!opts?.companyId) {
+    throw new Error('generateTopicEmbeddingsBatch requires opts.companyId for cost attribution');
+  }
+
+  await assertModelPricingExists('openai', EMBEDDING_MODEL, 'embedding');
+
+  const client = getClient();
+  const startedAt = Date.now();
+  const inputs = texts.map((t) => t.slice(0, 8191));
+  let response: Awaited<ReturnType<OpenAI['embeddings']['create']>>;
+  try {
+    response = await client.embeddings.create({
+      model: EMBEDDING_MODEL,
+      input: inputs,
+      dimensions: EMBEDDING_DIM,
+    });
+  } catch (err: any) {
+    void logUsageEvent({
+      organization_id: opts.companyId,
+      user_id:         opts.userId ?? null,
+      source_type:     opts.system ? 'system' : 'embedding',
+      provider_name:   'openai',
+      model_name:      EMBEDDING_MODEL,
+      source_name:     'openai',
+      process_type:    PROCESS_TYPE,
+      latency_ms:      Date.now() - startedAt,
+      error_flag:      true,
+      error_type:      err?.message?.slice(0, 200) ?? 'unknown',
+      metadata:        { ...opts.metadata, batch_size: texts.length },
+    });
+    throw err;
+  }
+
+  const byIndex = new Map<number, number[]>();
+  for (const row of response.data ?? []) {
+    if (Array.isArray(row?.embedding)) byIndex.set(row.index, row.embedding);
+  }
+  const embeddings = texts.map((_t, i) => byIndex.get(i));
+  if (embeddings.some((e) => !Array.isArray(e) || e.length !== EMBEDDING_DIM)) {
+    throw new Error(`Invalid batch embedding response: expected ${texts.length}×${EMBEDDING_DIM}`);
+  }
+
+  const totalTokens = Number((response as any)?.usage?.total_tokens ?? 0);
+  const cost = await resolveEmbeddingCost({
+    providerName: 'openai',
+    modelName: EMBEDDING_MODEL,
+    totalTokens,
+    processType: PROCESS_TYPE,
+    organizationId: opts.companyId,
+  });
+  void logUsageEvent({
+    organization_id: opts.companyId,
+    user_id:         opts.userId ?? null,
+    source_type:     opts.system ? 'system' : 'embedding',
+    provider_name:   'openai',
+    model_name:      EMBEDDING_MODEL,
+    source_name:     'openai',
+    process_type:    PROCESS_TYPE,
+    input_tokens:    totalTokens,
+    output_tokens:   0,
+    total_tokens:    totalTokens,
+    latency_ms:      Date.now() - startedAt,
+    unit_cost:       totalTokens > 0 ? cost.total_cost_usd / totalTokens : null,
+    total_cost:      cost.total_cost_usd,
+    total_cost_usd:  cost.total_cost_usd,
+    final_price_usd: cost.final_price_usd,
+    pricing_snapshot: cost.pricing_snapshot,
+    metadata:        { ...opts.metadata, batch_size: texts.length },
+  });
+
+  return embeddings as number[][];
+}
+
+/**
  * Format embedding as pgvector string: '[0.1,0.2,...]'
  */
 export function embeddingToPgVector(embedding: number[]): string {

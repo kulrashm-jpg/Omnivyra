@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * Render status / control — Step-R4 async UX support (flag-gated).
  *
@@ -19,7 +20,7 @@ import {
   cancelRenderJob, processQueuedRenderJob, createRenderProviderRegistry,
 } from '@/backend/services/creator/rendering';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -107,3 +108,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/activity-workspace/:id/render-status' });

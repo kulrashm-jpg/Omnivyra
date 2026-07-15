@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
@@ -25,7 +26,7 @@ function tryParseJson(value: unknown): any | null {
   }
 }
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+function handler(req: NextApiRequest, res: NextApiResponse) {
   // PERF-001: seed a request-scoped memo so repeated blueprint/daily-plan loads
   // within this request collapse to one each.
   return runWithRequestMemo(() => handlerImpl(req, res));
@@ -250,3 +251,6 @@ async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
     res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/daily-plans' });

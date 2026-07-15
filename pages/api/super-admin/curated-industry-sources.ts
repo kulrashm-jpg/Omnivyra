@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
@@ -83,7 +84,7 @@ async function requireCatalogCapability(req: NextApiRequest, res: NextApiRespons
   });
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:curated-industry-sources', 30, 60))) return;
 
   const guard = await requireCatalogCapability(req, res);
@@ -156,3 +157,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET,POST,PATCH,DELETE');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/curated-industry-sources' });

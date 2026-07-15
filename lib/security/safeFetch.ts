@@ -27,6 +27,7 @@ import dns from 'dns';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { validateOutboundUrl, isBlockedIp, type SsrfPolicy } from './ssrfGuard';
 import { recordExternal, recordRawCounter } from '../../backend/observability';
+import { defineRolloutFlag, resolveRolloutSync } from '../platform/rollout';
 
 export interface SafeFetchOptions extends SsrfPolicy {
   /** Max redirects to follow (default 3, 0 = none). */
@@ -134,6 +135,58 @@ function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
+// ── W2-5 (audit B-18): pooled keep-alive agents ───────────────────────────────
+//
+// With the flag OFF (default) every call builds a fresh single-use Agent —
+// today's behavior byte-for-byte. With 'outbound-keepalive' ON, agents are
+// reused per (hostname, validated-address-set, timeout): repeat calls to the
+// same host skip the TCP+TLS handshake (~50–150 ms each).
+//
+// SECURITY IS UNCHANGED EITHER WAY: DNS resolution + SSRF validation still
+// run on EVERY call and EVERY redirect hop (resolveAndValidate above); an
+// agent is only reused when the freshly-validated address set is IDENTICAL
+// to the one it was pinned to — a DNS change produces a different pool key
+// and a new pinned agent. Bounded LRU; evicted agents are closed.
+// Enable: ROLLOUT_OUTBOUND_KEEPALIVE_MODE=enforce (or configureOutboundAgents
+// in lib/platform/outboundHttp). Kill: ROLLOUT_OUTBOUND_KEEPALIVE_KILL.
+const OUTBOUND_KEEPALIVE_FLAG = defineRolloutFlag({
+  key: 'outbound-keepalive',
+  description: 'W2-5: pooled keep-alive agents in safeFetch (audit B-18)',
+});
+
+const AGENT_POOL = new Map<string, Agent>();
+const AGENT_POOL_MAX = 64;
+
+function getPooledAgent(
+  host: string,
+  addresses: Array<{ address: string; family: number }>,
+  timeoutMs: number,
+): Agent {
+  const key = `${host}|${addresses.map((a) => a.address).sort().join(',')}|${timeoutMs}`;
+  const existing = AGENT_POOL.get(key);
+  if (existing) {
+    AGENT_POOL.delete(key);
+    AGENT_POOL.set(key, existing); // LRU bump
+    return existing;
+  }
+  const agent = new Agent({
+    connect: { lookup: makePinnedLookup(addresses), timeout: timeoutMs },
+    headersTimeout: timeoutMs,
+    bodyTimeout: timeoutMs,
+    maxRedirections: 0, // we follow manually so every hop is re-validated
+    keepAliveTimeout: 10_000,
+    keepAliveMaxTimeout: 60_000,
+  });
+  AGENT_POOL.set(key, agent);
+  if (AGENT_POOL.size > AGENT_POOL_MAX) {
+    const oldestKey = AGENT_POOL.keys().next().value as string;
+    const evicted = AGENT_POOL.get(oldestKey);
+    AGENT_POOL.delete(oldestKey);
+    void evicted?.close().catch(() => { /* best-effort */ });
+  }
+  return agent;
+}
+
 /**
  * Perform a validated, pinned, redirect-safe outbound fetch. Returns the final
  * undici Response (its body still needs reading; use readCapped/safeFetchBuffer
@@ -164,12 +217,16 @@ export async function safeFetch(rawUrl: string, init: RequestInit = {}, options:
 
     const addresses = await resolveAndValidate(host, policy);
 
-    const agent = new Agent({
-      connect: { lookup: makePinnedLookup(addresses), timeout: timeoutMs },
-      headersTimeout: timeoutMs,
-      bodyTimeout: timeoutMs,
-      maxRedirections: 0, // we follow manually so every hop is re-validated
-    });
+    // W2-5: pooled keep-alive agent when the rollout flag is on; otherwise
+    // the historical fresh-per-call agent. Pinning semantics identical.
+    const agent = resolveRolloutSync(OUTBOUND_KEEPALIVE_FLAG).mode !== 'off'
+      ? getPooledAgent(host, addresses, timeoutMs)
+      : new Agent({
+          connect: { lookup: makePinnedLookup(addresses), timeout: timeoutMs },
+          headersTimeout: timeoutMs,
+          bodyTimeout: timeoutMs,
+          maxRedirections: 0, // we follow manually so every hop is re-validated
+        });
 
     let res: Response;
     try {

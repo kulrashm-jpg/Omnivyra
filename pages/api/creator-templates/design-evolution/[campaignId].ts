@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
 import { analyzeCampaignEvolution } from '../../../../backend/services/creator/designEvolutionService';
@@ -8,7 +9,7 @@ import { getCampaignDesignSystemCompanyId } from '../../../../backend/services/c
  *   → deterministic evolution analysis (strengths / weaknesses / recommendations)
  *   for the campaign's pinned collection. Read-only — never mutates.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -27,3 +28,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const analysis = await analyzeCampaignEvolution(campaignId);
   return res.status(200).json({ analysis });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/creator-templates/design-evolution/:campaignId' });

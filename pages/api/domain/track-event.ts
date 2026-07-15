@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/domain/track-event
  *
@@ -41,7 +42,7 @@ const ALLOWED_EVENTS = new Set([
   'DOMAIN_TOKEN_REGENERATED',
 ]);
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
@@ -125,3 +126,6 @@ export default async function handler(
 
   return res.status(202).json({ ok: true });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/domain/track-event' });

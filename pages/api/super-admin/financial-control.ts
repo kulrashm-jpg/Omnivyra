@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/super-admin/financial-control
  *
@@ -70,4 +71,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ ok: true, state: result.state });
 }
 
-export default withIdempotency(handler, { scope: 'admin-financial-control', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-financial-control', methods: ['POST'] }), { route: '/api/super-admin/financial-control' });

@@ -57,7 +57,7 @@ export default function HeroSection() {
           </p>
           <h1
             className="text-4xl font-bold leading-[1.08] tracking-tight text-white sm:text-5xl xl:text-[3.25rem]"
-            style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}
+            style={{ fontFamily: "var(--font-poppins), var(--font-inter), sans-serif" }}
           >
             Take Control of<br />Your Digital Growth.
           </h1>

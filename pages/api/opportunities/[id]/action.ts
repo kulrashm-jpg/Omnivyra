@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
@@ -112,4 +113,4 @@ async function actionHandler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(actionHandler, [Role.COMPANY_ADMIN]);
+export default __createApiRoute(withRBAC(actionHandler, [Role.COMPANY_ADMIN]), { route: '/api/opportunities/:id/action' });

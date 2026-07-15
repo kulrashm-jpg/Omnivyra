@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * Campaign Progress API
  * GET /api/campaigns/[id]/progress
@@ -106,4 +107,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALL_ROLES);
+export default __createApiRoute(withRBAC(handler, ALL_ROLES), { route: '/api/campaigns/:id/progress' });

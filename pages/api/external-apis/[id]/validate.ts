@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { validateExternalApiSource } from '../../../../backend/services/externalApiService';
 import { Role } from '../../../../backend/services/rbacService';
@@ -28,4 +29,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default __createApiRoute(withRBAC(handler, [Role.SUPER_ADMIN]), { route: '/api/external-apis/:id/validate' });

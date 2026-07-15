@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET  /api/super-admin/integration-audit
  *   Returns a per-integration health summary for every `company_integrations`
@@ -71,7 +72,7 @@ type AuditPostResponse = {
 
 type ErrorResponse = { status: 'error'; message: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<AuditGetResponse | AuditPostResponse | ErrorResponse>,
 ) {
@@ -202,3 +203,6 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse<AuditPostRes
 
   return res.status(200).json({ status: 'ok', health_check: result, health });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/integration-audit' });

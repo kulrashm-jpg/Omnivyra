@@ -5,6 +5,9 @@ import { config as appConfig } from '@/config';
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 import { getRequestContext } from './requestContext';
+// W2-4 (Foundation primitives): rollout gate + request-scoped memoization.
+import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
+import { memoRequest } from './requestScopedMemo';
 import { isBetaTextMockMode, createBetaMockCompletion } from './betaMockTextProvider';
 import {
   acquire as distSemaphoreAcquire,
@@ -541,10 +544,42 @@ function platformDefault(): ResolvedLlmConfig {
   };
 }
 
+/**
+ * W2-4 (Gateway Overhead Batch) rollout flag — gates the per-request
+ * memoization of company LLM config, the fire-and-forget audit write, and
+ * per-call info-log gating in aiGatewayProvidersOps. off (default) = today's
+ * behavior byte-for-byte. Kill: ROLLOUT_GATEWAY_OVERHEAD_KILL.
+ */
+export const GATEWAY_OVERHEAD_FLAG = defineRolloutFlag({
+  key: 'gateway-overhead',
+  description: 'W2-4: per-call gateway overhead reductions (audit B-33/B-57)',
+});
+
+/**
+ * W4-4: Anthropic system-prompt cache_control (OpenAI prefix caching is
+ * automatic — the stable system message already leads every prompt, so no
+ * OpenAI change is needed). Kill: ROLLOUT_PROVIDER_PROMPT_CACHE_KILL.
+ */
+export const PROVIDER_PROMPT_CACHE_FLAG = defineRolloutFlag({
+  key: 'provider-prompt-cache',
+  description: 'W4-4: provider-side prompt-prefix caching on stable system prompts (audit B-32)',
+});
+
 export async function resolveLlmConfig(
   companyId: string | null | undefined,
 ): Promise<ResolvedLlmConfig> {
   if (!companyId || companyId === UNKNOWN_ORG) return platformDefault();
+  // W2-4 (audit B-33): getCompanyLlmConfig is a joined DB read issued on
+  // EVERY gateway call. Within one request/job the config cannot change —
+  // memoize per request scope (pipelines with N model calls pay 1 read).
+  // Cross-request freshness is deliberately preserved (no TTL cache).
+  if (resolveRolloutSync(GATEWAY_OVERHEAD_FLAG).mode !== 'off') {
+    return memoRequest(`gateway:llmconfig:${companyId}`, () => resolveLlmConfigUncached(companyId));
+  }
+  return resolveLlmConfigUncached(companyId);
+}
+
+async function resolveLlmConfigUncached(companyId: string): Promise<ResolvedLlmConfig> {
   try {
     const config = await getCompanyLlmConfig(companyId);
     if (!config || !config.is_active) return platformDefault();
@@ -948,7 +983,19 @@ export async function callAnthropic(params: {
         model: params.model,
         max_tokens: params.max_tokens ?? 4096,
         temperature: params.temperature,
-        ...(systemMsg ? { system: systemMsg.content } : {}),
+        // W4-4 (audit B-32): provider prompt caching. Under the
+        // 'provider-prompt-cache' flag the system prompt (the multi-KB
+        // STABLE prefix — templates, examples, brand context) is marked
+        // cache_control:ephemeral, so repeat calls reuse the provider-side
+        // prefix cache (~90% input-token discount on cached reads). Prompt
+        // BYTES are identical either way — caching is provider-transparent
+        // and cannot change outputs. Fallback: flag off (default) emits the
+        // exact historical string form.
+        ...(systemMsg
+          ? (resolveRolloutSync(PROVIDER_PROMPT_CACHE_FLAG).mode !== 'off'
+              ? { system: [{ type: 'text', text: systemMsg.content, cache_control: { type: 'ephemeral' } }] }
+              : { system: systemMsg.content })
+          : {}),
         messages: userMessages.map((m) => ({ role: m.role, content: m.content })),
       }),
     });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/bolt/campaign-chat
  * AI chat to brainstorm and refine campaign topics for the BOLT strategy builder.
@@ -105,7 +106,7 @@ async function buildCompanyContextBlock(companyId: string): Promise<string | nul
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -597,3 +598,6 @@ Blueprint fields are OPTIONAL — omit any you can't choose confidently.` : '';
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/bolt/campaign-chat' });

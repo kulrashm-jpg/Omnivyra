@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/auth/signup
@@ -60,7 +61,7 @@ function maskEmail(email: string | null): string | null {
   return `${shown}${'•'.repeat(Math.max(1, local.length - shown.length))}@${host}`;
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -367,3 +368,6 @@ export default async function handler(
   await emitOutcome('SignupValidated', 'allowed');
   return res.status(200).json({ proceed: true });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/signup' });

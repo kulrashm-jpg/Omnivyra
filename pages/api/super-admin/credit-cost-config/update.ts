@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * POST /api/super-admin/credit-cost-config/update
@@ -98,4 +99,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'super-admin-credit-cost-config', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'super-admin-credit-cost-config', methods: ['POST'] }), { route: '/api/super-admin/credit-cost-config/update' });

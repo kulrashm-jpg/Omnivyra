@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { saveProfile } from '../../../backend/services/companyProfileService';
@@ -41,7 +42,7 @@ function capabilityForMethod(method: string | undefined): Capability {
   return SUPER_ADMIN_DASHBOARD_VIEW;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:companies', 20, 60))) return;
   const guard = await requireCapability(req, res, {
     capability: capabilityForMethod(req.method),
@@ -382,3 +383,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/companies' });

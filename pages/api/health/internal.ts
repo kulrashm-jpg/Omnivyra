@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * Internal System Health Endpoint
@@ -63,7 +64,7 @@ interface InternalHealthResponse {
   };
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<InternalHealthResponse>
 ) {
@@ -203,3 +204,6 @@ export default async function handler(
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/health/internal' });

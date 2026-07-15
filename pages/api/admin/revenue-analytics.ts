@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/admin/revenue-analytics
@@ -47,7 +48,7 @@ export type RevenueAnalyticsResponse = {
   trend: Array<{ year: number; month: number; total_consumed: number; total_revenue: number }>;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
   // ── Auth: super-admin only ────────────────────────────────────────────────
@@ -134,3 +135,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/revenue-analytics' });

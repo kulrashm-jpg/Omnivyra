@@ -20,6 +20,13 @@ import { recordCacheExactHit, recordCacheNearHit, recordCacheMiss } from './metr
 import { hotGet, hotSet, recordAccess as hotRecordAccess } from './hotKeyCache';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
 import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
+import {
+  registerCacheNamespace,
+  buildCacheKey,
+  isCacheNamespaceEnabled,
+  noteCacheIsolationViolation,
+} from '../../lib/platform/cacheCore';
+import { getTenantId } from '../../lib/platform/requestContext';
 
 const gzipAsync   = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -29,9 +36,23 @@ const COMPRESS_THRESHOLD_BYTES = 1024;
 const COMPRESS_PREFIX = '\x1fgzip:'; // magic prefix to detect compressed entries
 
 const EXACT_PREFIX    = 'omnivyra:ai_resp:v2';
-const SEMANTIC_PREFIX = 'omnivyra:ai_sem:v2';
 const SEMANTIC_MAX    = 200;   // entries per operation in semantic index
 const NEAR_THRESHOLD  = 0.80;  // Jaccard score required for near-match reuse
+
+// W1-1 (B-04 fix) — the near-match semantic index is TENANT-SCOPED via the
+// F-05 cache SDK. v2 keyed the index by operation only, so one company could
+// be served another company's cached output when prompts overlapped ≥80%.
+// v3 keys are `omnivyra:ai_sem:v3:t.<tenant>:<operation>`; with no resolvable
+// tenant (explicit param or request-context orgId) near-match is SKIPPED
+// entirely — exact-key matching (full-prompt hash) still applies. Old v2 keys
+// are never read again and expire via their TTLs (≤48 h) — no migration.
+const SEMANTIC_NS = registerCacheNamespace({
+  prefix: 'omnivyra:ai_sem',
+  description: 'AI response near-match (Jaccard) index — tenant-scoped per W1-1',
+  version: 3,
+  defaultTtlSeconds: 3_600, // mirrors DEFAULT_TTL below (declared later in file)
+  requireTenant: true,
+});
 
 // ── Operations that must NEVER be cached ─────────────────────────────────────
 const NO_CACHE_OPS = new Set([
@@ -85,8 +106,45 @@ const DEFAULT_TTL = 3_600;
 let _client: IORedis | null = null;
 let _available = false;
 
+// W2-7 (audit B-45): same key as bullmqClient's flag — one switch converges
+// all duplicated client construction. With it ON this cache rides the shared
+// instrumented standalone client (feature 'ai_cache') instead of a private
+// connection; fail-open semantics preserved (command timeout → catch → miss).
+const REDIS_SHARED_CONNECTION_FLAG = registerSharedConnFlag();
+function registerSharedConnFlag() {
+  try {
+    const { defineRolloutFlag } = require('../../lib/platform/rollout') as typeof import('../../lib/platform/rollout');
+    return defineRolloutFlag({
+      key: 'redis-shared-connection',
+      description: 'W2-7: converge duplicated Redis client construction (audit B-21/B-45)',
+    });
+  } catch {
+    return null;
+  }
+}
+
 function getClient(): IORedis | null {
   if (_client) return _client;
+  try {
+    if (REDIS_SHARED_CONNECTION_FLAG) {
+      const { resolveRolloutSync } = require('../../lib/platform/rollout') as typeof import('../../lib/platform/rollout');
+      if (resolveRolloutSync(REDIS_SHARED_CONNECTION_FLAG).mode !== 'off') {
+        const { getInstrumentedStandaloneRedisClient } = require('../queue/standaloneRedisClient') as typeof import('../queue/standaloneRedisClient');
+        _client = getInstrumentedStandaloneRedisClient('ai_cache');
+        // CERT-FIX P2: track availability on the shared client exactly like
+        // the private path does — a static `_available = true` masked
+        // Redis-down state and made every LLM call block on the command
+        // timeout (~1.5 s) during an outage instead of skipping instantly.
+        _available = _client.status === 'ready' || _client.status === 'connect';
+        _client.on('ready',      () => { _available = true; });
+        _client.on('connect',    () => { _available = true; });
+        _client.on('error',      () => { _available = false; });
+        _client.on('end',        () => { _available = false; });
+        _client.on('reconnecting', () => { _available = false; });
+        return _client;
+      }
+    }
+  } catch { /* fall through to the private-connection path */ }
   const url = process.env.REDIS_URL || 'redis://localhost:6379';
   const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
   try {
@@ -190,6 +248,48 @@ export function buildNormalizedKey(
 // cacheVersion param + invalidateCacheByPrefix, TTL provides freshness.
 const ENRICHMENT_CACHE_OPS = new Set(['profileEnrichment', 'profileExtraction']);
 
+// ── W4-3 (audit B-31): exact-key-only re-enable ───────────────────────────────
+// Master/variant content ops were blanket-disabled because NEAR-MATCH served
+// wrong content for similar topics. Exact-key matching hashes the FULL
+// normalized prompt (topic, brief, cacheVersion — inherently input-faithful),
+// so under the 'ai-exact-cache' flag these ops become cacheable again with
+// near-match PERMANENTLY skipped for them (isExactOnlyOp below). Never
+// semantic, never cross-tenant (exact keys embed the full company-specific
+// prompt; the near-match index is untouched and stays W1-1 tenant-scoped).
+// Flag off (default) = NO_CACHE exactly as today.
+const EXACT_ONLY_OPS = new Set([
+  'generateMasterContent',
+  'generatePlatformVariants',
+  'generateContentVariant',
+]);
+
+const AI_EXACT_CACHE_FLAG = (() => {
+  try {
+    const { defineRolloutFlag } = require('../../lib/platform/rollout') as typeof import('../../lib/platform/rollout');
+    return defineRolloutFlag({
+      key: 'ai-exact-cache',
+      description: 'W4-3: exact-key-only caching for master/variant content ops (audit B-31)',
+    });
+  } catch {
+    return null;
+  }
+})();
+
+function exactCacheEnabled(): boolean {
+  try {
+    if (!AI_EXACT_CACHE_FLAG) return false;
+    const { resolveRolloutSync } = require('../../lib/platform/rollout') as typeof import('../../lib/platform/rollout');
+    return resolveRolloutSync(AI_EXACT_CACHE_FLAG).mode !== 'off';
+  } catch {
+    return false;
+  }
+}
+
+/** Ops that may ONLY ever exact-match (near-match structurally forbidden). */
+export function isExactOnlyOp(operation: string): boolean {
+  return EXACT_ONLY_OPS.has(operation);
+}
+
 export function isCacheable(operation: string): boolean {
   if (ENRICHMENT_CACHE_OPS.has(operation)) {
     try {
@@ -200,6 +300,7 @@ export function isCacheable(operation: string): boolean {
       return false;
     }
   }
+  if (EXACT_ONLY_OPS.has(operation)) return exactCacheEnabled();
   return !NO_CACHE_OPS.has(operation);
 }
 
@@ -212,6 +313,7 @@ export async function getCachedCompletion(
   model: string,
   messages: Array<{ role: string; content: string }>,
   cacheVersion?: string | null,
+  tenantId?: string | null,
 ): Promise<string | null> {
   if (!isCacheable(operation)) return null;
   const client = getClient();
@@ -240,8 +342,15 @@ export async function getCachedCompletion(
       return decompressed;
     }
 
-    // ── Near-match fallback (GAP 2) ───────────────────────────────────────────
-    const semKey = `${SEMANTIC_PREFIX}:${operation}`;
+    // ── Near-match fallback (GAP 2) — TENANT-SCOPED (W1-1 / B-04 fix) ─────────
+    // W4-3: exact-only ops NEVER near-match — miss means a fresh generation.
+    if (isExactOnlyOp(operation)) { recordCacheMiss(); return null; }
+    // No resolvable tenant → no near-match. Exact matching above still ran.
+    const tenant = tenantId ?? getTenantId() ?? null;
+    const semKey = isCacheNamespaceEnabled(SEMANTIC_NS)
+      ? buildCacheKey(SEMANTIC_NS, { tenantId: tenant, parts: [operation] })
+      : null;
+    if (!semKey) { recordCacheMiss(); return null; }
     const rawEntries = await client.lrange(semKey, 0, SEMANTIC_MAX - 1);
     if (rawEntries.length === 0) return null;
 
@@ -251,7 +360,14 @@ export async function getCachedCompletion(
 
     for (const raw of rawEntries) {
       try {
-        const entry = JSON.parse(raw) as { words: string[]; key: string };
+        const entry = JSON.parse(raw) as { words: string[]; key: string; t?: string };
+        // Defense in depth: entries record the tenant they were written for.
+        // A mismatch means the index itself was corrupted/mis-keyed — count
+        // it on the permanent isolation-violation assertion and never serve.
+        if (entry.t !== undefined && entry.t !== (tenant ?? '')) {
+          noteCacheIsolationViolation(SEMANTIC_NS);
+          continue;
+        }
         const score = jaccardSimilarity(queryTerms, entry.words);
         if (score >= NEAR_THRESHOLD && score > bestScore) {
           bestScore = score;
@@ -310,6 +426,7 @@ export async function setCachedCompletion(
   messages: Array<{ role: string; content: string }>,
   response: string,
   cacheVersion?: string | null,
+  tenantId?: string | null,
 ): Promise<void> {
   if (!isCacheable(operation) || !response) return;
   const client = getClient();
@@ -325,10 +442,18 @@ export async function setCachedCompletion(
     // Hot key tier: store uncompressed for instant access on next hit
     hotSet(exactKey, response);
 
-    // ── Update semantic index (GAP 2) ─────────────────────────────────────────
-    const semKey = `${SEMANTIC_PREFIX}:${operation}`;
+    // ── Update semantic index (GAP 2) — TENANT-SCOPED (W1-1 / B-04 fix) ───────
+    // W4-3: exact-only ops are never indexed for near-match.
+    if (isExactOnlyOp(operation)) return;
+    // No resolvable tenant → the entry is NOT indexed for near-match (it
+    // remains exactly retrievable via the full-prompt hash above).
+    const tenant = tenantId ?? getTenantId() ?? null;
+    const semKey = isCacheNamespaceEnabled(SEMANTIC_NS)
+      ? buildCacheKey(SEMANTIC_NS, { tenantId: tenant, parts: [operation] })
+      : null;
+    if (!semKey) return;
     const words = tokenize(normalizeMessages(messages));
-    const entry = JSON.stringify({ words, key: exactKey });
+    const entry = JSON.stringify({ words, key: exactKey, t: tenant ?? '' });
     const pipe = client.pipeline();
     pipe.lpush(semKey, entry);
     pipe.ltrim(semKey, 0, SEMANTIC_MAX - 1);

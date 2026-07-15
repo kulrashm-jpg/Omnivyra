@@ -1,4 +1,22 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
+// W3-4 (async planner) on the F-14 generalized runway.
+import { defineRolloutFlag, resolveRolloutSync } from '../../../../lib/platform/rollout';
+import { getAiHeavyQueue } from '../../../../backend/queue/bullmqClient';
+import { buildRunwayPollKey, pollRunwayResult, enqueueRunwayOperation, getRunwayJobStatus } from '../../../../lib/platform/runway';
+import { getRequestContext } from '../../../../backend/services/requestContext';
+
+/**
+ * W3-4 rollout flag. off (default) = inline planner exactly as before.
+ * enforce (per-tenant promotable) = generate_plan enqueues to ai-heavy and
+ * the client polls by re-POSTing the same request (202 → 200 with the
+ * stored planner response). Requires the worker (dev:full / prod) — the
+ * same requirement plan-v2 already has. Kill: ROLLOUT_ASYNC_PLANNER_KILL.
+ */
+const ASYNC_PLANNER_FLAG = defineRolloutFlag({
+  key: 'async-planner',
+  description: 'W3-4: interactive generate_plan via ai-heavy enqueue + result-store polling (audit B-05)',
+});
 import {
   generatePlanPreview,
   PlanningValidationError,
@@ -38,7 +56,7 @@ const COMPANY_CTX_TTL_MS = 60_000;
 
 const MODES: CampaignAiMode[] = ['generate_plan', 'refine_day', 'platform_customize'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -685,7 +703,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    const result = await runCampaignAiPlan({
+    // W3-4 (audit B-05): async planner. When 'async-planner' is ENFORCED for
+    // this tenant, generate_plan no longer blocks the HTTP request on the
+    // multi-call planner (up to 240 s): the EXACT same args are enqueued to
+    // the ai-heavy worker; the result persists in the existing
+    // aiExecutionResultStore; the client re-POSTs (same inputs) to poll —
+    // 202 while running, 200 with the identical planner response when done.
+    // Flag off (default) = inline execution exactly as before. Planner
+    // logic, contracts, outputs, and billing are untouched (billing runs
+    // inside runCampaignAiPlan on the worker, the same code path).
+    const plannerArgs = {
       campaignId: resolvedCampaignId,
       mode: effectiveMode,
       message: messageForTone,
@@ -693,6 +720,65 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       collectedPlanningContext: finalCollectedPlanningContext,
       targetDay: typeof targetDay === 'string' ? targetDay : undefined,
       platforms: Array.isArray(platforms) ? platforms : undefined,
+    };
+    if (
+      effectiveMode === 'generate_plan' &&
+      typeof companyId === 'string' && companyId &&
+      resolveRolloutSync(ASYNC_PLANNER_FLAG, { tenantId: companyId }).mode === 'enforce'
+    ) {
+      // F-14: the enqueue/poll/result lifecycle now runs on the generalized
+      // runway (extracted from this very implementation in Batch D).
+      const pollKey = buildRunwayPollKey('interactive-plan', String(resolvedCampaignId), {
+        m: messageForTone, d: effectiveDurationWeeks, c: finalCollectedPlanningContext ?? null,
+      });
+      const stored = await pollRunwayResult(pollKey);
+      if (stored) return res.status(200).json(stored);
+      // CERT-FIX P1: inspect the job before (re-)enqueueing so failures are
+      // surfaced deterministically instead of polling forever against a
+      // retained failed job that jobId-dedup silently no-ops on.
+      const jobStatus = await getRunwayJobStatus(getAiHeavyQueue(), pollKey);
+      if (jobStatus.state === 'failed' || jobStatus.state === 'completed_no_result') {
+        return res.status(200).json({
+          async: true,
+          status: 'failed',
+          poll_key: pollKey,
+          error: jobStatus.state === 'failed'
+            ? (jobStatus.failedReason ?? 'Plan generation failed. Please try again.')
+            : 'Plan generation finished but the result could not be stored. Please try again.',
+          retryable: true, // the failed job was removed — re-submitting re-runs
+        });
+      }
+      if (jobStatus.state === 'pending' || jobStatus.state === 'active') {
+        return res.status(202).json({
+          async: true,
+          status: 'queued',
+          poll_key: pollKey,
+          retry_after_ms: 2_500,
+        });
+      }
+      const envelope = await enqueueRunwayOperation({
+        queue: getAiHeavyQueue(),
+        queueName: 'ai-heavy',
+        jobName: 'interactive-plan',
+        pollKey,
+        payload: {
+          companyId,
+          actorUserId: getRequestContext().userId ?? 'system',
+          args: {
+            ...plannerArgs,
+            conversationHistory: toneOnlyConversationHistory?.slice(-50),
+            recommendationContext: recommendationContext && typeof recommendationContext === 'object' ? recommendationContext : undefined,
+            autopilot: autopilot === true,
+            account_context: bodyAccountContext && typeof bodyAccountContext === 'object' ? bodyAccountContext : undefined,
+            previous_campaign_context: previousCampaignContext ?? undefined,
+          },
+        },
+      });
+      return res.status(202).json(envelope);
+    }
+
+    const result = await runCampaignAiPlan({
+      ...plannerArgs,
       // Always pass conversationHistory so QA gating can detect answered questions
       // (even when planningInputs exist and we only use history for tone/context).
       conversationHistory: toneOnlyConversationHistory?.slice(-50),
@@ -827,3 +913,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/ai/plan' });

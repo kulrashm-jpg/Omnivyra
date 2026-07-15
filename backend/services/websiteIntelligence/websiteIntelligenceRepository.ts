@@ -22,6 +22,10 @@
  * brand) are reported honestly as unavailable.
  */
 import { computeWebsiteHealthScore } from '../websiteHealthScoreService';
+// W4-2 (Batch D cache stack)
+import { registerCacheNamespace } from '../../../lib/platform/cacheCore';
+import { createCache } from '../../../lib/platform/cacheClient';
+import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
 import { getWebsiteHealthSummary, deriveIntegrationHealth } from '../integrationHealthService';
 import { buildActivationReadiness } from '../activationReadinessService';
 import { getWebsiteIntelligenceSignals } from '../websiteIntelligenceService';
@@ -144,7 +148,48 @@ async function resolveWebsiteId(companyId: string, websiteId?: string | null): P
   return { id: first?.id ?? null, website: first };
 }
 
+// ── W4-2 (audit B-12): shared snapshot sources ───────────────────────────────
+// loadSources runs a 10-way fan-out (health scoring, readiness, signals,
+// integrations, 4 intelligence evaluators). Every granular accessor called
+// it again, so one report page multiplied the fan-out per panel. Under the
+// 'website-snapshot-cache' flag the assembled Sources are shared:
+//   1. request-scoped (memoRequest) — all accessors within one request use
+//      ONE fan-out (zero staleness: same-request snapshot identity),
+//   2. short Redis TTL (default 120 s, env WEBSITE_SNAPSHOT_TTL_SECONDS) —
+//      panels arriving as separate requests reuse it briefly.
+// Everything cached is deterministic company/website evaluation state — no
+// mutable user state. Kill: CACHE_KILL_OMNIVYRA_WI_SOURCES; invalidation:
+// version bump or invalidateWebsiteSnapshotCache(companyId).
+const WI_SOURCES_FLAG = defineRolloutFlag({
+  key: 'website-snapshot-cache',
+  description: 'W4-2: share the website-intelligence sources fan-out across accessors (audit B-12)',
+});
+const WI_SOURCES_NS = registerCacheNamespace({
+  prefix: 'omnivyra:wi_sources',
+  description: 'W4-2 website intelligence sources (deterministic evaluation state)',
+  version: 1,
+  defaultTtlSeconds: Math.max(30, Number(process.env.WEBSITE_SNAPSHOT_TTL_SECONDS) || 120),
+  requireTenant: true,
+});
+const wiSourcesCache = createCache(WI_SOURCES_NS);
+
+/** Explicit invalidation for crawl/refresh flows. */
+export async function invalidateWebsiteSnapshotCache(companyId: string, websiteId?: string | null): Promise<void> {
+  await wiSourcesCache.invalidate({ tenantId: companyId, parts: [websiteId ?? 'default'], reason: 'refresh' });
+}
+
 async function loadSources(companyId: string, websiteId?: string | null): Promise<Sources> {
+  if (resolveRolloutSync(WI_SOURCES_FLAG, { tenantId: companyId }).mode !== 'off') {
+    return wiSourcesCache.getOrLoad<Sources>({
+      tenantId: companyId,
+      parts: [websiteId ?? 'default'],
+      load: () => loadSourcesUncached(companyId, websiteId),
+    });
+  }
+  return loadSourcesUncached(companyId, websiteId);
+}
+
+async function loadSourcesUncached(companyId: string, websiteId?: string | null): Promise<Sources> {
   const { id, website } = await resolveWebsiteId(companyId, websiteId);
   const [score, healthSummary, readiness, signals, integrations, domain, content, technical, accessibility, brand] = await Promise.all([
     id ? safe(computeWebsiteHealthScore({ companyId, websiteId: id }), null) : Promise.resolve(null),

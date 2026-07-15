@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { withOrgAccess } from '../../../backend/middleware/withOrgAccess';
 import { listCustomerBillingEvents } from '../../../backend/services/customerBillingProjectionService';
@@ -28,4 +29,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withOrgAccess(handler);
+export default __createApiRoute(withOrgAccess(handler), { route: '/api/credits/transactions' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/social-accounts/status
@@ -33,7 +34,7 @@ const SUPPORTED_PLATFORMS = [
   { key: 'quora',          label: 'Quora',          authPath: null,                  category: 'community' },
 ];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   // Try to get user — not required, just shows connection status if available
@@ -224,3 +225,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ accounts: result, user_role: userRole });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/social-accounts/status' });

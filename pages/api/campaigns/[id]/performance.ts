@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET  /api/campaigns/[id]/performance
  *   → Returns the most recent performance snapshot + evaluation for this campaign.
@@ -149,4 +150,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default handler;
+export default __createApiRoute(handler, { route: '/api/campaigns/:id/performance' });

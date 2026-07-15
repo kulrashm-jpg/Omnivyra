@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * POST /api/admin/access-requests/approve
@@ -26,7 +27,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { IDENTITY_ADMIN_ASSIGN } from '../../../../shared/contracts/security';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   // Approving access requests grants org membership — IDENTITY_ADMIN_ASSIGN
@@ -145,3 +146,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     companyName: company,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/admin/access-requests/approve' });

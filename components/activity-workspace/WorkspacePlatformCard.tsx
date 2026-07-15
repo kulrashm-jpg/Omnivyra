@@ -5,7 +5,7 @@ import { computeVariantIntelligence } from '@/lib/intelligence/executionIntellig
 import { isActivityDetailMode } from '@/lib/shared/activityWorkspaceMode';
 import ContentRenderer from '@/components/ContentRenderer';
 import PlatformIcon from '@/components/ui/PlatformIcon';
-import RichTextEditor from '@/components/RichTextEditor';
+import RichTextEditor from '@/components/RichTextEditorLazy'; // W5-2: lazy tiptap chunk
 import { apiFetch } from '@/lib/apiFetch';
 import ImagePicker from '../../pages/activity-workspace/ImagePicker';
 import PlatformContentPreview from '../../pages/activity-workspace/PlatformContentPreview';

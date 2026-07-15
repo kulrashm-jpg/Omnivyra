@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image'; // W5-3
 import Link from 'next/link';
 
 const COLUMNS = [
@@ -86,7 +87,7 @@ export default function Footer() {
           {/* Brand */}
           <div className="col-span-2 sm:col-span-1">
             <Link href="/" aria-label="Omnivyra home">
-              <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain" />
+              <Image src="/logo.png" alt="Omnivyra" width={898} height={278} className="h-12 w-auto object-contain" />
             </Link>
             <p className="mt-3 text-sm leading-relaxed text-[#6B7C93]">
               Clarity, control, and direction<br />in your marketing.

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
 import {
@@ -5,7 +6,7 @@ import {
   getDurableCreatorRenderJobStatus,
 } from '../../../../../backend/services/creatorRenderDurableQueue';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) return res.status(401).json({ error: 'Unauthorized' });
   const id = String(req.query.id || '').trim();
@@ -20,3 +21,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/command-center/creator-content/render-job/:id' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * PUT /api/billing/profile — CANONICAL lightweight billing-geography capture.
  *
@@ -18,7 +19,7 @@ import {
   captureBillingProfileGeography,
 } from '../../../backend/services/billing/payments/billingProfileCaptureService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PUT') {
     res.setHeader('Allow', 'PUT');
     return res.status(405).json({ error: 'method_not_allowed' });
@@ -64,3 +65,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     geography_known: ctx.country !== null,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/billing/profile' });

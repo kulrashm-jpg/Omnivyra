@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/auth/check-domain?domain=example.com
@@ -19,7 +20,7 @@ type ErrorResponse   = { error: string };
 
 const CHECK_DOMAIN_LIMIT = { ...LOGIN_LIMIT, keyPrefix: 'rl:check-domain', limit: 30, windowSecs: 60 };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -51,3 +52,6 @@ export default async function handler(
 
   return res.status(200).json({ taken: !!domainRow });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/check-domain' });

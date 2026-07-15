@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/health/readiness
  *
@@ -25,7 +26,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { bootAuthSubsystem } from '../../../backend/security/startup/authSubsystemBoot';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).end();
@@ -54,3 +55,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(readiness.ready ? 200 : 503).json(body);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/health/readiness' });

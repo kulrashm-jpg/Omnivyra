@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET  /api/whatsapp/broadcasts/[id]           — broadcast detail + stats
  * POST /api/whatsapp/broadcasts/[id]/enqueue   — enqueue a draft broadcast
@@ -19,7 +20,7 @@ import {
   type ContactInput,
 } from '../../../../backend/services/whatsappBroadcastService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id, action } = req.query as { id: string; action?: string };
 
   if (!id) return res.status(400).json({ error: 'Broadcast id required' });
@@ -97,3 +98,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', ['GET', 'POST']);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/whatsapp/broadcasts/:id' });

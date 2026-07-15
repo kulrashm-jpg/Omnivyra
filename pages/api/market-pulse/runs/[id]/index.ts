@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { config } from '@/config';
 import { ownedDbTable } from '../../../../../backend/db/writeOwner';
@@ -39,7 +40,7 @@ async function recoverLocalPendingJob(runId: string, companyId: string): Promise
   await processMarketPulseJobV1(legacyJobId);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -83,3 +84,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: (error as Error).message || 'Failed to load Market Pulse run' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/market-pulse/runs/:id' });

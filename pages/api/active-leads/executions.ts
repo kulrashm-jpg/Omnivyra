@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Phase 3 — Listening execution control endpoint.
  *
@@ -34,7 +35,7 @@ import {
   listExecutionsForSource,
 } from '../../../backend/services/listeningExecutionService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
   if (req.method === 'POST') return handlePost(req, res);
   if (req.method === 'DELETE') return handleDelete(req, res);
@@ -135,3 +136,6 @@ async function handleDelete(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: err?.message ?? 'Cancel failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/active-leads/executions' });

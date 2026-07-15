@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Phase 9 — Region routing endpoint.
  *
@@ -20,7 +21,7 @@ import {
   type RegionFailoverStrategy,
 } from '../../../backend/types/regionRouting';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') return handleGet(req, res);
   if (req.method === 'POST') return handlePost(req, res);
   res.setHeader('Allow', 'GET, POST');
@@ -68,3 +69,6 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ ok: false, error: err?.message ?? 'region_routing_failed' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/active-leads/region-routing' });

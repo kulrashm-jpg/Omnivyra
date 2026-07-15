@@ -19,6 +19,8 @@ import {
   instrumentWorker,
   startQueueReportFlush,
 } from './queueInstrumentation';
+import { runWithJobTraceContext } from '../observability/traceKit';
+import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
 import { getMetricsReport } from '../../lib/redis/instrumentation';
 import IORedis from 'ioredis';
 import { createHash } from 'crypto';
@@ -147,7 +149,23 @@ const IS_OPTIONAL_LOCAL_REDIS =
 const REDIS_ERROR_LOG_COOLDOWN_MS = 30_000;
 const REDIS_PREFLIGHT_TIMEOUT_MS = 2_000;
 
-export function getRedisConfig() {
+/**
+ * W2-7 (audit B-21) rollout flag: with 'redis-shared-connection' ON, the two
+ * connection-options getters below hand BullMQ the SHARED IORedis instance
+ * instead of an options object — every Queue/Worker built from them reuses
+ * one physical connection (BullMQ duplicate()s internally for blocking ops)
+ * instead of opening its own TLS+AUTH connection against Upstash. Off
+ * (default) = today's per-instance connections, byte-for-byte. Every caller
+ * uses the value solely as a BullMQ `connection:` (verified W2-7), which
+ * accepts both shapes. Kill: ROLLOUT_REDIS_SHARED_CONNECTION_KILL.
+ */
+const REDIS_SHARED_CONNECTION_FLAG = defineRolloutFlag({
+  key: 'redis-shared-connection',
+  description: 'W2-7: BullMQ queues/workers reuse the shared Redis connection (audit B-21)',
+});
+
+export function getRedisConfig(): IORedis | typeof redisConfig {
+  if (resolveRolloutSync(REDIS_SHARED_CONNECTION_FLAG).mode !== 'off') return getRedisConnection();
   return redisConfig;
 }
 
@@ -177,7 +195,24 @@ export function getRedisConfig() {
  * localhost it left the worker permanently disconnected; BullMQ Worker
  * survives Redis reconnects natively when the strategy is left default.
  */
-export function getConnectionConfig() {
+export function getConnectionConfig(): IORedis | Record<string, unknown> {
+  // W2-7: shared-connection mode (see REDIS_SHARED_CONNECTION_FLAG above).
+  if (resolveRolloutSync(REDIS_SHARED_CONNECTION_FLAG).mode !== 'off') return getRedisConnection();
+  return rawConnectionOptions();
+}
+
+/**
+ * The historical per-instance options object (probe + flag-off callers).
+ * CERT-FIX P2: exported (getRawConnectionOptions) for the two consumers that
+ * SPREAD connection options into their own `new Redis({...})` — spreading a
+ * live client instance (what getConnectionConfig returns under W2-7) would
+ * silently fall back to localhost. Spread-consumers must use THIS.
+ */
+export function getRawConnectionOptions(): Record<string, unknown> {
+  return rawConnectionOptions();
+}
+
+function rawConnectionOptions(): Record<string, unknown> {
   return {
     host: redisConfig.host,
     port: redisConfig.port,
@@ -214,7 +249,9 @@ export function getConnectionConfig() {
  */
 export async function verifyRedisReadyForBackgroundRuntime(context: string): Promise<boolean> {
   const probe = new IORedis({
-    ...getConnectionConfig(),
+    // Raw options ALWAYS (never the W2-7 shared instance) — the probe is a
+    // deliberately short-lived throwaway connection.
+    ...rawConnectionOptions(),
     maxRetriesPerRequest: 1,
     retryStrategy: () => null,
     reconnectOnError: () => false,
@@ -285,7 +322,9 @@ function ensureRedisInfraStarted(): void {
 function getRedisConnection(): IORedis {
 
   if (!redisConnection) {
-    redisConnection = new IORedis(getConnectionConfig());
+    // Raw options ALWAYS: this constructs the shared instance itself —
+    // routing through getConnectionConfig() would recurse under W2-7.
+    redisConnection = new IORedis(rawConnectionOptions());
 
     redisConnection.on('error', (err) => {
       if (isNonRecoverableRedisError(err)) {
@@ -710,7 +749,11 @@ export function getWorker(
   opts?: { concurrency?: number }
 ): Worker {
   const concurrency = opts?.concurrency ?? 5;
-  const worker = new Worker(queueName, processor, {
+  // F-02 (Foundation Batch A): run every job inside a RequestContext seeded
+  // from the job's trace metadata (or its identity). Purely additive ALS
+  // scoping — fail-safe, never alters job execution or results.
+  const tracedProcessor = (job: any) => runWithJobTraceContext(job, () => processor(job));
+  const worker = new Worker(queueName, tracedProcessor, {
     connection: getRedisConnection(),
     prefix: getQueuePrefix(),
     concurrency,
@@ -725,7 +768,12 @@ export function getWorker(
   });
 
   worker.on('completed', (job) => {
-    console.log(`✅ Job ${job.id} completed`);
+    // W0-6: per-job success logs are metrics-covered (instrumentWorker /
+    // recordQueueJob); the console line is opt-in to cut steady-state noise
+    // and event-loop tax on the single worker. Failures still always log.
+    if (/^(1|true|yes|on)$/i.test(String(process.env.WORKER_VERBOSE_LOGS ?? ''))) {
+      console.log(`✅ Job ${job.id} completed`);
+    }
   });
 
   worker.on('failed', (job, err) => {

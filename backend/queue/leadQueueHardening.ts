@@ -24,8 +24,7 @@
 
 import { Queue, type JobsOptions } from 'bullmq';
 import { createHash } from 'crypto';
-import { leadQueueConnection } from './leadQueue';
-import { getQueuePrefix } from './bullmqClient';
+import { getQueuePrefix, getSharedRedisClient } from './bullmqClient';
 
 const LEAD_QUEUE_ATTEMPTS = Math.max(
   1,
@@ -54,15 +53,24 @@ export const leadQueueHardenedDefaults: JobsOptions = {
   },
 };
 
-export const leadDeadLetterQueue = new Queue(LEAD_DLQ_NAME, {
-  connection: leadQueueConnection,
-  prefix: getQueuePrefix(),
-  defaultJobOptions: {
-    attempts: 1,
-    removeOnComplete: { age: 30 * 24 * 3600 },
-    removeOnFail: { age: 30 * 24 * 3600 },
-  },
-});
+// W1-4: the DLQ is now LAZY (was a module-level Queue that opened its own
+// Redis connection at import time — the orphaned lead-jobs connection bug
+// class) and rides the shared client (F-06 convergence direction). Callers:
+// leadQueueObservability snapshot + future DLQ producers.
+let _leadDeadLetterQueue: Queue | null = null;
+export function getLeadDeadLetterQueue(): Queue {
+  if (_leadDeadLetterQueue) return _leadDeadLetterQueue;
+  _leadDeadLetterQueue = new Queue(LEAD_DLQ_NAME, {
+    connection: getSharedRedisClient(),
+    prefix: getQueuePrefix(),
+    defaultJobOptions: {
+      attempts: 1,
+      removeOnComplete: { age: 30 * 24 * 3600 },
+      removeOnFail: { age: 30 * 24 * 3600 },
+    },
+  });
+  return _leadDeadLetterQueue;
+}
 
 export type LeadJobFailureMetadata = {
   job_id: string;
@@ -114,31 +122,9 @@ export function buildLeadJobIdempotencyKey(parts: {
   return `lead-job:${parts.leadJobId}:${hash}`;
 }
 
-import { leadQueue } from './leadQueue';
-
-export async function getLeadQueueHealth(): Promise<{
-  waiting: number;
-  active: number;
-  completed: number;
-  failed: number;
-  delayed: number;
-  attempts_allowed_default: number;
-  backoff_delay_ms_default: number;
-}> {
-  const [waiting, active, completed, failed, delayed] = await Promise.all([
-    leadQueue.getWaitingCount(),
-    leadQueue.getActiveCount(),
-    leadQueue.getCompletedCount(),
-    leadQueue.getFailedCount(),
-    leadQueue.getDelayedCount(),
-  ]);
-  return {
-    waiting,
-    active,
-    completed,
-    failed,
-    delayed,
-    attempts_allowed_default: LEAD_QUEUE_ATTEMPTS,
-    backoff_delay_ms_default: LEAD_QUEUE_BACKOFF_DELAY_MS,
-  };
-}
+// W1-4: getLeadQueueHealth removed with the orphaned `lead-jobs` queue
+// (leadQueue.ts deleted — no producer existed, no bootstrap ever registered
+// its consumer, and the module-level Queue opened a Redis connection at
+// import time). Live lead processing runs on `engine-jobs`; its counts come
+// from getLeadQueueObservabilitySnapshot (leadQueueObservability.ts). The
+// hardened defaults + idempotency/metadata helpers above remain in use.

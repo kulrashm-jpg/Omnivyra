@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runWeeklyRecommendationRefresh } from '../../../backend/services/recommendationScheduler';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
@@ -31,4 +32,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.CONTENT_CREATOR]);
+export default __createApiRoute(withRBAC(handler, [Role.COMPANY_ADMIN, Role.CONTENT_CREATOR]), { route: '/api/recommendations/refresh' });

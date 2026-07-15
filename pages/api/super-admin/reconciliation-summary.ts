@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/super-admin/reconciliation-summary?windowHours=24
  *
@@ -32,7 +33,7 @@ const DEFAULT_WINDOW_HOURS = 24;
 const MAX_WINDOW_HOURS = 720; // 30 days; bounded to keep the scan cheap
 const SCAN_ROW_CAP = 5_000;   // cap rows scanned in a single request
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -137,3 +138,6 @@ function pickLatestSnapshot(metadata: unknown): ReconciliationSnapshot | null {
   }
   return latest;
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/reconciliation-summary' });

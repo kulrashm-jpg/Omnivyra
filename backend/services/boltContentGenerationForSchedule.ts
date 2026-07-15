@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { definePool } from '../../lib/platform/concurrency';
 /**
  * BOLT Content Generation for Schedule
  *
@@ -189,8 +190,19 @@ function buildBlogSlug(topic: string): string {
   return `${base}-${Date.now().toString(36)}`;
 }
 
-/** Process up to N topic groups in parallel to speed up BOLT content generation. */
-const CONTENT_GEN_CONCURRENCY = 1;
+/**
+ * W3-2 (audit B-06): topic-group concurrency now comes from the F-08 pool —
+ * defaultLimit 1 preserves today's fully-serial behavior byte-for-byte;
+ * operators ramp via CONCURRENCY_BOLT_CONTENT_GEN (1 → 2 → 4, hard cap 8).
+ * Groups are independent (per-group master + variants; per-group failure is
+ * already caught and yields []), so >1 is semantically safe; provider QPS
+ * stays bounded by the gateway pools/limiters.
+ */
+const CONTENT_GEN_POOL = definePool({
+  name: 'bolt-content-gen',
+  defaultLimit: 1,
+  maxLimit: 8,
+});
 
 /**
  * Generate master content and platform variants for all daily plan activities.
@@ -404,14 +416,19 @@ export async function generateContentForDailyPlans(
     return updates;
   }
 
-  for (let i = 0; i < groupEntries.length; i += CONTENT_GEN_CONCURRENCY) {
-    const batch = groupEntries.slice(i, i + CONTENT_GEN_CONCURRENCY);
+  const poolLimit = CONTENT_GEN_POOL.limit();
+  for (let i = 0; i < groupEntries.length; i += poolLimit) {
+    const batch = groupEntries.slice(i, i + poolLimit);
     if (!phaseCreatingFired) {
       phaseCreatingFired = true;
       options?.onPhase?.('creating');
     }
+    // Pool-run (W3-2): identical batch semantics to the prior slice/Promise.all
+    // shape — per-group failures still degrade to [] with the same warning —
+    // but the in-flight cap is live-tunable and pool wait/in-flight metrics
+    // flow to HARDEN-001.
     const results = await Promise.all(
-      batch.map(([, rows]) => processGroup(rows).catch((err) => {
+      batch.map(([, rows]) => CONTENT_GEN_POOL.run(() => processGroup(rows)).catch((err) => {
         const first = rows[0];
         if (first) console.warn('[bolt-content-gen] Failed for topic', first.topic, (err as Error)?.message);
         return [] as { id: string; content: string }[];

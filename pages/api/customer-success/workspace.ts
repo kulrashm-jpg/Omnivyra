@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET /api/customer-success/workspace — the canonical Customer Success Workspace
  * read endpoint (CSA-007). Reuses the existing auth + tenant guard
@@ -45,4 +46,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json(workspace);
 }
 
-export default withOrgAccess(handler);
+export default __createApiRoute(withOrgAccess(handler), { route: '/api/customer-success/workspace' });

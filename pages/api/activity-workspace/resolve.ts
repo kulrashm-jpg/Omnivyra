@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 // Phase-2 Step-1: blueprint item discovery now goes through the ONE
@@ -31,7 +32,7 @@ function nonEmpty(v: unknown): string {
   return String(v ?? '').trim();
 }
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+function handler(req: NextApiRequest, res: NextApiResponse) {
   // PERF-001: seed a request-scoped memo. resolve() runs loadSources 2-3× per
   // request; this collapses the duplicate blueprint + daily-plan loads to one each.
   return runWithRequestMemo(() => handlerImpl(req, res));
@@ -424,3 +425,6 @@ async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/activity-workspace/resolve' });

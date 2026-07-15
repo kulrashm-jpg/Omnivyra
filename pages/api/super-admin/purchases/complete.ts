@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * POST /api/super-admin/purchases/complete
@@ -24,7 +25,7 @@ import {
   getMonetizationControlMode,
 } from '../../../../backend/services/monetizationOpsService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -131,3 +132,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     credits_granted: result.creditsGranted,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/purchases/complete' });

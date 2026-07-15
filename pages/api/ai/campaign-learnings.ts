@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 
 // In-memory storage for demo purposes
@@ -59,7 +60,7 @@ let campaignLearnings: any[] = [
   }
 ];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     // Get all campaign learnings
     res.status(200).json({ learnings: campaignLearnings });
@@ -159,3 +160,6 @@ function generateImprovementsFromResults(campaign: any, actualResults: any): str
 
   return improvements;
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/ai/campaign-learnings' });

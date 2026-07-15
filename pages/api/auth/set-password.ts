@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
@@ -15,7 +16,7 @@ import { validatePassword } from '../../../lib/auth/passwordPolicy';
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -186,3 +187,6 @@ function userAgent(req: NextApiRequest): string | null {
   const ua = req.headers['user-agent'];
   return typeof ua === 'string' ? ua : null;
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/auth/set-password' });

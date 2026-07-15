@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/settings/scheduler-prefs
@@ -18,7 +19,7 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 
 const VALID_INTERVALS = [15, 30, 60, 120, 240, 480];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user } = await getSupabaseUserFromRequest(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -87,3 +88,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/settings/scheduler-prefs' });

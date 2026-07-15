@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
 
 /**
  * POST /api/track
@@ -44,7 +45,7 @@ function domainAllowed(origin: string, referer: string, allowed: string, allowSu
   return check(origin) || check(referer);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -109,3 +110,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(204).end();
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/track' });

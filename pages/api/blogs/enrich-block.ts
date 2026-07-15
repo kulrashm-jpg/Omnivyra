@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
@@ -5,7 +6,7 @@ import { getProfile } from '../../../backend/services/companyProfileService';
 import { enrichSingleBlock, isEnrichableType } from '../../../backend/services/blockEnrichEngine';
 import type { ContentBlock, BlockType } from '../../../lib/blog/blockTypes';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { company_id, block, context_blocks, blog_meta } = req.body ?? {};
@@ -62,3 +63,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: msg });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/blogs/enrich-block' });

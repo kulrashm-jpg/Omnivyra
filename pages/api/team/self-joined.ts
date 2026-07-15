@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET  /api/team/self-joined?companyId=xxx
@@ -19,7 +20,7 @@ import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { ORGANIZATION_MANAGE } from '../../../shared/contracts/security';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { companyId, userId } = req.query as { companyId?: string; userId?: string };
   if (!companyId) return res.status(400).json({ error: 'companyId is required' });
 
@@ -124,3 +125,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, PATCH, DELETE');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/team/self-joined' });

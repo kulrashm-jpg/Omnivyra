@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * POST /api/super-admin/companies/promote-admin
  *
@@ -17,7 +18,7 @@ import { requireCapability } from '../../../../backend/security/requireCapabilit
 import { IDENTITY_ADMIN_ASSIGN } from '../../../../shared/contracts/security';
 import { promoteMemberToAdmin, type PromoteResult } from '../../../../backend/services/orgOwnershipRecoveryService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -67,3 +68,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     idempotent:   result.idempotent,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/companies/promote-admin' });

@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET /api/campaigns/[id]/orchestration-events
  * Phase-2 Step-23 SSE channel · Step-24 distributed transport ·
@@ -26,7 +27,7 @@ import type { OrchestrationEvent } from '../../../../backend/services/orchestrat
 
 export const config = { api: { bodyParser: false, externalResolver: true } };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -147,3 +148,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     writeEvent(ev, 'live');
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/campaigns/:id/orchestration-events' });

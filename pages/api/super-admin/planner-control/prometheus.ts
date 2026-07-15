@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * GET /api/super-admin/planner-control/prometheus
  *
@@ -16,7 +17,7 @@ import { requireCapability } from '../../../../backend/security/requireCapabilit
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 import { renderPrometheusText } from '../../../../backend/services/plannerExporters/prometheusRegistry';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
   const auth = await requireCapability(req, res, {
     capability: SUPER_ADMIN_DASHBOARD_VIEW,
@@ -28,3 +29,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Cache-Control', 'no-cache, no-store');
   res.status(200).send(body);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/planner-control/prometheus' });

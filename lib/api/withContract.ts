@@ -1,13 +1,12 @@
-import type { NextApiHandler, NextApiRequest, NextApiResponse } from 'next';
-import { withApiObservability } from '../../backend/observability';
+import type { NextApiHandler } from 'next';
+import { createApiRoute } from '../platform/routeFactory';
 
 export function withContract(handler: NextApiHandler): NextApiHandler {
-  // HARDEN-001: transparently instrument every route that already opts into the
-  // shared contract wrapper. withApiObservability only observes (duration /
-  // status / payload size) and forwards the request+response verbatim — no
-  // contract, header, status, or body change.
-  const contractHandler = async function contractHandler(req: NextApiRequest, res: NextApiResponse) {
-    return handler(req, res);
-  };
-  return withApiObservability(contractHandler);
+  // F-01 (Foundation Batch A): withContract now delegates to the canonical
+  // route factory. Observable behavior is unchanged — the factory applies the
+  // same withApiObservability wrapper this file applied directly (HARDEN-001),
+  // and additionally seeds the F-03 request execution context (ALS only; no
+  // header, status, or body change). The three existing withContract routes
+  // are Batch A's validation surface.
+  return createApiRoute(handler);
 }

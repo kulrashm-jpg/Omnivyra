@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * POST /api/admin/pricing/update
  *
@@ -254,4 +255,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(400).json({ error: "target must be 'model' or 'action'" });
 }
 
-export default withIdempotency(handler, { scope: 'admin-pricing-update', methods: ['POST'] });
+export default __createApiRoute(withIdempotency(handler, { scope: 'admin-pricing-update', methods: ['POST'] }), { route: '/api/admin/pricing/update' });

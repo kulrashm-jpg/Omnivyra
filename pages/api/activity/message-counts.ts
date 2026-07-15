@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * GET /api/activity/message-counts?campaignId=...&activityIds=id1,id2,id3
@@ -52,4 +53,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // HARDEN-002: measurement only (HARDEN-001 API metrics).
-export default withApiObservability(handler, '/api/activity/message-counts');
+export default __createApiRoute(withApiObservability(handler, '/api/activity/message-counts'), { route: '/api/activity/message-counts' });

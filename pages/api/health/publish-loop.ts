@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * Publish-Loop Health Endpoint  (BETA-004 · RULE 8)
  *
@@ -49,7 +50,7 @@ interface PublishLoopHealth {
 const worst = (a: StageStatus, b: StageStatus): StageStatus =>
   a === 'failed' || b === 'failed' ? 'failed' : a === 'warning' || b === 'warning' ? 'warning' : 'healthy';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<PublishLoopHealth>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<PublishLoopHealth>) {
   const timestamp = new Date().toISOString();
   const nowMs = Date.now();
 
@@ -167,3 +168,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   // Healthy/Warning → 200; Failed → 503 (matches /api/health/internal convention).
   res.status(overall === 'failed' ? 503 : 200).json(body);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/health/publish-loop' });

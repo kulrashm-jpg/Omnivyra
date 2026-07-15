@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 
 /**
  * GET /api/super-admin/plans/analytics
@@ -66,7 +67,7 @@ async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
   }
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<PlanAnalyticsResponse | { error: string }>
 ) {
@@ -303,3 +304,6 @@ export default async function handler(
     return res.status(500).json({ error: error.message || 'Failed to fetch plan analytics' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/plans/analytics' });

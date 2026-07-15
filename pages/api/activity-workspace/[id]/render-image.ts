@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * Creator image-render endpoint — Step-R3 (synchronous, flag-gated).
  *
@@ -35,7 +36,7 @@ import {
   GLOBAL_GOVERNANCE_SENTINEL,
 } from '@/backend/services/creator/rendering';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -189,3 +190,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const httpStatus = result.ok ? 200 : result.status === 'blocked' ? 422 : result.status === 'skipped' ? 404 : 500;
   return res.status(httpStatus).json({ render: result });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/activity-workspace/:id/render-image' });

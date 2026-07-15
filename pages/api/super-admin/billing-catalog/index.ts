@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * /api/super-admin/billing-catalog — HIDDEN super-admin pricing governance.
  *
@@ -85,7 +86,7 @@ function validateCreate(b: Record<string, unknown>): ValidationError | null {
   return null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST' && req.method !== 'PATCH') {
     res.setHeader('Allow', 'GET, POST, PATCH');
     return res.status(405).json({ error: 'method_not_allowed' });
@@ -225,3 +226,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ updated: data });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/super-admin/billing-catalog' });

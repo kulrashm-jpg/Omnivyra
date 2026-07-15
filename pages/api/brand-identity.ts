@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
 /**
  * Unified Brand Runtime — Phase 3B. Voice-first brand-identity write path.
  *
@@ -20,7 +21,7 @@ import {
   type BrandWriteDeps, type BrandProfileVoiceSource,
 } from '../../backend/services/brand/brandIdentityWriteService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ status: 'error', code: 'METHOD_NOT_ALLOWED' });
@@ -74,3 +75,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ status: 'error', code: 'BRAND_WRITE_FAILED', message: e instanceof Error ? e.message : String(e) });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/brand-identity' });

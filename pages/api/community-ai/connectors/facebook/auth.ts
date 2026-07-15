@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 /**
@@ -12,7 +13,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
  *
  * Canonical: /api/community-ai/connectors/meta/auth
  */
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -20,3 +21,6 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   url.searchParams.set('provider', 'facebook');
   return res.redirect(301, `/api/community-ai/connectors/meta/auth${url.search}`);
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/community-ai/connectors/facebook/auth' });

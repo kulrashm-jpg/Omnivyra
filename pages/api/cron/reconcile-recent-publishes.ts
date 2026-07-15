@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * POST /api/cron/reconcile-recent-publishes
  *
@@ -52,7 +53,7 @@ const DEFAULT_SKIP_COOLDOWN_MS = 15 * 60 * 1000; // 15 min
 const DEFAULT_BATCH = 50;
 const DEFAULT_DELAY_MS = 200;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -189,3 +190,6 @@ function sleep(ms: number): Promise<void> {
 // Re-export for callers that want type access; keeps the cron self-contained
 // in terms of imports.
 export type { DriftKind };
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/cron/reconcile-recent-publishes' });

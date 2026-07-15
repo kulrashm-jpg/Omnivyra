@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/onboarding/setup-company
@@ -95,7 +96,7 @@ async function fetchAdminName(
   );
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<Result>) {
   if (req.method !== 'POST') return res.status(405).end();
 
   // ── Rate limiting (AUTH-001 §4) — this endpoint creates companies and
@@ -902,3 +903,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/onboarding/setup-company' });

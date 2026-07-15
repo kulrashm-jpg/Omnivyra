@@ -62,13 +62,24 @@ describe('cron.ts scheduling contract (source characterization)', () => {
     expect([...keys].sort()).toMatchSnapshot('cron-guard-restore-keys');
   });
 
-  it('locks the base-tick wiring (publish cycle cadence)', () => {
-    // The publish cycle is gated by shouldRunPublishCycle() on a BASE_TICK_MS interval.
-    expect(src).toMatch(/setInterval\([\s\S]{0,200}?shouldRunPublishCycle\(\)[\s\S]{0,200}?BASE_TICK_MS\)/);
-    // Startup runs the cycle immediately (before the first tick).
+  it('locks the base-tick wiring (W1-2 contract: fast tick, gated publish safety net)', () => {
+    // W1-2 (B-01 fix, approved contract change): the outer tick fires every
+    // CRON_INTERVAL_MS so sub-4h job intervals actually run on schedule; the
+    // publish safety net stays on its prior working-hours/≥4 h cadence via
+    // shouldRunPublishCycle() → includePublishSafetyNet. Locking BOTH halves:
+    // (1) the tick interval is CRON_INTERVAL_MS (NOT BASE_TICK_MS),
+    expect(src).toMatch(/cronInterval = setInterval\([\s\S]{0,400}?\}, CRON_INTERVAL_MS\);/);
+    // (2) the publish gate decides the safety-net flag inside each tick.
+    expect(src).toMatch(/const publishDue = await shouldRunPublishCycle\(\);[\s\S]{0,200}?runSchedulerCycle\(\{ includePublishSafetyNet: publishDue \}\)/);
+    // (3) runSchedulerCycle defaults to INCLUDING the safety net (direct callers unchanged).
+    expect(src).toMatch(/async function runSchedulerCycle\(opts: \{ includePublishSafetyNet\?: boolean \} = \{\}\)/);
+    expect(src).toMatch(/if \(opts\.includePublishSafetyNet !== false\)/);
+    // Startup runs the cycle immediately (before the first tick) — unchanged.
     expect(src).toMatch(/_lastPublishCycleRun = Date\.now\(\);\s*\n\s*await runSchedulerCycle\(\);/);
     const baseTick = src.match(/const BASE_TICK_MS\s*=\s*([^;]+);/);
     expect(baseTick?.[1].trim()).toMatchSnapshot('base-tick');
+    const cronTick = src.match(/const CRON_INTERVAL_MS\s*=\s*([^;]+);/);
+    expect(cronTick?.[1].trim()).toMatchSnapshot('cron-tick');
   });
 
   it('locks the worker tick semantics (jitter, error containment, self-reschedule)', () => {

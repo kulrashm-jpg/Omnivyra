@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 
 /**
  * POST /api/access/request
@@ -23,7 +24,7 @@ function hashIp(ip: string): string {
   return crypto.createHash('sha256').update(ip + (process.env.RATE_LIMIT_SALT ?? 'salt')).digest('hex');
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
@@ -136,3 +137,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(201).json({ success: true, requestId: newRequest.id });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/access/request' });

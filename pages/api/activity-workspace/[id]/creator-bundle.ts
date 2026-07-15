@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 /**
  * Creator Workspace BUNDLE endpoint — Step-12 multi-variant orchestration.
  *
@@ -35,7 +36,7 @@ import {
 } from '@/backend/services/creator/intelligence/workspace';
 import type { DailyContentPlanRow } from '@/backend/services/creator/intelligence/workspace';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'PATCH') {
     res.setHeader('Allow', 'GET, PATCH');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -177,3 +178,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     persisted: true,
   });
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/activity-workspace/:id/creator-bundle' });

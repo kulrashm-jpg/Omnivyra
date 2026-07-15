@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../aiGateway';
+import { definePool } from '../../../lib/platform/concurrency';
 import { validatePlatformVariants } from '../aiOutputValidationService';
 import { getMediaIntentDescriptor } from '../mediaIntentDescriptorRules';
 import { processContent } from '../unifiedContentProcessor';
@@ -303,6 +304,44 @@ export async function renderPlatformVariantsFromBlueprint(
           })
         : null;
 
+    // W3-2 (audit B-08): pre-compute the per-platform FALLBACK variants (one
+    // LLM call each for batch-key misses) in a bounded ordered pass instead
+    // of awaiting them inline in the assembly loop. Pool default 1 keeps
+    // today's sequential behavior byte-for-byte; ramp via
+    // CONCURRENCY_VARIANT_FALLBACK. The single-target branch (which passes
+    // generation_overrides) stays inline and unchanged. Errors rethrow
+    // exactly as the inline awaits did.
+    const fallbackByIndex = new Map<number, Awaited<ReturnType<typeof generatePlatformVariantFromMaster>>>();
+    if (aiTargets.length >= 2) {
+      const misses: number[] = [];
+      for (let i = 0; i < aiTargets.length; i++) {
+        const t = aiTargets[i]!;
+        const key = `${t.platform}_${t.content_type}`;
+        const raw = batchRaw && typeof batchRaw === 'object' && !Array.isArray(batchRaw)
+          ? (batchRaw as Record<string, string>)[key] ?? null
+          : null;
+        if (!raw) misses.push(i);
+      }
+      if (misses.length > 0) {
+        const results = await VARIANT_FALLBACK_POOL.map(misses, async (idx) => {
+          const t = aiTargets[idx]!;
+          return generatePlatformVariantFromMaster(masterPayload, t.platform, {
+            content_type: t.content_type,
+            max_length: t.max_length,
+            writer_content_brief: asObject(item?.writer_content_brief) || undefined,
+            intent: asObject(item?.intent) || undefined,
+            discoverabilityMeta: discoverabilityMetas[idx],
+            governance: (item as any)?.governance ?? null,
+          });
+        });
+        for (let j = 0; j < misses.length; j++) {
+          const r = results[j];
+          if (!r.ok) throw r.error; // inline-await parity: first failure propagates
+          fallbackByIndex.set(misses[j], r.value!);
+        }
+      }
+    }
+
     for (let i = 0; i < aiTargets.length; i++) {
       const target = aiTargets[i]!;
       const discoverabilityMeta = discoverabilityMetas[i];
@@ -327,14 +366,7 @@ export async function renderPlatformVariantsFromBlueprint(
       }
 
       if (!rawContent) {
-        const fallback = await generatePlatformVariantFromMaster(masterPayload, target.platform, {
-          content_type: target.content_type,
-          max_length: target.max_length,
-          writer_content_brief: asObject(item?.writer_content_brief) || undefined,
-          intent: asObject(item?.intent) || undefined,
-          discoverabilityMeta,
-          governance: (item as any)?.governance ?? null,
-        });
+        const fallback = fallbackByIndex.get(i)!;
         built.push(fallback);
         continue;
       }
@@ -387,6 +419,16 @@ export async function renderPlatformVariantsFromBlueprint(
   const validatedVariants = validatePlatformVariants(built);
   return validatedVariants;
 }
+
+/**
+ * W3-2 pool for batch-miss fallback variant calls. defaultLimit 1 = today's
+ * sequential behavior; ramp via CONCURRENCY_VARIANT_FALLBACK (cap 8).
+ */
+const VARIANT_FALLBACK_POOL = definePool({
+  name: 'variant-fallback',
+  defaultLimit: 1,
+  maxLimit: 8,
+});
 
 export async function generatePlatformVariantFromMaster(
   master: MasterContentPayload,

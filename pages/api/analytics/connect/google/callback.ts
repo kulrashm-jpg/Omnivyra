@@ -1,3 +1,4 @@
+import { createApiRoute as __createApiRoute } from '../../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getBaseUrl } from '../../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../../backend/auth/oauthState';
@@ -47,7 +48,7 @@ function buildSuccessParams(returnTo: string | null, flow: 'ga4' | 'gsc'): Recor
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   console.log('[GA-OAUTH][callback] hit', { method: req.method, url: req.url });
 
   if (req.method !== 'GET') {
@@ -223,3 +224,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(buildRedirectUrl(decodedState.returnTo ?? null, { error: redirectError }));
   }
 }
+
+// W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
+export default __createApiRoute(handler, { route: '/api/analytics/connect/google/callback' });
