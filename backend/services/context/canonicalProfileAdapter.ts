@@ -182,22 +182,41 @@ export async function getCanonicalProfile(
   companyId?: string,
   options?: GetProfileOptions,
 ): Promise<ProfileT> {
+  const totalStart = Date.now(); // E6: total grounding latency
   const legacy = await getProfile(companyId, options);
   if (!companyId) return legacy;
 
-  const mode = resolveRolloutSync(CANONICAL_GROUNDING_FLAG, { tenantId: companyId }).mode;
+  // E6: capture the FULL rollout decision (mode + source). All metrics are
+  // AGGREGATE — no tenant identifier ever enters a label. Per-tenant rollout
+  // state is observable as the aggregate mode distribution.
+  const decision = resolveRolloutSync(CANONICAL_GROUNDING_FLAG, { tenantId: companyId });
+  const mode = decision.mode;
+  try {
+    recordRawCounter('canonical_grounding.call', 1, { mode });
+    if (decision.source === 'global-kill' || decision.source === 'env-kill' || decision.source === 'admin-kill') {
+      recordRawCounter('canonical_grounding.kill', 1, { source: decision.source });
+    }
+  } catch { /* metrics never break the call */ }
 
   // OFF (default): byte-faithful legacy. Canonical never runs.
-  if (mode === 'off') return legacy;
+  if (mode === 'off') {
+    try { recordRawHistogram('canonical_grounding.total_ms', Date.now() - totalStart, { mode: 'off' }); } catch { /* fail-safe */ }
+    return legacy;
+  }
 
   const { canonical, ctxOk } = await assembleCanonical(companyId, legacy, mode);
+  // E6: graceful fallback rate (context unavailable → legacy grounding used);
+  // distinct from canonical_grounding.error (exceptions).
+  if (!ctxOk) { try { recordRawCounter('canonical_grounding.fallback', 1, { mode }); } catch { /* fail-safe */ } }
 
   // SHADOW: return LEGACY (never canonical); measure the divergence.
   if (mode === 'shadow') {
     recordShadowDivergence(legacy, canonical, ctxOk);
+    try { recordRawHistogram('canonical_grounding.total_ms', Date.now() - totalStart, { mode: 'shadow' }); } catch { /* fail-safe */ }
     return legacy;
   }
 
   // ENFORCE: canonical grounding (legacy remains available via flag → off).
+  try { recordRawHistogram('canonical_grounding.total_ms', Date.now() - totalStart, { mode: 'enforce' }); } catch { /* fail-safe */ }
   return canonical;
 }

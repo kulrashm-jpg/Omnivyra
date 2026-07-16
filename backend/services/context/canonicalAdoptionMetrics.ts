@@ -4,7 +4,15 @@
  * Tracks migration of AI grounding consumers onto the Canonical Context Engine:
  * a static inventory (migrated vs remaining) + a runtime counter of actual
  * canonical-backed reads. No I/O; safe to import anywhere.
+ *
+ * E6 (Wave R4): the runtime read counter is ALSO routed through the HARDEN-001
+ * registry as an AGGREGATE series (canonical_grounding.read{context_backed}).
+ * The `consumerId` (a tenant/companyId at call sites) NEVER enters a metric
+ * label — only the boolean outcome does — so cardinality stays at 2 and no
+ * tenant identifier is exported. The bounded in-memory map below is retained
+ * purely as the local diagnostic surface for getCanonicalReadCounts().
  */
+import { recordRawCounter } from '../../observability';
 
 /** Consumers migrated to canonical grounding in Wave 1 (CONTENT-INTELLIGENCE-003). */
 export const WAVE1_MIGRATED_CONSUMERS: readonly string[] = [
@@ -182,6 +190,13 @@ const canonicalBacked = { yes: 0, no: 0 };
 
 /** Called by the adapter each time a consumer reads grounding. */
 export function recordCanonicalRead(consumerId: string, canonical: boolean): void {
+  try {
+    // E6: aggregate, tenant-free emission through HARDEN-001. `canonical` is the
+    // context-backed / adoption signal; the consumerId is deliberately excluded
+    // from the label to keep cardinality bounded (context availability across
+    // all rollout modes; canonical adoption = share with context_backed=true).
+    recordRawCounter('canonical_grounding.read', 1, { context_backed: canonical });
+  } catch { /* never throw from a metric */ }
   try {
     if (reads.size < 500) reads.set(consumerId, (reads.get(consumerId) ?? 0) + 1);
     if (canonical) canonicalBacked.yes += 1; else canonicalBacked.no += 1;
