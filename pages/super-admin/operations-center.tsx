@@ -67,6 +67,17 @@ type Snapshot = {
     note: string;
     error?: string;
   } | null;
+  marketIntelligenceRuntime: {
+    available: boolean;
+    counts: { signals: number; runsCompleted: number; runsFailed: number; findings: number; monitoredCompanies: number; competitorEnrichments: number };
+    lastRunAt: string | null;
+    runFailureRate: number;
+    freshnessDays: number | null;
+    healthy: boolean;
+    missingSignals: string[];
+    note: string;
+    error?: string;
+  } | null;
 };
 
 const box: React.CSSProperties = { border: '1px solid #2a2a2a', borderRadius: 8, padding: 16, marginBottom: 16, background: '#0f0f0f' };
@@ -291,6 +302,29 @@ export default function OperationsCenter() {
                 {data.websiteIntelligenceRuntime.error && <div style={{ color: '#e5c07b', fontSize: 12, marginTop: 6 }}>{data.websiteIntelligenceRuntime.error}</div>}
                 <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
                   Not exposed by the runtime: {data.websiteIntelligenceRuntime.missingSignals.join('; ')}.
+                </div>
+              </div>
+            )}
+
+            {data.marketIntelligenceRuntime && (
+              <div style={{ ...box, borderColor: !data.marketIntelligenceRuntime.available ? '#e5c07b' : (data.marketIntelligenceRuntime.healthy ? '#2a2a2a' : '#e06c75') }}>
+                <h2 style={h2}>
+                  Market Intelligence Runtime{' '}
+                  <span style={{ color: !data.marketIntelligenceRuntime.available ? '#e5c07b' : (data.marketIntelligenceRuntime.healthy ? '#98c379' : '#e06c75'), fontWeight: 700 }}>
+                    {!data.marketIntelligenceRuntime.available ? '● unavailable' : (data.marketIntelligenceRuntime.healthy ? '● healthy' : '● degraded')}
+                  </span>
+                </h2>
+                <table><tbody>
+                  <tr><td style={td}>monitored companies</td><td style={td}>{data.marketIntelligenceRuntime.counts.monitoredCompanies}</td></tr>
+                  <tr><td style={td}>signals</td><td style={td}>{data.marketIntelligenceRuntime.counts.signals}</td></tr>
+                  <tr><td style={td}>pulse runs</td><td style={td}>{data.marketIntelligenceRuntime.counts.runsCompleted} completed · {data.marketIntelligenceRuntime.counts.runsFailed} failed</td></tr>
+                  <tr><td style={td}>run failure rate</td><td style={{ ...td, color: data.marketIntelligenceRuntime.runFailureRate > 0.25 ? '#e06c75' : '#ddd' }}>{(data.marketIntelligenceRuntime.runFailureRate * 100).toFixed(1)}%</td></tr>
+                  <tr><td style={td}>last run</td><td style={{ ...td, color: (data.marketIntelligenceRuntime.freshnessDays ?? 0) > 3 ? '#e06c75' : '#ddd' }}>{data.marketIntelligenceRuntime.lastRunAt ?? '—'}{data.marketIntelligenceRuntime.freshnessDays !== null ? ` (${data.marketIntelligenceRuntime.freshnessDays}d ago)` : ''}</td></tr>
+                  <tr><td style={td}>findings · competitor enrich</td><td style={td}>{data.marketIntelligenceRuntime.counts.findings} · {data.marketIntelligenceRuntime.counts.competitorEnrichments}</td></tr>
+                </tbody></table>
+                {data.marketIntelligenceRuntime.error && <div style={{ color: '#e5c07b', fontSize: 12, marginTop: 6 }}>{data.marketIntelligenceRuntime.error}</div>}
+                <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
+                  Not exposed by the runtime: {data.marketIntelligenceRuntime.missingSignals.join('; ')}.
                 </div>
               </div>
             )}

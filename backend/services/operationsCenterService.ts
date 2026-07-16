@@ -374,6 +374,100 @@ export async function getWebsiteIntelligenceRuntimeView(): Promise<WebsiteIntell
   }
 }
 
+// ── Market Intelligence Runtime operational view ───────────────────────────
+// Read-only aggregation of EXISTING market-intelligence state: signals, market
+// pulse runs (completed/failed), findings, monitored companies, competitor
+// enrichments + last-run freshness. Reads counts/timestamps only — never signal
+// contents, company identities, or findings. Does NOT change collection /
+// polling / enrichment / scheduling.
+export interface MarketIntelligenceRuntimeView {
+  available: boolean;
+  counts: { signals: number; runsCompleted: number; runsFailed: number; findings: number; monitoredCompanies: number; competitorEnrichments: number };
+  lastRunAt: string | null;
+  runFailureRate: number;
+  freshnessDays: number | null;
+  healthy: boolean;
+  missingSignals: string[];
+  note: string;
+  error?: string;
+}
+
+const MI_MISSING = [
+  'pending-refresh backlog (jobQueue-driven; not a simple count)',
+  'per-company signal / trend freshness (platform view shows only last-run freshness)',
+  'enrichment latency + per-stage success (not tracked as metrics)',
+  'scheduler / worker participation (policy + cron driven; not aggregated)',
+  'retry counts (not aggregated)',
+];
+
+/** Pure health rollup from market-intelligence counts + last-run freshness. */
+export function summarizeMarketIntelligenceRuntime(input: {
+  counts: MarketIntelligenceRuntimeView['counts'];
+  lastRunAt: string | null;
+  nowMs: number;
+  freshnessThresholdDays?: number;
+}): MarketIntelligenceRuntimeView {
+  const { runsCompleted, runsFailed } = input.counts;
+  const denom = runsCompleted + runsFailed;
+  const runFailureRate = denom ? runsFailed / denom : 0;
+  const parsed = input.lastRunAt ? Date.parse(input.lastRunAt) : NaN;
+  const freshnessDays = Number.isFinite(parsed) ? Math.max(0, Math.floor((input.nowMs - parsed) / 86_400_000)) : null;
+  const threshold = input.freshnessThresholdDays ?? 3;
+  const fresh = freshnessDays === null ? denom === 0 : freshnessDays <= threshold;
+  const healthy = runFailureRate < 0.25 && fresh;
+  return {
+    available: true,
+    counts: input.counts,
+    lastRunAt: input.lastRunAt,
+    runFailureRate,
+    freshnessDays,
+    healthy,
+    missingSignals: MI_MISSING,
+    note: 'Counts from market_intelligence_signals / market_pulse_runs / market_pulse_findings / market_pulse_automation_settings / competitor_enrichment_cache. Freshness = age of the most recent pulse run. No signal contents or company identities are read.',
+  };
+}
+
+/** Query market-intelligence tables for a read-only operational view. Best-effort. */
+export async function getMarketIntelligenceRuntimeView(nowMs: number = Date.now()): Promise<MarketIntelligenceRuntimeView> {
+  const safe = async (fn: () => Promise<number>): Promise<number> => { try { return await fn(); } catch { return 0; } };
+  const countTable = (table: string) => safe(async () => {
+    const { count } = await supabase.from(table).select('*', { count: 'exact', head: true });
+    return count ?? 0;
+  });
+  const countStatus = (table: string, status: string) => safe(async () => {
+    const { count } = await supabase.from(table).select('*', { count: 'exact', head: true }).eq('status', status);
+    return count ?? 0;
+  });
+  try {
+    const [signals, runsCompleted, runsFailed, findings, monitoredCompanies, competitorEnrichments] = await Promise.all([
+      countTable('market_intelligence_signals'),
+      countStatus('market_pulse_runs', 'completed'),
+      countStatus('market_pulse_runs', 'failed'),
+      countTable('market_pulse_findings'),
+      countTable('market_pulse_automation_settings'),
+      countTable('competitor_enrichment_cache'),
+    ]);
+    let lastRunAt: string | null = null;
+    try {
+      const { data } = await supabase.from('market_pulse_runs').select('created_at').order('created_at', { ascending: false }).limit(1);
+      lastRunAt = (data?.[0] as { created_at?: string } | undefined)?.created_at ?? null;
+    } catch { /* best-effort */ }
+    return summarizeMarketIntelligenceRuntime({
+      counts: { signals, runsCompleted, runsFailed, findings, monitoredCompanies, competitorEnrichments },
+      lastRunAt, nowMs,
+    });
+  } catch (e) {
+    return {
+      available: false,
+      counts: { signals: 0, runsCompleted: 0, runsFailed: 0, findings: 0, monitoredCompanies: 0, competitorEnrichments: 0 },
+      lastRunAt: null, runFailureRate: 0, freshnessDays: null, healthy: false,
+      missingSignals: ['market-intelligence counts could not be read', ...MI_MISSING],
+      note: 'Market intelligence state unavailable.',
+      error: e instanceof Error ? e.message : 'query failed',
+    };
+  }
+}
+
 // Verified runtime topology (POP-A2). Documented constants — BullMQ queue/worker
 // names are not enumerable without instantiating, so they are maintained here.
 const BULLMQ_QUEUES = ['publish/posting', 'bolt-execution', 'ai-heavy', 'engagement-polling', 'lead-thread-recompute', 'conversation-memory-rebuild'];

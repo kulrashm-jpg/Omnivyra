@@ -5,7 +5,7 @@
  * without changing any runtime behaviour.
  */
 import { defineRolloutFlag } from '../../../lib/platform/rollout';
-import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime, summarizeStorageRuntime, summarizeWebsiteIntelligenceRuntime } from '../../services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime, summarizeStorageRuntime, summarizeWebsiteIntelligenceRuntime, summarizeMarketIntelligenceRuntime } from '../../services/operationsCenterService';
 
 const ENV = ['ROLLOUT_OPS_TEST_FLAG_MODE', 'ROLLOUT_OPS_TEST_FLAG_KILL', 'ROLLOUT_KILL_SWITCH'];
 beforeEach(() => { for (const k of ENV) delete process.env[k]; });
@@ -178,5 +178,37 @@ describe('summarizeWebsiteIntelligenceRuntime', () => {
     const v = summarizeWebsiteIntelligenceRuntime({ counts: { websitesTracked: 1, websitesActive: 1, healthScores: 0, signals: 0, alerts: 0 }, engines });
     expect(v.missingSignals.some((m) => /crawl freshness|backlog|retry/i.test(m))).toBe(true);
     expect(JSON.stringify(v)).not.toMatch(/https?:\/\/|\.com|\.io|domain=/i);
+  });
+});
+
+describe('summarizeMarketIntelligenceRuntime', () => {
+  const NOW = Date.parse('2026-07-16T00:00:00Z');
+  const counts = { signals: 5000, runsCompleted: 90, runsFailed: 5, findings: 400, monitoredCompanies: 30, competitorEnrichments: 120 };
+
+  test('healthy: low failure rate + recent run', () => {
+    const v = summarizeMarketIntelligenceRuntime({ counts, lastRunAt: '2026-07-15T04:30:00Z', nowMs: NOW });
+    expect(v.available).toBe(true);
+    expect(v.runFailureRate).toBeCloseTo(5 / 95);
+    expect(v.freshnessDays).toBe(0);
+    expect(v.healthy).toBe(true);
+  });
+
+  test('degraded: high run failure rate', () => {
+    const v = summarizeMarketIntelligenceRuntime({ counts: { ...counts, runsCompleted: 10, runsFailed: 10 }, lastRunAt: '2026-07-15T04:30:00Z', nowMs: NOW });
+    expect(v.healthy).toBe(false);
+  });
+
+  test('degraded: stale (last run older than threshold)', () => {
+    const v = summarizeMarketIntelligenceRuntime({ counts, lastRunAt: '2026-07-01T00:00:00Z', nowMs: NOW });
+    expect(v.freshnessDays).toBeGreaterThan(3);
+    expect(v.healthy).toBe(false);
+  });
+
+  test('no runs → healthy; missing signals; no company identities', () => {
+    const v = summarizeMarketIntelligenceRuntime({ counts: { signals: 0, runsCompleted: 0, runsFailed: 0, findings: 0, monitoredCompanies: 0, competitorEnrichments: 0 }, lastRunAt: null, nowMs: NOW });
+    expect(v.healthy).toBe(true);
+    expect(v.freshnessDays).toBeNull();
+    expect(v.missingSignals.some((m) => /backlog|enrichment latency|scheduler/i.test(m))).toBe(true);
+    expect(JSON.stringify(v)).not.toMatch(/company_id=|@|https?:\/\//i);
   });
 });
