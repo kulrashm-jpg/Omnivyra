@@ -39,6 +39,11 @@ import { recordCanonicalRead } from './canonicalAdoptionMetrics';
 import { overlayCanonicalOntoProfile } from './canonicalProfileOverlay';
 import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
 import { recordRawCounter, recordRawHistogram } from '../../observability';
+// RF-2: shadow-divergence forensic traceability. Reuses ONLY existing Foundation
+// infra — F-03 Request Context (trace/request/correlation ids) + the platform
+// structured logger. No new tracing/metrics/logging subsystem, no new series.
+import { getTraceId, getRequestId, getRequestContext, getContextMeta } from '../../../lib/platform/requestContext';
+import { logger } from '../logger';
 // E3 (Wave R3): Foundation F-12 cache SDK — cache ONLY the deterministic
 // canonical context so flag-on grounded reads reach W4-5 latency parity.
 import { registerCacheNamespace } from '../../../lib/platform/cacheCore';
@@ -97,7 +102,7 @@ function isEmptyValue(v: unknown): boolean {
  * never overwritten); any nonzero reading is the shadow safety-violation
  * signal. Metrics only; never throws, never affects the returned result.
  */
-function recordShadowDivergence(legacy: unknown, canonical: unknown, ctxOk: boolean): void {
+function recordShadowDivergence(legacy: unknown, canonical: unknown, ctxOk: boolean, assemblyMs?: number): void {
   try {
     if (!legacy || !canonical || typeof legacy !== 'object' || typeof canonical !== 'object') {
       recordRawCounter('canonical_grounding.shadow', 1, { result: 'no_object' });
@@ -107,17 +112,23 @@ function recordShadowDivergence(legacy: unknown, canonical: unknown, ctxOk: bool
     const c = canonical as Record<string, unknown>;
     let backfilled = 0;
     let overwrote = 0;
+    // Field KEYS only (schema identifiers) — never the values (no PII/content).
+    const overwrittenFields: string[] = [];
     for (const key of new Set([...Object.keys(l), ...Object.keys(c)])) {
       const lv = l[key];
       const cv = c[key];
       if (isEmptyValue(lv) && !isEmptyValue(cv)) { backfilled++; continue; }
-      if (!isEmptyValue(lv) && JSON.stringify(lv) !== JSON.stringify(cv)) overwrote++;
+      if (!isEmptyValue(lv) && JSON.stringify(lv) !== JSON.stringify(cv)) { overwrote++; overwrittenFields.push(key); }
     }
     recordRawHistogram('canonical_grounding.fields_backfilled', backfilled, {});
     if (overwrote > 0) {
       // Safety violation — canonical changed a value legacy already held.
       recordRawCounter('canonical_grounding.shadow', 1, { result: 'overwrote' });
       recordRawHistogram('canonical_grounding.fields_overwrote', overwrote, {});
+      // RF-2: this is the promotion-blocking divergence → capture a bounded,
+      // tenant-free, trace-correlated forensic record so the exact request is
+      // investigable. Complements (never replaces) the metrics above.
+      captureShadowDivergence({ category: 'overwrote', overwrote, backfilled, overwrittenFields, ctxOk, assemblyMs });
     } else {
       recordRawCounter('canonical_grounding.shadow', 1, { result: backfilled > 0 ? 'backfilled' : 'identical' });
     }
@@ -125,6 +136,104 @@ function recordShadowDivergence(legacy: unknown, canonical: unknown, ctxOk: bool
   } catch {
     /* metrics must never break the call */
   }
+}
+
+/**
+ * RF-2 — shadow-divergence forensic traceability (bounded, sampled, fail-safe).
+ *
+ * When a PROMOTION-BLOCKING divergence occurs (canonical overwrote a value legacy
+ * already held), capture the minimum record needed to investigate, correlated to
+ * the request via F-03 (trace / request / correlation id). Backfill-only and
+ * identical shadows are NOT captured (intended value-add / no-op) — this keeps
+ * volume bounded and focuses forensics on the safety signal. Complements the
+ * canonical_grounding.* metrics; introduces NO new metric series.
+ *
+ * Privacy: records only request-correlation ids + aggregate counts + overwritten
+ * field KEYS (schema identifiers). NEVER tenant ids, field VALUES, prompts, AI
+ * output, PII, customer content, or large payloads.
+ *
+ * Bounding: dedup by signature within a rolling window, a per-window rate cap,
+ * and a hard max of retained entries (drop-oldest ring). Fully fail-safe: any
+ * error is swallowed and production behaviour is unchanged.
+ */
+export interface ShadowDivergenceDiagnostic {
+  traceId?: string;
+  requestId?: string;
+  correlationId?: string;
+  mode: string;
+  operation?: string;
+  category: string;
+  fieldsOverwritten: number;
+  fieldsBackfilled: number;
+  overwrittenFields: string[];
+  contextAvailable: boolean;
+  assemblyMs?: number;
+  ts: string;
+}
+
+const SHADOW_DIAG_WINDOW_MS = 60_000;
+const shadowDiagnostics: ShadowDivergenceDiagnostic[] = [];
+const shadowDiagDedup = new Set<string>();
+let shadowDiagWindowStart = 0;
+let shadowDiagWindowCount = 0;
+let shadowDiagDropped = 0;
+
+function captureShadowDivergence(input: {
+  category: string;
+  overwrote: number;
+  backfilled: number;
+  overwrittenFields: string[];
+  ctxOk: boolean;
+  assemblyMs?: number;
+}): void {
+  try {
+    // Env read at capture time (capture is rare) so limits are operable/testable.
+    const maxEntries = Math.max(1, Number(process.env.CANONICAL_SHADOW_DIAG_MAX) || 50);
+    const windowMax = Math.max(1, Number(process.env.CANONICAL_SHADOW_DIAG_WINDOW_MAX) || 20);
+
+    const now = Date.now();
+    if (now - shadowDiagWindowStart > SHADOW_DIAG_WINDOW_MS) {
+      shadowDiagWindowStart = now;
+      shadowDiagWindowCount = 0;
+      shadowDiagDedup.clear();
+    }
+    // Dedup identical signatures within the window; rate-limit new captures.
+    const signature = `${input.category}|${[...input.overwrittenFields].sort().join(',')}`;
+    if (shadowDiagDedup.has(signature)) { shadowDiagDropped++; return; }
+    if (shadowDiagWindowCount >= windowMax) { shadowDiagDropped++; return; }
+    shadowDiagDedup.add(signature);
+    shadowDiagWindowCount++;
+
+    const ctx = getRequestContext();
+    const diag: ShadowDivergenceDiagnostic = {
+      traceId: getTraceId(),
+      requestId: getRequestId(),
+      correlationId: ctx.correlationId,
+      mode: 'shadow',
+      operation: getContextMeta<string>('operation'),
+      category: input.category,
+      fieldsOverwritten: input.overwrote,
+      fieldsBackfilled: input.backfilled,
+      overwrittenFields: [...input.overwrittenFields],
+      contextAvailable: input.ctxOk,
+      assemblyMs: input.assemblyMs,
+      ts: new Date().toISOString(),
+    };
+
+    // Bounded store (drop-oldest ring) for offline/ops introspection.
+    shadowDiagnostics.push(diag);
+    while (shadowDiagnostics.length > maxEntries) shadowDiagnostics.shift();
+
+    // Real-time signal via the EXISTING structured logger (reused, not new).
+    logger.warn('canonical_grounding.shadow_overwrite', { ...diag });
+  } catch {
+    /* forensic capture must never affect production behaviour */
+  }
+}
+
+/** Ops/test introspection of captured shadow-divergence diagnostics (bounded). */
+export function getShadowDivergenceDiagnostics(): { entries: ShadowDivergenceDiagnostic[]; dropped: number } {
+  return { entries: [...shadowDiagnostics], dropped: shadowDiagDropped };
 }
 
 /**
@@ -161,7 +270,7 @@ async function assembleCanonical(
   companyId: string,
   legacy: ProfileT,
   mode: string,
-): Promise<{ canonical: ProfileT; ctxOk: boolean }> {
+): Promise<{ canonical: ProfileT; ctxOk: boolean; assemblyMs: number }> {
   const startedAt = Date.now();
   let canonical: ProfileT = legacy;
   let ctxOk = false;
@@ -178,8 +287,9 @@ async function assembleCanonical(
     try { recordRawCounter('canonical_grounding.error', 1, { mode }); } catch { /* fail-safe */ }
     canonical = legacy; // graceful fallback
   }
-  try { recordRawHistogram('canonical_grounding.assembly_ms', Date.now() - startedAt, { mode }); } catch { /* fail-safe */ }
-  return { canonical, ctxOk };
+  const assemblyMs = Date.now() - startedAt;
+  try { recordRawHistogram('canonical_grounding.assembly_ms', assemblyMs, { mode }); } catch { /* fail-safe */ }
+  return { canonical, ctxOk, assemblyMs };
 }
 
 /**
@@ -213,14 +323,14 @@ export async function getCanonicalProfile(
     return legacy;
   }
 
-  const { canonical, ctxOk } = await assembleCanonical(companyId, legacy, mode);
+  const { canonical, ctxOk, assemblyMs } = await assembleCanonical(companyId, legacy, mode);
   // E6: graceful fallback rate (context unavailable → legacy grounding used);
   // distinct from canonical_grounding.error (exceptions).
   if (!ctxOk) { try { recordRawCounter('canonical_grounding.fallback', 1, { mode }); } catch { /* fail-safe */ } }
 
   // SHADOW: return LEGACY (never canonical); measure the divergence.
   if (mode === 'shadow') {
-    recordShadowDivergence(legacy, canonical, ctxOk);
+    recordShadowDivergence(legacy, canonical, ctxOk, assemblyMs);
     try { recordRawHistogram('canonical_grounding.total_ms', Date.now() - totalStart, { mode: 'shadow' }); } catch { /* fail-safe */ }
     return legacy;
   }
