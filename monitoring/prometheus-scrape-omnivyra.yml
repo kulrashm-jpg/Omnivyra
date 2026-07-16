@@ -30,9 +30,11 @@ scrape_configs:
     # (Prometheus cannot template arbitrary headers pre-2.25; use Bearer above.)
 
   # ── Railway worker (job-side grounding) ──────────────────────────────────
-  # Confirm the worker's metrics path/host before enabling. If the worker reuses
-  # the same handler, point metrics_path at its exposed route; otherwise wire a
-  # worker metrics endpoint. Until confirmed, OmnivyraWorkerMetricsMissing fires.
+  # The worker exposes /metrics from its health server (backend/workers/
+  # healthServer.ts) using the SAME exporter + OBSERVABILITY_EXPORT_TOKEN as the
+  # API. Port = the worker's config.PORT (Railway-assigned; defaults to 8080).
+  # Only the host:port is deployment-specific — fill it in from Railway.
+  # Dark until the token is set; until then OmnivyraWorkerMetricsMissing fires.
   - job_name: omnivyra-worker
     metrics_path: /metrics
     scheme: https
@@ -40,7 +42,7 @@ scrape_configs:
       type: Bearer
       credentials_file: /etc/prometheus/secrets/omnivyra_metrics_token
     static_configs:
-      - targets: ["<railway-worker-host>:<port>"]   # FILL IN from Railway
+      - targets: ["<railway-worker-host>:<port>"]   # FILL IN from Railway (port = config.PORT, default 8080)
         labels: { surface: worker, service: omnivyra }
 
 # Load the alert rules alongside:
