@@ -175,13 +175,41 @@ const NAV_MAP: { group: string; links: NavLink[] }[] = [
 export default function OperationsCenter() {
   const [data, setData] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rolloutBusy, setRolloutBusy] = useState<string | null>(null);
+  const [rolloutMsg, setRolloutMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    apiFetch('/api/super-admin/operations-center')
+  const load = React.useCallback(() => {
+    return apiFetch('/api/super-admin/operations-center')
       .then(async (r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(setData)
       .catch((e) => setError(e instanceof Error ? e.message : 'failed'));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Operator write path — the SINGLE canonical rollout mutation endpoint. Posts
+  // the requested action, then re-reads the snapshot so the row reflects the new
+  // resolved state (no separate rollout store). Visibility is unchanged; this
+  // only exercises the existing admin-config override fields.
+  const mutateRollout = React.useCallback(async (flagKey: string, body: Record<string, unknown>, label: string) => {
+    setRolloutBusy(flagKey);
+    setRolloutMsg(null);
+    try {
+      const r = await apiFetch('/api/super-admin/rollout-control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flagKey, ...body }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setRolloutMsg(`${flagKey}: ${label} → ${j?.resolved?.mode ?? 'ok'} (${j?.resolved?.source ?? ''})`);
+      await load();
+    } catch (e) {
+      setRolloutMsg(`${flagKey}: ${label} failed — ${e instanceof Error ? e.message : 'error'}`);
+    } finally {
+      setRolloutBusy(null);
+    }
+  }, [load]);
 
   return (
     <>
@@ -409,16 +437,37 @@ export default function OperationsCenter() {
             <div style={box}>
               <h2 style={h2}>Rollout Flags</h2>
               {data.rolloutFlags.length === 0 && <div style={{ color: '#7f8c8d' }}>No flags registered in this instance.</div>}
+              {rolloutMsg && <div style={{ fontSize: 12, color: '#7f8c8d', marginBottom: 8 }}>{rolloutMsg}</div>}
               <table style={{ width: '100%' }}><tbody>
-                {data.rolloutFlags.map((f) => (
+                {data.rolloutFlags.map((f) => {
+                  const busy = rolloutBusy === f.key;
+                  const btn = (bg: string): React.CSSProperties => ({
+                    fontSize: 11, padding: '2px 7px', marginRight: 4, marginTop: 2, borderRadius: 4,
+                    border: '1px solid #333', background: busy ? '#222' : bg, color: '#eee',
+                    cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1,
+                  });
+                  return (
                   <tr key={f.key}>
                     <td style={td}>{f.key}</td>
                     <td style={{ ...td, color: modeColor(f.mode, f.killed), fontWeight: 700 }}>{f.mode}{f.killed ? ' (killed)' : ''}</td>
                     <td style={{ ...td, color: '#7f8c8d' }}>{f.source}</td>
                     <td style={{ ...td, color: '#7f8c8d' }}>{f.envPrefix}_MODE</td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                      <button disabled={busy} style={btn('#2a2a2a')} onClick={() => mutateRollout(f.key, { action: 'set-mode', mode: 'off' }, 'off')}>Off</button>
+                      <button disabled={busy} style={btn('#2a2a2a')} onClick={() => mutateRollout(f.key, { action: 'set-mode', mode: 'shadow' }, 'shadow')}>Shadow</button>
+                      <button disabled={busy} style={btn('#2a3a2a')} onClick={() => mutateRollout(f.key, { action: 'set-mode', mode: 'enforce' }, 'enforce')}>Enforce</button>
+                      {f.killed
+                        ? <button disabled={busy} style={btn('#2a2a3a')} onClick={() => mutateRollout(f.key, { action: 'unkill' }, 'unkill')}>Unkill</button>
+                        : <button disabled={busy} style={btn('#3a2020')} onClick={() => mutateRollout(f.key, { action: 'kill' }, 'kill')}>Kill</button>}
+                      <button disabled={busy} style={btn('#2a2a2a')} onClick={() => mutateRollout(f.key, { action: 'clear' }, 'clear')}>Clear</button>
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody></table>
+              <p style={{ color: '#555', fontSize: 11, marginTop: 8, marginBottom: 0 }}>
+                Controls write the admin-config override (mode / kill / clear). An env kill or env mode always wins; “Clear” resets to env/default. Effect is immediate (no redeploy). Every action is audit-logged.
+              </p>
             </div>
 
             <div style={box}>

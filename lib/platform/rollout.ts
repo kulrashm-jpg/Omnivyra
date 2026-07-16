@@ -75,6 +75,11 @@ export function listRolloutFlags(): RolloutFlag[] {
   return Array.from(flagsByKey.values());
 }
 
+/** Look up a registered flag by key (operator write-surface validation). */
+export function getRolloutFlag(key: string): RolloutFlag | undefined {
+  return flagsByKey.get(key);
+}
+
 function truthyEnv(name: string): boolean {
   const raw = process.env[name];
   return raw !== undefined && /^(1|true|yes|on)$/i.test(String(raw).trim());
@@ -199,6 +204,92 @@ export function resolveRolloutSync(
   } catch {
     return { mode: 'off', source: 'fail-safe' };
   }
+}
+
+// ── Operator write surface ────────────────────────────────────────────────────
+// The single canonical mutation path for the generic rollout kit. Writes the
+// SAME admin-config namespace that loadAdminConfig() reads (ROLLOUT_CONFIG_KEY)
+// — no parallel storage, registry, or evaluation. Resolution priority is
+// unchanged (env-kill > admin-kill > admin-mode > env-mode > default; tenant
+// promotion for shadow), so an override only takes effect where env does not
+// already force the decision. Kill switches and planner-specific controls are
+// untouched.
+
+/** A single-flag operator mutation. `null` clears a field; `clear` removes the whole override. */
+export interface RolloutOverridePatch {
+  /** Set the mode; `null` clears it (falls back to env/default). */
+  mode?: RolloutMode | null;
+  /** Set/clear the admin kill switch. */
+  killed?: boolean;
+  /** Tenant allowlist for shadow→enforce promotion (canary); `null` clears it. */
+  enforceTenants?: string[] | null;
+  /** Remove this flag's override entirely (reset to env/default). */
+  clear?: boolean;
+}
+
+/**
+ * Pure config transform (no I/O) — apply a patch to an admin config and return
+ * the new config plus before/after override for audit. Never mutates its input.
+ */
+export function applyRolloutPatch(
+  config: RolloutAdminConfig | null,
+  flagKey: string,
+  patch: RolloutOverridePatch,
+): { config: RolloutAdminConfig; previous: RolloutFlagOverride | null; next: RolloutFlagOverride | null } {
+  const base: RolloutAdminConfig = { v: 1, flags: { ...(config?.flags ?? {}) } };
+  const previous = base.flags[flagKey] ? { ...base.flags[flagKey] } : null;
+
+  if (patch.clear) {
+    delete base.flags[flagKey];
+    return { config: base, previous, next: null };
+  }
+
+  const next: RolloutFlagOverride = { ...(previous ?? {}) };
+  if (patch.mode === null) delete next.mode;
+  else if (patch.mode !== undefined) next.mode = patch.mode;
+  if (typeof patch.killed === 'boolean') next.killed = patch.killed;
+  if (patch.enforceTenants === null) delete next.enforceTenants;
+  else if (patch.enforceTenants !== undefined) next.enforceTenants = patch.enforceTenants;
+
+  // An empty override carries no signal — drop it rather than persist noise.
+  if (next.mode === undefined && next.killed === undefined && next.enforceTenants === undefined) {
+    delete base.flags[flagKey];
+    return { config: base, previous, next: null };
+  }
+  base.flags[flagKey] = next;
+  return { config: base, previous, next };
+}
+
+/**
+ * Canonical operator write: read → apply → persist the admin-config namespace,
+ * then drop the in-process cache so the next resolve re-reads (no redeploy).
+ * Requires Redis (the admin-config transport); without it, only env controls
+ * exist and this throws so the caller can report the limitation honestly.
+ */
+export async function setRolloutOverride(
+  flagKey: string,
+  patch: RolloutOverridePatch,
+): Promise<{ previous: RolloutFlagOverride | null; next: RolloutFlagOverride | null }> {
+  const flag = getRolloutFlag(flagKey);
+  if (!flag) throw new Error(`unknown rollout flag: ${flagKey}`);
+
+  const { redisConfigured, getStandaloneRedis } = await import('../redis/canonicalClient');
+  if (!redisConfigured()) {
+    throw new Error('rollout admin config unavailable: Redis not configured (use env controls)');
+  }
+  const client = await getStandaloneRedis('rate_limit');
+  const raw = await client.get(ROLLOUT_CONFIG_KEY);
+  let current: RolloutAdminConfig | null = null;
+  if (raw) {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.flags) {
+      current = parsed as RolloutAdminConfig;
+    }
+  }
+  const { config, previous, next } = applyRolloutPatch(current, flagKey, patch);
+  await client.set(ROLLOUT_CONFIG_KEY, JSON.stringify(config));
+  __resetRolloutAdminCache(); // next resolveRollout() re-reads; resolveRolloutSync warms on it
+  return { previous, next };
 }
 
 // ── Shadow execution ─────────────────────────────────────────────────────────

@@ -16,7 +16,10 @@ import {
   resolveRolloutSync,
   runWithRollout,
   listRolloutFlags,
+  getRolloutFlag,
+  applyRolloutPatch,
   __resetRolloutAdminCache,
+  type RolloutAdminConfig,
 } from '../../../lib/platform/rollout';
 import { registry } from '../../../backend/observability/registry';
 
@@ -176,5 +179,75 @@ describe('F-04 rollout kit — shadow execution contract', () => {
     });
     expect(result).toBe('a');
     expect(shadowCount('compare_error')).toBe(before + 1);
+  });
+});
+
+// Operator write surface — the pure config transform behind setRolloutOverride.
+// The async setRolloutOverride() only adds a Redis read/write around this and
+// __resetRolloutAdminCache; the override SHAPE it persists is exactly what
+// resolution already consumes (RolloutFlagOverride: mode / killed / enforceTenants).
+describe('F-04 rollout kit — operator write surface (applyRolloutPatch)', () => {
+  const empty = (): RolloutAdminConfig => ({ v: 1, flags: {} });
+
+  test('getRolloutFlag looks up registered flags, undefined otherwise', () => {
+    expect(getRolloutFlag('batch-a-test')?.key).toBe('batch-a-test');
+    expect(getRolloutFlag('no-such-flag')).toBeUndefined();
+  });
+
+  test('set-mode writes the override and reports before/after for audit', () => {
+    const r = applyRolloutPatch(empty(), 'batch-a-test', { mode: 'shadow' });
+    expect(r.previous).toBeNull();
+    expect(r.next).toEqual({ mode: 'shadow' });
+    expect(r.config.flags['batch-a-test']).toEqual({ mode: 'shadow' });
+  });
+
+  test('mode change over an existing override preserves other fields + captures previous', () => {
+    const seed: RolloutAdminConfig = { v: 1, flags: { 'batch-a-test': { mode: 'shadow', enforceTenants: ['org-1'] } } };
+    const r = applyRolloutPatch(seed, 'batch-a-test', { mode: 'enforce' });
+    expect(r.previous).toEqual({ mode: 'shadow', enforceTenants: ['org-1'] });
+    expect(r.next).toEqual({ mode: 'enforce', enforceTenants: ['org-1'] });
+  });
+
+  test('kill / unkill toggle the admin kill flag without dropping mode', () => {
+    const seed: RolloutAdminConfig = { v: 1, flags: { 'batch-a-test': { mode: 'enforce' } } };
+    const killed = applyRolloutPatch(seed, 'batch-a-test', { killed: true });
+    expect(killed.next).toEqual({ mode: 'enforce', killed: true });
+    const unkilled = applyRolloutPatch(killed.config, 'batch-a-test', { killed: false });
+    expect(unkilled.next).toEqual({ mode: 'enforce', killed: false });
+  });
+
+  test('set-tenants sets the canary allowlist; null clears it', () => {
+    const set = applyRolloutPatch(empty(), 'batch-a-test', { mode: 'shadow', enforceTenants: ['org-1', 'org-2'] });
+    expect(set.next).toEqual({ mode: 'shadow', enforceTenants: ['org-1', 'org-2'] });
+    const cleared = applyRolloutPatch(set.config, 'batch-a-test', { enforceTenants: null });
+    expect(cleared.next).toEqual({ mode: 'shadow' });
+  });
+
+  test('clear removes the whole override (reset to env/default)', () => {
+    const seed: RolloutAdminConfig = { v: 1, flags: { 'batch-a-test': { mode: 'enforce', killed: true } } };
+    const r = applyRolloutPatch(seed, 'batch-a-test', { clear: true });
+    expect(r.previous).toEqual({ mode: 'enforce', killed: true });
+    expect(r.next).toBeNull();
+    expect(r.config.flags['batch-a-test']).toBeUndefined();
+  });
+
+  test('an override emptied to nothing is dropped, not persisted as noise', () => {
+    const seed: RolloutAdminConfig = { v: 1, flags: { 'batch-a-test': { mode: 'shadow' } } };
+    const r = applyRolloutPatch(seed, 'batch-a-test', { mode: null });
+    expect(r.next).toBeNull();
+    expect(r.config.flags['batch-a-test']).toBeUndefined();
+  });
+
+  test('is pure — never mutates the input config or its overrides', () => {
+    const seed: RolloutAdminConfig = { v: 1, flags: { 'batch-a-test': { mode: 'shadow' } } };
+    const snapshot = JSON.stringify(seed);
+    applyRolloutPatch(seed, 'batch-a-test', { mode: 'enforce', killed: true });
+    expect(JSON.stringify(seed)).toBe(snapshot);
+  });
+
+  test('preserves unrelated flags untouched (no cross-flag bleed)', () => {
+    const seed: RolloutAdminConfig = { v: 1, flags: { 'batch-a-test': { mode: 'shadow' }, other: { mode: 'enforce' } } };
+    const r = applyRolloutPatch(seed, 'batch-a-test', { killed: true });
+    expect(r.config.flags.other).toEqual({ mode: 'enforce' });
   });
 });
