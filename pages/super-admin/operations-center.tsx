@@ -120,11 +120,12 @@ const NAV_MAP: { group: string; links: NavLink[] }[] = [
   { group: 'Infrastructure', links: [
     { label: 'System Health', href: '/super-admin/system-health' },
     { label: 'Redis Metrics', href: '/api/super-admin/redis-metrics', api: true },
-    { label: 'Runtime Pressure', href: '/api/super-admin/runtime-pressure', api: true },
   ] },
   { group: 'Runtime & Observability', links: [
     { label: 'Observability Snapshot', href: '/api/super-admin/observability', api: true },
     { label: 'Runtime Pressure', href: '/api/super-admin/runtime-pressure', api: true },
+    { label: 'Engagement Health', href: '/admin/engagement-health' },
+    { label: 'Intelligence Control', href: '/admin/intelligence-control' },
   ] },
   { group: 'Queues', links: [
     { label: 'Queue Metrics', href: '/api/super-admin/queue-metrics', api: true },
@@ -133,7 +134,6 @@ const NAV_MAP: { group: string; links: NavLink[] }[] = [
   ] },
   { group: 'Scheduler & Cron', links: [
     { label: 'Cron Metrics', href: '/api/super-admin/cron-metrics', api: true },
-    { label: 'Recovery State', href: '/api/super-admin/recovery-state', api: true },
   ] },
   { group: 'Integrations & OAuth', links: [
     { label: 'Integration Health (page)', href: '/super-admin/oauth-health' },
@@ -145,11 +145,14 @@ const NAV_MAP: { group: string; links: NavLink[] }[] = [
     { label: 'Settlement Ops', href: '/api/super-admin/settlement-ops', api: true },
     { label: 'Credit Reconciliation', href: '/api/super-admin/credit-reconciliation', api: true },
     { label: 'Credits & Billing (dashboard)', href: '/super-admin/dashboard' },
+    { label: 'Free Credits', href: '/super-admin/free-credits' },
+    { label: 'Pricing', href: '/super-admin/pricing' },
   ] },
   { group: 'Customer Health', links: [
     { label: 'Customer Operations', href: '/super-admin/customer-operations' },
     { label: 'Customer Readiness', href: '/super-admin/customer-readiness' },
     { label: 'Activation Workbench', href: '/super-admin/customer-activation-workbench' },
+    { label: 'Activation Operations', href: '/super-admin/customer-activation-operations' },
   ] },
   { group: 'Runtime Economics', links: [
     { label: 'Consumption', href: '/super-admin/consumption' },
@@ -162,6 +165,7 @@ const NAV_MAP: { group: string; links: NavLink[] }[] = [
   { group: 'Governance & Rollout', links: [
     { label: 'Planner Control', href: '/super-admin/planner-control' },
     { label: 'Enterprise Governance', href: '/super-admin/enterprise-governance' },
+    { label: 'Access Requests', href: '/admin/access-requests' },
   ] },
   { group: 'Deployments & Version', links: [
     { label: 'Health / Version', href: '/api/health/version', api: true },
