@@ -4,7 +4,7 @@ import { useRouter } from 'next/router';
 import {
   Menu, X, ChevronDown, BarChart3, FileText, Megaphone, MessageSquare,
   Settings, LogOut, Users, CreditCard, Zap, Link2, HelpCircle,
-  Sun, Moon, LifeBuoy, BookOpen, Home, Shield, Activity,
+  Sun, Moon, LifeBuoy, BookOpen, Home, Shield, Activity, Command,
 } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
@@ -286,7 +286,10 @@ function UserMenu({
             {/* Security settings are per-user, not per-company-role; visible to every authenticated user. */}
             <Item icon={Shield}     label="Security"           href={SETTINGS_ROUTE_SECURITY} />
             {isSuperAdminUser && (
-              <Item icon={Activity} label="Integration Health" href="/super-admin/oauth-health" />
+              <>
+                <Item icon={Command} label="Operations Center" href="/super-admin/operations-center" />
+                <Item icon={Activity} label="Integration Health" href="/super-admin/oauth-health" />
+              </>
             )}
           </Section>
 

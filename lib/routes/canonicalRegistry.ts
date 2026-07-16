@@ -55,6 +55,7 @@ export const CANONICAL_ROUTES: ReadonlyArray<RouteRegistryEntry> = [
   { key: 'super_admin.consumption', path: '/super-admin/consumption',         domain: 'super_admin',  lifecycle: 'canonical',     description: 'Aggregate consumption breakdowns (LLM/API costs).' },
   { key: 'super_admin.free_credits', path: '/super-admin/free-credits',        domain: 'super_admin',  lifecycle: 'canonical',     description: 'Free credit grants admin.' },
   { key: 'super_admin.system_health', path: '/super-admin/system-health',     domain: 'super_admin',  lifecycle: 'canonical',     description: 'Platform health dashboard.' },
+  { key: 'super_admin.operations_center', path: '/super-admin/operations-center', domain: 'super_admin', lifecycle: 'canonical',   description: 'Production Operations Center — rollout flags, version, topology, and the canonical operations navigation hub.' },
   { key: 'admin.access_requests', path: '/admin/access-requests',              domain: 'admin',        lifecycle: 'canonical',     description: 'Approve / reject external access requests.' },
   { key: 'admin.intelligence_control', path: '/admin/intelligence-control',    domain: 'admin',        lifecycle: 'canonical',     description: 'Cron / scheduler / queue runtime knobs.' },
   { key: 'admin.users',          path: '/admin/users',                        domain: 'admin',        lifecycle: 'canonical',     description: 'Platform user management.' },

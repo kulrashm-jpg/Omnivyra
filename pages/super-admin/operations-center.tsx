@@ -36,6 +36,61 @@ function modeColor(mode: string, killed: boolean): string {
   return '#7f8c8d'; // off
 }
 
+// Canonical Operations navigation — links to EXISTING operational routes only.
+// Pages are internal; API endpoints (↗) open the raw JSON. No new pages created.
+type NavLink = { label: string; href: string; api?: boolean };
+const NAV_MAP: { group: string; links: NavLink[] }[] = [
+  { group: 'Infrastructure', links: [
+    { label: 'System Health', href: '/super-admin/system-health' },
+    { label: 'Redis Metrics', href: '/api/super-admin/redis-metrics', api: true },
+    { label: 'Runtime Pressure', href: '/api/super-admin/runtime-pressure', api: true },
+  ] },
+  { group: 'Runtime & Observability', links: [
+    { label: 'Observability Snapshot', href: '/api/super-admin/observability', api: true },
+    { label: 'Runtime Pressure', href: '/api/super-admin/runtime-pressure', api: true },
+  ] },
+  { group: 'Queues', links: [
+    { label: 'Queue Metrics', href: '/api/super-admin/queue-metrics', api: true },
+    { label: 'Dead-Letter Queue', href: '/api/super-admin/dead-letter-queue', api: true },
+    { label: 'Recovery State', href: '/api/super-admin/recovery-state', api: true },
+  ] },
+  { group: 'Scheduler & Cron', links: [
+    { label: 'Cron Metrics', href: '/api/super-admin/cron-metrics', api: true },
+    { label: 'Recovery State', href: '/api/super-admin/recovery-state', api: true },
+  ] },
+  { group: 'Integrations & OAuth', links: [
+    { label: 'Integration Health (page)', href: '/super-admin/oauth-health' },
+    { label: 'Integration Health API', href: '/api/super-admin/integration-health', api: true },
+    { label: 'Connection Health', href: '/api/super-admin/connection-health', api: true },
+  ] },
+  { group: 'Billing & Settlement', links: [
+    { label: 'Billing Forensics', href: '/api/super-admin/billing-forensics/timeline', api: true },
+    { label: 'Settlement Ops', href: '/api/super-admin/settlement-ops', api: true },
+    { label: 'Credit Reconciliation', href: '/api/super-admin/credit-reconciliation', api: true },
+    { label: 'Credits & Billing (dashboard)', href: '/super-admin/dashboard' },
+  ] },
+  { group: 'Customer Health', links: [
+    { label: 'Customer Operations', href: '/super-admin/customer-operations' },
+    { label: 'Customer Readiness', href: '/super-admin/customer-readiness' },
+    { label: 'Activation Workbench', href: '/super-admin/customer-activation-workbench' },
+  ] },
+  { group: 'Runtime Economics', links: [
+    { label: 'Consumption', href: '/super-admin/consumption' },
+    { label: 'Profitability', href: '/api/super-admin/economics/profitability', api: true },
+    { label: 'Savings Report', href: '/api/super-admin/savings-report', api: true },
+  ] },
+  { group: 'BOLT', links: [
+    { label: 'BOLT Failures', href: '/super-admin/bolt-failures' },
+  ] },
+  { group: 'Governance & Rollout', links: [
+    { label: 'Planner Control', href: '/super-admin/planner-control' },
+    { label: 'Enterprise Governance', href: '/super-admin/enterprise-governance' },
+  ] },
+  { group: 'Deployments & Version', links: [
+    { label: 'Health / Version', href: '/api/health/version', api: true },
+  ] },
+];
+
 export default function OperationsCenter() {
   const [data, setData] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +107,29 @@ export default function OperationsCenter() {
       <Head><title>Operations Center · Super Admin</title></Head>
       <div style={{ maxWidth: 1000, margin: '0 auto', padding: 24, color: '#ddd', background: '#0a0a0a', minHeight: '100vh' }}>
         <h1 style={{ fontSize: 22, marginBottom: 4 }}>Production Operations Center</h1>
-        <p style={{ color: '#7f8c8d', fontSize: 13, marginTop: 0 }}>Read-only. Rollout flags, deployment version, runtime topology, and SPOFs.</p>
+        <p style={{ color: '#7f8c8d', fontSize: 13, marginTop: 0 }}>Read-only. The canonical hub for every operational surface. Rollout flags, deployment version, runtime topology, and SPOFs below.</p>
+
+        <div style={box}>
+          <h2 style={h2}>Operations Navigation</h2>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 12 }}>
+            {NAV_MAP.map((g) => (
+              <div key={g.group} style={{ border: '1px solid #1e1e1e', borderRadius: 6, padding: 10 }}>
+                <div style={{ fontSize: 12, color: '#9aa', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>{g.group}</div>
+                {g.links.map((l) => (
+                  <a
+                    key={`${g.group}:${l.label}`}
+                    href={l.href}
+                    target={l.api ? '_blank' : undefined}
+                    rel={l.api ? 'noopener noreferrer' : undefined}
+                    style={{ display: 'block', fontSize: 13, color: '#61afef', textDecoration: 'none', padding: '2px 0' }}
+                  >
+                    {l.label}{l.api ? ' ↗' : ''}
+                  </a>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
 
         {error && <div style={{ ...box, borderColor: '#e06c75', color: '#e06c75' }}>Error: {error}</div>}
         {!data && !error && <div style={box}>Loading…</div>}
