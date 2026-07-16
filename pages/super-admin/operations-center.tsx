@@ -23,6 +23,17 @@ type Snapshot = {
   };
   singlePointsOfFailure: string[];
   note: string;
+  aiRuntime: {
+    healthy: boolean;
+    configuredProviders: { provider: string; keyPresent: boolean }[];
+    defaultModel: string | null;
+    pools: { pool: string; activeCalls: number; pendingAcquires: number; maxAllowed: number; recentAvgWaitMs: number } | null;
+    totals: { calls: number; errors: number; errorRate: number; retries: number; tokensIn: number; tokensOut: number; slow: number };
+    byProvider: { provider: string; calls: number; errors: number; errorRate: number; retries: number; tokensIn: number; tokensOut: number; slow: number; avgDurationMs: number | null }[];
+    slowTop: { providerModel: string; ms: number }[];
+    missingSignals: string[];
+    note: string;
+  } | null;
 };
 
 const box: React.CSSProperties = { border: '1px solid #2a2a2a', borderRadius: 8, padding: 16, marginBottom: 16, background: '#0f0f0f' };
@@ -147,6 +158,42 @@ export default function OperationsCenter() {
                 <tr><td style={td}>schema manifest</td><td style={td}>{data.version.schemaManifestHash ?? '—'}</td></tr>
               </tbody></table>
             </div>
+
+            {data.aiRuntime && (
+              <div style={{ ...box, borderColor: data.aiRuntime.healthy ? '#2a2a2a' : '#e06c75' }}>
+                <h2 style={h2}>
+                  AI Runtime{' '}
+                  <span style={{ color: data.aiRuntime.healthy ? '#98c379' : '#e06c75', fontWeight: 700 }}>
+                    {data.aiRuntime.healthy ? '● healthy' : '● degraded'}
+                  </span>
+                </h2>
+                <table><tbody>
+                  <tr><td style={td}>providers</td><td style={td}>{data.aiRuntime.configuredProviders.map((p) => `${p.provider}:${p.keyPresent ? 'key✓' : 'no-key'}`).join('  ·  ')} {data.aiRuntime.defaultModel ? `(default ${data.aiRuntime.defaultModel})` : ''}</td></tr>
+                  {data.aiRuntime.pools && (
+                    <tr><td style={td}>gateway pool</td><td style={td}>{data.aiRuntime.pools.activeCalls}/{data.aiRuntime.pools.maxAllowed} active · {data.aiRuntime.pools.pendingAcquires} waiting · ~{data.aiRuntime.pools.recentAvgWaitMs}ms wait</td></tr>
+                  )}
+                  <tr><td style={td}>totals</td><td style={td}>{data.aiRuntime.totals.calls} calls · {(data.aiRuntime.totals.errorRate * 100).toFixed(1)}% err · {data.aiRuntime.totals.retries} retries · {data.aiRuntime.totals.slow} slow · {data.aiRuntime.totals.tokensIn}/{data.aiRuntime.totals.tokensOut} tok</td></tr>
+                </tbody></table>
+                {data.aiRuntime.byProvider.length > 0 && (
+                  <table style={{ width: '100%', marginTop: 8 }}><tbody>
+                    <tr><td style={{ ...td, color: '#9aa' }}>provider</td><td style={{ ...td, color: '#9aa' }}>calls</td><td style={{ ...td, color: '#9aa' }}>err%</td><td style={{ ...td, color: '#9aa' }}>retries</td><td style={{ ...td, color: '#9aa' }}>avg ms</td></tr>
+                    {data.aiRuntime.byProvider.map((p) => (
+                      <tr key={p.provider}>
+                        <td style={td}>{p.provider}</td>
+                        <td style={td}>{p.calls}</td>
+                        <td style={{ ...td, color: p.errorRate > 0.25 ? '#e06c75' : '#ddd' }}>{(p.errorRate * 100).toFixed(1)}</td>
+                        <td style={td}>{p.retries}</td>
+                        <td style={td}>{p.avgDurationMs ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                )}
+                {data.aiRuntime.byProvider.length === 0 && <div style={{ color: '#7f8c8d', fontSize: 13 }}>No AI executions recorded on this instance since boot.</div>}
+                <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
+                  Not exposed by the runtime: {data.aiRuntime.missingSignals.join('; ')}.
+                </div>
+              </div>
+            )}
 
             <div style={box}>
               <h2 style={h2}>Rollout Flags</h2>

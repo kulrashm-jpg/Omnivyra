@@ -51,6 +51,91 @@ export interface OperationsCenterSnapshot {
   note: string;
 }
 
+// ── AI Runtime operational view ────────────────────────────────────────────
+// Pure rollup of EXISTING runtime signals (HARDEN-001 recordAi series + LLM pool
+// pressure + provider-key presence). Fabricates nothing; unavailable signals are
+// listed in `missingSignals`. Does NOT change execution/billing/retry/routing.
+export interface AiProviderRollup {
+  provider: string; calls: number; errors: number; errorRate: number;
+  retries: number; tokensIn: number; tokensOut: number; slow: number; avgDurationMs: number | null;
+}
+export interface AiRuntimeView {
+  healthy: boolean;
+  configuredProviders: { provider: string; keyPresent: boolean }[];
+  defaultModel: string | null;
+  pools: { pool: string; activeCalls: number; pendingAcquires: number; maxAllowed: number; recentAvgWaitMs: number } | null;
+  totals: { calls: number; errors: number; errorRate: number; retries: number; tokensIn: number; tokensOut: number; slow: number };
+  byProvider: AiProviderRollup[];
+  slowTop: { providerModel: string; ms: number }[];
+  missingSignals: string[];
+  note: string;
+}
+
+type CounterEntry = { name: string; labels?: Record<string, unknown>; value: number };
+type HistogramEntry = { name: string; labels?: Record<string, unknown>; count: number; sum: number };
+
+export function summarizeAiRuntime(input: {
+  counters: CounterEntry[];
+  histograms: HistogramEntry[];
+  slowAi: { providerModel: string; ms: number }[];
+  pools: AiRuntimeView['pools'];
+  providerEnv: { provider: string; keyPresent: boolean }[];
+  defaultModel: string | null;
+}): AiRuntimeView {
+  const acc = new Map<string, AiProviderRollup>();
+  const get = (p: string): AiProviderRollup => {
+    let e = acc.get(p);
+    if (!e) { e = { provider: p, calls: 0, errors: 0, errorRate: 0, retries: 0, tokensIn: 0, tokensOut: 0, slow: 0, avgDurationMs: null }; acc.set(p, e); }
+    return e;
+  };
+  const FIELD: Record<string, keyof AiProviderRollup> = {
+    'ai.provider.count': 'calls', 'ai.provider.errors': 'errors', 'ai.provider.retries': 'retries',
+    'ai.provider.tokens_in': 'tokensIn', 'ai.provider.tokens_out': 'tokensOut', 'ai.provider.slow': 'slow',
+  };
+  for (const c of input.counters) {
+    const p = String(c.labels?.provider ?? '');
+    const field = FIELD[c.name];
+    if (!p || !field) continue;
+    (get(p)[field] as number) += c.value;
+  }
+  const dur = new Map<string, { sum: number; count: number }>();
+  for (const h of input.histograms) {
+    if (h.name !== 'ai.provider.duration_ms') continue;
+    const p = String(h.labels?.provider ?? '');
+    if (!p) continue;
+    const d = dur.get(p) ?? { sum: 0, count: 0 };
+    d.sum += h.sum; d.count += h.count; dur.set(p, d);
+  }
+  const byProvider = [...acc.values()].map((e) => {
+    const d = dur.get(e.provider);
+    return { ...e, errorRate: e.calls ? e.errors / e.calls : 0, avgDurationMs: d && d.count ? Math.round(d.sum / d.count) : null };
+  }).sort((a, b) => b.calls - a.calls);
+
+  const totals = byProvider.reduce(
+    (t, e) => ({ calls: t.calls + e.calls, errors: t.errors + e.errors, retries: t.retries + e.retries, tokensIn: t.tokensIn + e.tokensIn, tokensOut: t.tokensOut + e.tokensOut, slow: t.slow + e.slow }),
+    { calls: 0, errors: 0, retries: 0, tokensIn: 0, tokensOut: 0, slow: 0 },
+  );
+  const errorRate = totals.calls ? totals.errors / totals.calls : 0;
+  const pending = input.pools?.pendingAcquires ?? 0;
+  const healthy = totals.calls === 0 ? true : (errorRate < 0.25 && pending === 0);
+
+  return {
+    healthy,
+    configuredProviders: input.providerEnv,
+    defaultModel: input.defaultModel,
+    pools: input.pools,
+    totals: { ...totals, errorRate },
+    byProvider,
+    slowTop: (input.slowAi ?? []).slice(0, 5),
+    missingSignals: [
+      'circuit-breaker state (gateway does not expose a readable getter)',
+      'last-successful-execution timestamp (not tracked)',
+      'per-provider availability health-check (not tracked)',
+    ],
+    note: 'AI signals are per-instance (this app instance’s registry). Metrics accumulate since boot; ai-heavy queue backlog is under Queues → Queue Metrics.',
+  };
+}
+
 // Verified runtime topology (POP-A2). Documented constants — BullMQ queue/worker
 // names are not enumerable without instantiating, so they are maintained here.
 const BULLMQ_QUEUES = ['publish/posting', 'bolt-execution', 'ai-heavy', 'engagement-polling', 'lead-thread-recompute', 'conversation-memory-rebuild'];

@@ -11,7 +11,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { CONTENT_PUBLISH } from '../../../shared/contracts/security/SecurityCapabilities';
-import { getOperationsCenterSnapshot } from '../../../backend/services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime } from '../../../backend/services/operationsCenterService';
+import { getObservabilitySnapshot } from '../../../backend/observability';
+import { getLlmPoolPressure } from '../../../backend/services/aiGatewayCore';
 // Side-effect import: loading the adapter registers the `canonical-grounding`
 // rollout flag so it appears in the snapshot's flag registry.
 import '../../../backend/services/context/canonicalProfileAdapter';
@@ -29,7 +31,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (guard.ok !== true) return;
 
   try {
-    return res.status(200).json(getOperationsCenterSnapshot());
+    const base = getOperationsCenterSnapshot();
+    // AI Runtime view — reuse existing signals only (HARDEN-001 recordAi series +
+    // LLM pool pressure + provider-key presence). Degrades to null on any error;
+    // never affects execution/billing/retry/routing.
+    let aiRuntime = null;
+    try {
+      const snap = getObservabilitySnapshot();
+      aiRuntime = summarizeAiRuntime({
+        counters: snap.counters,
+        histograms: snap.histograms,
+        slowAi: snap.leaderboards?.slowAi ?? [],
+        pools: getLlmPoolPressure(),
+        providerEnv: [
+          { provider: 'openai', keyPresent: !!process.env.OPENAI_API_KEY },
+          { provider: 'anthropic', keyPresent: !!process.env.ANTHROPIC_API_KEY },
+        ],
+        defaultModel: process.env.OPENAI_MODEL ?? null,
+      });
+    } catch { /* AI runtime view is best-effort */ }
+    return res.status(200).json({ ...base, aiRuntime });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : 'snapshot failed' });
   }
