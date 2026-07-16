@@ -1,0 +1,43 @@
+# Canonical Grounding — Prometheus RECORDING rules
+# Operational IaC (no application runtime change). Precompute the ratios the
+# dashboard + alerts use, so panels/alerts are cheap and consistent.
+# Load into Prometheus:
+#   Copy to: /etc/prometheus/rules/canonical-grounding-recording-rules.yml
+#   rule_files: [ "rules/canonical-grounding-recording-rules.yml" ]
+---
+groups:
+  - name: canonical_grounding_recording
+    interval: 30s
+    rules:
+      # Grounded reads per second by mode.
+      - record: canonical_grounding:call:rate5m
+        expr: sum by (mode) (rate(canonical_grounding_call[5m]))
+
+      # Overwrite violations in the last hour (the promotion gate; target 0).
+      - record: canonical_grounding:overwrite:increase1h
+        expr: sum(increase(canonical_grounding_shadow{result="overwrote"}[1h]))
+
+      # Fallback rate: context-unavailable share of grounded (shadow|enforce) reads.
+      - record: canonical_grounding:fallback:ratio10m
+        expr: |
+          sum(increase(canonical_grounding_fallback[10m]))
+          /
+          clamp_min(sum(increase(canonical_grounding_call{mode=~"shadow|enforce"}[10m])), 1)
+
+      # Canonical context cache hit ratio.
+      - record: canonical_grounding:cache:hit_ratio10m
+        expr: |
+          sum(rate(cache_hit{cache="omnivyra:canonical_ctx"}[10m]))
+          /
+          clamp_min(sum(rate(cache_hit{cache="omnivyra:canonical_ctx"}[10m])) + sum(rate(cache_miss{cache="omnivyra:canonical_ctx"}[10m])), 1)
+
+      # Adoption: share of reads that were context-backed (canonical added value).
+      - record: canonical_grounding:context_backed:ratio10m
+        expr: |
+          sum(rate(canonical_grounding_read{context_backed="true"}[10m]))
+          /
+          clamp_min(sum(rate(canonical_grounding_read[10m])), 1)
+
+      # p95 total grounded-read latency by mode (from summary quantiles).
+      - record: canonical_grounding:total_ms:p95
+        expr: max by (mode) (canonical_grounding_total_ms{quantile="0.95"})

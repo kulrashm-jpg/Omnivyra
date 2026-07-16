@@ -1,0 +1,43 @@
+# Canonical Grounding — Alertmanager routing (example snippet)
+# Operational IaC. Merge into the production alertmanager.yml `route`/`receivers`.
+# Routes the canonical_grounding alerts emitted by canonical-grounding-alerts.yml:
+#   - severity=critical + page=sre  → immediate page (PagerDuty/Opsgenie/etc.)
+#   - severity=warning              → Slack/ticket
+# Replace receiver configs with real integrations (secrets NOT committed).
+---
+route:
+  receiver: default
+  group_by: ["alertname", "component"]
+  routes:
+    - matchers:
+        - component = "canonical_grounding"
+        - severity = "critical"
+      receiver: sre-page
+      continue: false
+      group_wait: 0s
+      repeat_interval: 15m
+    - matchers:
+        - component = "canonical_grounding"
+        - severity = "warning"
+      receiver: eng-slack
+      repeat_interval: 1h
+    - matchers:
+        - component = "worker"
+        - severity = "critical"
+      receiver: sre-page
+
+receivers:
+  - name: default
+    # fallthrough receiver — wire to your default channel
+  - name: sre-page
+    # pagerduty_configs / opsgenie_configs / webhook_configs — provide via secret
+    # e.g. pagerduty_configs: [{ routing_key_file: /etc/alertmanager/secrets/pd_key }]
+  - name: eng-slack
+    # slack_configs: [{ api_url_file: /etc/alertmanager/secrets/slack_url, channel: "#canonical-grounding" }]
+
+# Inhibition: while the whole app metrics are absent, suppress the noisier
+# canonical grounding warnings (root cause is the pipeline, not grounding).
+inhibit_rules:
+  - source_matchers: [ alertname = "CanonicalGroundingMetricsMissing" ]
+    target_matchers: [ component = "canonical_grounding", severity = "warning" ]
+    equal: ["component"]
