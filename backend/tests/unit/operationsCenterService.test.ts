@@ -5,7 +5,7 @@
  * without changing any runtime behaviour.
  */
 import { defineRolloutFlag } from '../../../lib/platform/rollout';
-import { getOperationsCenterSnapshot, summarizeAiRuntime } from '../../services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime } from '../../services/operationsCenterService';
 
 const ENV = ['ROLLOUT_OPS_TEST_FLAG_MODE', 'ROLLOUT_OPS_TEST_FLAG_KILL', 'ROLLOUT_KILL_SWITCH'];
 beforeEach(() => { for (const k of ENV) delete process.env[k]; });
@@ -98,5 +98,33 @@ describe('summarizeAiRuntime (AI runtime rollup from existing signals)', () => {
     expect(v.healthy).toBe(true);
     expect(v.totals.calls).toBe(0);
     expect(v.missingSignals.some((m) => /circuit-breaker/i.test(m))).toBe(true);
+  });
+});
+
+describe('summarizeEmailRuntime (email_jobs queue rollup)', () => {
+  const ts = '2026-07-16T10:00:00Z';
+
+  test('healthy: low backlog + low failure rate', () => {
+    const v = summarizeEmailRuntime({ counts: { pending: 3, sent: 900, failed: 20 }, lastSuccessfulSendAt: ts, mostRecentFailureAt: ts });
+    expect(v.available).toBe(true);
+    expect(v.backlog).toBe(3);
+    expect(v.failureRate).toBeCloseTo(20 / 920);
+    expect(v.healthy).toBe(true);
+    expect(v.provider).toMatch(/SES/);
+  });
+
+  test('degraded: high backlog OR high failure rate', () => {
+    expect(summarizeEmailRuntime({ counts: { pending: 400, sent: 100, failed: 1 }, lastSuccessfulSendAt: ts, mostRecentFailureAt: ts }).healthy).toBe(false); // backlog
+    expect(summarizeEmailRuntime({ counts: { pending: 1, sent: 10, failed: 10 }, lastSuccessfulSendAt: ts, mostRecentFailureAt: ts }).healthy).toBe(false); // 50% failure
+  });
+
+  test('no traffic → healthy; missing signals + no PII in note', () => {
+    const v = summarizeEmailRuntime({ counts: { pending: 0, sent: 0, failed: 0 }, lastSuccessfulSendAt: null, mostRecentFailureAt: null });
+    expect(v.healthy).toBe(true);
+    expect(v.failureRate).toBe(0);
+    expect(v.missingSignals.some((m) => /provider availability|SES/i.test(m))).toBe(true);
+    expect(v.note).toMatch(/no recipient/i);
+    // no ACTUAL PII (email addresses) in the view — the note's prose is documentation
+    expect(JSON.stringify(v)).not.toMatch(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i);
   });
 });

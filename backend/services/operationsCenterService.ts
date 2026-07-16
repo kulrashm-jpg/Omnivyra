@@ -14,6 +14,7 @@
  */
 import { listRolloutFlags, resolveRolloutSync } from '../../lib/platform/rollout';
 import { emitBootFingerprint } from '../security/startup/bootFingerprint';
+import { supabase } from '../db/supabaseClient';
 import vercelConfig from '../../vercel.json';
 import railwayConfig from '../../railway.json';
 
@@ -134,6 +135,87 @@ export function summarizeAiRuntime(input: {
     ],
     note: 'AI signals are per-instance (this app instance’s registry). Metrics accumulate since boot; ai-heavy queue backlog is under Queues → Queue Metrics.',
   };
+}
+
+// ── Email Runtime operational view ─────────────────────────────────────────
+// Read-only aggregation of the EXISTING email_jobs queue table (statuses
+// pending/sent/failed). Reads counts + timestamps only — never recipients,
+// content, or payload. Does NOT change email/queue/retry/delivery/templates.
+export interface EmailRuntimeView {
+  available: boolean;
+  provider: string;
+  counts: { pending: number; sent: number; failed: number };
+  backlog: number;
+  failureRate: number;
+  lastSuccessfulSendAt: string | null;
+  mostRecentFailureAt: string | null;
+  healthy: boolean;
+  missingSignals: string[];
+  note: string;
+  error?: string;
+}
+
+const EMAIL_MISSING = [
+  'provider availability / SES health (configured in the send-transactional-email edge function; not app-checkable)',
+  'delivery latency + throughput (not recorded as metrics)',
+  'worker/cron last-run status (not tracked)',
+  'bounce / complaint / dead-letter (not modeled in email_jobs)',
+];
+
+/** Pure health rollup from email_jobs status counts. */
+export function summarizeEmailRuntime(input: {
+  counts: { pending: number; sent: number; failed: number };
+  lastSuccessfulSendAt: string | null;
+  mostRecentFailureAt: string | null;
+  backlogThreshold?: number;
+}): EmailRuntimeView {
+  const { pending, sent, failed } = input.counts;
+  const backlog = pending;
+  const denom = sent + failed;
+  const failureRate = denom ? failed / denom : 0;
+  const threshold = input.backlogThreshold ?? 250;
+  const healthy = backlog < threshold && failureRate < 0.25;
+  return {
+    available: true,
+    provider: 'AWS SES (via send-transactional-email edge function)',
+    counts: { pending, sent, failed },
+    backlog,
+    failureRate,
+    lastSuccessfulSendAt: input.lastSuccessfulSendAt,
+    mostRecentFailureAt: input.mostRecentFailureAt,
+    healthy,
+    missingSignals: EMAIL_MISSING,
+    note: 'Counts are from the email_jobs queue (pending = backlog). No recipient, content, or payload is read.',
+  };
+}
+
+/** Query the email_jobs queue for a read-only operational view. Best-effort. */
+export async function getEmailRuntimeView(): Promise<EmailRuntimeView> {
+  try {
+    const count = async (status: string): Promise<number> => {
+      const { count: c } = await supabase.from('email_jobs').select('*', { count: 'exact', head: true }).eq('status', status);
+      return c ?? 0;
+    };
+    const [pending, sent, failed] = await Promise.all([count('pending'), count('sent'), count('failed')]);
+    const { data: ls } = await supabase.from('email_jobs').select('sent_at').eq('status', 'sent').order('sent_at', { ascending: false }).limit(1);
+    const { data: lf } = await supabase.from('email_jobs').select('updated_at').eq('status', 'failed').order('updated_at', { ascending: false }).limit(1);
+    return summarizeEmailRuntime({
+      counts: { pending, sent, failed },
+      lastSuccessfulSendAt: (ls?.[0] as { sent_at?: string } | undefined)?.sent_at ?? null,
+      mostRecentFailureAt: (lf?.[0] as { updated_at?: string } | undefined)?.updated_at ?? null,
+    });
+  } catch (e) {
+    return {
+      available: false,
+      provider: 'AWS SES (via send-transactional-email edge function)',
+      counts: { pending: 0, sent: 0, failed: 0 },
+      backlog: 0, failureRate: 0, lastSuccessfulSendAt: null, mostRecentFailureAt: null,
+      healthy: false,
+      missingSignals: ['email_jobs queue could not be read', ...EMAIL_MISSING],
+      note: 'Email queue state unavailable.',
+      error: e instanceof Error ? e.message : 'query failed',
+    };
+  }
 }
 
 // Verified runtime topology (POP-A2). Documented constants — BullMQ queue/worker

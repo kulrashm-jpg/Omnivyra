@@ -34,6 +34,19 @@ type Snapshot = {
     missingSignals: string[];
     note: string;
   } | null;
+  emailRuntime: {
+    available: boolean;
+    provider: string;
+    counts: { pending: number; sent: number; failed: number };
+    backlog: number;
+    failureRate: number;
+    lastSuccessfulSendAt: string | null;
+    mostRecentFailureAt: string | null;
+    healthy: boolean;
+    missingSignals: string[];
+    note: string;
+    error?: string;
+  } | null;
 };
 
 const box: React.CSSProperties = { border: '1px solid #2a2a2a', borderRadius: 8, padding: 16, marginBottom: 16, background: '#0f0f0f' };
@@ -191,6 +204,29 @@ export default function OperationsCenter() {
                 {data.aiRuntime.byProvider.length === 0 && <div style={{ color: '#7f8c8d', fontSize: 13 }}>No AI executions recorded on this instance since boot.</div>}
                 <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
                   Not exposed by the runtime: {data.aiRuntime.missingSignals.join('; ')}.
+                </div>
+              </div>
+            )}
+
+            {data.emailRuntime && (
+              <div style={{ ...box, borderColor: !data.emailRuntime.available ? '#e5c07b' : (data.emailRuntime.healthy ? '#2a2a2a' : '#e06c75') }}>
+                <h2 style={h2}>
+                  Email Runtime{' '}
+                  <span style={{ color: !data.emailRuntime.available ? '#e5c07b' : (data.emailRuntime.healthy ? '#98c379' : '#e06c75'), fontWeight: 700 }}>
+                    {!data.emailRuntime.available ? '● unavailable' : (data.emailRuntime.healthy ? '● healthy' : '● degraded')}
+                  </span>
+                </h2>
+                <table><tbody>
+                  <tr><td style={td}>provider</td><td style={td}>{data.emailRuntime.provider}</td></tr>
+                  <tr><td style={td}>queue (email_jobs)</td><td style={td}>{data.emailRuntime.counts.pending} pending · {data.emailRuntime.counts.sent} sent · {data.emailRuntime.counts.failed} failed</td></tr>
+                  <tr><td style={td}>backlog</td><td style={{ ...td, color: data.emailRuntime.backlog >= 250 ? '#e06c75' : '#ddd' }}>{data.emailRuntime.backlog}</td></tr>
+                  <tr><td style={td}>failure rate</td><td style={{ ...td, color: data.emailRuntime.failureRate > 0.25 ? '#e06c75' : '#ddd' }}>{(data.emailRuntime.failureRate * 100).toFixed(1)}%</td></tr>
+                  <tr><td style={td}>last successful send</td><td style={td}>{data.emailRuntime.lastSuccessfulSendAt ?? '—'}</td></tr>
+                  <tr><td style={td}>most recent failure</td><td style={td}>{data.emailRuntime.mostRecentFailureAt ?? '—'}</td></tr>
+                </tbody></table>
+                {data.emailRuntime.error && <div style={{ color: '#e5c07b', fontSize: 12, marginTop: 6 }}>{data.emailRuntime.error}</div>}
+                <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
+                  Not exposed by the runtime: {data.emailRuntime.missingSignals.join('; ')}.
                 </div>
               </div>
             )}

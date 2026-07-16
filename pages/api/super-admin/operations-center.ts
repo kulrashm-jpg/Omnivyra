@@ -11,7 +11,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { CONTENT_PUBLISH } from '../../../shared/contracts/security/SecurityCapabilities';
-import { getOperationsCenterSnapshot, summarizeAiRuntime } from '../../../backend/services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime, getEmailRuntimeView } from '../../../backend/services/operationsCenterService';
 import { getObservabilitySnapshot } from '../../../backend/observability';
 import { getLlmPoolPressure } from '../../../backend/services/aiGatewayCore';
 // Side-effect import: loading the adapter registers the `canonical-grounding`
@@ -50,7 +50,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         defaultModel: process.env.OPENAI_MODEL ?? null,
       });
     } catch { /* AI runtime view is best-effort */ }
-    return res.status(200).json({ ...base, aiRuntime });
+    // Email Runtime view — read-only aggregation of the existing email_jobs queue.
+    const emailRuntime = await getEmailRuntimeView();
+    return res.status(200).json({ ...base, aiRuntime, emailRuntime });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : 'snapshot failed' });
   }
