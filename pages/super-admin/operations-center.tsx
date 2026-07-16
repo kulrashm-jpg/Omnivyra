@@ -23,6 +23,16 @@ type Snapshot = {
   };
   singlePointsOfFailure: string[];
   note: string;
+  operationsSummary: {
+    overall: 'healthy' | 'degraded' | 'unavailable';
+    domains: { name: string; status: 'healthy' | 'degraded' | 'unavailable'; missingSignals: number }[];
+    counts: { healthy: number; degraded: number; unavailable: number };
+    degradedDomains: string[];
+    unavailableDomains: string[];
+    domainsWithMissingSignals: string[];
+    externalDependencies: string[];
+    note: string;
+  } | null;
   deploymentRuntime: {
     healthy: boolean;
     build: string | null;
@@ -176,6 +186,41 @@ export default function OperationsCenter() {
       <div style={{ maxWidth: 1000, margin: '0 auto', padding: 24, color: '#ddd', background: '#0a0a0a', minHeight: '100vh' }}>
         <h1 style={{ fontSize: 22, marginBottom: 4 }}>Production Operations Center</h1>
         <p style={{ color: '#7f8c8d', fontSize: 13, marginTop: 0 }}>Read-only. The canonical hub for every operational surface. Rollout flags, deployment version, runtime topology, and SPOFs below.</p>
+
+        {data.operationsSummary && (() => {
+          const s = data.operationsSummary!;
+          const statusColor = (st: string) => st === 'healthy' ? '#98c379' : (st === 'degraded' ? '#e06c75' : '#e5c07b');
+          return (
+            <div style={{ ...box, borderColor: statusColor(s.overall), borderWidth: 2 }}>
+              <h2 style={h2}>
+                Operations Summary{' '}
+                <span style={{ color: statusColor(s.overall), fontWeight: 700 }}>
+                  ● {s.overall.toUpperCase()}
+                </span>
+                <span style={{ color: '#7f8c8d', fontWeight: 400, marginLeft: 10 }}>
+                  {s.counts.healthy} healthy · {s.counts.degraded} degraded · {s.counts.unavailable} unavailable
+                </span>
+              </h2>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                {s.domains.map((d) => (
+                  <span key={d.name} style={{ fontSize: 12, padding: '3px 8px', borderRadius: 12, border: `1px solid ${statusColor(d.status)}`, color: statusColor(d.status) }}>
+                    {d.status === 'healthy' ? '●' : d.status === 'degraded' ? '▲' : '○'} {d.name}{d.missingSignals > 0 ? ` · ${d.missingSignals} gaps` : ''}
+                  </span>
+                ))}
+              </div>
+              {s.degradedDomains.length > 0 && (
+                <div style={{ color: '#e06c75', fontSize: 13, marginBottom: 4 }}>Investigate first: {s.degradedDomains.join(', ')}</div>
+              )}
+              {s.unavailableDomains.length > 0 && (
+                <div style={{ color: '#e5c07b', fontSize: 13, marginBottom: 4 }}>Visibility gap (section unavailable): {s.unavailableDomains.join(', ')}</div>
+              )}
+              <div style={{ color: '#7f8c8d', fontSize: 12 }}>External deps: {s.externalDependencies.join(' · ')}</div>
+              {s.domainsWithMissingSignals.length > 0 && (
+                <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 2 }}>Missing operational signals in: {s.domainsWithMissingSignals.join(', ')}.</div>
+              )}
+            </div>
+          );
+        })()}
 
         <div style={box}>
           <h2 style={h2}>Operations Navigation</h2>

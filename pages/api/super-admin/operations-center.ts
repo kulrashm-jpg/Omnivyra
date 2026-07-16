@@ -11,7 +11,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { CONTENT_PUBLISH } from '../../../shared/contracts/security/SecurityCapabilities';
-import { getOperationsCenterSnapshot, summarizeAiRuntime, getEmailRuntimeView, getStorageRuntimeView, getWebsiteIntelligenceRuntimeView, getMarketIntelligenceRuntimeView, getDeploymentRuntimeView } from '../../../backend/services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime, getEmailRuntimeView, getStorageRuntimeView, getWebsiteIntelligenceRuntimeView, getMarketIntelligenceRuntimeView, getDeploymentRuntimeView, buildOperationsSummary } from '../../../backend/services/operationsCenterService';
 import { getObservabilitySnapshot } from '../../../backend/observability';
 import { getLlmPoolPressure } from '../../../backend/services/aiGatewayCore';
 // Side-effect import: loading the adapter registers the `canonical-grounding`
@@ -55,7 +55,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       getEmailRuntimeView(), getStorageRuntimeView(), getWebsiteIntelligenceRuntimeView(), getMarketIntelligenceRuntimeView(),
     ]);
     const deploymentRuntime = getDeploymentRuntimeView(); // sync (boot fingerprint)
-    return res.status(200).json({ ...base, deploymentRuntime, aiRuntime, emailRuntime, storageRuntime, websiteIntelligenceRuntime, marketIntelligenceRuntime });
+
+    // Executive rollup — reuses each section's own health decision (no new fetches, no new rules).
+    const operationsSummary = buildOperationsSummary({
+      domains: [
+        { name: 'Deployment & Runtime', view: deploymentRuntime },
+        { name: 'Rollout', view: { healthy: !base.rolloutFlags.some((f) => f.killed), missingSignals: [] } },
+        { name: 'AI Runtime', view: aiRuntime },
+        { name: 'Email Runtime', view: emailRuntime },
+        { name: 'Storage Runtime', view: storageRuntime },
+        { name: 'Website Intelligence', view: websiteIntelligenceRuntime },
+        { name: 'Market Intelligence', view: marketIntelligenceRuntime },
+      ],
+      externalDependencies: ['Vercel (app)', 'Railway (worker)', 'Supabase (Postgres/Storage/Auth)', 'Upstash Redis (queues/cache)', 'AWS SES (email)', 'OpenAI (AI provider)'],
+    });
+
+    return res.status(200).json({ ...base, operationsSummary, deploymentRuntime, aiRuntime, emailRuntime, storageRuntime, websiteIntelligenceRuntime, marketIntelligenceRuntime });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : 'snapshot failed' });
   }

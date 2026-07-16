@@ -468,6 +468,54 @@ export async function getMarketIntelligenceRuntimeView(nowMs: number = Date.now(
   }
 }
 
+// ── Unified Operations Health Summary (executive rollup) ────────────────────
+// Aggregates ONLY the health decisions the individual runtime views already
+// produced (their `available` / `healthy` / `missingSignals`). Invents no health
+// rules, fetches nothing, duplicates no detail — a read-only executive summary.
+export type DomainStatus = 'healthy' | 'degraded' | 'unavailable';
+export interface OperationsSummary {
+  overall: DomainStatus;
+  domains: { name: string; status: DomainStatus; missingSignals: number }[];
+  counts: { healthy: number; degraded: number; unavailable: number };
+  degradedDomains: string[];
+  unavailableDomains: string[];
+  domainsWithMissingSignals: string[];
+  externalDependencies: string[];
+  note: string;
+}
+
+export function buildOperationsSummary(input: {
+  domains: { name: string; view: { available?: boolean; healthy?: boolean; missingSignals?: string[] } | null }[];
+  externalDependencies: string[];
+}): OperationsSummary {
+  const rows = input.domains.map((d) => {
+    const v = d.view;
+    let status: DomainStatus;
+    if (!v) status = 'unavailable';
+    else if (v.available === false) status = 'unavailable';
+    else status = v.healthy ? 'healthy' : 'degraded';
+    return { name: d.name, status, missingSignals: v?.missingSignals?.length ?? 0 };
+  });
+  const counts = {
+    healthy: rows.filter((r) => r.status === 'healthy').length,
+    degraded: rows.filter((r) => r.status === 'degraded').length,
+    unavailable: rows.filter((r) => r.status === 'unavailable').length,
+  };
+  const overall: DomainStatus = counts.unavailable === rows.length && rows.length > 0
+    ? 'unavailable'
+    : (counts.degraded > 0 || counts.unavailable > 0 ? 'degraded' : 'healthy');
+  return {
+    overall,
+    domains: rows,
+    counts,
+    degradedDomains: rows.filter((r) => r.status === 'degraded').map((r) => r.name),
+    unavailableDomains: rows.filter((r) => r.status === 'unavailable').map((r) => r.name),
+    domainsWithMissingSignals: rows.filter((r) => r.missingSignals > 0).map((r) => r.name),
+    externalDependencies: input.externalDependencies,
+    note: 'Rolls up each section’s own health decision (no new rules). Investigate degraded domains first; unavailable = a section read failed (visibility gap, not necessarily an outage).',
+  };
+}
+
 // ── Deployment & Runtime operational view ──────────────────────────────────
 // Read-only view of THIS instance's deployment identity (boot fingerprint) + the
 // repo-owned deployment-verification tooling. Reuses emitBootFingerprint (same

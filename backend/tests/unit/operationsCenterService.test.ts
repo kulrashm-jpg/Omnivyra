@@ -5,7 +5,7 @@
  * without changing any runtime behaviour.
  */
 import { defineRolloutFlag } from '../../../lib/platform/rollout';
-import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime, summarizeStorageRuntime, summarizeWebsiteIntelligenceRuntime, summarizeMarketIntelligenceRuntime, getDeploymentRuntimeView } from '../../services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime, summarizeStorageRuntime, summarizeWebsiteIntelligenceRuntime, summarizeMarketIntelligenceRuntime, getDeploymentRuntimeView, buildOperationsSummary } from '../../services/operationsCenterService';
 
 const ENV = ['ROLLOUT_OPS_TEST_FLAG_MODE', 'ROLLOUT_OPS_TEST_FLAG_KILL', 'ROLLOUT_KILL_SWITCH'];
 beforeEach(() => { for (const k of ENV) delete process.env[k]; });
@@ -226,5 +226,55 @@ describe('getDeploymentRuntimeView (boot fingerprint reuse)', () => {
     expect(v.missingSignals.some((m) => /build parity|origin\/main|schema drift/i.test(m))).toBe(true);
     // no secrets in the payload
     expect(JSON.stringify(v)).not.toMatch(/secret|token|password|rediss:\/\//i);
+  });
+});
+
+describe('buildOperationsSummary (executive rollup — reuses existing decisions)', () => {
+  const ext = ['Vercel (app)', 'Supabase'];
+
+  test('all healthy → overall healthy; no new rules invented', () => {
+    const s = buildOperationsSummary({
+      domains: [
+        { name: 'Deployment & Runtime', view: { healthy: true } },
+        { name: 'AI Runtime', view: { healthy: true, missingSignals: ['x'] } },
+        { name: 'Email Runtime', view: { available: true, healthy: true } },
+      ],
+      externalDependencies: ext,
+    });
+    expect(s.overall).toBe('healthy');
+    expect(s.counts).toEqual({ healthy: 3, degraded: 0, unavailable: 0 });
+    expect(s.domainsWithMissingSignals).toEqual(['AI Runtime']);
+    expect(s.externalDependencies).toBe(ext);
+  });
+
+  test('a degraded section → overall degraded + investigate-first list', () => {
+    const s = buildOperationsSummary({
+      domains: [
+        { name: 'AI Runtime', view: { healthy: true } },
+        { name: 'Email Runtime', view: { available: true, healthy: false } },
+      ],
+      externalDependencies: ext,
+    });
+    expect(s.overall).toBe('degraded');
+    expect(s.degradedDomains).toEqual(['Email Runtime']);
+  });
+
+  test('available:false → unavailable (visibility gap), still degrades overall', () => {
+    const s = buildOperationsSummary({
+      domains: [
+        { name: 'AI Runtime', view: { healthy: true } },
+        { name: 'Storage Runtime', view: { available: false, healthy: false } },
+        { name: 'Market Intelligence', view: null },
+      ],
+      externalDependencies: ext,
+    });
+    expect(s.overall).toBe('degraded');
+    expect(s.unavailableDomains).toEqual(['Storage Runtime', 'Market Intelligence']);
+    expect(s.counts.unavailable).toBe(2);
+  });
+
+  test('all sections unavailable → overall unavailable', () => {
+    const s = buildOperationsSummary({ domains: [{ name: 'A', view: null }, { name: 'B', view: { available: false, healthy: false } }], externalDependencies: ext });
+    expect(s.overall).toBe('unavailable');
   });
 });
