@@ -229,7 +229,7 @@ export interface StorageRuntimeView {
   error?: string;
 }
 
-// Documented buckets (scripts/operator/sql/setup-storage-buckets.sql + mediaService).
+// Documented buckets (defined by the storage-bucket setup SQL + mediaService).
 const STORAGE_BUCKETS = ['media-uploads', 'media-images', 'media-videos', 'media-audios', 'media-documents'];
 const STORAGE_MISSING = [
   'upload success / failure rate (not recorded as metrics)',
