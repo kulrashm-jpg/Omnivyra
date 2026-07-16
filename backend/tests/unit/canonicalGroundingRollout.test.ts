@@ -34,11 +34,14 @@ const ENV_KEYS = ['ROLLOUT_CANONICAL_GROUNDING_MODE', 'ROLLOUT_CANONICAL_GROUNDI
 beforeEach(() => {
   jest.clearAllMocks();
   for (const k of ENV_KEYS) delete process.env[k];
+  // Isolate mode logic from the E3 cache (tested separately) — disable the
+  // canonical-context namespace so these assertions see every loader call.
+  process.env.CACHE_KILL_OMNIVYRA_CANONICAL_CTX = '1';
   mGetProfile.mockResolvedValue({ ...LEGACY });
   mGetCtx.mockResolvedValue({ assembled: true });
   mOverlay.mockReturnValue({ ...CANON });
 });
-afterAll(() => { for (const k of ENV_KEYS) delete process.env[k]; });
+afterAll(() => { for (const k of ENV_KEYS) delete process.env[k]; delete process.env.CACHE_KILL_OMNIVYRA_CANONICAL_CTX; });
 
 describe('OFF (default)', () => {
   test('returns legacy byte-faithfully; canonical NEVER runs', async () => {

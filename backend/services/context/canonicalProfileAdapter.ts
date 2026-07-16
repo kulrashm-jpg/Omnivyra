@@ -39,8 +39,33 @@ import { recordCanonicalRead } from './canonicalAdoptionMetrics';
 import { overlayCanonicalOntoProfile } from './canonicalProfileOverlay';
 import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
 import { recordRawCounter, recordRawHistogram } from '../../observability';
+// E3 (Wave R3): Foundation F-12 cache SDK — cache ONLY the deterministic
+// canonical context so flag-on grounded reads reach W4-5 latency parity.
+import { registerCacheNamespace } from '../../../lib/platform/cacheCore';
+import { createCache } from '../../../lib/platform/cacheClient';
 
 export { overlayCanonicalOntoProfile };
+
+/**
+ * E3 — canonical-context cache (F-12). Caches the deterministic context
+ * assembled by getCanonicalContext, NOT the legacy profile (which keeps its
+ * own W4-5 path) and NOT the overlaid result (recombined fresh each call).
+ *   - tenant-scoped by construction (requireTenant → no tenant, no cache);
+ *   - short TTL parity with the W4-5 profile cache (CANONICAL_CTX_TTL_SECONDS);
+ *   - versioned invalidation (bump `version`); compression + metrics inherited;
+ *   - request-level dedup via getOrLoad's memoRequest single-flight;
+ *   - fail-open (Redis down → loader runs directly) and kill-switchable
+ *     (CACHE_KILL_OMNIVYRA_CANONICAL_CTX / CACHE_KILL_ALL → uncached).
+ * Deterministic grounding only — never AI output, prompts, or mutable state.
+ */
+const CANONICAL_CTX_NS = registerCacheNamespace({
+  prefix: 'omnivyra:canonical_ctx',
+  description: 'E3 canonical grounding context (deterministic, tenant-scoped)',
+  version: 1,
+  defaultTtlSeconds: Math.max(30, Number(process.env.CANONICAL_CTX_TTL_SECONDS) || 300),
+  requireTenant: true,
+});
+const canonicalCtxCache = createCache(CANONICAL_CTX_NS);
 
 type ProfileT = Awaited<ReturnType<typeof getProfile>>;
 type GetProfileOptions = { autoRefine?: boolean; languageRefine?: boolean; includeStoredCompetitors?: boolean };
@@ -115,9 +140,26 @@ async function assembleCanonical(
   let canonical: ProfileT = legacy;
   let ctxOk = false;
   try {
-    const ctx = legacy
-      ? await getCanonicalContext(companyId, { loadProfile: async () => legacy as unknown as Record<string, unknown> }).catch(() => null)
-      : await getCanonicalContext(companyId).catch(() => null);
+    // E3: resolve the deterministic context through the F-12 cache. The
+    // loader catches its own errors → null (never cached); getOrLoad is
+    // fail-open (Redis down → loader runs directly) and request-memoized
+    // (same-request repeat reads share one assembly). The freshly-loaded
+    // legacy profile is still combined by the overlay below — only the
+    // context fan-out is cached.
+    const ctx = await canonicalCtxCache.getOrLoad<Awaited<ReturnType<typeof getCanonicalContext>> | null>({
+      tenantId: companyId,
+      parts: ['ctx'],
+      load: async () => {
+        try {
+          const c = legacy
+            ? await getCanonicalContext(companyId, { loadProfile: async () => legacy as unknown as Record<string, unknown> })
+            : await getCanonicalContext(companyId);
+          return c ?? null;
+        } catch {
+          return null;
+        }
+      },
+    }).catch(() => null);
     ctxOk = !!ctx;
     recordCanonicalRead(companyId, ctxOk);
     if (legacy && ctx) {
