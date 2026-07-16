@@ -5,7 +5,7 @@ import {
   type PlatformVariantPayload,
 } from '../../backend/services/contentGenerationPipeline';
 import { getDefaultPostTemplates } from './defaultPostTemplates';
-import { getProfile } from '../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   extractCompanyIdentity,
   buildIdentityLock,

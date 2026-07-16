@@ -406,7 +406,7 @@ export async function resolveBrand(
  */
 export const defaultLoadBrandData: BrandDataLoader = async (companyId, opts) => {
   const { supabase } = await import('../../db/supabaseClient');
-  const { getProfile } = await import('../companyProfileService');
+  const { getCanonicalProfile: getProfile } = await import('@/backend/services/context/canonicalProfileAdapter');
   // Cast-loose: the Phase-1A tables are not in the generated DB types yet, and
   // this loader is inert (nothing calls resolveBrand) until adoption.
   const db = supabase as unknown as { from: (t: string) => any };

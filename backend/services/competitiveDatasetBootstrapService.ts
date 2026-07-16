@@ -4,7 +4,7 @@ import {
   getFinalCompetitors,
   splitCompetitorNames,
 } from './competitorEngineService';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   upsertCompetitorDomain,
   type CompetitorDomainRecord,

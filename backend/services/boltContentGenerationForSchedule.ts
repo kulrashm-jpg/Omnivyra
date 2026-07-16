@@ -19,7 +19,7 @@ import { buildStrategicContextString } from '../../lib/shared/campaign/campaignO
 // Closure Pass — Phase 4. BOLT schedule generation now resolves
 // governance from the campaign's company profile and threads it onto
 // the pipeline `item` so system prompts pick up the preamble.
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildGovernancePromptContext } from './creator/strategyGovernancePromptContext';
 // R3-P2 — Content Workspace adoption. Same single resolver as
 // processBlockSchedule: APPROVED workspace copy is canonical; generation is

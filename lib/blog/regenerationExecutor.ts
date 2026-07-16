@@ -134,7 +134,7 @@ export async function applyOptimizationActions(
   let effectiveOptions: RegenerationOptions | undefined = options;
   if (!options?.governance) {
     try {
-      const { getProfile } = await import('../../backend/services/companyProfileService');
+      const { getCanonicalProfile: getProfile } = await import('@/backend/services/context/canonicalProfileAdapter');
       const { buildGovernancePromptContext } = await import('../../backend/services/creator/strategyGovernancePromptContext');
       const profile = await getProfile(blog.company_id, { autoRefine: false });
       if (profile) {

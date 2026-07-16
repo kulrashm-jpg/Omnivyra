@@ -1,4 +1,4 @@
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { fetchTrendsFromApis, getCompanyDefaultApiIds } from './externalApiService';
 import { getActivePolicy, RecommendationPolicyWeights } from './recommendationPolicyService';
 import { generateRecommendations } from './recommendationEngine';

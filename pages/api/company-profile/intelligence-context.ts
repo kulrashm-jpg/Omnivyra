@@ -8,7 +8,7 @@ import {
   saveCompanyContextIntelligence,
 } from '../../../backend/services/companyContextIntelligenceService';
 import { calculateContextQualityMetadata } from '../../../backend/services/companyContextEnrichmentService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;

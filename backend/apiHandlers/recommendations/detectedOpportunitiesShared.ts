@@ -3,7 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendations } from '../../services/recommendationEngineService';
 import { getCompanyDefaultApiIds } from '../../services/externalApiService';
 import { enforceCompanyAccess } from '../../services/userContextService';
-import { getProfile } from '../../services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { supabase } from '../../db/supabaseClient';
 import { Role } from '../../services/rbacService';
 import { withRBAC } from '../../middleware/withRBAC';

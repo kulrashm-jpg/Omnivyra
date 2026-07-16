@@ -1,5 +1,6 @@
 import { normalizePlatform } from '../constants/platforms';
-import { CompanyProfile, getProfile, validateCompanyProfile } from './companyProfileService';
+import { CompanyProfile, validateCompanyProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   alignTrendsToPlans,
   buildTrendAssessments,

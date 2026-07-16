@@ -6,7 +6,7 @@
  */
 import { supabase } from '../../db/supabaseClient';
 import { isRateLimited as redisIsRateLimited } from '../redisExternalApiCache';
-import { getProfile } from '../companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { safeFetch } from '../../../lib/security/safeFetch';
 import type { ExternalApiSource } from './types';
 

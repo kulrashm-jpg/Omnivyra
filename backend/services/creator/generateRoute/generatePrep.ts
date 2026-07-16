@@ -453,7 +453,7 @@ export async function resolveGovernanceForLane(input: {
   actorUserId?: string | null;
 }): Promise<any> {
   try {
-    const { getProfile } = await import('../../../../backend/services/companyProfileService');
+    const { getCanonicalProfile: getProfile } = await import('@/backend/services/context/canonicalProfileAdapter');
     const { buildGovernancePromptContext } = await import('../../../../backend/services/creator/strategyGovernancePromptContext');
     const { maybeAuditRestrictedStrategySelection } = await import('../../../../backend/services/creator/governanceItemEnricher');
     const profile = await getProfile(input.companyId, { autoRefine: false });

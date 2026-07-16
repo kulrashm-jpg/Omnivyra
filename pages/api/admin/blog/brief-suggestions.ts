@@ -2,7 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
-import { getProfile } from '../../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
 import { buildFormattedStyleInstructions } from '../../../../lib/content/writingStyleEngine';
 import { createHash } from 'crypto';

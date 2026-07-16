@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { CompanyProfile, getProfile } from './companyProfileService';
+import { CompanyProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { WeeklyPlan } from './campaignRecommendationService';
 import {
   saveCampaignVersion,

@@ -16,7 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildCompanyContext } from '../../../backend/services/companyContextService';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
 import { processContent } from '../../../backend/services/unifiedContentProcessor';

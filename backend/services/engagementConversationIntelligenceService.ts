@@ -9,7 +9,7 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { supabase } from '../db/supabaseClient';
 import { evaluateCommunityAiEngagement, isOmnivyraEnabled } from './omnivyraClientV1';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 
 const INFLUENCER_FOLLOWER_THRESHOLD = 10000;
 

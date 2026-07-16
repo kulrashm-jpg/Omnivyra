@@ -6,7 +6,7 @@ import { ownedDbTable } from '../db/writeOwner';
 
 import { supabase } from '../db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from './campaignBlueprintService';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { runCompletionWithOperation } from './aiGateway';
 
 export type RecommendationWeekInput = {

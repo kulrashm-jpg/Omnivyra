@@ -1,5 +1,6 @@
 import { ownedDbTable } from '../db/writeOwner';
-import { getProfile, splitToList, type CompanyProfile } from './companyProfileService';
+import { splitToList, type CompanyProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
 
 export type UnifiedCompetitor = {

@@ -3,7 +3,7 @@
  * Replaces shallow profile string context with structured problem-domain alignment.
  */
 
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import type { CompanyProfile } from './companyProfileService';
 
 export type ContextMode =

@@ -11,7 +11,7 @@ import { getLatestPlatformExecutionPlan } from '../db/platformExecutionStore';
 import { listAssetsWithLatestContent } from '../db/contentAssetStore';
 import { getCampaignMemory } from '../services/campaignMemoryService';
 import { getLatestAnalyticsReport, getLatestLearningInsights } from '../db/performanceStore';
-import { getProfile } from '../services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { evaluateAndPersistCampaignHealth } from './campaignHealthEvaluationJob';
 import {
   generateStrategicInsights,

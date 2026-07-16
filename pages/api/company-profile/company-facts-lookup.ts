@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { lookupCompanyFirmographicsFromWikidata } from '../../../backend/services/intelligence/adapters/wikidataAdapter';
 
 /**

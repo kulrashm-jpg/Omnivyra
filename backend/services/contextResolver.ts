@@ -6,7 +6,7 @@
 
 import { buildCompanyMissionContext, formatMissionContextForPrompt } from './companyMissionContext';
 import type { CompanyMissionContext } from './companyMissionContext';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 
 export type ContextMode = 'FULL' | 'FOCUSED' | 'NONE';
 

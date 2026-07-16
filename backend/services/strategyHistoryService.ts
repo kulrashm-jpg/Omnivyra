@@ -1,5 +1,5 @@
 import { supabase } from '../db/supabaseClient';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 
 export type StrategyMomentum = {
   dominant_streak_aspect: string | null;

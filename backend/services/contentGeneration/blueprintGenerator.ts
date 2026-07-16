@@ -9,7 +9,7 @@ import { validateContentBlueprint } from '../aiOutputValidationService';
 import { nonEmpty, asObject, sanitizeIdPart, getContentTypeSystemPrompt, getContentTypeCategory, getContentTypeMaxWords } from './contentTypeHelpers';
 import { isMediaDependentContentType } from './executionHelpers';
 import type { MasterContentPayload, DailyExecutionItemLike } from './types';
-import { getProfile } from '../companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { resolveBrandVoice } from '../brand/resolveBrandVoice';
 import { registerBrandCacheInvalidator } from '../brand/brandCacheRegistry';
 import {

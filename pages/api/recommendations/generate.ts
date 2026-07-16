@@ -4,7 +4,7 @@ import { generateRecommendations } from '../../../backend/services/recommendatio
 import { getCompanyDefaultApiIds } from '../../../backend/services/externalApiService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
 import { getStrategyHistoryForCompany } from '../../../backend/services/strategyHistoryService';
 import { formatForUserOutput } from '../../../backend/utils/refineUserFacingResponse';

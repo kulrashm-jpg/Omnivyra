@@ -1,7 +1,7 @@
 import { assessVirality } from '../viralityAdvisorService';
 import { buildCampaignSnapshotWithHash } from '../viralitySnapshotBuilder';
 import { getPlatformStrategies } from '../externalApiService';
-import { getProfile } from '../companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { buildCompanyContext, buildForcedCompanyContext, formatForcedContextForPrompt } from '../companyContextService';
 import { buildCompanyStrategyDNA } from '../companyStrategyDNAService';
 import { createLightweightContext } from './lightweightContext';

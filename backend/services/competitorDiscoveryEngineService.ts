@@ -5,7 +5,7 @@ import {
   splitCompetitorNames,
   type RankedCompetitor,
 } from './competitorEngineService';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { upsertCompetitorDomain } from './externalCompetitiveIntelligenceService';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
 

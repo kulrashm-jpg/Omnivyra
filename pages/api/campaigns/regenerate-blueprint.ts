@@ -18,7 +18,7 @@ import { normalizeExecutionState } from '../../../backend/governance/ExecutionSt
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getRecommendedTopicsForCompany } from '../../../backend/services/recommendationEngineService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { getLatestCampaignVersionByCampaignId } from '../../../backend/db/campaignVersionStore';
 import { getStrategicThemesAsOpportunities } from '../../../backend/services/strategicThemeEngine';
 import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';

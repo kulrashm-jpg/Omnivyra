@@ -8,7 +8,7 @@ import type { DurationEvaluationResult } from '../types/CampaignDuration';
 import { getCampaignById } from '../db/campaignStore';
 import { listAssetsWithLatestContent } from '../db/contentAssetStore';
 import { getLatestCampaignVersion } from '../db/campaignVersionStore';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { classifyBaseline, computeExpectedBaseline } from './baselineClassificationService';
 
 export interface PrePlanningInput {

@@ -16,7 +16,7 @@
  */
 
 import { runCompletionWithOperation } from '../aiGateway';
-import { getProfile } from '../companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   type CompanyContextFoundation,
   buildCompanyContextFoundation,

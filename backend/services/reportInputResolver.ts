@@ -1,6 +1,7 @@
 import { supabase } from '../db/supabaseClient';
 import { getGoogleSearchConsoleReadiness } from './googleProviderReadinessService';
-import { getProfile, saveProfile, type CompanyProfile } from './companyProfileService';
+import { saveProfile, type CompanyProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   assertCompetitorOutputPartition,
   buildCandidatesFromNames,

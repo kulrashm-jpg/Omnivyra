@@ -8,7 +8,7 @@ import type { ContentBlueprint } from '../contentBlueprintCache';
 import { nonEmpty, asObject, sanitizeIdPart, toPositiveNumber } from './contentTypeHelpers';
 import { isMediaDependentContentType, resolvePlatformTargets, resolveMediaStatus, buildExecutionReadiness, buildExecutionJobsFromItem } from './executionHelpers';
 import { optimizeDiscoverabilityForPlatform, buildMediaSearchIntent, normalizeLegacyMediaSearchIntent } from './discoverabilityHelpers';
-import { getProfile } from '../companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { extractCompanyIdentity, buildCompanyContextBlockShort, buildIdentityLock, buildAntiGenericRules, type CompanyIdentity } from '../../../lib/content/companyContextBlock';
 import { resolveBrandVoice } from '../brand/resolveBrandVoice';
 import { registerBrandCacheInvalidator } from '../brand/brandCacheRegistry';

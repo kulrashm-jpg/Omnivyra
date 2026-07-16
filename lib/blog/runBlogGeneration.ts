@@ -297,7 +297,7 @@ export async function runBlogGeneration(
   // public metadata envelope on every result branch.
   const governance: GovernancePromptContext | null = await (async () => {
     try {
-      const { getProfile } = await import('../../backend/services/companyProfileService');
+      const { getCanonicalProfile: getProfile } = await import('@/backend/services/context/canonicalProfileAdapter');
       const { buildGovernancePromptContext } = await import('../../backend/services/creator/strategyGovernancePromptContext');
       const profile = await getProfile(company_id, { autoRefine: false });
       if (!profile) return null;

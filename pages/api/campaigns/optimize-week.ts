@@ -7,7 +7,7 @@ import {
   getResolvedCampaignPlanContext,
   PrePlanningRequiredError,
 } from '../../../backend/services/campaignBlueprintService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { validateCampaignHealth } from '../../../backend/services/campaignHealthService';
 import { getLatestCampaignVersion, saveCampaignHealthReport } from '../../../backend/db/campaignVersionStore';
 import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';

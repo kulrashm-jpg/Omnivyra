@@ -8,7 +8,7 @@ import {
   runCompanyContextEnrichment,
 } from '../../../backend/services/companyContextEnrichmentService';
 import { calculateIntelligenceReadiness } from '../../../backend/services/companyContextIntelligenceService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 

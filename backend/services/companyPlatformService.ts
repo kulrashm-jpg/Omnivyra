@@ -5,7 +5,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import { getProfile } from './companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   getAvailablePlatformsFromProfile,
   CONTENT_PLATFORM_AFFINITY,

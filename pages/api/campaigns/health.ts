@@ -15,7 +15,7 @@ import {
   type ExecutionPlanInput,
   type CompanyContextModeInput,
 } from '../../../backend/services/campaignIntelligenceService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {

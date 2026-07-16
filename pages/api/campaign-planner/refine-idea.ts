@@ -7,7 +7,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getProfile } from '../../../backend/services/companyProfileService';
+import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { refineCampaignIdea } from '../../../backend/services/ideaRefinementService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
