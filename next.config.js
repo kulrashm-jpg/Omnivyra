@@ -123,6 +123,10 @@ const nextConfig = {
     { source: '/threads/template', destination: '/threads/intelligence', permanent: false },
     { source: '/threads/suggestions', destination: '/threads/intelligence', permanent: false },
     { source: '/command-center/bolt-text-strategy', destination: '/command-center/bolt-text', permanent: false },
+    // Signup entry normalization — one canonical signup destination. Next.js
+    // preserves query params (e.g. ?ref=, ?email=) across these redirects.
+    { source: '/signup', destination: '/create-account', permanent: true },
+    { source: '/register', destination: '/create-account', permanent: true },
   ],
   webpack: (config, { isServer, dev }) => {
     if (dev) {

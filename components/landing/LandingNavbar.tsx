@@ -19,6 +19,7 @@ const NAV_LINKS = [
   { label: 'Pricing', href: '/pricing' },
   { label: 'Blog', href: '/blog' },
   { label: 'About', href: '/about' },
+  { label: 'Help', href: '/help' },
 ];
 
 export default function LandingNavbar() {

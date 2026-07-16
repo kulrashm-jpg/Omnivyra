@@ -22,6 +22,7 @@ const COLUMNS = [
   {
     heading: 'Talk to us',
     links: [
+      { label: 'Help Center', href: '/help' },
       { label: 'Request a Demo', href: '/request-demo' },
       { label: 'Contact Sales', href: '/contact-sales' },
       { label: 'Book a Consultation', href: '/book-consultation' },

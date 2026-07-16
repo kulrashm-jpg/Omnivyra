@@ -354,6 +354,10 @@ export default function CreateAccountPage() {
               <Link href="/terms" className="hover:underline">Terms</Link> and{' '}
               <Link href="/privacy" className="hover:underline">Privacy Policy</Link>.
             </p>
+            <p className="mt-2 text-center text-xs text-[#6B7C93]">
+              Need help?{' '}
+              <Link href="/help" className="font-semibold text-[#0A66C2] hover:underline">Visit our Help Center</Link>
+            </p>
 
           </div>
         </main>

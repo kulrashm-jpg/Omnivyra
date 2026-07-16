@@ -658,6 +658,10 @@ export default function LoginPage() {
                 Create one free
               </Link>
             </p>
+            <p className="mt-2 text-center text-xs text-[#6B7C93]">
+              Need help?{' '}
+              <Link href="/help" className="font-semibold text-[#0A66C2] hover:underline">Visit our Help Center</Link>
+            </p>
 
           </div>
         </main>
