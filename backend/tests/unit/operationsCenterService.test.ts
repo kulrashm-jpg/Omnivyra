@@ -5,7 +5,7 @@
  * without changing any runtime behaviour.
  */
 import { defineRolloutFlag } from '../../../lib/platform/rollout';
-import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime } from '../../services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime, summarizeStorageRuntime } from '../../services/operationsCenterService';
 
 const ENV = ['ROLLOUT_OPS_TEST_FLAG_MODE', 'ROLLOUT_OPS_TEST_FLAG_KILL', 'ROLLOUT_KILL_SWITCH'];
 beforeEach(() => { for (const k of ENV) delete process.env[k]; });
@@ -126,5 +126,34 @@ describe('summarizeEmailRuntime (email_jobs queue rollup)', () => {
     expect(v.note).toMatch(/no recipient/i);
     // no ACTUAL PII (email addresses) in the view — the note's prose is documentation
     expect(JSON.stringify(v)).not.toMatch(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i);
+  });
+});
+
+describe('summarizeStorageRuntime (Supabase Storage rollup)', () => {
+  const buckets = ['media-uploads', 'media-images', 'media-videos', 'media-audios', 'media-documents'];
+
+  test('healthy: connectivity configured + low stuck-upload backlog', () => {
+    const v = summarizeStorageRuntime({ connectivityConfigured: true, buckets, counts: { mediaFiles: 5000, creatorAssets: 1200, awaitingUpload: 3 } });
+    expect(v.available).toBe(true);
+    expect(v.provider).toBe('Supabase Storage');
+    expect(v.buckets).toContain('media-uploads');
+    expect(v.healthy).toBe(true);
+  });
+
+  test('degraded: stuck-upload backlog over threshold', () => {
+    const v = summarizeStorageRuntime({ connectivityConfigured: true, buckets, counts: { mediaFiles: 1, creatorAssets: 1, awaitingUpload: 250 } });
+    expect(v.healthy).toBe(false);
+  });
+
+  test('degraded: connectivity not configured', () => {
+    const v = summarizeStorageRuntime({ connectivityConfigured: false, buckets, counts: { mediaFiles: 0, creatorAssets: 0, awaitingUpload: 0 } });
+    expect(v.healthy).toBe(false);
+  });
+
+  test('missing signals listed; no object paths/contents in payload', () => {
+    const v = summarizeStorageRuntime({ connectivityConfigured: true, buckets, counts: { mediaFiles: 0, creatorAssets: 0, awaitingUpload: 0 } });
+    expect(v.missingSignals.some((m) => /signed-URL|quota|janitor/i.test(m))).toBe(true);
+    // no actual object URLs/paths in the view (the missing-signals prose is documentation)
+    expect(JSON.stringify(v)).not.toMatch(/https?:\/\/|\.png|\.jpg|\.mp4|object_path/i);
   });
 });

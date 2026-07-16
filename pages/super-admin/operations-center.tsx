@@ -47,6 +47,17 @@ type Snapshot = {
     note: string;
     error?: string;
   } | null;
+  storageRuntime: {
+    available: boolean;
+    provider: string;
+    connectivityConfigured: boolean;
+    buckets: string[];
+    counts: { mediaFiles: number; creatorAssets: number; awaitingUpload: number };
+    healthy: boolean;
+    missingSignals: string[];
+    note: string;
+    error?: string;
+  } | null;
 };
 
 const box: React.CSSProperties = { border: '1px solid #2a2a2a', borderRadius: 8, padding: 16, marginBottom: 16, background: '#0f0f0f' };
@@ -227,6 +238,28 @@ export default function OperationsCenter() {
                 {data.emailRuntime.error && <div style={{ color: '#e5c07b', fontSize: 12, marginTop: 6 }}>{data.emailRuntime.error}</div>}
                 <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
                   Not exposed by the runtime: {data.emailRuntime.missingSignals.join('; ')}.
+                </div>
+              </div>
+            )}
+
+            {data.storageRuntime && (
+              <div style={{ ...box, borderColor: !data.storageRuntime.available ? '#e5c07b' : (data.storageRuntime.healthy ? '#2a2a2a' : '#e06c75') }}>
+                <h2 style={h2}>
+                  Storage Runtime{' '}
+                  <span style={{ color: !data.storageRuntime.available ? '#e5c07b' : (data.storageRuntime.healthy ? '#98c379' : '#e06c75'), fontWeight: 700 }}>
+                    {!data.storageRuntime.available ? '● unavailable' : (data.storageRuntime.healthy ? '● healthy' : '● degraded')}
+                  </span>
+                </h2>
+                <table><tbody>
+                  <tr><td style={td}>provider</td><td style={td}>{data.storageRuntime.provider} {data.storageRuntime.connectivityConfigured ? '(SUPABASE_URL✓)' : '(SUPABASE_URL missing)'}</td></tr>
+                  <tr><td style={td}>buckets</td><td style={td}>{data.storageRuntime.buckets.join(', ')}</td></tr>
+                  <tr><td style={td}>media files</td><td style={td}>{data.storageRuntime.counts.mediaFiles}</td></tr>
+                  <tr><td style={td}>creator assets</td><td style={td}>{data.storageRuntime.counts.creatorAssets}</td></tr>
+                  <tr><td style={td}>awaiting upload (stuck proxy)</td><td style={{ ...td, color: data.storageRuntime.counts.awaitingUpload >= 100 ? '#e06c75' : '#ddd' }}>{data.storageRuntime.counts.awaitingUpload}</td></tr>
+                </tbody></table>
+                {data.storageRuntime.error && <div style={{ color: '#e5c07b', fontSize: 12, marginTop: 6 }}>{data.storageRuntime.error}</div>}
+                <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
+                  Not exposed by the runtime: {data.storageRuntime.missingSignals.join('; ')}.
                 </div>
               </div>
             )}

@@ -218,6 +218,93 @@ export async function getEmailRuntimeView(): Promise<EmailRuntimeView> {
   }
 }
 
+// ── Storage Runtime operational view ───────────────────────────────────────
+// Read-only aggregation of EXISTING storage state: configured buckets (Supabase
+// Storage), asset row counts (media_files / creator_assets), and a stuck-upload
+// proxy (daily_content_plans awaiting_media_upload — the janitor's target). Reads
+// counts only — never object paths, contents, or signed URLs. Does NOT change
+// uploads/downloads/buckets/permissions.
+export interface StorageRuntimeView {
+  available: boolean;
+  provider: string;
+  connectivityConfigured: boolean;
+  buckets: string[];
+  counts: { mediaFiles: number; creatorAssets: number; awaitingUpload: number };
+  healthy: boolean;
+  missingSignals: string[];
+  note: string;
+  error?: string;
+}
+
+// Documented buckets (scripts/operator/sql/setup-storage-buckets.sql + mediaService).
+const STORAGE_BUCKETS = ['media-uploads', 'media-images', 'media-videos', 'media-audios', 'media-documents'];
+const STORAGE_MISSING = [
+  'upload success / failure rate (not recorded as metrics)',
+  'signed-URL generation status (not tracked)',
+  'storage bytes / quota (Supabase-managed; not app-readable)',
+  'cleanup janitor last-run + deleted-count history (report returned to cron, not persisted queryably)',
+  'live storage connectivity (would require a live storage call; only env-configuration is repo-visible)',
+];
+
+/** Pure health rollup from storage counts. */
+export function summarizeStorageRuntime(input: {
+  connectivityConfigured: boolean;
+  buckets: string[];
+  counts: { mediaFiles: number; creatorAssets: number; awaitingUpload: number };
+  awaitingThreshold?: number;
+}): StorageRuntimeView {
+  const threshold = input.awaitingThreshold ?? 100;
+  const healthy = input.connectivityConfigured && input.counts.awaitingUpload < threshold;
+  return {
+    available: true,
+    provider: 'Supabase Storage',
+    connectivityConfigured: input.connectivityConfigured,
+    buckets: input.buckets,
+    counts: input.counts,
+    healthy,
+    missingSignals: STORAGE_MISSING,
+    note: 'Counts from media_files / creator_assets; awaitingUpload = daily_content_plans in awaiting_media_upload (stuck-upload proxy). No object paths, contents, or signed URLs are read.',
+  };
+}
+
+/** Query storage-related tables for a read-only operational view. Best-effort. */
+export async function getStorageRuntimeView(): Promise<StorageRuntimeView> {
+  const safeCount = async (fn: () => Promise<number>): Promise<number> => {
+    try { return await fn(); } catch { return 0; }
+  };
+  try {
+    const countTable = (table: string) => safeCount(async () => {
+      const { count } = await supabase.from(table).select('*', { count: 'exact', head: true });
+      return count ?? 0;
+    });
+    const [mediaFiles, creatorAssets, awaitingUpload] = await Promise.all([
+      countTable('media_files'),
+      countTable('creator_assets'),
+      safeCount(async () => {
+        const { count } = await supabase.from('daily_content_plans').select('*', { count: 'exact', head: true }).eq('content_status', 'awaiting_media_upload');
+        return count ?? 0;
+      }),
+    ]);
+    return summarizeStorageRuntime({
+      connectivityConfigured: !!process.env.SUPABASE_URL,
+      buckets: STORAGE_BUCKETS,
+      counts: { mediaFiles, creatorAssets, awaitingUpload },
+    });
+  } catch (e) {
+    return {
+      available: false,
+      provider: 'Supabase Storage',
+      connectivityConfigured: !!process.env.SUPABASE_URL,
+      buckets: STORAGE_BUCKETS,
+      counts: { mediaFiles: 0, creatorAssets: 0, awaitingUpload: 0 },
+      healthy: false,
+      missingSignals: ['storage counts could not be read', ...STORAGE_MISSING],
+      note: 'Storage state unavailable.',
+      error: e instanceof Error ? e.message : 'query failed',
+    };
+  }
+}
+
 // Verified runtime topology (POP-A2). Documented constants — BullMQ queue/worker
 // names are not enumerable without instantiating, so they are maintained here.
 const BULLMQ_QUEUES = ['publish/posting', 'bolt-execution', 'ai-heavy', 'engagement-polling', 'lead-thread-recompute', 'conversation-memory-rebuild'];
