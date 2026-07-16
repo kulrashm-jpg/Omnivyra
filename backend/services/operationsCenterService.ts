@@ -28,15 +28,8 @@ export interface RolloutFlagView {
 }
 
 export interface OperationsCenterSnapshot {
-  version: {
-    fingerprint: string;
-    build: string | null;
-    environment: string;
-    nodeVersion: string;
-    nodeEnv: string;
-    authContractVersion: string;
-    schemaManifestHash: string | null;
-  };
+  // Deployment / version identity is owned by getDeploymentRuntimeView()
+  // (the canonical "Deployment & Runtime" view) — not duplicated here.
   rolloutFlags: RolloutFlagView[];
   topology: {
     app: { host: string; deploy: string };
@@ -573,8 +566,6 @@ const BULLMQ_QUEUES = ['publish/posting', 'bolt-execution', 'ai-heavy', 'engagem
 const WORKERS = ['publish', 'bolt-execution', 'engagement-polling', 'intelligence-polling', 'creator-render', 'lead-thread-recompute', 'conversation-memory-rebuild', 'engine', 'campaign'];
 
 export function getOperationsCenterSnapshot(): OperationsCenterSnapshot {
-  const fp = emitBootFingerprint();
-
   const rolloutFlags: RolloutFlagView[] = listRolloutFlags()
     .map((f) => {
       let mode = 'unknown';
@@ -592,15 +583,6 @@ export function getOperationsCenterSnapshot(): OperationsCenterSnapshot {
   const crons = ((vercelConfig as { crons?: { path: string; schedule: string }[] }).crons ?? []).map((c) => ({ path: c.path, schedule: c.schedule }));
 
   return {
-    version: {
-      fingerprint: fp.fingerprint,
-      build: fp.deploymentId,
-      environment: fp.vercelEnv ?? fp.railwayEnv ?? fp.nodeEnv,
-      nodeVersion: fp.nodeVersion,
-      nodeEnv: fp.nodeEnv,
-      authContractVersion: fp.authContractVersion,
-      schemaManifestHash: fp.schemaManifestHash,
-    },
     rolloutFlags,
     topology: {
       app: { host: 'www.omnivyra.com', deploy: 'Vercel (manual; git.deploymentEnabled=false)' },

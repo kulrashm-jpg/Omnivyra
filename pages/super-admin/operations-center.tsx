@@ -12,7 +12,6 @@ import { apiFetch } from '../../lib/apiFetch';
 
 type RolloutFlagView = { key: string; description: string; envPrefix: string; mode: string; source: string; killed: boolean };
 type Snapshot = {
-  version: { fingerprint: string; build: string | null; environment: string; nodeVersion: string; nodeEnv: string; authContractVersion: string; schemaManifestHash: string | null };
   rolloutFlags: RolloutFlagView[];
   topology: {
     app: { host: string; deploy: string };
@@ -249,18 +248,6 @@ export default function OperationsCenter() {
 
         {data && (
           <>
-            <div style={box}>
-              <h2 style={h2}>Deployment / Version</h2>
-              <table><tbody>
-                <tr><td style={td}>environment</td><td style={td}>{data.version.environment}</td></tr>
-                <tr><td style={td}>build</td><td style={td}>{data.version.build ?? '—'}</td></tr>
-                <tr><td style={td}>fingerprint</td><td style={td}>{data.version.fingerprint.slice(0, 16)}…</td></tr>
-                <tr><td style={td}>node</td><td style={td}>{data.version.nodeVersion} ({data.version.nodeEnv})</td></tr>
-                <tr><td style={td}>auth contract</td><td style={td}>{data.version.authContractVersion}</td></tr>
-                <tr><td style={td}>schema manifest</td><td style={td}>{data.version.schemaManifestHash ?? '—'}</td></tr>
-              </tbody></table>
-            </div>
-
             {data.deploymentRuntime && (
               <div style={{ ...box, borderColor: data.deploymentRuntime.healthy ? '#2a2a2a' : '#e06c75' }}>
                 <h2 style={h2}>

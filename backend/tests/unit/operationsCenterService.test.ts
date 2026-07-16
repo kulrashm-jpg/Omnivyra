@@ -12,10 +12,10 @@ beforeEach(() => { for (const k of ENV) delete process.env[k]; });
 afterAll(() => { for (const k of ENV) delete process.env[k]; });
 
 describe('operationsCenterService', () => {
-  test('surfaces version, topology, and SPOFs', () => {
+  test('surfaces topology and SPOFs (deployment/version owned by getDeploymentRuntimeView)', () => {
     const s = getOperationsCenterSnapshot();
-    expect(typeof s.version.fingerprint).toBe('string');
-    expect(s.version.nodeVersion).toBe(process.version);
+    // deployment/version is NOT duplicated here — see getDeploymentRuntimeView.
+    expect((s as unknown as { version?: unknown }).version).toBeUndefined();
     // topology reflects committed vercel.json / railway.json
     expect(s.topology.vercelCrons.length).toBeGreaterThanOrEqual(12);
     expect(s.topology.worker.replicas).toBe(1); // railway.json numReplicas
