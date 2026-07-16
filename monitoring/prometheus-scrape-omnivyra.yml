@@ -1,0 +1,48 @@
+# Omnivyra — Prometheus scrape configuration (canonical grounding observability)
+# Operational IaC. Merge these scrape_configs into the production prometheus.yml.
+# The metrics endpoint (pages/api/observability/metrics.ts) is auth-gated: it
+# accepts `Authorization: Bearer <token>` OR `x-metrics-secret: <token>`.
+# Provide the token via a file (do NOT inline the secret in git).
+#
+# NOTE: canonical grounding executes in BOTH surfaces:
+#   - Vercel app  (Next.js API routes)      → https://www.omnivyra.com/api/observability/metrics
+#   - Railway worker (background jobs)       → the worker MUST expose its own
+#     registry endpoint for its grounding metrics to be scraped (confirm path).
+# Scrape BOTH so shadow telemetry is complete (worker-side overwrites count too).
+
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+
+scrape_configs:
+  # ── Vercel app (API-route grounding) ─────────────────────────────────────
+  - job_name: omnivyra-app
+    metrics_path: /api/observability/metrics
+    scheme: https
+    # Bearer token read from a file mounted into Prometheus (NOT committed).
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/omnivyra_metrics_token
+    static_configs:
+      - targets: ["www.omnivyra.com"]
+        labels: { surface: app, service: omnivyra }
+    # Alternative auth if the deployment prefers the custom header instead of Bearer:
+    # (Prometheus cannot template arbitrary headers pre-2.25; use Bearer above.)
+
+  # ── Railway worker (job-side grounding) ──────────────────────────────────
+  # Confirm the worker's metrics path/host before enabling. If the worker reuses
+  # the same handler, point metrics_path at its exposed route; otherwise wire a
+  # worker metrics endpoint. Until confirmed, OmnivyraWorkerMetricsMissing fires.
+  - job_name: omnivyra-worker
+    metrics_path: /metrics
+    scheme: https
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/omnivyra_metrics_token
+    static_configs:
+      - targets: ["<railway-worker-host>:<port>"]   # FILL IN from Railway
+        labels: { surface: worker, service: omnivyra }
+
+# Load the alert rules alongside:
+#   rule_files:
+#     - "rules/canonical-grounding-alerts.yml"

@@ -1,0 +1,110 @@
+# Canonical Grounding — Prometheus Alert Rules (SHADOW/canary/enforce safety)
+# Operational IaC. Does NOT change application runtime. Metric names are the
+# EXACT Prometheus-exported names (registry dots → underscores; histograms are
+# exported as summaries with _sum/_count and quantile labels).
+#
+# Load into Prometheus:
+#   Copy to: /etc/prometheus/rules/canonical-grounding-alerts.yml
+#   Then in prometheus.yml:
+#     rule_files:
+#       - "rules/canonical-grounding-alerts.yml"
+#
+# Metric provenance (backend/services/context/canonicalProfileAdapter.ts,
+# canonicalAdoptionMetrics.ts, backend/observability):
+#   canonical_grounding_call{mode}                counter
+#   canonical_grounding_shadow{result}            counter  (result: overwrote|backfilled|identical|no_object)
+#   canonical_grounding_shadow_context{ok}        counter
+#   canonical_grounding_error{mode}               counter
+#   canonical_grounding_fallback{mode}            counter
+#   canonical_grounding_kill{source}              counter
+#   canonical_grounding_read{context_backed}      counter
+#   canonical_grounding_fields_overwrote{,_sum,_count,quantile}   summary
+#   canonical_grounding_fields_backfilled{,_sum,_count,quantile}  summary
+#   canonical_grounding_assembly_ms{,_sum,_count,quantile}        summary
+#   canonical_grounding_total_ms{mode,_sum,_count,quantile}       summary
+#   cache_hit{cache="omnivyra:canonical_ctx"}     counter
+#   cache_miss{cache="omnivyra:canonical_ctx"}    counter
+# (RF-2 forensic exemplar is a LOG event `canonical_grounding.shadow_overwrite`,
+#  not a metric — alert on it via the log pipeline; see ALERT-CG-001 note.)
+---
+groups:
+  - name: canonical_grounding_safety
+    interval: 30s
+    rules:
+      # ── PRIORITY 1 — PROMOTION-BLOCKING SAFETY VIOLATION ──────────────────
+      # Canonical overwrote a value legacy already held. Must be ZERO in shadow.
+      # Any nonzero HALTS promotion and requires RF-2 diagnostic investigation.
+      - alert: CanonicalGroundingOverwriteViolation
+        expr: increase(canonical_grounding_shadow{result="overwrote"}[5m]) > 0
+        for: 0m
+        labels: { severity: critical, component: canonical_grounding, category: correctness, page: sre }
+        annotations:
+          summary: "Canonical grounding OVERWROTE a legacy value ({{ $value }} in 5m)"
+          description: |
+            canonical_grounding_shadow{result="overwrote"} increased — canonical
+            changed a field legacy already populated. This is the RF-2 safety gate.
+            ACTION:
+            1. Query RF-2 diagnostics: getShadowDivergenceDiagnostics() (trace/request/correlation id + overwrittenFields).
+            2. Correlate the trace id in logs (event=canonical_grounding.shadow_overwrite).
+            3. HALT any promotion. Kill switch if in canary/enforce: ROLLOUT_CANONICAL_GROUNDING_KILL=1.
+
+      # ── PRIORITY 2 — SHADOW ERROR / FALLBACK / LATENCY / CACHE ────────────
+      - alert: CanonicalGroundingErrorSpike
+        expr: increase(canonical_grounding_error[5m]) > 5
+        for: 5m
+        labels: { severity: warning, component: canonical_grounding, category: errors }
+        annotations:
+          summary: "Canonical grounding exceptions: {{ $value }} in 5m"
+          description: "canonical_grounding_error rising (canonical assembly throwing). Investigate contextAssimilationEngine / cache."
+
+      - alert: CanonicalGroundingFallbackSpike
+        # Fallback (context unavailable → legacy used) as a share of grounded calls.
+        expr: |
+          (sum(increase(canonical_grounding_fallback[10m])))
+          /
+          clamp_min(sum(increase(canonical_grounding_call{mode=~"shadow|enforce"}[10m])), 1) > 0.05
+        for: 10m
+        labels: { severity: warning, component: canonical_grounding, category: availability }
+        annotations:
+          summary: "Canonical grounding fallback rate {{ $value | humanizePercentage }} (>5%)"
+          description: "Context unavailable too often — canonical adds no value for these reads. Check contextAssimilationEngine sources / cache health."
+
+      - alert: CanonicalGroundingLatencyRegression
+        expr: canonical_grounding_total_ms{quantile="0.95"} > 1500
+        for: 10m
+        labels: { severity: warning, component: canonical_grounding, category: latency }
+        annotations:
+          summary: "Canonical grounding p95 total latency {{ $value }}ms (>1500ms)"
+          description: "Grounded read latency budget breached. Check assembly_ms p95 and cache hit rate."
+
+      - alert: CanonicalGroundingCacheMissHigh
+        expr: |
+          sum(rate(cache_miss{cache="omnivyra:canonical_ctx"}[10m]))
+          /
+          clamp_min(sum(rate(cache_hit{cache="omnivyra:canonical_ctx"}[10m])) + sum(rate(cache_miss{cache="omnivyra:canonical_ctx"}[10m])), 1) > 0.6
+        for: 15m
+        labels: { severity: warning, component: canonical_grounding, category: cache }
+        annotations:
+          summary: "Canonical context cache miss ratio {{ $value | humanizePercentage }} (>60%)"
+          description: "Low warm-cache efficiency (or Redis degraded/killed). Grounding is fail-open but latency/cost rise. Check Redis + CACHE_KILL_OMNIVYRA_CANONICAL_CTX."
+
+      # ── PRIORITY 3 — PIPELINE / WORKER AVAILABILITY ──────────────────────
+      # canonical_grounding_call is emitted for EVERY grounded read incl. mode=off,
+      # so its absence means the metrics pipeline (or the whole app) is down.
+      - alert: CanonicalGroundingMetricsMissing
+        expr: absent(canonical_grounding_call)
+        for: 10m
+        labels: { severity: critical, component: canonical_grounding, category: observability, page: sre }
+        annotations:
+          summary: "Canonical grounding metrics ABSENT (>10m)"
+          description: "No canonical_grounding_call series scraped. Metrics endpoint down, scrape misconfigured, or app not serving. Shadow decisions are blind until restored."
+
+      - alert: OmnivyraWorkerMetricsMissing
+        # The Railway worker exposes its own registry (worker grounding runs there).
+        # Alert if the worker scrape target is down/absent.
+        expr: up{job="omnivyra-worker"} == 0 or absent(up{job="omnivyra-worker"})
+        for: 5m
+        labels: { severity: critical, component: worker, category: availability, page: sre }
+        annotations:
+          summary: "Omnivyra worker scrape target unavailable"
+          description: "Worker metrics (incl. worker-side canonical grounding) not scrapeable. Confirm the worker exposes /metrics and Railway is running the expected commit."

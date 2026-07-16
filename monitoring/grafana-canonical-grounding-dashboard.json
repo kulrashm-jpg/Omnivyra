@@ -1,0 +1,98 @@
+{
+  "__doc__": "Operational IaC — import into Grafana (Dashboards → Import → Upload JSON). Uses exact Prometheus-exported canonical_grounding_* names. Does not affect application runtime.",
+  "title": "Canonical Grounding — Shadow / Rollout",
+  "uid": "canonical-grounding",
+  "tags": ["canonical-grounding", "rollout", "shadow"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      { "name": "datasource", "type": "datasource", "query": "prometheus", "current": {}, "hide": 0 }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "OVERWRITE VIOLATIONS (must be 0)",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }, "color": { "mode": "thresholds" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "graphMode": "none", "textMode": "value" },
+      "targets": [ { "refId": "A", "expr": "sum(increase(canonical_grounding_shadow{result=\"overwrote\"}[1h]))" } ]
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Grounding calls by mode (rate)",
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [ { "refId": "A", "expr": "sum by (mode) (rate(canonical_grounding_call[5m]))", "legendFormat": "{{mode}}" } ]
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Shadow outcomes by result (rate)",
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [ { "refId": "A", "expr": "sum by (result) (rate(canonical_grounding_shadow[5m]))", "legendFormat": "{{result}}" } ]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Fields backfilled vs overwrote (count/5m)",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(canonical_grounding_fields_backfilled_count[5m]))", "legendFormat": "backfilled events" },
+        { "refId": "B", "expr": "sum(increase(canonical_grounding_fields_overwrote_count[5m]))", "legendFormat": "overwrote events" }
+      ]
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Latency p95 (ms) — total vs assembly",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "targets": [
+        { "refId": "A", "expr": "max by (mode) (canonical_grounding_total_ms{quantile=\"0.95\"})", "legendFormat": "total p95 {{mode}}" },
+        { "refId": "B", "expr": "max(canonical_grounding_assembly_ms{quantile=\"0.95\"})", "legendFormat": "assembly p95" }
+      ]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Fallback rate (context unavailable)",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "targets": [ { "refId": "A", "expr": "sum(increase(canonical_grounding_fallback[10m])) / clamp_min(sum(increase(canonical_grounding_call{mode=~\"shadow|enforce\"}[10m])), 1)", "legendFormat": "fallback %" } ]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Canonical context cache — hit vs miss (rate)",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(cache_hit{cache=\"omnivyra:canonical_ctx\"}[5m]))", "legendFormat": "hit" },
+        { "refId": "B", "expr": "sum(rate(cache_miss{cache=\"omnivyra:canonical_ctx\"}[5m]))", "legendFormat": "miss" }
+      ]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Cache hit ratio",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } },
+      "targets": [ { "refId": "A", "expr": "sum(rate(cache_hit{cache=\"omnivyra:canonical_ctx\"}[10m])) / clamp_min(sum(rate(cache_hit{cache=\"omnivyra:canonical_ctx\"}[10m])) + sum(rate(cache_miss{cache=\"omnivyra:canonical_ctx\"}[10m])), 1)", "legendFormat": "hit ratio" } ]
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Context-backed reads (adoption)",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [ { "refId": "A", "expr": "sum by (context_backed) (rate(canonical_grounding_read[5m]))", "legendFormat": "context_backed={{context_backed}}" } ]
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Kill-switch activations by source",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [ { "refId": "A", "expr": "sum by (source) (increase(canonical_grounding_kill[15m]))", "legendFormat": "{{source}}" } ]
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Grounding errors by mode (rate)",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [ { "refId": "A", "expr": "sum by (mode) (rate(canonical_grounding_error[5m]))", "legendFormat": "{{mode}}" } ]
+    }
+  ]
+}
