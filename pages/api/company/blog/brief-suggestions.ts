@@ -1,10 +1,9 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
+import { getCanonicalProfile as getProfile, getCanonicalGroundingContext } from '@/backend/services/context/canonicalProfileAdapter';
 import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { buildFormattedStyleInstructions } from '@/lib/content/writingStyleEngine';
-import { getCanonicalContext } from '@/backend/services/context/contextAssimilationEngine';
 import { toBriefGrounding } from '@/backend/services/context/canonicalContextAdapters';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '@/backend/services/billing/phase2RouteWiring';
@@ -78,12 +77,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const profile = await getProfile(company_id, { autoRefine: false, languageRefine: false });
     const styleInstructions = profile ? buildFormattedStyleInstructions(profile) : '';
 
-    // CONTENT-INTELLIGENCE-002: the GROUNDING SOURCE is now the canonical context
-    // engine (profile + website + content history + market signals), not a raw
-    // profile field. Prompt shape is unchanged — only the substance source moved.
-    // (getProfile above is retained ONLY for the style/voice adapter, which is
-    // the documented remaining profile dependency for this consumer.)
-    const canonical = await getCanonicalContext(company_id).catch(() => null);
+    // CONTENT-INTELLIGENCE-002 / RF-1: the GROUNDING SOURCE is the canonical
+    // context engine (profile + website + content history + market signals),
+    // obtained ONLY through the flag-governed adapter — never getCanonicalContext
+    // directly. OFF → null (byte-faithful legacy: no grounding injected); SHADOW
+    // → null (measured, legacy behaviour); ENFORCE → canonical context. Prompt
+    // shape is unchanged; getProfile above is retained ONLY for the style adapter.
+    const canonical = await getCanonicalGroundingContext(company_id);
     const grounding = canonical ? toBriefGrounding(canonical) : null;
 
     const briefObj = (brief && typeof brief === 'object') ? (brief as Record<string, unknown>) : {};

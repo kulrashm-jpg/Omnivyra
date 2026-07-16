@@ -68,6 +68,7 @@ const CANONICAL_CTX_NS = registerCacheNamespace({
 const canonicalCtxCache = createCache(CANONICAL_CTX_NS);
 
 type ProfileT = Awaited<ReturnType<typeof getProfile>>;
+type CanonicalCtxT = Awaited<ReturnType<typeof getCanonicalContext>>;
 type GetProfileOptions = { autoRefine?: boolean; languageRefine?: boolean; includeStoredCompetitors?: boolean };
 
 /**
@@ -127,6 +128,31 @@ function recordShadowDivergence(legacy: unknown, canonical: unknown, ctxOk: bool
 }
 
 /**
+ * E3 — shared cached canonical-context load. The SINGLE seam that touches the
+ * F-12 cache + getCanonicalContext, reused by BOTH the profile-overlay path
+ * (assembleCanonical) and the gated context accessor (getCanonicalGroundingContext)
+ * so context assembly is never duplicated. The loader catches its own errors →
+ * null (never cached); getOrLoad is fail-open (Redis down → loader runs directly)
+ * and request-memoized (same-request repeat reads share one assembly).
+ */
+async function loadCanonicalContextCached(companyId: string, legacy?: ProfileT): Promise<CanonicalCtxT | null> {
+  return canonicalCtxCache.getOrLoad<CanonicalCtxT | null>({
+    tenantId: companyId,
+    parts: ['ctx'],
+    load: async () => {
+      try {
+        const c = legacy
+          ? await getCanonicalContext(companyId, { loadProfile: async () => legacy as unknown as Record<string, unknown> })
+          : await getCanonicalContext(companyId);
+        return c ?? null;
+      } catch {
+        return null;
+      }
+    },
+  }).catch(() => null);
+}
+
+/**
  * Assemble the canonical-grounded profile (shared by shadow + enforce).
  * Preserves the historical fallback: no profile OR canonical unavailable →
  * the untouched legacy profile. Records adoption + latency + errors.
@@ -140,26 +166,9 @@ async function assembleCanonical(
   let canonical: ProfileT = legacy;
   let ctxOk = false;
   try {
-    // E3: resolve the deterministic context through the F-12 cache. The
-    // loader catches its own errors → null (never cached); getOrLoad is
-    // fail-open (Redis down → loader runs directly) and request-memoized
-    // (same-request repeat reads share one assembly). The freshly-loaded
-    // legacy profile is still combined by the overlay below — only the
-    // context fan-out is cached.
-    const ctx = await canonicalCtxCache.getOrLoad<Awaited<ReturnType<typeof getCanonicalContext>> | null>({
-      tenantId: companyId,
-      parts: ['ctx'],
-      load: async () => {
-        try {
-          const c = legacy
-            ? await getCanonicalContext(companyId, { loadProfile: async () => legacy as unknown as Record<string, unknown> })
-            : await getCanonicalContext(companyId);
-          return c ?? null;
-        } catch {
-          return null;
-        }
-      },
-    }).catch(() => null);
+    // The freshly-loaded legacy profile is still combined by the overlay below —
+    // only the deterministic context fan-out is cached (shared seam).
+    const ctx = await loadCanonicalContextCached(companyId, legacy);
     ctxOk = !!ctx;
     recordCanonicalRead(companyId, ctxOk);
     if (legacy && ctx) {
@@ -219,4 +228,41 @@ export async function getCanonicalProfile(
   // ENFORCE: canonical grounding (legacy remains available via flag → off).
   try { recordRawHistogram('canonical_grounding.total_ms', Date.now() - totalStart, { mode: 'enforce' }); } catch { /* fail-safe */ }
   return canonical;
+}
+
+/**
+ * RF-1: gated canonical CONTEXT accessor — the SINGLE control point for
+ * consumers that need the raw canonical context (not the profile overlay),
+ * e.g. brief-suggestions grounding. Governed by the SAME `canonical-grounding`
+ * flag, the SAME F-12 cache seam, and the SAME HARDEN-001 recorders as
+ * getCanonicalProfile. No consumer may call getCanonicalContext directly.
+ *   OFF (default) — null. Canonical never runs → byte-faithful legacy
+ *                   (no context, no latency, no prompt injection).
+ *   SHADOW        — run + measure canonical, RETURN NULL: the consumer keeps
+ *                   production-main behaviour (no grounding injected).
+ *   ENFORCE       — return the canonical context for grounding.
+ * Kill switch (rollout kit) forces OFF. Never throws; ctx failure → null.
+ */
+export async function getCanonicalGroundingContext(companyId?: string): Promise<CanonicalCtxT | null> {
+  if (!companyId) return null;
+
+  const mode = resolveRolloutSync(CANONICAL_GROUNDING_FLAG, { tenantId: companyId }).mode;
+  // OFF (default): canonical never runs.
+  if (mode === 'off') return null;
+
+  const startedAt = Date.now();
+  let ctx: CanonicalCtxT | null = null;
+  try {
+    ctx = await loadCanonicalContextCached(companyId);
+    recordCanonicalRead(companyId, !!ctx);
+  } catch {
+    try { recordRawCounter('canonical_grounding.error', 1, { mode }); } catch { /* fail-safe */ }
+    ctx = null;
+  }
+  try { recordRawHistogram('canonical_grounding.assembly_ms', Date.now() - startedAt, { mode }); } catch { /* fail-safe */ }
+
+  // SHADOW: measured above, but return legacy semantics (no canonical grounding).
+  if (mode === 'shadow') return null;
+  // ENFORCE: canonical grounding context.
+  return ctx;
 }
