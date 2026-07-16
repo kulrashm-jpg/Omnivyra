@@ -218,7 +218,7 @@ export default function OperationsCenter() {
         <h1 style={{ fontSize: 22, marginBottom: 4 }}>Production Operations Center</h1>
         <p style={{ color: '#7f8c8d', fontSize: 13, marginTop: 0 }}>Read-only. The canonical hub for every operational surface. Rollout flags, deployment version, runtime topology, and SPOFs below.</p>
 
-        {data.operationsSummary && (() => {
+        {data?.operationsSummary && (() => {
           const s = data.operationsSummary!;
           const statusColor = (st: string) => st === 'healthy' ? '#98c379' : (st === 'degraded' ? '#e06c75' : '#e5c07b');
           return (
