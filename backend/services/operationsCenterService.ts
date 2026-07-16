@@ -468,6 +468,57 @@ export async function getMarketIntelligenceRuntimeView(nowMs: number = Date.now(
   }
 }
 
+// ── Deployment & Runtime operational view ──────────────────────────────────
+// Read-only view of THIS instance's deployment identity (boot fingerprint) + the
+// repo-owned deployment-verification tooling. Reuses emitBootFingerprint (same
+// source as /api/health/version) — no polling, no provider queries, no deploy
+// trigger. Cross-surface / git / live-schema drift is not computable at runtime
+// and is listed under Missing Signals.
+export interface DeploymentRuntimeView {
+  healthy: boolean;
+  build: string | null;
+  environment: string;
+  fingerprint: string;
+  bootedAt: string;
+  schemaManifestHash: string | null;
+  authContractVersion: string;
+  nodeVersion: string;
+  verification: { name: string; command: string }[];
+  missingSignals: string[];
+  note: string;
+}
+
+export function getDeploymentRuntimeView(): DeploymentRuntimeView {
+  const fp = emitBootFingerprint();
+  const environment = fp.vercelEnv ?? fp.railwayEnv ?? fp.nodeEnv;
+  return {
+    healthy: !!fp.fingerprint && !!environment,
+    build: fp.deploymentId,
+    environment,
+    fingerprint: fp.fingerprint,
+    bootedAt: fp.emittedAt,
+    schemaManifestHash: fp.schemaManifestHash,
+    authContractVersion: fp.authContractVersion,
+    nodeVersion: fp.nodeVersion,
+    // Repo-owned deployment-verification tooling (documentation — not executed here).
+    verification: [
+      { name: 'Predeploy gate', command: 'npm run deploy:check' },
+      { name: 'Vercel render parity', command: 'npm run verify:vercel-render-parity' },
+      { name: 'Schema parity', command: 'node scripts/verify-schema-parity.js' },
+      { name: 'Platform parity', command: 'node scripts/ops/validatePlatformParity.ts' },
+      { name: 'Canonical grounding ops', command: 'node scripts/ops/verify-canonical-grounding-ops.mjs' },
+    ],
+    missingSignals: [
+      'Vercel app ↔ Railway worker build parity (requires querying both version endpoints; not done at runtime)',
+      'running commit ↔ origin/main drift (deploy-time only, enforced by predeploy-check.js)',
+      'live schema drift vs expected manifest (script-time only, via verify-schema-parity.js)',
+      'deployment / release history (external — Vercel & Railway dashboards)',
+      'verification last-run results (scripts are on-demand; results not persisted)',
+    ],
+    note: 'Identity is THIS serving instance (per-instance). Parity/drift checks are deploy-time/script-time; see /api/health/version for the live probe.',
+  };
+}
+
 // Verified runtime topology (POP-A2). Documented constants — BullMQ queue/worker
 // names are not enumerable without instantiating, so they are maintained here.
 const BULLMQ_QUEUES = ['publish/posting', 'bolt-execution', 'ai-heavy', 'engagement-polling', 'lead-thread-recompute', 'conversation-memory-rebuild'];

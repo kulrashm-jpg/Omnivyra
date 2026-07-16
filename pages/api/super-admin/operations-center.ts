@@ -11,7 +11,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { CONTENT_PUBLISH } from '../../../shared/contracts/security/SecurityCapabilities';
-import { getOperationsCenterSnapshot, summarizeAiRuntime, getEmailRuntimeView, getStorageRuntimeView, getWebsiteIntelligenceRuntimeView, getMarketIntelligenceRuntimeView } from '../../../backend/services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime, getEmailRuntimeView, getStorageRuntimeView, getWebsiteIntelligenceRuntimeView, getMarketIntelligenceRuntimeView, getDeploymentRuntimeView } from '../../../backend/services/operationsCenterService';
 import { getObservabilitySnapshot } from '../../../backend/observability';
 import { getLlmPoolPressure } from '../../../backend/services/aiGatewayCore';
 // Side-effect import: loading the adapter registers the `canonical-grounding`
@@ -54,7 +54,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const [emailRuntime, storageRuntime, websiteIntelligenceRuntime, marketIntelligenceRuntime] = await Promise.all([
       getEmailRuntimeView(), getStorageRuntimeView(), getWebsiteIntelligenceRuntimeView(), getMarketIntelligenceRuntimeView(),
     ]);
-    return res.status(200).json({ ...base, aiRuntime, emailRuntime, storageRuntime, websiteIntelligenceRuntime, marketIntelligenceRuntime });
+    const deploymentRuntime = getDeploymentRuntimeView(); // sync (boot fingerprint)
+    return res.status(200).json({ ...base, deploymentRuntime, aiRuntime, emailRuntime, storageRuntime, websiteIntelligenceRuntime, marketIntelligenceRuntime });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : 'snapshot failed' });
   }

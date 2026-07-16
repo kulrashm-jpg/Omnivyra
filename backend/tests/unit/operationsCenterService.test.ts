@@ -5,7 +5,7 @@
  * without changing any runtime behaviour.
  */
 import { defineRolloutFlag } from '../../../lib/platform/rollout';
-import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime, summarizeStorageRuntime, summarizeWebsiteIntelligenceRuntime, summarizeMarketIntelligenceRuntime } from '../../services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime, summarizeStorageRuntime, summarizeWebsiteIntelligenceRuntime, summarizeMarketIntelligenceRuntime, getDeploymentRuntimeView } from '../../services/operationsCenterService';
 
 const ENV = ['ROLLOUT_OPS_TEST_FLAG_MODE', 'ROLLOUT_OPS_TEST_FLAG_KILL', 'ROLLOUT_KILL_SWITCH'];
 beforeEach(() => { for (const k of ENV) delete process.env[k]; });
@@ -210,5 +210,21 @@ describe('summarizeMarketIntelligenceRuntime', () => {
     expect(v.freshnessDays).toBeNull();
     expect(v.missingSignals.some((m) => /backlog|enrichment latency|scheduler/i.test(m))).toBe(true);
     expect(JSON.stringify(v)).not.toMatch(/company_id=|@|https?:\/\//i);
+  });
+});
+
+describe('getDeploymentRuntimeView (boot fingerprint reuse)', () => {
+  test('exposes build/env/fingerprint/schema + verification tooling + drift missing signals', () => {
+    const v = getDeploymentRuntimeView();
+    expect(v.nodeVersion).toBe(process.version);
+    expect(typeof v.fingerprint).toBe('string');
+    expect(typeof v.bootedAt).toBe('string');
+    expect(v.healthy).toBe(true); // fingerprint + environment resolve
+    // repo-owned verification tooling surfaced (documentation, not executed)
+    expect(v.verification.some((x) => /deploy:check|predeploy/i.test(x.command))).toBe(true);
+    // drift that is not computable at runtime is honestly listed
+    expect(v.missingSignals.some((m) => /build parity|origin\/main|schema drift/i.test(m))).toBe(true);
+    // no secrets in the payload
+    expect(JSON.stringify(v)).not.toMatch(/secret|token|password|rediss:\/\//i);
   });
 });

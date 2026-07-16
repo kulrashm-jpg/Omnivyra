@@ -23,6 +23,19 @@ type Snapshot = {
   };
   singlePointsOfFailure: string[];
   note: string;
+  deploymentRuntime: {
+    healthy: boolean;
+    build: string | null;
+    environment: string;
+    fingerprint: string;
+    bootedAt: string;
+    schemaManifestHash: string | null;
+    authContractVersion: string;
+    nodeVersion: string;
+    verification: { name: string; command: string }[];
+    missingSignals: string[];
+    note: string;
+  } | null;
   aiRuntime: {
     healthy: boolean;
     configuredProviders: { provider: string; keyPresent: boolean }[];
@@ -202,6 +215,34 @@ export default function OperationsCenter() {
                 <tr><td style={td}>schema manifest</td><td style={td}>{data.version.schemaManifestHash ?? '—'}</td></tr>
               </tbody></table>
             </div>
+
+            {data.deploymentRuntime && (
+              <div style={{ ...box, borderColor: data.deploymentRuntime.healthy ? '#2a2a2a' : '#e06c75' }}>
+                <h2 style={h2}>
+                  Deployment &amp; Runtime{' '}
+                  <span style={{ color: data.deploymentRuntime.healthy ? '#98c379' : '#e06c75', fontWeight: 700 }}>
+                    {data.deploymentRuntime.healthy ? '● healthy' : '● degraded'}
+                  </span>
+                </h2>
+                <table><tbody>
+                  <tr><td style={td}>build (commit)</td><td style={td}>{data.deploymentRuntime.build ?? '—'}</td></tr>
+                  <tr><td style={td}>environment</td><td style={td}>{data.deploymentRuntime.environment}</td></tr>
+                  <tr><td style={td}>booted at</td><td style={td}>{data.deploymentRuntime.bootedAt}</td></tr>
+                  <tr><td style={td}>runtime fingerprint</td><td style={td}>{data.deploymentRuntime.fingerprint.slice(0, 16)}…</td></tr>
+                  <tr><td style={td}>schema manifest</td><td style={td}>{data.deploymentRuntime.schemaManifestHash ?? '—'}</td></tr>
+                  <tr><td style={td}>auth contract · node</td><td style={td}>{data.deploymentRuntime.authContractVersion} · {data.deploymentRuntime.nodeVersion}</td></tr>
+                </tbody></table>
+                <div style={{ fontSize: 12, color: '#9aa', textTransform: 'uppercase', letterSpacing: 1, margin: '8px 0 4px' }}>Verification tooling (on-demand)</div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                  {data.deploymentRuntime.verification.map((vf) => (
+                    <li key={vf.name} style={{ marginBottom: 2 }}>{vf.name}: <code style={{ color: '#61afef' }}>{vf.command}</code></li>
+                  ))}
+                </ul>
+                <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
+                  Not exposed at runtime: {data.deploymentRuntime.missingSignals.join('; ')}.
+                </div>
+              </div>
+            )}
 
             {data.aiRuntime && (
               <div style={{ ...box, borderColor: data.aiRuntime.healthy ? '#2a2a2a' : '#e06c75' }}>
