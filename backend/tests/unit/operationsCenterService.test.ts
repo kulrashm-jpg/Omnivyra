@@ -5,7 +5,7 @@
  * without changing any runtime behaviour.
  */
 import { defineRolloutFlag } from '../../../lib/platform/rollout';
-import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime, summarizeStorageRuntime } from '../../services/operationsCenterService';
+import { getOperationsCenterSnapshot, summarizeAiRuntime, summarizeEmailRuntime, summarizeStorageRuntime, summarizeWebsiteIntelligenceRuntime } from '../../services/operationsCenterService';
 
 const ENV = ['ROLLOUT_OPS_TEST_FLAG_MODE', 'ROLLOUT_OPS_TEST_FLAG_KILL', 'ROLLOUT_KILL_SWITCH'];
 beforeEach(() => { for (const k of ENV) delete process.env[k]; });
@@ -155,5 +155,28 @@ describe('summarizeStorageRuntime (Supabase Storage rollup)', () => {
     expect(v.missingSignals.some((m) => /signed-URL|quota|janitor/i.test(m))).toBe(true);
     // no actual object URLs/paths in the view (the missing-signals prose is documentation)
     expect(JSON.stringify(v)).not.toMatch(/https?:\/\/|\.png|\.jpg|\.mp4|object_path/i);
+  });
+});
+
+describe('summarizeWebsiteIntelligenceRuntime', () => {
+  const engines = ['accessibility', 'brand', 'businessImpact', 'content', 'technical'];
+
+  test('healthy when websites are tracked; surfaces counts + engines', () => {
+    const v = summarizeWebsiteIntelligenceRuntime({ counts: { websitesTracked: 40, websitesActive: 35, healthScores: 120, signals: 900, alerts: 4 }, engines });
+    expect(v.available).toBe(true);
+    expect(v.healthy).toBe(true);
+    expect(v.counts.websitesTracked).toBe(40);
+    expect(v.engines).toContain('technical');
+  });
+
+  test('degraded when nothing is tracked', () => {
+    const v = summarizeWebsiteIntelligenceRuntime({ counts: { websitesTracked: 0, websitesActive: 0, healthScores: 0, signals: 0, alerts: 0 }, engines });
+    expect(v.healthy).toBe(false);
+  });
+
+  test('missing signals listed; no domains/URLs in payload', () => {
+    const v = summarizeWebsiteIntelligenceRuntime({ counts: { websitesTracked: 1, websitesActive: 1, healthScores: 0, signals: 0, alerts: 0 }, engines });
+    expect(v.missingSignals.some((m) => /crawl freshness|backlog|retry/i.test(m))).toBe(true);
+    expect(JSON.stringify(v)).not.toMatch(/https?:\/\/|\.com|\.io|domain=/i);
   });
 });

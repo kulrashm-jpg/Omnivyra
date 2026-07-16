@@ -58,6 +58,15 @@ type Snapshot = {
     note: string;
     error?: string;
   } | null;
+  websiteIntelligenceRuntime: {
+    available: boolean;
+    counts: { websitesTracked: number; websitesActive: number; healthScores: number; signals: number; alerts: number };
+    engines: string[];
+    healthy: boolean;
+    missingSignals: string[];
+    note: string;
+    error?: string;
+  } | null;
 };
 
 const box: React.CSSProperties = { border: '1px solid #2a2a2a', borderRadius: 8, padding: 16, marginBottom: 16, background: '#0f0f0f' };
@@ -260,6 +269,28 @@ export default function OperationsCenter() {
                 {data.storageRuntime.error && <div style={{ color: '#e5c07b', fontSize: 12, marginTop: 6 }}>{data.storageRuntime.error}</div>}
                 <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
                   Not exposed by the runtime: {data.storageRuntime.missingSignals.join('; ')}.
+                </div>
+              </div>
+            )}
+
+            {data.websiteIntelligenceRuntime && (
+              <div style={{ ...box, borderColor: !data.websiteIntelligenceRuntime.available ? '#e5c07b' : (data.websiteIntelligenceRuntime.healthy ? '#2a2a2a' : '#e06c75') }}>
+                <h2 style={h2}>
+                  Website Intelligence Runtime{' '}
+                  <span style={{ color: !data.websiteIntelligenceRuntime.available ? '#e5c07b' : (data.websiteIntelligenceRuntime.healthy ? '#98c379' : '#e06c75'), fontWeight: 700 }}>
+                    {!data.websiteIntelligenceRuntime.available ? '● unavailable' : (data.websiteIntelligenceRuntime.healthy ? '● healthy' : '● degraded')}
+                  </span>
+                </h2>
+                <table><tbody>
+                  <tr><td style={td}>websites tracked</td><td style={td}>{data.websiteIntelligenceRuntime.counts.websitesTracked} ({data.websiteIntelligenceRuntime.counts.websitesActive} active)</td></tr>
+                  <tr><td style={td}>health scores</td><td style={td}>{data.websiteIntelligenceRuntime.counts.healthScores}</td></tr>
+                  <tr><td style={td}>signals</td><td style={td}>{data.websiteIntelligenceRuntime.counts.signals}</td></tr>
+                  <tr><td style={td}>alerts (total)</td><td style={td}>{data.websiteIntelligenceRuntime.counts.alerts}</td></tr>
+                  <tr><td style={td}>engines</td><td style={td}>{data.websiteIntelligenceRuntime.engines.join(', ')}</td></tr>
+                </tbody></table>
+                {data.websiteIntelligenceRuntime.error && <div style={{ color: '#e5c07b', fontSize: 12, marginTop: 6 }}>{data.websiteIntelligenceRuntime.error}</div>}
+                <div style={{ color: '#7f8c8d', fontSize: 12, marginTop: 8 }}>
+                  Not exposed by the runtime: {data.websiteIntelligenceRuntime.missingSignals.join('; ')}.
                 </div>
               </div>
             )}

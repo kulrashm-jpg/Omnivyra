@@ -305,6 +305,75 @@ export async function getStorageRuntimeView(): Promise<StorageRuntimeView> {
   }
 }
 
+// ── Website Intelligence Runtime operational view ──────────────────────────
+// Read-only aggregation of EXISTING website-intelligence state: tracked websites,
+// health scores, signals, alerts + the documented deterministic engines. Reads
+// counts only — never domains, URLs, crawl contents, or signal payloads. Does NOT
+// change crawling / refresh / extraction / scheduling.
+export interface WebsiteIntelligenceRuntimeView {
+  available: boolean;
+  counts: { websitesTracked: number; websitesActive: number; healthScores: number; signals: number; alerts: number };
+  engines: string[];
+  healthy: boolean;
+  missingSignals: string[];
+  note: string;
+  error?: string;
+}
+
+const WI_ENGINES = ['accessibility', 'brand', 'businessImpact', 'content', 'technical'];
+const WI_MISSING = [
+  'crawl freshness / last-crawled timestamps (per-website; not a platform rollup)',
+  'crawl & refresh success/failure rate + latency (event-logged per service; not aggregated)',
+  'crawl / refresh backlog + worker participation (policy-driven scheduler; no backlog table)',
+  'retry counts (not aggregated)',
+  'per-engine extraction success (engines run inline; not tracked as metrics)',
+];
+
+/** Pure health rollup from website-intelligence counts. */
+export function summarizeWebsiteIntelligenceRuntime(input: {
+  counts: { websitesTracked: number; websitesActive: number; healthScores: number; signals: number; alerts: number };
+  engines: string[];
+}): WebsiteIntelligenceRuntimeView {
+  const healthy = input.counts.websitesTracked > 0; // tracking is live
+  return {
+    available: true,
+    counts: input.counts,
+    engines: input.engines,
+    healthy,
+    missingSignals: WI_MISSING,
+    note: 'Counts from websites / website_health_scores / website_intelligence_signals / website_intelligence_alerts. Alerts is a total (open+resolved). No domains, URLs, or crawl contents are read.',
+  };
+}
+
+/** Query website-intelligence tables for a read-only operational view. Best-effort. */
+export async function getWebsiteIntelligenceRuntimeView(): Promise<WebsiteIntelligenceRuntimeView> {
+  const safe = async (fn: () => Promise<number>): Promise<number> => { try { return await fn(); } catch { return 0; } };
+  const countTable = (table: string) => safe(async () => {
+    const { count } = await supabase.from(table).select('*', { count: 'exact', head: true });
+    return count ?? 0;
+  });
+  try {
+    const [websitesTracked, websitesActive, healthScores, signals, alerts] = await Promise.all([
+      safe(async () => { const { count } = await supabase.from('websites').select('*', { count: 'exact', head: true }).is('deleted_at', null); return count ?? 0; }),
+      safe(async () => { const { count } = await supabase.from('websites').select('*', { count: 'exact', head: true }).eq('status', 'active').is('deleted_at', null); return count ?? 0; }),
+      countTable('website_health_scores'),
+      countTable('website_intelligence_signals'),
+      countTable('website_intelligence_alerts'),
+    ]);
+    return summarizeWebsiteIntelligenceRuntime({ counts: { websitesTracked, websitesActive, healthScores, signals, alerts }, engines: WI_ENGINES });
+  } catch (e) {
+    return {
+      available: false,
+      counts: { websitesTracked: 0, websitesActive: 0, healthScores: 0, signals: 0, alerts: 0 },
+      engines: WI_ENGINES,
+      healthy: false,
+      missingSignals: ['website-intelligence counts could not be read', ...WI_MISSING],
+      note: 'Website intelligence state unavailable.',
+      error: e instanceof Error ? e.message : 'query failed',
+    };
+  }
+}
+
 // Verified runtime topology (POP-A2). Documented constants — BullMQ queue/worker
 // names are not enumerable without instantiating, so they are maintained here.
 const BULLMQ_QUEUES = ['publish/posting', 'bolt-execution', 'ai-heavy', 'engagement-polling', 'lead-thread-recompute', 'conversation-memory-rebuild'];
