@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletion } from '../../../backend/services/aiGateway';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
+import { buildCompanyKnowledgeGraph, buildKnowledgeGrounding } from '../../../backend/services/companyProfile/companyKnowledgeGraph';
 
 // Commercial fields collected in Phase 1. Field naming matches company_profiles DB columns.
 const FIELDS_DESCRIPTION = [
@@ -94,6 +95,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           ].join('\n');
     const missingBlock = missingCommercial.length > 0 ? missingCommercial.join(', ') : 'none';
 
+    // Canonical Company Knowledge Graph grounding: the single authority for what
+    // is already known ACROSS the whole profile (identity, offering, audience,
+    // positioning, …) — so this conversation never re-asks anything the graph
+    // already knows, in any phrasing (semantic dedup by node identity).
+    const kgGrounding = profile ? buildKnowledgeGrounding(buildCompanyKnowledgeGraph(profile)) : null;
+    const kgKnownBlock = kgGrounding?.known ?? 'Nothing established yet.';
+
     const systemPrompt =
       'You are a commercial strategy assistant. Your goal is to capture structured commercial and target-customer information through a short guided conversation.\n\n' +
       'Rules:\n' +
@@ -119,6 +127,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         role: 'user',
         content:
           `Context: ${companyContext}\n\n` +
+          `${kgKnownBlock}\n\n` +
           `ALREADY CAPTURED (do NOT ask about these — reuse the value):\n${knownFieldsBlock}\n\n` +
           `STILL MISSING commercial fields (ask only about these): ${missingBlock}\n\n` +
           (conversation.length === 0
