@@ -95,7 +95,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     showCompanyFactReviewPrompt, showCreateCompanyModal, showOnboardingContinuation,
     showStandardProfileActions, skipOnboardingRefinement, socialPreviewAccounts, successMessage,
     targetCustomerInput, targetCustomerLoading, targetCustomerMessages, targetCustomerPanelOpen,
-    targetCustomerPendingSave, toTitleCase, topCompetitorScore, uiConfidence,
+    targetCustomerPendingSave, toTitleCase, topCompetitorScore, uiConfidence, uiConfidenceScored,
     uiProblemTransformationCompletion, uiUnifiedCompletion, understandingDraft,
     unifiedCompetitorIntelligence, unifiedCompetitorOpportunities, unifiedCompetitors, updateActiveProfile,
     updateGuidedCompetitor, updateIntelligenceContext, updateOtherSocial, uploadBrandAsset, user,
@@ -121,7 +121,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <StatCard
               label="Profile confidence"
-              value={`${completionPercent(uiConfidence)}%`}
+              value={uiConfidenceScored ? `${completionPercent(uiConfidence)}%` : 'Not yet scored'}
               tone="indigo"
             />
             <StatCard

@@ -2082,17 +2082,15 @@ export function useCompanyProfileState() {
   const uiUnifiedCompletion = Math.round(
     0.7 * uiCoreCompletion + 0.3 * uiIntelligenceReadinessScore
   );
-  const uiConfidence = Math.max(
-    0,
-    Math.min(
-      100,
-      Number(
-        activeProfile.overall_confidence ??
-          activeProfile.confidence_score ??
-          Math.round(uiUnifiedCompletion * 0.85)
-      )
-    )
-  );
+  // Confidence must reflect a REAL score, never a number synthesized from
+  // completion. When the profile has not been confidence-scored yet, expose
+  // that explicitly (uiConfidenceScored=false) so the UI can say "Not yet
+  // scored" instead of inventing a value from completion.
+  const rawConfidence = activeProfile.overall_confidence ?? activeProfile.confidence_score ?? null;
+  const uiConfidenceScored = rawConfidence != null;
+  const uiConfidence = uiConfidenceScored
+    ? Math.max(0, Math.min(100, Number(rawConfidence)))
+    : 0;
   const toTitleCase = (value: string): string =>
     value
       .replace(/_/g, ' ')
@@ -2372,6 +2370,7 @@ export function useCompanyProfileState() {
     targetCustomerPanelOpen,
     toTitleCase,
     uiConfidence,
+    uiConfidenceScored,
     uiOverallProfileCompletion,
     uiUnifiedCompletion,
     uiProblemTransformationCompletion,

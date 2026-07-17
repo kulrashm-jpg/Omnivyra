@@ -26,8 +26,10 @@ export default function NetworkHealth({
   lastActivityAt,
 }: NetworkHealthProps) {
   const ineligibleUsers = Math.max(0, totalDiscoveredUsers - totalEligibleUsers);
+  // Clamp to [0,1]: eligible can never exceed discovered, so the label/bar can
+  // never read >100% (the sibling ineligibleUsers is already floored at 0).
   const eligibleRate = totalDiscoveredUsers
-    ? totalEligibleUsers / totalDiscoveredUsers
+    ? Math.min(1, totalEligibleUsers / totalDiscoveredUsers)
     : 0;
   const ineligibleRate = totalDiscoveredUsers
     ? ineligibleUsers / totalDiscoveredUsers

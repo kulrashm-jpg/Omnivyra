@@ -85,7 +85,7 @@ export function computeReadinessScore(
     breakdown,
     completedFeatures: completedCount,
     totalFeatures: features.length,
-    completionPercentage: Math.round((completedCount / features.length) * 100),
+    completionPercentage: features.length ? Math.round((completedCount / features.length) * 100) : 0,
   };
 }
 

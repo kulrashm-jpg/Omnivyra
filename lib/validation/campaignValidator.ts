@@ -367,15 +367,7 @@ export function validateCampaignPlan(input: CampaignValidationInput): CampaignVa
     ...consistencyDeductions,
   ];
 
-  // Aggregate score (start at 100, deduct)
-  const totalLoss = allDeductions.reduce((s, d) => s + d.points, 0);
-  const confidenceScore = Math.max(0, Math.min(100, 100 - totalLoss));
-
-  // Risk mapping
-  const riskLevel: CampaignValidation['riskLevel'] =
-    confidenceScore >= 80 ? 'LOW' : confidenceScore >= 50 ? 'MEDIUM' : 'HIGH';
-
-  // Dimension breakdown (each dimension starts at 20 points → total 100)
+  // Dimension breakdown (each dimension starts at 20 points → total 100).
   const scoreBreakdown: CampaignValidation['scoreBreakdown'] = {
     frequency: dimensionScore(20, freqDeductions),
     platformMix: dimensionScore(20, platformDeductions),
@@ -383,6 +375,17 @@ export function validateCampaignPlan(input: CampaignValidationInput): CampaignVa
     funnelCoverage: dimensionScore(20, funnelDeductions),
     consistency: dimensionScore(20, consistencyDeductions),
   };
+
+  // The headline confidence is the SUM of the floored dimensions, so it can
+  // never contradict the breakdown shown directly beneath it. (Previously the
+  // headline subtracted the full, per-dimension-unbounded loss while each
+  // dimension floored at 0 — so a single dimension losing >20 points made the
+  // five sub-scores add up to MORE than the headline.)
+  const confidenceScore = Object.values(scoreBreakdown).reduce((sum, v) => sum + v, 0);
+
+  // Risk mapping
+  const riskLevel: CampaignValidation['riskLevel'] =
+    confidenceScore >= 80 ? 'LOW' : confidenceScore >= 50 ? 'MEDIUM' : 'HIGH';
 
   return {
     confidenceScore,

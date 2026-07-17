@@ -180,7 +180,22 @@ export const computeConfidenceScore = (extraction: CompanyProfileExtractionOutpu
     extraction.unique_value_proposition,
     extraction.content_themes,
   ];
+  // Weight each field by its ACTUAL confidence band, not mere presence. Counting
+  // any non-"missing" field as fully confident is what produced a 100% score on
+  // a barely-filled profile: an AI-inferred, Low-confidence value read as full
+  // confidence. This stays consistent with computeMissingFields, which already
+  // treats Low-confidence fields as effectively missing — so the confidence and
+  // completion signals now move together instead of contradicting each other.
+  const weightForConfidence = (field: { source?: string; confidence?: string } | null | undefined): number => {
+    if (!field || field.source === 'missing') return 0;
+    switch (String(field.confidence ?? '').toLowerCase()) {
+      case 'high':   return 1;
+      case 'medium': return 0.6;
+      case 'low':    return 0.2;
+      default:       return 0.6; // has a source but no stated band → treat as medium
+    }
+  };
   const total = fields.length;
-  const extracted = fields.filter((field) => field && field.source !== 'missing').length;
-  return Math.round((extracted / total) * 100);
+  const score = fields.reduce((sum, field) => sum + weightForConfidence(field), 0);
+  return Math.round((score / total) * 100);
 };
