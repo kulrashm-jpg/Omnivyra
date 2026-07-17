@@ -13,9 +13,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   X, Send, Loader2, Sparkles, CheckCircle2, ArrowRight,
-  Lightbulb, Target, Zap, Mic, MicOff,
+  Lightbulb, Target, Zap,
 } from 'lucide-react';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import ChatVoiceButton from '../ChatVoiceButton';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -110,13 +111,9 @@ export default function AIBlogCardModal({
   const [elapsedSec, setElapsedSec] = useState(0);
   const [conversationPhase, setConversationPhase] = useState<'topic' | 'intent' | 'details' | 'preview'>('topic');
   const [cardPreview, setCardPreview] = useState<BlogCardPreview | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [cardAwaitingConfirmation, setCardAwaitingConfirmation] = useState(false);
-  const recognitionRef = useRef<any>(null);
-  const transcriptRef = useRef('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const [voiceError, setVoiceError] = useState<string | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -323,132 +320,6 @@ export default function AIBlogCardModal({
     setInput(intentText);
   };
 
-  const stopVoiceRecording = () => {
-    if (recognitionRef.current && isRecording) {
-      try {
-        recognitionRef.current.stop();
-      } catch (_) {}
-      recognitionRef.current = null;
-      setIsRecording(false);
-    }
-  };
-
-  const startVoiceRecording = async () => {
-    console.log('🎤 startVoiceRecording called');
-    
-    // Kill any existing recognition
-    if (recognitionRef.current) {
-      console.log('🔪 Aborting existing recognition...');
-      try {
-        recognitionRef.current.stop();
-      } catch (_) {}
-      recognitionRef.current = null;
-    }
-
-    // Small delay to ensure cleanup
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    console.log('Speech API available:', !!SpeechRecognition);
-    
-    if (!SpeechRecognition) {
-      console.error('❌ No SpeechRecognition API');
-      setVoiceError('Voice input not supported. Use Chrome or Edge.');
-      return;
-    }
-
-    console.log('🔨 Creating NEW speech recognition...');
-    setVoiceError(null);
-    transcriptRef.current = '';
-    setIsRecording(true);
-
-    try {
-      const recognition = new SpeechRecognition();
-      console.log('✅ New recognition object created');
-      
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-
-      const SILENCE_TIMEOUT_MS = 3500;
-      let silenceTimerRef: ReturnType<typeof setTimeout> | null = null;
-
-      const clearSilenceTimer = () => {
-        if (silenceTimerRef) {
-          clearTimeout(silenceTimerRef);
-          silenceTimerRef = null;
-        }
-      };
-
-      const resetSilenceTimer = () => {
-        clearSilenceTimer();
-        silenceTimerRef = setTimeout(() => {
-          console.log('⏱️ Silence timeout - stopping recognition');
-          if (recognitionRef.current === recognition) {
-            try {
-              recognition.stop();
-            } catch (_) {}
-          }
-        }, SILENCE_TIMEOUT_MS);
-      };
-
-      resetSilenceTimer();
-
-      recognition.onstart = () => {
-        console.log('✅ ONSTART FIRED - listening for audio');
-      };
-
-      recognition.onresult = (event: any) => {
-        console.log('📝 ONRESULT FIRED - transcript coming in');
-        let interim = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const t = event.results[i][0]?.transcript?.trim();
-          if (!t) continue;
-          console.log(`  "${t}" (final: ${event.results[i].isFinal})`);
-          if (event.results[i].isFinal) {
-            transcriptRef.current = transcriptRef.current
-              ? `${transcriptRef.current} ${t}`
-              : t;
-          } else {
-            interim = interim ? `${interim} ${t}` : t;
-          }
-        }
-        const full = `${transcriptRef.current} ${interim}`.trim();
-        console.log(`  Final: "${full}"`);
-        setInput(full);
-        resetSilenceTimer();
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error('❌ ONERROR FIRED:', event.error, event.message);
-        clearSilenceTimer();
-        if (event.error === 'not-allowed') {
-          setVoiceError('Microphone access denied. Enable in browser settings.');
-        } else if (event.error === 'no-speech') {
-          setVoiceError('No speech detected. Please speak into your microphone.');
-        } else if (event.error !== 'aborted') {
-          setVoiceError(event.message || `Voice error: ${event.error}`);
-        }
-        setIsRecording(false);
-      };
-
-      recognition.onend = () => {
-        console.log('🛑 ONEND FIRED');
-        clearSilenceTimer();
-        recognitionRef.current = null;
-        setIsRecording(false);
-      };
-
-      recognitionRef.current = recognition;
-      console.log('📍 Ref stored. Calling start()...');
-      recognition.start();
-      console.log('✔️ start() called - should see onstart next');
-    } catch (err) {
-      console.error('❌ Exception:', err);
-      setVoiceError('Could not start voice recording.');
-      setIsRecording(false);
-    }
-  };
 
   return (
     <div
@@ -652,16 +523,13 @@ export default function AIBlogCardModal({
             <div />
           ) : (
             <div className="space-y-2">
-              {voiceError && (
-                <p className="text-xs text-red-600 bg-red-50 p-2 rounded">{voiceError}</p>
-              )}
               <div className="flex gap-2 items-center">
                 <input
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyPress={(e) => {
-                    if (e.key === 'Enter' && !isLoading && !isRecording) {
+                    if (e.key === 'Enter' && !isLoading) {
                       sendMessage();
                     }
                   }}
@@ -669,27 +537,12 @@ export default function AIBlogCardModal({
                   disabled={isLoading}
                   className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-600 disabled:bg-gray-100 disabled:cursor-not-allowed"
                 />
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isRecording) {
-                      stopVoiceRecording();
-                    } else {
-                      startVoiceRecording();
-                    }
-                  }}
+                <ChatVoiceButton
+                  onTranscription={(t) => setInput(t)}
                   disabled={isLoading}
-                  title={isRecording ? 'Stop recording' : 'Start voice recording'}
-                  className={`p-2.5 rounded-lg transition-colors shrink-0 cursor-pointer ${
-                    isRecording
-                      ? 'bg-red-100 text-red-600 animate-pulse'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                >
-                  {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                </button>
+                  context="blog"
+                  className="p-2.5 rounded-lg transition-colors shrink-0 bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
                 <button
                   onClick={(e) => {
                     e.preventDefault();
