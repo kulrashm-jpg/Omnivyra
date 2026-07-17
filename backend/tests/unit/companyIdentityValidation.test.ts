@@ -134,13 +134,30 @@ describe('validateCompanyIdentity — authoritative verdict', () => {
     expect(id.requiresManualReview).toBe(false);
   });
 
-  it('does NOT reject on a transient probe failure when the domain resolves → "try again" (throws)', async () => {
-    await expect(
-      validateCompanyIdentity('john@acme.com', deps({
-        probeWebsite: async (d) => PROBE_FAILED(d),
-        classifyDomainDns: async () => 'has_records',
-      })),
-    ).rejects.toThrow(/WEBSITE_PROBE_TRANSIENT/);
+  it('AUTO-APPROVABLE review when the web host resolves but the site was unreachable (never rejects)', async () => {
+    // DNS knows the web host (has_records) + MX proven by eligibility, only the
+    // website was unreachable from our egress → routed to review AND flagged
+    // auto-approvable (§6). Must NOT be a hard reject and must NOT throw.
+    const id = await validateCompanyIdentity('john@acme.com', deps({
+      probeWebsite: async (d) => PROBE_FAILED(d),
+      classifyDomainDns: async () => 'has_records',
+    }));
+    expect(id.eligible).toBe(false);
+    expect(id.validationReason).toBe('NO_WEBSITE_FOUND');
+    expect(id.requiresManualReview).toBe(true);
+    expect(id.autoApprovable).toBe(true);
+  });
+
+  it('MANUAL review (not auto-approvable) when only MX/NS exist but no web host (registered_no_web)', async () => {
+    const id = await validateCompanyIdentity('john@acme.com', deps({
+      probeWebsite: async (d) => PROBE_FAILED(d),
+      classifyDomainDns: async () => 'registered_no_web',
+    }));
+    expect(id.eligible).toBe(false);
+    expect(id.validationReason).toBe('NO_WEBSITE_FOUND');
+    expect(id.requiresManualReview).toBe(true);
+    // Not the temporary-web-reachability case → NOT auto-approvable.
+    expect(id.autoApprovable).toBeFalsy();
   });
 
   it('does NOT reject on a transient DNS failure → "try again" (throws)', async () => {

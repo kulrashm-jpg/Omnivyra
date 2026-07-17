@@ -35,7 +35,12 @@ import {
 export { normalizeDomain, registrableRoot };
 
 const MAX_REDIRECTS = 8;
-const PER_HOP_TIMEOUT_MS = 3_000;
+// PROD-CX-004: generous per-hop budget. Legitimate origins hosted far from our
+// serverless egress (regional DCs, cold TLS, slow CDNs) routinely exceed 3s on a
+// first hit; a too-tight timeout manufactured "unreachable" verdicts for real
+// sites. resolveDomain also retries the HTTPS attempt once (see below) before any
+// downgrade, so a single transient stall never decides the outcome.
+const PER_HOP_TIMEOUT_MS = 8_000;
 const MAX_RESPONSE_BYTES = 1_048_576; // 1 MB
 
 /** Distinct error code on connect-time SSRF blocks — used by followChain to
@@ -99,15 +104,38 @@ function isPrivateIPv4(ip: string): boolean {
  *   - ::1/128                loopback
  *   - fc00::/7               unique local (covers fc00::/8 and fd00::/8)
  *   - fe80::/10              link-local
- *   - ::ffff:0:0/96          IPv4-mapped — must check the embedded v4
+ *   - ::ffff:0:0/96          IPv4-mapped     — must check the embedded v4
+ *   - ::/96 (compatible)     IPv4-compatible — must check the embedded v4
+ *
+ * PROD-CX-004: the embedded-v4 forms are detected in BOTH dotted (::ffff:1.2.3.4)
+ * and hextet (::ffff:c0a8:1d01, ::c0a8:1d01) notation, closing an SSRF gap where a
+ * private v4 hidden in hextet form was misclassified as "not private". This only
+ * ever matches ::-prefixed addresses (all-zero high 96 bits); a globally-routable
+ * address such as 2405:201:680d:c083::c0a8:1d01 has a non-zero prefix, is NOT
+ * ::-prefixed, and is therefore never touched — legitimate global IPv6 (including
+ * ones whose low bits look like an embedded IPv4) is never over-blocked.
  */
+function embeddedV4(norm: string): string | null {
+  // Dotted forms: ::ffff:1.2.3.4  or  ::1.2.3.4
+  const dotted = norm.match(/^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) return dotted[1];
+  // Hextet forms: ::ffff:c0a8:1d01  or  ::c0a8:1d01  (high 96 bits all zero)
+  const hex = norm.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+  }
+  return null;
+}
+
 function isPrivateIPv6(ip: string): boolean {
   const norm = ip.toLowerCase();
   if (norm === '::1' || norm === '0:0:0:0:0:0:0:1') return true;
 
-  // IPv4-mapped: ::ffff:1.2.3.4 — re-check against IPv4 ranges.
-  const v4MappedMatch = norm.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (v4MappedMatch) return isPrivateIPv4(v4MappedMatch[1]);
+  // IPv4-mapped (::ffff:…) and IPv4-compatible (::…) — re-check the embedded v4.
+  const embedded = embeddedV4(norm);
+  if (embedded) return isPrivateIPv4(embedded);
 
   // First hextet drives fc00::/7 and fe80::/10 detection.
   const firstHextet = norm.split(':')[0];
@@ -124,34 +152,51 @@ function isPrivateIPv6(ip: string): boolean {
   return false;
 }
 
-function isPrivateIp(ip: string): boolean {
+/**
+ * THE SSRF IP-classification boundary. Exported for certification tests
+ * (PROD-CX-004 §5); production callers reach it via classifyHost()/safeConnect().
+ */
+export function isPrivateIp(ip: string): boolean {
   return isPrivateIPv4(ip) || isPrivateIPv6(ip);
 }
 
 /**
- * DNS-resolve a hostname to all A + AAAA records. Returns null on any DNS
- * failure (caller treats this as a fail-closed signal).
+ * DNS-resolve a hostname to all A + AAAA records. Returns null only when EVERY
+ * resolver finds nothing (caller treats null as a fail-closed signal).
+ *
+ * PROD-CX-004: unions the c-ares resolvers (dns.resolve4/6 — raw DNS) with
+ * getaddrinfo (dns.lookup — the OS resolver browsers use). c-ares can spuriously
+ * return ENODATA/ENOTFOUND in some serverless runtimes / against regional
+ * authoritative NS (e.g. India-hosted .edu.in), where getaddrinfo and the actual
+ * HTTP request both succeed — the SNIS-class false negative. Adding getaddrinfo
+ * eliminates that. SSRF is UNCHANGED: every address returned here is still
+ * validated by isPrivateIp() in classifyHost() and re-validated at connect time
+ * in safeConnect(), so no private destination is ever reachable.
  */
 async function resolveAllAddresses(host: string): Promise<string[] | null> {
-  const all: string[] = [];
-  let anySuccess = false;
-  // A records
+  const all = new Set<string>();
+  // c-ares A records
   try {
-    const a = await dns.resolve4(host);
-    all.push(...a);
-    anySuccess = true;
+    (await dns.resolve4(host)).forEach((ip) => all.add(ip));
   } catch {
-    // ignore — try AAAA
+    // ignore — try the other resolvers
   }
+  // c-ares AAAA records
   try {
-    const aaaa = await dns.resolve6(host);
-    all.push(...aaaa);
-    anySuccess = true;
+    (await dns.resolve6(host)).forEach((ip) => all.add(ip));
   } catch {
     // ignore
   }
-  if (!anySuccess) return null;
-  return all;
+  // getaddrinfo (OS resolver) — reliable where c-ares' raw DNS fails.
+  try {
+    const looked = await dns.lookup(host, { all: true, verbatim: true });
+    for (const r of looked) {
+      if (r && r.address) all.add(r.address);
+    }
+  } catch {
+    // ignore
+  }
+  return all.size > 0 ? [...all] : null;
 }
 
 /**
@@ -426,8 +471,16 @@ export async function resolveDomain(domain: string): Promise<ResolveDomainResult
     };
   }
 
-  // Try HTTPS first.
+  // Try HTTPS first. PROD-CX-004: retry the HTTPS attempt ONCE on a plain
+  // failure before any downgrade — a single transient network/TLS stall (common
+  // on first contact with distant origins) must not be read as "no website".
+  // The retry is skipped for SSRF outcomes (blocked/rebind), which are terminal
+  // and never transient.
   let result = await followChain(`https://${input}`);
+  if (result.status === 'failed') {
+    const retry = await followChain(`https://${input}`);
+    if (retry.status !== 'failed') result = retry;
+  }
   // Only retry over plain HTTP if the HTTPS attempt FAILED outright (DNS /
   // network), never when SSRF blocked it (rebind or pre-fetch). A private
   // host on :443 is just as private on :80 — and a rebind during HTTPS will

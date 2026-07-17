@@ -298,11 +298,21 @@ async function handler(
     });
   }
 
-  if (!identity.eligible) {
+  // PROD-CX-004 §6 — auto-approve the narrow, provably-real case: MX valid + a
+  // web host resolves in DNS, only the website was unreachable from our egress
+  // (no SSRF/forwarding/canonical/parked concern). Email ownership is proven by
+  // the verification step that gates account creation downstream, so admitting
+  // the signup_intent here never creates an unverified account. The intent is
+  // tagged for operator visibility. Flag-gated (default ON) for instant rollback;
+  // when off, the case falls through to the normal review-block below.
+  const autoApproveEnabled = (process.env.IDENTITY_HARDENING_AUTO_APPROVE ?? 'true').toLowerCase() !== 'false';
+  const autoApproveReview = identity.autoApprovable === true && autoApproveEnabled;
+
+  if (!identity.eligible && !autoApproveReview) {
     // PUBLIC_EMAIL / NO_EMAIL_CAPABILITY / NO_WEBSITE_FOUND / FORWARDING_DOMAIN /
     // DOMAIN_NOT_CANONICAL / DOMAIN_MISMATCH / BLOCKED — all messaged from the
     // single ELIGIBILITY_MESSAGES source. Review-needed cases surface the
-    // "contact our team" copy; no review row is written yet (Phase 5 pending).
+    // "contact our team" copy; the account-creating handoff is not taken.
     const reason = identity.validationReason ?? 'BLOCKED';
     logger.info('auth_signup_identity_blocked', {
       email: normalizedEmail,
@@ -315,6 +325,15 @@ async function handler(
     return res.status(httpStatusFor(reason)).json({
       error: ELIGIBILITY_MESSAGES[reason],
       code:  reason,
+    });
+  }
+
+  if (autoApproveReview) {
+    logger.info('auth_signup_identity_auto_approved', {
+      email: normalizedEmail,
+      reason: identity.validationReason,
+      diagnostics: identity.diagnostics ?? null,
+      correlationId,
     });
   }
 
@@ -332,6 +351,12 @@ async function handler(
     // AUTH-001 §10 — journey correlation ID; later stages (verify-email,
     // setup-company, credits) recover it from here by email.
     correlation_id:           correlationId,
+    // PROD-CX-004 §6 — ops-visible marker when this signup was admitted via the
+    // auto-approve path (DNS web host present, site unreachable from our egress)
+    // rather than a clean live-website pass. Null on the normal eligible path.
+    ...(autoApproveReview
+      ? { auto_approved: true, auto_approved_reason: identity.validationReason }
+      : {}),
   };
 
   const { data: existingIntent } = await supabase

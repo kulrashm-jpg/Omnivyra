@@ -72,11 +72,25 @@ describe('Phase-4 evidence: validation scenarios', () => {
     expect(id.requiresManualReview).toBe(false);
   });
 
-  it('4b. transient probe failure (domain resolves) → NOT rejected, surfaces "try again"', async () => {
+  it('4b. web host resolves but site unreachable → NOT rejected, AUTO-APPROVABLE review (PROD-CX-004 §6)', async () => {
+    // A web host resolves in DNS (has_records) + MX proven by eligibility, only
+    // the website was unreachable from our egress → routed to review and flagged
+    // auto-approvable. Never a hard reject, never a permanent rejection.
+    const id = await validateCompanyIdentity('john@acme.com', deps({
+      probeWebsite: async (d) => ({ ...liveCanonical(d), resolution_failed: true }),
+      classifyDomainDns: async () => 'has_records',
+    }));
+    expect(id.eligible).toBe(false);
+    expect(id.validationReason).toBe('NO_WEBSITE_FOUND');
+    expect(id.requiresManualReview).toBe(true);
+    expect(id.autoApprovable).toBe(true);
+  });
+
+  it('4c. truly transient DNS (resolvers flaking) → NOT rejected, surfaces "try again"', async () => {
     await expect(
       validateCompanyIdentity('john@acme.com', deps({
         probeWebsite: async (d) => ({ ...liveCanonical(d), resolution_failed: true }),
-        classifyDomainDns: async () => 'has_records',
+        classifyDomainDns: async () => 'transient',
       })),
     ).rejects.toThrow(/WEBSITE_PROBE_TRANSIENT/);
   });

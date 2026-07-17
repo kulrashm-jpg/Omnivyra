@@ -32,6 +32,7 @@
 
 import dns from 'dns/promises';
 import { supabase } from '../db/supabaseClient';
+import { safeFetch } from '../../lib/security/safeFetch';
 import { checkDomainEligibility } from './domainEligibilityService';
 import { resolveDomain, type ResolveDomainResult } from './domainCanonicalService';
 import { detectParkedDomain, type ParkedDomainVerdict } from './parkedDomainDetectionService';
@@ -62,45 +63,139 @@ export class WebsiteProbeTransientError extends Error {
 }
 
 /**
- * Classifies a domain's DNS so we can tell a DEFINITIVE "no website exists"
- * (apex + www both have zero A/AAAA records) from a TRANSIENT lookup problem.
- *   - 'has_records' → the domain resolves; a failed HTTP probe is the site
- *                     being momentarily down → transient.
- *   - 'transient'   → DNS itself was transiently unavailable (ETIMEOUT /
- *                     ESERVFAIL / EAI_AGAIN) → transient.
- *   - 'no_records'  → NXDOMAIN / NODATA on both apex and www → definitively no
- *                     website host → hard reject.
- * Read-only DNS lookups; no outbound fetch, so no SSRF surface.
+ * Staged DNS-existence classifier (PROD-CX-004 §2). Distinguishes a DEFINITIVE
+ * "this domain does not exist anywhere" from a real domain whose website we
+ * merely could not reach — so that a hard reject is only ever issued on a
+ * UNANIMOUS, cross-resolver absence.
+ *
+ * Verdicts:
+ *   - 'has_records'       → an A/AAAA web host resolves via at least ONE resolver
+ *                           (c-ares, getaddrinfo, or Cloudflare/Google DoH). A
+ *                           failed HTTP probe is then just an unreachable site.
+ *   - 'registered_no_web' → no web A/AAAA anywhere, but the domain publishes MX
+ *                           (mail) or NS (delegated zone) → a real registered
+ *                           organisation whose website is elsewhere/not yet up.
+ *   - 'transient'         → nothing found, but at least one resolver failed with
+ *                           a transient error (ETIMEOUT / ESERVFAIL / EAI_AGAIN /
+ *                           EREFUSED / DoH network) → we genuinely cannot tell.
+ *   - 'no_records'        → UNANIMOUS: every resolver definitively returned
+ *                           NXDOMAIN / NODATA and there is no MX and no NS. The
+ *                           domain does not exist → the only hard-reject signal.
+ *
+ * Stage order (each feeds the next; short-circuits on the first web host found):
+ *   c-ares A/AAAA → getaddrinfo → DoH Cloudflare + Google → MX → NS.
+ *
+ * DoH runs through the SSRF-safe fetch seam and is strictly fail-open — a DoH
+ * network/parse error contributes no signal and can never cause a hard reject.
  */
-export type DomainDnsClass = 'has_records' | 'transient' | 'no_records';
+export type DomainDnsClass = 'has_records' | 'registered_no_web' | 'transient' | 'no_records';
+
+export interface DomainDnsResolvers {
+  /** c-ares (raw DNS) A records. */
+  resolve4?: (host: string) => Promise<string[]>;
+  /** c-ares (raw DNS) AAAA records. */
+  resolve6?: (host: string) => Promise<string[]>;
+  /** getaddrinfo (OS resolver) — resolves where c-ares spuriously fails. */
+  lookup?: (host: string) => Promise<string[]>;
+  /** MX exchanges for the apex. */
+  resolveMx?: (host: string) => Promise<string[]>;
+  /** NS hosts for the apex. */
+  resolveNs?: (host: string) => Promise<string[]>;
+  /** DNS-over-HTTPS union (Cloudflare + Google), returns record data strings. */
+  dohQuery?: (name: string, type: 'A' | 'AAAA' | 'MX' | 'NS') => Promise<string[]>;
+}
+
+const DOH_TIMEOUT_MS = 4_000;
+const DOH_TYPE_CODE: Record<string, number> = { A: 1, AAAA: 28, MX: 15, NS: 2 };
+
+/** One DoH JSON resolver (RFC 8484 application/dns-json). Fail-open → []. */
+async function dohFrom(endpoint: string, name: string, type: string): Promise<string[]> {
+  try {
+    const url = `${endpoint}?name=${encodeURIComponent(name)}&type=${encodeURIComponent(type)}`;
+    const res = await safeFetch(
+      url,
+      { method: 'GET', headers: { accept: 'application/dns-json' } },
+      { timeoutMs: DOH_TIMEOUT_MS },
+    );
+    if (!res.ok) return [];
+    const body = (await res.json()) as
+      | { Status?: number; Answer?: Array<{ type?: number; data?: string }> }
+      | null;
+    if (!body || body.Status !== 0 || !Array.isArray(body.Answer)) return [];
+    const want = DOH_TYPE_CODE[type];
+    return body.Answer
+      .filter((a) => a && a.type === want && typeof a.data === 'string' && a.data.length > 0)
+      .map((a) => a.data as string);
+  } catch {
+    return [];
+  }
+}
+
+/** Default DoH: query Cloudflare AND Google in parallel and union the answers. */
+async function defaultDohQuery(name: string, type: 'A' | 'AAAA' | 'MX' | 'NS'): Promise<string[]> {
+  const [cf, google] = await Promise.all([
+    dohFrom('https://cloudflare-dns.com/dns-query', name, type),
+    dohFrom('https://dns.google/resolve', name, type),
+  ]);
+  return [...cf, ...google];
+}
 
 export async function classifyDomainDnsDefault(
   domain: string,
-  resolvers: {
-    resolve4?: (host: string) => Promise<string[]>;
-    resolve6?: (host: string) => Promise<string[]>;
-  } = {},
+  resolvers: DomainDnsResolvers = {},
 ): Promise<DomainDnsClass> {
   const resolve4 = resolvers.resolve4 ?? ((h: string) => dns.resolve4(h));
   const resolve6 = resolvers.resolve6 ?? ((h: string) => dns.resolve6(h));
-  const hosts = [domain, `www.${domain}`];
+  const lookup =
+    resolvers.lookup ??
+    (async (h: string) => (await dns.lookup(h, { all: true, verbatim: true })).map((r) => r.address));
+  const resolveMx = resolvers.resolveMx ?? (async (h: string) => (await dns.resolveMx(h)).map((m) => m.exchange));
+  const resolveNs = resolvers.resolveNs ?? ((h: string) => dns.resolveNs(h));
+  const dohQuery = resolvers.dohQuery ?? defaultDohQuery;
+
   let sawTransient = false;
-  for (const host of hosts) {
-    for (const lookup of [() => resolve4(host), () => resolve6(host)]) {
-      try {
-        const records = await lookup();
-        if (records && records.length > 0) return 'has_records';
-      } catch (err) {
-        const code = (err as { code?: string } | null)?.code ?? '';
-        // ENOTFOUND / ENODATA(NODATA) are definitive "no record for this host".
-        // Everything else (ETIMEOUT, ESERVFAIL, EAI_AGAIN, EREFUSED, …) is a
-        // transient resolver condition — never let it hard-reject.
-        if (code !== 'ENOTFOUND' && code !== 'ENODATA' && code !== 'NODATA') {
-          sawTransient = true;
-        }
-      }
+  // Runs one lookup; empty on any failure, marking transient unless the error is
+  // a definitive "no such record" (ENOTFOUND / ENODATA / NODATA).
+  const tryRecords = async (fn: () => Promise<string[]>): Promise<string[]> => {
+    try {
+      const r = await fn();
+      return Array.isArray(r) ? r.filter((x) => typeof x === 'string' && x.length > 0) : [];
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code ?? '';
+      if (code !== 'ENOTFOUND' && code !== 'ENODATA' && code !== 'NODATA') sawTransient = true;
+      return [];
     }
+  };
+
+  const hosts = [domain, `www.${domain}`];
+
+  // ── Stage 1: web-host existence (A/AAAA). c-ares → getaddrinfo. Any hit wins.
+  for (const host of hosts) {
+    if ((await tryRecords(() => resolve4(host))).length) return 'has_records';
+    if ((await tryRecords(() => resolve6(host))).length) return 'has_records';
+    if ((await tryRecords(() => lookup(host))).length) return 'has_records';
   }
+  // Independent DoH resolvers — catch c-ares/getaddrinfo serverless false
+  // negatives (the SNIS class). Fail-open.
+  for (const host of hosts) {
+    if ((await tryRecords(() => dohQuery(host, 'A'))).length) return 'has_records';
+    if ((await tryRecords(() => dohQuery(host, 'AAAA'))).length) return 'has_records';
+  }
+
+  // ── Stage 2: no web host, but MX or NS proves a real, registered domain.
+  const mx = [
+    ...(await tryRecords(() => resolveMx(domain))),
+    ...(await tryRecords(() => dohQuery(domain, 'MX'))),
+  ];
+  if (mx.length) return 'registered_no_web';
+  const ns = [
+    ...(await tryRecords(() => resolveNs(domain))),
+    ...(await tryRecords(() => dohQuery(domain, 'NS'))),
+  ];
+  if (ns.length) return 'registered_no_web';
+
+  // ── Stage 3: nothing anywhere. Transient trouble ⇒ don't reject; only a
+  // unanimous definitive absence is a hard-reject signal.
   return sawTransient ? 'transient' : 'no_records';
 }
 
@@ -122,6 +217,17 @@ export interface CompanyIdentity {
 
   /** True when the user should be routed to the manual-review queue, not hard-rejected. */
   requiresManualReview: boolean;
+
+  /**
+   * PROD-CX-004 §6 auto-approve signal. True ONLY for the narrow, provably-real
+   * case: the email domain has valid MX (proven by the eligibility stage) AND a
+   * web host resolves in DNS (some resolver saw A/AAAA), but the website was
+   * merely unreachable from our egress — no SSRF, forwarding, canonical, or
+   * parked concern. Callers that also hold proof of email ownership (signup after
+   * verification) may treat this as an auto-approval instead of a manual review.
+   * Never set for registered_no_web / forwarding / parked / canonical outcomes.
+   */
+  autoApprovable?: boolean;
 
   /**
    * Validation diagnostics (AUTH-001 §7) — structured detail for operators;
@@ -259,18 +365,35 @@ export async function validateCompanyIdentity(
     return block(base, 'BLOCKED', false);
   }
   if (resolution.resolution_failed) {
-    // The resolver collapses DNS/timeout/network failures into one flag. Split
-    // them so the bible rule ("email domain must host a website") HARD-rejects
-    // only a DEFINITIVE absence, while a transient blip says "try again" rather
-    // than false-rejecting a legitimate company whose site is momentarily down.
+    // The resolver collapses DNS/timeout/network failures into one flag. The
+    // staged classifier (c-ares → getaddrinfo → DoH → MX → NS) re-derives what
+    // actually exists so a HARD reject is issued ONLY on a unanimous, definitive
+    // absence — every ambiguity becomes a review or a retry, never a permanent
+    // rejection of a real organisation (PROD-CX-004 §2/§4/§6).
     const dnsClass = await classifyDomainDns(normalizedEmailDomain);
     if (dnsClass === 'no_records') {
-      // Apex + www both have zero A/AAAA → there is definitively no website
-      // at the email domain → hard reject (NOT a review; requiresManualReview=false).
+      // UNANIMOUS across every resolver: no A/AAAA, no MX, no NS anywhere → the
+      // domain does not exist → the ONLY hard reject (requiresManualReview=false).
       return block(base, 'NO_WEBSITE_FOUND', false);
     }
-    // has_records | transient → do not reject on a transient condition.
-    throw new WebsiteProbeTransientError(normalizedEmailDomain);
+    if (dnsClass === 'transient') {
+      // We genuinely cannot determine existence right now (resolvers flaking) →
+      // "try again" (503), which is recoverable and self-heals. Never a reject.
+      throw new WebsiteProbeTransientError(normalizedEmailDomain);
+    }
+    if (dnsClass === 'has_records') {
+      // A web host resolves via at least one resolver AND MX was already proven
+      // by the eligibility stage — a provably real, active organisation whose
+      // site was only unreachable from our egress (temporary web-reachability
+      // failure, no SSRF/forwarding/canonical/parked concern). Mark AUTO-APPROVABLE
+      // (§6): a caller holding email-ownership proof may admit it; absent that,
+      // it is a manual review. Either way, never a hard rejection.
+      return { ...block(base, 'NO_WEBSITE_FOUND', true), autoApprovable: true };
+    }
+    // registered_no_web → MX/NS prove a real registered domain whose website is
+    // elsewhere or not yet up, but no web host resolves → MANUAL REVIEW only
+    // (not auto-approvable). Never a hard rejection.
+    return block(base, 'NO_WEBSITE_FOUND', true);
   }
   if (resolution.input_domain !== resolution.final_domain) {
     return block(base, 'DOMAIN_NOT_CANONICAL', true);
