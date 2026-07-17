@@ -148,7 +148,10 @@ describe('validateCompanyIdentity — authoritative verdict', () => {
     expect(id.autoApprovable).toBe(true);
   });
 
-  it('MANUAL review (not auto-approvable) when only MX/NS exist but no web host (registered_no_web)', async () => {
+  it('AUTO-APPROVABLE when only MX/NS exist (registered_no_web) — MX proven by eligibility ⇒ real org', async () => {
+    // MX was proven by the eligibility stage, so a domain that publishes MX/NS
+    // but whose web host we could not resolve from our egress is still a real,
+    // active organisation. It must NOT be hard-rejected (PROD-CX-004 §6).
     const id = await validateCompanyIdentity('john@acme.com', deps({
       probeWebsite: async (d) => PROBE_FAILED(d),
       classifyDomainDns: async () => 'registered_no_web',
@@ -156,8 +159,7 @@ describe('validateCompanyIdentity — authoritative verdict', () => {
     expect(id.eligible).toBe(false);
     expect(id.validationReason).toBe('NO_WEBSITE_FOUND');
     expect(id.requiresManualReview).toBe(true);
-    // Not the temporary-web-reachability case → NOT auto-approvable.
-    expect(id.autoApprovable).toBeFalsy();
+    expect(id.autoApprovable).toBe(true);
   });
 
   it('does NOT reject on a transient DNS failure → "try again" (throws)', async () => {

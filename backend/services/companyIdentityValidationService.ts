@@ -105,7 +105,7 @@ export interface DomainDnsResolvers {
   dohQuery?: (name: string, type: 'A' | 'AAAA' | 'MX' | 'NS') => Promise<string[]>;
 }
 
-const DOH_TIMEOUT_MS = 4_000;
+const DOH_TIMEOUT_MS = 8_000;
 const DOH_TYPE_CODE: Record<string, number> = { A: 1, AAAA: 28, MX: 15, NS: 2 };
 
 /** One DoH JSON resolver (RFC 8484 application/dns-json). Fail-open → []. */
@@ -381,19 +381,25 @@ export async function validateCompanyIdentity(
       // "try again" (503), which is recoverable and self-heals. Never a reject.
       throw new WebsiteProbeTransientError(normalizedEmailDomain);
     }
-    if (dnsClass === 'has_records') {
-      // A web host resolves via at least one resolver AND MX was already proven
-      // by the eligibility stage — a provably real, active organisation whose
-      // site was only unreachable from our egress (temporary web-reachability
-      // failure, no SSRF/forwarding/canonical/parked concern). Mark AUTO-APPROVABLE
-      // (§6): a caller holding email-ownership proof may admit it; absent that,
-      // it is a manual review. Either way, never a hard rejection.
+    if (dnsClass === 'has_records' || dnsClass === 'registered_no_web') {
+      // The domain provably EXISTS and is a real, active organisation:
+      //   • has_records       → a web host resolves via at least one resolver;
+      //   • registered_no_web → MX/NS publish a real registered/delegated domain.
+      // In BOTH cases valid MX was already proven by the eligibility stage (rule
+      // 2) — the organisation demonstrably receives mail (it received our signup
+      // email). Only the website was unreachable from our egress, which on
+      // serverless is frequently a REGIONAL DNS artefact (some authoritative NS
+      // are slow/unresolvable from a given runtime) rather than a real absence.
+      // Blocking here would false-reject a confirmed-real organisation, which is
+      // exactly what PROD-CX-004 forbids. Mark AUTO-APPROVABLE (§6): email
+      // ownership is proven downstream by the verification that gates account
+      // creation, so no unverified account is ever created. Never a hard reject.
       return { ...block(base, 'NO_WEBSITE_FOUND', true), autoApprovable: true };
     }
-    // registered_no_web → MX/NS prove a real registered domain whose website is
-    // elsewhere or not yet up, but no web host resolves → MANUAL REVIEW only
-    // (not auto-approvable). Never a hard rejection.
-    return block(base, 'NO_WEBSITE_FOUND', true);
+    // (unreachable in practice: eligibility already proved MX, so classifyDomainDns
+    // will always find at least MX → registered_no_web) — defensive hard reject
+    // only if the domain publishes absolutely nothing anywhere.
+    return block(base, 'NO_WEBSITE_FOUND', false);
   }
   if (resolution.input_domain !== resolution.final_domain) {
     return block(base, 'DOMAIN_NOT_CANONICAL', true);
