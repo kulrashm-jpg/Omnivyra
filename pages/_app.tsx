@@ -63,7 +63,7 @@ import {
 // the marketing navbar and bypass the auth gate.
 const LEAD_CAPTURE_PUBLIC_ROUTES = ['/request-demo', '/contact-sales', '/book-consultation', '/talk-to-expert', '/thank-you'];
 
-const LANDING_PUBLIC_ROUTES = ['/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report', ...LEAD_CAPTURE_PUBLIC_ROUTES];
+const LANDING_PUBLIC_ROUTES = ['/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/help', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report', ...LEAD_CAPTURE_PUBLIC_ROUTES];
 
 const WebsiteAnalytics: React.FC = () => {
   const router = useRouter();
@@ -223,7 +223,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     setMounted(true);
   }, []);
 
-  const publicRoutes = ['/login', '/super-admin/login', '/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/get-free-credits', '/create-account', '/auth/callback', '/auth/verify', '/auth/set-password', '/auth/accept-invite', ...LEAD_CAPTURE_PUBLIC_ROUTES];
+  const publicRoutes = ['/login', '/super-admin/login', '/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/help', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/get-free-credits', '/create-account', '/auth/callback', '/auth/verify', '/auth/set-password', '/auth/accept-invite', ...LEAD_CAPTURE_PUBLIC_ROUTES];
   const isBlogRoute = router.pathname === '/blog' || router.pathname.startsWith('/blog/');
   const isAdminBlogRoute = router.pathname === '/admin/blog' || router.pathname.startsWith('/admin/blog/');
   const isSuperAdminRoute = router.pathname.startsWith('/super-admin');
