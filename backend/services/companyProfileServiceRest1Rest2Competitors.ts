@@ -2,6 +2,7 @@
 /** TEMP2 — split from companyProfileServiceRest1.ts (barrel preserved; importers unchanged). */
 /** TEMP1 — split from companyProfileService.ts (barrel preserved; importers unchanged). */
 import { ownedDbTable } from '../db/writeOwner';
+import { isSelfOrPlatformDomain } from './companyProfile/competitorDomainFilter';
 /**
  * companyProfileService.ts — orchestration only.
  * All helpers/types live in ./companyProfile/* sub-modules.
@@ -687,23 +688,10 @@ async function buildRefinedPayload(
 
   // Never let the profiled company's OWN domain — or the platform's own domain
   // (omnivyra.com) — surface as a "competitor" in the persisted first-load
-  // scorecard. The live unified path already excludes omnivyra.com; this
-  // persisted competitor_details path previously did not, which is how the
-  // platform's own category leaked onto the profile on first load.
-  const ownDomainHost = (() => {
-    const raw = String(workingProfile.website_url ?? '').trim();
-    if (!raw) return '';
-    try {
-      return new URL(/^https?:\/\//.test(raw) ? raw : `https://${raw}`).hostname.replace(/^www\./, '').toLowerCase();
-    } catch { return ''; }
-  })();
-  const isSelfOrPlatformDomain = (domain: string | null): boolean => {
-    const d = String(domain ?? '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
-    if (!d) return false;
-    if (/(^|\.)omnivyra\.com$/i.test(d)) return true;
-    return Boolean(ownDomainHost && (d === ownDomainHost || d.endsWith(`.${ownDomainHost}`)));
-  };
-  const rankedCompetitorsClean = rankedCompetitors.filter((c) => !isSelfOrPlatformDomain(c.domain));
+  // scorecard. Shared with the read-time scrub in the company-profile GET.
+  const rankedCompetitorsClean = rankedCompetitors.filter(
+    (c) => !isSelfOrPlatformDomain(c.domain, workingProfile.website_url),
+  );
 
   const splitCompetitorOutput = splitRankedCompetitorsForOutput(rankedCompetitorsClean, 8, 3);
   assertCompetitorOutputPartition(splitCompetitorOutput, 'refine_profile_competitor_output');

@@ -1,5 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { NextApiRequest, NextApiResponse } from 'next';
+import { scrubCompetitorDetails } from '../../../backend/services/companyProfile/competitorDomainFilter';
 import {
   getProfile,
   saveProfile,
@@ -251,6 +252,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             unified_competitor_intelligence: unifiedCompetitorIntelligence,
           },
         };
+      }
+      // Read-time scrub: a profile saved before the write-time filter existed may
+      // still carry competitor_details that include omnivyra.com or the company's
+      // OWN domain. Strip them on serve so the first-load scorecard never shows
+      // self/platform as a "competitor" — no regenerate required.
+      {
+        const mp = (responseProfile.report_settings as { market_pulse?: { competitor_details?: Array<{ domain?: unknown }> } } | undefined)?.market_pulse;
+        if (mp && Array.isArray(mp.competitor_details)) {
+          const scrubbed = scrubCompetitorDetails(mp.competitor_details, (responseProfile as { website_url?: unknown }).website_url);
+          if (scrubbed.length !== mp.competitor_details.length) {
+            responseProfile.report_settings = {
+              ...(responseProfile.report_settings ?? {}),
+              market_pulse: { ...mp, competitor_details: scrubbed },
+            };
+          }
+        }
       }
       const response: Record<string, unknown> = { profile: responseProfile };
       response.company_profile_review = getCompanyProfileReviewStatus(resolvedProfile);
