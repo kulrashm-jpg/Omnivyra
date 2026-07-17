@@ -685,13 +685,33 @@ async function buildRefinedPayload(
     final_competitors_count: rankedCompetitors.length,
   });
 
-  const splitCompetitorOutput = splitRankedCompetitorsForOutput(rankedCompetitors, 8, 3);
+  // Never let the profiled company's OWN domain — or the platform's own domain
+  // (omnivyra.com) — surface as a "competitor" in the persisted first-load
+  // scorecard. The live unified path already excludes omnivyra.com; this
+  // persisted competitor_details path previously did not, which is how the
+  // platform's own category leaked onto the profile on first load.
+  const ownDomainHost = (() => {
+    const raw = String(workingProfile.website_url ?? '').trim();
+    if (!raw) return '';
+    try {
+      return new URL(/^https?:\/\//.test(raw) ? raw : `https://${raw}`).hostname.replace(/^www\./, '').toLowerCase();
+    } catch { return ''; }
+  })();
+  const isSelfOrPlatformDomain = (domain: string | null): boolean => {
+    const d = String(domain ?? '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+    if (!d) return false;
+    if (/(^|\.)omnivyra\.com$/i.test(d)) return true;
+    return Boolean(ownDomainHost && (d === ownDomainHost || d.endsWith(`.${ownDomainHost}`)));
+  };
+  const rankedCompetitorsClean = rankedCompetitors.filter((c) => !isSelfOrPlatformDomain(c.domain));
+
+  const splitCompetitorOutput = splitRankedCompetitorsForOutput(rankedCompetitorsClean, 8, 3);
   assertCompetitorOutputPartition(splitCompetitorOutput, 'refine_profile_competitor_output');
   const competitorValues = splitCompetitorOutput.competitors.map((item) => item.name);
-  const competitorDetails = rankedCompetitorDetailsForProfile(rankedCompetitors);
-  const competitorIntelligence = rankedCompetitorIntelligenceForProfile(rankedCompetitors);
-  const competitorQuality = rankedCompetitorQualityForProfile(rankedCompetitors);
-  const marketAlternatives = rankedMarketAlternativesForProfile(rankedCompetitors);
+  const competitorDetails = rankedCompetitorDetailsForProfile(rankedCompetitorsClean);
+  const competitorIntelligence = rankedCompetitorIntelligenceForProfile(rankedCompetitorsClean);
+  const competitorQuality = rankedCompetitorQualityForProfile(rankedCompetitorsClean);
+  const marketAlternatives = rankedMarketAlternativesForProfile(rankedCompetitorsClean);
   const marketPulseWithAlternatives = marketPulseSettings || workingProfile.report_settings?.market_pulse
     ? {
         ...(workingProfile.report_settings?.market_pulse ?? {}),

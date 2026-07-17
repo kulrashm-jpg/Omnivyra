@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletion } from '../../../backend/services/aiGateway';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
+import { buildCompanyUnderstanding } from '../../../backend/services/context/companyUnderstandingService';
 
 /**
  * Competitive-intelligence chat.
@@ -32,7 +33,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const p = profile as unknown as Record<string, unknown>;
     const str = (v: unknown) => String(v ?? '').trim();
-    const website = str(p.website) || str(p.canonical_website) || str(p.domain);
 
     // Cumulative memory: seed from what we already established last time — the persisted
     // "company understanding" and the competitors already tracked — so this session builds
@@ -49,14 +49,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .map((c) => str(c?.name)).filter(Boolean);
     const trackedCompetitors = Array.from(new Set([...savedCompetitors, ...guidedNames]));
 
+    // Understand the CORE BUSINESS first, from multiple public sources (profile
+    // fields + Wikidata firmographics + Wikipedia description; Crunchbase/
+    // Bloomberg when keyed). This grounds discovery in what the company actually
+    // is — not a single field — so competitors are same-category and accurate.
+    const companyRead = await buildCompanyUnderstanding(companyId, p);
     const grounding = [
-      `Company: ${str(p.name) || companyId}`,
-      website ? `Website: ${website}` : '',
-      `Industry/Category: ${[str(p.industry), str(p.category)].filter(Boolean).join(' / ') || 'Not set'}`,
-      `What it sells (products/services): ${str(p.products_services) || 'Not set'}`,
-      `Unique value: ${str(p.unique_value) || 'Not set'}`,
-      `Target customer: ${str(p.target_audience) || str(p.ideal_customer_profile) || 'Not set'}`,
-      `Content themes: ${str(p.content_themes) || 'Not set'}`,
+      companyRead.groundingText,
+      str(p.content_themes) ? `Content themes: ${str(p.content_themes)}` : '',
       priorUnderstanding ? `Established understanding (refine with the user's input, do NOT discard): ${priorUnderstanding}` : '',
       trackedCompetitors.length ? `Competitors already confirmed by the user (keep unless the user removes them): ${trackedCompetitors.join(', ')}` : '',
     ].filter(Boolean).join('\n');
