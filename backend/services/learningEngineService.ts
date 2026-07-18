@@ -1,5 +1,17 @@
 import { saveLearningInsights } from '../db/performanceStore';
 
+/**
+ * @deprecated WRITER-EXEC-006 Wave 5 (item 10). Legacy campaign-level learning
+ * heuristic. Grep-proven to have ZERO runtime callers — referenced only by
+ * backend/tests/integration/analytics_learning.test.ts, not exported from the
+ * services barrel, and its output is consumed nowhere in pages/ or backend/.
+ * Superseded by the content-level Wave-5 learning surface
+ * (backend/services/content/learningEngine.ts recordLearningEvent, which learns
+ * per-published-item into learning_intelligence / learning_memory). KEPT
+ * FUNCTIONAL (not deleted): its integration test still imports it and cert env is
+ * down, so it cannot be runtime-revalidated — preservation over removal. Do NOT
+ * wire into new code; the Wave-5 learning surface is the seam.
+ */
 export async function generateLearningInsights(input: {
   analytics: {
     engagementRate: number;

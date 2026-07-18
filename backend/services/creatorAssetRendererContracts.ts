@@ -137,11 +137,28 @@ export type RenderOptions = {
   previewBufferOnly?: boolean;
 };
 
+/**
+ * WS3 fit-to-content contract. Consumed downstream (scheduler reads
+ * `media_bundle.metadata.text_fit.ok` to block publishing), so the shape/keys
+ * are load-bearing: `ok=false` means at least one field could not be shown
+ * completely at/above the minimum legible font. `ok=true` + `overflowFields=[]`
+ * is the everything-fits baseline (backward compatible).
+ */
+export type TextFitResult = {
+  ok: boolean;
+  overflowFields: string[];
+};
+
+export const OK_TEXT_FIT: TextFitResult = { ok: true, overflowFields: [] };
+
 export type OverlayQualityReport = {
   score: number;
   flags: string[];
   text_units: number;
   preset: string;
+  /** Structured fit-to-content result (WS3). Absent on legacy paths that
+   *  predate the fitter; treat absent as "unknown / assumed ok". */
+  text_fit?: TextFitResult;
 };
 
 type OverlayLayoutPreset = {
@@ -205,6 +222,88 @@ export function escapeXml(value: string): string {
     .replace(/'/g, '&apos;');
 }
 
+// ── Grapheme-aware measurement/slicing (WS3) ─────────────────────────────
+// UTF-16 `.length` / `.slice` split surrogate pairs and combining sequences,
+// so an emoji counts as 2 units and can be cut mid-surrogate (producing a
+// replacement glyph in the render). We segment by grapheme cluster via
+// Intl.Segmenter, falling back to code-point iteration (Array.from) where the
+// segmenter is unavailable — that fallback already keeps surrogate pairs whole.
+let graphemeSegmenterSingleton: Intl.Segmenter | null | undefined;
+function graphemeSegmenter(): Intl.Segmenter | null {
+  if (graphemeSegmenterSingleton !== undefined) return graphemeSegmenterSingleton;
+  try {
+    const Seg = (Intl as unknown as { Segmenter?: typeof Intl.Segmenter }).Segmenter;
+    graphemeSegmenterSingleton = typeof Seg === 'function'
+      ? new Seg(undefined, { granularity: 'grapheme' })
+      : null;
+  } catch {
+    graphemeSegmenterSingleton = null;
+  }
+  return graphemeSegmenterSingleton;
+}
+
+/** Split a string into grapheme clusters (emoji-safe). */
+export function toGraphemes(value: string): string[] {
+  const str = String(value ?? '');
+  if (!str) return [];
+  const seg = graphemeSegmenter();
+  if (seg) {
+    const out: string[] = [];
+    for (const piece of seg.segment(str)) out.push(piece.segment);
+    return out;
+  }
+  // Code-point fallback — never splits a surrogate pair.
+  return Array.from(str);
+}
+
+/** Grapheme-cluster length (emoji count as one). */
+export function graphemeLength(value: string): number {
+  return toGraphemes(value).length;
+}
+
+/** Grapheme-safe slice — indices are in grapheme units, never mid-surrogate. */
+export function graphemeSlice(value: string, start: number, end?: number): string {
+  return toGraphemes(value).slice(start, end).join('');
+}
+
+/**
+ * Fit-to-content sizer (WS3). Returns the LARGEST font (down to a floor) at
+ * which `text` fits within `maxLines × char budget`, RECOMPUTING the per-line
+ * char budget at each candidate size — a smaller font fits more chars per line.
+ * This is the generalization of the old keyInsight-only shrink loop and fixes
+ * the prior bug where an adaptive multiplier scaled the font but left the
+ * char budget static (so wrap and box disagreed). `fits=false` means the text
+ * could NOT be fully shown even at the floor → the caller records an overflow
+ * and still renders the shrunk text (best-effort visible).
+ */
+export function fitTextToBox(input: {
+  text: string;
+  baseFontSize: number;
+  baseCharsPerLine: number;
+  maxLines: number;
+  /** Floor as a fraction of the base font (default 0.72, matching the legacy insight floor). */
+  minFontScale?: number;
+  /** Absolute floor in px (default 16). */
+  minFontSize?: number;
+}): { fontSize: number; charsPerLine: number; fits: boolean; lines: number } {
+  const len = graphemeLength(compactText(input.text));
+  const base = Math.max(1, Math.round(input.baseFontSize));
+  const floor = Math.min(base, Math.max(input.minFontSize ?? 16, Math.round(base * (input.minFontScale ?? 0.72))));
+  const maxLines = Math.max(1, input.maxLines);
+  const charsAt = (size: number) => Math.max(8, Math.round(input.baseCharsPerLine * (base / Math.max(1, size))));
+  const linesAt = (size: number) => (len === 0 ? 0 : Math.ceil(len / charsAt(size)));
+  const fitsAt = (size: number) => linesAt(size) <= maxLines;
+  let size = base;
+  while (size > floor && !fitsAt(size)) size -= 1;
+  return { fontSize: size, charsPerLine: charsAt(size), fits: fitsAt(size), lines: linesAt(size) };
+}
+
+/** Combine per-field fit outcomes into the emitted contract. */
+export function mergeTextFit(fields: Array<{ field: string; fits: boolean }>): TextFitResult {
+  const overflowFields = Array.from(new Set(fields.filter((f) => !f.fits).map((f) => f.field)));
+  return { ok: overflowFields.length === 0, overflowFields };
+}
+
 function wrapText(value: string, maxChars: number, maxLines: number): string[] {
   const words = value.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
@@ -214,7 +313,7 @@ function wrapText(value: string, maxChars: number, maxLines: number): string[] {
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i];
     const next = current ? `${current} ${word}` : word;
-    if (next.length <= maxChars) {
+    if (graphemeLength(next) <= maxChars) {
       current = next;
       continue;
     }
@@ -237,13 +336,13 @@ export function balanceTextLines(value: string, maxChars: number, maxLines: numb
   const clean = compactText(value);
   if (!clean) return [];
   const words = clean.split(/\s+/).filter(Boolean);
-  if (words.length <= 2) return [clean.slice(0, maxChars)];
+  if (words.length <= 2) return [graphemeSlice(clean, 0, maxChars)];
   const lines = wrapText(clean, maxChars, maxLines);
   if (lines.length <= 1) return lines;
 
   const last = lines[lines.length - 1];
   const previous = lines[lines.length - 2];
-  if (last.length < Math.max(10, previous.length * 0.42)) {
+  if (graphemeLength(last) < Math.max(10, graphemeLength(previous) * 0.42)) {
     const previousWords = previous.split(/\s+/);
     const moved = previousWords.pop();
     if (moved) {
@@ -253,11 +352,12 @@ export function balanceTextLines(value: string, maxChars: number, maxLines: numb
   }
 
   return lines.map((line, index) => {
-    if (index < maxLines - 1 || line.length <= maxChars) return line;
+    if (index < maxLines - 1 || graphemeLength(line) <= maxChars) return line;
     // Last-resort clip to fit — end on a COMPLETE word, never mid-word, and no
-    // trailing ellipsis (which reads as "cut off"). Generation is now budgeted to
-    // fit the composition, so this should rarely trigger.
-    const cut = line.slice(0, maxChars).trimEnd();
+    // trailing ellipsis (which reads as "cut off"). Grapheme-safe so an emoji is
+    // never severed mid-surrogate. Generation is now budgeted to fit the
+    // composition, so this should rarely trigger.
+    const cut = graphemeSlice(line, 0, maxChars).trimEnd();
     const lastSpace = cut.lastIndexOf(' ');
     return (lastSpace > maxChars * 0.5 ? cut.slice(0, lastSpace).trimEnd() : cut) || line;
   });
@@ -646,11 +746,15 @@ export function normalizeOverlayText(input: {
   // composer skips blank blocks). Strictly opt-in via the marker the creator
   // page sets on overlay_text — every existing flow (no marker) is unchanged.
   const authoritative = direct.__template_authoritative === true || metadataOverlay.__template_authoritative === true;
+  // Source-slice caps are grapheme-safe (WS3): never sever an emoji mid-surrogate.
+  // The caps (76/84/190/96/42) sit ABOVE the render fit budgets — even after the
+  // fitter shrinks a field to its floor it can show ~this many chars — so average
+  // copy is not pre-clipped below what the overlay can actually fit.
   const cta = authoritative
-    ? compactText(overlay.cta || '').replace(/\b(click here|submit|read now)\b/gi, 'Learn more').slice(0, 42)
-    : compactText(overlay.cta || input.metadata.cta || 'Learn more').replace(/\b(click here|submit|read now)\b/gi, 'Learn more').slice(0, 42);
+    ? graphemeSlice(compactText(overlay.cta || '').replace(/\b(click here|submit|read now)\b/gi, 'Learn more'), 0, 42)
+    : graphemeSlice(compactText(overlay.cta || input.metadata.cta || 'Learn more').replace(/\b(click here|submit|read now)\b/gi, 'Learn more'), 0, 42);
   return {
-    hook: compactText(authoritative ? overlay.hook : (overlay.hook || input.metadata.topic || input.title)).slice(0, 76),
+    hook: graphemeSlice(compactText(authoritative ? overlay.hook : (overlay.hook || input.metadata.topic || input.title)), 0, 76),
     // Text-inside must NEVER render blank. When the template/answer fields carry
     // no headline (e.g. the workspace brief flow supplies a free-text brief, not a
     // per-field headline, and the curated template has no default field values),
@@ -658,10 +762,10 @@ export function normalizeOverlayText(input: {
     // mode. `input.title` is real generated copy (descriptor.headline / caption
     // hook), NOT the template placeholder the authoritative flag guards against —
     // so this restores on-image text without re-introducing garbled examples.
-    headline: compactText(overlay.headline || input.title).slice(0, 84),
-    keyInsight: compactText(overlay.keyInsight || overlay.key_insight || '').slice(0, 190),
+    headline: graphemeSlice(compactText(overlay.headline || input.title), 0, 84),
+    keyInsight: graphemeSlice(compactText(overlay.keyInsight || overlay.key_insight || ''), 0, 190),
     cta,
-    supportingText: compactText(overlay.supportingText || overlay.supporting_text || '').slice(0, 96),
+    supportingText: graphemeSlice(compactText(overlay.supportingText || overlay.supporting_text || ''), 0, 96),
   };
 }
 
@@ -853,6 +957,11 @@ export function evaluateOverlayQuality(input: {
   /** Carousel slides must carry a body; a blank body is a hard defect ("not worth
    *  presenting"). Single promo images may legitimately be headline-only. */
   expectBody?: boolean;
+  /** WS3 fit outcomes measured by the caller's fitter (per field, did it fit at/above
+   *  the min font). When supplied, these drive the STRUCTURED `text_fit` result
+   *  authoritatively; when omitted, `text_fit` is derived from the char-budget
+   *  heuristic below so the function alone still emits a structured result. */
+  fit?: { headline?: boolean; keyInsight?: boolean; supportingText?: boolean };
 }): OverlayQualityReport {
   const textUnits = [input.overlay.hook, input.overlay.headline, input.overlay.keyInsight, input.overlay.supportingText, input.overlay.cta]
     .join(' ')
@@ -886,11 +995,32 @@ export function evaluateOverlayQuality(input: {
   if (input.headlineLines.length >= 3 && input.preset.headlineSize > 48) flags.push('headline_dominates_visual');
   const severe = flags.filter((flag) => flag.startsWith('severe_')).length;
   const score = Math.max(35, 100 - (flags.length * 10) - (severe * 12) - Math.max(0, textUnits - 230) / 8);
+  // Structured fit-to-content result (WS3). Prefer the caller's measured fit
+  // outcomes; otherwise reproduce the advisory char-budget heuristic (the same
+  // signal the `*_truncated_or_tight` flags express) as a structured verdict.
+  const overflowFields: string[] = [];
+  const headlineOverflowByHeuristic = Boolean(input.overlay.headline)
+    && input.headlineLines.length >= input.preset.maxHeadlineLines
+    && graphemeLength(input.overlay.headline) > input.preset.headlineChars * input.preset.maxHeadlineLines;
+  const insightOverflowByHeuristic = Boolean(input.overlay.keyInsight)
+    && input.insightLines.length >= input.preset.maxInsightLines
+    && graphemeLength(input.overlay.keyInsight) > input.preset.insightChars * input.preset.maxInsightLines;
+  const supportOverflowByHeuristic = Boolean(input.overlay.supportingText)
+    && input.preset.maxSupportLines > 0
+    && input.supportLines.length >= input.preset.maxSupportLines
+    && graphemeLength(input.overlay.supportingText) > input.preset.supportChars * input.preset.maxSupportLines;
+  const headlineFits = input.fit ? input.fit.headline !== false : !headlineOverflowByHeuristic;
+  const insightFits = input.fit ? input.fit.keyInsight !== false : !insightOverflowByHeuristic;
+  const supportFits = input.fit ? input.fit.supportingText !== false : !supportOverflowByHeuristic;
+  if (Boolean(input.overlay.headline) && !headlineFits) overflowFields.push('headline');
+  if (Boolean(input.overlay.keyInsight) && !insightFits) overflowFields.push('keyInsight');
+  if (Boolean(input.overlay.supportingText) && !supportFits) overflowFields.push('supportingText');
   return {
     score: Math.round(score),
     flags,
     text_units: textUnits,
     preset: input.preset.name,
+    text_fit: { ok: overflowFields.length === 0, overflowFields },
   };
 }
 

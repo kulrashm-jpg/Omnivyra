@@ -1,6 +1,17 @@
 /**
  * Shared Creation Generation State (CREATOR-059, STEP 4).
  *
+ * @deprecated Wave 1 (item 3) — RETIRED as a live status source. In practice this
+ * FSM was INERT: `buildWorkspaceAssets`/`buildWorkspaceState` mint every asset as
+ * 'planned' and no runtime path ever advanced them, so the Publish center's counts
+ * were always "N planned, 0 everything else". The Marketing Creation Workspace no
+ * longer consumes this module; it derives status from the ONE canonical content
+ * lifecycle instead (see lib/content/contentLifecycle.ts — DEFAULT_LIFECYCLE and
+ * mapLegacyStatus('workspace_fsm', …), which folds this vocabulary onto the
+ * canonical spine). The module is kept (not deleted) only because a unit test still
+ * imports it; do NOT wire it into new UI. New status surfaces MUST read the
+ * canonical content spine (public.content.lifecycle_status).
+ *
  * The ONE canonical asset-status model the Marketing Workspace owns for every
  * Writer / Creator / Campaign asset — so there is no per-module tracking and one
  * publish center. This is the workspace's ORCHESTRATION view (planned → published);

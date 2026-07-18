@@ -354,6 +354,13 @@ export const WORKFLOW_CONFIG: Partial<Record<CreatorTypeId, WorkflowConfig>> = {
         ],
       },
       {
+        // Objective Preservation (Wave 0): this single-select's default (the
+        // first option, 'awareness') is a UI convenience ONLY — it must never be
+        // treated as a user-chosen objective. Any brief-derived objective
+        // (see mapBriefToEditorAnswers in creatorWorkflowModel.ts, merged AFTER
+        // buildDefaultAnswers) overrides it, and generation must not fabricate an
+        // objective when none was supplied. Mapping a free-form brief objective
+        // onto one of these option values is deferred to Wave 1 (UI work).
         id: 'objective',
         label: 'What should this asset achieve?',
         kind: 'single-select',

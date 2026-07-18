@@ -1,4 +1,5 @@
-import { generateCampaignPlan } from '../aiGateway';
+// WAVE3 (item 2): generateCampaignPlan import removed — the AI discoverability
+// branch was deleted, so no LLM dependency remains in this module.
 import { getDiscoverabilityTargets } from '../discoverabilityRules';
 import { getMediaRequirements, getPlatformMediaSearchRule } from '../platformMediaSearchRules';
 import {
@@ -251,95 +252,12 @@ export async function optimizeDiscoverabilityForPlatform(
   platform: string,
   contentType: string
 ): Promise<DiscoverabilityMeta> {
-  const deterministic = buildDeterministicDiscoverabilityMeta(masterContent, platform, contentType);
-  const targets = getDiscoverabilityTargets(platform);
-  const aiOptimizationEnabled = String(process.env.DISCOVERABILITY_OPTIMIZER_AI || '').toLowerCase() === 'true';
-  if (!aiOptimizationEnabled) {
-    return deterministic;
-  }
-  try {
-    const aiResult = await generateCampaignPlan({
-      companyId: null,
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      temperature: 0,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Generate discoverability metadata. Return JSON only with: keyword_clusters {primary:string[], secondary:string[], intent_outcome:string[]}, hashtags:string[], youtube_tags?:string[]. Keep hashtags platform-aware and bounded by requested limits.',
-        },
-        {
-          role: 'user',
-          content: JSON.stringify({
-            platform: nonEmpty(platform).toLowerCase(),
-            content_type: nonEmpty(contentType).toLowerCase() || 'post',
-            hashtag_target: {
-              min: targets.hashtagMin,
-              max: targets.hashtagMax,
-              recommended: targets.hashtagRecommended,
-            },
-            youtube_tags_max: targets.youtubeTagsMax || 50,
-            master_content: masterContent,
-          }),
-        },
-      ],
-    });
-    const parsed = JSON.parse(nonEmpty(aiResult?.output) || '{}') as {
-      keyword_clusters?: { primary?: unknown[]; secondary?: unknown[]; intent_outcome?: unknown[] };
-      hashtags?: unknown[];
-      youtube_tags?: unknown[];
-    };
-    const clusters: DiscoverabilityMeta['keyword_clusters'] = {
-      primary: uniqueLimited((parsed.keyword_clusters?.primary || []).map((v) => String(v)), 6),
-      secondary: uniqueLimited((parsed.keyword_clusters?.secondary || []).map((v) => String(v)), 8),
-      intent_outcome: uniqueLimited((parsed.keyword_clusters?.intent_outcome || []).map((v) => String(v)), 6),
-    };
-    const hashtags = uniqueLimited(
-      (parsed.hashtags || []).map((v) => normalizeHashtag(String(v))).filter(Boolean),
-      targets.hashtagMax
-    );
-    const boundedHashtags =
-      hashtags.length >= targets.hashtagMin
-        ? hashtags
-        : buildHashtagsFromClusters(
-            {
-              primary: clusters.primary.length > 0 ? clusters.primary : deterministic.keyword_clusters.primary,
-              secondary: clusters.secondary.length > 0 ? clusters.secondary : deterministic.keyword_clusters.secondary,
-              intent_outcome:
-                clusters.intent_outcome.length > 0 ? clusters.intent_outcome : deterministic.keyword_clusters.intent_outcome,
-            },
-            targets.hashtagMin,
-            targets.hashtagMax
-          );
-    const youtube_tags =
-      nonEmpty(platform).toLowerCase() === 'youtube'
-        ? uniqueLimited(
-            (parsed.youtube_tags || []).map((v) => String(v)).filter(Boolean),
-            targets.youtubeTagsMax || 50
-          )
-        : undefined;
-    return {
-      ...deterministic,
-      strategy_source: 'ai',
-      keyword_clusters: {
-        primary: clusters.primary.length > 0 ? clusters.primary : deterministic.keyword_clusters.primary,
-        secondary: clusters.secondary.length > 0 ? clusters.secondary : deterministic.keyword_clusters.secondary,
-        intent_outcome:
-          clusters.intent_outcome.length > 0 ? clusters.intent_outcome : deterministic.keyword_clusters.intent_outcome,
-      },
-      hashtags: boundedHashtags,
-      youtube_tags: nonEmpty(platform).toLowerCase() === 'youtube'
-        ? (youtube_tags && youtube_tags.length > 0 ? youtube_tags : deterministic.youtube_tags)
-        : undefined,
-      generated_at: new Date().toISOString(),
-    };
-  } catch (error) {
-    console.warn('[content-generation-pipeline][discoverability-optimization-fallback]', {
-      platform: nonEmpty(platform).toLowerCase(),
-      content_type: nonEmpty(contentType).toLowerCase() || 'post',
-      error: String(error),
-    });
-    return deterministic;
-  }
+  // WAVE3 (item 2): discoverability metadata is pure mechanical formatting
+  // (hashtag/keyword derivation + platform-bounded limits) — not reasoning —
+  // so it is now DETERMINISTIC-ONLY. The former AI branch was already gated
+  // OFF by default (DISCOVERABILITY_OPTIMIZER_AI) and merely re-derived what
+  // buildDeterministicDiscoverabilityMeta already produces, then re-clamped it
+  // to the same limits. Removed the dead AI round-trip. Signature (async ⇒
+  // Promise<DiscoverabilityMeta>) and output shape are unchanged.
+  return buildDeterministicDiscoverabilityMeta(masterContent, platform, contentType);
 }

@@ -95,54 +95,11 @@ export type InfographicCopyInput = {
   staticOnly?: boolean;
 };
 
-function buildSystemPrompt(input: InfographicCopyInput): string {
-  const lines = [
-    'You are a senior infographic copywriter producing the editorial copy that will be laid out by a designer.',
-    'Your job: write information-DENSE copy for each section so the infographic reads as a busy reference page — NOT a minimal poster.',
-    'For every section you MUST produce all seven pieces:',
-    '  • lead: 1–2 specific sentences (≤200 chars) that frame the section concretely.',
-    '  • bullets: 3–5 short supporting points (each ≤80 chars). These carry the body of the information.',
-    '  • stat: a numeric callout {value, label} when one is genuinely relevant — otherwise null. Do NOT fabricate stats.',
-    '  • example: one concrete worked example or scenario (≤140 chars) when it helps — otherwise null.',
-    '  • take: one-line takeaway sentence (≤90 chars) that lands the section.',
-    '  • impact: the upside / positive outcome of acting on this section (≤80 chars).',
-    '  • risk: the risk / caveat / what to watch out for (≤80 chars).',
-    'IMPACT and RISK are required — they make the infographic feel balanced and enterprise-grade. Never leave them blank.',
-    'The deck must read as one coherent message ending in the CTA. No emoji, no markdown, no fluff.',
-    'No design directives ("use a clean font", "make sure to...") — only reader-facing content.',
-    // Craft bar — the difference between an amateur and a professional infographic.
-    'DISTINCTNESS: every piece within a section must be genuinely different — the lead frames, the bullets add NEW specifics, the takeaway is a fresh angle, impact and risk are opposites. NEVER reword the section heading, or restate one field as another.',
-    'BE SPECIFIC: name concrete mechanisms, tradeoffs, numbers, timeframes, and real scenarios. BANNED vague filler — do NOT write lines like "clarifies key concepts", "encourages collaboration", "enhances understanding", "a structured approach", "better communication", "drives engagement". Any such line must be replaced with a substantive, specific point a practitioner would find useful.',
-    'Each section HEADING must be a specific, insight- or benefit-led phrase (≤52 chars) — never the word "Infographic", the asset type, a step number alone, or a bare restatement of the topic.',
-  ];
-  if (input.mode === 'company-context' && input.companyContext) {
-    lines.push('Ground the copy in the supplied company context (audience, tone). Reference the company by name at most ONCE across the entire deck.');
-  } else {
-    lines.push('Independent mode — do NOT invent or use any company name; speak in second person ("you") to a generic operator-level reader.');
-  }
-  return lines.join(' ');
-}
-
-function buildUserPayload(input: InfographicCopyInput): string {
-  const payload = {
-    topic: input.topic,
-    layout: input.layout,
-    cta: input.cta || '(generate one)',
-    company: input.mode === 'company-context' ? (input.companyContext ?? null) : null,
-    sections: input.sectionTitles.map((title, idx) => ({
-      index: idx,
-      title,
-      existing_body: input.sectionBodies[idx] ?? '',
-    })),
-    output_schema: {
-      sections: '[{ index, lead, bullets: string[], stat: {value, label} | null, example: string | null, take: string | null, impact: string, risk: string }]',
-      narrative: 'string ≤200 chars',
-      cta: 'string ≤40 chars',
-    },
-    instruction: 'Return STRICT JSON matching output_schema. No prose outside the JSON object.',
-  };
-  return JSON.stringify(payload);
-}
+// WAVE3 (item 10): the superseded `buildSystemPrompt` / `buildUserPayload`
+// pair was removed here. `composeInfographicCopy` builds its prompts through
+// the CREATOR-115 role-aware `buildRoleSystemPrompt` / `buildRoleUserPayload`
+// pair below; grep confirmed the old pair had no call sites (module-private,
+// uncalled).
 
 type ParsedSection = {
   index: number;

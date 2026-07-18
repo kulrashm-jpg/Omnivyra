@@ -160,6 +160,14 @@ export type GatewayRequest = {
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   /** Maximum output tokens. If unset, uses model default. */
   max_tokens?: number;
+  /**
+   * WAVE3 (item 3): optional deterministic sampling seed. Threaded to the
+   * OpenAI provider call (`seed` param) so repeat calls with identical inputs
+   * are reproducible. Anthropic has no seed parameter, so it is accepted but
+   * ignored for that provider. ADDITIVE + backward compatible: when unset the
+   * provider params and the cache key are byte-for-byte unchanged.
+   */
+  seed?: number | null;
   /** Variant-scoped observability metadata supplied by adapters. */
   variantMetadata?: Record<string, unknown>;
   /** For prompt change tracking and token debugging. */
@@ -618,6 +626,8 @@ export async function callOpenAi(params: {
   pool?: LlmPoolName;
   stream?: boolean;
   onChunk?: (delta: string, accumulated: string) => void;
+  /** WAVE3: deterministic sampling seed (OpenAI-only). Omitted from the request when null/undefined. */
+  seed?: number | null;
 }): Promise<NormalizedCompletion> {
   const client = getOpenAiClient(params.apiKey);
   const timeoutMs = resolveProviderTimeoutMs(params.max_tokens, params.operation);
@@ -641,6 +651,7 @@ export async function callOpenAi(params: {
           stream: true,
           stream_options: { include_usage: true },
           ...(params.max_tokens ? { max_tokens: params.max_tokens } : {}),
+          ...(params.seed != null ? { seed: params.seed } : {}),
         },
         { timeout: timeoutMs, signal: params.signal },
       );
@@ -702,6 +713,7 @@ export async function callOpenAi(params: {
         response_format: params.response_format,
         messages: params.messages,
         ...(params.max_tokens ? { max_tokens: params.max_tokens } : {}),
+        ...(params.seed != null ? { seed: params.seed } : {}),
       },
       { timeout: timeoutMs, signal: params.signal },
     );
@@ -935,6 +947,12 @@ export async function callAnthropic(params: {
   pool?: LlmPoolName;
   stream?: boolean;
   onChunk?: (delta: string, accumulated: string) => void;
+  /**
+   * WAVE3: accepted for signature parity with callOpenAi (the retry dispatcher
+   * passes one param shape to both providers) but intentionally NOT sent — the
+   * Anthropic Messages API has no `seed` field.
+   */
+  seed?: number | null;
 }): Promise<NormalizedCompletion> {
   // Separate system message (Anthropic requires it top-level)
   const systemMsg = params.messages.find((m) => m.role === 'system');

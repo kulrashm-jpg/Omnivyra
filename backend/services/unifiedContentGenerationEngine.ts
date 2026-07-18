@@ -27,7 +27,8 @@ import { refineLanguageOutput } from './languageRefinementService';
 import { validateContentBlueprint } from './aiOutputValidationService';
 import {
   getContentBlueprintPromptWithFingerprint,
-  CONTENT_TYPE_SYSTEM_PROMPTS,
+  // WAVE3 (item 10): CONTENT_TYPE_SYSTEM_PROMPTS import removed — it was imported
+  // but never referenced in this module (grep-confirmed import-only).
   CONTENT_GENERATION_PROMPT_VERSION,
 } from '../prompts';
 import {
@@ -606,6 +607,11 @@ Return valid JSON with: { hook: string, key_points: string[], cta: string }`;
   return basePrompt;
 }
 
+/**
+ * @deprecated — superseded by backend/services/content/runtime/generationRuntime.ts (Wave 3).
+ * Retained as a reachable backward-compat surface (still exported via `unifiedEngine`);
+ * new short-form generation should flow through the canonical GenerationRuntime.
+ */
 export async function generateMasterContent(
   input: ContentInput,
   angle: ContentAngle,

@@ -30,7 +30,10 @@ export function getContentBlueprintPromptWithFingerprint(): {
 
 export const CONTENT_BLUEPRINT_SYSTEM = `Generate a content blueprint from the given context. Output strict JSON only: { "hook": string, "key_points": string[], "cta": string }. Hook: 1-2 punchy opening sentences. Key points: 2-4 bullet points. CTA: single closing call-to-action. Max 180 words total across all fields.`;
 
-export const CONTENT_MASTER_SYSTEM = `Write publish-ready universal master content from the provided JSON context. Keep it neutral and non-platform-specific. Maintain weekly narrative intent. Output plain text only. Max 180 words.`;
+// WAVE3 (item 10): the unused `CONTENT_MASTER_SYSTEM` const was removed here.
+// grep confirmed zero consumers — it was only re-exported by backend/prompts/index.ts
+// (that barrel line was also removed) and never imported anywhere. The distinct
+// CONTENT_MASTER_SYSTEM in contentGenerationPromptsV3.ts is unaffected.
 
 export const PLATFORM_VARIANTS_SYSTEM = `Rewrite the given content for each platform. Output strict JSON only. Keys match platform_config[].key exactly. Each value is adapted plain-text content. No markdown.
 

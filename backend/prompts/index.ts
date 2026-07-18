@@ -27,7 +27,6 @@ export {
   buildContentGenerationPrompt,
   CONTENT_GENERATION_PROMPT_VERSION,
   CONTENT_BLUEPRINT_SYSTEM,
-  CONTENT_MASTER_SYSTEM,
   PLATFORM_VARIANTS_SYSTEM,
   getContentBlueprintPromptWithFingerprint,
 } from './contentGeneration.prompt';

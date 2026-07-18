@@ -10,6 +10,12 @@ import { isMediaDependentContentType, resolvePlatformTargets, resolveMediaStatus
 import { optimizeDiscoverabilityForPlatform, buildMediaSearchIntent, normalizeLegacyMediaSearchIntent } from './discoverabilityHelpers';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { extractCompanyIdentity, buildCompanyContextBlockShort, buildIdentityLock, buildAntiGenericRules, type CompanyIdentity } from '../../../lib/content/companyContextBlock';
+// Wave 2 item 6 — cross-platform originality. The CANONICAL per-platform
+// adaptation profile is the single source of per-platform style. It replaces the
+// old shared `'Neutral adaptation with clear readability.'` fallback so every
+// platform (threads, youtube_community, tiktok, pinterest, reddit, …) gets its
+// OWN distinct directive and can no longer collide on byte-identical output.
+import { getPlatformProfile, listPlatformProfiles, listPlatformKeys } from '../../../lib/content/platformAdaptationProfiles';
 import { resolveBrandVoice } from '../brand/resolveBrandVoice';
 import { registerBrandCacheInvalidator } from '../brand/brandCacheRegistry';
 // Creator System-Prompt Governance Integration. Final Closure Pass —
@@ -72,15 +78,19 @@ import type { MasterContentPayload, PlatformVariantPayload, DailyExecutionItemLi
 
 export type { DiscoverabilityMeta } from './variantRenderers';
 
-/** Platform style hints for batch variant generation (structured). */
-export const PLATFORM_STYLE_MAP: Record<string, string> = {
-  linkedin: 'Professional tone, clear structure, slightly longer form with practical insight.',
-  facebook: 'Conversational voice, engagement-focused flow, short paragraphs.',
-  x: 'Concise and punchy style, high information density.',
-  twitter: 'Concise and punchy style, high information density.',
-  instagram: 'Emotionally resonant and visually descriptive tone, hashtag-friendly ending.',
-  youtube: 'Output for YouTube in TWO parts separated by a blank line. FIRST LINE = a compelling, SEO-optimized video TITLE, keyword front-loaded, max 70 characters, no hashtags. Then a blank line, then the DESCRIPTION: a strong hook in the first 1-2 lines (shown above the fold), followed by the value/detail, a clear call-to-action, and finish with 3-5 relevant hashtags on the last line.',
-};
+/**
+ * Platform style hints for batch variant generation (structured).
+ *
+ * Wave 2 item 6 — now DERIVED from the canonical adaptation profiles so there is
+ * exactly one source of per-platform style. Kept as an exported map for
+ * backward-compatibility with any existing importer; every value is a distinct
+ * profile `styleDirective` (no shared generic string). Prefer
+ * `getPlatformProfile()` for new call sites — it also covers unlisted platforms
+ * with a platform-named directive instead of a generic fallback.
+ */
+export const PLATFORM_STYLE_MAP: Record<string, string> = Object.fromEntries(
+  listPlatformProfiles().map((p) => [p.platform, p.styleDirective]),
+);
 
 /**
  * Generates platform variants in a single AI call. Returns map of "platform_contenttype" -> raw content.
@@ -123,7 +133,7 @@ async function generatePlatformVariantsInOneCall(
     key: `${t.platform}_${t.content_type}`,
     platform: t.platform,
     content_type: t.content_type,
-    style: PLATFORM_STYLE_MAP[t.platform] ?? 'Neutral adaptation with clear readability.',
+    style: getPlatformProfile(t.platform).styleDirective,
     max_chars: t.max_length ?? null,
     hashtags: t.discoverabilityMeta?.hashtags?.slice(0, 5) ?? [],
   }));
@@ -398,7 +408,7 @@ export async function renderPlatformVariantsFromBlueprint(
         generation_overrides: target.generation_overrides,
         adaptation_trace: {
           platform: target.platform,
-          style_strategy: PLATFORM_STYLE_MAP[target.platform] ?? 'AI adaptation',
+          style_strategy: getPlatformProfile(target.platform).styleDirective,
           character_limit_used: maxLength ?? null,
           target_length_used: maxLength ? Math.floor(maxLength * 0.9) : null,
           actual_length_used: bounded.length,
@@ -449,15 +459,12 @@ export async function generatePlatformVariantFromMaster(
 ): Promise<PlatformVariantPayload> {
   const normalizedPlatform = nonEmpty(platform).toLowerCase() || 'unknown';
   const contentType = nonEmpty(constraints.content_type).toLowerCase() || 'post';
-  const platformStyles: Record<string, string> = {
-    linkedin: 'Professional tone, clear structure, slightly longer form with practical insight.',
-    facebook: 'Conversational voice, engagement-focused flow, short paragraphs.',
-    x: 'Concise and punchy style, high information density.',
-    twitter: 'Concise and punchy style, high information density.',
-    instagram: 'Emotionally resonant and visually descriptive tone, hashtag-friendly ending.',
-    youtube: 'Output for YouTube in TWO parts separated by a blank line. FIRST LINE = a compelling, SEO-optimized video TITLE, keyword front-loaded, max 70 characters, no hashtags. Then a blank line, then the DESCRIPTION: a strong hook in the first 1-2 lines, then the value/detail, a clear call-to-action, and finish with 3-5 relevant hashtags on the last line.',
-  };
-  const styleInstruction = platformStyles[normalizedPlatform] || 'Neutral adaptation with clear readability.';
+  // Wave 2 item 6 — per-platform style comes from the canonical profile source
+  // (no local map, no shared 'Neutral adaptation' fallback). Unlisted platforms
+  // still get a platform-named directive rather than the generic string.
+  const styleProfile = getPlatformProfile(normalizedPlatform);
+  const styleInstruction = styleProfile.styleDirective;
+  const isListedPlatform = listPlatformKeys().includes(styleProfile.platform);
   const maxLength = toPositiveNumber(constraints.max_length);
   const targetLength = maxLength ? Math.floor(maxLength * 0.9) : null;
   const formatFamily =
@@ -508,7 +515,7 @@ export async function generatePlatformVariantFromMaster(
     };
   }
 
-  if (!platformStyles[normalizedPlatform]) {
+  if (!isListedPlatform) {
     console.warn('[content-generation-pipeline][unsupported-platform-style-default]', {
       platform: normalizedPlatform,
       content_type: contentType,
@@ -610,23 +617,13 @@ export async function generatePlatformVariantFromMaster(
       content_type: contentType,
       card_type: 'platform_variant',
     });
-    let bounded = maxLength ? truncateAtWordBoundary(processed3.content, maxLength) : processed3.content;
-    if (maxLength && targetLength && bounded.length < targetLength) {
-      const expanded = await requestVariant(
-        `Rewrite for platform "${normalizedPlatform}" and content_type "${contentType}" with richer promotional detail (CTA, hook, value) while staying <= ${maxLength} chars and targeting ~${targetLength} chars. Style: ${styleInstruction}`
-      );
-      const expandedRaw = nonEmpty(maxLength ? truncateAtWordBoundary(expanded, maxLength) : expanded);
-      if (expandedRaw.length > bounded.length) {
-        const processed3b = await processContent({
-          content: expandedRaw,
-          platform: normalizedPlatform,
-          content_type: contentType,
-          card_type: 'platform_variant',
-        });
-        const expandedBounded = maxLength ? truncateAtWordBoundary(processed3b.content, maxLength) : processed3b.content;
-        if (expandedBounded.length > bounded.length) bounded = expandedBounded;
-      }
-    }
+    // WAVE3 (item 2): removed the SECOND LLM "expansion" call that re-generated
+    // the variant purely to pad it toward ~90% of the char budget. Length
+    // *padding* via another AI round-trip is waste — the first pass is already
+    // instructed to target ~90% of the limit (see buildUserPrompt), and the
+    // deterministic char-limit logic in processContent/truncateAtWordBoundary
+    // already handles trimming to the cap. We keep the first bounded result.
+    const bounded = maxLength ? truncateAtWordBoundary(processed3.content, maxLength) : processed3.content;
     const traceWithLength = { ...adaptationTrace, actual_length_used: bounded.length };
     const mediaSearchIntent =
       normalizeLegacyMediaSearchIntent(constraints.existingMediaSearchIntent) ||
@@ -781,7 +778,7 @@ async function buildPlatformVariantsRuntime(item: DailyExecutionItemLike): Promi
               generation_overrides: target.generation_overrides,
               adaptation_trace: {
                 platform: target.platform,
-                style_strategy: PLATFORM_STYLE_MAP[target.platform] ?? 'Neutral',
+                style_strategy: getPlatformProfile(target.platform).styleDirective,
                 character_limit_used: target.max_length ?? null,
                 target_length_used: null,
                 actual_length_used: null,
@@ -822,7 +819,7 @@ async function buildPlatformVariantsRuntime(item: DailyExecutionItemLike): Promi
                 generation_overrides: target.generation_overrides,
                 adaptation_trace: {
                   platform: target.platform,
-                  style_strategy: PLATFORM_STYLE_MAP[target.platform] ?? 'Neutral',
+                  style_strategy: getPlatformProfile(target.platform).styleDirective,
                   character_limit_used: target.max_length ?? null,
                   target_length_used: null,
                   actual_length_used: null,
@@ -865,7 +862,7 @@ async function buildPlatformVariantsRuntime(item: DailyExecutionItemLike): Promi
         generation_overrides: target.generation_overrides,
         adaptation_trace: {
           platform: target.platform,
-          style_strategy: PLATFORM_STYLE_MAP[target.platform] ?? 'Neutral adaptation',
+          style_strategy: getPlatformProfile(target.platform).styleDirective,
           character_limit_used: maxLength ?? null,
           target_length_used: maxLength ? Math.floor(maxLength * 0.9) : null,
           actual_length_used: bounded.length,

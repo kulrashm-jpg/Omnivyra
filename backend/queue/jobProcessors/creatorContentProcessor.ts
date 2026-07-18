@@ -18,16 +18,15 @@
 
 import { Job } from 'bullmq';
 import { unifiedEngine } from '../../services/unifiedContentGenerationEngine';
-import { getCreatorSystemPrompt, CREATOR_VALIDATION_RULES } from '../../prompts/creatorContentPromptsV1';
+import { CREATOR_VALIDATION_RULES } from '../../prompts/creatorContentPromptsV1';
 import {
   repurposeVideoScriptForPlatforms,
   repurposeCarouselForPlatforms,
 } from '../../services/creatorContentRepurposingEngine';
 import { validateCreatorContentQuality } from '../../services/creatorContentValidation';
 import { recordCreatorFeedback } from '../../services/contentFeedbackLoop';
-import { runCompletionWithOperation } from '../../services/aiGateway';
 import { estimateLlmCostUsd } from '../../services/pricingService';
-import type { ContentAngle, ContentBlueprint } from '../../services/unifiedContentGenerationEngine';
+import type { ContentBlueprint } from '../../services/unifiedContentGenerationEngine';
 import { createCreatorExecutionEngine } from '../../services/executionEngines/creatorExecutionEngine';
 import { runCreatorOrchestration } from '../../services/creator/creatorOrchestrator';
 
@@ -514,150 +513,13 @@ async function processCreatorContentJobInner(job: Job): Promise<any> {
   }
 }
 
-/**
- * Generate 3 narrative angles for visual content
- * Tailored to visual storytelling, platform-native hooks, engagement psychology
- */
-async function generateCreatorAngles(
-  topic: string,
-  audience: string | undefined,
-  creatorContext: any,
-  contentType: string
-): Promise<ContentAngle[]> {
-  const systemPrompt = getCreatorSystemPrompt(contentType as any, creatorContext);
-
-  // Create 3 angle generation prompt
-  const anglesPrompt = `Given the topic "${topic}" for ${contentType} content targeting ${audience || 'general audience'}, and with the campaign context "${creatorContext.campaign_description}", generate 3 distinct narrative angles optimized for visual storytelling on ${creatorContext.target_platforms?.join(', ')}.
-
-Each angle should be fundamentally different in:
-1. **Hook approach** - How to grab attention in first 1-2 seconds
-2. **Visual narrative** - The visual progression that tells the story
-3. **Emotional resonance** - What feeling/reaction drives engagement
-
-Format as JSON array with: type (analytical/contrarian/strategic), label, title, angle_summary (50 words), and hook (one sentence that appears on-screen)`;
-
-  const response = await runCompletionWithOperation({
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: anglesPrompt },
-    ],
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    temperature: 0.7,
-    response_format: { type: 'json_object' },
-    operation: 'creator_angles_generation',
-  });
-
-  try {
-    const parsed = JSON.parse(response.output || '{}');
-    const angles = Array.isArray(parsed) ? parsed : parsed.angles || [];
-    console.log(`[generateCreatorAngles] Parsed ${angles.length} angles from AI response`);
-    return angles;
-  } catch (error) {
-    console.warn(`[generateCreatorAngles] AI parsing failed, using fallback:`, error instanceof Error ? error.message : error);
-    return buildFallbackCreatorAngles(topic, contentType);
-  }
-}
-
-/**
- * Select optimal angle based on feedback + creator context
- */
-async function selectOptimalCreatorAngle(
-  angles: ContentAngle[],
-  preference: string | undefined,
-  company_id: string
-): Promise<ContentAngle> {
-  if (preference && angles.some(a => a.type === preference)) {
-    return angles.find(a => a.type === preference)!;
-  }
-
-  // TODO: Query feedback effectiveness for this company
-  // For now, default to strategic (most versatile for visual content)
-  return angles.find(a => a.type === 'strategic') || angles[0];
-}
-
-/**
- * Generate master creator content (video script / carousel / story)
- */
-async function generateCreatorMasterContent(
-  topic: string,
-  audience: string | undefined,
-  angle: ContentAngle,
-  creatorContext: any,
-  contentType: string
-): Promise<any> {
-  const systemPrompt = getCreatorSystemPrompt(contentType as any, creatorContext);
-
-  const contentPrompt = `Generate a ${contentType} for the topic "${topic}" targeting ${audience || 'general audience'}.
-
-Angle: ${angle.label} (${angle.angle_summary})
-Campaign: ${creatorContext.campaign_description}
-Theme: ${creatorContext.content_theme}
-Target Platforms: ${creatorContext.target_platforms?.join(', ')}
-Brand Visual Tone: ${creatorContext.brand_visual_tone || 'professional'}
-Audio Guidance: ${creatorContext.audio_guidance || 'platform-native'}
-
-Requirements:
-- Hook must follow the pattern of the ${angle.type} angle
-- Visual descriptions must be specific and actionable
-- Each platform variant must respect the platform's native constraints
-- The narrative must drive the campaign objective
-
-Output ONLY valid JSON matching the ${contentType} format.`;
-
-  const response = await runCompletionWithOperation({
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: contentPrompt },
-    ],
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    temperature: 0,
-    response_format: { type: 'json_object' },
-    operation: `creator_content_generation_${contentType}`,
-  });
-
-  try {
-    const content = JSON.parse(response.output || '{}');
-    return {
-      ...content,
-      metadata: {
-        selected_angle: angle,
-        campaign_context: creatorContext.campaign_description,
-        theme: creatorContext.content_theme,
-      },
-    };
-  } catch {
-    throw new Error(`Failed to parse ${contentType} content generation response`);
-  }
-}
-
-/**
- * Fallback angles for creator content when AI generation fails
- */
-function buildFallbackCreatorAngles(topic: string, contentType: string): ContentAngle[] {
-  return [
-    {
-      type: 'analytical',
-      label: 'Deep Dive',
-      title: `Analyzing ${topic}: The Data Behind It`,
-      angle_summary: `Educational angle that breaks down ${topic} into key insights with data, statistics, and framework. Appeals to audiences seeking understanding.`,
-      hook: `The real reason ${topic} matters (and the data proves it)`,
-    },
-    {
-      type: 'contrarian',
-      label: 'Counterintuitive',
-      title: `Everyone's Wrong About ${topic}`,
-      angle_summary: `Challenge conventional wisdom on ${topic}. Presents counter-narrative with evidence. High engagement through controversy/surprise.`,
-      hook: `What everyone gets wrong about ${topic}`,
-    },
-    {
-      type: 'strategic',
-      label: 'Actionable',
-      title: `How to Win at ${topic}`,
-      angle_summary: `Practical, outcome-focused narrative. Provides specific steps/framework to achieve results with ${topic}. Appeals to doers/builders.`,
-      hook: `Here's exactly how to leverage ${topic} for results`,
-    },
-  ];
-}
+// WAVE3 (item 10): the dead 3-angle creator system (generateCreatorAngles /
+// selectOptimalCreatorAngle / generateCreatorMasterContent /
+// buildFallbackCreatorAngles + their anglesPrompt/contentPrompt) was removed
+// here. It was UNREACHABLE — processCreatorContentJobInner routes generation
+// through runCreatorOrchestration, and grep confirmed the four functions were
+// referenced only among themselves (external hits were static-analysis reports,
+// not importers). See generationRuntime.ts / creatorOrchestrator for the live path.
 
 /**
  * Estimate tokens for creator content (accounts for multiple platforms)

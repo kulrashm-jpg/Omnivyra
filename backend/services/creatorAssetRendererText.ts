@@ -29,7 +29,7 @@ import {
   scoreCreatorQuality,
   validateVisualGovernance,
 } from './creatorAssetGovernance';
-import { estimateTextBox, validateLayoutGeometry } from './creatorRenderGeometry';
+import { estimateTextBox, validateLayoutGeometry, charsPerLineForWidth } from './creatorRenderGeometry';
 import {
   assertRenderManifestExportable,
   createRenderManifest,
@@ -84,7 +84,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
-import { type OverlayQualityReport, escapeXml, balanceTextLines, compactText } from './creatorAssetRendererContracts';
+import { type OverlayQualityReport, escapeXml, balanceTextLines, compactText, fitTextToBox, mergeTextFit, graphemeLength, graphemeSlice } from './creatorAssetRendererContracts';
 import { defaultBrandPlacement } from './creatorAssetRendererImage';
 
 export function buildStatCardSvg(input: {
@@ -103,10 +103,18 @@ export function buildStatCardSvg(input: {
   const context = compactText(overlay.supportingText || overlay.keyInsight || '').trim();
   const cta = compactText(overlay.cta || '').trim();
 
-  const statSize = Math.round(width * 0.135);
-  const statLines = balanceTextLines(stat, Math.max(6, Math.floor(width / (statSize * 0.62))), 2);
-  const ctxSize = Math.round(width * 0.033);
-  const ctxLines = context ? balanceTextLines(context, Math.max(18, Math.floor(width / (ctxSize * 0.56))), 3) : [];
+  // WS3 fit-to-content: shrink the stat figure / context to fit their line
+  // budgets (recompute chars/line as the font drops). Short copy → base size.
+  const statBaseSize = Math.round(width * 0.135);
+  const statFit = fitTextToBox({ text: stat, baseFontSize: statBaseSize, baseCharsPerLine: Math.max(6, charsPerLineForWidth(width, statBaseSize, 0.62)), maxLines: 2 });
+  const statSize = statFit.fontSize;
+  const statLines = balanceTextLines(stat, statFit.charsPerLine, 2);
+  const ctxBaseSize = Math.round(width * 0.033);
+  const ctxFit = context
+    ? fitTextToBox({ text: context, baseFontSize: ctxBaseSize, baseCharsPerLine: Math.max(18, charsPerLineForWidth(width, ctxBaseSize, 0.56)), maxLines: 3 })
+    : { fontSize: ctxBaseSize, charsPerLine: 1, fits: true, lines: 0 };
+  const ctxSize = ctxFit.fontSize;
+  const ctxLines = context ? balanceTextLines(context, ctxFit.charsPerLine, 3) : [];
 
   const statLineH = Math.round(statSize * 1.04);
   const ctxLineH = Math.round(ctxSize * 1.4);
@@ -153,6 +161,10 @@ export function buildStatCardSvg(input: {
     flags,
     text_units: stat.length + context.length + cta.length,
     preset: 'stat_card',
+    text_fit: mergeTextFit([
+      { field: 'headline', fits: stat ? statFit.fits : true },
+      { field: 'supportingText', fits: context ? ctxFit.fits : true },
+    ]),
   };
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
@@ -179,8 +191,10 @@ export function buildQuoteCardSvg(input: {
   const quote = compactText(overlay.headline || '').trim().replace(/^["“”'']+|["“”'']+$/g, '').trim();
   const author = compactText(overlay.keyInsight || overlay.supportingText || '').trim();
 
-  const quoteSize = Math.round(width * 0.062);
-  const quoteLines = balanceTextLines(quote, Math.max(14, Math.floor(width / (quoteSize * 0.52))), 5);
+  const quoteBaseSize = Math.round(width * 0.062);
+  const quoteFit = fitTextToBox({ text: quote, baseFontSize: quoteBaseSize, baseCharsPerLine: Math.max(14, charsPerLineForWidth(width, quoteBaseSize, 0.52)), maxLines: 5 });
+  const quoteSize = quoteFit.fontSize;
+  const quoteLines = balanceTextLines(quote, quoteFit.charsPerLine, 5);
   const authorSize = Math.round(width * 0.03);
   const lineH = Math.round(quoteSize * 1.32);
   const authorGap = author ? Math.round(height * 0.055) : 0;
@@ -219,6 +233,7 @@ export function buildQuoteCardSvg(input: {
     flags,
     text_units: quote.length + author.length,
     preset: 'quote_card',
+    text_fit: mergeTextFit([{ field: 'headline', fits: quote ? quoteFit.fits : true }]),
   };
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
@@ -253,10 +268,16 @@ export function buildSplitCardSvg(input: {
   const top = parse(overlay.headline || '');
   const bot = parse(overlay.supportingText || overlay.keyInsight || '');
 
-  const panel = (yBase: number, accent: string, label: string | null, body: string): string => {
+  // WS3 fit-to-content per panel body — recompute chars/line as the font shrinks.
+  const splitBodyBase = Math.round(width * 0.05);
+  const splitFit = (body: string) => fitTextToBox({ text: body, baseFontSize: splitBodyBase, baseCharsPerLine: Math.max(14, charsPerLineForWidth(width, splitBodyBase, 0.54)), maxLines: 4 });
+  const topFit = splitFit(top.body);
+  const botFit = splitFit(bot.body);
+
+  const panel = (yBase: number, accent: string, label: string | null, body: string, fit: ReturnType<typeof splitFit>): string => {
     const labelSize = Math.round(width * 0.026);
-    const bodySize = Math.round(width * 0.05);
-    const bodyLines = balanceTextLines(body, Math.max(14, Math.floor(width / (bodySize * 0.54))), 4);
+    const bodySize = fit.fontSize;
+    const bodyLines = balanceTextLines(body, fit.charsPerLine, 4);
     const lineH = Math.round(bodySize * 1.22);
     const labelGap = label ? labelSize + Math.round(height * 0.02) : 0;
     const blockH = labelGap + bodyLines.length * lineH;
@@ -287,8 +308,8 @@ export function buildSplitCardSvg(input: {
     `<rect x="0" y="0" width="10" height="${half}" fill="${negColor}"/>` +
     `<rect x="0" y="${half}" width="10" height="${height - half}" fill="${posColor}"/>` +
     `<rect x="0" y="${half - 2}" width="${width}" height="4" fill="#ffffff" opacity="0.5"/>` +
-    panel(0, negColor, top.label, top.body) +
-    panel(half, posColor, bot.label, bot.body) +
+    panel(0, negColor, top.label, top.body, topFit) +
+    panel(half, posColor, bot.label, bot.body, botFit) +
     '</svg>';
 
   const flags: string[] = [];
@@ -299,6 +320,10 @@ export function buildSplitCardSvg(input: {
     flags,
     text_units: top.body.length + bot.body.length,
     preset: 'split_card',
+    text_fit: mergeTextFit([
+      { field: 'headline', fits: top.body ? topFit.fits : true },
+      { field: 'supportingText', fits: bot.body ? botFit.fits : true },
+    ]),
   };
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
@@ -332,10 +357,15 @@ export function buildTwoColumnCardSvg(input: {
   const right = parse(overlay.supportingText || overlay.keyInsight || '');
 
   const colTextW = Math.round(width * 0.4);
-  const col = (centerX: number, label: string | null, body: string): string => {
+  // WS3 fit-to-content per column body.
+  const colBodyBase = Math.round(width * 0.042);
+  const colFit = (body: string) => fitTextToBox({ text: body, baseFontSize: colBodyBase, baseCharsPerLine: Math.max(8, charsPerLineForWidth(colTextW, colBodyBase, 0.56)), maxLines: 6 });
+  const leftFit = colFit(left.body);
+  const rightFit = colFit(right.body);
+  const col = (centerX: number, label: string | null, body: string, fit: ReturnType<typeof colFit>): string => {
     const labelSize = Math.round(width * 0.024);
-    const bodySize = Math.round(width * 0.042);
-    const bodyLines = balanceTextLines(body, Math.max(8, Math.floor(colTextW / (bodySize * 0.56))), 6);
+    const bodySize = fit.fontSize;
+    const bodyLines = balanceTextLines(body, fit.charsPerLine, 6);
     const lineH = Math.round(bodySize * 1.24);
     const labelGap = label ? labelSize + Math.round(height * 0.02) : 0;
     const blockH = labelGap + bodyLines.length * lineH;
@@ -363,8 +393,8 @@ export function buildTwoColumnCardSvg(input: {
     '</defs>' +
     `<rect x="0" y="0" width="${width}" height="${height}" fill="url(#twoColScrim)"/>` +
     `<rect x="${cx - 2}" y="${Math.round(height * 0.14)}" width="4" height="${Math.round(height * 0.72)}" fill="#ffffff" opacity="0.32"/>` +
-    col(Math.round(width * 0.25), left.label, left.body) +
-    col(Math.round(width * 0.75), right.label, right.body) +
+    col(Math.round(width * 0.25), left.label, left.body, leftFit) +
+    col(Math.round(width * 0.75), right.label, right.body, rightFit) +
     `<circle cx="${cx}" cy="${cy}" r="${badgeR}" fill="${accent}"/>` +
     `<text x="${cx}" y="${cy + Math.round(width * 0.022)}" text-anchor="middle" fill="#ffffff" font-family="${font}" font-size="${Math.round(width * 0.036)}" font-weight="800" letter-spacing="1">VS</text>` +
     '</svg>';
@@ -377,6 +407,10 @@ export function buildTwoColumnCardSvg(input: {
     flags,
     text_units: left.body.length + right.body.length,
     preset: 'two_column_card',
+    text_fit: mergeTextFit([
+      { field: 'headline', fits: left.body ? leftFit.fits : true },
+      { field: 'supportingText', fits: right.body ? rightFit.fits : true },
+    ]),
   };
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
@@ -400,7 +434,8 @@ export function buildListCardSvg(input: {
   const font = brandKit.typography?.fontFamily || 'Inter, Arial, sans-serif';
   const accent = Array.isArray(brandKit.palette) && brandKit.palette.length ? brandKit.palette[0] : '#22c55e';
 
-  const fit = (s: string, chars: number): string => (s.length <= chars ? s : `${s.slice(0, Math.max(0, chars - 1)).trimEnd()}…`);
+  // Grapheme-safe single-line clip for checklist items (emoji never severed).
+  const fit = (s: string, chars: number): string => (graphemeLength(s) <= chars ? s : `${graphemeSlice(s, 0, Math.max(0, chars - 1)).trimEnd()}…`);
   const title = compactText(input.title || '').trim();
   const items = String(input.itemsRaw || '')
     .split(/\r?\n/)
@@ -409,11 +444,15 @@ export function buildListCardSvg(input: {
     .slice(0, 6);
 
   const marginX = Math.round(width * 0.1);
-  const titleSize = Math.round(width * 0.058);
+  const titleBaseSize = Math.round(width * 0.058);
+  const titleFit = title
+    ? fitTextToBox({ text: title, baseFontSize: titleBaseSize, baseCharsPerLine: Math.max(10, charsPerLineForWidth(width - marginX * 2, titleBaseSize, 0.55)), maxLines: 2 })
+    : { fontSize: titleBaseSize, charsPerLine: 1, fits: true, lines: 0 };
+  const titleSize = titleFit.fontSize;
   const itemSize = Math.round(width * 0.042);
   const rowH = Math.round(height * 0.104);
   const checkR = Math.round(itemSize * 0.62);
-  const titleLines = title ? balanceTextLines(title, Math.max(10, Math.floor((width - marginX * 2) / (titleSize * 0.55))), 2) : [];
+  const titleLines = title ? balanceTextLines(title, titleFit.charsPerLine, 2) : [];
   const titleBlockH = titleLines.length * Math.round(titleSize * 1.15);
   const listH = items.length * rowH;
   const totalH = titleBlockH + Math.round(height * 0.05) + listH;
@@ -453,11 +492,18 @@ export function buildListCardSvg(input: {
   const flags: string[] = [];
   if (!title) flags.push('missing_headline');
   if (items.length === 0) flags.push('missing_items');
+  // A checklist item longer than the single-line budget is clipped with an
+  // ellipsis (grapheme-safe) — record it as an overflow rather than pretend it fit.
+  const itemsOverflow = items.some((it) => graphemeLength(it) > itemChars);
   const quality: OverlayQualityReport = {
     score: title && items.length ? 1 : title || items.length ? 0.5 : 0,
     flags,
     text_units: title.length + items.join(' ').length,
     preset: 'list_card',
+    text_fit: mergeTextFit([
+      { field: 'headline', fits: title ? titleFit.fits : true },
+      { field: 'items', fits: !itemsOverflow },
+    ]),
   };
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }

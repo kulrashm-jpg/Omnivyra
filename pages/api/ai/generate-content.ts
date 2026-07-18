@@ -75,9 +75,41 @@ async function generateCampaignContent(
         'Company update',
     ).trim() || 'Company update';
 
+  // Objective Preservation (Wave 0): forward the campaign's REAL objective into
+  // generation. Derive it from the campaign goal(s) — the goal's own
+  // objective/goal/description — falling back to campaign-level objective/goal
+  // fields. This is intentionally NOT the topic fallback: the objective is the
+  // WHY (what the campaign should achieve), not the subject line. Absent ⇒
+  // undefined so runPostGeneration omits the objective entirely (no fabrication).
+  const pickString = (...vals: unknown[]): string => {
+    for (const v of vals) {
+      const s = typeof v === 'string' ? v.trim() : '';
+      if (s) return s;
+    }
+    return '';
+  };
+  const goalObjectives = goals
+    .map((g) => (g && typeof g === 'object' ? (g as Record<string, unknown>) : {}))
+    .map((g) => pickString(g.objective, g.goal, g.description, g.summary, g.title))
+    .filter(Boolean);
+  const objective =
+    pickString(
+      firstGoal.objective,
+      firstGoal.goal,
+      firstGoal.description,
+      firstGoal.summary,
+      // Multiple campaign goals → carry them all so the objective reflects the
+      // full campaign intent rather than only the first goal.
+      goalObjectives.length > 1 ? goalObjectives.join('; ') : '',
+      campaignData.objective,
+      campaignData.goal,
+      campaignData.description,
+    ) || undefined;
+
   const result = await runPostGeneration({
     company_id,
     topic,
+    objective,
     platform: typeof context.platform === 'string' ? context.platform : undefined,
     template_name: contentType,
     extra_instruction:

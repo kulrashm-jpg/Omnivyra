@@ -1,3 +1,11 @@
+/**
+ * @deprecated WRITER-EXEC-005 Wave 4 — superseded by the canonical
+ * recommendation runtime (backend/services/content/recommendationRuntime.ts) +
+ * collaboration/quality persistence services. This endpoint stays FUNCTIONAL
+ * because it is still called by many editors (blogsNewMain, admin/blog editors,
+ * articles/case-studies/guides/newsletters/stories/whitepapers `new` pages) — do
+ * NOT delete. New recommendation surfaces should consume recommendationRuntime.
+ */
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';

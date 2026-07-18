@@ -95,9 +95,13 @@ export async function generateContentBlueprint(item: DailyExecutionItemLike): Pr
   // Resolve company identity for context enforcement
   const identity = await resolveCompanyIdentity(companyId === 'default' ? null : companyId);
 
+  // Objective Preservation (Wave 0): resolve the real objective and OMIT the
+  // key entirely when absent — never send a fabricated 'TBD objective' token to
+  // the model. Present-objective payloads stay byte-identical (key + order).
+  const blueprintObjective = nonEmpty(intent?.objective) || nonEmpty(brief?.whatShouldReaderLearn);
   const contextPayload: Record<string, unknown> = {
     topic: theme,
-    objective: nonEmpty(intent?.objective) || nonEmpty(brief?.whatShouldReaderLearn) || 'TBD objective',
+    ...(blueprintObjective ? { objective: blueprintObjective } : {}),
     target_audience: identity.idealCustomerProfile || identity.targetAudience || audience,
     pain_point: nonEmpty(intent?.pain_point) || nonEmpty(brief?.whatProblemAreWeAddressing) || identity.painPoints?.[0] || 'Audience challenge',
     outcome_promise: nonEmpty(intent?.outcome_promise) || nonEmpty(brief?.expectedOutcome) || 'Clear improvement',
@@ -231,17 +235,21 @@ export async function generateMasterContentStrict(
   const nowIso  = new Date().toISOString();
   const intent  = asObject(item.intent);
   const brief   = asObject(item.writer_content_brief);
-  const topic   = nonEmpty(item.topic) || nonEmpty(item.title) || nonEmpty(intent?.topic) || 'TBD topic';
+  // Objective Preservation (Wave 0): NO fabricated 'TBD topic' / 'TBD objective'
+  // / 'TBD core message' tokens. Empty when genuinely absent so the payload
+  // builders below can OMIT the corresponding line instead of feeding the model
+  // a fake value it would otherwise treat as the user's real intent.
+  const topic   = nonEmpty(item.topic) || nonEmpty(item.title) || nonEmpty(intent?.topic) || '';
   const objective =
     nonEmpty(intent?.objective) ||
     nonEmpty(brief?.whatShouldReaderLearn) ||
     nonEmpty(brief?.topicGoal) ||
-    'TBD objective';
+    '';
   const coreMessage =
     nonEmpty(intent?.outcome_promise) ||
     nonEmpty(intent?.pain_point) ||
     nonEmpty(brief?.whatProblemAreWeAddressing) ||
-    'TBD core message';
+    '';
 
   const decisionTrace: NonNullable<MasterContentPayload['decision_trace']> = {
     source_topic: topic,
@@ -287,9 +295,9 @@ export async function generateMasterContentStrict(
     const antiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
     systemPrompt = applyGovernanceToSystemPrompt(productionSystemPromptBase + antiGeneric, item);
     const productionContext: Record<string, unknown> = {
-      topic,
-      objective,
-      core_message: coreMessage,
+      ...(topic ? { topic } : {}),
+      ...(objective ? { objective } : {}),
+      ...(coreMessage ? { core_message: coreMessage } : {}),
       target_audience: identity.idealCustomerProfile || identity.targetAudience || nonEmpty(intent?.target_audience) || nonEmpty((asObject(item?.writer_content_brief) as any)?.whoAreWeWritingFor) || 'Campaign audience',
       tone: nonEmpty((asObject(item?.writer_content_brief) as any)?.narrativeStyle) || nonEmpty(intent?.tone) || 'Professional and engaging',
       cta: nonEmpty(intent?.cta_type) || 'Follow for more',
@@ -303,8 +311,8 @@ export async function generateMasterContentStrict(
   } else {
     const contextPayload: Record<string, unknown> = {
       content_type: nonEmpty(item?.content_type).toLowerCase() || 'post',
-      topic,
-      objective,
+      ...(topic ? { topic } : {}),
+      ...(objective ? { objective } : {}),
       target_audience:
         identity.idealCustomerProfile || identity.targetAudience ||
         nonEmpty(intent?.target_audience) ||
@@ -327,7 +335,7 @@ export async function generateMasterContentStrict(
         nonEmpty(brief?.narrativeStyle) ||
         nonEmpty(brief?.toneGuidance) ||
         'Neutral, clear, practical',
-      core_message: coreMessage,
+      ...(coreMessage ? { core_message: coreMessage } : {}),
       key_points: Array.isArray(brief?.key_points)
         ? (brief.key_points as unknown[]).map((v) => nonEmpty(v)).filter(Boolean)
         : [],
@@ -419,17 +427,20 @@ async function generateMasterContentRuntime(item: DailyExecutionItemLike): Promi
 
   const intent = asObject(item.intent);
   const brief = asObject(item.writer_content_brief);
-  const topic = nonEmpty(item.topic) || nonEmpty(item.title) || nonEmpty(intent?.topic) || 'TBD topic';
+  // Objective Preservation (Wave 0): empty (not 'TBD …') when genuinely absent so
+  // the context payloads below OMIT the line rather than feed the model a
+  // fabricated objective/topic/core-message it would treat as user intent.
+  const topic = nonEmpty(item.topic) || nonEmpty(item.title) || nonEmpty(intent?.topic) || '';
   const objective =
     nonEmpty(intent?.objective) ||
     nonEmpty(brief?.whatShouldReaderLearn) ||
     nonEmpty(brief?.topicGoal) ||
-    'TBD objective';
+    '';
   const coreMessage =
     nonEmpty(intent?.outcome_promise) ||
     nonEmpty(intent?.pain_point) ||
     nonEmpty(brief?.whatProblemAreWeAddressing) ||
-    'TBD core message';
+    '';
   const decisionTrace: NonNullable<MasterContentPayload['decision_trace']> = {
     source_topic: topic,
     objective,
@@ -467,15 +478,24 @@ async function generateMasterContentRuntime(item: DailyExecutionItemLike): Promi
     const antiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
     const productionSystemPrompt = applyGovernanceToSystemPrompt(productionSystemPromptBase + antiGeneric, item);
     const productionContext: Record<string, unknown> = {
-      topic,
-      objective,
-      core_message: coreMessage,
+      ...(topic ? { topic } : {}),
+      ...(objective ? { objective } : {}),
+      ...(coreMessage ? { core_message: coreMessage } : {}),
       target_audience: identity.idealCustomerProfile || identity.targetAudience || nonEmpty(intent?.target_audience) || nonEmpty((asObject(item?.writer_content_brief) as any)?.whoAreWeWritingFor) || 'Campaign audience',
       tone: nonEmpty((asObject(item?.writer_content_brief) as any)?.narrativeStyle) || nonEmpty(intent?.tone) || 'Professional and engaging',
       cta: nonEmpty(intent?.cta_type) || 'Follow for more',
       creator_instruction: nonEmpty((item as any)?.creatorInstruction) || nonEmpty((item as any)?.creator_instruction) || '',
     };
     if (shortContext) productionContext.company_context = shortContext;
+    // Deterministic media-blueprint fallback (used only when the model returns
+    // empty or errors). Built line-by-line so an absent objective/topic/core
+    // message is OMITTED rather than emitted as an empty "Objective:" line.
+    const mediaBlueprintFallback = [
+      '[MEDIA BLUEPRINT]',
+      topic ? `Topic: ${topic}` : '',
+      objective ? `Objective: ${objective}` : '',
+      coreMessage ? `Core message: ${coreMessage}` : '',
+    ].filter(Boolean).join('\n');
     try {
       const productionResult = await runCompletionWithOperation({
         companyId: (item as any)?.company_id ?? null,
@@ -487,7 +507,7 @@ async function generateMasterContentRuntime(item: DailyExecutionItemLike): Promi
           { role: 'user', content: JSON.stringify(productionContext) },
         ],
       });
-      const productionContent = nonEmpty(productionResult?.output) || `[MEDIA BLUEPRINT]\nTopic: ${topic}\nObjective: ${objective}\nCore message: ${coreMessage}`;
+      const productionContent = nonEmpty(productionResult?.output) || mediaBlueprintFallback;
       return {
         id: `master-${itemId}`,
         generated_at: nowIso,
@@ -503,7 +523,7 @@ async function generateMasterContentRuntime(item: DailyExecutionItemLike): Promi
       return {
         id: `master-${itemId}`,
         generated_at: nowIso,
-        content: `[MEDIA BLUEPRINT]\nTopic: ${topic}\nObjective: ${objective}\nCore message: ${coreMessage}`,
+        content: mediaBlueprintFallback,
         generation_status: 'generated',
         generation_source: 'ai',
         content_type_mode: 'media_blueprint',

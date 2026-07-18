@@ -53,7 +53,12 @@ export function resolveEditorContext(brief: MarketingBrief | null | undefined): 
     goalId: brief?.goalId ?? null,
     goalLabel,
     topic: freeText || offer || goalLabel,
-    objective: goalLabel || offer,
+    // Objective Preservation (Wave 0): the objective must carry the user's
+    // SUBSTANTIVE intent (their conversational brief / specific offer), not just
+    // the generic goal-category label. Prefer freeText → offer, and fall back to
+    // the goal label only when nothing more specific was supplied. Shape is
+    // unchanged (still a string field); only the value is now more grounded.
+    objective: freeText || offer || goalLabel,
     audience: s(brief?.audience),
     tone: s(brief?.tone),
     cta: s(brief?.cta),

@@ -77,27 +77,26 @@ function buildIcp(profile: Record<string, unknown>): string | undefined {
   return parts.length ? parts.join(' · ') : undefined;
 }
 
-/** Resolve the canonical company context (business understanding). */
+/**
+ * Resolve the canonical company context (business understanding).
+ *
+ * DELEGATED (Wave 1 item 6): the company-context resolution + field mapping now
+ * live in the ONE canonical resolver (canonicalContentContextResolver). This
+ * function preserves its exact contract — company-scoped, best-effort, null-safe
+ * ({} on failure) — and remains memoized by companyId via resolveCreatorCopyContext.
+ *
+ * Objective Preservation (Wave 0): this resolver stays company-scoped and cached
+ * by companyId (see resolveCreatorCopyContext, 30s TTL). It carries the company's
+ * standing `businessObjectives` (growth priorities), NOT the user's per-request
+ * campaign objective — that MUST stay per-request and is threaded separately via
+ * the orchestrator input (generateHandler → orchestratorInput.objective →
+ * creatorPromptComposer "Campaign objective:" line + blueprint intent.objective).
+ * The canonical resolver's company mapping deliberately folds in NO per-request
+ * objective, so nothing leaks across requests for the same company.
+ */
 export async function resolveCreatorCompanyContext(companyId: string): Promise<CreatorCompanyContext> {
-  try {
-    const { getCanonicalProfile: getProfile } = await import('@/backend/services/context/canonicalProfileAdapter');
-    const profile = (await getProfile(companyId, { autoRefine: false })) as Record<string, unknown> | null;
-    if (!profile) return {};
-    return {
-      description: str(profile.description),
-      products: list(profile.products_services_list, profile.products_services),
-      audience: list(profile.target_audience_list, profile.target_audience),
-      positioning: str(profile.brand_positioning) ?? str(profile.product_positioning),
-      differentiators: str(profile.biggest_advantage) ?? str(profile.competitive_advantages),
-      industries: list(profile.industry_list, profile.industry),
-      categories: list(profile.category_list, profile.category),
-      businessObjectives: list(profile.growth_priorities),
-      messagingPillars: list(profile.messaging_pillars, profile.recommendation_context),
-      icp: buildIcp(profile),
-    };
-  } catch {
-    return {};
-  }
+  const { resolveCreatorCompany } = await import('@/backend/services/context/canonicalContentContextResolver');
+  return resolveCreatorCompany(companyId);
 }
 
 /** Resolve the canonical brand voice + compliance (communication style) from BrandRuntime. */

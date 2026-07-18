@@ -140,12 +140,21 @@ const executeGatewayCompletion = async (
     });
   }
 
+  // ── WAVE3 (item 3): fold a deterministic seed into the cache/coalescing key
+  // ONLY when the caller supplies one. When seed is absent this is exactly
+  // request.cache_version (undefined stays undefined), so existing cache keys
+  // are byte-for-byte unchanged. When present, two calls that differ only by
+  // seed no longer collide in the cache / in-flight map.
+  const effectiveCacheVersion = request.seed != null
+    ? `${request.cache_version ?? ''}::seed=${request.seed}`
+    : request.cache_version;
+
   // ── GAP 4: In-flight coalescing — deduplicate concurrent identical requests ─
   // Build key from normalized inputs so GAP 1 normalization applies here too.
   // SKIP COALESCING when the caller supplied a signal: a coalesced caller that
   // aborts cannot actually cancel the underlying shared call, defeating the
   // budget mechanism (the orphan would keep the slot and still consume tokens).
-  const coalescingKey = buildNormalizedKey(activeModel, request.messages, request.cache_version);
+  const coalescingKey = buildNormalizedKey(activeModel, request.messages, effectiveCacheVersion);
   if (!request.signal) {
     const existing = _inFlight.get(coalescingKey);
     if (existing) {
@@ -200,7 +209,7 @@ const executeGatewayCompletion = async (
     request.operation,
     activeModel,
     request.messages,
-    request.cache_version,
+    effectiveCacheVersion,
     // W1-1 (B-04): tenant-scope the near-match index. companyId is the tenant.
     request.companyId ?? null,
   );
@@ -282,6 +291,7 @@ const executeGatewayCompletion = async (
       pool:            request.pool,
       stream:          request.stream,
       onChunk:         request.onChunk,
+      seed:            request.seed,
     }, true, trackingCtx);
   } catch (error: any) {
     const latency = Date.now() - start;
@@ -422,7 +432,7 @@ const executeGatewayCompletion = async (
     generateAdditionalStrategicThemes: 'additional_strategic_themes',
   };
   // ── Store result in cache — GAP 1+2+5 (fire-and-forget) ─────────────────────
-  void setCachedCompletion(request.operation, effectiveModel, request.messages, content, request.cache_version, request.companyId ?? null);
+  void setCachedCompletion(request.operation, effectiveModel, request.messages, content, effectiveCacheVersion, request.companyId ?? null);
 
   // W2-4 (audit B-57): with the overhead flag on, the audit-log insert no
   // longer blocks the response — it becomes fire-and-forget like its sibling

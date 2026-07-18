@@ -157,6 +157,16 @@ function buildTextGovernanceMetadata(
  */
 function buildPipelineItem(input: TextGenerationInput, primaryPlatform: string): Record<string, unknown> {
   const isThread = input.contentType === 'thread';
+  // Objective Preservation (Wave 0): thread the caller's REAL objective; OMIT
+  // `intent.objective` when genuinely absent so the downstream blueprint prompt
+  // omits the objective line instead of steering the model with a fabricated
+  // "high-retention educational thread." / "platform-native post." goal.
+  const resolvedObjective =
+    (typeof input.objective === 'string' && input.objective.trim())
+      ? input.objective.trim()
+      : (typeof input.intent === 'string' && input.intent.trim())
+        ? input.intent.trim()
+        : '';
   const item: Record<string, unknown> = {
     execution_id: `${input.contentType}-${Date.now()}`,
     company_id: input.companyId,
@@ -165,9 +175,7 @@ function buildPipelineItem(input: TextGenerationInput, primaryPlatform: string):
     topic: input.topic.trim(),
     title: input.topic.trim(),
     intent: {
-      objective: input.objective || input.intent || (isThread
-        ? 'Create a high-retention educational thread.'
-        : 'Engage the audience with a platform-native post.'),
+      ...(resolvedObjective ? { objective: resolvedObjective } : {}),
       target_audience: input.audience || 'Audience aligned to the topic and company context',
       tone: input.tone || (isThread
         ? 'Punchy, clear, and momentum-building'

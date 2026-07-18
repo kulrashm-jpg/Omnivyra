@@ -29,16 +29,28 @@ import {
 } from '../../lib/content/writerCreatorAttachmentContracts';
 import WriterEmbeddedPreview from '../preview/WriterEmbeddedPreview';
 import { projectWriterAttachment } from '../../lib/preview/previewUtils';
+import { useCanonicalContent } from '../../hooks/useCanonicalContent';
+import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
 
 const WRITER_CREATOR_SOCIAL_PLATFORMS = ['linkedin', 'x', 'instagram', 'facebook', 'threads', 'reddit'];
 
 type ShortformPayload = {
+  // Wave 1 — the persist agent stamps the canonical content id onto the
+  // generation payload. Accepted at the top level OR inside `output`, in
+  // either casing, so the result page can prefer the canonical row by id.
+  content_id?: string;
+  contentId?: string;
   output?: {
     success?: boolean;
     content_type?: 'post';
+    content_id?: string;
+    contentId?: string;
     template_used?: string | null;
     master_content?: {
       content?: string;
+      // WS1 — top-level objective mirror (populated from decision_trace on load)
+      // so the scheduler's objective resolution can read it directly.
+      objective?: string;
       decision_trace?: {
         objective?: string;
         writing_angle?: string;
@@ -112,12 +124,24 @@ export default function ShortformResultPage({
     try {
       const raw = sessionStorage.getItem(token);
       if (!raw) return;
+      const parsed = JSON.parse(raw) as ShortformPayload;
+      // WS1 client half — the scheduler opens in a new tab and reads the
+      // localStorage MIRROR of this payload. Surface the strategic objective
+      // (held on the master decision trace) as master_content.objective so the
+      // scheduler's objective resolution finds it and carries it into
+      // DraftPayload.objective. Additive only; never fabricates a default.
+      const master = parsed?.output?.master_content;
+      const traceObjective = master?.decision_trace?.objective;
+      if (master && typeof traceObjective === 'string' && traceObjective.trim() && !master.objective) {
+        (master as { objective?: string }).objective = traceObjective.trim();
+      }
+      const serialized = JSON.stringify(parsed);
       try {
-        window.localStorage.setItem(token, raw);
+        window.localStorage.setItem(token, serialized);
       } catch {
         // Ignore localStorage write failures and keep the current-tab session flow working.
       }
-      setPayload(JSON.parse(raw) as ShortformPayload);
+      setPayload(parsed);
     } catch {
       setPayload(null);
     }
@@ -152,11 +176,44 @@ export default function ShortformResultPage({
     };
   }, [selectedCompanyId]);
 
-  const generatedContent = payload?.output?.platform_variant?.generated_content || '';
+  // Wave 1 — canonical content id, if the persist agent stamped one onto the
+  // payload (top-level or inside `output`, either casing). When present the
+  // canonical row (loaded by id) is the source of truth; the sessionStorage
+  // payload downgrades to a transient paint cache.
+  const contentId =
+    payload?.content_id ||
+    payload?.contentId ||
+    payload?.output?.content_id ||
+    payload?.output?.contentId ||
+    null;
+
+  // Single client source of truth for this piece of content. Inert (all nulls,
+  // no network) when there is no contentId — legacy payloads behave exactly as
+  // before. Provides autosave / undo / redo / draft-recovery for future editors.
+  const canonical = useCanonicalContent(contentId, { companyId: selectedCompanyId });
+  const canonicalContent = canonical.content;
+
+  const payloadGeneratedContent = payload?.output?.platform_variant?.generated_content || '';
+  // Prefer the canonical body when a canonical row is present; fall back to the
+  // sessionStorage paint cache (today's behavior) otherwise.
+  const generatedContent =
+    (canonicalContent?.body && canonicalContent.body.trim())
+      ? canonicalContent.body
+      : payloadGeneratedContent;
   const hashtags = payload?.output?.platform_variant?.discoverability_meta?.hashtags || [];
   const masterTrace = payload?.output?.master_content?.decision_trace;
   const adaptationTrace = payload?.output?.platform_variant?.adaptation_trace;
-  const topic = payload?.topic || `Generated ${contentType}`;
+  const topic =
+    (canonicalContent?.topic && canonicalContent.topic.trim())
+      ? canonicalContent.topic
+      : (canonicalContent?.title && canonicalContent.title.trim())
+        ? canonicalContent.title
+        : payload?.topic || `Generated ${contentType}`;
+  // Prefer the canonical objective for the Strategy Notes when present.
+  const resolvedObjective =
+    (canonicalContent?.objective && canonicalContent.objective.trim())
+      ? canonicalContent.objective
+      : masterTrace?.objective || '';
   const writerSourceId = useMemo(() => createWriterSourceId('post', token || topic), [token, topic]);
   // Phase 5 hydration hardening — memoized projection so the embedded
   // preview rebuilds only when the attached-asset list changes, not on
@@ -315,6 +372,29 @@ export default function ShortformResultPage({
       window.setTimeout(() => setHashtagsCopied(false), 1800);
     }
   };
+
+  // Wave 1 — when a canonical contentId is present, hand off to the scheduler
+  // by content id via launchSocialPostingFromContent so the scheduler resolves
+  // the canonical row (the separate scheduler agent extends the signature to
+  // accept `contentId`). When no id is present the caller keeps the legacy
+  // URL-prefill Link flow, so behavior is unchanged for legacy payloads.
+  const postToSchedulerByContentId = useCallback(() => {
+    if (!contentId) return;
+    const platform = payload?.output?.platform_variant?.platform || payload?.platform || undefined;
+    launchSocialPostingFromContent({
+      router,
+      contentType: 'post',
+      title: topic,
+      content: generatedContent,
+      tags: hashtags,
+      platform,
+      objective: resolvedObjective || null,
+      // The scheduler agent extends launchSocialPostingFromContent to accept
+      // `contentId`; the assertion keeps this additive call compiling before/
+      // after that concurrent signature change.
+      contentId,
+    } as Parameters<typeof launchSocialPostingFromContent>[0] & { contentId?: string | null });
+  }, [contentId, payload, router, topic, generatedContent, hashtags, resolvedObjective]);
 
   if (isLoading) {
     return (
@@ -505,7 +585,7 @@ export default function ShortformResultPage({
                 <div className="mt-4 space-y-3 text-sm text-slate-600">
                   <div>
                     <p className="font-semibold text-slate-900">Objective</p>
-                    <p className="mt-1">{masterTrace?.objective || 'Not available'}</p>
+                    <p className="mt-1">{resolvedObjective || 'Not available'}</p>
                   </div>
                   <div>
                     <p className="font-semibold text-slate-900">Writing Angle</p>
@@ -636,9 +716,19 @@ export default function ShortformResultPage({
                         </div>
                       ) : null}
                     </div>
-                    <Link href={socialWorkflowLinks.social} className={`inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-white ${accentButtonClassName}`}>
-                      Post to social
-                    </Link>
+                    {contentId ? (
+                      <button
+                        type="button"
+                        onClick={postToSchedulerByContentId}
+                        className={`inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-white ${accentButtonClassName}`}
+                      >
+                        Post to social
+                      </button>
+                    ) : (
+                      <Link href={socialWorkflowLinks.social} className={`inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-white ${accentButtonClassName}`}>
+                        Post to social
+                      </Link>
+                    )}
                     <Link href={socialWorkflowLinks.intelligence} className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
                       Return to post intelligence
                     </Link>

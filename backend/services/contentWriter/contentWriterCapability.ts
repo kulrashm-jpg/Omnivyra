@@ -1,6 +1,11 @@
 /**
  * contentWriterCapability.ts — the migrated workspace Content Writer (PMF-001 §4/§7).
  *
+ * @deprecated — superseded by backend/services/content/runtime/generationRuntime.ts (Wave 3).
+ * Retained functional as a reachable backward-compat surface (imported by the workspace
+ * route + unit tests); do NOT delete. New generation should flow through the canonical
+ * GenerationRuntime; this capability remains the compatibility adapter for the workspace path.
+ *
  * All inference for the workspace Content Writer now executes through AIC-001's
  * executeCapability. Knowledge comes from CKC-001 (via the capability's knowledge
  * stage), the prompt is the EXACT legacy prompt (injected assembler over the shared

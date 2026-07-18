@@ -21,11 +21,20 @@ export type DraftPayload = {
   excerpt?: string | null;
   sourceContentType?: string | null;
   sourceId?: string | null;
+  // Wave 1 (item 8, shared contract). The canonical Content id (public.content)
+  // this draft was produced from. When present the scheduler reads persisted
+  // content by id and writes variants/lifecycle back to it. Additive/optional —
+  // absent on legacy payloads ⇒ today's sessionStorage-only behavior.
+  contentId?: string | null;
   masterContent?: Record<string, unknown> | null;
   sourcePlatform?: string | null;
   mediaUrls?: string[];
   mediaTypes?: string[];
   creatorAttachments?: Array<Record<string, unknown>>;
+  // WS1 (shared contract). The strategic objective that produced this draft.
+  // Carried client-side from the source flow so per-platform adaptation can
+  // stay on-objective. Additive/optional — absent on legacy payloads.
+  objective?: string | null;
 };
 
 export type PlatformState = {
@@ -37,6 +46,14 @@ export type PlatformState = {
   message: string | null;
   scheduledPostId?: string | null;
   status: 'idle' | 'scheduled' | 'published' | 'error';
+  // WS2/WS5/WS6 (Wave 0). The reviewed/source copy this platform seeded from,
+  // preserved so "Keep Original" can restore it and "Compare" can diff it
+  // against the current (edited/adapted) copy. `adapted` marks that an explicit
+  // per-platform adaptation was applied; `manuallyEdited` marks operator edits
+  // that no code path may silently overwrite.
+  originalContent?: string;
+  adapted?: boolean;
+  manuallyEdited?: boolean;
 };
 
 export type PlatformOption = {
