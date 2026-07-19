@@ -119,3 +119,10 @@ content/creator-templates/system-templates.json
 .governance-execution/
 .governance-supervision/
 .governance-closure/
+# REPO-HARDEN-001: confirmed generated/cache/ledger outputs (never source).
+# .governance-ledger/ = append-only governance evidence (mutation-ledger.jsonl, etc.)
+# .governance-orchestrator-cache/ = governance orchestrator run cache
+# .cert-supabase/ = abandoned local certification workspace (regenerable)
+.governance-ledger/
+.governance-orchestrator-cache/
+.cert-supabase/

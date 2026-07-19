@@ -1,0 +1,38 @@
+# CODEOWNERS — production baseline protection (REPO-HARDEN-001)
+#
+# Purpose: require mandatory review on the production-critical contracts of the
+# CERTIFIED Writer baseline (and the frozen Governance Runtime), so a parallel
+# workstream or automated agent cannot silently alter them. Path-scoped ONLY —
+# there is deliberately NO repo-wide `*` default; unlisted paths keep their
+# normal review flow. Last matching pattern wins (GitHub CODEOWNERS semantics).
+#
+# Owner is the current repo owner; replace with a team as the org grows, e.g.
+#   @<org>/writer-platform · @<org>/release-owners · @<org>/governance-maintainers
+
+# ── Writer generation runtime (flag-gated cutover; certified parity) ─────────
+/lib/post/runPostGeneration.ts                          @kulrashm-jpg
+/lib/thread/runThreadGeneration.ts                      @kulrashm-jpg
+
+# ── Canonical content + shared generation runtime ───────────────────────────
+/backend/services/content/runtime/**                    @kulrashm-jpg
+/backend/services/contentGeneration/**                  @kulrashm-jpg
+
+# ── Content persistence (canonical spine + memory/originality services) ──────
+/backend/services/content/contentService.ts             @kulrashm-jpg
+/backend/services/content/contentMemoryService.ts       @kulrashm-jpg
+
+# ── Database migrations (additive-only contract) ─────────────────────────────
+/supabase/migrations/**                                 @kulrashm-jpg
+
+# ── Shared scheduler runtime (used by Writer/campaigns/creator/engagement) ───
+/components/MultiPlatformSchedulerController.tsx         @kulrashm-jpg
+/components/content/post-to-social/**                   @kulrashm-jpg
+
+# ── Release-managed files (deploy + package manifest) ────────────────────────
+/package.json                                           @kulrashm-jpg
+/scripts/predeploy-check.js                             @kulrashm-jpg
+/scripts/start-all.js                                   @kulrashm-jpg
+
+# ── Frozen Governance Runtime v1.0.0 (preserved from R3A; immutable baseline) ─
+/docs/company-intelligence/governance-automation/runtime/**   @kulrashm-jpg
+/scripts/governance-baseline/**                               @kulrashm-jpg
