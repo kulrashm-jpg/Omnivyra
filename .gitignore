@@ -108,3 +108,14 @@ runtime-report.json
 content/creator-templates/system-templates.json
 
 .vercel
+.governance-deployment/
+.governance-audit/
+.governance-baseline/
+.governance-evolution/
+.governance-succession/
+.governance-activation/
+.governance-enforcement-constitutional/
+.governance-gateway/
+.governance-execution/
+.governance-supervision/
+.governance-closure/

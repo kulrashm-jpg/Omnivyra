@@ -152,42 +152,9 @@ function resolveTemplateInstruction(templateName?: string): string | undefined {
 export async function runThreadGeneration(
   input: ThreadGenerationRequest,
 ): Promise<ThreadGenerationResult> {
-  // ── WAVE 3 (item 1) — canonical-runtime delegation, FLAG-GATED + FALL-BACK-SAFE ──
-  // Default OFF ⇒ inline path unchanged. ON ⇒ route through the runtime; an
-  // incomplete runtime result falls through to inline (can never break generation).
-  if (isWriterRuntimeDelegationEnabled()) {
-    try {
-      const out = await generationRuntime.generate({
-        contentType: 'thread',
-        companyId: input.company_id,
-        topic: input.topic,
-        platform: input.platform,
-        objective: input.objective,
-        extraInstruction: input.extra_instruction,
-        intent: input.intent,
-        target_audience: input.target_audience,
-        tone: input.tone,
-        cta: input.cta,
-        template_name: input.template_name,
-      });
-      const master = out.master as MasterContentPayload | undefined;
-      const variant = (Array.isArray(out.variants) ? out.variants[0] : undefined) as PlatformVariantPayload | undefined;
-      if (master && variant) {
-        return {
-          success: true,
-          content_type: 'thread',
-          template_used: input.template_name?.trim() || null,
-          master_content: master,
-          platform_variant: variant,
-          content_id: out.contentId ?? null,
-        };
-      }
-      console.warn('[runThreadGeneration] runtime returned no usable master/variant; falling back to inline path');
-    } catch (err) {
-      console.error('[runThreadGeneration] runtime delegation failed; falling back to inline path', err);
-    }
-  }
-
+  // Shared input assembly — hoisted ABOVE the Wave-3 delegation branch so BOTH the
+  // canonical runtime and the inline legacy path feed the primitive the SAME
+  // extra_instruction + governance + lifecycle (parity fix WRITER-CERT-006).
   const platform = typeof input.platform === 'string' && input.platform.trim()
     ? input.platform.trim().toLowerCase()
     : 'x';
@@ -219,12 +186,6 @@ export async function runThreadGeneration(
       : undefined,
   ].filter(Boolean).join('\n\n');
 
-  // Phase 1 unification — initial generation routed through the shared
-  // textGenerationOrchestrator. The company-context regen pass below
-  // still uses the underlying pipeline directly because it needs to pass
-  // a modified extra_instruction WITH the original item shape; that
-  // path is preserved as a behavior-equivalent retry surface until the
-  // orchestrator exposes a retry hook.
   // Closure Pass — Phase 4. Build the governance context from the
   // already-loaded company profile (best-effort; null when no profile).
   const governance = profile
@@ -239,6 +200,53 @@ export async function runThreadGeneration(
         selectedStrategy: null,
       })
     : null;
+
+  // ── WAVE 3 (item 1) — canonical-runtime delegation, FLAG-GATED + FALL-BACK-SAFE ──
+  // Default OFF ⇒ inline path unchanged. ON ⇒ route through the runtime; an
+  // incomplete runtime result falls through to inline (can never break generation).
+  if (isWriterRuntimeDelegationEnabled()) {
+    try {
+      const out = await generationRuntime.generate({
+        contentType: 'thread',
+        companyId: input.company_id,
+        topic: input.topic,
+        platform: input.platform,
+        objective: input.objective,
+        // Parity (WRITER-CERT-006): feed the runtime the SAME assembled guidance +
+        // governance + lifecycle the legacy path uses, so delegation is faithful.
+        extraInstruction: extraInstruction || input.extra_instruction,
+        governance,
+        lifecycleStatus: 'generated',
+        intent: input.intent,
+        target_audience: input.target_audience,
+        tone: input.tone,
+        cta: input.cta,
+        template_name: input.template_name,
+      });
+      const master = out.master as MasterContentPayload | undefined;
+      const variant = (Array.isArray(out.variants) ? out.variants[0] : undefined) as PlatformVariantPayload | undefined;
+      if (master && variant) {
+        return {
+          success: true,
+          content_type: 'thread',
+          template_used: input.template_name?.trim() || null,
+          master_content: master,
+          platform_variant: variant,
+          content_id: out.contentId ?? null,
+        };
+      }
+      console.warn('[runThreadGeneration] runtime returned no usable master/variant; falling back to inline path');
+    } catch (err) {
+      console.error('[runThreadGeneration] runtime delegation failed; falling back to inline path', err);
+    }
+  }
+
+  // Phase 1 unification — initial generation routed through the shared
+  // textGenerationOrchestrator. The company-context regen pass below
+  // still uses the underlying pipeline directly because it needs to pass
+  // a modified extra_instruction WITH the original item shape; that
+  // path is preserved as a behavior-equivalent retry surface until the
+  // orchestrator exposes a retry hook.
   const initial = await runTextGeneration({
     origin: 'thread-api',
     companyId: input.company_id,

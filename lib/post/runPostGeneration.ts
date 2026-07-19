@@ -188,44 +188,10 @@ function buildPostFactualGuardrails(input: PostGenerationRequest): string {
 export async function runPostGeneration(
   input: PostGenerationRequest,
 ): Promise<PostGenerationResult> {
-  // ── WAVE 3 (item 1) — canonical-runtime delegation, FLAG-GATED + FALL-BACK-SAFE ──
-  // Default OFF ⇒ the inline orchestration below runs unchanged. When ON, route
-  // through the single GenerationRuntime; if it does not return a complete
-  // master+variant (its post-generation stages are fail-open), fall through to
-  // the inline path — so enabling the flag can NEVER break generation.
-  if (isWriterRuntimeDelegationEnabled()) {
-    try {
-      const out = await generationRuntime.generate({
-        contentType: 'post',
-        companyId: input.company_id,
-        topic: input.topic,
-        platform: input.platform,
-        objective: input.objective,
-        extraInstruction: input.extra_instruction,
-        intent: input.intent,
-        target_audience: input.target_audience,
-        tone: input.tone,
-        cta: input.cta,
-        template_name: input.template_name,
-      });
-      const master = out.master as MasterContentPayload | undefined;
-      const variant = (Array.isArray(out.variants) ? out.variants[0] : undefined) as PlatformVariantPayload | undefined;
-      if (master && variant) {
-        return {
-          success: true,
-          content_type: 'post',
-          template_used: input.template_name?.trim() || null,
-          master_content: master,
-          platform_variant: variant,
-          content_id: out.contentId ?? null,
-        };
-      }
-      console.warn('[runPostGeneration] runtime returned no usable master/variant; falling back to inline path');
-    } catch (err) {
-      console.error('[runPostGeneration] runtime delegation failed; falling back to inline path', err);
-    }
-  }
-
+  // Shared input assembly — hoisted ABOVE the Wave-3 delegation branch so BOTH the
+  // canonical runtime and the inline legacy path feed the generation primitive the
+  // SAME extra_instruction + governance + lifecycle (parity fix WRITER-CERT-006).
+  // Reads only from `input`; behaviour with the flag OFF is unchanged.
   const platform = typeof input.platform === 'string' && input.platform.trim()
     ? input.platform.trim().toLowerCase()
     : 'linkedin';
@@ -273,6 +239,48 @@ export async function runPostGeneration(
         selectedStrategy: null,
       })
     : null;
+
+  // ── WAVE 3 (item 1) — canonical-runtime delegation, FLAG-GATED + FALL-BACK-SAFE ──
+  // Default OFF ⇒ the inline orchestration below runs unchanged. When ON, route
+  // through the single GenerationRuntime; if it does not return a complete
+  // master+variant (its post-generation stages are fail-open), fall through to
+  // the inline path — so enabling the flag can NEVER break generation.
+  if (isWriterRuntimeDelegationEnabled()) {
+    try {
+      const out = await generationRuntime.generate({
+        contentType: 'post',
+        companyId: input.company_id,
+        topic: input.topic,
+        platform: input.platform,
+        objective: input.objective,
+        // Parity (WRITER-CERT-006): feed the runtime the SAME assembled guidance +
+        // governance + lifecycle the legacy path uses, so delegation is faithful.
+        extraInstruction: extraInstruction || input.extra_instruction,
+        governance,
+        lifecycleStatus: 'generated',
+        intent: input.intent,
+        target_audience: input.target_audience,
+        tone: input.tone,
+        cta: input.cta,
+        template_name: input.template_name,
+      });
+      const master = out.master as MasterContentPayload | undefined;
+      const variant = (Array.isArray(out.variants) ? out.variants[0] : undefined) as PlatformVariantPayload | undefined;
+      if (master && variant) {
+        return {
+          success: true,
+          content_type: 'post',
+          template_used: input.template_name?.trim() || null,
+          master_content: master,
+          platform_variant: variant,
+          content_id: out.contentId ?? null,
+        };
+      }
+      console.warn('[runPostGeneration] runtime returned no usable master/variant; falling back to inline path');
+    } catch (err) {
+      console.error('[runPostGeneration] runtime delegation failed; falling back to inline path', err);
+    }
+  }
 
   // Objective Preservation (Wave 0): thread the caller's REAL objective through.
   // When genuinely absent we OMIT `intent.objective` entirely (rather than

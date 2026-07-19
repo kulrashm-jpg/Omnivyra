@@ -2,7 +2,14 @@ import * as dotenv from 'dotenv';
 import * as path from 'path';
 
 async function main() {
-  dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+  // WRITER-CERT-004 — cert-aware env file (ENV_FILE > .env.cert > .env.local).
+  const _fs = await import('fs');
+  const _envFile = process.env.ENV_FILE?.trim()
+    ? path.resolve(process.cwd(), process.env.ENV_FILE.trim())
+    : (_fs.existsSync(path.resolve(process.cwd(), '.env.cert'))
+        ? path.resolve(process.cwd(), '.env.cert')
+        : path.resolve(process.cwd(), '.env.local'));
+  dotenv.config({ path: _envFile });
   dotenv.config();
 
   const { getConfig } = await import('../config');
