@@ -1,0 +1,3 @@
+#!/bin/sh
+# Governance enforcement — Pull Request profile (install into .git/hooks/pre-push)
+npm run enforce:governance -- --profile "Pull Request" || exit 1

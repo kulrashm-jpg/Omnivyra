@@ -8,6 +8,9 @@
 import { supabase } from '../db/supabaseClient';
 import { runGovernanceAudit } from '../services/GovernanceAuditService';
 import type { GovernanceAuditResult } from '../services/GovernanceAuditService';
+// OMNI-GOV-002: optional constitutional admission via the certified Governance
+// Runtime (published R3D consumer; invoke-only, OFF by default).
+import { evaluateAdmission } from '../services/governance';
 
 let auditJobRunning = false;
 
@@ -22,6 +25,23 @@ export async function runAllCompanyAudits(): Promise<void> {
     console.log('GovernanceAuditJob: skipped — already running');
     return;
   }
+
+  // OMNI-GOV-002 — constitutional admission gate (feature-flagged, OFF by
+  // default). When the flag is off, `evaluateAdmission` bypasses instantly
+  // (admitted:true, no runtime spawn) and the sweep runs exactly as before. In
+  // enforce mode it invokes the certified runtime via the published adapter and
+  // skips the sweep if admission is not granted. The runtime alone decides — no
+  // governance logic is duplicated and nothing frozen is modified.
+  const admission = await evaluateAdmission({ operation: 'governance.audit.sweep' });
+  if (!admission.admitted) {
+    console.log('GovernanceAuditJob: skipped — constitutional admission not granted', {
+      disposition: admission.disposition,
+      reason: admission.reason,
+      mode: admission.mode,
+    });
+    return;
+  }
+
   auditJobRunning = true;
   try {
     const { data, error } = await supabase

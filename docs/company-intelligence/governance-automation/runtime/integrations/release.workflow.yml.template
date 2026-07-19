@@ -1,0 +1,12 @@
+# Inert template — copy to .github/workflows/ to activate. Release-candidate gate.
+name: Governance Release Gate
+on:
+  workflow_dispatch: {}
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm run enforce:governance -- --profile "Production"

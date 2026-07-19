@@ -1,0 +1,3 @@
+#!/bin/sh
+# Governance enforcement — Developer profile (install into .git/hooks/pre-commit)
+npm run enforce:governance -- --profile "Developer" || { echo "governance enforcement failed"; exit 1; }

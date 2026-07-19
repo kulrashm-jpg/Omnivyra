@@ -1,0 +1,23 @@
+{
+  "release": "Governance Runtime v1.0.0 — Immutable Engineering Baseline",
+  "runtimeVersion": "1.0.0",
+  "constitutionalVersion": "1.0.0",
+  "engineeringBaseline": "1.0.0",
+  "releaseId": "GOV-EXEC-RELEASE-v1.0.0-4903e8fb",
+  "baselineId": "GOV-RUNTIME-BASELINE-v1.0.0-4903e8fb",
+  "releaseDigest": "4903e8fb",
+  "releaseDigestMethod": "djb2 over the ordered [runtimeId, deterministicDigest] pairs for WP-02..WP-26",
+  "scope": "release engineering only — no runtime behavior, constitutional logic, or deterministic output changed",
+  "engineeringStatus": "Engineering Complete (per GOV-EXEC-WP27 audit)",
+  "runtimeModules": 25,
+  "sharedLibraries": 2,
+  "runtimeRoot": "docs/company-intelligence/governance-automation/runtime",
+  "constitutionalRoot": "docs/company-intelligence",
+  "frozen": {
+    "constitutionalRepository": "v1.0.0 (Certified / Platinum)",
+    "gen0Baseline": "BASELINE-Immutable-005975e3-ae8cdfdf",
+    "dependencyGraph": "25 nodes / 15 edges / 0 cycles",
+    "runtimeInventory": "25 modules + 2 libraries, no temporary/experimental/obsolete/duplicate"
+  },
+  "reproducibility": "deterministic — every runtime re-emits its digest unchanged; release digest reproducible from the module digests"
+}

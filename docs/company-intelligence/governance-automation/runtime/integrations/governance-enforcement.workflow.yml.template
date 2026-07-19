@@ -1,0 +1,11 @@
+# Inert template — copy to .github/workflows/ to activate. Invokes ONLY the canonical enforcement runtime.
+name: Governance Enforcement
+on: [pull_request, push]
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: npm run enforce:governance -- --profile "Main Branch"

@@ -1,0 +1,215 @@
+# Company Intelligence Platform — Dependency Manifest
+# Machine-readable representation of contexts, phases, dependencies, gates, and consumers.
+# Additive artifact; does NOT change sequencing (mirrors IMPLEMENTATION-001 and IMPLEMENTATION-003).
+# Suitable for CI validation (e.g., assert no phase enforces before its prerequisites' gates pass).
+schemaVersion: "1.0.0"
+generated_by: DOCS-GOVERNANCE-001
+source_of_truth:
+  sequencing: implementation/IMPLEMENTATION-001.md
+  execution: implementation/IMPLEMENTATION-003.md
+  invariants: appendices/invariants.md
+
+singletons:            # invariant P4 — counts permanently fixed at 1
+  write_authority: Knowledge
+  grounding_authority: Distribution
+  confidence_vocabulary: Trust
+  conversation_engine: Generation
+
+contexts:
+  - id: identity
+    name: Identity
+    owns: [company, website, domains, tenancy]
+  - id: evidence
+    name: Evidence
+    owns: [evidence_objects, observations, collection_policy, freshness]
+  - id: knowledge
+    name: Knowledge
+    owns: [facts, relationships, fact_state, versions, contradictions, user_authority]
+    write_authority: true
+  - id: trust
+    name: Trust
+    owns: [confidence, provenance, lineage, review, learning_signals]
+  - id: generation
+    name: Generation
+    owns: [workflows, prompts, models, industry_packs, conversation_engine]
+  - id: distribution
+    name: Distribution
+    owns: [grounding_authority, validation_pipeline, projections, consumers]
+
+phases:
+  - phase: 0
+    id: fabric
+    workstreams: [WS-0, WS-I]
+    depends_on: []
+    parallel_with: []
+    gate: GATE-0
+    gate_ref: implementation/IMPLEMENTATION-001.md#6
+    gate_criteria: "event bus verified; correction-rate baseline live; schema lineage ratified; writer census installed"
+    milestone: M0
+    risk: low
+  - phase: 1
+    id: writes
+    workstreams: [WS-K]
+    program: implementation/IMPLEMENTATION-002A.md
+    adr: adr/ADR-001-one-write-authority.md
+    depends_on: [fabric]
+    parallel_with: []
+    blocks: [trust, evidence, projections]
+    gate: GATE-1
+    gate_ref: implementation/IMPLEMENTATION-002A.md#14
+    gate_criteria: "writer census = 1; shadow overwrite = 0; chat-save validation blocking"
+    milestone: M1
+    risk: high
+    master_gate: true
+  - phase: 2
+    id: trust
+    workstreams: [WS-T]
+    program: implementation/IMPLEMENTATION-002B.md
+    adr: adr/ADR-002-one-trust-engine.md
+    depends_on: [writes]
+    parallel_with: [evidence]
+    gate: GATE-2
+    gate_ref: implementation/IMPLEMENTATION-002B.md#16
+    gate_criteria: "one confidence engine; drift = 0; reproducible; complete lineage/provenance"
+    milestone: M2
+    risk: medium
+  - phase: 3
+    id: evidence
+    workstreams: [WS-E]
+    program: implementation/IMPLEMENTATION-002C.md
+    adr: adr/ADR-003-immutable-evidence.md
+    depends_on: [writes]
+    parallel_with: [trust]
+    gate: GATE-3
+    gate_ref: implementation/IMPLEMENTATION-002C.md#15
+    gate_criteria: "one evidence layer; immutable; complete routing; SSRF non-regression"
+    milestone: M2
+    risk: medium
+  - phase: 4
+    id: grounding_validation
+    workstreams: [WS-G, WS-V]
+    program: implementation/IMPLEMENTATION-002D.md
+    adr: [adr/ADR-004-grounding-authority.md, adr/ADR-005-universal-validation.md]
+    depends_on: [writes, trust, evidence]
+    parallel_with: []
+    convergence: true
+    gate: GATE-4
+    gate_ref: implementation/IMPLEMENTATION-002D.md#17
+    gate_criteria: "one grounding authority; one validation pipeline; bypass = 0; deterministic; explainable"
+    milestone: M3
+    risk: medium-high
+  - phase: 5
+    id: conversation
+    workstreams: [WS-C]
+    program: implementation/IMPLEMENTATION-002E.md
+    adr: adr/ADR-006-conversation-runtime.md
+    depends_on: [grounding_validation]
+    parallel_with: [generation]
+    gate: GATE-5
+    gate_ref: implementation/IMPLEMENTATION-002E.md#15
+    gate_criteria: "one engine; zero duplicate questioning; no unvalidated persistence"
+    milestone: M4
+    risk: medium
+  - phase: 6
+    id: generation
+    workstreams: [WS-GEN]
+    program: implementation/IMPLEMENTATION-002F.md
+    adr: adr/ADR-007-generation-runtime.md
+    depends_on: [grounding_validation]
+    parallel_with: [conversation]
+    gate: GATE-6
+    gate_ref: implementation/IMPLEMENTATION-002F.md#16
+    gate_criteria: "one runtime; zero inline prompts/direct model calls/unregistered workflows; bench-gated"
+    milestone: M4
+    risk: medium
+  - phase: 7
+    id: projections_consumers
+    workstreams: [WS-P, WS-CM]
+    program: implementation/IMPLEMENTATION-002G.md
+    adr: adr/ADR-008-projection-runtime.md
+    depends_on: [writes, trust]        # grounding-reads already migrated in phase 4
+    parallel_with: []
+    gate: GATE-7
+    gate_ref: implementation/IMPLEMENTATION-002G.md#16
+    gate_criteria: "one projection runtime; direct-read census = 0; frontend dissolved"
+    milestone: M5
+    risk: medium-high
+    notes: "frontend migrates last, per-section, beta-first (risk R4)"
+  - phase: 8
+    id: learning
+    workstreams: [WS-L]
+    program: implementation/IMPLEMENTATION-002H.md
+    adr: adr/ADR-009-learning-runtime.md
+    depends_on: [writes, trust, evidence, grounding_validation, conversation, generation, projections_consumers]
+    parallel_with: []
+    terminal: true
+    gate: GATE-8
+    gate_ref: implementation/IMPLEMENTATION-002H.md#16
+    gate_criteria: "one learning runtime; zero unmanaged learning; correction-rate live; full constitution in force"
+    milestone: M6
+    risk: low
+
+census_rules:            # permanent CI conformance counters (GOVERNANCE.md#3)
+  - id: writer_authority
+    target: 1
+    installed_by: WS-K
+    enforces: P3
+  - id: confidence_writer
+    target: 1
+    installed_by: WS-T
+    enforces: P12
+  - id: grounding_bypass
+    target: 0
+    installed_by: WS-G
+    enforces: P11
+  - id: conversation_loops_outside_engine
+    target: 0
+    installed_by: WS-C
+    enforces: P17
+  - id: unregistered_llm_calls
+    target: 0
+    installed_by: WS-GEN
+    enforces: P16
+  - id: inline_prompts
+    target: 0
+    installed_by: WS-GEN
+    enforces: P16
+  - id: direct_model_reads
+    target: 0
+    installed_by: WS-GEN
+    enforces: P16
+  - id: direct_canonical_reads
+    target: 0
+    installed_by: WS-P
+    enforces: P26
+  - id: unmanaged_learning
+    target: 0
+    installed_by: WS-L
+    enforces: P14
+
+producers_consumers:
+  grounding_consumers:   # read via Grounding Authority (phase 4)
+    - content_generation
+    - campaigns_planner
+    - strategic_intelligent_mix
+    - recommendations
+    - marketpulse
+    - engagement
+    - ai_runtime
+  projection_consumers:  # read via Projection Runtime (phase 7)
+    - company_profile_ui
+    - reports
+    - dashboard
+    - analytics_customer_success
+    - ops_super_admin
+    - onboarding
+  non_consumers:
+    - id: chrome_extension
+      certified_by: AUDIT-002
+      note: "consumes no company-profile data; only /user/profile identity"
+
+flags:
+  ladder: [off, shadow, compare, enforce, legacy-retired]
+  enforcement_axis: per_tenant
+  order: [internal, beta, cohorts, all]
+  write_flips: all_or_nothing        # never percentage for writes

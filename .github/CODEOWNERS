@@ -36,3 +36,23 @@
 # ── Frozen Governance Runtime v1.0.0 (preserved from R3A; immutable baseline) ─
 /docs/company-intelligence/governance-automation/runtime/**   @kulrashm-jpg
 /scripts/governance-baseline/**                               @kulrashm-jpg
+
+# ── Constitutional Repository v1.0.0 (frozen; verified by check:governance-docs)
+/docs/company-intelligence/**                                 @kulrashm-jpg
+
+# ── Published runtime contracts + release baseline (R1/R2/R3A) ────────────────
+/docs/governance-runtime-v1.0.0/**                            @kulrashm-jpg
+
+# ── Governance consumer implementation + validation (R3D; OMNI-GOV-002) ───────
+/backend/services/governance/**                               @kulrashm-jpg
+/scripts/governance-consumers/**                              @kulrashm-jpg
+
+# ── Governance integration + contract documentation ──────────────────────────
+/docs/governance-consumers/**                                 @kulrashm-jpg
+/docs/governance-cicd/**                                      @kulrashm-jpg
+/docs/governance-ops-center/**                                @kulrashm-jpg
+/docs/governance-adoption/**                                  @kulrashm-jpg
+
+# ── Governance CI/CD workflows ───────────────────────────────────────────────
+/.github/workflows/governance-verification.yml                @kulrashm-jpg
+/.github/workflows/governance-nightly.yml                     @kulrashm-jpg

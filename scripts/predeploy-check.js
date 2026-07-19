@@ -165,6 +165,25 @@ try {
   process.exit(1);
 }
 
+// ── OMNI-GOV-002: governance baseline gate ───────────────────────────────────
+// Blocks the deploy if the frozen Governance Runtime v1.0.0 has drifted from its
+// certified byte-for-byte baseline. Verification-only: no network/DB, no secrets,
+// never part of the deployed app. Mirrors the existing execSync gate pattern.
+// The GitHub `governance-verification` workflow is the durable enforcer; this is
+// defense-in-depth for local `vercel --prod`.
+process.stdout.write(`Verifying governance baseline...\n`);
+try {
+  execSync('node scripts/governance-baseline/verify-baseline.mjs', { stdio: 'inherit' });
+  process.stdout.write(`  governance baseline: VERIFIED\n`);
+} catch {
+  process.stdout.write(
+    `RESULT: BLOCKED — the frozen Governance Runtime v1.0.0 has drifted from its\n` +
+    `certified baseline. Investigate via \`npm run governance:verify-baseline:reports\`.\n` +
+    `See docs/governance-cicd/DEPLOYMENT-VERIFICATION-GUIDE.md.\n`,
+  );
+  process.exit(1);
+}
+
 process.stdout.write(`Verifying schema parity against production DB...\n`);
 const strictSchema = process.env.PREDEPLOY_STRICT_SCHEMA === '1';
 try {

@@ -1,0 +1,33 @@
+{
+  "manifest": "Governance Runtime v1.0.0 — Dependency Manifest",
+  "releaseId": "GOV-EXEC-RELEASE-v1.0.0-4903e8fb",
+  "graphProperties": { "nodes": 25, "edges": 15, "cycles": 0, "acyclic": true, "singlePredecessorChainFrom": "WP-16", "deterministicOrdering": true },
+  "sharedLibraries": {
+    "lib/repository-model.mjs": "single filesystem discovery + parse-once model",
+    "lib/runtime-invoke.mjs": "single runtime-invocation seam"
+  },
+  "runtimeOrder": [
+    "WP-02", "WP-03", "WP-04", "WP-05", "WP-06", "WP-07", "WP-08", "WP-09", "WP-10", "WP-11",
+    "WP-12", "WP-13", "WP-14", "WP-15", "WP-16", "WP-17", "WP-18", "WP-19", "WP-20", "WP-21",
+    "WP-22", "WP-23", "WP-24", "WP-25", "WP-26"
+  ],
+  "edges": [
+    { "from": "lib/repository-model", "to": "WP-02" }, { "from": "lib/repository-model", "to": "WP-03" },
+    { "from": "lib/runtime-invoke", "to": "WP-04" }, { "from": "lib/runtime-invoke", "to": "WP-05" },
+    { "from": "lib/runtime-invoke", "to": "WP-06" }, { "from": "lib/runtime-invoke", "to": "WP-07" },
+    { "from": "lib/runtime-invoke", "to": "WP-08" }, { "from": "lib/runtime-invoke", "to": "WP-09" },
+    { "from": "lib/runtime-invoke", "to": "WP-10" }, { "from": "lib/runtime-invoke", "to": "WP-11" },
+    { "from": "lib/runtime-invoke", "to": "WP-12" },
+    { "from": "WP-12", "to": "WP-13" }, { "from": "WP-12", "to": "WP-14" }, { "from": "WP-13", "to": "WP-14" },
+    { "from": "WP-14", "to": "WP-15" }, { "from": "WP-15", "to": "WP-16" }, { "from": "WP-16", "to": "WP-17" },
+    { "from": "WP-17", "to": "WP-18" }, { "from": "WP-18", "to": "WP-19" }, { "from": "WP-19", "to": "WP-20" },
+    { "from": "WP-20", "to": "WP-21" }, { "from": "WP-21", "to": "WP-22" }, { "from": "WP-22", "to": "WP-23" },
+    { "from": "WP-23", "to": "WP-24" }, { "from": "WP-24", "to": "WP-25" }, { "from": "WP-25", "to": "WP-26" }
+  ],
+  "executionChain": "WP-02/WP-03 (discovery) → WP-04..WP-11 (governance runtimes over the invoke seam) → WP-12 orchestrator → WP-13 optimizer → WP-14 activation → WP-15 assurance → WP-16 certification → WP-17 audit → WP-18 lockdown → WP-19 evolution → WP-20 succession → WP-21 active constitution → WP-22 enforcement → WP-23 admission → WP-24 execution → WP-25 supervision → WP-26 closure",
+  "notes": [
+    "WP-14 activation is the only node importing two runtimes (WP-12 orchestrator + WP-13 optimizer); explicit, not hidden, not a cycle.",
+    "WP-16..WP-26 form a strict single-predecessor linear chain (each imports exactly one runtime).",
+    "Runtime→runtime spawning is mediated by lib/runtime-invoke; under the orchestrator there are zero runtime→runtime static spawns."
+  ]
+}

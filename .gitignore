@@ -126,3 +126,10 @@ content/creator-templates/system-templates.json
 .governance-ledger/
 .governance-orchestrator-cache/
 .cert-supabase/
+docs/governance-ops-center/dashboard.html
+docs/governance-ops-center/ops-center.json
+scripts/governance-baseline/reports/
+# RELEASE-R3D: generated consumer-validation evidence (regenerable via npm run governance:consumer-validate)
+docs/governance-consumers/consumer-validation.json
+# OMNI-GOV-002 hygiene: archived obsolete architecture-migration reports (kept on disk + in history; untracked from the authoritative tree)
+architecture-migration/reports/
