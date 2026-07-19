@@ -1,3 +1,0 @@
-## firebase_uid (production code only) — AFTER Wave 1
-pages/api/company/users.ts:375:      //    (auto-add without invite) was removed: it depended on firebase_uid
-pages/api/company/users.ts:376:      //    which was dropped in 20260407_drop_firebase_uid.sql, so the gate was
