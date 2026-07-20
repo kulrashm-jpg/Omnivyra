@@ -225,6 +225,11 @@ import {
 } from '../../backend/services/longForm/thoughtLeadershipQualityGate';
 
 import { type UnifiedLongFormGenerationInput, type UnifiedLongFormGenerationResult, resolveStrictMode } from './unifiedLongFormEngineModel';
+// WS-1c-4 — long-form runtime delegation seam (flag-dark, byte-identical). Routes
+// the compatibility-core generation through the runtime's long-form adapter when
+// LONGFORM_RUNTIME_DELEGATION_ENABLED is set; otherwise calls runBlogGeneration
+// directly (unchanged). See lib/content/longFormRuntimeDelegation.ts.
+import { dispatchLongFormCompatibilityCore } from './longFormRuntimeDelegation';
 
 export function evaluateLongFormEnforcementPromotion(): PromotionExecutionResult {
   return evaluatePromotionEngine();
@@ -780,13 +785,13 @@ export async function runUnifiedLongFormGeneration(
         fallback_reason: errorMessage,
       });
 
-      const result = await runBlogGeneration({
+      const result = await dispatchLongFormCompatibilityCore({
         ...inputWithPerspective,
         contentType: normalizedContentType,
         formatType: formatType as BlogGenerationRequest['formatType'],
         template_blocks: input.templateBlocks,
         answers: buildAnswers(input, formatType),
-      });
+      }, runBlogGeneration);
 
       return {
         ...result,
@@ -842,13 +847,13 @@ export async function runUnifiedLongFormGeneration(
     retirement_blocker_category: categorizationNonFull.blockerCategory,
   });
 
-  const result = await runBlogGeneration({
+  const result = await dispatchLongFormCompatibilityCore({
     ...inputWithPerspective,
     contentType: normalizedContentType,
     formatType: formatType as BlogGenerationRequest['formatType'],
     template_blocks: input.templateBlocks,
     answers: buildAnswers(input, formatType),
-  });
+  }, runBlogGeneration);
 
   return {
     ...result,
