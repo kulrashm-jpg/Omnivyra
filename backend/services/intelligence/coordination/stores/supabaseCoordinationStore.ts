@@ -45,6 +45,7 @@ interface Row {
   parent_artifact_id: string | null;
   derived_from: string[] | null;
   generation_stage: string | null;
+  idempotency_key: string | null;
 }
 
 function toRow(r: CommunicationRecord): Record<string, unknown> {
@@ -71,6 +72,7 @@ function toRow(r: CommunicationRecord): Record<string, unknown> {
   if (r.parentArtifactId !== undefined) row.parent_artifact_id = r.parentArtifactId ?? null;
   if (r.derivedFrom !== undefined) row.derived_from = r.derivedFrom;
   if (r.generationStage !== undefined) row.generation_stage = r.generationStage;
+  if (r.idempotencyKey !== undefined) row.idempotency_key = r.idempotencyKey ?? null;
   return row;
 }
 
@@ -95,6 +97,7 @@ function fromRow(row: Row): CommunicationRecord {
     parentArtifactId: row.parent_artifact_id ?? undefined,
     derivedFrom: row.derived_from ?? undefined,
     generationStage: (row.generation_stage as GenerationStage | null) ?? undefined,
+    idempotencyKey: row.idempotency_key ?? undefined,
   };
 }
 
@@ -103,6 +106,43 @@ export class SupabaseCoordinationStore implements CoordinationStore {
     const { data, error } = await ownedDbTable(TABLE).insert(toRow(record)).select('*').single();
     if (error) throw new Error(`coordination insert failed: ${error.message}`);
     return fromRow(data as Row);
+  }
+
+  async insertIdempotent(record: CommunicationRecord): Promise<{ record: CommunicationRecord; created: boolean }> {
+    if (!record.idempotencyKey) {
+      return { record: await this.insert(record), created: true };
+    }
+    const { data, error } = await ownedDbTable(TABLE).insert(toRow(record)).select('*').single();
+    if (!error) return { record: fromRow(data as Row), created: true };
+    // Unique-violation on (company_id, idempotency_key) ⇒ a concurrent/replayed
+    // registration already landed. Return the existing row (created:false).
+    const isUniqueViolation = (error as { code?: string }).code === '23505'
+      || /duplicate key|unique constraint/i.test(error.message ?? '');
+    if (isUniqueViolation) {
+      const existing = await this.findByIdempotencyKey(record.companyId, record.idempotencyKey);
+      if (existing) return { record: existing, created: false };
+    }
+    throw new Error(`coordination insertIdempotent failed: ${error.message}`);
+  }
+
+  private async findByIdempotencyKey(companyId: string, idempotencyKey: string): Promise<CommunicationRecord | null> {
+    const { data, error } = await ownedDbTable(TABLE)
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('idempotency_key', idempotencyKey)
+      .maybeSingle();
+    if (error) throw new Error(`coordination findByIdempotencyKey failed: ${error.message}`);
+    return data ? fromRow(data as Row) : null;
+  }
+
+  async getById(companyId: string, id: string): Promise<CommunicationRecord | null> {
+    const { data, error } = await ownedDbTable(TABLE)
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new Error(`coordination getById failed: ${error.message}`);
+    return data ? fromRow(data as Row) : null;
   }
 
   async findByRoot(companyId: string, semanticRootId: string): Promise<CommunicationRecord[]> {

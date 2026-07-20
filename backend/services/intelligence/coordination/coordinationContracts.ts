@@ -30,14 +30,25 @@ export type { CommunicationIntent };
 
 // ── Vocabulary ───────────────────────────────────────────────────────────────
 
-/** Lifecycle of a communication as it moves through the egress path. */
+/**
+ * Lifecycle of a communication as it moves through the egress path.
+ *
+ * Superset of the canonical WS-2B lifecycle (`planned → generated → adapted →
+ * published → engaged → measured → archived`, see `CommunicationLifecycleState`)
+ * plus the original operational states (`scheduled/suppressed/retired`). Widening
+ * is additive — every prior value remains valid.
+ */
 export type PublicationStatus =
   | 'planned'    // intent registered, nothing produced yet
   | 'generated'  // content produced, not scheduled
+  | 'adapted'    // adapted to a specific platform/surface
   | 'scheduled'  // queued for a future publish slot
   | 'published'  // live
+  | 'engaged'    // received/answered engagement
+  | 'measured'   // analytics/performance captured
   | 'suppressed' // intentionally withheld (e.g. duplicate intent / moderation)
-  | 'retired';   // superseded / archived
+  | 'retired'    // superseded
+  | 'archived';  // closed out / retained
 
 /** Which specialized intelligence owns/produced the communication. */
 export type CoordinationSourceModule =
@@ -123,6 +134,11 @@ export interface CommunicationRecord {
   parentArtifactId?: string | null;
   derivedFrom?: string[];
   generationStage?: GenerationStage;
+
+  // ── Idempotency (WS-2B, optional/additive) ──
+  // Deterministic per-tenant key; a replayed registration with the same key
+  // collapses onto the same row instead of creating a duplicate.
+  idempotencyKey?: string | null;
 }
 
 /** What a producer supplies to register / check an intent (layer fills the rest). */
@@ -141,12 +157,17 @@ export interface RegisterCommunicationInput {
   embedding?: SemanticEmbeddingRef | null; // caller may pre-compute; else the layer may (flag/seam)
   metadata?: Record<string, unknown>;
   correlationId?: string;
+  /** Event time (ISO). Defaults to now — set for historical/replayed events (e.g. analytics). */
+  observedAt?: string;
 
   // ── Semantic lineage (OMNI-COORD-002, optional/additive) ──
   artifactType?: ArtifactType;
   parentArtifactId?: string | null;
   derivedFrom?: string[];
   generationStage?: GenerationStage;
+
+  // ── Idempotency (WS-2B, optional/additive) — set by the registration pipeline. ──
+  idempotencyKey?: string | null;
 }
 
 /** Narrowing filters for reads / candidate selection. */
@@ -202,8 +223,15 @@ export type CoordinationResult<T> =
 export interface CommunicationRegistry {
   /** Record a communication intent. Derives the semantic root + embedding as needed. */
   register(input: RegisterCommunicationInput): Promise<CoordinationResult<CommunicationRecord>>;
+  /**
+   * Idempotent register (WS-2B). Requires `input.idempotencyKey`; a replay with the
+   * same key returns the existing row with `created:false` instead of duplicating.
+   */
+  registerIdempotent(input: RegisterCommunicationInput): Promise<CoordinationResult<{ record: CommunicationRecord; created: boolean }>>;
   /** Read prior communications for a company (optionally narrowed). */
   lookup(companyId: string, query?: CoordinationQuery): Promise<CoordinationResult<CommunicationRecord[]>>;
+  /** Read one communication by id (tenant-scoped). */
+  get(companyId: string, id: string): Promise<CoordinationResult<CommunicationRecord | null>>;
   /** Assess whether an intent duplicates a prior one — semantic, non-persisting. */
   checkDuplicateIntent(input: RegisterCommunicationInput): Promise<CoordinationResult<DuplicateIntentVerdict>>;
   /** Advance the lifecycle of a registered communication. */
@@ -218,7 +246,15 @@ export interface CommunicationRegistry {
  */
 export interface CoordinationStore {
   insert(record: CommunicationRecord): Promise<CommunicationRecord>;
+  /**
+   * Idempotent insert (WS-2B). If a row with the same (companyId, idempotencyKey)
+   * already exists, return it with `created:false` instead of inserting a
+   * duplicate; otherwise insert and return `created:true`. The record MUST carry
+   * an `idempotencyKey`. Replay-/retry-safe.
+   */
+  insertIdempotent(record: CommunicationRecord): Promise<{ record: CommunicationRecord; created: boolean }>;
   findByRoot(companyId: string, semanticRootId: string): Promise<CommunicationRecord[]>;
+  getById(companyId: string, id: string): Promise<CommunicationRecord | null>;
   query(companyId: string, query: CoordinationQuery): Promise<CommunicationRecord[]>;
   markStatus(companyId: string, id: string, status: PublicationStatus): Promise<void>;
 }

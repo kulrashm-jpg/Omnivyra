@@ -108,33 +108,40 @@ class CommunicationRegistryImpl implements CommunicationRegistry {
     };
   }
 
+  /** Build the persisted record from an input (shared by register/registerIdempotent). */
+  private async buildRecord(input: RegisterCommunicationInput): Promise<CommunicationRecord> {
+    const { semanticRootId, embedding } = await this.materialize(input);
+    return {
+      id: randomUUID(),
+      companyId: input.companyId,
+      semanticRootId,
+      communicationIntent: input.communicationIntent,
+      topic: input.topic,
+      campaignId: input.campaignId ?? null,
+      platform: input.platform ?? null,
+      audience: input.audience ?? null,
+      publicationStatus: input.publicationStatus ?? 'planned',
+      embedding,
+      contentRef: input.contentRef ?? null,
+      performanceRef: input.performanceRef ?? null,
+      sourceModule: input.sourceModule ?? 'unknown',
+      observedAt: input.observedAt ?? this.now(),
+      metadata: input.metadata,
+      // Semantic lineage (OMNI-COORD-002) — optional/additive, purely descriptive.
+      artifactType: input.artifactType,
+      parentArtifactId: input.parentArtifactId ?? null,
+      derivedFrom: input.derivedFrom,
+      generationStage: input.generationStage,
+      // Idempotency (WS-2B).
+      idempotencyKey: input.idempotencyKey ?? null,
+    };
+  }
+
   async register(input: RegisterCommunicationInput): Promise<CoordinationResult<CommunicationRecord>> {
     const tenantErr = requireTenant(input.companyId);
     if (tenantErr) return fail(tenantErr);
     try {
-      const { semanticRootId, embedding } = await this.materialize(input);
-      const record: CommunicationRecord = {
-        id: randomUUID(),
-        companyId: input.companyId,
-        semanticRootId,
-        communicationIntent: input.communicationIntent,
-        topic: input.topic,
-        campaignId: input.campaignId ?? null,
-        platform: input.platform ?? null,
-        audience: input.audience ?? null,
-        publicationStatus: input.publicationStatus ?? 'planned',
-        embedding,
-        contentRef: input.contentRef ?? null,
-        performanceRef: input.performanceRef ?? null,
-        sourceModule: input.sourceModule ?? 'unknown',
-        observedAt: this.now(),
-        metadata: input.metadata,
-        // Semantic lineage (OMNI-COORD-002) — optional/additive, purely descriptive.
-        artifactType: input.artifactType,
-        parentArtifactId: input.parentArtifactId ?? null,
-        derivedFrom: input.derivedFrom,
-        generationStage: input.generationStage,
-      };
+      const record = await this.buildRecord(input);
       const stored = await this.store.insert(record);
       recordCoordinationRegister(stored, { surface: 'coordination.register', correlationId: input.correlationId });
       return ok(stored);
@@ -143,6 +150,38 @@ class CommunicationRegistryImpl implements CommunicationRegistry {
       return fail(new AiError('INTERNAL', {
         devDetail: `coordination register failed: ${e instanceof Error ? e.message : String(e)}`,
         correlationId: input.correlationId,
+      }));
+    }
+  }
+
+  async registerIdempotent(input: RegisterCommunicationInput): Promise<CoordinationResult<{ record: CommunicationRecord; created: boolean }>> {
+    const tenantErr = requireTenant(input.companyId);
+    if (tenantErr) return fail(tenantErr);
+    try {
+      const record = await this.buildRecord(input);
+      const outcome = await this.store.insertIdempotent(record);
+      if (outcome.created) {
+        recordCoordinationRegister(outcome.record, { surface: 'coordination.register.idempotent', correlationId: input.correlationId });
+      }
+      return ok(outcome);
+    } catch (e) {
+      recordCoordinationDegrade('registerIdempotent', 'store_error', { correlationId: input.correlationId });
+      return fail(new AiError('INTERNAL', {
+        devDetail: `coordination registerIdempotent failed: ${e instanceof Error ? e.message : String(e)}`,
+        correlationId: input.correlationId,
+      }));
+    }
+  }
+
+  async get(companyId: string, id: string): Promise<CoordinationResult<CommunicationRecord | null>> {
+    const tenantErr = requireTenant(companyId);
+    if (tenantErr) return fail(tenantErr);
+    try {
+      return ok(await this.store.getById(companyId, id));
+    } catch (e) {
+      recordCoordinationDegrade('get', 'store_error');
+      return fail(new AiError('INTERNAL', {
+        devDetail: `coordination get failed: ${e instanceof Error ? e.message : String(e)}`,
       }));
     }
   }

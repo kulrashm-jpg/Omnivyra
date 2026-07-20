@@ -79,3 +79,64 @@ export {
   recordDuplicateIntentDecision,
   recordCoordinationDegrade,
 } from './coordinationObservability';
+
+// Adoption (WS-2A): Engagement shadow integration + adoption flags/metrics
+export {
+  observeEngagementSemanticShadow,
+  type EngagementShadowInput,
+  type EngagementSemanticContext,
+} from './adoption/engagementSemanticShadow';
+export {
+  getCoordinationAdoptionMode,
+  isCoordinationAdoptionEnabled,
+  COORDINATION_ADOPTION_MODE_ENV_VAR,
+  type CoordinationAdoptionMode,
+} from './adoption/coordinationAdoptionFlags';
+
+// Registration (WS-2B): the ONE canonical registerCommunication pipeline
+export {
+  communicationRegistrationPipeline,
+  createCommunicationRegistrationPipeline,
+  type RegistrationPipelineDeps,
+} from './registration/communicationRegistrationPipeline';
+export {
+  COMMUNICATION_LIFECYCLE,
+  lifecycleOrder,
+  type CommunicationLifecycleState,
+  type CommunicationRegistrationPipeline,
+  type RegisterCommunicationRequest,
+  type RegistrationOutcome,
+  type SemanticRootSeed,
+} from './registration/registrationContracts';
+export { deriveIdempotencyKey, type IdempotencyKeyParts } from './registration/registrationKeys';
+export {
+  getRegistrationMode,
+  isRegistrationEnabled,
+  COORDINATION_REGISTRATION_MODE_ENV_VAR,
+  type RegistrationMode,
+} from './registration/registrationFlags';
+
+// Intelligence (WS-2C): read-side lifecycle/history/lineage/graph/continuity queries
+export {
+  communicationIntelligence,
+  createCommunicationIntelligence,
+  type CommunicationIntelligenceDeps,
+} from './intelligence/communicationIntelligenceService';
+export * from './intelligence/communicationIntelligenceContracts';
+export {
+  rootsOf,
+  parentsOf,
+  childrenOf,
+  descendantsOf,
+  ancestorsOf,
+  lineageTree,
+  type LineageTreeNode,
+} from './intelligence/graphNavigation';
+export {
+  isCoordinationIntelligenceEnabled,
+  COORDINATION_INTELLIGENCE_ENABLED_ENV_VAR,
+} from './intelligence/coordinationIntelligenceFlags';
+
+// Query Profiles (WS-2D): canonical consumer-oriented read-side profiles
+// (facade `communicationQueryProfiles`, framework, models, and per-profile contracts)
+export * from './profiles';
