@@ -25,8 +25,12 @@
 import {
   GatewayAbortError,
   resolveProviderTimeoutMs,
+  attachProviderMetadata,
+  freezeProviderMetadata,
+  PERPLEXITY_METADATA_VERSION,
   type GatewayRequest,
   type NormalizedCompletion,
+  type PerplexityCompletionMetadataV1,
   type LlmPoolName,
 } from './aiGatewayCore';
 
@@ -274,7 +278,7 @@ export async function callPerplexity(params: GatewayTransportParams): Promise<No
   if (choice?.finish_reason === 'length') {
     warnTruncation('perplexity', params.model, params.max_tokens, u?.completion_tokens ?? null);
   }
-  return {
+  const base: NormalizedCompletion = {
     content,
     usage: u
       ? {
@@ -284,6 +288,26 @@ export async function callPerplexity(params: GatewayTransportParams): Promise<No
         }
       : null,
   };
+
+  // PB-001: preserve Perplexity's grounded `citations[]` into the provider-metadata
+  // container so they SURVIVE normalization (they were previously lost — see the
+  // PA-006 parity gap). Additive + non-consuming: when the provider returns no
+  // citations the completion is byte-identical to the legacy `{ content, usage }`
+  // shape (no `providerMetadata` key). Nothing here changes content/usage or any
+  // provider behavior; nothing consumes the metadata yet.
+  const rawCitations = (data as { citations?: unknown }).citations;
+  const citations = Array.isArray(rawCitations)
+    ? rawCitations.filter((c): c is string => typeof c === 'string')
+    : [];
+  if (citations.length === 0) return base;
+  return attachProviderMetadata(
+    base,
+    freezeProviderMetadata<'perplexity', PerplexityCompletionMetadataV1>(
+      'perplexity',
+      PERPLEXITY_METADATA_VERSION,
+      { citations },
+    ),
+  );
 }
 
 // ── Copilot transport (stub — no public API yet) ──────────────────────────────

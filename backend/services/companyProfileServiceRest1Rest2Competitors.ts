@@ -2,6 +2,8 @@
 /** TEMP2 — split from companyProfileServiceRest1.ts (barrel preserved; importers unchanged). */
 /** TEMP1 — split from companyProfileService.ts (barrel preserved; importers unchanged). */
 import { ownedDbTable } from '../db/writeOwner';
+// WAVE-1C-001 §C1
+import { parseModelOutputOr } from './ai/safety';
 import { isSelfOrPlatformDomain } from './companyProfile/competitorDomainFilter';
 /**
  * companyProfileService.ts — orchestration only.
@@ -379,7 +381,7 @@ const runProfileRefinement = async (
   ]);
   console.info('[refine] phase=extraction done', { elapsed: elapsed() });
 
-  const extractionParsed = JSON.parse(extractionResult.output?.trim() || '{}');
+  const extractionParsed = parseModelOutputOr<any>(extractionResult.output, {}, { surface: 'profile.competitorExtraction' });
   let extraction = buildExtractionWithDefaults(extractionParsed);
   let missingFieldQuestions = missingFieldQuestionsRaw;
   if (!extraction.missing_fields || extraction.missing_fields.length === 0) {

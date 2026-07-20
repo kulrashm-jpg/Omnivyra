@@ -1,5 +1,6 @@
 /** Part of regenerationExecutor (Agent-B split — main module keeps the original path). */
 import { type BlogForRegeneration, type RegenerationOptions, type RegenerationChange, effectiveSystemPrompt } from './regenerationExecutor';
+import { parseModelOutputOr } from '../../backend/services/ai/safety';
 /**
  * Regeneration Executor
  *
@@ -78,7 +79,7 @@ export async function applyAddReferences(
     ],
   });
 
-  const parsed = JSON.parse(result.output) as { references?: Array<{ title: string; url: string }> };
+  const parsed = parseModelOutputOr<{ references?: Array<{ title: string; url: string }> }>(result.output, {}, { surface: 'blog.regen.refs' });
   if (!Array.isArray(parsed.references) || parsed.references.length === 0) {
     throw new Error('No references returned from AI');
   }
@@ -210,7 +211,7 @@ export async function applyAddHeadings(
     ],
   });
 
-  const parsed = JSON.parse(result.output) as {
+  const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'blog.regen.multi' }) as {
     sections?: Array<{ heading?: string; paragraph_html?: string }>;
   };
 
@@ -285,7 +286,7 @@ export async function applyFixTitleKeyword(
     ],
   });
 
-  const parsed = JSON.parse(result.output) as { title?: string };
+  const parsed = parseModelOutputOr<{ title?: string }>(result.output, {}, { surface: 'blog.regen.title' });
   if (!parsed.title?.trim()) throw new Error('No title returned from AI');
 
   return {

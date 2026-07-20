@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../aiGateway';
+import { parseModelOutput } from '../ai/safety';
 import {
   CompanyProfile,
   EntityArchetypeIntelligence,
@@ -353,16 +354,23 @@ export async function refineProblemTransformationAnswers(
     return enforceProblemTransformationGrounding(mergeWithExisting(EMPTY_PT_OUTPUT, existingFields), profile, options?.archetype ?? profile?.report_settings?.entity_archetype ?? null);
   }
 
+  // WAVE-1C-001 §C1: canonical safe-parse. Behavior preserved — a parse miss
+  // still triggers the runLLM(true) retry, then falls back to grounded defaults.
   let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
+  const p1 = parseModelOutput<Record<string, unknown>>(raw, { surface: 'profile.problemTransformation' });
+  if (p1.ok) {
+    parsed = p1.value;
+  } else {
     try {
       raw = await runLLM(true);
-      parsed = JSON.parse(raw);
     } catch {
       return enforceProblemTransformationGrounding(mergeWithExisting(EMPTY_PT_OUTPUT, existingFields), profile, options?.archetype ?? profile?.report_settings?.entity_archetype ?? null);
     }
+    const p2 = parseModelOutput<Record<string, unknown>>(raw, { surface: 'profile.problemTransformation.retry' });
+    if (!p2.ok) {
+      return enforceProblemTransformationGrounding(mergeWithExisting(EMPTY_PT_OUTPUT, existingFields), profile, options?.archetype ?? profile?.report_settings?.entity_archetype ?? null);
+    }
+    parsed = p2.value;
   }
 
   const result = parseAndNormalizePT(parsed);

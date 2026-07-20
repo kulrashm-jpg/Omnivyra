@@ -21,6 +21,21 @@ import {
   buildUserGuidedIdentityContext as __buildUserGuidedIdentityContext,
   buildContextBlock as __buildContextBlock,
 } from '../../backend/services/context/canonicalContentContextResolver';
+// WAVE-1A (AI-CONTRACT-000 §C6): the instruction-hierarchy preamble at the system-
+// prompt head. Untrusted fields are already escaped at extractCompanyIdentity; this
+// declares the hierarchy (system > data > user) so fenced/escaped context is treated
+// as DATA. Flag-gated (default on) for instant, quality-safe reversibility.
+import { INSTRUCTION_HIERARCHY_PREAMBLE } from '../../backend/services/ai/safety';
+import { defineRolloutFlag, resolveRolloutSync } from '../platform/rollout';
+
+const PROMPT_SAFETY_PREAMBLE_FLAG = defineRolloutFlag({
+  key: 'prompt-safety-preamble',
+  description: 'WAVE-1A: prepend the instruction-hierarchy preamble to the identity-lock system prompt',
+  defaultMode: 'enforce',
+});
+function preambleEnabled(): boolean {
+  try { return resolveRolloutSync(PROMPT_SAFETY_PREAMBLE_FLAG).mode === 'enforce'; } catch { return false; }
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -110,6 +125,7 @@ export function buildIdentityLock(identity: CompanyIdentity, contentType: string
   const userGuidanceContext = buildUserGuidedIdentityContext(identity);
 
   return (
+    (preambleEnabled() ? `${INSTRUCTION_HIERARCHY_PREAMBLE}\n\n` : '') +
     `You are the in-house content strategist for ${name}. ` +
     `You write AS ${name}, not as an outside observer. ` +
     `Every piece of content must reflect ${name}'s ${audienceLed ? valueSurface : 'expertise, positioning, and audience'}.\n\n` +

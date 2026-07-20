@@ -6,6 +6,8 @@ import {
 } from './companyContextIntelligenceService';
 import { calculateContextQualityMetadata, type CompanyContextQualityMetadata } from './companyContextEnrichmentService';
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
+// WAVE-1 (AI-CONTRACT-000 §P6): honest provenance — no fabricated evidence.
+import { classifyProvenance } from './ai/safety/marketProvenance';
 
 export type MarketPulseSignalCategory =
   | 'regulation'
@@ -208,8 +210,12 @@ export function buildSignalFromFinding(input: {
     title: input.title,
     summary: input.summary,
     source_name: input.sourceName ?? 'Market Pulse scan',
-    source_type: 'system',
-    source_credibility: 65,
+    // WAVE-1 §P6: source_type + credibility are DERIVED from real evidence, never
+    // hard-coded. An uncited, model-derived scan signal is honestly labeled
+    // 'ai_inference'/'speculative' with derived (low) credibility instead of a
+    // fabricated 'system' source at credibility 65. Set via provenance below.
+    source_type: 'ai_inference',
+    source_credibility: 25,
     geography: input.regions[0] ?? 'Global',
     industries: [],
     affected_domains: affectedDomains,
@@ -226,6 +232,16 @@ export function buildSignalFromFinding(input: {
     weak_signal: (input.confidenceScore ?? 55) < 45,
     ...classification,
   };
+  // WAVE-1 §P6 — stamp honest provenance from the signal's ACTUAL evidence.
+  // Uncited scan signals become ai_inference/speculative with derived credibility;
+  // a real source_url would upgrade the tier to retrieval_backed. No fabricated evidence.
+  const __prov = classifyProvenance({
+    sourceUrl: (signal as { source_url?: string | null }).source_url ?? null,
+    sourceCount: 0,
+    confidenceScore: signal.confidence_score ?? null,
+  });
+  signal.source_type = __prov.tier;
+  signal.source_credibility = __prov.credibility;
   const direction = input.impactType === 'risk' ? 'negative' : input.impactType === 'opportunity' ? 'positive' : 'mixed';
   const impacts: MarketPulseSignalImpact[] = affectedDomains.length > 0
     ? affectedDomains.map((domain) => ({

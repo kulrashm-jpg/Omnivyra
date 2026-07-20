@@ -1,5 +1,6 @@
 /** Part of regenerationExecutor (Agent-B split — main module keeps the original path). */
 import { type BlogForRegeneration, type RegenerationOptions, type RegenerationChange, effectiveSystemPrompt } from './regenerationExecutor';
+import { parseModelOutputOr } from '../../backend/services/ai/safety';
 /**
  * Regeneration Executor
  *
@@ -150,7 +151,7 @@ export async function applyAddSummary(
     ],
   });
 
-  const parsed = JSON.parse(result.output) as { summary?: string };
+  const parsed = parseModelOutputOr<{ summary?: string }>(result.output, {}, { surface: 'blog.regen.summary' });
   if (!parsed.summary?.trim()) throw new Error('No summary returned from AI');
 
   const summaryBlock: SummaryBlock = {
@@ -214,7 +215,7 @@ export async function applyAddFaq(
     ],
   });
 
-  const parsed = JSON.parse(result.output) as { pairs?: Array<{ question: string; answer: string }> };
+  const parsed = parseModelOutputOr<{ pairs?: Array<{ question: string; answer: string }> }>(result.output, {}, { surface: 'blog.regen.pairs' });
   if (!Array.isArray(parsed.pairs) || parsed.pairs.length === 0) {
     throw new Error('No FAQ pairs returned from AI');
   }
@@ -299,7 +300,7 @@ export async function applyExpandSection(
     ],
   });
 
-  const parsed = JSON.parse(result.output) as { expanded_html?: string };
+  const parsed = parseModelOutputOr<{ expanded_html?: string }>(result.output, {}, { surface: 'blog.regen.expand' });
   if (!parsed.expanded_html?.trim()) throw new Error('No expanded content returned from AI');
 
   const newParagraph: ParagraphBlock = {

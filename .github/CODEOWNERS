@@ -1,13 +1,88 @@
-# CODEOWNERS — production baseline protection (REPO-HARDEN-001)
+# CODEOWNERS — Omnivyra ownership map (GOV-IMPLEMENT-002)
 #
-# Purpose: require mandatory review on the production-critical contracts of the
-# CERTIFIED Writer baseline (and the frozen Governance Runtime), so a parallel
-# workstream or automated agent cannot silently alter them. Path-scoped ONLY —
-# there is deliberately NO repo-wide `*` default; unlisted paths keep their
-# normal review flow. Last matching pattern wins (GitHub CODEOWNERS semantics).
+# ADVISORY ownership documentation of architectural boundaries. It records WHO owns
+# each platform contract; it does NOT enforce reviews today (there is no branch
+# protection — see ORG-AUDIT-003). When branch protection is enabled later, these
+# same entries become the enforced review map with no restructuring required.
 #
-# Owner is the current repo owner; replace with a team as the org grows, e.g.
-#   @<org>/writer-platform · @<org>/release-owners · @<org>/governance-maintainers
+# Rules:
+#  - Path-scoped by ARCHITECTURAL DOMAIN — deliberately NO repo-wide `*` default;
+#    unlisted paths keep their normal flow.
+#  - Owner is the current repo owner (@kulrashm-jpg) while the team is 1–2 people.
+#    As the org grows, swap the owner per domain for a team, e.g.
+#      @<org>/ai-platform · @<org>/content-platform · @<org>/data-platform ·
+#      @<org>/release-owners · @<org>/governance-maintainers
+#  - GitHub semantics: LAST matching pattern wins. Broad domain patterns come first;
+#    critical contracts are listed last so they can be given stricter ownership later.
+
+# ═══════════════════ PLATFORM DOMAINS (architectural boundaries) ═══════════════════
+
+# ── AI runtime (the shared gateway seam — every AI consumer depends on it) ────
+/backend/services/aiGateway*.ts                         @kulrashm-jpg
+
+# ── Content runtime + shared generation pipeline ─────────────────────────────
+/backend/services/content/**                            @kulrashm-jpg
+/backend/services/contentGeneration/**                  @kulrashm-jpg
+/lib/content/**                                         @kulrashm-jpg
+/lib/post/**                                            @kulrashm-jpg
+/lib/thread/**                                          @kulrashm-jpg
+
+# ── Campaign runtime ─────────────────────────────────────────────────────────
+/backend/services/Campaign*.ts                          @kulrashm-jpg
+
+# ── Creator runtime (generation + asset renderers) ───────────────────────────
+/backend/services/creator/**                            @kulrashm-jpg
+/backend/services/creatorAssetRenderer*.ts              @kulrashm-jpg
+/backend/services/creatorRenderGeometry.ts              @kulrashm-jpg
+
+# ── Scheduler + worker runtime ───────────────────────────────────────────────
+/backend/queue/**                                       @kulrashm-jpg
+/backend/scheduler/**                                   @kulrashm-jpg
+/components/MultiPlatformSchedulerController.tsx         @kulrashm-jpg
+/components/content/post-to-social/**                   @kulrashm-jpg
+
+# ── Authentication + authorization + security ────────────────────────────────
+/backend/auth/**                                        @kulrashm-jpg
+/backend/security/**                                    @kulrashm-jpg
+/backend/middleware/authMiddleware.ts                   @kulrashm-jpg
+/pages/api/auth/**                                      @kulrashm-jpg
+
+# ── Billing ──────────────────────────────────────────────────────────────────
+/backend/services/billing/**                            @kulrashm-jpg
+
+# ── Integrations (external adapters) ─────────────────────────────────────────
+/backend/services/integrations/**                       @kulrashm-jpg
+
+# ── Database, persistence client + migration framework ───────────────────────
+/backend/db/**                                          @kulrashm-jpg
+/supabase/migrations/**                                 @kulrashm-jpg
+/scripts/verify-schema-parity.js                        @kulrashm-jpg
+
+# ── API surface ──────────────────────────────────────────────────────────────
+/pages/api/**                                           @kulrashm-jpg
+
+# ── Frontend, shared components, shared libraries, hooks ─────────────────────
+/components/**                                          @kulrashm-jpg
+/hooks/**                                               @kulrashm-jpg
+/features/**                                            @kulrashm-jpg
+/lib/**                                                 @kulrashm-jpg
+
+# ── Configuration + environment contracts ────────────────────────────────────
+/config/**                                              @kulrashm-jpg
+/scripts/validate_startup_env.ts                        @kulrashm-jpg
+
+# ── CI/CD, deployment + release-managed files ────────────────────────────────
+/.github/workflows/**                                   @kulrashm-jpg
+/scripts/predeploy-check.js                             @kulrashm-jpg
+/scripts/start-all.js                                   @kulrashm-jpg
+/package.json                                           @kulrashm-jpg
+
+# ── Documentation ────────────────────────────────────────────────────────────
+/docs/**                                                @kulrashm-jpg
+
+# ═══════════════ CRITICAL CONTRACTS (specific — win via last-match) ═══════════════
+# The certified Writer baseline's production-critical contracts. Listed last so a
+# future team split can give these stricter ownership than their parent domain.
 
 # ── Writer generation runtime (flag-gated cutover; certified parity) ─────────
 /lib/post/runPostGeneration.ts                          @kulrashm-jpg
@@ -15,25 +90,14 @@
 
 # ── Canonical content + shared generation runtime ───────────────────────────
 /backend/services/content/runtime/**                    @kulrashm-jpg
-/backend/services/contentGeneration/**                  @kulrashm-jpg
 
 # ── Content persistence (canonical spine + memory/originality services) ──────
 /backend/services/content/contentService.ts             @kulrashm-jpg
 /backend/services/content/contentMemoryService.ts       @kulrashm-jpg
 
-# ── Database migrations (additive-only contract) ─────────────────────────────
-/supabase/migrations/**                                 @kulrashm-jpg
+# ═══════════════════════ GOVERNANCE (preserved; do not remove) ════════════════════
 
-# ── Shared scheduler runtime (used by Writer/campaigns/creator/engagement) ───
-/components/MultiPlatformSchedulerController.tsx         @kulrashm-jpg
-/components/content/post-to-social/**                   @kulrashm-jpg
-
-# ── Release-managed files (deploy + package manifest) ────────────────────────
-/package.json                                           @kulrashm-jpg
-/scripts/predeploy-check.js                             @kulrashm-jpg
-/scripts/start-all.js                                   @kulrashm-jpg
-
-# ── Frozen Governance Runtime v1.0.0 (preserved from R3A; immutable baseline) ─
+# ── Frozen Governance Runtime v1.0.0 (R3A; immutable baseline) ────────────────
 /docs/company-intelligence/governance-automation/runtime/**   @kulrashm-jpg
 /scripts/governance-baseline/**                               @kulrashm-jpg
 

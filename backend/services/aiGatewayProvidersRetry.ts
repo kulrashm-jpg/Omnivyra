@@ -30,6 +30,9 @@ import {
 
 import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
 import { recordProviderUsage } from './aiUsageCollector';
+// WAVE-1D-001 §C1: canonical retry policy + error normalization (deterministic).
+import { classifyProviderError, computeBackoffMs } from './ai/safety';
+import { recordRawCounter, recordRawHistogram } from '../observability';
 import { getCompanyLlmConfig, resolveCompanyApiKey, getActiveProviders, getModelsByProvider } from './llmProviderService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
@@ -333,16 +336,28 @@ export async function callProviderWithRetry(
     throw primaryErr;
   }
 
-  // ── Step 2: same-provider retry (rate limit / overload) ───────────────────
-  if (isRateLimitError(primaryErr)) {
+  // ── Step 2: same-provider retry ───────────────────────────────────────────
+  // WAVE-1D-001: deterministic, bounded, policy-driven. Rate-limit/overload
+  // (429/529) is always retried (legacy behavior preserved). Transient failures
+  // (5xx / timeout / network) become retry-eligible when AI_GATEWAY_RETRY_TRANSIENT
+  // is enabled (default OFF → behavior unchanged). NEVER retries auth/validation/
+  // abort/permanent errors. Backoff is exponential + equal jitter (was fixed 2s).
+  const __cls = classifyProviderError(primaryErr);
+  const __transientEnabled = /^(1|true|yes|on)$/i.test(String(process.env.AI_GATEWAY_RETRY_TRANSIENT ?? ''));
+  const __shouldRetrySameProvider = __cls.rateLimit || (__transientEnabled && __cls.retryable);
+  if (__shouldRetrySameProvider) {
     logIntermediateAttempt(tracking, attempt, provider, params.model, primaryErr);
     attempt += 1;
-    console.warn('[ai-gateway] rate-limit, retrying same provider after 2s', {
+    const __backoff = computeBackoffMs(attempt - 1);
+    try { recordRawCounter('ai.gateway.retry', 1, { provider, class: __cls.class }); } catch { /* fail-safe */ }
+    console.warn('[ai-gateway] transient error, retrying same provider', {
       provider,
       status: asGatewayError(primaryErr).status,
+      errorClass: __cls.class,
+      backoffMs: __backoff,
     });
     try {
-      await sleep(2000);
+      await sleep(__backoff);
       if (params.signal?.aborted) throw new GatewayAbortError(params.operation || provider);
       if (providerReceipt) markProviderTokenStarted(providerReceipt);
       if (distProviderReceipt) markDistProviderTokenStarted(distProviderReceipt);

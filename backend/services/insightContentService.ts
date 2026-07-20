@@ -4,6 +4,7 @@
  */
 
 import { runCompletionWithOperation } from './aiGateway';
+import { parseModelOutputOr } from './ai/safety';
 
 export type ContentFormat = 'post' | 'article' | 'video' | 'thread';
 
@@ -77,7 +78,7 @@ Return JSON only with this exact shape:
   let parsed: Record<string, unknown>;
   try {
     const raw = (result.output || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-    parsed = raw ? JSON.parse(raw) : {};
+    parsed = parseModelOutputOr<any>(raw, {}, { surface: 'insightContent' });
   } catch {
     return [];
   }

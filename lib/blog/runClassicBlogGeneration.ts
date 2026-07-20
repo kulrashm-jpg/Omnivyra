@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { parseModelOutputOr } from '../../backend/services/ai/safety';
 import { flattenBlocks } from './blockUtils';
 import type { ContentBlock } from './blockTypes';
 import type { BlogGenerationInput } from './blogGenerationEngine';
@@ -415,7 +416,7 @@ export async function runClassicBlogGeneration(args: {
 
         let html = '';
         try {
-          const raw = result.output ? JSON.parse(result.output) : null;
+          const raw = parseModelOutputOr<any>(result.output, null, { surface: 'blog.classic' });
           html = typeof raw?.html === 'string' ? raw.html.trim() : '';
         } catch {
           html = '';

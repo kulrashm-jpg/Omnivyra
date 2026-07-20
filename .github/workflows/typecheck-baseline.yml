@@ -24,6 +24,23 @@ jobs:
       - name: TypeScript non-regression baseline
         run: npm run typecheck:ci
 
+      # GOV-IMPLEMENT-003: worker compilation gate. Railway builds the worker image
+      # via `tsc -p tsconfig.worker.json`; a worker type error only surfaced AFTER
+      # the image push. This step fails the PR if the worker would not compile —
+      # identical to the local pre-commit hook (same tsconfig, --noEmit / no emit,
+      # no external dependencies). Reuses the job's single `npm ci`.
+      - name: Worker compilation typecheck
+        run: npx tsc -p tsconfig.worker.json --noEmit
+
+      # ENG-IMPL-002: migration quality gate (preventative). Fails the PR if a NEW
+      # migration uses the legacy date-only prefix, collides with an existing
+      # version, or omits IF NOT EXISTS on additive DDL. Historical migrations are
+      # frozen (scripts/migrations/historical-baseline.txt) — no retroactive
+      # failures. Deterministic, read-only, no DB/network. Same script locally
+      # (`npm run check:migrations`) and in CI.
+      - name: Migration quality gate
+        run: node scripts/check-migration-quality.js
+
       # HARDEN-005A: fail the build if new code makes a raw dynamic-URL outbound
       # request that bypasses the centralized SSRF layer (lib/security/safeFetch).
       - name: Outbound-SSRF guard

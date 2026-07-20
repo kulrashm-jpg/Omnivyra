@@ -5,6 +5,7 @@
  */
 
 import { runCompletionWithOperation } from './aiGateway';
+import { parseModelOutputOr } from './ai/safety';
 import type { PlannerCommand, PlannerCommandResponse } from '../types/plannerCommands';
 import type { PlannerCalendarPlan } from './plannerCommandInterpreter';
 
@@ -73,7 +74,7 @@ export async function extractPlannerCommands(
   let parsed: PlannerCommandResponse;
   try {
     const raw = (result.output ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-    parsed = JSON.parse(raw || '{}') as PlannerCommandResponse;
+    parsed = parseModelOutputOr<PlannerCommandResponse>(raw, {} as PlannerCommandResponse, { surface: 'planner.commandExtractor' });
   } catch {
     return [];
   }

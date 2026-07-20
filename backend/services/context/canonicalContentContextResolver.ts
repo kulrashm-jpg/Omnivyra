@@ -38,6 +38,15 @@ import {
 } from '../companyProfile/competitorSynthesis';
 import { buildStrategyInstructions, extractStrategyProfile } from '../../../lib/content/companyStrategyPerspective';
 import { getCanonicalProfile } from './canonicalProfileAdapter';
+// WAVE-1A (AI-CONTRACT-000 §C6 pre-gen): adopt the canonical prompt-safety primitive
+// at THE single identity choke point — every content flow builds CompanyIdentity here,
+// so untrusted profile fields (website-crawl/user-derived) are escaped ONCE and can
+// never forge instructions/roles/fences downstream. Quality-neutral (only control
+// sequences are defanged); injection attempts are counted for observability.
+// WAVE-1A-002: use the ONE shared adoption helper (no per-file duplicate logic).
+import { hardenText, hardenBlock, hardenTextList as __hardenTextList } from '../ai/safety';
+const hardenUntrusted = (v: string | null | undefined) => hardenText('company_profile', v);
+const hardenUntrustedList = (v: (string | null | undefined)[] | null | undefined) => __hardenTextList('company_profile', v);
 
 /* ── Creator overlay context types (re-exported; contract preserved) ──────── */
 
@@ -134,19 +143,19 @@ function buildIcp(profile: Record<string, unknown>): string | undefined {
 export function extractCompanyIdentity(profile: CompanyProfile | null | undefined): CompanyIdentity {
   if (!profile) return {};
   return {
-    companyName: profile.name || undefined,
-    industry: profile.industry || undefined,
-    targetAudience: profile.target_audience || undefined,
-    idealCustomerProfile: profile.ideal_customer_profile || undefined,
-    coreProblem: profile.core_problem_statement || undefined,
-    painPoints: profile.pain_symptoms?.filter(Boolean) || undefined,
-    uniqueValue: profile.unique_value || undefined,
-    productsServices: profile.products_services || undefined,
-    desiredTransformation: profile.desired_transformation || undefined,
-    competitiveAdvantages: profile.competitive_advantages || undefined,
+    companyName: hardenUntrusted(profile.name),
+    industry: hardenUntrusted(profile.industry),
+    targetAudience: hardenUntrusted(profile.target_audience),
+    idealCustomerProfile: hardenUntrusted(profile.ideal_customer_profile),
+    coreProblem: hardenUntrusted(profile.core_problem_statement),
+    painPoints: hardenUntrustedList(profile.pain_symptoms),
+    uniqueValue: hardenUntrusted(profile.unique_value),
+    productsServices: hardenUntrusted(profile.products_services),
+    desiredTransformation: hardenUntrusted(profile.desired_transformation),
+    competitiveAdvantages: hardenUntrusted(profile.competitive_advantages),
     authorityDomains: profile.authority_domains?.filter(Boolean) || undefined,
-    keyMessages: profile.key_messages || undefined,
-    brandVoice: profile.brand_voice || undefined,
+    keyMessages: hardenUntrusted(profile.key_messages),
+    brandVoice: hardenUntrusted(profile.brand_voice),
     strategyProfile: extractStrategyProfile(profile),
     entityArchetype: profile.report_settings?.entity_archetype ?? null,
     competitorIntelligence: profile.report_settings?.competitor_intelligence ?? null,
@@ -157,7 +166,8 @@ export function extractCompanyIdentity(profile: CompanyProfile | null | undefine
 /** Peer-intelligence identity cues (moved verbatim from #1). */
 export function buildCompetitorIdentityContext(identity: CompanyIdentity): string {
   if (!shouldUseAudienceLedSynthesis(identity.entityArchetype, identity.competitorIntelligence ?? null)) return '';
-  return buildStructuredCompetitorDimensionBlock(identity.competitorIntelligence ?? null);
+  // WAVE-1A-002 §C6: competitor-derived text is untrusted DATA — escape the block.
+  return hardenBlock('competitor', buildStructuredCompetitorDimensionBlock(identity.competitorIntelligence ?? null));
 }
 
 /** User-approved identity guidance (moved verbatim from #1). */
@@ -173,7 +183,9 @@ export function buildUserGuidedIdentityContext(identity: CompanyIdentity): strin
     if (note.status === 'archived' || !note.text) continue;
     lines.push(`guidance: ${note.text}`);
   }
-  return lines.slice(0, 6).join('\n');
+  // WAVE-1A-002 §C6: user-guided free text is untrusted DATA — escape the block
+  // (legitimate guidance intent is preserved; only role/fence forgeries are defanged).
+  return hardenBlock('user_input', lines.slice(0, 6).join('\n'));
 }
 
 /**

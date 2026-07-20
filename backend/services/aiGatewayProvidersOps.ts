@@ -39,6 +39,8 @@ import { recordGptCall, recordGptLatency, recordGptFailure } from './metricsColl
 import { evaluateJobCost } from './jobCostEstimator';
 import { trackLlmTokens } from '../../lib/redis/usageProtection';
 import { ownedDbTable } from '../db/writeOwner';
+// WAVE-1C-001 §C1: canonical safe-parse for model output (shared; no second parser).
+import { parseModelOutputOr } from './ai/safety';
 import { recordAi, recordCache } from '../observability/metrics';
 
 import { UNKNOWN_ORG, FEATURE_AREA_MAP, type GatewayMetadata, type GatewayResponse, type GatewayRequest, GatewayAbortError, isAbortError, _inFlight, sleep, resolveProviderTimeoutMs, _pools, acquireSlot, releaseSlot, resolveLlmConfig, type NormalizedCompletion, callOpenAi, callAnthropic, GATEWAY_OVERHEAD_FLAG } from './aiGatewayCore';
@@ -501,7 +503,7 @@ export const generateRecommendation = async (
   request: GatewayRequest
 ): Promise<GatewayResponse<Record<string, unknown>>> => {
   const result = await executeGatewayCompletion({ ...request, operation: 'generateRecommendation' });
-  const parsed = result.output ? JSON.parse(result.output) : {};
+  const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.generateRecommendation' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -512,7 +514,7 @@ export const previewStrategy = async (
   request: GatewayRequest
 ): Promise<GatewayResponse<Record<string, unknown>>> => {
   const result = await executeGatewayCompletion({ ...request, operation: 'previewStrategy' });
-  const parsed = result.output ? JSON.parse(result.output) : {};
+  const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.previewStrategy' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -565,7 +567,7 @@ export const generateDailyPlan = async (
   request: GatewayRequest
 ): Promise<GatewayResponse<Record<string, unknown>>> => {
   const result = await executeGatewayCompletion({ ...request, operation: 'generateDailyPlan' });
-  const parsed = result.output ? JSON.parse(result.output) : {};
+  const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.generateDailyPlan' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -582,7 +584,7 @@ export const generateDailyDistributionPlan = async (
   const result = await executeGatewayCompletion({ ...request, operation: 'generateDailyDistributionPlan' });
   let toParse = (typeof result.output === 'string' ? result.output : '') || '';
   toParse = toParse.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  const parsed = toParse ? JSON.parse(toParse) : {};
+  const parsed = parseModelOutputOr<any>(toParse, {}, { surface: 'gateway.generateDailyDistributionPlan' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -591,7 +593,7 @@ export const generateDailyDistributionPlan = async (
 
 export const optimizeWeek = async (request: GatewayRequest): Promise<GatewayResponse<Record<string, unknown>>> => {
   const result = await executeGatewayCompletion({ ...request, operation: 'optimizeWeek' });
-  const parsed = result.output ? JSON.parse(result.output) : {};
+  const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.optimizeWeek' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -680,7 +682,7 @@ Return JSON: { "suggested_weeks": number (4-12), "rationale": "1-2 sentences why
         },
       ],
     });
-    const parsed = result.output ? JSON.parse(result.output) : {};
+    const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.suggestDurationForOpportunity' });
     const weeks = Math.min(52, Math.max(1, Number(parsed.suggested_weeks) || 8));
     return {
       suggested_weeks: weeks,
@@ -753,7 +755,7 @@ Return JSON: { "suggested_weeks": number, "rationale": "2-3 sentences explaining
         },
       ],
     });
-    const parsed = result.output ? JSON.parse(result.output) : {};
+    const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.suggestDurationFromQuestionnaire' });
     const weeks = Math.min(52, Math.max(1, Number(parsed.suggested_weeks) || 8));
     return {
       suggested_weeks: weeks,
@@ -816,7 +818,7 @@ Reply with JSON only: { "allowed": true, "reason": null } or { "allowed": false,
         },
       ],
     });
-    const parsed = result.output ? JSON.parse(result.output) : {};
+    const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.moderateChatMessage' });
     return {
       allowed: Boolean(parsed.allowed !== false),
       reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,

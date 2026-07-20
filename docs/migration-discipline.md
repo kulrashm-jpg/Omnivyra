@@ -112,17 +112,46 @@ Supabase SQL editor.
 
 ## Future migration authoring checklist
 
+> **ENFORCED (ENG-IMPL-002).** Rules 1–2 are checked automatically by
+> `npm run check:migrations` (`scripts/check-migration-quality.js`), wired into the
+> `TypeScript Baseline` CI job. The check runs ONLY on migrations authored after the
+> gate landed — the pre-existing files are frozen in
+> `scripts/migrations/historical-baseline.txt` and never fail. Deterministic,
+> read-only, no DB/network; identical locally and in CI.
+
 When adding a new migration to `supabase/migrations/`:
 
-1. **Use idempotent DDL.** `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`. Never bare `ADD COLUMN`.
-2. **Use a fresh version prefix.** Append today's date `YYYYMMDD` and a short descriptive name. **Do not** reuse a version that already has a file — pick the next available day.
-3. **Comment provenance.** Top-of-file comment block explaining:
-   - What the migration adds.
-   - Why it's needed (which code path writes/reads it).
-   - What runtime behavior fails if the columns are absent (so future operators understand the urgency).
-   - Whether the migration replaces / supersedes an archived migration in `database/_archive/skipped-migrations/`.
-4. **Update `scripts/verify-schema-parity.js`.** If the new columns are load-bearing for runtime code (i.e. writes will fail without them), add them to the `REQUIRED_COLUMNS` manifest with a one-line motivation.
-5. **Apply via SQL editor, not `db push`.** Until the ledger is reconciled, manual application is the only safe path.
+1. **Use idempotent DDL (enforced).** `CREATE TABLE IF NOT EXISTS`,
+   `CREATE INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`. Never bare
+   `CREATE TABLE` / `CREATE INDEX` / `ADD COLUMN`. (`DROP … IF EXISTS`,
+   `CREATE OR REPLACE FUNCTION`, and `DROP POLICY IF EXISTS` + `CREATE POLICY`
+   are the guarded patterns for the statements that lack `IF NOT EXISTS`.)
+2. **Use a unique full-timestamp filename (enforced).**
+   `YYYYMMDDHHMMSS_<lower_snake_slug>.sql` — a **14-digit** timestamp, not the legacy
+   `YYYYMMDD` date-only prefix (which caused the historical collisions). The prefix
+   must not collide with any existing migration's version.
+3. **Comment provenance.** Top-of-file block: what it adds, why (which code path
+   writes/reads it), what fails if absent, and whether it supersedes an archived migration.
+4. **Update `scripts/verify-schema-parity.js`.** If the new columns are load-bearing,
+   add them to `REQUIRED_COLUMNS` with a severity + motivation (`BLOCKING` only if the
+   write is NOT fail-open).
+5. **Apply via SQL editor, not `db push`.** Until the ledger is reconciled, manual
+   application is the only safe path.
+
+**Compliant example:**
+```
+supabase/migrations/20260720141530_add_widget_owner.sql
+```
+```sql
+-- Adds widget.owner_id (widgetService.assignOwner writes it).
+CREATE TABLE IF NOT EXISTS public.widget (id uuid PRIMARY KEY);
+ALTER TABLE public.widget ADD COLUMN IF NOT EXISTS owner_id uuid;
+CREATE INDEX IF NOT EXISTS widget_owner_ix ON public.widget (owner_id);
+```
+
+**Rejected (why):** `20260720_add_widget.sql` — legacy date-only prefix ·
+`20260905000000_x.sql` — collides with an existing version · a bare
+`ALTER TABLE … ADD COLUMN owner_id` — missing `IF NOT EXISTS`.
 
 ---
 

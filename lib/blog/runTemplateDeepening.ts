@@ -6,6 +6,7 @@
  */
 
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { parseModelOutputOr } from '../../backend/services/ai/safety';
 import type { ContentBlock } from './blockTypes';
 import {
   stripHtmlForWordCount,
@@ -100,7 +101,7 @@ export async function deepenTemplateParagraphsIndividually(args: {
 
     let html = '';
     try {
-      const raw = result.output ? JSON.parse(result.output) : null;
+      const raw = parseModelOutputOr<any>(result.output, null, { surface: 'blog.templateDeepening' });
       html = typeof raw?.html === 'string' ? raw.html.trim() : '';
     } catch {
       html = '';

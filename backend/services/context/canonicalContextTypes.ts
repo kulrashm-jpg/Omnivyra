@@ -161,6 +161,9 @@ export interface CanonicalContext {
   knownGaps: string[];
   quality: ContextQuality;
   transparency: GroundingTransparency;
+  /** WAVE-2-001 — enforced grounding decision (floor + freshness-adjusted confidence).
+   *  Additive/optional; computed from `transparency` at assembly. */
+  grounding?: import('../ai/grounding/groundingPolicy').GroundingDecision;
   evidenceIntelligence: EvidenceIntelligence;
   /** ISO timestamp of assembly (stamped by caller; excluded from determinism checks). */
   assembledAt: string | null;

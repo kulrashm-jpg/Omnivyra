@@ -7,6 +7,7 @@
  */
 
 import { flattenBlocks } from './blockUtils';
+import { parseModelOutputOr } from '../../backend/services/ai/safety';
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
 import { getBlogTemplateDepthGuidance } from './blogTemplateGuidance';
 import { getNewsletterTemplateDepthGuidance } from '../newsletter/newsletterTemplateGuidance';
@@ -550,7 +551,7 @@ export async function deepenTemplateParagraphsIndividually(args: {
 
     let html = '';
     try {
-      const raw = result.output ? JSON.parse(result.output) : null;
+      const raw = parseModelOutputOr<any>(result.output, null, { surface: 'blog.runnerHelpers' });
       html = typeof raw?.html === 'string' ? raw.html.trim() : '';
     } catch {
       html = '';

@@ -18,6 +18,9 @@
  */
 
 import { supabase } from '../../db/supabaseClient';
+// WAVE-1B-001 §C6 post-gen: canonical outbound moderation before persistence
+// (shared primitive; shadow by default → never blocks; enforce blocks unsafe output).
+import { moderateBeforePersist, AiError } from '../ai/safety';
 import { canTransition } from '../../../lib/content/contentLifecycle';
 import type {
   CanonicalContent,
@@ -220,6 +223,18 @@ export interface ExternalContentRow {
  * revision 1). Returns the persisted DTO.
  */
 export async function createContent(input: CreateContentInput): Promise<CanonicalContent> {
+  // WAVE-1B-001 — outbound moderation at THE canonical persistence boundary for
+  // post/thread. Invoked exactly once before insert. Shadow (default) classifies +
+  // audits without blocking; enforce blocks unsafe output (fail-closed) via AiError.
+  const moderation = await moderateBeforePersist(input.body ?? input.title ?? '', {
+    surface: `content.${input.contentType}`,
+  });
+  if (!moderation.allow) {
+    throw new AiError('SAFETY_MODERATION_BLOCKED', {
+      devDetail: `outbound moderation blocked ${input.contentType}: ${moderation.categories.join(',')} (audit ${moderation.auditId})`,
+    });
+  }
+
   const insertRow = {
     company_id: input.companyId,
     content_type: input.contentType,

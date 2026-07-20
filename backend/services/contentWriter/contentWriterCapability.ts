@@ -16,6 +16,7 @@
  */
 
 import { executeCapability } from '../aiCapability/aiCapabilityRuntime';
+import { parseModelOutput } from '../ai/safety';
 import type { CapabilityRequest, CapabilityResult } from '../aiCapability/capabilityContracts';
 import type { ModelRunner } from '../aiCapability/capabilityModelRunner';
 import type { CapabilityDefinition } from '../aiCapability/capabilityRegistry';
@@ -82,7 +83,11 @@ const modelRunner: ModelRunner = async (input) => {
 /** Injected output parser — reproduces the legacy JSON parse (fence-strip + lowercase keys). */
 function outputParser(_def: CapabilityDefinition, text: string): unknown {
   const raw = (text ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  const parsed = JSON.parse(raw); // throw → AIC recovery (same terminal error as legacy)
+  // WAVE-1C-001 §C1: canonical safe-parse. The intentional throw→AIC-recovery is
+  // PRESERVED by re-throwing the typed AiError on failure (same terminal error).
+  const pr = parseModelOutput(raw, { surface: 'contentWriter.capability' });
+  if ('error' in pr) throw pr.error;
+  const parsed = pr.value;
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
     if (typeof v === 'string') out[k.toLowerCase()] = v;

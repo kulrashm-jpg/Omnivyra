@@ -609,10 +609,125 @@ async function resolveLlmConfigUncached(companyId: string): Promise<ResolvedLlmC
 
 // ── Provider-specific callers ─────────────────────────────────────────────────
 
+// ── Provider-native metadata container (PB-001 · Program B · Zone P) ───────────
+/**
+ * PROVIDER METADATA CONTRACT (PB-001).
+ *
+ * `NormalizedCompletion` is intentionally provider-AGNOSTIC: it carries only
+ * `content` + normalized `usage` — the fields every consumer relies on. Some
+ * providers return NATIVE extras that this normalization would otherwise drop
+ * (e.g. Perplexity `citations[]`, grounding refs, search provenance, safety
+ * annotations, reasoning traces). This container lets those extras SURVIVE
+ * normalization WITHOUT weakening or polluting the canonical core object. It is:
+ *
+ *   - OPTIONAL           — absent on every legacy path; adding it changed no caller.
+ *   - IMMUTABLE          — every envelope + its `data` is deep-frozen (readonly types).
+ *   - VERSION-SAFE       — each envelope tags its own `version`; consumers branch on it.
+ *   - PROVIDER-SCOPED    — keyed by provider id; one provider's data can never sit
+ *                          in another provider's slot (provider isolation).
+ *   - FORWARD-COMPATIBLE — `data` is an open readonly record, so new kinds
+ *                          (citations, grounding, provenance, safety, reasoning)
+ *                          need NO contract change — only a new envelope + version.
+ *
+ * PB-001 GUARANTEES SURVIVAL ONLY — nothing in this package CONSUMES the metadata.
+ * Contract doc: docs/ai-architecture/contracts/PROVIDER-METADATA-CONTRACT.md
+ */
+
+/** Contract version of the container MECHANISM (not any single provider's data). */
+export const PROVIDER_METADATA_CONTRACT_VERSION = 1 as const;
+
+/** One provider's version-tagged, immutable native-metadata envelope. */
+export type ProviderMetadataEnvelope<
+  P extends string = string,
+  D = Readonly<Record<string, unknown>>,
+> = {
+  /** Provider id that produced this metadata (e.g. 'perplexity'). */
+  readonly provider: P;
+  /** Schema version of THIS provider's `data` shape. Bump on a breaking change. */
+  readonly version: number;
+  /** Provider-native payload. Deep-frozen; readonly at the type level. */
+  readonly data: Readonly<D>;
+};
+
+/**
+ * Provider-scoped map: at most one envelope per provider id. Keying by provider
+ * is what guarantees isolation — reading `map['a']` can never surface provider
+ * 'b''s data.
+ */
+export type ProviderMetadataMap = Readonly<Record<string, ProviderMetadataEnvelope>>;
+
+/** Known provider payload — Perplexity's grounded citation list (v1). */
+export const PERPLEXITY_METADATA_VERSION = 1 as const;
+export type PerplexityCompletionMetadataV1 = {
+  /** Ordered list of source URLs Perplexity grounded the answer in. */
+  readonly citations: readonly string[];
+};
+
 export type NormalizedCompletion = {
   content: string;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
+  /**
+   * OPTIONAL, IMMUTABLE provider-native metadata (PB-001). Absent on every
+   * existing provider path, so consumers reading only `content`/`usage` are
+   * unchanged. When present it is a provider-scoped, version-tagged, deep-frozen
+   * map — see {@link ProviderMetadataMap}. Additive extension point.
+   */
+  readonly providerMetadata?: ProviderMetadataMap;
 };
+
+/** Internal deep-freeze so a returned envelope's nested arrays/objects are truly immutable. */
+function deepFreezeMetadata<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      deepFreezeMetadata((value as Record<string, unknown>)[key]);
+    }
+  }
+  return value;
+}
+
+/**
+ * Build an immutable, version-tagged provider-metadata envelope. `data` is
+ * deep-frozen so neither the envelope nor its nested arrays/objects can be
+ * mutated after creation.
+ */
+export function freezeProviderMetadata<P extends string, D>(
+  provider: P,
+  version: number,
+  data: D,
+): ProviderMetadataEnvelope<P, D> {
+  return Object.freeze({
+    provider,
+    version,
+    data: deepFreezeMetadata(data) as Readonly<D>,
+  }) as ProviderMetadataEnvelope<P, D>;
+}
+
+/**
+ * Return a NEW completion with the given envelope(s) merged into its
+ * provider-metadata map (PURE — the input completion is never mutated). Merge is
+ * provider-scoped: an envelope replaces only its own provider's slot, so one
+ * provider's metadata can never leak into another's. No-op (returns the input
+ * unchanged) when no envelopes are supplied — preserving byte-identical behavior
+ * for providers that emit no native metadata.
+ */
+export function attachProviderMetadata(
+  completion: NormalizedCompletion,
+  ...envelopes: ReadonlyArray<ProviderMetadataEnvelope>
+): NormalizedCompletion {
+  if (envelopes.length === 0) return completion;
+  const merged: Record<string, ProviderMetadataEnvelope> = { ...(completion.providerMetadata ?? {}) };
+  for (const env of envelopes) merged[env.provider] = env;
+  return { ...completion, providerMetadata: Object.freeze(merged) };
+}
+
+/** Read one provider's envelope from a completion, or `undefined` when absent. */
+export function getProviderMetadata(
+  completion: NormalizedCompletion,
+  provider: string,
+): ProviderMetadataEnvelope | undefined {
+  return completion.providerMetadata?.[provider];
+}
 
 export async function callOpenAi(params: {
   apiKey: string;

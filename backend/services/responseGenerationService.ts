@@ -4,6 +4,8 @@
  */
 
 import { runCompletionWithOperation } from './aiGateway';
+// WAVE-1A-002/1B-001 §C6: canonical prompt-safety + outbound-moderation primitives (shared).
+import { hardenText, hardenBlock, moderateBeforePersist } from './ai/safety';
 import { parseTemplateStructure, blocksToPromptStructure } from './taggedResponseInterpreter';
 import { getPlatformFormatRules } from './platformResponseFormatter';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
@@ -26,6 +28,8 @@ import {
   extractStrategyProfile,
   validateStrategicPerspective,
 } from '../../lib/content/companyStrategyPerspective';
+// WS-2A: Coordination Platform shadow adoption (dark by default; never alters replies).
+import { observeEngagementSemanticShadow } from './intelligence/coordination/adoption/engagementSemanticShadow';
 
 export type GenerateInput = {
   message_id: string;
@@ -52,11 +56,22 @@ export async function generateResponse(
 
   const platformRules = getPlatformFormatRules(input.platform);
 
+  // WS-2A shadow adoption: observe semantic coordination for this reply intent.
+  // Fire-and-forget, dark by default — it can never modify, block, or delay the reply.
+  void observeEngagementSemanticShadow({
+    companyId: input.organization_id,
+    topic: input.original_message ?? '',
+    platform: input.platform ?? null,
+    surface: 'engagement.reply',
+    correlationId: input.message_id,
+  }).catch(() => {});
+
   let conversationContext = '';
   if (input.thread_id) {
     const summary = await getThreadMemory(input.thread_id);
     if (summary) {
-      conversationContext = `Conversation context: ${summary}\n\n`;
+      // WAVE-1A-002 §C6: conversation memory is untrusted DATA — escape before prompt.
+      conversationContext = `Conversation context: ${hardenBlock('conversation_history', summary)}\n\n`;
     }
   }
 
@@ -143,7 +158,7 @@ Output ONLY the reply text. No quotes, no preamble, no explanation.${strategyGui
 
   const userPrompt = `${conversationContext}Original message from ${input.author_name ?? 'user'}:
 """
-${(input.original_message ?? '').slice(0, 2000)}
+${hardenText('user_input', (input.original_message ?? '').slice(0, 2000)) ?? ''}
 """
 
 Template structure to follow:
@@ -205,6 +220,14 @@ Generate the reply:`;
       });
       const retried = (retry.output ?? '').toString().trim();
       if (retried) text = retried;
+    }
+    // WAVE-1B-001 — outbound moderation before the reply is delivered. Shadow
+    // (default) classifies + audits without blocking; enforce withholds unsafe replies.
+    const moderation = await moderateBeforePersist(text, {
+      surface: 'engagement.reply', platform: input.platform, correlationId: input.organization_id,
+    });
+    if (!moderation.allow) {
+      return { text: '', error: `outbound moderation blocked reply (${moderation.categories.join(',')})` };
     }
     return { text };
   } catch (err) {

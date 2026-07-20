@@ -11,6 +11,10 @@ import { supabase } from '../db/supabaseClient';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { runCompletionWithOperation } from './aiGateway';
 import { isDmMessageType, stripSenderColonPrefix } from '../../lib/engagement/messageRoles';
+// WAVE-1A-002/1B-002 §C6: canonical prompt-safety + outbound-moderation primitives (shared).
+import { hardenText, hardenBlock, moderateBeforePersist } from './ai/safety';
+// WS-2A: Coordination Platform shadow adoption (dark by default; never alters replies).
+import { observeEngagementSemanticShadow } from './intelligence/coordination/adoption/engagementSemanticShadow';
 import { config } from '@/config';
 
 export type ToneVariant =
@@ -247,24 +251,25 @@ async function generateReplySuggestionsViaOpenAi(
     if (recent.length > 0) {
       const lines = recent.map((turn) => {
         const who = turn.self ? 'YOU (the creator)' : (turn.author || 'Them');
-        const cleanedTurn = stripSenderColonPrefix(turn.content);
+        // WAVE-1A-002 §C6: conversation turns are untrusted DATA.
+        const cleanedTurn = hardenText('conversation_history', stripSenderColonPrefix(turn.content)) ?? '';
         return `${who}: ${cleanedTurn}`;
       });
       userParts.push(`CONVERSATION SO FAR (oldest → newest):\n${lines.join('\n')}`);
     }
     userParts.push(
-      `THEIR LATEST MESSAGE (${targetAuthor ?? 'them'}) — this is what you are replying to:\n${(targetMessage || '').trim()}`
+      `THEIR LATEST MESSAGE (${targetAuthor ?? 'them'}) — this is what you are replying to:\n${hardenText('user_input', (targetMessage || '').trim()) ?? ''}`
     );
     userParts.push('Now write the three reply suggestions as JSON. Reply only to the LATEST message; the earlier turns are context.');
   } else {
-    if (originalPost) userParts.push(`ORIGINAL POST:\n${originalPost.trim()}`);
+    if (originalPost) userParts.push(`ORIGINAL POST:\n${hardenBlock('user_input', originalPost.trim())}`);
     if (parentComment) {
       userParts.push(
-        `PARENT COMMENT (${parentComment.author ?? 'someone'}):\n${parentComment.content.trim()}`
+        `PARENT COMMENT (${parentComment.author ?? 'someone'}):\n${hardenBlock('user_input', parentComment.content.trim())}`
       );
     }
     userParts.push(
-      `COMMENT TO REPLY TO (${targetAuthor ?? 'commenter'}):\n${(targetMessage || '').trim()}`
+      `COMMENT TO REPLY TO (${targetAuthor ?? 'commenter'}):\n${hardenText('user_input', (targetMessage || '').trim()) ?? ''}`
     );
     userParts.push('Now write the three reply suggestions as JSON.');
   }
@@ -519,6 +524,17 @@ export async function generateReplySuggestions(
     conversation: conversationTurns,
   };
 
+  // WS-2A shadow adoption: observe semantic coordination for this reply intent
+  // (Semantic Root lookup + duplicate-intent detection + adoption metrics).
+  // Fire-and-forget, dark by default — it can never modify, block, or delay the reply.
+  void observeEngagementSemanticShadow({
+    companyId: organization_id,
+    topic: originalPostText || (message.content ?? ''),
+    platform: message.platform ?? null,
+    surface: 'engagement.suggestion',
+    correlationId: message_id,
+  }).catch(() => {});
+
   const wrapAsResult = (replies: ReplySuggestion[]): GenerateReplySuggestionsResult => {
     const tone_variants: Partial<Record<ToneVariant, string>> = {};
     for (const r of replies) {
@@ -607,7 +623,17 @@ export async function generateReplySuggestions(
       return fallback();
     }
 
-    return { suggested_replies, tone_variants };
+    // WAVE-1B-002 — moderate each suggestion before it is delivered to the user.
+    // Shadow (default): keep all (classify + audit). Enforce: drop unsafe suggestions.
+    const moderatedReplies: ReplySuggestion[] = [];
+    for (const r of suggested_replies) {
+      const v = await moderateBeforePersist(r.text, { surface: 'engagement.suggestion' });
+      if (v.allow) moderatedReplies.push(r);
+    }
+    const moderatedToneVariants: Partial<Record<ToneVariant, string>> = {};
+    for (const r of moderatedReplies) { if (r.tone && r.text) moderatedToneVariants[r.tone] = r.text; }
+
+    return { suggested_replies: moderatedReplies, tone_variants: moderatedReplies.length ? moderatedToneVariants : tone_variants };
   } catch (err) {
     console.warn('[engagementAiAssistantService] Omnivyra error:', (err as Error)?.message);
     const llmReplies = await generateReplySuggestionsViaOpenAi(llmInput);

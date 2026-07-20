@@ -5,6 +5,7 @@
  */
 
 import { runCompletionWithOperation } from './aiGateway';
+import { parseModelOutputOr } from './ai/safety';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -275,7 +276,7 @@ export async function generateDailyPlansWithAI(ctx: WeeklyGenerationContext): Pr
 
     let parsed: { days?: DayPlan[] };
     try {
-      parsed = typeof result.output === 'string' ? JSON.parse(result.output) : result.output;
+      parsed = typeof result.output === 'string' ? parseModelOutputOr<any>(result.output, {}, { surface: 'dailyPlanAiGenerator' }) : result.output;
     } catch {
       parsed = {};
     }

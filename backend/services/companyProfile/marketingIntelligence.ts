@@ -1,4 +1,6 @@
 import { runCompletionWithOperation } from '../aiGateway';
+// WAVE-1C-001 §C1
+import { parseModelOutputOr } from '../ai/safety';
 import type { CompanyProfile, EntityArchetypeIntelligence } from './types';
 import { buildArchetypePromptContext, isBusinessFirstOnlyArchetype } from './entityArchetype';
 import {
@@ -98,7 +100,7 @@ export async function generateMarketingIntelligenceDraft(
       ],
     });
 
-    const parsed = JSON.parse(result.output?.trim() || '{}') as Record<string, unknown>;
+    const parsed = parseModelOutputOr<Record<string, unknown>>(result.output, {}, { surface: 'profile.marketingIntelligence' });
 
     const draft = {
       marketing_channels: cleanText(parsed.marketing_channels),
