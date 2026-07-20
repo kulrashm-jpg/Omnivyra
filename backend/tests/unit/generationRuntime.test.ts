@@ -250,3 +250,88 @@ describe('generationRuntime.generate', () => {
     expect(mBuildVariants).not.toHaveBeenCalled();
   });
 });
+
+// ── WS-1c-2 — NO-PERSIST MODE ────────────────────────────────────────────────
+// Proves the additive `persist` / `runOriginality` options: DEFAULT is unchanged
+// (persists + runs the gate), and each false value SKIPS exactly its stage while
+// still returning master + variants (pure generation engine).
+describe('generationRuntime.generate — WS-1c-2 no-persist mode', () => {
+  it('DEFAULT (no flags) still persists AND runs originality — byte-identical', async () => {
+    const out = await generate(REQUEST);
+
+    // Persistence trio all fired.
+    expect(mCreateContent).toHaveBeenCalledTimes(1);
+    expect(mIndexContentUnit).toHaveBeenCalledTimes(1);
+    expect(mPersistOriginality).toHaveBeenCalledTimes(1);
+    // Originality gate ran.
+    expect(mAssertOriginality).toHaveBeenCalledTimes(1);
+    // Output carries the persisted id + originality verdict.
+    expect(out.contentId).toBe('content-1');
+    expect(out.originality).toEqual(ORIGINALITY_ACCEPTED);
+    // Full observable 8-stage contract is unchanged.
+    const metrics = out.metrics as Record<string, unknown>;
+    expect(metrics.stages).toEqual([...RUNTIME_STAGES]);
+  });
+
+  it('persist:false — SKIPS the persistence trio; contentId null; still returns master+variants', async () => {
+    const out = await generate({ ...REQUEST, persist: false } as GenerationRequest);
+
+    // No persistence at all.
+    expect(mCreateContent).not.toHaveBeenCalled();
+    expect(mIndexContentUnit).not.toHaveBeenCalled();
+    expect(mPersistOriginality).not.toHaveBeenCalled();
+    // But generation still produced master + variants (pure engine).
+    expect(out.master).toEqual(MASTER);
+    expect(out.variants).toHaveLength(1);
+    expect(out.contentId).toBeNull();
+    // Originality still ran (only persistence was disabled) ⇒ verdict present.
+    expect(mAssertOriginality).toHaveBeenCalledTimes(1);
+    expect(out.originality).toEqual(ORIGINALITY_ACCEPTED);
+    // No `persistence` stage recorded.
+    const metrics = out.metrics as Record<string, unknown>;
+    expect(metrics.stages).not.toContain('persistence');
+    expect(metrics.stages).toContain('variants');
+  });
+
+  it('runOriginality:false — SKIPS the gate; generates ONCE; originality null', async () => {
+    const out = await generate({ ...REQUEST, runOriginality: false } as GenerationRequest);
+
+    // Gate never consulted; a single generation call.
+    expect(mAssertOriginality).not.toHaveBeenCalled();
+    expect(mGenerateMaster).toHaveBeenCalledTimes(1);
+    expect(out.originality).toBeNull();
+    // Persistence still ran (only originality disabled) — but persistOriginality
+    // is skipped because there is no verdict to persist.
+    expect(mCreateContent).toHaveBeenCalledTimes(1);
+    expect(mIndexContentUnit).toHaveBeenCalledTimes(1);
+    expect(mPersistOriginality).not.toHaveBeenCalled();
+    // No `originality_validation` stage recorded.
+    const metrics = out.metrics as Record<string, unknown>;
+    expect(metrics.stages).not.toContain('originality_validation');
+    expect(metrics.stages).toContain('generation');
+  });
+
+  it('persist:false + runOriginality:false — PURE ENGINE: no persistence, no gate, master+variants only', async () => {
+    const out = await generate(
+      { ...REQUEST, persist: false, runOriginality: false } as GenerationRequest,
+    );
+
+    expect(mCreateContent).not.toHaveBeenCalled();
+    expect(mIndexContentUnit).not.toHaveBeenCalled();
+    expect(mPersistOriginality).not.toHaveBeenCalled();
+    expect(mAssertOriginality).not.toHaveBeenCalled();
+    // Still a fully-formed generation result.
+    expect(out.master).toEqual(MASTER);
+    expect(out.variants).toHaveLength(1);
+    expect(out.contentId).toBeNull();
+    expect(out.originality).toBeNull();
+    // Generation happened exactly once.
+    expect(mGenerateMaster).toHaveBeenCalledTimes(1);
+    const metrics = out.metrics as Record<string, unknown>;
+    expect(metrics.stages).not.toContain('persistence');
+    expect(metrics.stages).not.toContain('originality_validation');
+    expect(metrics.stages).toEqual(
+      expect.arrayContaining(['context', 'prompt_assembly', 'generation', 'variants', 'observability']),
+    );
+  });
+});

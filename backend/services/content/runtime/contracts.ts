@@ -141,6 +141,25 @@ export interface GenerationRequest {
   objective?: string;
   brief?: Record<string, unknown>;
   extraInstruction?: string;
+  /**
+   * WS-1c-2 (PMO-ADR-08) — NO-PERSIST MODE. Both flags are ADDITIVE + OPTIONAL and
+   * default to TODAY's behavior, so a caller that passes neither runs
+   * byte-identically to before this wave.
+   *
+   *   persist        — `false` ⇒ SKIP the persistence trio (createContent /
+   *                    indexContentUnit / persistOriginality); `output.contentId`
+   *                    stays null. Default (`undefined`/`true`) ⇒ persist as today.
+   *   runOriginality — `false` ⇒ SKIP the originality gate + regeneration loop
+   *                    (a single generation is produced); `output.originality` is
+   *                    null. Default (`undefined`/`true`) ⇒ run the gate as today.
+   *
+   * Together `{ persist: false, runOriginality: false }` turns the ONE runtime
+   * into a pure generation engine (context → prompt → generate → variants) that
+   * persistence-free legacy generators can delegate to WITHOUT the runtime ever
+   * double-persisting or re-running a gate they never had.
+   */
+  persist?: boolean;
+  runOriginality?: boolean;
   [k: string]: unknown;
 }
 

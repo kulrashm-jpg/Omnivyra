@@ -198,6 +198,16 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
   const failures: string[] = [];
   const totalTimer = startTimer();
 
+  // ── WS-1c-2 — NO-PERSIST MODE (ADDITIVE, DEFAULT-PRESERVING). Both flags default
+  // to today's behavior: an existing caller that passes neither runs BYTE-IDENTICALLY
+  // to before this wave. `persist:false` skips the Stage-6 persistence trio (contentId
+  // stays null); `runOriginality:false` skips the Stage-5 originality gate +
+  // regeneration loop (single generation; originality returned null). Combined, they
+  // make the runtime a pure generation engine that persistence-free legacy generators
+  // delegate to WITHOUT double-persisting or re-running a gate they never had.
+  const persist = req.persist !== false;
+  const runOriginality = req.runOriginality !== false;
+
   const policy = getTaskPolicy(req.contentType);
   const metricLabels = { contentType: String(req.contentType) };
   runtimeMetrics.providerSelection(policy.model, metricLabels);
@@ -283,103 +293,145 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
   let generationMarked = false;
   const modelTimer = startTimer();
 
-  const outcome = await regenerateUntilOriginal<MasterContentPayload>({
-    maxAttempts: ORIGINALITY_MAX_ATTEMPTS,
-    generate: async (attempt: number) => {
-      if (!generationMarked) {
-        generationMarked = true;
-        stages.push('generation');
-      }
-      // Retry wraps ONLY the generation call — persistence is a separate,
-      // post-success step, so a retried generation can never double-persist.
-      const result = await executeWithRetry(
-        () => generateMasterContentFromIntent(item),
-        policy.retry,
-        { idempotencyKey: `${req.companyId}:${req.contentType}:regen-${attempt}` },
-      );
-      retries += result.retries;
-      const master = result.value;
-      return { text: master.content ?? '', result: master };
-    },
-    assert: async (text: string) => {
-      const t = startTimer();
-      try {
-        return await assertOriginality({
-          companyId: req.companyId,
-          contentType: req.contentType,
-          platform: primaryPlatform,
-          campaignId: req.campaignId ?? null,
-          candidateText: text,
-        });
-      } finally {
-        originalityTimeMs += t();
-      }
-    },
-  });
-  stages.push('originality_validation');
+  let master: MasterContentPayload;
+  // WS-1c-2 — nullable: `runOriginality:false` produces NO verdict.
+  let originality: OriginalityResult | null;
+  let attempts: number;
+  let regenerated: boolean;
+
+  if (runOriginality) {
+    // DEFAULT PATH — verbatim: generate under the retry policy, gate for
+    // originality, regenerate on duplicates. BYTE-IDENTICAL to pre-WS-1c-2.
+    const outcome = await regenerateUntilOriginal<MasterContentPayload>({
+      maxAttempts: ORIGINALITY_MAX_ATTEMPTS,
+      generate: async (attempt: number) => {
+        if (!generationMarked) {
+          generationMarked = true;
+          stages.push('generation');
+        }
+        // Retry wraps ONLY the generation call — persistence is a separate,
+        // post-success step, so a retried generation can never double-persist.
+        const result = await executeWithRetry(
+          () => generateMasterContentFromIntent(item),
+          policy.retry,
+          { idempotencyKey: `${req.companyId}:${req.contentType}:regen-${attempt}` },
+        );
+        retries += result.retries;
+        const generatedMaster = result.value;
+        return { text: generatedMaster.content ?? '', result: generatedMaster };
+      },
+      assert: async (text: string) => {
+        const t = startTimer();
+        try {
+          return await assertOriginality({
+            companyId: req.companyId,
+            contentType: req.contentType,
+            platform: primaryPlatform,
+            campaignId: req.campaignId ?? null,
+            candidateText: text,
+          });
+        } finally {
+          originalityTimeMs += t();
+        }
+      },
+    });
+    stages.push('originality_validation');
+    master = outcome.result;
+    originality = outcome.originality;
+    attempts = outcome.attempts;
+    regenerated = outcome.regenerated;
+  } else {
+    // WS-1c-2 — NO-ORIGINALITY PATH. Generate the master EXACTLY ONCE (still
+    // retry-wrapped for transient provider errors) with NO originality assertion
+    // and NO regeneration loop. This is the parity-matching config for
+    // persistence-free legacy generators (#7/#8) which never ran the gate. Stage 5
+    // is not entered (no `originality_validation` in the observable stage list).
+    stages.push('generation');
+    const result = await executeWithRetry(
+      () => generateMasterContentFromIntent(item),
+      policy.retry,
+      { idempotencyKey: `${req.companyId}:${req.contentType}:regen-1` },
+    );
+    retries += result.retries;
+    master = result.value;
+    originality = null;
+    attempts = 1;
+    regenerated = false;
+  }
 
   const modelLatencyMs = modelTimer();
-  const master = outcome.result;
-  const originality: OriginalityResult = outcome.originality;
 
   runtimeMetrics.modelLatencyMs(modelLatencyMs, { ...metricLabels, model: policy.model });
   runtimeMetrics.retries(retries, metricLabels);
   runtimeMetrics.originalityTimeMs(originalityTimeMs, metricLabels);
 
-  // ── Stage 6 — Persistence (FAIL-OPEN)
-  stages.push('persistence');
+  // ── Stage 6 — Persistence (FAIL-OPEN; SKIPPED ENTIRELY in no-persist mode)
+  // WS-1c-2 — `persist:false` skips the whole trio (createContent /
+  // indexContentUnit / persistOriginality); `contentId` stays null and no
+  // `persistence` stage is recorded. `persist:true` (default) ⇒ BYTE-IDENTICAL
+  // to today. This is what prevents a delegating legacy generator from
+  // double-persisting into its own tables AND the canonical content store.
   let contentId: string | null = null;
-  const persistTimer = startTimer();
-  try {
-    const created = await createContent({
-      companyId: req.companyId,
-      contentType: req.contentType as CanonicalContentType,
-      title: trimmed(reqField(req, 'topic')) || trimmed(item.topic) || null,
-      body: master.content ?? null,
-      topic: trimmed(reqField(req, 'topic')) || trimmed(item.topic) || null,
-      objective: ctx.objective ?? null,
-      audience: ctx.audience ?? null,
-      tone: ctx.tone ?? null,
-      brief: (req.brief as Record<string, unknown> | undefined) ?? null,
-      // WS-1a — persist the Semantic Root id as a SOFT reference in the existing
-      // content.source_metadata column. This is the durable link between the
-      // immutable generation identity and the canonical content row (NO new
-      // store). Absent when the flag is OFF ⇒ createContent call is unchanged.
-      ...(semanticRoot
-        ? { sourceMetadata: { semanticRootId: semanticRoot.semanticRootId, semanticRoot } }
-        : {}),
-      lifecycleStatus: (reqField<string>(req, 'lifecycleStatus') as CreateContentInput['lifecycleStatus']) ?? 'draft',
-      createdBy: (reqField<string>(req, 'createdBy')) ?? null,
-    });
-    contentId = created.id;
+  let persistenceTimeMs = 0;
+  if (persist) {
+    stages.push('persistence');
+    const persistTimer = startTimer();
+    try {
+      const created = await createContent({
+        companyId: req.companyId,
+        contentType: req.contentType as CanonicalContentType,
+        title: trimmed(reqField(req, 'topic')) || trimmed(item.topic) || null,
+        body: master.content ?? null,
+        topic: trimmed(reqField(req, 'topic')) || trimmed(item.topic) || null,
+        objective: ctx.objective ?? null,
+        audience: ctx.audience ?? null,
+        tone: ctx.tone ?? null,
+        brief: (req.brief as Record<string, unknown> | undefined) ?? null,
+        // WS-1a — persist the Semantic Root id as a SOFT reference in the existing
+        // content.source_metadata column. This is the durable link between the
+        // immutable generation identity and the canonical content row (NO new
+        // store). Absent when the flag is OFF ⇒ createContent call is unchanged.
+        ...(semanticRoot
+          ? { sourceMetadata: { semanticRootId: semanticRoot.semanticRootId, semanticRoot } }
+          : {}),
+        lifecycleStatus: (reqField<string>(req, 'lifecycleStatus') as CreateContentInput['lifecycleStatus']) ?? 'draft',
+        createdBy: (reqField<string>(req, 'createdBy')) ?? null,
+      });
+      contentId = created.id;
 
-    // Both of these are fail-safe (return null on error) but are still inside the
-    // try so any unexpected throw keeps persistence fail-open as a unit.
-    await indexContentUnit({
-      companyId: req.companyId,
-      contentId,
-      campaignId: req.campaignId ?? null,
-      contentType: req.contentType,
-      platform: primaryPlatform,
-      lifecycleStatus: created.lifecycleStatus,
-      text: master.content ?? '',
-    });
-    await persistOriginality({
-      companyId: req.companyId,
-      contentId,
-      originalityScore: originality.score,
-      decision: originality.decision,
-      nearestMatches: originality.nearestMatches,
-      similarityDimensions: originality.dimensions,
-      regenerationCount: Math.max(0, outcome.attempts - 1),
-      generationFingerprint: originality.fingerprint.exactHash,
-    });
-  } catch {
-    failures.push('persistence');
-    runtimeMetrics.failure('persistence', metricLabels);
+      // Both of these are fail-safe (return null on error) but are still inside the
+      // try so any unexpected throw keeps persistence fail-open as a unit.
+      await indexContentUnit({
+        companyId: req.companyId,
+        contentId,
+        campaignId: req.campaignId ?? null,
+        contentType: req.contentType,
+        platform: primaryPlatform,
+        lifecycleStatus: created.lifecycleStatus,
+        text: master.content ?? '',
+      });
+      // persistOriginality only when a verdict exists. The DEFAULT path always has
+      // one (byte-identical to today); `runOriginality:false` skips the gate ⇒
+      // originality is null ⇒ no originality row is written.
+      if (originality) {
+        await persistOriginality({
+          companyId: req.companyId,
+          contentId,
+          originalityScore: originality.score,
+          decision: originality.decision,
+          nearestMatches: originality.nearestMatches,
+          similarityDimensions: originality.dimensions,
+          regenerationCount: Math.max(0, attempts - 1),
+          generationFingerprint: originality.fingerprint.exactHash,
+        });
+      }
+    } catch {
+      failures.push('persistence');
+      runtimeMetrics.failure('persistence', metricLabels);
+    }
+    persistenceTimeMs = persistTimer();
+    runtimeMetrics.persistenceTimeMs(persistenceTimeMs, metricLabels);
   }
-  const persistenceTimeMs = persistTimer();
-  runtimeMetrics.persistenceTimeMs(persistenceTimeMs, metricLabels);
 
   // ── Stage 7 — Variant Generation (FAIL-OPEN)
   stages.push('variants');
@@ -452,8 +504,8 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
     originalityTimeMs,
     persistenceTimeMs,
     retries,
-    attempts: outcome.attempts,
-    regenerated: outcome.regenerated,
+    attempts,
+    regenerated,
     cacheHit: policy.cache.enabled,
     model: policy.model,
     primaryPlatform,
