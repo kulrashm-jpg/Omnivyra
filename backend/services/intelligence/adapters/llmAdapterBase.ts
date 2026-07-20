@@ -68,6 +68,21 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
   /** Subclasses pull the answer text out of the parsed JSON response. */
   protected abstract extractAnswer(response: unknown): string;
 
+  /**
+   * Transport seam (PA-004). Default = the legacy direct-HTTP path
+   * (buildRequest → production fetch → parsed JSON). A subclass MAY override this
+   * to route transport through the canonical Platform gateway dispatcher while
+   * keeping ALL probe business logic here in the base. Default-preserving: any
+   * subclass that does not override gets byte-identical legacy behaviour.
+   */
+  protected async fetchCompletionJson(apiKey: string, query: string): Promise<unknown> {
+    const request = this.buildRequest({ apiKey, query });
+    const envelope = await withRetry(this.id, () =>
+      fetchProduction(this.id, request.url, request.init, this.config.timeoutMs),
+    );
+    return envelope.json();
+  }
+
   async isAvailable(): Promise<boolean> {
     return Boolean(this.getCredential());
   }
@@ -145,11 +160,9 @@ export abstract class LLMAdapterBase implements LLMVisibilityProvider {
 
       const startedAt = Date.now();
       try {
-        const request = this.buildRequest({ apiKey, query });
-        const envelope = await withRetry(this.id, () =>
-          fetchProduction(this.id, request.url, request.init, this.config.timeoutMs),
-        );
-        const json = await envelope.json();
+        // PA-004: transport via the overridable seam (legacy by default; a
+        // subclass may route through the Platform gateway dispatcher).
+        const json = await this.fetchCompletionJson(apiKey, query);
         // Phase 8G-B — platform cost capture (no customer org; fire-and-forget). Separate billing ledger.
         void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
         // BETA-PHASE1-EXEC-001: record the paid call against the canonical scan budget (the only writer to
