@@ -32,7 +32,17 @@ import type { EvidenceTrace } from '../../canonicalReport/canonicalReportTypes';
 import { withinBudget, recordUsage, estimateCost } from '../costGovernance';
 import { getActiveScanId } from '../scanBudgetContext';
 import { extractProbeTokenUsage } from '../probeCostCapture';
+// PA-003: consume the canonical Platform gateway dispatcher (Zone P) for LLM
+// transport. The adapter keeps ALL business logic (prompt build, citation
+// extraction, scoring, budget); only the raw HTTP transport moves to the gateway.
+import { dispatchTransport, type GatewayDispatchParams } from '../../aiGatewayDispatcher';
+import type { NormalizedCompletion } from '../../aiGatewayCore';
 
+/**
+ * @deprecated PA-003 — direct-transport endpoint. Retained as the flag-OFF
+ * fallback; removed in PA-008 once the gateway path is default and every
+ * visibility adapter has migrated.
+ */
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const TIMEOUT_MS = 25_000;
@@ -47,6 +57,46 @@ type OpenAIChatResponse = {
   }>;
 };
 
+/** The probe-consumed OpenAI response shape (answer + usage + model). */
+type OpenAIProbeResponse = OpenAIChatResponse & {
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  model?: string;
+};
+
+/**
+ * PA-003 — adapter-owned feature flag. When enabled, OpenAI probe transport routes
+ * through the canonical Platform gateway dispatcher instead of the adapter's direct
+ * HTTP. Default OFF → byte-identical legacy path preserved as the fallback.
+ */
+export function openaiGatewayTransportEnabled(): boolean {
+  return /^(1|true|on|yes)$/i.test(process.env.OPENAI_ADAPTER_GATEWAY_TRANSPORT ?? '');
+}
+
+/**
+ * PA-003 — re-shape a gateway `NormalizedCompletion` into the OpenAI chat-response
+ * shape the probe path already consumes, so answer extraction and cost/usage
+ * capture (`extractProbeTokenUsage` / `captureProbeCost`) stay byte-identical
+ * across both transports. Pure.
+ */
+export function reshapeCompletionToOpenAiResponse(
+  completion: NormalizedCompletion,
+  model: string,
+): OpenAIProbeResponse {
+  return {
+    choices: [{ message: { content: completion.content } }],
+    model,
+    ...(completion.usage
+      ? {
+          usage: {
+            prompt_tokens: completion.usage.prompt_tokens,
+            completion_tokens: completion.usage.completion_tokens,
+            total_tokens: completion.usage.total_tokens,
+          },
+        }
+      : {}),
+  };
+}
+
 export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
   public readonly id: AIProviderId = 'chatgpt';
   private readonly cache = new TtlCache<CitationMention>(CACHE_TTL_SECONDS);
@@ -54,6 +104,51 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
 
   async isAvailable(): Promise<boolean> {
     return Boolean(process.env.OPENAI_API_KEY);
+  }
+
+  /**
+   * PA-003 — the transport seam. Business logic (prompt build, parsing, scoring,
+   * budget, caching, rate-limit, retry) stays in `probe`; this method owns ONLY
+   * how the raw completion is fetched. Retry (`withRetry`) is the adapter's
+   * reliability policy and wraps BOTH paths identically. Flag ON → canonical
+   * gateway dispatcher (transport owned by Platform); flag OFF → legacy direct
+   * HTTP. Both return the same OpenAI response shape so downstream is unchanged.
+   */
+  private async fetchProbeChat(
+    apiKey: string,
+    messages: Array<{ role: string; content: string }>,
+  ): Promise<OpenAIProbeResponse> {
+    const model = process.env.OPENAI_PROBE_MODEL ?? DEFAULT_MODEL;
+    if (openaiGatewayTransportEnabled()) {
+      const completion = await withRetry(this.id, () =>
+        dispatchTransport('openai', {
+          apiKey,
+          model,
+          temperature: 0,
+          max_tokens: 600,
+          messages: messages as GatewayDispatchParams['messages'],
+          operation: 'visibility.probe.chatgpt',
+        }),
+      );
+      return reshapeCompletionToOpenAiResponse(completion, model);
+    }
+    // @deprecated PA-003 — legacy direct transport; removed in PA-008.
+    const envelope = await withRetry(this.id, () =>
+      fetchProduction(
+        this.id,
+        OPENAI_CHAT_URL,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 600 }),
+        },
+        TIMEOUT_MS,
+      ),
+    );
+    return (await envelope.json()) as OpenAIProbeResponse;
   }
 
   async probe(probe: AIVisibilityProbe): Promise<AIVisibilityProbeResult> {
@@ -129,27 +224,8 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
           ...(formatted.system ? [{ role: 'system', content: formatted.system }] : []),
           { role: 'user', content: formatted.user },
         ];
-        const envelope = await withRetry(this.id, () =>
-          fetchProduction(
-            this.id,
-            OPENAI_CHAT_URL,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`,
-              },
-              body: JSON.stringify({
-                model: process.env.OPENAI_PROBE_MODEL ?? DEFAULT_MODEL,
-                messages,
-                temperature: 0,
-                max_tokens: 600,
-              }),
-            },
-            TIMEOUT_MS,
-          ),
-        );
-        const json = (await envelope.json()) as OpenAIChatResponse;
+        // PA-003: transport via the flag-gated seam (gateway dispatcher or legacy).
+        const json = await this.fetchProbeChat(apiKey, messages);
         // Phase 8G-B — platform cost capture (no customer org; fire-and-forget). Separate billing ledger.
         void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
         // BETA-PHASE1-EXEC-001: record the paid call against the canonical scan budget (sole writer to the
