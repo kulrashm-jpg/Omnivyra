@@ -61,6 +61,8 @@ import type {
 } from '../../contentGeneration/types';
 
 import { getTaskPolicy } from './taskPolicyRegistry';
+import { selectTaskProfile } from './taskProfiles/registry';
+import { generateWithTaskProfile } from './taskProfileRuntime';
 import { executeWithRetry } from './retryPolicy';
 import { runtimeMetrics } from './runtimeMetrics';
 import { assembleGenerationPrompt } from './promptAssembler';
@@ -194,6 +196,18 @@ async function runVariantGeneration(
  * the originality result, and the per-run metrics envelope.
  */
 export async function generate(req: GenerationRequest): Promise<GenerationOutput> {
+  // ── WS-1c-3b (PMO-ADR-09) — TASK-PROFILE SELECTOR (ADDITIVE, DEFAULT-PRESERVING).
+  // When the caller explicitly asked for a REGISTERED non-master profile
+  // (structured/blueprint families #9/#10), route to the profile execution path.
+  // Absent / empty / 'master' / unregistered ⇒ null ⇒ the DEFAULT master body below
+  // runs BYTE-IDENTICALLY. Existing callers (master / post / thread / #7 / BOLT)
+  // never set `req.taskProfile`, so this guard is a pure no-op for them — proven by
+  // the sacred parity suites, which pass no taskProfile.
+  const taskProfileKey = selectTaskProfile(req);
+  if (taskProfileKey) {
+    return generateWithTaskProfile(taskProfileKey, req);
+  }
+
   const stages: string[] = [];
   const failures: string[] = [];
   const totalTimer = startTimer();

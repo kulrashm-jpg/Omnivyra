@@ -178,6 +178,26 @@ export interface GenerationRequest {
    */
   painPoint?: string;
   outcomePromise?: string;
+  /**
+   * WS-1c-3b (PMO-ADR-09) — TASK-PROFILE SELECTOR. STRICTLY ADDITIVE + OPTIONAL.
+   * When set to a REGISTERED non-master profile key (e.g. 'day_content',
+   * 'blueprint'), the runtime routes this request through that profile's
+   * structured/blueprint output path instead of the default master path. Absent,
+   * empty, 'master', or an unregistered value ⇒ the runtime runs the DEFAULT
+   * master body BYTE-IDENTICALLY (existing callers never set this, so the master /
+   * post / thread / #7 / BOLT paths are unperturbed). The profile path reuses the
+   * ONE canonical context read + the ONE gateway; it produces a profile-specific
+   * output shape (NOT `content: string`) and is persistence-free by contract
+   * (the delegating family persists per its own legacy behavior).
+   */
+  taskProfile?: string;
+  /**
+   * WS-1c-3b — opaque per-profile input bag. A profile's buildMessages/parse read
+   * their family-specific inputs (campaign/week/day/trend/angle/…) from here. Kept
+   * unmodelled so adding a profile never changes this contract. Ignored entirely
+   * by the master path.
+   */
+  taskProfileInput?: Record<string, unknown>;
   [k: string]: unknown;
 }
 
