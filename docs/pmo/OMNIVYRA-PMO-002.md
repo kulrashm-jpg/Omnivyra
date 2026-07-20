@@ -5,19 +5,20 @@
 > | **Document ID** | PMO-002 |
 > | **Title** | Governance Re-Baseline & Program Reorganization |
 > | **Version** | 1.2 |
-> | **Status** | **Draft (Pending Adoption)** |
-> | **Authority** | Omnivyra AI-platform execution (effective on adoption; none until then) |
+> | **Status** | **Active** (Governance Baseline) |
+> | **Authority** | Omnivyra AI-platform execution — **sole active authority** |
 > | **Type** | Baseline |
-> | **Predecessor** | PMO-001 |
+> | **Predecessor** | PMO-001 (Historical) |
 > | **Successor** | — |
-> | **Adoption Date** | Pending — fires on Program 0 completion (see PMO-002A §6) |
+> | **Adoption Date** | 2026-07-20 (Program 0 complete; adoption transaction — see Governance Succession Log) |
 > | **Supersession Criteria** | Superseded when a future adopted PMO document names PMO-002 as Predecessor |
 > | **Related Amendments** | PMO-002A (succession), PMO-002B (lifecycle refinement) |
 > | **Last Updated** | 2026-07-20 |
 
-> **Authority notice.** This document is **Draft (Pending Adoption)**. It holds **no execution authority**.
-> **PMO-001 remains the Active Governance Baseline** until PMO-003 executes the adoption transaction.
-> Reading PMO-002 means reading this baseline together with amendments PMO-002A and PMO-002B.
+> **Authority notice.** This document is the **Active Governance Baseline** (adopted 2026-07-20 by the
+> PMO-003R adoption transaction, on completion of Program 0). It holds **sole execution authority**.
+> PMO-001 is now **Historical** (audit-only). Reading PMO-002 means reading this baseline together with
+> amendments PMO-002A and PMO-002B.
 
 ---
 

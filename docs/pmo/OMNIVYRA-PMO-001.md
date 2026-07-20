@@ -2,23 +2,29 @@
 
 <!-- ────────────────────────────────────────────────────────────────────────
      GOVERNANCE METADATA (PMO-002B canonical standard) — ARCHIVAL ANNOTATION
-     Added by PROGRAM-0B (2026-07-20). Document body below is UNCHANGED.
-     This annotation records lineage only; it does NOT transition authority.
+     Added by PROGRAM-0B (2026-07-20); Status updated by the PMO-003R adoption
+     transaction (2026-07-20). Document body below is UNCHANGED (verbatim).
      ──────────────────────────────────────────────────────────────────────── -->
 > | Field | Value |
 > |---|---|
 > | **Document ID** | PMO-001 |
 > | **Title** | Multi-Agent Engineering Execution Plan |
 > | **Version** | 1.0 |
-> | **Status** | **Active** (Governance Baseline) — remains Active until PMO-003 executes the adoption transaction |
-> | **Authority** | Omnivyra AI-platform execution (current, sole) |
+> | **Status** | **Historical** (Governance Baseline) — superseded by PMO-002 on 2026-07-20; audit-only, no execution authority |
+> | **Authority** | — (transferred to PMO-002 on 2026-07-20) |
 > | **Type** | Baseline |
 > | **Predecessor** | — |
-> | **Successor** | PMO-002 (Draft — Pending Adoption) |
-> | **Adoption Date** | 2026-07-20 (governing since) |
-> | **Supersession Criteria** | Becomes `Historical` when the PMO-002 adoption transaction completes (PMO-002A §6 triggers) |
+> | **Successor** | PMO-002 (Active) |
+> | **Adoption Date** | 2026-07-20 (governed 2026-07-20 → 2026-07-20) |
+> | **Supersession Criteria** | Fulfilled — PMO-002 adoption transaction completed 2026-07-20 (PMO-002A §6 triggers all satisfied) |
 > | **Related Amendments** | — |
-> | **Last Updated** | 2026-07-20 (archival annotation only) |
+> | **Last Updated** | 2026-07-20 (Historical transition) |
+>
+> **Record of service.** PMO-001 successfully governed the Generation Spine consolidation (WS-1a/1b/1c) and
+> the Coordination Foundation (ICR-1, OMNI-COORD-001/002, WS-2A–2D), producing a repository that passed
+> PMO-001 certification (zone-pure commits, fork-free semantic-identity contract, type-debt reduced 86→54)
+> and Program 0 (hygiene commit `29a41dd1`, governance persistence `721d75b3`). Authority transferred to
+> PMO-002 by the PMO-003R adoption transaction. This document is retained immutably for audit and traceability.
 >
 > *Governance note: this document predates the PMO-002B metadata standard and is grandfathered; the header above is an archival annotation. Its original certification banner and body are preserved verbatim.*
 

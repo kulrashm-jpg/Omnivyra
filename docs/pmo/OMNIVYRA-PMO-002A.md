@@ -5,15 +5,15 @@
 > | **Document ID** | PMO-002A |
 > | **Title** | Governance Amendment — Historical Continuity & Document Succession |
 > | **Version** | 1.0 |
-> | **Status** | Draft (Pending Adoption) — inherits PMO-002 authority |
-> | **Authority** | Inherited from PMO-002 (none until PMO-002 is adopted) |
+> | **Status** | Active (inherits PMO-002) |
+> | **Authority** | Inherited from PMO-002 (now the Active Baseline) |
 > | **Type** | Amendment |
 > | **Predecessor** | PMO-002 (parent baseline) |
 > | **Successor** | PMO-002B (next amendment in lineage) |
-> | **Adoption Date** | Pending — with PMO-002 |
+> | **Adoption Date** | 2026-07-20 (with PMO-002) |
 > | **Supersession Criteria** | Amendment is superseded only if PMO-002 itself is superseded |
 > | **Related Amendments** | Belongs to PMO-002; sibling PMO-002B |
-> | **Last Updated** | 2026-07-20 |
+> | **Last Updated** | 2026-07-20 (adoption) |
 
 > **Amendment notice.** This amendment is **not** an independent governance baseline. It inherits its
 > authority exclusively from PMO-002 and carries none until PMO-002 is adopted. Amendments never

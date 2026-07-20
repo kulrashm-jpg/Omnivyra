@@ -5,15 +5,15 @@
 > | **Document ID** | PMO-002B |
 > | **Title** | Governance Lifecycle Refinement (Final) |
 > | **Version** | 1.0 |
-> | **Status** | Draft (Pending Adoption) — inherits PMO-002 authority |
-> | **Authority** | Inherited from PMO-002 (none until PMO-002 is adopted) |
+> | **Status** | Active (inherits PMO-002) |
+> | **Authority** | Inherited from PMO-002 (now the Active Baseline) |
 > | **Type** | Amendment |
 > | **Predecessor** | PMO-002A |
 > | **Successor** | — |
-> | **Adoption Date** | Pending — with PMO-002 |
+> | **Adoption Date** | 2026-07-20 (with PMO-002) |
 > | **Supersession Criteria** | Amendment is superseded only if PMO-002 itself is superseded |
 > | **Related Amendments** | Belongs to PMO-002; sibling PMO-002A |
-> | **Last Updated** | 2026-07-20 |
+> | **Last Updated** | 2026-07-20 (adoption) |
 
 > **Amendment notice.** Governance-only editorial refinement of the lifecycle model. Alters no engineering
 > program, capability, roadmap, TD, ADR, ownership, or sequencing. Weakens no PMO-002A invariant.
