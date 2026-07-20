@@ -170,6 +170,13 @@ function buildGenerationItem(
   const audience = trimmed(ctx.audience) || trimmed(norm?.audience) || 'Audience aligned to the topic and company context';
   const tone = trimmed(ctx.tone) || trimmed(norm?.tone) || 'Direct and platform-native';
   const cta = trimmed(raw.cta) || 'Engagement CTA';
+  // WS-1c-2b — BOLT convergence passthroughs. Sourced from the raw request (like
+  // `cta`), NOT the Semantic Root: they feed the master primitive's `intent`
+  // directly (parity with a caller's own item) and are NOT part of the continuity
+  // guard. NO default — absent ⇒ the key is OMITTED below ⇒ existing callers (which
+  // never supply these) build a BYTE-IDENTICAL intent to before this wave.
+  const painPoint = trimmed(raw.painPoint);
+  const outcomePromise = trimmed(raw.outcomePromise);
 
   const item: DailyExecutionItemLike = {
     execution_id: `${contentType}-${Date.now()}`,
@@ -179,6 +186,8 @@ function buildGenerationItem(
     platform: platforms[0],
     intent: {
       ...(objective ? { objective } : {}),
+      ...(painPoint ? { pain_point: painPoint } : {}),
+      ...(outcomePromise ? { outcome_promise: outcomePromise } : {}),
       target_audience: audience,
       tone,
       cta_type: cta,

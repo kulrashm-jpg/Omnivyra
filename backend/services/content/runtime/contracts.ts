@@ -160,6 +160,24 @@ export interface GenerationRequest {
    */
   persist?: boolean;
   runOriginality?: boolean;
+  /**
+   * WS-1c-2b (PMO-ADR-08) — BOLT CONVERGENCE passthroughs. STRICTLY ADDITIVE +
+   * OPTIONAL + OPT-IN. A caller that supplies NEITHER produces a BYTE-IDENTICAL
+   * generation item to before this wave (buildGenerationItem emits the matching
+   * `intent.pain_point` / `intent.outcome_promise` keys ONLY when the value is
+   * present). These are NOT BOLT-specific concepts — the master generation
+   * primitive (generateMasterContentFromIntent) already reads `intent.pain_point`
+   * and `intent.outcome_promise` for EVERY content type; this simply lets any
+   * caller thread the explicit audience problem + promised outcome through the
+   * shared request instead of relying on the primitive's internal defaults. The
+   * full `writer_content_brief` continues to flow through the existing `brief`
+   * field (buildGenerationItem already passes it through as item.writer_content_brief).
+   *
+   *   painPoint      — the audience problem this content addresses.
+   *   outcomePromise — the concrete outcome/value the reader should walk away with.
+   */
+  painPoint?: string;
+  outcomePromise?: string;
   [k: string]: unknown;
 }
 
