@@ -25,6 +25,8 @@ import { getContent, setLifecycleStatus } from './contentService';
 import { recordApprovalLatency } from '../../observability/qualityMetrics';
 import * as publicationLineageService from './publicationLineageService';
 import * as learningEngine from './learningEngine';
+import { isSemanticRootEnabled } from './runtime/semanticSpine';
+import { isSemanticRootId } from '../../platform/intelligence';
 import type {
   CanonicalContent,
   ContentLifecycleStatus,
@@ -137,13 +139,36 @@ async function recordHistory(
  * mutates the content (recordEvent / recordLearningEvent are append-only + no-op
  * on content).
  */
-async function emitPublishLearningEvent(companyId: string, contentId: string): Promise<void> {
-  // Lineage: append a 'published' event (soft-ref, append-only).
+/**
+ * WS-1b (PMO-ADR-06) — recover the generation-time Semantic Root soft-ref from a
+ * content row's `source_metadata` (where the runtime persisted it at creation).
+ * Returns the id ONLY when it is a canonical `sroot_<…>` — a malformed/legacy
+ * value degrades to null (we never fabricate one). No I/O; pure projection.
+ */
+function readSemanticRootId(content: CanonicalContent | null | undefined): string | null {
+  const meta = content?.sourceMetadata;
+  if (!meta || typeof meta !== 'object') return null;
+  const raw = (meta as Record<string, unknown>).semanticRootId;
+  return typeof raw === 'string' && isSemanticRootId(raw) ? raw : null;
+}
+
+async function emitPublishLearningEvent(
+  companyId: string,
+  contentId: string,
+  semanticRootId?: string | null,
+): Promise<void> {
+  // Lineage: append a 'published' event (soft-ref, append-only). WS-1b — carry
+  // the generation-time Semantic Root id into the ONE certified lineage store so
+  // the generation→publish lineage is COMPLETE. This REUSES publicationLineage-
+  // Service.recordEvent (its WS-1a `semanticRootId` seam folds it into metadata);
+  // NO second lineage store is introduced. A null id leaves the recorded event
+  // byte-identical to today (never mints a fresh root).
   try {
     await publicationLineageService.recordEvent({
       companyId,
       contentId,
       eventType: 'published',
+      ...(semanticRootId ? { semanticRootId } : {}),
     });
   } catch (err) {
     console.warn('[approvalService][publish-lineage-failed]', {
@@ -239,8 +264,21 @@ export async function advanceApproval(
   // must NEVER block or roll back the approval, so this is guarded end-to-end and
   // its outcome is deliberately NOT reflected in the returned result.
   if (toStatus === 'published') {
+    // WS-1b — recover the Semantic Root soft-ref persisted at generation time and
+    // carry it into the lineage event. OBSERVABLE continuity gap (fail-open,
+    // post-commit): under the enforcement flag a published piece that carries NO
+    // Semantic Root is a continuity gap — but the publish has ALREADY committed,
+    // so we can neither fail it nor mint a fresh root; we record the gap
+    // deterministically and still append the lineage event with the real id.
+    const semanticRootId = readSemanticRootId(updated);
+    if (isSemanticRootEnabled() && !semanticRootId) {
+      console.warn('[approvalService][semantic-continuity-gap]', {
+        contentId,
+        reason: 'published content missing semanticRootId in source_metadata',
+      });
+    }
     try {
-      await emitPublishLearningEvent(companyId, contentId);
+      await emitPublishLearningEvent(companyId, contentId, semanticRootId);
     } catch { /* fail-open — never blocks a committed publish */ }
   }
 

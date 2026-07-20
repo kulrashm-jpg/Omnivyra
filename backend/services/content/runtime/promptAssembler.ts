@@ -149,13 +149,24 @@ function buildGenerationItem(
 ): DailyExecutionItemLike {
   const raw = (ctx.raw ?? {}) as Record<string, unknown>;
   const contentType = String(ctx.contentType || 'post');
-  const topic = trimmed(raw.topic) || trimmed((ctx.brief ?? {}).topic as unknown);
+  // WS-1a — when a Semantic Root is threaded, topic + communication intent are
+  // sourced from that ONE root instead of re-derived here (single source). The
+  // root's precedence mirrors this function's, so the values are byte-identical.
+  const root = ctx.semanticRoot;
+  const topic = root
+    ? trimmed(root.topic)
+    : trimmed(raw.topic) || trimmed((ctx.brief ?? {}).topic as unknown);
   const platformsRaw = raw.targetPlatforms;
   const platforms = Array.isArray(platformsRaw) && platformsRaw.length
     ? platformsRaw.map((p) => String(p ?? '').toLowerCase()).filter(Boolean)
     : [String(ctx.platform ?? 'linkedin').toLowerCase()];
 
-  const objective = trimmed(ctx.objective) || trimmed(raw.objective) || trimmed(raw.intent && (raw.intent as any).objective);
+  // ICR-1 (TD-13): the prompt's objective is the FREE-FORM business objective,
+  // now preserved on the root's contentBrief (root.communicationIntent narrowed
+  // to the canonical grouping vocabulary). Value is byte-identical to pre-ICR-1.
+  const objective = root
+    ? trimmed(root.contentBrief.objective)
+    : trimmed(ctx.objective) || trimmed(raw.objective) || trimmed(raw.intent && (raw.intent as any).objective);
   const audience = trimmed(ctx.audience) || trimmed(norm?.audience) || 'Audience aligned to the topic and company context';
   const tone = trimmed(ctx.tone) || trimmed(norm?.tone) || 'Direct and platform-native';
   const cta = trimmed(raw.cta) || 'Engagement CTA';
@@ -198,6 +209,11 @@ function buildGenerationItem(
   // Governance is threaded verbatim so blueprintGenerator / variant generator can
   // read `item.governance` (null → strict no-op, byte-identical to legacy callers).
   if (raw.governance) (item as Record<string, unknown>).governance = raw.governance;
+
+  // WS-1a — carry the Semantic Root id as metadata so the generation primitive
+  // and the variant generator reference the SAME root. The primitives ignore
+  // unknown fields, so this is inert to prompt bytes; it only threads lineage.
+  if (root) (item as Record<string, unknown>).semantic_root_id = root.semanticRootId;
 
   return item;
 }

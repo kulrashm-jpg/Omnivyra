@@ -19,6 +19,7 @@
  */
 
 import type { OriginalityResult } from '../../../../lib/content/originality/types';
+import type { CommunicationIntent, GenerationInstanceId } from '../../../platform/intelligence';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Content taxonomy
@@ -66,6 +67,14 @@ export interface GenerationContext {
   originalityContext?: unknown;
   /** Canonical brief/context snapshot captured at generation time. */
   brief?: Record<string, unknown>;
+  /**
+   * WS-1a (PMO-ADR-06) — the immutable Semantic Root this generation inherits
+   * from, threaded once by the runtime. ADDITIVE + OPTIONAL: absent ⇒ the
+   * pre-WS-1a code paths run byte-identically (flag OFF default). When present,
+   * the prompt assembler and downstream stages source topic / communication
+   * intent / core message from this single object instead of re-deriving them.
+   */
+  semanticRoot?: SemanticRoot;
   /** Escape hatch for raw, not-yet-modelled request fields. */
   raw?: Record<string, unknown>;
 }
@@ -146,6 +155,136 @@ export interface GenerationOutput {
   contentId?: string | null;
   originality?: OriginalityResult | null;
   metrics?: Record<string, unknown>;
+  /**
+   * WS-1a (PMO-ADR-06) — the Semantic Root this artifact inherited from, and the
+   * continuity/lineage record linking it to persistence. Present ONLY when the
+   * Semantic Spine is flag-enabled; absent ⇒ output is shape-identical to today.
+   */
+  semanticRoot?: SemanticRoot;
+  semanticContinuity?: SemanticContinuity;
+  /**
+   * Orchestration-only visual bridge (no image call). Carries the semantic
+   * lineage across to the (frozen) image seam: the visual brief is derived from
+   * the content brief, the image text from the communication intent, and the
+   * image prompt consumes the generated text rather than re-inventing context.
+   */
+  visualBrief?: VisualBrief;
+  imagePromptSpec?: ImagePromptSpec;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WS-1a — Semantic Spine (PMO-ADR-06). A1 Module-owned. Pure type declarations.
+//
+// The canonical generation-time semantic IDENTITY every artifact inherits from.
+// One immutable Semantic Root per request threads through the pipeline so no
+// downstream stage can independently invent a different communication objective:
+//   Business Goal → Campaign Goal? → Topic → Communication Intent → Core Message
+//   → Content Brief → Generated Text → Visual Brief → Image Prompt → …
+//
+// IMMUTABILITY — every field is `readonly`; the builder (semanticSpine.ts)
+// Object.freeze()s the constructed root so no later stage can mutate the shared
+// identity. `publication_lineage` (Wave 5) remains the lifecycle EVENT LOG; the
+// Semantic Root is the generation-time identity. They are LINKED (semanticRootId
+// carried into lineage metadata / content.source_metadata), NOT duplicated.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The canonical brief the Semantic Root carries (mirror of the resolved brief). */
+export interface SemanticContentBrief {
+  readonly topic: string;
+  readonly objective?: string;
+  readonly audience?: string;
+  readonly tone?: string;
+  readonly painPoint?: string;
+  readonly outcomePromise?: string;
+  readonly keyPoints?: readonly string[];
+  /** The unmodelled remainder of the source brief, carried opaque. */
+  readonly raw?: Record<string, unknown>;
+}
+
+/**
+ * The immutable Semantic Root — one per generation request. All fields readonly;
+ * the constructed instance is Object.freeze()d by the builder.
+ */
+export interface SemanticRoot {
+  /**
+   * The DETERMINISTIC grouping key (platform `SemanticRootId`, `sroot_<24-hex>`).
+   * ICR-1 (TD-13): derived via the canonical platform `deriveSemanticRootId` from
+   * (companyId, communicationIntent, campaignId, normalized topic), so the SAME
+   * intent seed converges on the SAME id here (A1 producer) and in the A2
+   * coordination layer. Per-run uniqueness now lives in `generationInstanceId`.
+   */
+  readonly semanticRootId: string;
+  /** UNIQUE id for this concrete generation run (platform `sgen_<uuid>`). */
+  readonly generationInstanceId: GenerationInstanceId;
+  readonly businessGoalId?: string;
+  readonly campaignId?: string;
+  readonly topic: string;
+  /** The communication objective — the ONE intent every stage must preserve. */
+  readonly communicationIntent: CommunicationIntent;
+  readonly coreMessage: string;
+  readonly contentBrief: SemanticContentBrief;
+  /** ISO creation time (identity provenance). */
+  readonly createdAt: string;
+}
+
+/**
+ * Semantic Continuity (lineage) — the reconstructable link between the immutable
+ * Semantic Root and the persisted content. `generationLineageRef` is a SOFT
+ * reference into the existing `publication_lineage` store (Wave 5); no second
+ * lineage table/service is introduced.
+ */
+export interface SemanticContinuity {
+  readonly semanticRootId: string;
+  readonly communicationIntent: CommunicationIntent;
+  readonly topic: string;
+  readonly campaignId?: string;
+  readonly contentId: string | null;
+  /** Soft-ref into the ONE existing lineage store; NOT a parallel store. */
+  readonly generationLineageRef: {
+    readonly store: 'publication_lineage';
+    readonly contentId: string | null;
+    readonly semanticRootId: string;
+  };
+}
+
+/**
+ * Visual Brief — orchestration-only. Derived from the content brief; carries the
+ * image text (derived from communication intent) and the semantic identity so a
+ * downstream image stage inherits the SAME intent instead of re-deriving it.
+ * This module never generates an image and never calls the image seam.
+ */
+export interface VisualBrief {
+  readonly semanticRootId: string;
+  readonly derivedFrom: 'content_brief';
+  readonly topic: string;
+  readonly communicationIntent: CommunicationIntent;
+  readonly coreMessage: string;
+  /** Image text derived from the communication intent (the on-image message). */
+  readonly imageText: string;
+  readonly visualTheme: string;
+  readonly audience?: string;
+  /**
+   * WS-1b — the HUMAN-READABLE business objective inherited from the content
+   * brief (NOT the canonical `communicationIntent` enum token). Carried so a
+   * downstream image stage can narrate a natural objective (TD-15) instead of the
+   * grouping-vocabulary token. ADDITIVE + OPTIONAL (A1 contract only).
+   */
+  readonly objective?: string;
+  /** WS-1b — tone/positioning inherited from the content brief. ADDITIVE + OPTIONAL. */
+  readonly tone?: string;
+}
+
+/**
+ * Image Prompt Spec — orchestration-only. The image prompt CONSUMES the
+ * generated text (passed in) rather than re-inventing context, preserving
+ * continuity. No image is produced here.
+ */
+export interface ImagePromptSpec {
+  readonly semanticRootId: string;
+  readonly derivedFrom: 'generated_text';
+  readonly imagePrompt: string;
+  readonly imageText: string;
+  readonly visualTheme: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

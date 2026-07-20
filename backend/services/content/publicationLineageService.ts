@@ -43,6 +43,15 @@ export interface RecordEventInput {
   parentContentId?: string | null;
   scheduledPostId?: string | null;
   metadata?: Record<string, unknown> | null;
+  /**
+   * WS-1a (PMO-ADR-06) — SOFT reference to the immutable generation-time
+   * Semantic Root. When supplied it is folded into `metadata.semanticRootId`,
+   * linking this lifecycle EVENT LOG row back to the generation identity. This
+   * is the ONLY lineage store; the Semantic Root is not a parallel lineage
+   * table. ADDITIVE + OPTIONAL: omitting it leaves `metadata` byte-identical, so
+   * every existing caller is unaffected.
+   */
+  semanticRootId?: string | null;
   /** ISO event time. Supplied by the caller for reproducibility; optional. */
   createdAt?: string;
 }
@@ -105,6 +114,17 @@ export async function recordEvent(input: RecordEventInput): Promise<LineageEvent
     if (!input?.companyId) return null;
     if (!LINEAGE_EVENT_TYPES.includes(input.eventType)) return null;
 
+    // WS-1a — fold an optional Semantic Root soft-ref into metadata. When absent
+    // the value stays exactly `input.metadata ?? null` (byte-identical for every
+    // existing caller); when present it links this event to the generation root.
+    const rootId =
+      typeof input.semanticRootId === 'string' && input.semanticRootId.trim().length > 0
+        ? input.semanticRootId.trim()
+        : null;
+    const metadata: Record<string, unknown> | null = rootId
+      ? { ...(input.metadata ?? {}), semanticRootId: rootId }
+      : input.metadata ?? null;
+
     const insertRow: Record<string, unknown> = {
       company_id: input.companyId,
       content_id: input.contentId ?? null,
@@ -112,7 +132,7 @@ export async function recordEvent(input: RecordEventInput): Promise<LineageEvent
       event_type: input.eventType,
       platform: input.platform ?? null,
       scheduled_post_id: input.scheduledPostId ?? null,
-      metadata: input.metadata ?? null,
+      metadata,
     };
     if (input.createdAt) insertRow.created_at = input.createdAt;
 

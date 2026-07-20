@@ -32,7 +32,26 @@ import type {
   GenerationOutput,
   GenerationRequest,
   GenerationRuntime,
+  ImagePromptSpec,
+  SemanticContinuity,
+  SemanticRoot,
+  VisualBrief,
 } from './contracts';
+import {
+  buildSemanticContinuity,
+  buildSemanticRoot,
+  deriveImagePromptSpec,
+  deriveVisualBrief,
+  isSemanticRootEnabled,
+} from './semanticSpine';
+import {
+  assertStageContinuity,
+  assertValidSemanticRoot,
+  assertVariantsPreserveIntent,
+  checkArtifactInheritsRoot,
+  SemanticContinuityError,
+  stampVariantSemanticIdentity,
+} from './semanticContinuityGuard';
 import type { CanonicalContentType } from '../../../../lib/content/canonicalContent';
 import type { OriginalityResult } from '../../../../lib/content/originality/types';
 import type {
@@ -192,10 +211,56 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
   const primaryPlatform = String(ctx.platform ?? 'linkedin');
   const platforms = (ctx.raw?.targetPlatforms as string[] | undefined) ?? [primaryPlatform];
 
+  // ── WS-1a — Semantic Root (flag-gated, default OFF). Built ONCE per request
+  // from the resolved context and threaded through the pipeline so every
+  // artifact inherits the same communication objective. Flag OFF ⇒ root stays
+  // undefined and the pipeline is byte-identical to pre-WS-1a. Inline (no new
+  // RUNTIME_STAGES entry) so the observable stage contract is unchanged.
+  const semanticEnabled = isSemanticRootEnabled();
+  let semanticRoot: SemanticRoot | undefined;
+  if (semanticEnabled) {
+    // WS-1b — FAIL-CLOSED continuity enforcement. With the flag ON the operator
+    // has opted INTO enforcement: a missing/invalid Semantic Root is a
+    // DETERMINISTIC, OBSERVABLE SemanticContinuityError, recorded in `failures`
+    // and surfaced to the caller. We deliberately do NOT swallow it and NEVER
+    // mint a fresh root to paper over the gap — that silent regeneration is
+    // exactly the continuity break WS-1b exists to prevent. The throw sits at the
+    // PRE-generation boundary, consistent with the runtime's "stages 1–4 may fail
+    // the call" contract; everything AFTER generation stays fail-open below.
+    try {
+      semanticRoot = buildSemanticRoot(ctx);
+      assertValidSemanticRoot(semanticRoot, 'content_brief');
+      ctx.semanticRoot = semanticRoot;
+    } catch (err) {
+      failures.push('semantic_root');
+      runtimeMetrics.failure('semantic_root', metricLabels);
+      throw err instanceof SemanticContinuityError
+        ? err
+        : new SemanticContinuityError(
+            'content_brief',
+            err instanceof Error ? err.message : 'semantic root build failed',
+          );
+    }
+  }
+
   // ── Stage 2 — Prompt Assembly (single assembly path)
   stages.push('prompt_assembly');
   const promptSet = assembleGenerationPrompt(ctx, policy);
   const item = ((promptSet.meta?.item as DailyExecutionItemLike | undefined) ?? {}) as DailyExecutionItemLike;
+
+  // WS-1b — content_brief → generated_text continuity (FAIL-CLOSED, pre-generation).
+  // Before the master is produced, assert the assembled generation item inherited
+  // the SAME Semantic Root the brief carries (the assembler stamps
+  // `semantic_root_id`). A dropped identity here throws deterministically rather
+  // than generating an artifact with no/ambiguous lineage. Flag OFF ⇒ skipped.
+  if (semanticRoot) {
+    const itemRootId = (item as Record<string, unknown>).semantic_root_id;
+    assertStageContinuity('generated_text', {
+      root: semanticRoot,
+      parentSemanticRootId: typeof itemRootId === 'string' ? itemRootId : 'MISSING',
+      parentCommunicationIntent: semanticRoot.communicationIntent,
+    });
+  }
 
   // ── Stage 3 — Originality Preparation (light retrieval; fail-open)
   stages.push('originality_prep');
@@ -276,6 +341,13 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
       audience: ctx.audience ?? null,
       tone: ctx.tone ?? null,
       brief: (req.brief as Record<string, unknown> | undefined) ?? null,
+      // WS-1a — persist the Semantic Root id as a SOFT reference in the existing
+      // content.source_metadata column. This is the durable link between the
+      // immutable generation identity and the canonical content row (NO new
+      // store). Absent when the flag is OFF ⇒ createContent call is unchanged.
+      ...(semanticRoot
+        ? { sourceMetadata: { semanticRootId: semanticRoot.semanticRootId, semanticRoot } }
+        : {}),
       lifecycleStatus: (reqField<string>(req, 'lifecycleStatus') as CreateContentInput['lifecycleStatus']) ?? 'draft',
       createdBy: (reqField<string>(req, 'createdBy')) ?? null,
     });
@@ -320,6 +392,55 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
     variants = [];
   }
 
+  // WS-1b — platform adaptations PRESERVE INTENT (FAIL-OPEN, observable). The
+  // external variant builder is intent-agnostic, so the runtime stamps each
+  // adaptation with the root identity (semantic_root_id + communication_intent)
+  // — only presentation differs, the semantic intent is unchanged — then runs a
+  // DETERMINISTIC preservation check. Consistent with the post-generation
+  // fail-open contract: a break is recorded in `failures`/metrics, never silently
+  // repaired with a fresh root. Flag OFF ⇒ variants are byte-identical to today.
+  if (semanticRoot && variants.length > 0) {
+    variants = variants.map((v) => stampVariantSemanticIdentity(v, semanticRoot!));
+    const preserved = assertVariantsPreserveIntent(semanticRoot, variants);
+    if (!preserved.ok) {
+      failures.push('semantic_continuity_variants');
+      runtimeMetrics.failure('semantic_continuity_variants', metricLabels);
+    }
+  }
+
+  // ── WS-1a — Semantic Continuity + Visual Bridge (flag-gated, orchestration
+  // only). Continuity links the immutable root to the persisted content id;
+  // the visual bridge derives a VisualBrief (from the content brief) + an
+  // ImagePromptSpec (consuming the generated text) that CARRY the same semantic
+  // identity toward the frozen image seam — no image is generated or called.
+  // All best-effort: a derivation failure never breaks generation.
+  let semanticContinuity: SemanticContinuity | undefined;
+  let visualBrief: VisualBrief | undefined;
+  let imagePromptSpec: ImagePromptSpec | undefined;
+  if (semanticRoot) {
+    try {
+      semanticContinuity = buildSemanticContinuity(semanticRoot, contentId);
+      visualBrief = deriveVisualBrief(semanticRoot);
+      imagePromptSpec = deriveImagePromptSpec(visualBrief, master.content ?? '');
+      // WS-1b — assert the DERIVED visual artifacts inherited the SAME root
+      // (visual_brief ← root; image_prompt_spec ← visual_brief). Observable,
+      // non-throwing (post-generation fail-open): a divergence is recorded, never
+      // silently repaired.
+      const vbCheck = checkArtifactInheritsRoot(semanticRoot, visualBrief, 'visual_brief');
+      const ipCheck = checkArtifactInheritsRoot(
+        semanticRoot,
+        imagePromptSpec,
+        'image_prompt_spec',
+      );
+      if (!vbCheck.ok || !ipCheck.ok) {
+        failures.push('semantic_continuity_visual');
+        runtimeMetrics.failure('semantic_continuity_visual', metricLabels);
+      }
+    } catch {
+      failures.push('semantic_bridge');
+    }
+  }
+
   // ── Stage 8 — Observability
   stages.push('observability');
   const latencyMs = totalTimer();
@@ -338,9 +459,20 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
     primaryPlatform,
     stages,
     failures,
+    ...(semanticRoot ? { semanticRootId: semanticRoot.semanticRootId } : {}),
   };
 
-  return { master, variants, contentId, originality, metrics };
+  return {
+    master,
+    variants,
+    contentId,
+    originality,
+    metrics,
+    ...(semanticRoot ? { semanticRoot } : {}),
+    ...(semanticContinuity ? { semanticContinuity } : {}),
+    ...(visualBrief ? { visualBrief } : {}),
+    ...(imagePromptSpec ? { imagePromptSpec } : {}),
+  };
 }
 
 /** The canonical GenerationRuntime instance — THE runtime seam. */
