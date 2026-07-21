@@ -25,14 +25,14 @@
 import {
   GatewayAbortError,
   resolveProviderTimeoutMs,
-  attachProviderMetadata,
-  freezeProviderMetadata,
-  PERPLEXITY_METADATA_VERSION,
   type GatewayRequest,
   type NormalizedCompletion,
-  type PerplexityCompletionMetadataV1,
   type LlmPoolName,
 } from './aiGatewayCore';
+// PB-003R: the provider-metadata consumer framework owns validation for BOTH sides
+// of the wire. The producer below normalizes through the SAME registered decoder
+// consumers read with, so read/write validation can no longer drift.
+import { attachTypedProviderMetadata, PERPLEXITY_CITATIONS_V1 } from './aiGatewayMetadata';
 
 // ── Common transport contract ─────────────────────────────────────────────────
 
@@ -123,6 +123,57 @@ function transportTimeoutError(label: string, timeoutMs: number): Error & { code
   return err;
 }
 
+/**
+ * PB-013 (HARDEN-005 compliance) — the transport-origin invariant.
+ *
+ * `executeJsonTransport` takes `url` as a PARAMETER, so its `fetch` call is a
+ * dynamic-URL call site by shape even though every URL it can receive today is
+ * derived from the frozen `GATEWAY_TRANSPORT_CAPABILITIES` endpoints. Rather
+ * than relying on that trust being merely ASSERTED in a comment (which would
+ * rot the moment a future seam passes a variable URL), the trust is ENFORCED
+ * here: the request origin must be one the transport registry itself declares.
+ *
+ * Derived from the registry, so it can never drift from it. Endpoints that do
+ * not parse are skipped rather than thrown at module load (a stub transport's
+ * `null` endpoint, or a malformed future entry, must not break module init —
+ * it simply is not a trusted origin, and a seam using it would be refused).
+ */
+const TRUSTED_TRANSPORT_ORIGINS: ReadonlySet<string> = (() => {
+  const origins = new Set<string>();
+  for (const capability of Object.values(GATEWAY_TRANSPORT_CAPABILITIES)) {
+    if (typeof capability.endpoint !== 'string' || capability.endpoint.length === 0) continue;
+    try {
+      origins.add(new URL(capability.endpoint).origin);
+    } catch {
+      /* not a parseable endpoint → not a trusted origin */
+    }
+  }
+  return origins;
+})();
+
+/**
+ * Refuse any transport URL whose origin is not declared by the transport
+ * registry. For every call site that exists today this is a no-op (gemini and
+ * perplexity both build their URL from their own frozen registry endpoint), so
+ * it cannot change the behaviour of any current request; it exists so that a
+ * FUTURE caller cannot silently inherit the `ssrf-ok` suppression below with a
+ * user- or config-derived URL.
+ */
+function assertTrustedTransportOrigin(provider: string, url: string): void {
+  let origin: string;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    throw new Error(`[ai-gateway] transport '${provider}' refused an unparseable request URL`);
+  }
+  if (!TRUSTED_TRANSPORT_ORIGINS.has(origin)) {
+    throw new Error(
+      `[ai-gateway] transport '${provider}' refused request to untrusted origin ${origin} — ` +
+        'transport URLs must originate from GATEWAY_TRANSPORT_CAPABILITIES',
+    );
+  }
+}
+
 function warnTruncation(
   provider: string,
   model: string,
@@ -155,6 +206,10 @@ async function executeJsonTransport(args: {
   signal?: AbortSignal;
   max_tokens?: number;
 }): Promise<Record<string, unknown>> {
+  // PB-013: enforced BEFORE any timer/controller is allocated, so a refusal
+  // cannot leak a pending timeout. No-op for every current caller.
+  assertTrustedTransportOrigin(args.provider, args.url);
+
   const controller = new AbortController();
   const timeoutMs = resolveProviderTimeoutMs(args.max_tokens, args.operation);
   const timeout = setTimeout(() => controller.abort(transportTimeoutError(`${args.provider} request`, timeoutMs)), timeoutMs);
@@ -165,6 +220,21 @@ async function executeJsonTransport(args: {
 
   let response: Response;
   try {
+    // `args.url` is not user-controlled. Both call sites build it from the frozen
+    // GATEWAY_TRANSPORT_CAPABILITIES endpoints — callPerplexity passes the literal
+    // `perplexity.endpoint`, callGemini interpolates ONLY the model and the API key
+    // (each encodeURIComponent'd, both AFTER the authority, so neither can alter the
+    // host) into `gemini.endpoint`. No env/config override and no request-derived
+    // host exists anywhere in the chain. This suppression covers a SHARED helper, so
+    // a future caller passing a variable URL would inherit it — which is exactly why
+    // `assertTrustedTransportOrigin` above enforces the registry origin at runtime
+    // rather than leaving that trust merely asserted in this comment.
+    // safeFetch is deliberately NOT used: it dispatches via undici with its own
+    // agent, redirect policy, timeouts and byte caps, which would break this seam's
+    // AbortController / computed-timeout / caller-abort contract (and the
+    // fetch-stubbed capability probes) — the "trusted constant" case the guard
+    // itself sanctions.
+    // ssrf-ok: trusted constant — origin fixed by GATEWAY_TRANSPORT_CAPABILITIES and enforced above.
     response = await fetch(args.url, {
       method: 'POST',
       signal: controller.signal,
@@ -291,23 +361,15 @@ export async function callPerplexity(params: GatewayTransportParams): Promise<No
 
   // PB-001: preserve Perplexity's grounded `citations[]` into the provider-metadata
   // container so they SURVIVE normalization (they were previously lost — see the
-  // PA-006 parity gap). Additive + non-consuming: when the provider returns no
-  // citations the completion is byte-identical to the legacy `{ content, usage }`
-  // shape (no `providerMetadata` key). Nothing here changes content/usage or any
-  // provider behavior; nothing consumes the metadata yet.
-  const rawCitations = (data as { citations?: unknown }).citations;
-  const citations = Array.isArray(rawCitations)
-    ? rawCitations.filter((c): c is string => typeof c === 'string')
-    : [];
-  if (citations.length === 0) return base;
-  return attachProviderMetadata(
-    base,
-    freezeProviderMetadata<'perplexity', PerplexityCompletionMetadataV1>(
-      'perplexity',
-      PERPLEXITY_METADATA_VERSION,
-      { citations },
-    ),
-  );
+  // PA-006 parity gap). Additive: when the provider returns no citations (or a
+  // non-array / non-string payload) the completion is byte-identical to the legacy
+  // `{ content, usage }` shape (no `providerMetadata` key).
+  //
+  // PB-003R: the hand-rolled array/string filtering that used to live here now
+  // lives ONCE in the registered `PERPLEXITY_CITATIONS_V1` decoder, which consumers
+  // read through too. `attachTypedProviderMetadata` is a no-op when the payload is
+  // absent or untrustworthy, so the emitted wire shape is unchanged.
+  return attachTypedProviderMetadata(base, PERPLEXITY_CITATIONS_V1, data);
 }
 
 // ── Copilot transport (stub — no public API yet) ──────────────────────────────

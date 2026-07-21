@@ -13,6 +13,39 @@ import { formatQueryForProvider } from '../queryOrchestrator';
 import { withRetry } from '../productionPrimitives';
 import { dispatchTransport, type GatewayDispatchParams } from '../../aiGatewayDispatcher';
 import type { NormalizedCompletion } from '../../aiGatewayCore';
+// PB-007: consume the canonical PB-006 provider-identity layer (Zone P, read-only).
+// Product→Platform id translation is performed by the PLATFORM, never hand-written here.
+import { toPlatformProviderId } from '../../aiGatewayProviderIdentity';
+
+// ── PB-007 · Canonical provider identity ──────────────────────────────────────
+//
+// Copilot's product and platform ids COINCIDE. Deriving the platform id anyway keeps
+// all five adapters structurally identical, so no future author can read a coinciding
+// adapter and conclude that hand-writing the literal is the house style.
+
+/** PB-007 — the PRODUCT id this adapter is. Single source of truth for the file. */
+const PRODUCT_PROVIDER_ID = 'copilot' satisfies AIProviderId;
+
+/**
+ * PB-007 — the PLATFORM id this adapter transacts with, derived canonically.
+ *
+ * BEHAVIOR PARITY IS COMPILE-CHECKED. The explicit `'copilot'` annotation is the
+ * previously hard-coded literal: `toPlatformProviderId` is overloaded so a statically
+ * known product id yields a statically known platform id, so if the canonical mapping
+ * ever produced anything other than `'copilot'` for `'copilot'` this line would not
+ * compile. The value handed to the dispatcher is therefore provably byte-identical to
+ * the literal it replaces — including the flag-ON path that resolves to the
+ * not-yet-implemented `callCopilot` stub, whose graceful-`unavailable` outcome is
+ * unchanged because the routing key is unchanged.
+ *
+ * NO NEW THROW PATH. `toPlatformProviderId` throws only for an id outside the product
+ * union; the argument here is the compile-time literal `'copilot'`, and the canonical
+ * map is `satisfies Record<ProductProviderId, PlatformProviderId>` (total over that
+ * union), so the failing branch is statically unreachable. It is additionally
+ * evaluated ONCE at module initialization — input-independent and request-independent
+ * — so no per-request code path that could not throw before can throw now.
+ */
+const PLATFORM_PROVIDER_ID: 'copilot' = toPlatformProviderId(PRODUCT_PROVIDER_ID);
 
 type AzureOpenAIResponse = {
   choices?: Array<{ message?: { content?: string } }>;
@@ -61,9 +94,9 @@ export function reshapeCompletionToAzureResponse(
 }
 
 export class CopilotAdapter extends LLMAdapterBase {
-  public readonly id: AIProviderId = 'copilot';
+  public readonly id: AIProviderId = PRODUCT_PROVIDER_ID;
   protected readonly config: LLMAdapterConfig = {
-    id: 'copilot',
+    id: PRODUCT_PROVIDER_ID,
     envKey: 'AZURE_COPILOT_API_KEY',
     cacheTtlSeconds: 60 * 60 * 12,
     rateCapacity: 30,
@@ -133,7 +166,9 @@ export class CopilotAdapter extends LLMAdapterBase {
     ];
     const model = process.env.AZURE_COPILOT_DEPLOYMENT ?? 'gpt-4o-mini';
     const completion = await withRetry(this.id, () =>
-      dispatchTransport('copilot', {
+      // PB-007: the platform id is DERIVED from this adapter's product id, not typed
+      // by hand. Identical value ('copilot'), enforced by the Platform.
+      dispatchTransport(PLATFORM_PROVIDER_ID, {
         apiKey,
         model,
         temperature: 0,

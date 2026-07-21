@@ -643,6 +643,15 @@ export type ProviderMetadataEnvelope<
 > = {
   /** Provider id that produced this metadata (e.g. 'perplexity'). */
   readonly provider: P;
+  /**
+   * PB-003R — OPTIONAL metadata KIND (e.g. 'citations', 'grounding', 'reasoning',
+   * 'safety', 'provenance', 'diagnostics'). ABSENT means the provider's DEFAULT
+   * kind — which is exactly what every PB-001/PB-002-era envelope is, so legacy
+   * envelopes are unchanged (no key emitted) and legacy readers are unaffected.
+   * A kind lets several INDEPENDENT payloads from the SAME provider coexist and
+   * version independently. See `backend/services/aiGatewayMetadata.ts`.
+   */
+  readonly kind?: string;
   /** Schema version of THIS provider's `data` shape. Bump on a breaking change. */
   readonly version: number;
   /** Provider-native payload. Deep-frozen; readonly at the type level. */
@@ -650,11 +659,37 @@ export type ProviderMetadataEnvelope<
 };
 
 /**
- * Provider-scoped map: at most one envelope per provider id. Keying by provider
+ * Provider-scoped map: at most one envelope per provider SLOT. Keying by provider
  * is what guarantees isolation — reading `map['a']` can never surface provider
  * 'b''s data.
+ *
+ * PB-003R: a slot key is the provider id for the DEFAULT kind (unchanged, so
+ * `map['perplexity']` keeps resolving exactly as it did in PB-001/PB-002), and
+ * `"<provider>::<kind>"` for every additional kind. The prefix is the provider id,
+ * so isolation is preserved by construction and multiple kinds coexist without
+ * reshaping the map. See {@link providerMetadataSlotKey}.
  */
 export type ProviderMetadataMap = Readonly<Record<string, ProviderMetadataEnvelope>>;
+
+/**
+ * PB-003R — the implicit kind of every envelope that carries no `kind`. Kept as a
+ * sentinel (never written into an envelope) so "absent" keeps meaning "absent".
+ */
+export const DEFAULT_PROVIDER_METADATA_KIND = 'default' as const;
+
+/** Separator between provider id and kind in a non-default slot key. */
+export const PROVIDER_METADATA_SLOT_SEPARATOR = '::' as const;
+
+/**
+ * PB-003R — slot key for a (provider, kind) pair inside {@link ProviderMetadataMap}.
+ * The DEFAULT kind maps to the bare provider id (backward compatible); any other
+ * kind maps to `"<provider>::<kind>"`.
+ */
+export function providerMetadataSlotKey(provider: string, kind?: string): string {
+  return kind === undefined || kind === DEFAULT_PROVIDER_METADATA_KIND
+    ? provider
+    : `${provider}${PROVIDER_METADATA_SLOT_SEPARATOR}${kind}`;
+}
 
 /** Known provider payload — Perplexity's grounded citation list (v1). */
 export const PERPLEXITY_METADATA_VERSION = 1 as const;
@@ -675,7 +710,7 @@ export type NormalizedCompletion = {
   readonly providerMetadata?: ProviderMetadataMap;
 };
 
-/** Internal deep-freeze so a returned envelope's nested arrays/objects are truly immutable. */
+/** Deep-freeze so a returned envelope's nested arrays/objects are truly immutable. */
 function deepFreezeMetadata<T>(value: T): T {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -687,20 +722,36 @@ function deepFreezeMetadata<T>(value: T): T {
 }
 
 /**
+ * PB-003R — the canonical deep-freeze used by the metadata container, published
+ * so the metadata framework (`aiGatewayMetadata.ts`) freezes decoded payloads with
+ * the SAME implementation instead of re-deriving one. Pure w.r.t. value identity
+ * (returns its input).
+ */
+export function deepFreezeProviderMetadata<T>(value: T): T {
+  return deepFreezeMetadata(value);
+}
+
+/**
  * Build an immutable, version-tagged provider-metadata envelope. `data` is
  * deep-frozen so neither the envelope nor its nested arrays/objects can be
  * mutated after creation.
+ *
+ * PB-003R — the optional trailing `kind` is additive: omitted (or the DEFAULT
+ * kind) produces the exact PB-001 envelope shape with NO `kind` key, so existing
+ * producers, serialization and structural equality are unchanged.
  */
 export function freezeProviderMetadata<P extends string, D>(
   provider: P,
   version: number,
   data: D,
+  kind?: string,
 ): ProviderMetadataEnvelope<P, D> {
-  return Object.freeze({
-    provider,
-    version,
-    data: deepFreezeMetadata(data) as Readonly<D>,
-  }) as ProviderMetadataEnvelope<P, D>;
+  const frozenData = deepFreezeMetadata(data) as Readonly<D>;
+  return Object.freeze(
+    kind === undefined || kind === DEFAULT_PROVIDER_METADATA_KIND
+      ? { provider, version, data: frozenData }
+      : { provider, kind, version, data: frozenData },
+  ) as ProviderMetadataEnvelope<P, D>;
 }
 
 /**
@@ -710,6 +761,11 @@ export function freezeProviderMetadata<P extends string, D>(
  * provider's metadata can never leak into another's. No-op (returns the input
  * unchanged) when no envelopes are supplied — preserving byte-identical behavior
  * for providers that emit no native metadata.
+ *
+ * PB-003R — the merge key is now the (provider, kind) SLOT key. For every
+ * kind-less (PB-001/PB-002) envelope the slot key IS the provider id, so this is
+ * behaviourally identical; kind-tagged envelopes land in their own slot, which is
+ * what lets several kinds from one provider coexist without overwriting.
  */
 export function attachProviderMetadata(
   completion: NormalizedCompletion,
@@ -717,16 +773,27 @@ export function attachProviderMetadata(
 ): NormalizedCompletion {
   if (envelopes.length === 0) return completion;
   const merged: Record<string, ProviderMetadataEnvelope> = { ...(completion.providerMetadata ?? {}) };
-  for (const env of envelopes) merged[env.provider] = env;
+  for (const env of envelopes) merged[providerMetadataSlotKey(env.provider, env.kind)] = env;
   return { ...completion, providerMetadata: Object.freeze(merged) };
 }
 
-/** Read one provider's envelope from a completion, or `undefined` when absent. */
-export function getProviderMetadata(
+/**
+ * Read one provider's DEFAULT-kind envelope from a completion, or `undefined`
+ * when absent. Unchanged since PB-001 (this is the provider-only lookup PB-002
+ * consumes). For typed + validated + kind-aware retrieval use
+ * `readProviderMetadata` / `getProviderMetadataEnvelope` in
+ * `backend/services/aiGatewayMetadata.ts`.
+ *
+ * PB-003R — the optional type parameter `D` is additive (it defaults to the
+ * PB-001 open record), letting a caller name the payload type without a cast.
+ */
+export function getProviderMetadata<D = Readonly<Record<string, unknown>>>(
   completion: NormalizedCompletion,
   provider: string,
-): ProviderMetadataEnvelope | undefined {
-  return completion.providerMetadata?.[provider];
+): ProviderMetadataEnvelope<string, D> | undefined {
+  return completion.providerMetadata?.[provider] as
+    | ProviderMetadataEnvelope<string, D>
+    | undefined;
 }
 
 export async function callOpenAi(params: {

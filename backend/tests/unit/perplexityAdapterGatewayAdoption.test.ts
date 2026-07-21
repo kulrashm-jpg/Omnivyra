@@ -29,7 +29,7 @@ jest.mock('../../services/intelligence/probeCostCapture', () => ({
   extractProbeTokenUsage: () => ({ inputTokens: 0, outputTokens: 0, model: null }),
 }));
 jest.mock('../../services/intelligence/citationExtractor', () => ({
-  extractCitation: (args: { provider: string; query: string; query_class: string; answer: string; observedAt: string }) => ({
+  extractCitation: jest.fn((args: { provider: string; query: string; query_class: string; answer: string; observedAt: string }) => ({
     provider: args.provider,
     query: args.query,
     query_class: args.query_class,
@@ -37,7 +37,7 @@ jest.mock('../../services/intelligence/citationExtractor', () => ({
     prominence: 1,
     evidence_excerpt: null,
     observed_at: args.observedAt,
-  }),
+  })),
 }));
 jest.mock('../../services/intelligence/queryOrchestrator', () => ({
   formatQueryForProvider: (q: string) => ({ system: null, user: q }),
@@ -47,12 +47,28 @@ import {
   PerplexityAdapter,
   perplexityGatewayTransportEnabled,
   reshapeCompletionToPerplexityResponse,
+  extractPerplexityCitations,
 } from '../../services/intelligence/adapters/perplexityAdapter';
 import { dispatchTransport } from '../../services/aiGatewayDispatcher';
 import { fetchProduction } from '../../services/intelligence/productionPrimitives';
+import { extractCitation } from '../../services/intelligence/citationExtractor';
+import type { NormalizedCompletion } from '../../services/aiGatewayCore';
 
 const dispatchMock = dispatchTransport as unknown as jest.Mock;
 const fetchProdMock = fetchProduction as unknown as jest.Mock;
+const extractCitationMock = extractCitation as unknown as jest.Mock;
+
+/** A gateway completion carrying PB-001 Perplexity citation metadata (v1). */
+const withCitations = (citations: string[], content = 'Brand X ranks highly'): NormalizedCompletion => ({
+  content,
+  usage: { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 },
+  providerMetadata: {
+    perplexity: { provider: 'perplexity', version: 1, data: { citations } },
+  },
+});
+
+/** The last answer string handed to the citation extractor (post-`extractAnswer`). */
+const lastAnswer = (): string => extractCitationMock.mock.calls.at(-1)?.[0]?.answer ?? '';
 
 const PROBE = { provider: 'perplexity', query_class: 'commercial', queries: ['best crm for teams'], brandName: 'Brand X' };
 
@@ -74,7 +90,7 @@ describe('PA-006 — flag + reshape (pure)', () => {
     expect(perplexityGatewayTransportEnabled()).toBe(false);
   });
 
-  it('reshape maps completion → Perplexity shape (choices + usage + model), no citations', () => {
+  it('reshape maps completion → Perplexity shape (choices + usage + model); metadata absent ⇒ no citations key', () => {
     const r = reshapeCompletionToPerplexityResponse(
       { content: 'perplexity answer', usage: { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 } },
       'sonar',
@@ -82,7 +98,8 @@ describe('PA-006 — flag + reshape (pure)', () => {
     expect(r.choices?.[0]?.message?.content).toBe('perplexity answer');
     expect(r.usage).toEqual({ prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 });
     expect(r.model).toBe('sonar');
-    expect(r.citations).toBeUndefined(); // documented parity gap
+    expect(r.citations).toBeUndefined();          // no metadata ⇒ citation-free shape preserved
+    expect('citations' in r).toBe(false);          // key OMITTED, not set to []
   });
 
   it('reshape omits usage when the completion has none', () => {
@@ -141,5 +158,100 @@ describe('PA-006 — flag-gated routing + parity', () => {
     expect(viaGateway.citation_rate).toBe(viaLegacy.citation_rate);
     expect(viaGateway.mean_prominence).toBe(viaLegacy.mean_prominence);
     expect(viaGateway.mentions.length).toBe(viaLegacy.mentions.length);
+  });
+});
+
+describe('PB-002 — metadata consumption + citation restoration (reshape, pure)', () => {
+  it('restores citations from PB-001 metadata when present', () => {
+    const r = reshapeCompletionToPerplexityResponse(withCitations(['https://a.com', 'https://b.com']), 'sonar');
+    expect(r.citations).toEqual(['https://a.com', 'https://b.com']);
+    expect(r.choices?.[0]?.message?.content).toBe('Brand X ranks highly');
+  });
+
+  it('omits citations (byte-identical) when the metadata envelope is absent', () => {
+    const r = reshapeCompletionToPerplexityResponse({ content: 'x', usage: null }, 'm');
+    expect('citations' in r).toBe(false);
+  });
+
+  it('extractPerplexityCitations reads the v1 envelope and filters non-strings', () => {
+    const completion = {
+      content: 'x', usage: null,
+      providerMetadata: { perplexity: { provider: 'perplexity', version: 1, data: { citations: ['https://a.com', 42, null, 'https://b.com'] } } },
+    } as unknown as NormalizedCompletion;
+    expect(extractPerplexityCitations(completion)).toEqual(['https://a.com', 'https://b.com']);
+  });
+
+  it('ignores a metadata envelope with an unknown version (version-safe)', () => {
+    const completion = {
+      content: 'x', usage: null,
+      providerMetadata: { perplexity: { provider: 'perplexity', version: 999, data: { citations: ['https://a.com'] } } },
+    } as unknown as NormalizedCompletion;
+    expect(extractPerplexityCitations(completion)).toEqual([]);
+    expect('citations' in reshapeCompletionToPerplexityResponse(completion, 'm')).toBe(false);
+  });
+
+  it('never surfaces another provider\'s metadata (provider isolation)', () => {
+    const completion = {
+      content: 'x', usage: null,
+      providerMetadata: { openai: { provider: 'openai', version: 1, data: { citations: ['https://leak.com'] } } },
+    } as unknown as NormalizedCompletion;
+    expect(extractPerplexityCitations(completion)).toEqual([]);
+  });
+});
+
+describe('PB-002 — citation rendering across transports', () => {
+  it('gateway path renders "Sources: …" from restored metadata citations', async () => {
+    process.env.PERPLEXITY_ADAPTER_GATEWAY_TRANSPORT = 'true';
+    dispatchMock.mockResolvedValue(withCitations(['https://a.com', 'https://b.com']));
+    const result = await new PerplexityAdapter().probe(PROBE as never);
+    expect(result.state).toBe('measured');
+    expect(lastAnswer()).toBe('Brand X ranks highly\nSources: https://a.com, https://b.com');
+  });
+
+  it('legacy path still renders "Sources: …" from raw response citations', async () => {
+    delete process.env.PERPLEXITY_ADAPTER_GATEWAY_TRANSPORT;
+    fetchProdMock.mockResolvedValue({
+      json: async () => ({
+        choices: [{ message: { content: 'Brand X ranks highly' } }],
+        citations: ['https://a.com', 'https://b.com'],
+        usage: { prompt_tokens: 5, completion_tokens: 7 },
+        model: 'sonar',
+      }),
+    });
+    await new PerplexityAdapter().probe(PROBE as never);
+    expect(lastAnswer()).toBe('Brand X ranks highly\nSources: https://a.com, https://b.com');
+  });
+
+  it('gateway (metadata) and legacy (raw) produce an IDENTICAL cited answer — parity restored', async () => {
+    const citations = ['https://a.com', 'https://b.com'];
+    process.env.PERPLEXITY_ADAPTER_GATEWAY_TRANSPORT = 'true';
+    dispatchMock.mockResolvedValue(withCitations(citations));
+    await new PerplexityAdapter().probe(PROBE as never);
+    const gatewayAnswer = lastAnswer();
+
+    jest.clearAllMocks();
+    process.env.PERPLEXITY_API_KEY = 'test-key';
+    delete process.env.PERPLEXITY_ADAPTER_GATEWAY_TRANSPORT;
+    fetchProdMock.mockResolvedValue({ json: async () => ({ choices: [{ message: { content: 'Brand X ranks highly' } }], citations, usage: { prompt_tokens: 5, completion_tokens: 7 }, model: 'sonar' }) });
+    await new PerplexityAdapter().probe(PROBE as never);
+    expect(lastAnswer()).toBe(gatewayAnswer);
+  });
+});
+
+describe('PB-002 — resilience (retry / unavailable paths preserved)', () => {
+  it('gateway transport failure degrades to unavailable (retry-seam error path)', async () => {
+    process.env.PERPLEXITY_ADAPTER_GATEWAY_TRANSPORT = 'true';
+    dispatchMock.mockRejectedValue(new Error('perplexity 503'));
+    const result = await new PerplexityAdapter().probe(PROBE as never);
+    expect(result.state).toBe('unavailable');
+    expect(result.mentions).toHaveLength(0);
+  });
+
+  it('no API key ⇒ unavailable (no transport attempted)', async () => {
+    delete process.env.PERPLEXITY_API_KEY;
+    const result = await new PerplexityAdapter().probe(PROBE as never);
+    expect(result.state).toBe('unavailable');
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(fetchProdMock).not.toHaveBeenCalled();
   });
 });
