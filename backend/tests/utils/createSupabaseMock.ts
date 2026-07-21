@@ -10,10 +10,14 @@
  *   + .then() for await
  */
 
-import type { Mock } from 'jest';
+// PB-010: the `jest` package exports no `Mock` type; the mock-function type is
+// `jest.Mock` from the ambient @types/jest namespace. The previous
+// `import type { Mock } from 'jest'` resolved to an error type (TS2305), which
+// silently degraded every `createMockFn()` call site to `any`. This is a
+// type-only correction — `import type` is fully erased, so no runtime change.
 
 // Create mock function type for use in buildChain
-const createMockFn = (): Mock => {
+const createMockFn = (): jest.Mock => {
   if (typeof jest !== 'undefined' && jest.fn) {
     return jest.fn();
   }
