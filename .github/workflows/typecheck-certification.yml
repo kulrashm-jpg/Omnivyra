@@ -1,0 +1,225 @@
+# PB-012 — Backend TypeScript Certification (CI enforcement)
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# PB-009/PB-010/PB-011 built a complete backend type-certification pipeline
+# (`scripts/typecheck-certification.js`) that passed locally and was referenced by
+# NO workflow. An unarmed guard cannot fail anything. This workflow arms it.
+#
+# WHAT FAILS THIS JOB
+# -------------------
+# `scripts/typecheck-certification.js` funnels every verdict into a single
+# `process.exit(failed ? 1 : 0)`. All four conditions below therefore produce a
+# non-zero exit, and the run step propagates it verbatim — no `continue-on-error`,
+# no `|| true`, no swallowed output:
+#
+#   1. NET-NEW BACKEND TYPE DEBT
+#      A diagnostic whose identity (file, TS code, normalized message) is absent
+#      from scripts/typecheck-certification-fingerprints.json, or exceeds its
+#      baselined count; and/or a per-project scalar count above
+#      scripts/typecheck-certification-baseline.json.
+#      Trading a fixed error for a new one leaves the total flat and STILL fails.
+#   2. CERTIFICATION COVERAGE REGRESSION
+#      A backend file present on disk but absent from the `tsc --listFiles`
+#      program — i.e. excluding a failing file instead of fixing it.
+#   3. PARSER INTEGRITY FAILURE
+#      The diagnostic parser accounted for fewer errors than `tsc` reported. An
+#      unrecognised diagnostic shape could hide new debt, so the run fails.
+#   4. BASELINE / FINGERPRINT INCONSISTENCY
+#      The scalar baseline and the per-error fingerprint baseline disagree on a
+#      project total — one half was re-baselined, which would reopen the scalar
+#      hole.
+#
+# WHAT NEVER FAILS THIS JOB
+# -------------------------
+# Pre-existing baselined debt is INFORMATIONAL. Debt REDUCTION passes and prints
+# a re-baseline instruction. Neither is a failure, by design.
+#
+# RE-BASELINING NEVER HAPPENS HERE
+# --------------------------------
+# `CI` is exported for the job and `--update-baseline` refuses to run under CI.
+# Both artifacts are regenerated only by a human running
+# `npm run typecheck:certification:baseline`, which also refuses to raise a total
+# and refuses to absorb net-new debt without an explicit `--accept-new-debt`.
+#
+# ADVISORY UNTIL REGISTERED — READ THIS BEFORE CLAIMING IT IS ENFORCED
+# -------------------------------------------------------------------
+# A workflow file makes a check RUN. It cannot make a check REQUIRED to merge.
+# Blocking a merge requires adding the job name below —
+#
+#     Backend TypeScript certification
+#
+# — to the required status checks of the `main` branch-protection rule (repo
+# Settings -> Branches). Until an owner performs that admin action, a red run here
+# is visible but NOT merge-blocking. See
+# docs/pmo/PB-012-certification-pipeline-enforcement.md.
+#
+# LOCAL == CI
+# -----------
+# `npm run typecheck:certification` is the identical local command. There is no
+# CI-only logic in the guard.
+
+name: Backend TypeScript Certification
+
+on:
+  pull_request:
+  # Also on pushes to main: an admin-override merge, a direct push, or a merge
+  # whose PR run predated a conflicting merge can all land debt that no PR run
+  # ever saw. This gives `main` its own certification history.
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typecheck-certification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck-certification:
+    # ####################################################################
+    # This name IS the status-check identity used by branch protection.
+    # Renaming it silently un-registers the check. Do not rename it without
+    # updating branch protection and docs/ENGINEERING-GOVERNANCE.md §4/§6.
+    # ####################################################################
+    name: Backend TypeScript certification
+    runs-on: ubuntu-latest
+    # Local wall clock is ~3m15s for both non-incremental tsc passes (2,961 +
+    # 1,111 files). 30 minutes is headroom for a slower runner, not a target.
+    timeout-minutes: 30
+    env:
+      # Explicit rather than inherited: guarantees the `--update-baseline` CI
+      # refusal is armed even if a runner stopped exporting CI by default. `CI`
+      # is read by the guard for that refusal and for nothing else.
+      CI: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so PB-011 attribution can resolve
+          # `git merge-base origin/$GITHUB_BASE_REF HEAD` and name the change that
+          # introduced a net-new error. Attribution is EVIDENCE ONLY — an
+          # unattributed net-new error still fails — so this improves diagnostics
+          # without changing any verdict.
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # Matches package.json engines (node 22.x) and typecheck-baseline.yml.
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Turns "npm ERR! Missing script" into a precise statement of what is not
+      # yet on the branch. Deterministic, read-only, no certification semantics.
+      - name: Preflight — certification pipeline present
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in \
+            scripts/typecheck-certification.js \
+            scripts/lib/typecheckFingerprint.js \
+            scripts/typecheck-certification-baseline.json \
+            scripts/typecheck-certification-fingerprints.json \
+            tsconfig.backend.json \
+            tsconfig.backend-tests.json
+          do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f"
+              missing=1
+            fi
+          done
+          if ! node -e "process.exit(require('./package.json').scripts['typecheck:certification']?0:1)"; then
+            echo 'MISSING: package.json script "typecheck:certification"'
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo ''
+            echo 'The PB-009/PB-010/PB-011 certification pipeline is not present on this ref.'
+            echo 'All of the files listed above, plus the package.json typecheck:certification*'
+            echo 'scripts, must be committed together — see'
+            echo 'docs/pmo/PB-012-certification-pipeline-enforcement.md §"Required commit set".'
+            exit 1
+          fi
+          echo 'certification pipeline present'
+
+      # ---- THE GATE ----------------------------------------------------------
+      # `set -o pipefail` keeps the guard's exit code authoritative through `tee`;
+      # `tee` captures the full report for the step summary and the artifact.
+      # Nothing here may suppress a non-zero exit.
+      - name: Backend TypeScript certification
+        id: certification
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run typecheck:certification 2>&1 | tee typecheck-certification.log
+
+      # Makes a failure readable on the Actions summary page without opening raw
+      # logs. Runs on success and failure; never alters the job's conclusion.
+      - name: Publish certification report to job summary
+        if: always()
+        shell: bash
+        run: |
+          LOG=typecheck-certification.log
+          {
+            echo '## Backend TypeScript certification'
+            echo ''
+            if [ ! -f "$LOG" ]; then
+              echo '**RESULT: UNKNOWN** — the certification step produced no log; it did not start.'
+            elif grep -q '^RESULT: PASS' "$LOG"; then
+              echo '**RESULT: PASS** — full coverage, no net-new type debt.'
+            elif grep -q '^RESULT: FAIL' "$LOG"; then
+              echo '**RESULT: FAIL** — see the failing conditions below.'
+            else
+              echo '**RESULT: INCOMPLETE** — the guard did not reach a verdict (crash, OOM, or timeout). Treated as a failure.'
+            fi
+            echo ''
+            if [ -f "$LOG" ]; then
+              echo '### Headline'
+              echo ''
+              echo '```'
+              grep -E '^(=== certification|coverage:|errors:|fingerprints:|attribution source:|RESULT:)' "$LOG" || true
+              echo '```'
+              echo ''
+              echo '### Failing conditions'
+              echo ''
+              FAILS="$(grep -n 'FAIL' "$LOG" || true)"
+              if [ -n "$FAILS" ]; then
+                echo '```'
+                echo "$FAILS"
+                echo '```'
+              else
+                echo '_none_'
+              fi
+              echo ''
+              echo '<details><summary>Full certification report (last 400 lines)</summary>'
+              echo ''
+              echo '```'
+              tail -n 400 "$LOG"
+              echo '```'
+              echo ''
+              echo '</details>'
+              echo ''
+            fi
+            echo '---'
+            echo ''
+            echo '- Pre-existing baselined debt is **informational** and never fails this job. Debt reduction **passes**.'
+            echo '- Net-new debt fails **even when the scalar total is unchanged** — the ratchet compares error *identities*.'
+            echo '- Re-baseline deliberately and locally: `npm run typecheck:certification:baseline`'
+            echo '  (refuses to run in CI; needs `--accept-new-debt` to absorb net-new, which prints every absorbed error).'
+            echo '- Identical local command: `npm run typecheck:certification`.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload certification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-certification-report
+          path: typecheck-certification.log
+          if-no-files-found: warn

@@ -93,3 +93,48 @@ The retry/fallback layer (`aiGatewayProvidersRetry.ts`) and the dispatcher (`aiG
 3. Consumers opt in via `getProviderMetadata(completion, '<provider>')` and branch on `version`.
 
 No core contract edit is required — that is the forward-compatibility guarantee.
+
+---
+
+## 8. Consumer framework (PB-003R) — `backend/services/aiGatewayMetadata.ts`
+
+PB-002 (the first adopter) proved the container works and exposed the cost: every consumer had to hand-roll null-check → version-branch → cast → shape-validate → filter. PB-003R absorbs that into the Platform. **Purely additive** — §§1–7 above remain true and unchanged.
+
+### 8.1 Slot keys and kinds
+
+An envelope may now carry an OPTIONAL `kind` (`'citations' | 'grounding' | 'reasoning' | 'safety' | 'provenance' | 'diagnostics' | …`). The map stays provider-keyed:
+
+| Kind | Slot key | Wire shape |
+|---|---|---|
+| DEFAULT (absent) | `"<provider>"` | `{ provider, version, data }` — **exactly PB-001** |
+| any other | `"<provider>::<kind>"` | `{ provider, kind, version, data }` |
+
+The slot key is always provider-prefixed, so **provider isolation is preserved by construction** and several kinds from one provider coexist and version independently. `getProviderMetadata(completion, provider)` is unchanged: it reads the DEFAULT slot.
+
+### 8.2 Registry
+
+`defineProviderMetadataKind({ provider, kind, version, legacyDefault?, validate?, decode? })` builds + registers a **descriptor** under `(provider, kind, version)`. `decode` normalizes an untrusted payload to the typed shape or `undefined`; `validate` is derived from it when omitted (and vice-versa). Decoder/validator throws are contained.
+
+`legacyDefault: true` declares "this kind IS the provider's default slot" — its envelopes omit `kind` (so they are byte-identical to PB-001) and a modern `(provider, 'citations')` read still resolves them. That is the bridge that keeps PB-002 working with zero edits.
+
+Resolution: `(provider, kind, version)` → exact · `(provider, kind)` → highest registered version · `(provider)` → the legacy-default descriptor, else the provider's sole descriptor, else `undefined` (never a guess).
+
+### 8.3 Consumer API
+
+```ts
+const citations = readProviderMetadata(completion, PERPLEXITY_CITATIONS_V1)?.citations ?? [];
+```
+
+Typed, validated, deep-frozen, or `undefined`. Also `readProviderMetadataOr`, `readProviderMetadataByRef` (registry coordinate), `getProviderMetadataEnvelope`, `hasProviderMetadata`, `listProviderMetadataEnvelopes` (coexistence view).
+
+### 8.4 Producer API (one validator, both sides)
+
+`buildProviderMetadataEnvelope(descriptor, raw)` / `attachTypedProviderMetadata(completion, descriptor, raw)` run the SAME registered decoder, and are a **no-op returning the input reference** when the payload is absent or untrustworthy. `callPerplexity` now produces through `PERPLEXITY_CITATIONS_V1`, so the read/write filtering duplication is gone; the emitted wire shape is unchanged.
+
+### 8.5 Adding a new provider metadata kind (revised recipe)
+
+1. `export const X_GROUNDING_V1 = defineProviderMetadataKind<XGroundingV1>({ provider: 'x', kind: 'grounding', version: 1, decode })`.
+2. Producer: `return attachTypedProviderMetadata(base, X_GROUNDING_V1, rawResponse)`.
+3. Consumer: `readProviderMetadata(completion, X_GROUNDING_V1)`.
+
+No core edit, no casts, no hand-written guards.
