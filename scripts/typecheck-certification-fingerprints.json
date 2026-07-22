@@ -1,0 +1,1372 @@
+{
+  "version": 1,
+  "generated": "2026-07-21",
+  "typescript": "5.9.2",
+  "note": [
+    "PB-011 per-error identity baseline for the backend certification surface.",
+    "Identity = (repo-relative file, TS error code, normalized message). Line and column are",
+    "intentionally excluded so unrelated edits above an error do not manufacture false",
+    "\"new error\" reports. `count` preserves duplicates within a file.",
+    "A fingerprint present here is PRE-EXISTING DEBT: informational, never a build failure.",
+    "A fingerprint NOT present here — or exceeding its count — is NET-NEW DEBT and FAILS,",
+    "even when the scalar total in typecheck-certification-baseline.json is unchanged.",
+    "Regenerate ONLY via `npm run typecheck:certification:baseline` (refuses to run in CI,",
+    "refuses to raise a total, and refuses to absorb net-new debt without --accept-new-debt).",
+    "This file and typecheck-certification-baseline.json must always be regenerated together;",
+    "the guard fails if their totals disagree."
+  ],
+  "projects": {
+    "tsconfig.backend.json": {
+      "total": 1,
+      "files": {
+        "pages/api/company-profile/index.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '{ domain?: unknown; }[]' is not assignable to type '{ name: string; domain?: string; category?: string; tier?: string; score?: number; confidence?: number; rationale?: string; }[]'.",
+            "count": 1
+          }
+        ]
+      }
+    },
+    "tsconfig.backend-tests.json": {
+      "total": 470,
+      "files": {
+        "backend/tests/integration/campaign_preemption_execution.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'logId' does not exist on type 'PreemptionAttemptResult'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'preemptedBlueprintStatus' does not exist on type 'PreemptionAttemptResult'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'preemptedCampaignId' does not exist on type 'PreemptionAttemptResult'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'preemptedExecutionStatus' does not exist on type 'PreemptionAttemptResult'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'success' does not exist on type 'PreemptionAttemptResult'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/campaign_tradeoff_engine.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'newDurationWeeks' does not exist on type 'TradeOffOption'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/communityAiTestHarness.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type 'Mock<void, [key: string, value: string], any>' is not assignable to type '((name: string, value: string | number | readonly string[]) => NextApiResponse) & Mock<any, any, any>'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/community_ai_alerts_learning.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'confidence' does not exist on type 'unknown'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'learning_state' does not exist on type 'unknown'.",
+            "count": 2
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 3
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'supporting_signals' does not exist on type 'unknown'.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 4
+          }
+        ],
+        "backend/tests/integration/community_ai_analytics_summary.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 5
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 6
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; start_date: string; end_date: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 2
+          }
+        ],
+        "backend/tests/integration/community_ai_auto_rules_export.test.ts": [
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; headers: {}; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; headers: {}; query: { tenant_id: string; organization_id: string; platform: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 4
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; headers: {}; query: { tenant_id: string; organization_id: string; type: string; format: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 4
+          }
+        ],
+        "backend/tests/integration/community_ai_campaign_baseline.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'baseline_value' does not exist on type 'unknown'.",
+            "count": 4
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'campaign_value' does not exist on type 'unknown'.",
+            "count": 4
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; playbook_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 2
+          }
+        ],
+        "backend/tests/integration/community_ai_core_apis.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 4
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; platform: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; platform: string; postId: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/community_ai_executive_narrative_wow.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'current_value' does not exist on type 'unknown'.",
+            "count": 3
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 2
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'previous_value' does not exist on type 'unknown'.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 5
+          }
+        ],
+        "backend/tests/integration/community_ai_forecast_details.test.ts": [
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 2
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; platform: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/community_ai_history_metrics.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 4
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { action_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 2
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; action_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 3
+          }
+        ],
+        "backend/tests/integration/community_ai_insights_forecast.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 5
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; platform: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; platform: string; content_type: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/community_ai_mom.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'current_value' does not exist on type 'unknown'.",
+            "count": 3
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'previous_value' does not exist on type 'unknown'.",
+            "count": 3
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 2
+          }
+        ],
+        "backend/tests/integration/community_ai_notifications_content_trends.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 6
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 6
+          }
+        ],
+        "backend/tests/integration/community_ai_rbac.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; headers: {}; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/community_ai_recommendations_export.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 2
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 2
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; format: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 2
+          }
+        ],
+        "backend/tests/integration/community_ai_webhooks.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'mock' does not exist on type 'Send<any>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { tenant_id: string; organization_id: string; }; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/external_api_alignment.test.ts": [
+          {
+            "code": "TS2345",
+            "message": "Argument of type '{ recordHealth: boolean; }' is not assignable to parameter of type 'string'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/integration/external_api_company_scope.test.ts": [
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; query: { companyId: string; }; headers: {}; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/external_api_presets.test.ts": [
+          {
+            "code": "TS2352",
+            "message": "Conversion of type '{ method: string; headers: { authorization: string; }; query: { companyId: string; }; body: {}; }' to type 'NextApiRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/governance_integrity_guard.test.ts": [
+          {
+            "code": "TS2540",
+            "message": "Cannot assign to 'NODE_ENV' because it is a read-only property.",
+            "count": 2
+          }
+        ],
+        "backend/tests/integration/governance_performance_guard.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'Error'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/integration/user_lifecycle_management.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'status' does not exist on type 'RoleRow'.",
+            "count": 3
+          }
+        ],
+        "backend/tests/manual/liveSerpValidation.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'missing_keywords' does not exist on type '{}'.",
+            "count": 2
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'strong_keywords' does not exist on type '{}'.",
+            "count": 2
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'weak_keywords' does not exist on type '{}'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/orchestration/distributed/executionClaimingEngine.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'reason' does not exist on type 'ClaimOwnershipOutcome'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/activityAiIsolation.test.ts": [
+          {
+            "code": "TS2345",
+            "message": "Argument of type '({ action: \"IMPROVE_HOOK\"; } | { action: \"ADD_DISCOVERABILITY\"; })[]' is not assignable to parameter of type 'SuggestionWithAction[]'.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/aiSafetyWave1.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'ParseResult<{ b: number; }>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'ParseResult<unknown>'.",
+            "count": 2
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'trust_scorable' does not exist on type '{ source_type: string; source_url: any; source_credibility: number; confidence_score: number; } & { __provenance: ProvenanceVerdict; }'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/aiVisibilityProvider.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type 'AIProviderId' is not assignable to type 'EvidenceSourceKind'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/assetIdTimingFix.test.ts": [
+          {
+            "code": "TS2556",
+            "message": "A spread argument must either have a tuple type or be passed to a rest parameter.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/assetPolicyAndAiContract.test.ts": [
+          {
+            "code": "TS2493",
+            "message": "Tuple type '[]' of length '0' has no element at index '1'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/auth001PublicEmailDomains.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'reason' does not exist on type '{ valid: true; } | { valid: false; reason: string; }'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/authorityVelocityHonestState.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"s\"' is not assignable to type '\"system\" | \"user\"'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/billingAmountResolver.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'ResolveAmountResult'.",
+            "count": 6
+          }
+        ],
+        "backend/tests/unit/billingSchemaVerification.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'body' does not exist on type '{ ready: true; } | { ready: false; status: 503; body: { error: string; code: \"BILLING_SCHEMA_NOT_READY\"; remediation: string; }; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'status' does not exist on type '{ ready: true; } | { ready: false; status: 503; body: { error: string; code: \"BILLING_SCHEMA_NOT_READY\"; remediation: string; }; }'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/blueprintExecutionResolver.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'blueprint' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
+            "count": 2
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'blueprint' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; execution_source: \"validated_blueprint\"; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'execution_source' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; execution_source: \"validated_blueprint\"; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'failure' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
+            "count": 3
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'failure' does not exist on type '{ ok: true; blueprint: CampaignBlueprint; execution_source: \"validated_blueprint\"; } | { ok: false; failure: ExecutionBlueprintGuardFailure; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2345",
+            "message": "Argument of type '{ campaign_blueprint_validated: any; campaign_blueprint: { duration_weeks: number; weekly_plan: { week_number: number; stage: string; stage_objective: string; psychological_goal: string; momentum_level: string; primary_recommendations: any[]; supporting_recommendations: any[]; }[]; progression_summary: string; }; }' is not assignable to parameter of type 'RecommendationResultLike'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/boltCampaignModeAcceptance.test.ts": [
+          {
+            "code": "TS2367",
+            "message": "This comparison appears to be unintentional because the types '\"text_based\"' and '\"creator_dependent\"' have no overlap.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/boltSchemaReadiness.test.ts": [
+          {
+            "code": "TS2554",
+            "message": "Expected 0 arguments, but got 1.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/bridgeCookie.test.ts": [
+          {
+            "code": "TS2540",
+            "message": "Cannot assign to 'NODE_ENV' because it is a read-only property.",
+            "count": 2
+          },
+          {
+            "code": "TS2704",
+            "message": "The operand of a 'delete' operator cannot be a read-only property.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/capacityExpectationValidator.simulation.test.ts": [
+          {
+            "code": "TS2345",
+            "message": "Argument of type '{ available_content: { 'Text posts': number; }; weekly_capacity: { 'Text posts': number; Videos: number; }; platform_content_requests: { platform: string; content_type: string; count_per_week: number; }[]; cross_platform_sharing: { ...; }; campaign_duration_weeks: number; }' is not assignable to parameter of type '{ available_content: unknown; weekly_capacity: unknown; exclusive_campaigns: unknown; platform_content_requests: unknown; cross_platform_sharing?: unknown; content_repurposing?: unknown; campaign_duration_weeks?: number; message?: string; override_confirmed?: boolean; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2345",
+            "message": "Argument of type '{ available_content: { post: number; }; weekly_capacity: { post: number; }; platform_content_requests: { platform: string; content_type: string; count_per_week: number; }[]; cross_platform_sharing: { ...; }; }' is not assignable to parameter of type '{ available_content: unknown; weekly_capacity: unknown; exclusive_campaigns: unknown; platform_content_requests: unknown; cross_platform_sharing?: unknown; content_repurposing?: unknown; campaign_duration_weeks?: number; message?: string; override_confirmed?: boolean; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2345",
+            "message": "Argument of type '{ available_content: { post: number; }; weekly_capacity: { post: number; }; platform_content_requests: { platform: string; content_type: string; count_per_week: number; }[]; cross_platform_sharing: { ...; }; campaign_duration_weeks: number; }' is not assignable to parameter of type '{ available_content: unknown; weekly_capacity: unknown; exclusive_campaigns: unknown; platform_content_requests: unknown; cross_platform_sharing?: unknown; content_repurposing?: unknown; campaign_duration_weeks?: number; message?: string; override_confirmed?: boolean; }'.",
+            "count": 6
+          },
+          {
+            "code": "TS2345",
+            "message": "Argument of type '{ available_content: { post: number; }; weekly_capacity: { post: number; }; platform_content_requests: undefined[]; cross_platform_sharing: { enabled: boolean; }; }' is not assignable to parameter of type '{ available_content: unknown; weekly_capacity: unknown; exclusive_campaigns: unknown; platform_content_requests: unknown; cross_platform_sharing?: unknown; content_repurposing?: unknown; campaign_duration_weeks?: number; message?: string; override_confirmed?: boolean; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2345",
+            "message": "Argument of type '{ available_content: { post: number; video: number; }; weekly_capacity: { post: number; video: number; }; platform_content_requests: { platform: string; content_type: string; count_per_week: number; }[]; cross_platform_sharing: { ...; }; campaign_duration_weeks: number; }' is not assignable to parameter of type '{ available_content: unknown; weekly_capacity: unknown; exclusive_campaigns: unknown; platform_content_requests: unknown; cross_platform_sharing?: unknown; content_repurposing?: unknown; campaign_duration_weeks?: number; message?: string; override_confirmed?: boolean; }'.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/cashfreePhonepeProviders.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'OrchestrateCheckoutResult'.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/checkoutSessionOrchestrator.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'OrchestrateCheckoutResult'.",
+            "count": 11
+          }
+        ],
+        "backend/tests/unit/checkoutSessionPersistence.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'OrchestrateCheckoutResult'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/communityAiActionExecutor.manualApi.test.ts": [
+          {
+            "code": "TS2554",
+            "message": "Expected 0 arguments, but got 2.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/companyContextFoundationFix.test.ts": [
+          {
+            "code": "TS2724",
+            "message": "'\"../../services/recommendationIntelligenceService\"' has no exported member named 'enrichRecommendationIntelligence'. Did you mean 'RecommendationIntelligence'?",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/competitorEngineService.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'enrichment' does not exist on type '{ name: string; }'.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/contentIntelligenceAlignment.test.ts": [
+          {
+            "code": "TS2740",
+            "message": "Type '{ week_number: number; theme: string; trend_influence: undefined[]; }' is missing the following properties from type '{ week_number: number; theme: string; campaign_objective: CampaignObjective; trend_influence: string[]; platforms: string[]; content_types: Record<string, string[]>; ... 4 more ...; version: number; }': campaign_objective, platforms, content_types, frequency_per_platform, and 4 more.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/contentRetentionLifecycle.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'archived_at' does not exist on type '{ execution_id: string; retention_state: \"temporary\"; expires_at: string; content_visibility: true; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'content_visibility' does not exist on type '{ execution_id: string; created_at: string; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'expires_at' does not exist on type '{ execution_id: string; created_at: string; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'retention_reminders' does not exist on type '{ execution_id: string; created_at: string; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'retention_reminders' does not exist on type '{ execution_id: string; retention_state: \"saved\"; expires_at: string; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'retention_state' does not exist on type '{ execution_id: string; created_at: string; }'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/coordinationContinuityFoundation.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'CoordinationResult<SemanticRoot>'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/coordinationFoundation.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'CoordinationResult<CommunicationRecord>'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/coordinationIntelligence.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"generated\"' is not assignable to type 'GenerationStage'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/coordinationQueryProfiles.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"generated\"' is not assignable to type 'GenerationStage'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'CoordinationResult<ProfileResponse<TimelineProfileData>>'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/coordinationRegistrationPipeline.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'CoordinationResult<RegistrationOutcome>'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/coordinationRegistrationValidation.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"generated\"' is not assignable to type 'GenerationStage'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'CoordinationResult<{ changed: boolean; state: CommunicationLifecycleState; }>'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/creatorAssetCatalog.test.ts": [
+          {
+            "code": "TS2352",
+            "message": "Conversion of type 'CreatorAssetRef' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/creatorAttachmentSession.test.ts": [
+          {
+            "code": "TS2352",
+            "message": "Conversion of type 'CreatorAssetRef' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/creatorAudienceJourney.test.ts": [
+          {
+            "code": "TS2352",
+            "message": "Conversion of type 'AudienceJourney' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/creatorBlogRegenerationGovernance.test.tsx": [
+          {
+            "code": "TS2322",
+            "message": "Type '{ id: string; type: \"heading\"; level: 2; text: string; }' is not assignable to type 'ContentBlock'.",
+            "count": 1
+          },
+          {
+            "code": "TS2345",
+            "message": "Argument of type '{ id: string; title: string; content_blocks: ({ id: string; type: \"heading\"; level: number; text: string; html?: undefined; } | { id: string; type: \"paragraph\"; html: string; level?: undefined; text?: undefined; })[]; company_id: string; }' is not assignable to parameter of type 'BlogForRegeneration'.",
+            "count": 11
+          }
+        ],
+        "backend/tests/unit/creatorCalendarUnification.test.ts": [
+          {
+            "code": "TS2556",
+            "message": "A spread argument must either have a tuple type or be passed to a rest parameter.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/creatorCommunicationStrategy.test.ts": [
+          {
+            "code": "TS2352",
+            "message": "Conversion of type 'CommunicationStrategy' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/creatorContentPanel.ui.test.tsx": [
+          {
+            "code": "TS18048",
+            "message": "'arg' is possibly 'undefined'.",
+            "count": 4
+          },
+          {
+            "code": "TS2493",
+            "message": "Tuple type '[]' of length '0' has no element at index '0'.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/creatorEnterpriseClosure.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'errors' does not exist on type 'CreatorPublishValidationResult'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/creatorEnterpriseRuntimeOps.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'errors' does not exist on type 'CreatorPublishValidationResult'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/creatorPostUploadSchedule.test.ts": [
+          {
+            "code": "TS2556",
+            "message": "A spread argument must either have a tuple type or be passed to a rest parameter.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/creatorRolloutClosure.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'errors' does not exist on type 'CreatorLivePublishValidationResult'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/creditApprovalService.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'ProposeApprovalResult'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'SignApprovalResult'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/csa002ReadinessHistory.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"P2\"' is not assignable to type 'PriorityTier'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/customerActionPlaybook.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '{ WEBSITE: \"HIGH\"; COMPANY_PROFILE: \"HIGH\"; BILLING: \"HIGH\"; GOOGLE_ANALYTICS: \"MEDIUM\"; GOOGLE_SEARCH_CONSOLE: \"MEDIUM\"; SOCIAL_INTEGRATIONS: \"MEDIUM\"; TEAM_MEMBERS: \"MEDIUM\"; }' is not assignable to type 'Record<ReadinessArea, ConfidenceLevel> & Partial<Record<ReadinessArea, ConfidenceLevel>>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ WEBSITE: \"HIGH\"; COMPANY_PROFILE: \"LOW\"; TEAM_MEMBERS: \"LOW\"; GOOGLE_ANALYTICS: \"MEDIUM\"; GOOGLE_SEARCH_CONSOLE: \"MEDIUM\"; SOCIAL_INTEGRATIONS: \"MEDIUM\"; BILLING: \"MEDIUM\"; }' is not assignable to type 'Record<ReadinessArea, ConfidenceLevel> & Partial<Record<ReadinessArea, ConfidenceLevel>>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ WEBSITE: \"HIGH\"; COMPANY_PROFILE: \"UNKNOWN\"; }' is not assignable to type 'Record<ReadinessArea, ConfidenceLevel> & Partial<Record<ReadinessArea, ConfidenceLevel>>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ WEBSITE: \"LOW\"; }' is not assignable to type 'Record<ReadinessArea, ConfidenceLevel> & Partial<Record<ReadinessArea, ConfidenceLevel>>'.",
+            "count": 2
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ WEBSITE: \"UNKNOWN\"; }' is not assignable to type 'Record<ReadinessArea, ConfidenceLevel> & Partial<Record<ReadinessArea, ConfidenceLevel>>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ WEBSITE: \"UNKNOWN\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/customerImpactAttribution.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '{ GOOGLE_ANALYTICS: \"READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ WEBSITE: \"READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 5
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ WEBSITE: \"READY\"; GOOGLE_ANALYTICS: \"READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/customerInterventionGovernance.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '{ COMPANY_PROFILE: \"LOW\"; }' is not assignable to type 'Record<ReadinessArea, ConfidenceLevel> & Partial<Record<ReadinessArea, ConfidenceLevel>>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ COMPANY_PROFILE: \"NOT_READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 4
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ COMPANY_PROFILE: \"NOT_READY\"; WEBSITE: \"READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 3
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ COMPANY_PROFILE: \"READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 2
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ GOOGLE_ANALYTICS: \"UNKNOWN\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/customerOutcomeIntelligence.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '{ GOOGLE_ANALYTICS: \"NOT_READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ GOOGLE_ANALYTICS: \"READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ GOOGLE_ANALYTICS: \"READY\"; WEBSITE: \"READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '{ WEBSITE: \"READY\"; }' is not assignable to type 'Record<ReadinessArea, ReadinessState> & Partial<Record<ReadinessArea, ReadinessState>>'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/designSystemCoverage.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"pdf\"' is not assignable to type 'TemplateAssetFamily'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/executivePdfRenderer.test.ts": [
+          {
+            "code": "TS2353",
+            "message": "Object literal may only specify known properties, and 'quality_score' does not exist in type 'PlaybookEffectivenessMetrics'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/finalizeCreatorRowMedia.test.ts": [
+          {
+            "code": "TS2493",
+            "message": "Tuple type '[]' of length '0' has no element at index '0'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/gatewayProviderCapabilities.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"citations\"' is not assignable to type '\"search\"'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/governanceAuditAdmission.test.ts": [
+          {
+            "code": "TS2556",
+            "message": "A spread argument must either have a tuple type or be passed to a rest parameter.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/hiddenBillingCatalogParity.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'ResolveAmountResult'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/idempotencySafeRetry.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'SafeRetryResult'.",
+            "count": 5
+          }
+        ],
+        "backend/tests/unit/leadCaptureService.test.ts": [
+          {
+            "code": "TS2556",
+            "message": "A spread argument must either have a tuple type or be passed to a rest parameter.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/longFormRuntimeDelegation.test.ts": [
+          {
+            "code": "TS2554",
+            "message": "Expected 0 arguments, but got 1.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/mediaUploadValidationService.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'errors' does not exist on type 'MediaUploadValidation'.",
+            "count": 6
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'reason' does not exist on type '{ ok: true; sniffed: string; claimed: string; } | { ok: false; sniffed: string; claimed: string; reason: string; }'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/onboard001rLifecycleAndReadiness.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '{ id: JourneyStageId; title: string; why: string; mandatory: boolean; skippable: boolean; dismissible: boolean; dependsOn: JourneyStageId[]; ... 7 more ...; overriddenAt?: string | null; }' is not assignable to type 'JourneyStageView'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/paymentProviderPolicyResolver.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'reason' does not exist on type '{ ok: true; } | { ok: false; reason: string; }'.",
+            "count": 4
+          }
+        ],
+        "backend/tests/unit/paymentSettlementOrchestrator.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'reason' does not exist on type 'NormalizeResult'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/perplexityAdapterCapabilityAdoption.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"throws\"' is not assignable to type '\"real\"'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '\"undeclared\"' is not assignable to type '\"real\"'.",
+            "count": 1
+          },
+          {
+            "code": "TS2322",
+            "message": "Type '\"unsupported\"' is not assignable to type '\"real\"'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/plannerDistributedHardening.test.ts": [
+          {
+            "code": "TS2345",
+            "message": "Argument of type 'PlannerEvent<unknown>' is not assignable to parameter of type 'PlannerEvent<Record<string, unknown>>'.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/plannerOperationalMaturity.test.ts": [
+          {
+            "code": "TS2540",
+            "message": "Cannot assign to 'NODE_ENV' because it is a read-only property.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/platformActivation.test.ts": [
+          {
+            "code": "TS2741",
+            "message": "Property 'findings' is missing in type '{ key: string; label: string; status: \"partial\"; available: true; source: string; lastUpdated: null; score: number; }' but required in type 'PluginModule'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/platformContentCapability.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type 'ValidationResult'.",
+            "count": 5
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'message' does not exist on type 'ValidationResult'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/platformHistory.test.ts": [
+          {
+            "code": "TS2741",
+            "message": "Property 'findings' is missing in type '{ key: string; label: string; status: \"partial\"; available: true; source: string; lastUpdated: null; score: number; }' but required in type 'PluginModule'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/probeCostCapture.test.ts": [
+          {
+            "code": "TS18048",
+            "message": "'p' is possibly 'undefined'.",
+            "count": 10
+          },
+          {
+            "code": "TS2493",
+            "message": "Tuple type '[]' of length '0' has no element at index '0'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/progressCard.test.tsx": [
+          {
+            "code": "TS2741",
+            "message": "Property 'backendStages' is missing in type '{ stage: string; label: string; }' but required in type 'ProgressStep'.",
+            "count": 9
+          }
+        ],
+        "backend/tests/unit/publicDomainAuditService.test.ts": [
+          {
+            "code": "TS2741",
+            "message": "Property 'companyContext' is missing in type '{ companyName: null; websiteDomain: string; businessType: string; geography: string; socialLinks: undefined[]; competitors: undefined[]; source: \"manual-entry\"; uploadedFileName: null; manualData: null; }' but required in type '{ companyName: string; websiteDomain: string; businessType: string; geography: string; socialLinks: string[]; competitors: string[]; source: \"unknown\" | \"manual\" | \"upload\" | \"integrations\" | \"manual-entry\"; uploadedFileName: string; manualData: Record<...>; companyContext: ReportCompanyContext; }'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/readinessCapability.test.ts": [
+          {
+            "code": "TS2741",
+            "message": "Property 'emailAuthConfigured' is missing in type '{ available: true; reason: null; legalPagesPresent: false; }' but required in type '{ available: boolean; reason: string; legalPagesPresent: boolean; emailAuthConfigured: boolean; }'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/recommendationEngineCharacterization.test.ts": [
+          {
+            "code": "TS2493",
+            "message": "Tuple type '[]' of length '0' has no element at index '0'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/recommendationIntelligenceEnrichment.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'authority_reason' does not exist on type 'RecommendationIntelligence'.",
+            "count": 3
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'campaign_angle' does not exist on type 'RecommendationIntelligence'.",
+            "count": 4
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'expected_transformation' does not exist on type 'RecommendationIntelligence'.",
+            "count": 7
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'gap_being_filled' does not exist on type 'RecommendationIntelligence'.",
+            "count": 2
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'problem_being_solved' does not exist on type 'RecommendationIntelligence'.",
+            "count": 7
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'why_now' does not exist on type 'RecommendationIntelligence'.",
+            "count": 2
+          },
+          {
+            "code": "TS2724",
+            "message": "'\"../../services/recommendationIntelligenceService\"' has no exported member named 'enrichRecommendationIntelligence'. Did you mean 'RecommendationIntelligence'?",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/recommendationRuntime.test.ts": [
+          {
+            "code": "TS2578",
+            "message": "Unused '@ts-expect-error' directive.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/reconciliationRunner.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type '{ ok: true; } | { ok: false; error: string; }'.",
+            "count": 3
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type '{ ok: true; manifest: ReconciliationManifest; } | { ok: false; error: string; }'.",
+            "count": 10
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'DispatchOutcome'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/reportHtmlTemplateRenderer.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"authority\"' is not assignable to type '\"content\" | \"keywords\" | \"backlinks\" | \"visibility\" | \"technical_seo\"'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/reportScoreModelService.test.ts": [
+          {
+            "code": "TS2741",
+            "message": "Property 'companyContext' is missing in type '{ companyName: null; websiteDomain: string; businessType: null; geography: null; socialLinks: string[]; competitors: undefined[]; source: \"manual-entry\"; uploadedFileName: null; manualData: null; }' but required in type '{ companyName: string; websiteDomain: string; businessType: string; geography: string; socialLinks: string[]; competitors: string[]; source: \"unknown\" | \"manual\" | \"upload\" | \"integrations\" | \"manual-entry\"; uploadedFileName: string; manualData: Record<...>; companyContext: ReportCompanyContext; }'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/rescheduleFullMove.test.ts": [
+          {
+            "code": "TS2554",
+            "message": "Expected 3 arguments, but got 1.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/runTemplateBlogGenerationCharacterization.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'confidence' does not exist on type 'BlogGenerationResult'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'hook_assessment' does not exist on type 'BlogGenerationResult'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'mode' does not exist on type 'BlogGenerationResult'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'result' does not exist on type 'BlogGenerationResult'.",
+            "count": 7
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'seo_intelligence' does not exist on type 'BlogGenerationResult'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'template_used' does not exist on type 'BlogGenerationResult'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/schedulerHarden004Batching.test.ts": [
+          {
+            "code": "TS2493",
+            "message": "Tuple type '[]' of length '0' has no element at index '2'.",
+            "count": 1
+          },
+          {
+            "code": "TS2556",
+            "message": "A spread argument must either have a tuple type or be passed to a rest parameter.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/schedulerHarden004Intelligence.test.ts": [
+          {
+            "code": "TS2493",
+            "message": "Tuple type '[]' of length '0' has no element at index '2'.",
+            "count": 1
+          },
+          {
+            "code": "TS2493",
+            "message": "Tuple type '[companyId: string]' of length '1' has no element at index '1'.",
+            "count": 1
+          },
+          {
+            "code": "TS2554",
+            "message": "Expected 0 arguments, but got 1.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/skeletonPromptBootstrap.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'instagram' does not exist on type '{ linkedin: { post: number; }; }'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/strategyAnalyticsRuntime.test.ts": [
+          {
+            "code": "TS2739",
+            "message": "Type '{ dimensions: { strategy_id: string; strategy_family: \"quote\"; content_type: \"image\"; layout_type: \"image-overlay\"; render_strategy_id: string; purpose_family: \"quote\"; }; companyId: string; campaignId: string; creatorId: string; platform: string; mediaBundleMetadata: null; }' is missing the following properties from type 'StrategyAttribution': variantId, variantFamily",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/stripeWebhookService.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'reason' does not exist on type 'VerifySignatureResult'.",
+            "count": 4
+          }
+        ],
+        "backend/tests/unit/structuredOutputAdoptionWave1c.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'ParseResult<{ b: number; }>'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type 'ParseResult<unknown>'.",
+            "count": 2
+          }
+        ],
+        "backend/tests/unit/trustGracefulDegradation.test.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"s\"' is not assignable to type '\"system\" | \"user\"'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/variantEmbedding.test.tsx": [
+          {
+            "code": "TS2322",
+            "message": "Type '\"default\"' is not assignable to type 'VariantModeOption'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/websiteIntelligenceRepository.test.ts": [
+          {
+            "code": "TS2556",
+            "message": "A spread argument must either have a tuple type or be passed to a rest parameter.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/weeklyScheduleAllocator.test.ts": [
+          {
+            "code": "TS2339",
+            "message": "Property 'content_code' does not exist on type '{ topic: string; intent: { objective: string; cta_type: string; target_audience: string; }; }'.",
+            "count": 3
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'repurpose_index' does not exist on type '{ topic: string; intent: { objective: string; cta_type: string; target_audience: string; }; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'repurpose_total' does not exist on type '{ topic: string; intent: { objective: string; cta_type: string; target_audience: string; }; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'scheduled_day' does not exist on type '{ topic: string; intent: { objective: string; cta_type: string; target_audience: string; }; }'.",
+            "count": 4
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'scheduled_time' does not exist on type '{ topic: string; intent: { objective: string; cta_type: string; target_audience: string; }; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'target_regions' does not exist on type '{ topic: string; intent: { objective: string; cta_type: string; target_audience: string; }; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'timezone_mode' does not exist on type '{ topic: string; intent: { objective: string; cta_type: string; target_audience: string; }; }'.",
+            "count": 1
+          },
+          {
+            "code": "TS2339",
+            "message": "Property 'topic_code' does not exist on type '{ topic: string; intent: { objective: string; cta_type: string; target_audience: string; }; }'.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/weeklySlotNormalization.test.ts": [
+          {
+            "code": "TS2345",
+            "message": "Argument of type '(dayIndex: number, dayName: string, index: number) => SlotLike' is not assignable to parameter of type '(dayIndex: number, dayName: string, index: number, campaignTheme?: string) => { day_index: number; short_topic: string; full_topic: string; }'.",
+            "count": 1
+          }
+        ],
+        "backend/tests/unit/writerCreatorLaunchRouting.test.ts": [
+          {
+            "code": "TS18048",
+            "message": "'arg' is possibly 'undefined'.",
+            "count": 12
+          },
+          {
+            "code": "TS2493",
+            "message": "Tuple type '[]' of length '0' has no element at index '0'.",
+            "count": 3
+          }
+        ],
+        "backend/tests/unit/writerSchedulingRefs.test.ts": [
+          {
+            "code": "TS2352",
+            "message": "Conversion of type 'CreatorAssetRef' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            "count": 1
+          }
+        ],
+        "pages/api/company-profile/index.ts": [
+          {
+            "code": "TS2322",
+            "message": "Type '{ domain?: unknown; }[]' is not assignable to type '{ name: string; domain?: string; category?: string; tier?: string; score?: number; confidence?: number; rationale?: string; }[]'.",
+            "count": 1
+          }
+        ]
+      }
+    }
+  }
+}

@@ -289,6 +289,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   const creatorCard = normalizedAttachment.creatorCard;
 
+  // Objective Preservation (Wave 0): the user's real objective can arrive at the
+  // top level (body.objective) OR inside the creator_card (brief-derived, via
+  // resolveGeneratorContext). Resolve it ONCE from both — preferring the explicit
+  // top-level value — and thread the SAME value to the text / theme / visual
+  // (orchestrator → overlay copy + blueprint) paths. Never fabricated: absent ⇒
+  // undefined so downstream stages omit rather than invent an objective.
+  const resolvedObjective =
+    String(body.objective || (creatorCard as Record<string, unknown>).objective || '').trim() || undefined;
+
   if (!companyId) {
     return res.status(400).json({ error: 'company_id required' });
   }
@@ -364,7 +373,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           contentType,
           targetPlatforms,
           audience: String(body.audience || '').trim() || undefined,
-          objective: String(body.objective || '').trim() || undefined,
+          objective: resolvedObjective,
           summary: String(body.summary || '').trim() || undefined,
           creatorCard,
         })),
@@ -404,7 +413,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           contentType,
           targetPlatforms,
           audience: String(body.audience || '').trim() || undefined,
-          objective: String(body.objective || '').trim() || undefined,
+          objective: resolvedObjective,
           summary: String(body.summary || '').trim() || undefined,
           creatorCard,
         })),
@@ -529,7 +538,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contentType,
       targetPlatforms,
       audience: String(body.audience || '').trim() || undefined,
-      objective: String(body.objective || '').trim() || undefined,
+      objective: resolvedObjective,
       summary: String(body.summary || '').trim() || undefined,
       // Canonical company + brand grounding made available to the generator
       // (single resolution) + the brand voice for deterministic output validation.
@@ -628,7 +637,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         contentType,
         targetPlatforms,
         audience: String(body.audience || '').trim() || undefined,
-        objective: String(body.objective || '').trim() || undefined,
+        objective: resolvedObjective,
         summary: String(body.summary || '').trim() || undefined,
         creatorCard,
         fallbackReason: error instanceof Error ? error.message : String(error),

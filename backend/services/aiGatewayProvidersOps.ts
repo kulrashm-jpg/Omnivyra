@@ -39,6 +39,8 @@ import { recordGptCall, recordGptLatency, recordGptFailure } from './metricsColl
 import { evaluateJobCost } from './jobCostEstimator';
 import { trackLlmTokens } from '../../lib/redis/usageProtection';
 import { ownedDbTable } from '../db/writeOwner';
+// WAVE-1C-001 §C1: canonical safe-parse for model output (shared; no second parser).
+import { parseModelOutputOr } from './ai/safety';
 import { recordAi, recordCache } from '../observability/metrics';
 
 import { UNKNOWN_ORG, FEATURE_AREA_MAP, type GatewayMetadata, type GatewayResponse, type GatewayRequest, GatewayAbortError, isAbortError, _inFlight, sleep, resolveProviderTimeoutMs, _pools, acquireSlot, releaseSlot, resolveLlmConfig, type NormalizedCompletion, callOpenAi, callAnthropic, GATEWAY_OVERHEAD_FLAG } from './aiGatewayCore';
@@ -140,12 +142,21 @@ const executeGatewayCompletion = async (
     });
   }
 
+  // ── WAVE3 (item 3): fold a deterministic seed into the cache/coalescing key
+  // ONLY when the caller supplies one. When seed is absent this is exactly
+  // request.cache_version (undefined stays undefined), so existing cache keys
+  // are byte-for-byte unchanged. When present, two calls that differ only by
+  // seed no longer collide in the cache / in-flight map.
+  const effectiveCacheVersion = request.seed != null
+    ? `${request.cache_version ?? ''}::seed=${request.seed}`
+    : request.cache_version;
+
   // ── GAP 4: In-flight coalescing — deduplicate concurrent identical requests ─
   // Build key from normalized inputs so GAP 1 normalization applies here too.
   // SKIP COALESCING when the caller supplied a signal: a coalesced caller that
   // aborts cannot actually cancel the underlying shared call, defeating the
   // budget mechanism (the orphan would keep the slot and still consume tokens).
-  const coalescingKey = buildNormalizedKey(activeModel, request.messages, request.cache_version);
+  const coalescingKey = buildNormalizedKey(activeModel, request.messages, effectiveCacheVersion);
   if (!request.signal) {
     const existing = _inFlight.get(coalescingKey);
     if (existing) {
@@ -200,7 +211,7 @@ const executeGatewayCompletion = async (
     request.operation,
     activeModel,
     request.messages,
-    request.cache_version,
+    effectiveCacheVersion,
     // W1-1 (B-04): tenant-scope the near-match index. companyId is the tenant.
     request.companyId ?? null,
   );
@@ -282,6 +293,7 @@ const executeGatewayCompletion = async (
       pool:            request.pool,
       stream:          request.stream,
       onChunk:         request.onChunk,
+      seed:            request.seed,
     }, true, trackingCtx);
   } catch (error: any) {
     const latency = Date.now() - start;
@@ -422,7 +434,7 @@ const executeGatewayCompletion = async (
     generateAdditionalStrategicThemes: 'additional_strategic_themes',
   };
   // ── Store result in cache — GAP 1+2+5 (fire-and-forget) ─────────────────────
-  void setCachedCompletion(request.operation, effectiveModel, request.messages, content, request.cache_version, request.companyId ?? null);
+  void setCachedCompletion(request.operation, effectiveModel, request.messages, content, effectiveCacheVersion, request.companyId ?? null);
 
   // W2-4 (audit B-57): with the overhead flag on, the audit-log insert no
   // longer blocks the response — it becomes fire-and-forget like its sibling
@@ -491,7 +503,7 @@ export const generateRecommendation = async (
   request: GatewayRequest
 ): Promise<GatewayResponse<Record<string, unknown>>> => {
   const result = await executeGatewayCompletion({ ...request, operation: 'generateRecommendation' });
-  const parsed = result.output ? JSON.parse(result.output) : {};
+  const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.generateRecommendation' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -502,7 +514,7 @@ export const previewStrategy = async (
   request: GatewayRequest
 ): Promise<GatewayResponse<Record<string, unknown>>> => {
   const result = await executeGatewayCompletion({ ...request, operation: 'previewStrategy' });
-  const parsed = result.output ? JSON.parse(result.output) : {};
+  const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.previewStrategy' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -555,7 +567,7 @@ export const generateDailyPlan = async (
   request: GatewayRequest
 ): Promise<GatewayResponse<Record<string, unknown>>> => {
   const result = await executeGatewayCompletion({ ...request, operation: 'generateDailyPlan' });
-  const parsed = result.output ? JSON.parse(result.output) : {};
+  const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.generateDailyPlan' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -572,7 +584,7 @@ export const generateDailyDistributionPlan = async (
   const result = await executeGatewayCompletion({ ...request, operation: 'generateDailyDistributionPlan' });
   let toParse = (typeof result.output === 'string' ? result.output : '') || '';
   toParse = toParse.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  const parsed = toParse ? JSON.parse(toParse) : {};
+  const parsed = parseModelOutputOr<any>(toParse, {}, { surface: 'gateway.generateDailyDistributionPlan' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -581,7 +593,7 @@ export const generateDailyDistributionPlan = async (
 
 export const optimizeWeek = async (request: GatewayRequest): Promise<GatewayResponse<Record<string, unknown>>> => {
   const result = await executeGatewayCompletion({ ...request, operation: 'optimizeWeek' });
-  const parsed = result.output ? JSON.parse(result.output) : {};
+  const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.optimizeWeek' });
   return {
     output: parsed,
     metadata: result.metadata,
@@ -670,7 +682,7 @@ Return JSON: { "suggested_weeks": number (4-12), "rationale": "1-2 sentences why
         },
       ],
     });
-    const parsed = result.output ? JSON.parse(result.output) : {};
+    const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.suggestDurationForOpportunity' });
     const weeks = Math.min(52, Math.max(1, Number(parsed.suggested_weeks) || 8));
     return {
       suggested_weeks: weeks,
@@ -743,7 +755,7 @@ Return JSON: { "suggested_weeks": number, "rationale": "2-3 sentences explaining
         },
       ],
     });
-    const parsed = result.output ? JSON.parse(result.output) : {};
+    const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.suggestDurationFromQuestionnaire' });
     const weeks = Math.min(52, Math.max(1, Number(parsed.suggested_weeks) || 8));
     return {
       suggested_weeks: weeks,
@@ -806,7 +818,7 @@ Reply with JSON only: { "allowed": true, "reason": null } or { "allowed": false,
         },
       ],
     });
-    const parsed = result.output ? JSON.parse(result.output) : {};
+    const parsed = parseModelOutputOr<any>(result.output, {}, { surface: 'gateway.moderateChatMessage' });
     return {
       allowed: Boolean(parsed.allowed !== false),
       reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,

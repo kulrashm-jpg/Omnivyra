@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { parseModelOutputOr } from './ai/safety';
 /**
  * Campaign Recommendations Extension — Expert consultation to improve existing plans.
  * Generates stage-aware suggestions per week; stored in campaign_recommendation_weeks.
@@ -92,7 +93,7 @@ Generate improvement suggestions for each week.`;
       ],
     });
     const raw = result.output?.trim() || '{}';
-    const parsed = JSON.parse(raw) as { weeks?: RecommendationWeekInput[] };
+    const parsed = parseModelOutputOr<{ weeks?: RecommendationWeekInput[] }>(raw, {}, { surface: 'campaign.recommendationExt' });
     resultWeeks = Array.isArray(parsed.weeks) ? parsed.weeks : [];
   } catch (err) {
     console.warn('AI recommendation generation failed, using heuristic:', err);

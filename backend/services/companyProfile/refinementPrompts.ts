@@ -4,6 +4,7 @@
  */
 
 import { runCompletionWithOperation } from '../aiGateway';
+import { parseModelOutputOr } from '../ai/safety';
 import { CompanyProfile, CompanyProfileExtractionOutput, EntityArchetypeIntelligence } from './types';
 import { buildArchetypePromptContext, isAudienceLedArchetype, isArchetypeInfluential } from './entityArchetype';
 
@@ -45,7 +46,7 @@ export const cleanEvidenceWithAi = async (
   });
 
   const raw = result.output?.trim() || '{}';
-  const parsed = JSON.parse(raw);
+  const parsed = parseModelOutputOr<any>(raw, {}, { surface: 'profile.refinement' });
   const cleaned = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.evidence) ? parsed.evidence : [];
   const deduped = new Map<string, { label: string; url: string; summary: string }>();
   cleaned.forEach((entry: any) => {
@@ -242,7 +243,7 @@ export const generateMissingFieldQuestions = async (
   });
 
   const raw = result.output?.trim() || '{}';
-  const parsed = JSON.parse(raw);
+  const parsed = parseModelOutputOr<any>(raw, {}, { surface: 'profile.refinement' });
   const questions = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.questions) ? parsed.questions : [];
   return questions
     .filter(isAllowedMissingFieldQuestion)

@@ -40,6 +40,19 @@ export function contrastRatio(foreground: string, background: string): number {
   return Number(((lighter + 0.05) / (darker + 0.05)).toFixed(2));
 }
 
+/**
+ * Canonical character-width heuristic (chars ≈ width / (fontSize × factor)).
+ * Kept as the Wave-0 approximation for both the geometry box estimate AND the
+ * fit-to-content fitter so wrap budgets and box measurement agree on ONE factor
+ * instead of each site inlining its own literal.
+ */
+export const CHAR_WIDTH_FACTOR = 0.56;
+
+/** Largest whole char-per-line budget that fits `maxWidth` at `fontSize`. */
+export function charsPerLineForWidth(maxWidth: number, fontSize: number, factor: number = CHAR_WIDTH_FACTOR): number {
+  return Math.max(1, Math.floor(maxWidth / Math.max(1, fontSize * factor)));
+}
+
 export function estimateTextBox(input: {
   id: string;
   text: string;
@@ -50,7 +63,7 @@ export function estimateTextBox(input: {
   maxLines: number;
   role?: string;
 }): LayoutBox {
-  const charsPerLine = Math.max(1, Math.floor(input.maxWidth / Math.max(1, input.fontSize * 0.56)));
+  const charsPerLine = charsPerLineForWidth(input.maxWidth, input.fontSize);
   const lineCount = Math.max(1, Math.min(input.maxLines, Math.ceil(input.text.length / charsPerLine)));
   return {
     id: input.id,

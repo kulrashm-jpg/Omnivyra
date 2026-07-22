@@ -1,0 +1,48 @@
+{
+  // PB-009 — Backend TypeScript Certification Coverage.
+  //
+  // WHY THIS PROJECT EXISTS
+  // -----------------------
+  // Root `tsconfig.json` excludes `backend/tests`, `**/*.test.ts` and
+  // `**/*.spec.ts`; `tsconfig.backend.json` and `tsconfig.scripts.json` inherit
+  // the same exclusions. Jest does NOT close the gap: root `tsconfig.json` sets
+  // `"isolatedModules": true`, so ts-jest runs transpile-only and never
+  // type-checks. Net effect before PB-009: `backend/tests/**` was type-checked
+  // by NOTHING, and real type errors shipped with a green suite.
+  //
+  // This project is the ONLY thing that type-checks the backend test surface.
+  // It is deliberately a separate `tsc` project rather than turning on
+  // type-checking inside ts-jest: jest-time checking would convert pre-existing
+  // type debt into TEST FAILURES and slow every run — a build regression.
+  //
+  // Compiler options are inherited verbatim from the root project (including
+  // `strict: false` and `isolatedModules: true`) so this check is neither
+  // stricter nor looser than what production code is held to.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": true
+  },
+  // Covers the whole jest `roots: ['<rootDir>/backend']` surface, not just
+  // `backend/tests/**`: three co-located suites live under
+  // `backend/services/longForm/__tests__/` and are excluded from every other
+  // project by the `**/*.test.ts` exclude, so they must be named explicitly.
+  "include": [
+    "backend/tests/**/*.ts",
+    "backend/tests/**/*.tsx",
+    "backend/**/__tests__/**/*.ts",
+    "backend/**/__tests__/**/*.tsx",
+    "backend/**/*.test.ts",
+    "backend/**/*.test.tsx",
+    "backend/**/*.spec.ts",
+    "backend/**/*.spec.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "out",
+    "docs",
+    "tmp",
+    "tmp_*",
+    "artifacts"
+  ]
+}

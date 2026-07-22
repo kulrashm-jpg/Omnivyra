@@ -21,7 +21,11 @@ import {
   routeGoalToContentTypes, emptyMarketingBrief, mergeBrief, buildCreationPlan,
   type MarketingBrief, type CreationLane, type ContentType,
 } from '../../lib/content/unifiedCreationModel';
-import { buildWorkspaceState, statusCounts, ASSET_STATUS_LABELS, type AssetStatus } from '../../lib/content/creationGenerationState';
+// Wave 1 (item 3) — the always-'planned' client FSM (creationGenerationState) is
+// RETIRED from the Publish center. Status is now derived from the ONE canonical
+// content lifecycle instead of the inert per-asset counts.
+import { DEFAULT_LIFECYCLE, mapLegacyStatus } from '../../lib/content/contentLifecycle';
+import type { ContentLifecycleStatus } from '../../lib/content/canonicalContent';
 import { SampleGallery } from './SampleGallery';
 import type { CreatorTemplate } from '../../lib/creator-templates/types';
 import { MARKETING_BRIEF_SESSION_KEY, serializeMarketingBrief } from '../../lib/content/marketingBriefResolver';
@@ -30,6 +34,15 @@ import { color, radius, shadow, space, fontSize, fontWeight } from '../../lib/pl
 
 type Step = 'goal' | 'samples' | 'brief' | 'plan';
 const CUSTOM = 'brand-awareness';
+
+// Wave 1 (item 3) — display labels for the canonical content lifecycle. The
+// Publish center reports against these stages (source of truth = the canonical
+// content spine) instead of the retired always-'planned' workspace FSM.
+const CANONICAL_STAGE_LABELS: Record<ContentLifecycleStatus, string> = {
+  draft: 'Draft', generated: 'Generated', edited: 'Edited', quality_reviewed: 'Quality Reviewed',
+  approved: 'Approved', adapted: 'Adapted', scheduled: 'Scheduled', published: 'Published',
+  archived: 'Archived',
+};
 
 // CREATOR-073: business language — no Writer/Creator/Campaign module terminology.
 const LANE_META: Record<CreationLane, { label: string; icon: React.ReactNode; effort: string }> = {
@@ -221,16 +234,38 @@ export function MarketingCreationWorkspace({ onNavigate, onAdvanced }: { onNavig
         </div>
       ))}
       {(() => {
+        // Wave 1 (item 3) — Publish center status is now CANONICAL-derived. The
+        // old FSM (creationGenerationState.statusCounts) always reported every
+        // asset as 'planned', so its counts were meaningless. Until each planned
+        // asset carries a live canonical Content id, a just-planned asset maps to
+        // the canonical lifecycle's first active state via the shared adapter:
+        // mapLegacyStatus('workspace_fsm', 'planned') === 'draft'. We report the
+        // planned count against that canonical stage and render the full forward
+        // lifecycle spine so the vocabulary matches the canonical content model.
         const plan = goalId ? buildCreationPlan(goalId, brief, enabled.map((c) => c.id)) : null;
-        const counts = plan ? statusCounts(buildWorkspaceState(plan)) : null;
-        const order: AssetStatus[] = ['planned', 'generating', 'needs-review', 'approved', 'published'];
+        const plannedCount = plan
+          ? (['writer', 'creator', 'campaign'] as CreationLane[]).reduce((n, l) => n + plan.lanes[l].length, 0)
+          : enabled.length;
+        const canonicalStatus = mapLegacyStatus('workspace_fsm', 'planned'); // → 'draft'
+        const stages = DEFAULT_LIFECYCLE.filter((s) => s !== 'archived');
         return (
           <div style={{ ...card, padding: '14px 16px', marginTop: 8, background: color.surface2 }}>
             <div style={{ ...label, marginBottom: 8 }}>Publish center</div>
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-              {counts ? order.map((s) => (<span key={s} style={{ fontSize: 12.5, color: color.textMuted }}><strong>{counts[s]}</strong> {ASSET_STATUS_LABELS[s]}</span>)) : null}
+              {stages.map((s) => (
+                <span
+                  key={s}
+                  style={{
+                    fontSize: 12.5,
+                    color: s === canonicalStatus ? color.text : color.textMuted,
+                    fontWeight: s === canonicalStatus ? 700 : 400,
+                  }}
+                >
+                  <strong>{s === canonicalStatus ? plannedCount : 0}</strong> {CANONICAL_STAGE_LABELS[s]}
+                </span>
+              ))}
             </div>
-            <div style={{ fontSize: 12, color: color.textSubtle, marginTop: 8 }}>Every asset reports into one shared status. Open each to generate, review and publish in its editor — your brief is shared across all of them.</div>
+            <div style={{ fontSize: 12, color: color.textSubtle, marginTop: 8 }}>Status tracks the one canonical content lifecycle (draft → generated → … → published). Open each asset to generate, review and publish in its editor; its live status is read from the canonical content spine as each asset progresses.</div>
           </div>
         );
       })()}

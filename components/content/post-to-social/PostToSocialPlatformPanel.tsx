@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Calendar, Loader2, Send } from 'lucide-react';
 import type { PlatformOption, PlatformState } from './schedulerShared';
 import {
@@ -39,6 +39,17 @@ export default function PostToSocialPlatformPanel({
   const canDelete = !!selectedState.scheduledPostId && selectedState.status === 'scheduled';
   const actionLabel = sourceContentLabel.toLowerCase();
 
+  // WS2/WS6 — per-platform copy controls. `originalContent` is the reviewed
+  // seed; "Keep Original" restores it and "Compare" diffs it against the current
+  // (edited/adapted) copy. Editing the textarea marks the copy manuallyEdited so
+  // nothing silently overwrites it. The "Adapt for <platform>" action is provided
+  // by the controller through `assetAction` (it needs company/objective context).
+  const [showCompare, setShowCompare] = useState(false);
+  const original = selectedState.originalContent ?? '';
+  const hasOriginal = original.trim().length > 0;
+  const canRestore = hasOriginal && original !== selectedState.content;
+  const handleKeepOriginal = () => onChange({ content: original, adapted: false, manuallyEdited: false });
+
   return (
     <div className="mt-6 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-5">
       <div>
@@ -65,6 +76,37 @@ export default function PostToSocialPlatformPanel({
             </span>
           ) : null}
         </label>
+
+        {/* WS2 — per-platform copy controls. Adapt (controller-provided via
+            assetAction) + Keep Original + Compare. Copy never auto-regenerates;
+            these are the only ways it changes besides direct edits. */}
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          {assetAction}
+          <button
+            type="button"
+            onClick={handleKeepOriginal}
+            disabled={disabled || !canRestore}
+            className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Keep Original
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowCompare((open) => !open)}
+            disabled={!hasOriginal}
+            className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {showCompare ? 'Hide comparison' : 'Compare'}
+          </button>
+          {selectedState.adapted ? (
+            <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-700">Adapted</span>
+          ) : selectedState.manuallyEdited ? (
+            <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700">Edited</span>
+          ) : (
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-semibold text-slate-500">Reviewed copy</span>
+          )}
+        </div>
+
         {(() => {
           const validation = validatePostForPlatform(selectedState.content || '', selectedOption.key);
           const borderClass = validation.state === 'invalid'
@@ -76,7 +118,7 @@ export default function PostToSocialPlatformPanel({
             <>
               <textarea
                 value={selectedState.content}
-                onChange={(e) => onChange({ content: e.target.value })}
+                onChange={(e) => onChange({ content: e.target.value, manuallyEdited: true, adapted: false })}
                 rows={8}
                 className={`w-full rounded-2xl border bg-white px-4 py-3 text-sm leading-7 text-slate-900 ${borderClass}`}
               />
@@ -93,6 +135,21 @@ export default function PostToSocialPlatformPanel({
             </>
           );
         })()}
+
+        {/* WS2 — inline comparison of the reviewed/original copy vs the current
+            (edited/adapted) copy. Simple side-by-side; no external diff lib. */}
+        {showCompare && hasOriginal ? (
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Original</p>
+              <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-6 text-slate-600">{original}</pre>
+            </div>
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-3">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-indigo-400">Current</p>
+              <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-6 text-slate-700">{selectedState.content}</pre>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div>
@@ -131,7 +188,6 @@ export default function PostToSocialPlatformPanel({
       ) : null}
 
       <div className="flex flex-wrap gap-3">
-        {assetAction}
         <button
           type="button"
           onClick={onSchedule}

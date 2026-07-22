@@ -108,3 +108,28 @@ runtime-report.json
 content/creator-templates/system-templates.json
 
 .vercel
+.governance-deployment/
+.governance-audit/
+.governance-baseline/
+.governance-evolution/
+.governance-succession/
+.governance-activation/
+.governance-enforcement-constitutional/
+.governance-gateway/
+.governance-execution/
+.governance-supervision/
+.governance-closure/
+# REPO-HARDEN-001: confirmed generated/cache/ledger outputs (never source).
+# .governance-ledger/ = append-only governance evidence (mutation-ledger.jsonl, etc.)
+# .governance-orchestrator-cache/ = governance orchestrator run cache
+# .cert-supabase/ = abandoned local certification workspace (regenerable)
+.governance-ledger/
+.governance-orchestrator-cache/
+.cert-supabase/
+docs/governance-ops-center/dashboard.html
+docs/governance-ops-center/ops-center.json
+scripts/governance-baseline/reports/
+# RELEASE-R3D: generated consumer-validation evidence (regenerable via npm run governance:consumer-validate)
+docs/governance-consumers/consumer-validation.json
+# OMNI-GOV-002 hygiene: archived obsolete architecture-migration reports (kept on disk + in history; untracked from the authoritative tree)
+architecture-migration/reports/

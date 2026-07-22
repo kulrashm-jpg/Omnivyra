@@ -32,7 +32,20 @@ import type { EvidenceTrace } from '../../canonicalReport/canonicalReportTypes';
 import { withinBudget, recordUsage, estimateCost } from '../costGovernance';
 import { getActiveScanId } from '../scanBudgetContext';
 import { extractProbeTokenUsage } from '../probeCostCapture';
+// PA-003: consume the canonical Platform gateway dispatcher (Zone P) for LLM
+// transport. The adapter keeps ALL business logic (prompt build, citation
+// extraction, scoring, budget); only the raw HTTP transport moves to the gateway.
+import { dispatchTransport, type GatewayDispatchParams } from '../../aiGatewayDispatcher';
+import type { NormalizedCompletion } from '../../aiGatewayCore';
+// PB-007: consume the canonical PB-006 provider-identity layer (Zone P, read-only).
+// Product→Platform id translation is performed by the PLATFORM, never hand-written here.
+import { toPlatformProviderId } from '../../aiGatewayProviderIdentity';
 
+/**
+ * @deprecated PA-003 — direct-transport endpoint. Retained as the flag-OFF
+ * fallback; removed in PA-008 once the gateway path is default and every
+ * visibility adapter has migrated.
+ */
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const TIMEOUT_MS = 25_000;
@@ -41,19 +54,136 @@ const CACHE_TTL_SECONDS = 60 * 60 * 12; // 12h — keeps within free re-runs the
 const RATE_CAPACITY = 60;
 const RATE_REFILL_PER_SEC = 1;
 
+// ── PB-007 · Canonical provider identity ──────────────────────────────────────
+//
+// This adapter's PRODUCT id, declared ONCE, and the PLATFORM id DERIVED from it via
+// the canonical PB-006 mapping. Before PB-007 the platform literal `'openai'` was
+// hand-written at the `dispatchTransport` call site; it was correct, but only because
+// the author remembered that 'chatgpt' ≠ 'openai'. Deriving it makes that correctness
+// STRUCTURAL — the Platform owns the mapping, not author memory.
+
+/** PB-007 — the PRODUCT id this adapter is. Single source of truth for the file. */
+const PRODUCT_PROVIDER_ID = 'chatgpt' satisfies AIProviderId;
+
+/**
+ * PB-007 — the PLATFORM id this adapter transacts with, derived canonically.
+ *
+ * BEHAVIOR PARITY IS COMPILE-CHECKED. The explicit `'openai'` annotation is the
+ * previously hard-coded literal: `toPlatformProviderId` is overloaded so a statically
+ * known product id yields a statically known platform id, so if the canonical mapping
+ * ever produced anything other than `'openai'` for `'chatgpt'` this line would not
+ * compile. The value handed to the dispatcher is therefore provably byte-identical to
+ * the literal it replaces.
+ *
+ * NO NEW THROW PATH. `toPlatformProviderId` throws only for an id outside the product
+ * union; the argument here is the compile-time literal `'chatgpt'`, and the canonical
+ * map is `satisfies Record<ProductProviderId, PlatformProviderId>` (total over that
+ * union), so the failing branch is statically unreachable. It is additionally
+ * evaluated ONCE at module initialization — input-independent and request-independent
+ * — so no per-request code path that could not throw before can throw now.
+ */
+const PLATFORM_PROVIDER_ID: 'openai' = toPlatformProviderId(PRODUCT_PROVIDER_ID);
+
 type OpenAIChatResponse = {
   choices?: Array<{
     message?: { content?: string };
   }>;
 };
 
+/** The probe-consumed OpenAI response shape (answer + usage + model). */
+type OpenAIProbeResponse = OpenAIChatResponse & {
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  model?: string;
+};
+
+/**
+ * PA-003 — adapter-owned feature flag. When enabled, OpenAI probe transport routes
+ * through the canonical Platform gateway dispatcher instead of the adapter's direct
+ * HTTP. Default OFF → byte-identical legacy path preserved as the fallback.
+ */
+export function openaiGatewayTransportEnabled(): boolean {
+  return /^(1|true|on|yes)$/i.test(process.env.OPENAI_ADAPTER_GATEWAY_TRANSPORT ?? '');
+}
+
+/**
+ * PA-003 — re-shape a gateway `NormalizedCompletion` into the OpenAI chat-response
+ * shape the probe path already consumes, so answer extraction and cost/usage
+ * capture (`extractProbeTokenUsage` / `captureProbeCost`) stay byte-identical
+ * across both transports. Pure.
+ */
+export function reshapeCompletionToOpenAiResponse(
+  completion: NormalizedCompletion,
+  model: string,
+): OpenAIProbeResponse {
+  return {
+    choices: [{ message: { content: completion.content } }],
+    model,
+    ...(completion.usage
+      ? {
+          usage: {
+            prompt_tokens: completion.usage.prompt_tokens,
+            completion_tokens: completion.usage.completion_tokens,
+            total_tokens: completion.usage.total_tokens,
+          },
+        }
+      : {}),
+  };
+}
+
 export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
-  public readonly id: AIProviderId = 'chatgpt';
+  public readonly id: AIProviderId = PRODUCT_PROVIDER_ID;
   private readonly cache = new TtlCache<CitationMention>(CACHE_TTL_SECONDS);
   private readonly limiter = getRateLimiter(this.id, RATE_CAPACITY, RATE_REFILL_PER_SEC);
 
   async isAvailable(): Promise<boolean> {
     return Boolean(process.env.OPENAI_API_KEY);
+  }
+
+  /**
+   * PA-003 — the transport seam. Business logic (prompt build, parsing, scoring,
+   * budget, caching, rate-limit, retry) stays in `probe`; this method owns ONLY
+   * how the raw completion is fetched. Retry (`withRetry`) is the adapter's
+   * reliability policy and wraps BOTH paths identically. Flag ON → canonical
+   * gateway dispatcher (transport owned by Platform); flag OFF → legacy direct
+   * HTTP. Both return the same OpenAI response shape so downstream is unchanged.
+   */
+  private async fetchProbeChat(
+    apiKey: string,
+    messages: Array<{ role: string; content: string }>,
+  ): Promise<OpenAIProbeResponse> {
+    const model = process.env.OPENAI_PROBE_MODEL ?? DEFAULT_MODEL;
+    if (openaiGatewayTransportEnabled()) {
+      const completion = await withRetry(this.id, () =>
+        // PB-007: the platform id is DERIVED from this adapter's product id, not typed
+        // by hand. Identical value ('openai'), enforced by the Platform.
+        dispatchTransport(PLATFORM_PROVIDER_ID, {
+          apiKey,
+          model,
+          temperature: 0,
+          max_tokens: 600,
+          messages: messages as GatewayDispatchParams['messages'],
+          operation: 'visibility.probe.chatgpt',
+        }),
+      );
+      return reshapeCompletionToOpenAiResponse(completion, model);
+    }
+    // @deprecated PA-003 — legacy direct transport; removed in PA-008.
+    const envelope = await withRetry(this.id, () =>
+      fetchProduction(
+        this.id,
+        OPENAI_CHAT_URL,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({ model, messages, temperature: 0, max_tokens: 600 }),
+        },
+        TIMEOUT_MS,
+      ),
+    );
+    return (await envelope.json()) as OpenAIProbeResponse;
   }
 
   async probe(probe: AIVisibilityProbe): Promise<AIVisibilityProbeResult> {
@@ -129,27 +259,8 @@ export class OpenAIChatGPTAdapter implements LLMVisibilityProvider {
           ...(formatted.system ? [{ role: 'system', content: formatted.system }] : []),
           { role: 'user', content: formatted.user },
         ];
-        const envelope = await withRetry(this.id, () =>
-          fetchProduction(
-            this.id,
-            OPENAI_CHAT_URL,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`,
-              },
-              body: JSON.stringify({
-                model: process.env.OPENAI_PROBE_MODEL ?? DEFAULT_MODEL,
-                messages,
-                temperature: 0,
-                max_tokens: 600,
-              }),
-            },
-            TIMEOUT_MS,
-          ),
-        );
-        const json = (await envelope.json()) as OpenAIChatResponse;
+        // PA-003: transport via the flag-gated seam (gateway dispatcher or legacy).
+        const json = await this.fetchProbeChat(apiKey, messages);
         // Phase 8G-B — platform cost capture (no customer org; fire-and-forget). Separate billing ledger.
         void import('../probeCostCapture').then((m) => m.captureProbeCost({ providerId: this.id, json })).catch(() => {});
         // BETA-PHASE1-EXEC-001: record the paid call against the canonical scan budget (sole writer to the

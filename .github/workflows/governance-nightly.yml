@@ -1,0 +1,47 @@
+# Governance Runtime v1.0.0 — Nightly Verification & Drift Monitoring (Release R3B)
+#
+# Scheduled deep verification of the frozen Governance Runtime: complete runtime + release + dependency
+# verification, drift detection, and integrity verification. Emits deterministic reports as artifacts and
+# fails (alert) on any drift. Read-only; no application-runtime coupling.
+
+name: Governance Nightly Verification
+
+on:
+  schedule:
+    - cron: '17 3 * * *'   # daily 03:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  governance-nightly:
+    name: Nightly governance integrity & drift monitoring
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Baseline verification with full report set (fails on any drift → alert via the failed run).
+      - name: Baseline verification (+ reports)
+        run: npm run governance:verify-baseline:reports
+      # Documentation validation.
+      - name: Documentation validation
+        run: npm run check:governance-docs
+      # Full deep-chain governance pass (orchestrator manifest digest must equal the frozen a1531f8d).
+      - name: Full governance orchestration (drift alarm)
+        run: |
+          node docs/company-intelligence/governance-automation/runtime/orchestrator.mjs --full --json > orchestration.json
+          node -e "const j=require('./orchestration.json'); if(j.manifestDigest!=='a1531f8d'){console.error('GOVERNANCE DRIFT: orchestrator manifest '+j.manifestDigest+' != a1531f8d');process.exit(1)} console.log('orchestration digest OK: '+j.manifestDigest)"
+      # Delivery-assurance record for the nightly snapshot.
+      - name: Delivery assurance record
+        if: always()
+        run: node scripts/governance-baseline/delivery-assurance.mjs --out scripts/governance-baseline/reports/delivery-assurance.json || true
+      - name: Upload nightly governance reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: governance-nightly-reports
+          path: scripts/governance-baseline/reports/
+          if-no-files-found: ignore

@@ -6,6 +6,8 @@
  */
 
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
+// WAVE-1A-002 §C6: canonical prompt-safety primitive (shared; no campaign-specific impl).
+import { hardenText } from './ai/safety';
 import { listPlatformRules } from '../db/platformPromotionStore';
 import { ensureFallbackPlatformRules } from './platformRulesService';
 import type { PlanningGenerationInput } from '../types/campaignPlanning';
@@ -73,10 +75,11 @@ function buildContextBlock(input: PlanningGenerationInput, platformContentGuide:
   const platforms = Array.isArray(strat?.platforms) && strat.platforms.length > 0
     ? strat.platforms.map((p) => String(p).toLowerCase().trim())
     : ['linkedin'];
-  const goal = (strat?.campaign_goal ?? '').toString().trim();
-  const audience = Array.isArray(strat?.target_audience)
+  // WAVE-1A-002 §C6: user-supplied campaign goal/audience are untrusted DATA.
+  const goal = hardenText('user_input', (strat?.campaign_goal ?? '').toString().trim()) ?? '';
+  const audience = hardenText('user_input', Array.isArray(strat?.target_audience)
     ? (strat.target_audience as string[]).filter(Boolean).join(', ')
-    : (strat?.target_audience ?? '').toString().trim();
+    : (strat?.target_audience ?? '').toString().trim()) ?? '';
 
   parts.push(`Duration: ${duration} weeks`);
   parts.push(`Platforms to use (ONLY these, no others): ${platforms.join(', ')}`);
@@ -302,7 +305,7 @@ export async function buildCampaignPlanningPrompt(
 
   const repairBlock =
     input.repair_instruction && input.repair_instruction.trim().length > 0
-      ? `\n\nREPAIR INSTRUCTION: ${input.repair_instruction.trim()}`
+      ? `\n\nREPAIR INSTRUCTION: ${hardenText('user_input', input.repair_instruction.trim()) ?? ''}`
       : '';
 
   const systemPrompt = `You are a campaign planner. Generate a detailed campaign plan strictly following the user's platform, frequency, and content type settings.

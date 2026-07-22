@@ -84,7 +84,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
-import { sharp, type RenderedMediaBundle, type RenderOptions, getCachedRenderBuffer, safeObject, escapeXml, balanceTextLines, renderWrappedBodyText, blueprintIdForRender, curatedDesignTemplate, resolveInfographicRenderStyle, compactText, buildAccessibleAltText, resolveRenderSize } from './creatorAssetRendererContracts';
+import { sharp, type RenderedMediaBundle, type RenderOptions, getCachedRenderBuffer, safeObject, escapeXml, balanceTextLines, renderWrappedBodyText, blueprintIdForRender, curatedDesignTemplate, resolveInfographicRenderStyle, compactText, buildAccessibleAltText, resolveRenderSize, fitTextToBox } from './creatorAssetRendererContracts';
 import { loadBrandMark } from './creatorAssetRendererOverlay';
 import { bufferFromRemoteImage } from './creatorAssetRendererSvg';
 import { uploadRenderedPng } from './creatorAssetRendererMedia';
@@ -896,6 +896,17 @@ export async function renderInfographicAsset(
     }
   }
 
+  // WS3 text-fit signal (sections). Each card is grown to fit its measured
+  // content up to the portrait canvas ceiling (1900px); when the total exceeds
+  // that ceiling the canvas is clamped and a card can extend past the bottom
+  // edge — i.e. its content is clipped. Record every such section rather than
+  // let the tail vanish silently. Header-title overflow is added further below.
+  const infographicOverflowFields: string[] = [];
+  sections.forEach((_section, index) => {
+    const cardBottom = (perCardTop[index] ?? 0) + (perCardHeight[index] ?? 0);
+    if (cardBottom > height + 4) infographicOverflowFields.push(`section_${index + 1}`);
+  });
+
   const cards = sections.map((section, index) => {
     const { x } = engine.position(index);
     const y = perCardTop[index];
@@ -1378,6 +1389,10 @@ export async function renderInfographicAsset(
   const headerZoneW = brandPlacement.left - headerLeftX - HD.zoneRightPad;
   const headerTitleCharsPerLine = Math.max(10, Math.floor(headerZoneW / (titleFontSize * HD.titleCharFactor)));
   const headerTitleLines = balanceTextLines(headerTitleText, headerTitleCharsPerLine, HD.titleMaxLines);
+  // WS3: the header title is width-constrained + capped at HD.titleMaxLines; if
+  // the full title cannot fit even at the min font it is recorded as overflow.
+  const headerTitleFit = fitTextToBox({ text: headerTitleText, baseFontSize: titleFontSize, baseCharsPerLine: headerTitleCharsPerLine, maxLines: HD.titleMaxLines });
+  if (!headerTitleFit.fits) infographicOverflowFields.push('header_title');
   const headerTitleLineH = Math.round(titleFontSize * HD.titleLineHeightMul);
   const headerTitleBlockH = headerTitleLines.length * headerTitleLineH;
   // With a subtitle, anchor the title near the top so the subtitle has
@@ -1533,6 +1548,10 @@ export async function renderInfographicAsset(
     renderer_pipeline: 'dedicated_infographic_svg_v1',
     infographic_engine: engine.engineId,
     infographic_layout: layout,
+    // WS3 CONSUMED CONTRACT — media_bundle.metadata.text_fit. ok=false ⇒ a
+    // section card was clipped by the canvas ceiling or the header title could
+    // not be shown completely. The scheduler reads `.ok` to block publishing.
+    text_fit: { ok: infographicOverflowFields.length === 0, overflowFields: infographicOverflowFields },
     // CREATOR-113: the sample's declared semantic block structure (roles per block),
     // so every block's purpose is sample-driven and auditable (null = generic path).
     infographic_semantic_structure: curatedDesignTemplate(metadata)?.semanticStructure ?? ((bp) => (bp ? semanticStructureForBlueprint(bp) : null))(blueprintIdForRender(metadata)),

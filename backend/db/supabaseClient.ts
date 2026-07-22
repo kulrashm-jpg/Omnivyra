@@ -23,7 +23,14 @@ function ensureServerEnvLoaded(): void {
   // Keep dotenv on the runtime path only so Next build doesn't need to analyze it.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const dotenv = require('dotenv') as typeof import('dotenv');
-  dotenv.config({ path: `${process.cwd()}/.env.local` });
+  // WRITER-CERT-004 — cert-aware env file (ENV_FILE > .env.cert > .env.local).
+  // Backward compatible: .env.cert is absent in normal setups → loads .env.local.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const _fs = require('fs') as typeof import('fs');
+  const _envFile = (process.env.ENV_FILE && String(process.env.ENV_FILE).trim())
+    ? String(process.env.ENV_FILE).trim()
+    : (_fs.existsSync(`${process.cwd()}/.env.cert`) ? `${process.cwd()}/.env.cert` : `${process.cwd()}/.env.local`);
+  dotenv.config({ path: _envFile });
   dotenv.config();
 }
 

@@ -29,7 +29,7 @@ import {
   scoreCreatorQuality,
   validateVisualGovernance,
 } from './creatorAssetGovernance';
-import { estimateTextBox, validateLayoutGeometry } from './creatorRenderGeometry';
+import { estimateTextBox, validateLayoutGeometry, charsPerLineForWidth } from './creatorRenderGeometry';
 import {
   assertRenderManifestExportable,
   createRenderManifest,
@@ -84,7 +84,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
-import { sharp, type OverlayQualityReport, getCachedRenderBuffer, escapeXml, balanceTextLines, renderBackgroundPng, compactText, getOverlayPreset, evaluateOverlayQuality } from './creatorAssetRendererContracts';
+import { sharp, type OverlayQualityReport, type TextFitResult, getCachedRenderBuffer, escapeXml, balanceTextLines, renderBackgroundPng, compactText, getOverlayPreset, evaluateOverlayQuality, fitTextToBox, mergeTextFit } from './creatorAssetRendererContracts';
 import { STYLE_CARD_SPECS } from './creatorAssetRendererText';
 import { bufferFromRemoteImage } from './creatorAssetRendererSvg';
 import { type ImageSubtypeHint } from './creatorAssetRendererMedia';
@@ -115,11 +115,20 @@ export function buildStyleCardSvg(styleId: string, input: {
   const sub = compactText(overlay.supportingText || '').trim();
   const cta = compactText(overlay.cta || '').trim();
 
-  const hSize = Math.round(width * spec.scale);
-  const hLines = balanceTextLines(headline, Math.max(8, Math.floor(contentW / (hSize * (spec.serif ? 0.5 : 0.56)))), 4);
+  // WS3 fit-to-content: shrink the headline/subtitle fonts to the largest size
+  // at which the FULL text fits maxLines×box (recomputing chars/line as the font
+  // shrinks). Short copy fits at the base size → byte-identical to the prior card.
+  const hBaseSize = Math.round(width * spec.scale);
+  const hFit = fitTextToBox({ text: headline, baseFontSize: hBaseSize, baseCharsPerLine: Math.max(8, charsPerLineForWidth(contentW, hBaseSize, spec.serif ? 0.5 : 0.56)), maxLines: 4 });
+  const hSize = hFit.fontSize;
+  const hLines = balanceTextLines(headline, hFit.charsPerLine, 4);
   const hLineH = Math.round(hSize * 1.14);
-  const subSize = Math.round(width * 0.03);
-  const subLines = sub ? balanceTextLines(sub, Math.max(16, Math.floor(contentW / (subSize * 0.55))), 2) : [];
+  const subBaseSize = Math.round(width * 0.03);
+  const subFit = sub
+    ? fitTextToBox({ text: sub, baseFontSize: subBaseSize, baseCharsPerLine: Math.max(16, charsPerLineForWidth(contentW, subBaseSize, 0.55)), maxLines: 2 })
+    : { fontSize: subBaseSize, charsPerLine: 1, fits: true, lines: 0 };
+  const subSize = subFit.fontSize;
+  const subLines = sub ? balanceTextLines(sub, subFit.charsPerLine, 2) : [];
   const subLineH = Math.round(subSize * 1.35);
 
   const decoAboveH = spec.deco === 'rule-above' ? Math.round(height * 0.05) : 0;
@@ -175,6 +184,10 @@ export function buildStyleCardSvg(styleId: string, input: {
     flags,
     text_units: headline.length + sub.length + cta.length,
     preset: `style_${styleId}`,
+    text_fit: mergeTextFit([
+      { field: 'headline', fits: headline ? hFit.fits : true },
+      { field: 'supportingText', fits: sub ? subFit.fits : true },
+    ]),
   };
   return { svg, quality, brandPlacement: defaultBrandPlacement({ width, height, fileNamePrefix: input.fileNamePrefix }) };
 }
@@ -294,23 +307,49 @@ export function buildOverlaySvg(input: {
   };
   const overlayStrategy = input.brandKit.overlayStrategy;
   const accent = input.brandKit.accentColor;
-  const headlineLines = balanceTextLines(input.overlay.headline, preset.headlineChars, preset.maxHeadlineLines);
-  // Auto-fit the body: shrink the insight font (which fits more chars per line)
-  // until the FULL keyInsight fits within its line budget, so the body is never
-  // cut short. Floored at 72% for legibility; only activates for slides that would
-  // otherwise overflow — shorter slides keep the deck-consistent size.
-  const insightText = compactText(input.overlay.keyInsight || '');
-  let fittedInsightSize = preset.insightSize;
-  {
-    const insightFloor = Math.max(16, Math.round(preset.insightSize * 0.72));
-    const charsAt = (size: number) => Math.max(8, Math.round(preset.insightChars * (preset.insightSize / Math.max(1, size))));
-    const fitsAt = (size: number) => insightText.length === 0
-      || Math.ceil(insightText.length / charsAt(size)) <= preset.maxInsightLines;
-    while (fittedInsightSize > insightFloor && !fitsAt(fittedInsightSize)) fittedInsightSize -= 1;
-  }
-  const fittedInsightChars = Math.max(8, Math.round(preset.insightChars * (preset.insightSize / Math.max(1, fittedInsightSize))));
-  const insightLines = balanceTextLines(input.overlay.keyInsight, fittedInsightChars, preset.maxInsightLines);
-  const supportLines = preset.maxSupportLines > 0 ? balanceTextLines(input.overlay.supportingText, preset.supportChars, preset.maxSupportLines) : [];
+  // WS3 fit-to-content: size EVERY text field (headline, keyInsight,
+  // supportingText) to the largest font at which the FULL text fits its
+  // maxLines×box, RECOMPUTING the char-per-line budget as the font shrinks
+  // (the prior code scaled the adaptive font but left headlineChars/insightChars
+  // static, so wrap and box disagreed). Short copy fits at the base size → the
+  // deck-consistent scale is preserved, byte-identical to before. When a field
+  // can't fit even at the floor, `fits=false` is recorded (see textFit) and the
+  // shrunk text is still rendered — best-effort visible, never a silent drop.
+  const headlineFit = fitTextToBox({
+    text: input.overlay.headline,
+    baseFontSize: preset.headlineSize,
+    baseCharsPerLine: preset.headlineChars,
+    maxLines: preset.maxHeadlineLines,
+  });
+  const fittedHeadlineSize = headlineFit.fontSize;
+  const headlineLines = balanceTextLines(input.overlay.headline, headlineFit.charsPerLine, preset.maxHeadlineLines);
+
+  const insightFit = fitTextToBox({
+    text: input.overlay.keyInsight,
+    baseFontSize: preset.insightSize,
+    baseCharsPerLine: preset.insightChars,
+    maxLines: preset.maxInsightLines,
+  });
+  const fittedInsightSize = insightFit.fontSize;
+  const insightLines = balanceTextLines(input.overlay.keyInsight, insightFit.charsPerLine, preset.maxInsightLines);
+
+  const supportFit = preset.maxSupportLines > 0
+    ? fitTextToBox({
+        text: input.overlay.supportingText,
+        baseFontSize: preset.supportSize,
+        baseCharsPerLine: preset.supportChars,
+        maxLines: preset.maxSupportLines,
+      })
+    : { fontSize: preset.supportSize, charsPerLine: preset.supportChars, fits: true, lines: 0 };
+  const fittedSupportSize = supportFit.fontSize;
+  const supportLines = preset.maxSupportLines > 0 ? balanceTextLines(input.overlay.supportingText, supportFit.charsPerLine, preset.maxSupportLines) : [];
+
+  // The consumed contract: false ok ⇒ some field overflowed even at the min font.
+  const textFit: TextFitResult = mergeTextFit([
+    { field: 'headline', fits: headlineFit.fits },
+    { field: 'keyInsight', fits: insightFit.fits },
+    { field: 'supportingText', fits: supportFit.fits },
+  ]);
   // Hook fallback: prefer operator-typed hook → platform → generic.
   // The previous backdrop panel made the platform fallback look like a
   // banner ("INSTAGRAM"); without the panel a missing hook is just
@@ -360,9 +399,9 @@ export function buildOverlaySvg(input: {
   const logoMaxHeight = strategyMods
     ? Math.round(applyScale(logoBaseHeight, strategyMods.logoScaleMultiplier, 0.5, 1.6))
     : logoBaseHeight;
-  const headlineLineHeight = Math.round(preset.headlineSize * 1.14);
+  const headlineLineHeight = Math.round(fittedHeadlineSize * 1.14);
   const insightLineHeight = Math.round(fittedInsightSize * 1.34);
-  const supportLineHeight = Math.round(preset.supportSize * 1.35);
+  const supportLineHeight = Math.round(fittedSupportSize * 1.35);
   const hookLineGap = hook ? Math.round(preset.hookSize * 0.9) + 18 : 0;
   const insightGap = headlineLines.length > 0 && insightLines.length > 0 ? 22 : 0;
   const supportGap = (headlineLines.length + insightLines.length) > 0 && supportLines.length > 0 ? 14 : 0;
@@ -469,7 +508,12 @@ export function buildOverlaySvg(input: {
     layoutBottom,
     height: input.height,
     expectBody: input.fileNamePrefix === 'carousel',
+    fit: { headline: headlineFit.fits, keyInsight: insightFit.fits, supportingText: supportFit.fits },
   });
+  // Carry the WS3 fit contract on the quality report so every caller (image,
+  // carousel deck, review preview) can lift it to media_bundle.metadata.text_fit
+  // and the scheduler can enforce it.
+  quality.text_fit = textFit;
 
   // Bottom scrim — vertical gradient that fades from transparent at
   // ~50% height down to a soft dark at the bottom. Gives the text
@@ -671,9 +715,9 @@ export function buildOverlaySvg(input: {
         const counterX = safeMargin;
         return `<text x="${counterX}" y="${counterY}" filter="url(#textShadow)" fill="rgba(255,255,255,0.94)" font-size="${counterFontSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="700" letter-spacing="2.4">${escapeXml(slideCounter)}</text>`;
       })() : ''}
-      ${headlineLines.map((line, index) => `<text x="${textX}" y="${headlineStart + index * headlineLineHeight}" filter="url(#textShadow)" fill="${headingColor}" font-size="${preset.headlineSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="${input.brandKit.typography.headingWeight}">${escapeXml(line)}</text>`).join('')}
+      ${headlineLines.map((line, index) => `<text x="${textX}" y="${headlineStart + index * headlineLineHeight}" filter="url(#textShadow)" fill="${headingColor}" font-size="${fittedHeadlineSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="${input.brandKit.typography.headingWeight}">${escapeXml(line)}</text>`).join('')}
       ${insightLines.map((line, index) => `<text x="${textX}" y="${insightStart + index * insightLineHeight}" filter="url(#textShadow)" fill="${insightColor}" font-size="${fittedInsightSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="${input.brandKit.typography.bodyWeight}">${escapeXml(line)}</text>`).join('')}
-      ${supportLines.map((line, index) => `<text x="${textX}" y="${supportStart + index * supportLineHeight}" filter="url(#textShadow)" fill="${supportColor}" font-size="${preset.supportSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="500">${escapeXml(line)}</text>`).join('')}
+      ${supportLines.map((line, index) => `<text x="${textX}" y="${supportStart + index * supportLineHeight}" filter="url(#textShadow)" fill="${supportColor}" font-size="${fittedSupportSize}" font-family="${input.brandKit.typography.fontFamily || 'Inter, Arial, sans-serif'}" font-weight="500">${escapeXml(line)}</text>`).join('')}
       ${ctaSvg}
       <!-- footer watermark suppressed (brand mark in top-right is canonical); textWidth=${textWidth} retained for layout-spec future use -->
     </svg>

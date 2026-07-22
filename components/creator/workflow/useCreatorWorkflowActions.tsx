@@ -866,6 +866,10 @@ export function useCreatorWorkflowActions(
         mediaTypes,
         creatorAttachments,
         intent,
+        // WS1 client half — carry the real strategic objective into the
+        // scheduler handoff. Never a fabricated default: only the operator's
+        // selected objective, else null.
+        objective: String(answers.objective || '').trim() || null,
       });
     } catch (schedulerError) {
       setError(schedulerError instanceof Error ? schedulerError.message : `Could not open this output as a ${socialActionLabel}.`);

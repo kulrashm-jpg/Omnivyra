@@ -18,7 +18,11 @@ export function resolveSchedulerDraft({
       if (raw) {
         const parsed = JSON.parse(raw) as SocialPostingPrefillPayload & {
           output?: {
-            master_content?: Record<string, unknown>;
+            content_id?: string;
+            master_content?: Record<string, unknown> & {
+              objective?: string;
+              decision_trace?: { objective?: string };
+            };
             platform_variant?: {
               platform?: string;
               generated_content?: string;
@@ -26,6 +30,32 @@ export function resolveSchedulerDraft({
             };
           };
           topic?: string;
+        };
+
+        // Wave 1 (item 8) — resolve the canonical Content id from whatever payload
+        // shape carried the handoff: the social-posting draft (draft.contentId)
+        // first, then a generated ShortformResultPage payload (output.content_id).
+        // Absent ⇒ null, keeping the scheduler on its legacy sessionStorage path.
+        const resolveContentId = (): string | null => {
+          const fromDraft = typeof parsed?.draft?.contentId === 'string' ? parsed.draft.contentId.trim() : '';
+          if (fromDraft) return fromDraft;
+          const fromOutput = typeof parsed?.output?.content_id === 'string' ? parsed.output.content_id.trim() : '';
+          return fromOutput || null;
+        };
+
+        // WS1 client half — resolve the strategic objective from whatever payload
+        // shape carried the handoff: the social-posting draft (draft.objective),
+        // then the generated master_content.objective, then the master decision
+        // trace objective (ShortformResultPage payloads). Absent ⇒ null (never a
+        // fabricated default).
+        const resolveObjective = (): string | null => {
+          const fromDraft = typeof parsed?.draft?.objective === 'string' ? parsed.draft.objective.trim() : '';
+          if (fromDraft) return fromDraft;
+          const mc = parsed?.output?.master_content;
+          const fromMaster = typeof mc?.objective === 'string' ? mc.objective.trim() : '';
+          if (fromMaster) return fromMaster;
+          const fromTrace = typeof mc?.decision_trace?.objective === 'string' ? mc.decision_trace.objective.trim() : '';
+          return fromTrace || null;
         };
 
         if (parsed?.draft?.content?.trim()) {
@@ -49,11 +79,13 @@ export function resolveSchedulerDraft({
             excerpt: parsed.draft.excerpt || null,
             sourceContentType: parsed.draft.sourceContentType || sourceContentType,
             sourceId: parsed.draft.sourceId || sourceId,
+            contentId: resolveContentId(),
             masterContent: parsed.draft.masterContent || null,
             sourcePlatform: parsed.draft.sourcePlatform || null,
             mediaUrls,
             mediaTypes,
             creatorAttachments,
+            objective: resolveObjective(),
           };
         }
 
@@ -65,13 +97,19 @@ export function resolveSchedulerDraft({
           return {
             title: parsed.topic || topic || 'Generated Post',
             topic: parsed.topic || topic || 'Generated Post',
-            content: master || generated,
+            // WS2 (reviewed == published): seed from the platform_variant the
+            // user actually reviewed on the result page, not the platform-
+            // agnostic master. Master is still preserved in `masterContent` for
+            // explicit, user-driven re-derivation.
+            content: generated || master,
             hashtags: parsed?.output?.platform_variant?.discoverability_meta?.hashtags || [],
             excerpt: null,
             sourceContentType,
             sourceId,
+            contentId: resolveContentId(),
             masterContent: parsed?.output?.master_content || null,
             sourcePlatform: parsed?.output?.platform_variant?.platform || null,
+            objective: resolveObjective(),
           };
         }
       }

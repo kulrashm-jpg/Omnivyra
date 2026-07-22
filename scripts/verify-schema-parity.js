@@ -24,6 +24,15 @@
  *   - bolt_execution_runs: lock/heartbeat/abandonment forensics
  *   - queue_jobs: result_data, error_code (legacy-only columns now migrated)
  *   - scheduled_posts: idempotency_key
+ *   - Writer canonical content platform (content_* / learning_* / brand_memory /
+ *     publication_lineage — 16 tables, Waves 0–5). Severity WARN because Writer
+ *     persistence is fail-open; a missing table degrades (no canonical persistence)
+ *     rather than failing generation. See the manifest block for per-table detail.
+ *
+ * Maintenance rule (ENG-CERT-002 / ENG-IMPL-001): when a new production-critical
+ * write path is added, append its identity + core write columns to REQUIRED_COLUMNS
+ * with a severity reflecting real operational impact (BLOCKING only if the write is
+ * NOT fail-open). This keeps the gate's coverage current with schema evolution.
  *
  * Usage:
  *   node scripts/verify-schema-parity.js
@@ -130,6 +139,83 @@ const REQUIRED_COLUMNS = [
   // migration partially breaks pipeline writes. Upgrade to BLOCKING
   // once migration is verified applied.
   { severity: 'WARN', table: 'opportunity_feed_items', column: 'signal_excerpt', motivation: 'PR-OPA-1: verbatim source excerpt (max 300 chars). Writer populates on every classification; missing column makes inserts fail.' },
+
+  // ── Writer canonical content platform (Waves 0–5, migrations
+  //    20260718000000..0003 — 16 tables). ENG-IMPL-001 closes the
+  //    ENG-AUDIT-002 coverage gap. Severity = WARN (not BLOCKING): every
+  //    Writer persistence write is FAIL-OPEN (runPostGeneration:533
+  //    "canonical content persistence failed (continuing)" + generationRuntime
+  //    persistence try/catch), and the shipped default path is legacy
+  //    (WRITER_RUNTIME_DELEGATION_ENABLED off). A missing table/column therefore
+  //    DEGRADES (no canonical persistence / originality / quality / learning)
+  //    rather than failing or corrupting generation — deploy may proceed, but
+  //    the operator must apply the Wave migrations promptly. One identity anchor
+  //    + core write column(s) per table so an unapplied migration is detected.
+
+  // content — canonical spine (contentService.createContent)
+  { severity: 'WARN', table: 'content', column: 'company_id',       motivation: 'Tenant scope; createContent writes on every generation. Missing = canonical spine unpersisted (fail-open).' },
+  { severity: 'WARN', table: 'content', column: 'content_type',     motivation: 'Canonical content type. Written on create.' },
+  { severity: 'WARN', table: 'content', column: 'lifecycle_status', motivation: 'Approval/lifecycle state machine (generated→…→published). Written on create + advanceApproval.' },
+
+  // content_variant — per-platform variants (contentService.upsertVariant)
+  { severity: 'WARN', table: 'content_variant', column: 'content_id',     motivation: 'FK to content; upsertVariant writes per platform.' },
+  { severity: 'WARN', table: 'content_variant', column: 'platform',       motivation: 'Platform key (upsert conflict target).' },
+  { severity: 'WARN', table: 'content_variant', column: 'approval_state', motivation: 'Variant approval state.' },
+
+  // content_revision — revision snapshots (contentService)
+  { severity: 'WARN', table: 'content_revision', column: 'content_id',    motivation: 'FK to content; revision snapshots.' },
+  { severity: 'WARN', table: 'content_revision', column: 'snapshot',      motivation: 'Serialized revision payload.' },
+
+  // content_asset — attached creator assets
+  { severity: 'WARN', table: 'content_asset', column: 'content_id',       motivation: 'FK to content; asset attachment.' },
+  { severity: 'WARN', table: 'content_asset', column: 'asset_id',         motivation: 'Creator asset id linked to the content.' },
+
+  // content_memory — originality dedup index (contentMemoryService.indexContentUnit)
+  { severity: 'WARN', table: 'content_memory', column: 'company_id',      motivation: 'Tenant-scoped originality memory; indexContentUnit writes accepted masters/variants.' },
+  { severity: 'WARN', table: 'content_memory', column: 'exact_hash',      motivation: 'Exact-match dedup key.' },
+  { severity: 'WARN', table: 'content_memory', column: 'simhash',         motivation: 'Near-duplicate simhash used by assertOriginality retrieval.' },
+
+  // content_originality — per-record originality decision (persistOriginality)
+  { severity: 'WARN', table: 'content_originality', column: 'company_id', motivation: 'Tenant scope; persistOriginality records the decision alongside the canonical row.' },
+  { severity: 'WARN', table: 'content_originality', column: 'decision',   motivation: 'accepted/regenerate/duplicate/rejected verdict.' },
+
+  // brand_memory — Wave-2 brand rollup (getBrandMemory / brand writes)
+  { severity: 'WARN', table: 'brand_memory', column: 'company_id',        motivation: 'Per-company brand rollup key (voice/terminology/messaging).' },
+
+  // content_quality — 12-dim scorecard (qualityService.persistScorecard)
+  { severity: 'WARN', table: 'content_quality', column: 'company_id',     motivation: 'Tenant scope; persistScorecard writes the quality evaluation.' },
+  { severity: 'WARN', table: 'content_quality', column: 'dimensions',     motivation: '12-dimension scorecard payload (jsonb).' },
+
+  // content_block — section blocks (collaborationService.upsertBlocks)
+  { severity: 'WARN', table: 'content_block', column: 'content_id',       motivation: 'FK to content; upsertBlocks writes section blocks.' },
+  { severity: 'WARN', table: 'content_block', column: 'block_type',       motivation: 'Block type; part of collaborative-edit lock model.' },
+
+  // content_recommendation — explainable recs (collaborationService.saveRecommendations)
+  { severity: 'WARN', table: 'content_recommendation', column: 'content_id', motivation: 'FK to content; saveRecommendations writes explainable recs.' },
+  { severity: 'WARN', table: 'content_recommendation', column: 'category',   motivation: 'Recommendation category.' },
+
+  // content_approval_history — immutable approval trail (approvalService.advanceApproval)
+  { severity: 'WARN', table: 'content_approval_history', column: 'content_id', motivation: 'FK to content; advanceApproval appends each transition.' },
+  { severity: 'WARN', table: 'content_approval_history', column: 'to_status',  motivation: 'Target lifecycle status of the transition.' },
+
+  // content_performance — ingested signals (performanceService.ingestSignals)
+  { severity: 'WARN', table: 'content_performance', column: 'company_id',  motivation: 'Tenant scope; ingestSignals writes engagement/impression signals.' },
+  { severity: 'WARN', table: 'content_performance', column: 'content_id',  motivation: 'FK to content for the performance signal.' },
+
+  // publication_lineage — publish/schedule lineage (publicationLineageService.recordEvent)
+  { severity: 'WARN', table: 'publication_lineage', column: 'company_id',  motivation: 'Tenant scope; recordEvent traces publish/schedule lineage.' },
+  { severity: 'WARN', table: 'publication_lineage', column: 'event_type',  motivation: 'Lineage event type (published/scheduled/…).' },
+
+  // learning_intelligence — percentile learning patterns (learningEngine.recordLearningEvent)
+  { severity: 'WARN', table: 'learning_intelligence', column: 'company_id',  motivation: 'Tenant scope; recordLearningEvent writes learned patterns.' },
+  { severity: 'WARN', table: 'learning_intelligence', column: 'pattern_key', motivation: 'Pattern identity key.' },
+
+  // learning_memory — consumable learning rollup
+  { severity: 'WARN', table: 'learning_memory', column: 'model_version',   motivation: 'Learning-rollup model version; consumed by the prompt assembler.' },
+
+  // content_prediction — explainable prediction (predictionEngine.predict)
+  { severity: 'WARN', table: 'content_prediction', column: 'company_id',   motivation: 'Tenant scope; predict writes the explainable prediction.' },
+  { severity: 'WARN', table: 'content_prediction', column: 'explanation',  motivation: 'Score-as-sum-of-explanations payload.' },
 ];
 
 async function main() {

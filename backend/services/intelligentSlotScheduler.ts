@@ -10,6 +10,7 @@
  */
 
 import { generateCampaignPlan } from './aiGateway';
+import { parseModelOutputOr } from './ai/safety';
 import {
   getOptimalDays,
   getOptimalTime,
@@ -180,7 +181,7 @@ You will receive a list of content slots with research-based day assignments and
     });
 
     const raw = typeof result?.output === 'string'
-      ? JSON.parse(result.output)
+      ? parseModelOutputOr<any>(result.output, {}, { surface: 'intelligentSlotScheduler' })
       : result?.output;
 
     const items: LLMScheduleItem[] = Array.isArray(raw?.schedule) ? raw.schedule : [];

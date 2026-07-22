@@ -8,6 +8,7 @@ import { createHash } from 'crypto';
 import { wirePhase2Route } from '@/backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '@/backend/services/billing/phase2EnforcementGate';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
+import { buildAdaptationContextBlock } from '@/backend/services/context/canonicalContentContextResolver';
 import type { CompanyProfile } from '@/backend/services/companyProfile/types';
 
 type CompanyContext = {
@@ -16,58 +17,12 @@ type CompanyContext = {
   allowedNames: string[];
 };
 
+// Wave 1 item 6 — the company-context block is now assembled by the ONE
+// canonical resolver. This thin delegator preserves the exact CompanyContext
+// return shape (block + allowedNames) and output; handler/prompt logic below is
+// unchanged.
 function buildCompanyContextBlock(profile: CompanyProfile | null): CompanyContext | null {
-  if (!profile) return null;
-  const fields: Array<[string, string | null | undefined]> = [
-    ['Company', profile.name],
-    ['Industry', profile.industry],
-    ['Website', profile.website_url],
-    ['Products / services', profile.products_services],
-    ['Target audience', profile.target_audience],
-    ['Geography', profile.geography],
-    ['Brand voice', profile.brand_voice],
-    ['Unique value', profile.unique_value],
-    ['Brand positioning', profile.brand_positioning],
-    ['Key messages', profile.key_messages],
-  ];
-  const rendered = fields
-    .map(([label, value]) => {
-      if (!value || typeof value !== 'string') return null;
-      const trimmed = value.trim();
-      if (!trimmed) return null;
-      const compact = trimmed.length > 280 ? `${trimmed.slice(0, 277).trimEnd()}…` : trimmed;
-      return `- ${label}: ${compact}`;
-    })
-    .filter((line): line is string => line !== null);
-
-  // Build the allow-list of brand/product/service names the model may use.
-  // Source of truth: the company name plus every entry in products_services_list
-  // (the structured list set during onboarding/profile refinement). The freeform
-  // products_services string is left out of the allow-list because it is prose
-  // and might contain capability descriptions, not just names.
-  const seen = new Set<string>();
-  const allowedNames: string[] = [];
-  const pushName = (raw: string | null | undefined) => {
-    if (!raw || typeof raw !== 'string') return;
-    const cleaned = raw.trim();
-    if (!cleaned) return;
-    const key = cleaned.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    allowedNames.push(cleaned);
-  };
-  pushName(profile.name);
-  if (Array.isArray(profile.products_services_list)) {
-    for (const entry of profile.products_services_list) pushName(entry);
-  }
-
-  if (rendered.length === 0 && allowedNames.length === 0) return null;
-
-  if (allowedNames.length > 0) {
-    rendered.push(`- Allowed product / brand names (use ONLY these, copy verbatim): ${allowedNames.map((n) => `"${n}"`).join(', ')}`);
-  }
-
-  return { block: rendered.join('\n'), allowedNames };
+  return buildAdaptationContextBlock(profile);
 }
 
 type PlatformSpec = {
@@ -211,6 +166,45 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
     ],
     cta: 'End with a credible professional CTA — e.g. a reflective question to invite comments, "DM me to compare notes", "Curious how your team handles this — drop a thought below", or, when the company context supplies a website, a single "Learn more: <url>" line. Place the CTA on its own line just before the hashtag block.',
   },
+  // Wave 2 item 6 — distinct spec so Threads no longer falls through to the
+  // generic default. Threads is looser and more conversational than X; it must
+  // read as a reply-baiting conversation opener, never a repackaged tweet.
+  threads: {
+    rules: [
+      'Write in a casual, candid, conversation-starting voice.',
+      'Be looser and more personal than X — never a repackaged tweet.',
+      'Open with an opinionated or curious take that begs a reply.',
+      'Favor a human, off-the-cuff rhythm over polished brand copy.',
+    ],
+    wordRange: [20, 60],
+    emoji: 'Use 1-3 emojis for a relaxed, human tone.',
+    conventions: [
+      '500-character limit; short conversational lines with a blank line between beats.',
+      '0-2 hashtags, and only when genuinely relevant — Threads culture is light on tags.',
+      'No SEO framing; this is a feed conversation, not a search listing.',
+    ],
+    cta: 'Close with a soft conversational prompt that invites replies — e.g. "What am I missing?", "Curious what you\'d do here", "Tell me I\'m wrong". Invite a reply, not a click; do not bolt on a link CTA.',
+  },
+  // Wave 2 item 6 — distinct spec so the YouTube Community tab no longer shares
+  // the generic default (and is NOT treated like a searchable video listing).
+  // This is a subscriber-facing community post: no SEO title, no description
+  // structure, no hashtag block.
+  youtube_community: {
+    rules: [
+      'Write a short YouTube Community-tab update — a direct note to existing subscribers.',
+      'Do NOT emit an SEO title or a video-description structure.',
+      'Use a familiar, in-the-know tone that assumes the reader already follows the channel.',
+      'Keep it poll- and question-friendly to spark reactions from the community.',
+    ],
+    wordRange: [20, 60],
+    emoji: 'Use 1-3 emojis for a friendly, community-insider tone.',
+    conventions: [
+      '1-2 short paragraphs; an optional poll-style question is welcome.',
+      'No title line, no hashtag SEO block, no video-description scaffolding.',
+      'Speak to subscribers, not to search — this surface has no discovery ranking.',
+    ],
+    cta: 'Close with a community engagement prompt — e.g. "Vote in the poll", "Comment your take", "Tap 👍 if you want this next". Never use an SEO/search or formal "Learn more" CTA here.',
+  },
 };
 
 function buildPlatformRewritePrompt(
@@ -218,6 +212,11 @@ function buildPlatformRewritePrompt(
   contentType: string,
   targetLimit: number | null,
   companyContext: CompanyContext | null,
+  // Objective Preservation (SHARED CONTRACT): the campaign objective the source
+  // content was written to serve. When present it is injected as an explicit,
+  // high-priority constraint so the platform rewrite still advances it. Absent
+  // (null) ⇒ the line is omitted entirely (backward compatible).
+  objective: string | null,
 ) {
   const platformLabel = platform === 'x' ? 'X' : platform.charAt(0).toUpperCase() + platform.slice(1);
   const spec = PLATFORM_SPECS[platform];
@@ -248,6 +247,11 @@ function buildPlatformRewritePrompt(
     isTightFormat
       ? `The output should read like it was written natively for ${platformLabel} from the start — not like a compressed version of the source. Lead with the hook in the first line; do not echo the source's opening sentence.`
       : 'Rewrite it so it feels created for that platform from the start.',
+    // Campaign objective — HIGH PRIORITY. The rewrite may change pacing, tone,
+    // length, and structure for the platform, but it must still serve this
+    // objective. Placed early so the model treats it as a hard constraint.
+    objective ? '' : null,
+    objective ? `## Campaign objective (preserve this — the rewrite must still serve it): ${objective}` : null,
     companyContext ? '' : null,
     companyContext ? '## Company / product / market context' : null,
     companyContext
@@ -271,10 +275,24 @@ function buildPlatformRewritePrompt(
     ...rules,
     '',
     `## ${platformLabel} length target`,
+    // NOTE: this is CREATIVE length guidance (natural reading length in words /
+    // platform voice), not a mechanical character count — kept in the prompt.
     spec
       ? `Aim for ${spec.wordRange[0]}-${spec.wordRange[1]} words — that is the natural reading length on ${platformLabel}. Going shorter feels thin; going longer feels awkward and gets truncated by the platform UI.`
       : 'Aim for a length that reads naturally on this platform.',
-    targetLimit ? `Hard character cap: ${targetLimit} characters before hashtags. Aim ~10% under that cap.` : null,
+    // WAVE3 (item 2): removed the "Hard character cap: N characters ... aim ~10%
+    // under that cap" instruction. Counting characters is mechanical work — the
+    // deterministic pass in the handler (processContent({ enforce_char_limit:true }))
+    // already clamps the output to the platform cap after generation, so telling
+    // the model to count was redundant. `targetLimit` is still accepted for
+    // signature stability but no longer injected into the prompt.
+    // WAVE3-TODO: hashtag-count and emoji-count guidance in the per-platform
+    // `spec.conventions` / `spec.emoji` fields are intentionally LEFT IN. Unlike
+    // the char cap, the BODY content's hashtag/emoji counts are NOT
+    // deterministically re-clamped in this route — optimizeDiscoverabilityForPlatform
+    // only produces a SEPARATE discoverability_meta list and never rewrites
+    // processed.content, and processContent does not touch hashtags/emoji. Removing
+    // that guidance would change output with no deterministic backstop.
     '',
     `## ${platformLabel} platform conventions (must follow)`,
     ...(spec?.conventions ?? ['Follow the visual and structural conventions a native reader expects.']),
@@ -302,6 +320,7 @@ async function rewriteForPlatform({
   companyId,
   topic,
   companyContext,
+  objective,
 }: {
   content: string;
   platform: string;
@@ -309,6 +328,7 @@ async function rewriteForPlatform({
   companyId: string | null;
   topic: string | null;
   companyContext: CompanyContext | null;
+  objective: string | null;
 }) {
   const charLimit = PLATFORM_CHAR_LIMITS[platform] ?? 280;
   const targetLimit = charLimit
@@ -330,7 +350,7 @@ async function rewriteForPlatform({
     messages: [
       {
         role: 'system',
-        content: buildPlatformRewritePrompt(platform, contentType, targetLimit, companyContext),
+        content: buildPlatformRewritePrompt(platform, contentType, targetLimit, companyContext, objective),
       },
       {
         role: 'user',
@@ -364,6 +384,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const companyId = typeof rawCompanyId === 'string' && rawCompanyId.trim() ? rawCompanyId.trim() : null;
     const rawTopic = (req.body as any)?.topic;
     const topic = typeof rawTopic === 'string' && rawTopic.trim() ? rawTopic.trim() : null;
+    // Objective Preservation (SHARED CONTRACT). Optional `objective` request
+    // field carrying the campaign objective the rewrite must keep serving. A
+    // scheduler change sends it; absent ⇒ null ⇒ prompt omits the objective
+    // line (backward compatible). Field name is EXACTLY `objective`.
+    const rawObjective = (req.body as any)?.objective;
+    const objective = typeof rawObjective === 'string' && rawObjective.trim() ? rawObjective.trim() : null;
 
     if (!platform) {
       return res.status(400).json({ error: 'platform is required' });
@@ -398,6 +424,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         companyId,
         topic,
         companyContext,
+        objective,
       });
       // No companyId → nothing to charge; passthrough (honest, like Task 2).
       const rewritten = companyId

@@ -817,6 +817,15 @@ export async function composeStructuredDeckAsset(
     text_units: Math.round(qualityReports.reduce((sum, report) => sum + report.text_units, 0) / Math.max(1, qualityReports.length)),
     preset: fileNamePrefix,
   };
+  // WS3 CONSUMED CONTRACT — deck-level media_bundle.metadata.text_fit. Aggregate
+  // every slide's per-field fit result; a field that overflowed on slide N is
+  // surfaced as `slide_N:<field>`. ok=false ⇒ at least one slide could not show a
+  // field completely at/above the min font (scheduler reads `.ok` to block publish).
+  const deckOverflowFields = Array.from(new Set(
+    qualityReports.flatMap((report, index) =>
+      (report.text_fit?.overflowFields ?? []).map((field) => `slide_${index + 1}:${field}`)),
+  ));
+  const deckTextFit = { ok: deckOverflowFields.length === 0, overflowFields: deckOverflowFields };
   const textBlocks = renderItems.flatMap((item) => [item.headline, item.body]).filter(Boolean);
   // Operator feedback fix: density scoring was producing
   // 'text_density_exceeds_profile' / 'platform_density_mismatch' /
@@ -955,6 +964,7 @@ export async function composeStructuredDeckAsset(
         verified_at: new Date().toISOString(),
       },
       overlay_renderer: 'deterministic_svg_v1',
+      text_fit: deckTextFit,
       overlay_quality: avgQuality,
       // Per-slide overlay quality reports — additive, so post-render visual
       // validation can validate every slide independently (one failing slide

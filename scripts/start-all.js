@@ -52,21 +52,12 @@ function readPortArg(argv) {
   return process.env.PORT || '3000';
 }
 
-// Load .env.local
-const envPath = path.join(process.cwd(), '.env.local');
-if (fs.existsSync(envPath)) {
-  try {
-    require('dotenv').config({ path: envPath });
-  } catch {
-    const envContent = fs.readFileSync(envPath, 'utf8');
-    envContent.split('\n').forEach((line) => {
-      const match = line.match(/^([^=]+)=(.*)$/);
-      if (match && !match[1].startsWith('#')) {
-        process.env[match[1].trim()] = match[2].trim().replace(/^["']|["']$/g, '');
-      }
-    });
-  }
-}
+// WRITER-CERT-004 — cert-aware env loading (ENV_FILE > .env.cert > .env.local)
+// + in-process isolation guard when CERT_ENV=1. Backward compatible: .env.cert
+// is absent in normal dev/prod setups, so this loads .env.local exactly as
+// before. The resolved env propagates to spawned workers/cron/Next children.
+const envPath = require('./lib/certAwareEnv.cjs').loadCertAwareEnv(process.cwd());
+if (envPath && /\.env\.cert$/.test(envPath)) console.log(`[start-all] certification env loaded: ${envPath}`);
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 

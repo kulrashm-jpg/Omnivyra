@@ -1,3 +1,11 @@
+/**
+ * @deprecated WRITER-EXEC-005 Wave 4 — superseded by
+ * backend/services/content/recommendationRuntime.ts (the canonical, deterministic,
+ * section-level + explainable + reversible recommendation generator). This legacy
+ * AI whole-draft improvement flow remains FUNCTIONAL (still reached by
+ * pages/api/content/improve-draft.ts and the per-type improvement engines) and is
+ * NOT removed. Do not extend it; route new work through recommendationRuntime.
+ */
 import { calculateQualityScore, type FormMeta } from '../blog/blogValidation';
 import type { BlogFormatType } from '../blog/blogStructureTemplates';
 import { analyzeOptimization, type OptimizationAction, type InstructionCode } from '../blog/optimizationEngine';

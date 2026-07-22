@@ -22,6 +22,9 @@ import {
   type Fact,
 } from './canonicalContextTypes';
 import { makeFact } from './freshness';
+// WAVE-2-001 §C4: canonical grounding activation (floor + freshness enforcement + obs).
+import { evaluateGrounding } from '../ai/grounding';
+import { recordGroundingDecision } from '../ai/grounding';
 import { mergeListFacts, pickBest } from './contextMerge';
 import { computeContextQuality } from './contextQualityEngine';
 import { computeTransparency } from './groundingTransparency';
@@ -203,6 +206,21 @@ export async function assimilateContext(
   withQuality.evidenceIntelligence = buildEvidenceIntelligence(withQuality);
   withQuality.transparency = computeTransparency(withQuality);
   withQuality.knownGaps = withQuality.transparency.missingContext;
+
+  // WAVE-2-001 §C4 — ENFORCE the grounding contract on the computed transparency:
+  // freshness-degraded confidence + grounding-floor evaluation, surfaced (never
+  // silently present stale as current) + observed. Additive; does not alter the
+  // raw transparency or generation behavior.
+  const __t = withQuality.transparency;
+  const __decision = evaluateGrounding({
+    confidence: __t.confidence,
+    freshestDays: __t.freshestDays,
+    evidenceAvailable: __t.evidenceAvailable,
+    groundedFrom: (__t.groundedFrom ?? []).filter((s) => s.present).map((s) => s.source),
+    missingContext: __t.missingContext ?? [],
+  });
+  withQuality.grounding = __decision;
+  recordGroundingDecision(__decision, { surface: 'context.assimilation' });
 
   return withQuality;
 }

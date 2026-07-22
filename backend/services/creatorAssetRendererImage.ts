@@ -453,6 +453,11 @@ export async function composeSingleVisualAsset(
     auto_corrections: corrected.corrections,
     provider_text_validation: textValidation,
     overlay_renderer: skipOverlayComposite ? 'none' : 'deterministic_svg_v1',
+    // WS3 CONSUMED CONTRACT — media_bundle.metadata.text_fit. ok=false ⇒ some
+    // overlay field could not be shown completely at/above the min font. A
+    // separate scheduler change reads `.ok` to block publishing. No overlay
+    // composite (supporting_visual) → nothing to overflow → ok=true.
+    text_fit: overlayRender?.quality.text_fit ?? { ok: true, overflowFields: [] },
     fallback_reason: effectiveFallbackReason,
     preview_export_parity: {
       parity_version: 'creator-render-parity-v1',
@@ -972,6 +977,7 @@ export async function renderCreatorAssetReviewPreview(input: CreatorReviewPrevie
       asset_type: input.assetType,
       overlay_text: overlay,
       overlay_quality: overlayRender.quality,
+      text_fit: overlayRender.quality.text_fit ?? { ok: true, overflowFields: [] },
       overlay_renderer: 'deterministic_svg_v1',
       ...buildCreatorBrandKitMetadata(brandKit, {
         platform: input.platform,

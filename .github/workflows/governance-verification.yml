@@ -1,0 +1,45 @@
+# Governance Runtime v1.0.0 — CI Verification (Release R3B)
+#
+# Mandatory delivery gate: verifies the frozen Governance Runtime baseline on every push/PR.
+# Read-only, dependency-free, ~1s. Does NOT run or couple to the application runtime.
+# Blocks merge on any governance baseline drift (make this a required status check in branch protection).
+
+name: Governance Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # Fast on every PR; hard-gates changes to protected governance assets via CODEOWNERS + this check.
+    paths-ignore: []
+
+permissions:
+  contents: read
+
+concurrency:
+  group: governance-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governance-verify:
+    name: Governance baseline & documentation verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Stage 1 — constitutional documentation validation (WP-02: links, orphans, structure).
+      - name: Documentation validation
+        run: npm run check:governance-docs
+      # Stage 2 — baseline verification (inventory + dependency graph + release/runtime/digest integrity + drift).
+      - name: Baseline verification (+ reports)
+        run: npm run governance:verify-baseline:reports
+      # Stage 3 — publish the deterministic verification reports as build evidence.
+      - name: Upload governance verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: governance-verification-reports
+          path: scripts/governance-baseline/reports/
+          if-no-files-found: ignore

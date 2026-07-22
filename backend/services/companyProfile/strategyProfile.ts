@@ -1,4 +1,6 @@
 import { runCompletionWithOperation } from '../aiGateway';
+// WAVE-1C-001 §C1
+import { parseModelOutputOr } from '../ai/safety';
 import { supabase } from '../../db/supabaseClient';
 import type { CompanyProfile, StrategyProfile, EntityArchetypeIntelligence } from './types';
 import { buildArchetypePromptContext } from './entityArchetype';
@@ -281,7 +283,7 @@ export async function deriveStrategyProfileDraft(
         { role: 'user', content: prompt.userPrompt },
       ],
     });
-    const parsed = JSON.parse(result.output?.trim() || '{}') as RawStrategyExtraction;
+    const parsed = parseModelOutputOr<RawStrategyExtraction>(result.output, {} as RawStrategyExtraction, { surface: 'profile.strategyProfile' });
     return {
       strategyProfile: enforceStrategyGrounding(
         finalizeStrategyProfile(parsed),

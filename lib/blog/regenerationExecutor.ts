@@ -3,6 +3,15 @@
  *
  * Applies targeted OptimizationActions to a blog post's content_blocks.
  *
+ * WAVE4 NOTE (WRITER-EXEC-005): the audit flagged a "wholesale-replace path"
+ * here for retirement, but this executor is ALREADY surgical/block-scoped (see
+ * design rules below) and is actively reached by pages/api/blogs/optimize.ts +
+ * lib/content/contentImprovementEngine.ts + tests — so there is no wholesale path
+ * to remove and nothing is deleted. Section-level RECOMMENDATION *generation* is
+ * now owned by backend/services/content/recommendationRuntime.ts; this module
+ * remains the block-APPLICATION executor for the legacy optimize flow. Do not
+ * extend it for new recommendation surfaces.
+ *
  * Design rules:
  *   - Surgical updates only — never replaces the entire content_blocks array.
  *   - Each action targets a specific block or appends to a specific position.

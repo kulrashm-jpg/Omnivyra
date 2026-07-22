@@ -6,6 +6,8 @@
  */
 
 import { runCompletionWithOperation } from './aiGateway';
+// WAVE-1C-001 §C1: canonical safe-parse for model output.
+import { parseModelOutputOr } from './ai/safety';
 import type { ContentBlock, BlockType } from '../../lib/blog/blockTypes';
 
 export type EnrichBlockInput = {
@@ -116,7 +118,7 @@ Return the improved block as JSON.`;
     ],
   });
 
-  const raw = result.output ? JSON.parse(result.output) : {};
+  const raw = parseModelOutputOr<any>(result.output, {}, { surface: 'blockEnrich' });
 
   // Merge AI output into original block (preserve id, type)
   const enriched = mergeEnrichedContent(block, raw);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseModelOutputOr } from './ai/safety';
 import { runCompletionWithOperation } from './aiGateway';
 
 const CTA_TYPES = ['None', 'Soft CTA', 'Engagement CTA', 'Authority CTA', 'Direct Conversion CTA'] as const;
@@ -291,7 +292,7 @@ export async function parseAiPlanToWeeks(planText: string): Promise<ParsedPlan> 
   });
 
   const raw = result.output?.trim() || '';
-  const parsed = JSON.parse(raw);
+  const parsed = parseModelOutputOr<any>(raw, {}, { surface: 'campaign.planParser' });
 
   const blueprintValidation = blueprintPlanSchema.safeParse(parsed);
   if (blueprintValidation.success) {
@@ -476,7 +477,7 @@ export async function parseAiRefinedDay(planText: string): Promise<{
   });
 
   const raw = result.output?.trim() || '';
-  const parsed = JSON.parse(raw);
+  const parsed = parseModelOutputOr<any>(raw, {}, { surface: 'campaign.planParser' });
   const validation = refinedDaySchema.safeParse(parsed);
   if (!validation.success) {
     console.error('Refined day schema validation failed', {
@@ -531,7 +532,7 @@ export async function parseAiPlatformCustomization(planText: string): Promise<{
   const raw = result.output?.trim() || '';
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw || '{}');
+    parsed = parseModelOutputOr<any>(raw, {}, { surface: 'campaign.planParser' });
   } catch {
     throw new Error('Invalid platform customization schema: AI response was not valid JSON');
   }

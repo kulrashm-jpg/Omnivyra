@@ -322,3 +322,11 @@ describe('reschedule API', () => {
     expect(res.status).toHaveBeenCalledWith(405);
   });
 });
+
+// PB-010: mark this suite as a MODULE for tsc.
+// Without a top-level import/export, tsc treats the file as a global script, so
+// its top-level `const`/`function` declarations collide with identically named
+// declarations in sibling suites (TS2451/TS2393). Jest already loads every test
+// file as its own CommonJS module, so this is a type-visibility fix only and
+// changes no runtime behaviour.
+export {};

@@ -16,6 +16,7 @@
  */
 
 import { runCompletionWithOperation } from '../aiGateway';
+import { parseModelOutputOr } from '../ai/safety';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import {
   type CompanyContextFoundation,
@@ -296,7 +297,7 @@ async function refineSeedsWithLlm(
   }
 
   try {
-    const parsed = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, ''));
+    const parsed = parseModelOutputOr<any>(raw, {}, { surface: 'longForm.recommendation' });
     const refined = Array.isArray(parsed?.refined) ? parsed.refined : [];
     return { refined: refined as RefinedCandidateRaw[], raw };
   } catch {

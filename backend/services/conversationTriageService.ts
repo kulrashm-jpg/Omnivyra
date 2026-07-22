@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import { parseModelOutputOr } from './ai/safety';
 import { getThreadMemory } from './conversationMemoryService';
 import { runCompletionWithOperation } from './aiGateway';
 
@@ -137,7 +138,7 @@ Respond with JSON: {"classification_category":"...","classification_confidence":
     });
 
     const raw = (result.output ?? '').toString().trim();
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const parsed = parseModelOutputOr<Record<string, unknown>>(raw, {}, { surface: 'engagement.triage' });
     const category = String(parsed.classification_category ?? 'general_comment').toLowerCase();
     const validCategory = CLASSIFICATION_CATEGORIES.includes(category as ClassificationCategory)
       ? (category as ClassificationCategory)

@@ -13,6 +13,17 @@ import { supabase } from '../db/supabaseClient';
 import { updateActivity } from './executionPlannerPersistence';
 import { generateMasterContentFromIntent } from './contentGenerationPipeline';
 import { buildPlatformVariantsFromMaster } from './contentGenerationPipeline';
+// WS-1c-2b (PMO-ADR-08) — BOLT CONVERGENCE. Route BOLT's per-item MASTER
+// generation through the ONE canonical GenerationRuntime (persist:false +
+// runOriginality:false = pure generation engine). FLAG-GATED (default OFF) +
+// FALL-BACK-SAFE: flag OFF or ANY runtime miss/throw ⇒ the inline
+// generateMasterContentFromIntent path runs UNCHANGED. BOLT keeps ALL of its own
+// orchestration around the master (batch loop, per-target variants, persistence,
+// moderation, workspace-adoption, distribution-grouping); only the single master
+// gen call converges. See generateBoltMaster below.
+import { generationRuntime } from './content/runtime/generationRuntime';
+// WAVE-1B-002 §C6 post-gen: canonical outbound moderation before campaign persistence.
+import { moderateBeforePersist } from './ai/safety';
 // CAMPAIGN-IMPL-006B: expose the optimized strategic context via the existing
 // additional_guidance prompt slot (item.extra_instruction).
 import { buildStrategicContextString } from '../../lib/shared/campaign/campaignOptimizer';
@@ -205,6 +216,91 @@ const CONTENT_GEN_POOL = definePool({
 });
 
 /**
+ * WS-1c-2b — cutover flag for the canonical GenerationRuntime. Default OFF ⇒ the
+ * inline `generateMasterContentFromIntent` path runs unchanged (byte-identical).
+ * Scoped to BOLT (distinct from WRITER_/TEXTGEN_ delegation flags) so it can be
+ * enabled independently and reversibly.
+ */
+function isBoltRuntimeDelegationEnabled(): boolean {
+  return /^(1|true|on|yes)$/.test(
+    String(process.env.BOLT_RUNTIME_DELEGATION_ENABLED ?? '').trim().toLowerCase(),
+  );
+}
+
+/**
+ * WS-1c-2b — produce the per-topic MASTER content. Behind
+ * BOLT_RUNTIME_DELEGATION_ENABLED (default OFF) this routes BOLT's already-built
+ * generation `item` through the canonical GenerationRuntime as a PURE generation
+ * engine (`persist:false, runOriginality:false`): the runtime reuses the ONE
+ * context resolver + prompt assembler + Semantic-Root/lineage guards to produce
+ * `out.master`, and its `out.variants` are DISCARDED (BOLT keeps its own richer
+ * per-target `buildPlatformVariantsFromMaster`). Every request field is read off
+ * the SAME `item` the legacy path feeds the primitive, so the reconstructed
+ * generation item is faithful (same topic/objective/pain_point/outcome_promise/
+ * audience/cta/writer_content_brief/extra_instruction/governance). On flag-OFF or
+ * ANY runtime miss/throw, control falls through to the inline
+ * `generateMasterContentFromIntent(item)` path UNCHANGED — enabling the flag can
+ * NEVER break BOLT generation, and the runtime never persists (no double-persist:
+ * BOLT owns persistence).
+ */
+async function generateBoltMaster(
+  item: Parameters<typeof generateMasterContentFromIntent>[0],
+): Promise<Awaited<ReturnType<typeof generateMasterContentFromIntent>>> {
+  if (isBoltRuntimeDelegationEnabled()) {
+    try {
+      const itm = item as unknown as Record<string, unknown>;
+      const intent = (itm.intent ?? {}) as Record<string, unknown>;
+      const brief = itm.writer_content_brief;
+      const asString = (v: unknown): string | undefined =>
+        typeof v === 'string' && v.trim() ? v : undefined;
+      const targetPlatforms = Array.isArray(itm.active_platform_targets)
+        ? (itm.active_platform_targets as Array<{ platform?: unknown }>)
+            .map((t) => String(t?.platform ?? '').trim().toLowerCase())
+            .filter(Boolean)
+        : [];
+      const out = await generationRuntime.generate({
+        persist: false,
+        runOriginality: false,
+        companyId: String(itm.company_id ?? ''),
+        // BOLT's master item is ALWAYS a text-flow 'post' (buildItemFromEnriched);
+        // per-target content types are handled by BOLT's own variant generation.
+        contentType: 'post',
+        topic: asString(itm.topic),
+        ...(targetPlatforms.length
+          ? { targetPlatforms, platform: targetPlatforms[0] }
+          : {}),
+        objective: asString(intent.objective),
+        audience: asString(intent.target_audience),
+        cta: asString(intent.cta_type),
+        painPoint: asString(intent.pain_point),
+        outcomePromise: asString(intent.outcome_promise),
+        brief:
+          brief && typeof brief === 'object'
+            ? (brief as Record<string, unknown>)
+            : undefined,
+        extraInstruction: asString(itm.extra_instruction),
+        governance: itm.governance ?? undefined,
+      });
+      const runtimeMaster = out.master as
+        | Awaited<ReturnType<typeof generateMasterContentFromIntent>>
+        | undefined;
+      // Accept ONLY a usable (non-placeholder/non-failed) master; otherwise fall
+      // through to the inline path so a runtime miss can never degrade output.
+      if (runtimeMaster?.content && isReusableGeneratedText(runtimeMaster.content)) {
+        return runtimeMaster;
+      }
+      console.warn('[bolt-content-gen] runtime returned no usable master; falling back to inline path');
+    } catch (err) {
+      console.error(
+        '[bolt-content-gen] runtime delegation failed; falling back to inline path',
+        (err as Error)?.message,
+      );
+    }
+  }
+  return generateMasterContentFromIntent(item);
+}
+
+/**
  * Generate master content and platform variants for all daily plan activities.
  * Processes topic groups with limited concurrency (2) for speed.
  * Returns a map: `${rowId}` -> generated_content for each daily plan row.
@@ -319,8 +415,18 @@ export async function generateContentForDailyPlans(
         generation_source: 'ai',
       };
     } else {
-      master = await generateMasterContentFromIntent(item);
+      // WS-1c-2b — flag-gated convergence: master flows through the ONE runtime
+      // when BOLT_RUNTIME_DELEGATION_ENABLED, else the inline primitive (unchanged).
+      master = await generateBoltMaster(item);
     }
+
+    // WAVE-1B-002 — moderate generated master content ONCE before any campaign
+    // persistence (blog insert + daily_content_plans). Shadow (default) classifies
+    // + audits without blocking; enforce withholds unsafe content from persistence.
+    const masterModeration = await moderateBeforePersist(String(master.content ?? ''), {
+      surface: 'campaign.master', correlationId: campaignCompanyId ?? undefined,
+    });
+    const masterModerationAllowed = masterModeration.allow;
 
     (item as any).master_content = { ...master, generation_status: 'generated' };
     // R3-P2: fully adopted groups never adapt — each row publishes its own
@@ -346,7 +452,7 @@ export async function generateContentForDailyPlans(
       isReusableGeneratedText(master.content);
 
     const hasBlogRow = rows.some((r) => isBlogContentType(r.content_type));
-    if (hasBlogRow && masterIsValid && campaignCompanyId && campaignUserId) {
+    if (hasBlogRow && masterIsValid && masterModerationAllowed && campaignCompanyId && campaignUserId) {
       try {
         const blogTitle = String(enriched.topicTitle ?? enriched.topic ?? enriched.title ?? first.topic ?? first.title ?? '').trim() || 'Untitled Article';
         const datePart = String(first.date ?? '').slice(0, 10);

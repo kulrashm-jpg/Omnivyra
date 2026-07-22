@@ -12,6 +12,30 @@ import {
   extractStrategyProfile,
   validateStrategicPerspective,
 } from './companyStrategyPerspective';
+// Wave 1 item 6 — ONE canonical content-context resolver. The company/identity
+// resolution + the canonical context block live there now; these thin bindings
+// keep the SAME exported names/signatures/output for every existing importer.
+import {
+  extractCompanyIdentity as __extractCompanyIdentity,
+  buildCompetitorIdentityContext as __buildCompetitorIdentityContext,
+  buildUserGuidedIdentityContext as __buildUserGuidedIdentityContext,
+  buildContextBlock as __buildContextBlock,
+} from '../../backend/services/context/canonicalContentContextResolver';
+// WAVE-1A (AI-CONTRACT-000 §C6): the instruction-hierarchy preamble at the system-
+// prompt head. Untrusted fields are already escaped at extractCompanyIdentity; this
+// declares the hierarchy (system > data > user) so fenced/escaped context is treated
+// as DATA. Flag-gated (default on) for instant, quality-safe reversibility.
+import { INSTRUCTION_HIERARCHY_PREAMBLE } from '../../backend/services/ai/safety';
+import { defineRolloutFlag, resolveRolloutSync } from '../platform/rollout';
+
+const PROMPT_SAFETY_PREAMBLE_FLAG = defineRolloutFlag({
+  key: 'prompt-safety-preamble',
+  description: 'WAVE-1A: prepend the instruction-hierarchy preamble to the identity-lock system prompt',
+  defaultMode: 'enforce',
+});
+function preambleEnabled(): boolean {
+  try { return resolveRolloutSync(PROMPT_SAFETY_PREAMBLE_FLAG).mode === 'enforce'; } catch { return false; }
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,82 +73,21 @@ export interface CompanyContextScoreResult {
   issues: string[];
 }
 
-// ── Extract CompanyIdentity from CompanyProfile ──────────────────────────────
+// ── Extract CompanyIdentity + identity enrichment ────────────────────────────
+// DELEGATED to the canonical resolver (Wave 1 item 6). Re-exported here with the
+// SAME names/signatures so every existing importer (barrel + direct) is unchanged.
+// Local bindings are also used by the enforcement builders below.
 
-export function extractCompanyIdentity(profile: CompanyProfile | null | undefined): CompanyIdentity {
-  if (!profile) return {};
-  return {
-    companyName: profile.name || undefined,
-    industry: profile.industry || undefined,
-    targetAudience: profile.target_audience || undefined,
-    idealCustomerProfile: profile.ideal_customer_profile || undefined,
-    coreProblem: profile.core_problem_statement || undefined,
-    painPoints: profile.pain_symptoms?.filter(Boolean) || undefined,
-    uniqueValue: profile.unique_value || undefined,
-    productsServices: profile.products_services || undefined,
-    desiredTransformation: profile.desired_transformation || undefined,
-    competitiveAdvantages: profile.competitive_advantages || undefined,
-    authorityDomains: profile.authority_domains?.filter(Boolean) || undefined,
-    keyMessages: profile.key_messages || undefined,
-    brandVoice: profile.brand_voice || undefined,
-    strategyProfile: extractStrategyProfile(profile),
-    entityArchetype: profile.report_settings?.entity_archetype ?? null,
-    competitorIntelligence: profile.report_settings?.competitor_intelligence ?? null,
-    userGuidance: profile.report_settings?.user_guidance ?? null,
-  };
-}
-
-export function buildCompetitorIdentityContext(identity: CompanyIdentity): string {
-  if (!shouldUseAudienceLedSynthesis(identity.entityArchetype, identity.competitorIntelligence ?? null)) return '';
-  return buildStructuredCompetitorDimensionBlock(identity.competitorIntelligence ?? null);
-}
-
-export function buildUserGuidedIdentityContext(identity: CompanyIdentity): string {
-  const guidance = identity.userGuidance;
-  if (!guidance) return '';
-  const lines: string[] = [];
-  for (const [section, field] of Object.entries(guidance.messaging ?? {})) {
-    const value = field?.edited_value ?? field?.approved_value ?? field?.guidance;
-    if (value) lines.push(`${section.replace(/_/g, ' ')}: ${value}`);
-  }
-  for (const note of guidance.guidance_notes ?? []) {
-    if (note.status === 'archived' || !note.text) continue;
-    lines.push(`guidance: ${note.text}`);
-  }
-  return lines.slice(0, 6).join('\n');
-}
+export const extractCompanyIdentity = __extractCompanyIdentity;
+export const buildCompetitorIdentityContext = __buildCompetitorIdentityContext;
+export const buildUserGuidedIdentityContext = __buildUserGuidedIdentityContext;
 
 // ── 1. Canonical Company Context Block ───────────────────────────────────────
 // Used in EVERY prompt (system or user) across all content types.
+// DELEGATES to the canonical resolver's buildContextBlock — identical output.
 
 export function buildCompanyContextBlock(identity: CompanyIdentity): string {
-  const archetypeContext = isBusinessFirstOnlyArchetype(identity.entityArchetype)
-    ? ''
-    : buildArchetypePromptContext(identity.entityArchetype);
-  const competitorIdentityContext = buildCompetitorIdentityContext(identity);
-  const userGuidanceContext = buildUserGuidedIdentityContext(identity);
-  const lines = [
-    identity.companyName ? `COMPANY: ${identity.companyName}` : null,
-    archetypeContext ? `ENTITY ARCHETYPE: ${archetypeContext}` : null,
-    competitorIdentityContext ? `PEER INTELLIGENCE: ${competitorIdentityContext}` : null,
-    userGuidanceContext ? `USER-APPROVED IDENTITY GUIDANCE: ${userGuidanceContext}` : null,
-    identity.industry ? `INDUSTRY: ${identity.industry}` : null,
-    identity.targetAudience ? `TARGET AUDIENCE: ${identity.targetAudience}` : null,
-    identity.idealCustomerProfile ? `IDEAL CUSTOMER (ICP): ${identity.idealCustomerProfile}` : null,
-    identity.coreProblem ? `CORE PROBLEM: ${identity.coreProblem}` : null,
-    identity.painPoints?.length ? `PAIN POINTS: ${identity.painPoints.slice(0, 5).join('; ')}` : null,
-    identity.uniqueValue ? `UNIQUE VALUE: ${identity.uniqueValue}` : null,
-    identity.productsServices ? `PRODUCTS/SERVICES: ${identity.productsServices}` : null,
-    identity.desiredTransformation ? `TRANSFORMATION: ${identity.desiredTransformation}` : null,
-    identity.competitiveAdvantages ? `DIFFERENTIATORS: ${identity.competitiveAdvantages}` : null,
-    identity.authorityDomains?.length ? `AUTHORITY DOMAINS: ${identity.authorityDomains.slice(0, 5).join(', ')}` : null,
-    identity.keyMessages ? `KEY MESSAGES: ${identity.keyMessages}` : null,
-    identity.brandVoice ? `BRAND VOICE: ${identity.brandVoice} — write every sentence in this voice.` : null,
-    identity.strategyProfile ? buildStrategyInstructions(identity.strategyProfile) : null,
-  ].filter(Boolean);
-
-  if (lines.length === 0) return '';
-  return lines.join('\n');
+  return __buildContextBlock(identity);
 }
 
 /** Short version for short-form content (posts, threads). Max 4 lines. */
@@ -162,6 +125,7 @@ export function buildIdentityLock(identity: CompanyIdentity, contentType: string
   const userGuidanceContext = buildUserGuidedIdentityContext(identity);
 
   return (
+    (preambleEnabled() ? `${INSTRUCTION_HIERARCHY_PREAMBLE}\n\n` : '') +
     `You are the in-house content strategist for ${name}. ` +
     `You write AS ${name}, not as an outside observer. ` +
     `Every piece of content must reflect ${name}'s ${audienceLed ? valueSurface : 'expertise, positioning, and audience'}.\n\n` +

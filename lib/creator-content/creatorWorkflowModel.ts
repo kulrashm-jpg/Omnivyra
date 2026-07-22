@@ -8,6 +8,7 @@ import {
   type WriterCreatorSourcePayload,
 } from '../content/writerCreatorAssetLaunch';
 import type { MarketingBrief } from '../content/unifiedCreationModel';
+import { getCreationGoal } from '../content/unifiedCreationModel';
 import type { AttachmentMode } from '../content/writerCreatorAttachmentContracts';
 import type { CreatorDiagnosticReport } from '../../backend/services/creator/creatorDiagnosticReport';
 import {
@@ -293,6 +294,15 @@ export function mapBriefToEditorAnswers(brief: MarketingBrief, config: WorkflowC
   for (const id of ['keyMessage', 'message', 'coreMessage', 'mainMessage', 'headline']) set(id, message);
   set('cta', brief.cta);
   set('offer', brief.offer);
+  // Objective Preservation (Wave 0): seed `objective` from the brief's
+  // substantive intent (goal label → specific offer → conversational brief) so
+  // the user's real objective reaches generation instead of the workflow's
+  // silent select default ('awareness'). This is merged into `answers` AFTER
+  // buildDefaultAnswers in the lifecycle, so a brief-derived objective always
+  // overrides that UI default. (Refining this to a matching select option is
+  // Wave-1 UI work — here we simply preserve the intent.)
+  const goalLabel = brief.goalId ? (getCreationGoal(brief.goalId)?.label ?? '') : '';
+  set('objective', goalLabel || (brief.offer ?? '').trim() || message);
   // NOTE: do NOT seed dataPoints/stats from the freeform brief — the infographic
   // renderer extracts metrics from that field and mangles freeform text (e.g. the
   // year "2026" rendered as a giant "2026B" numeral). Leave it for the user / AI.

@@ -1,0 +1,130 @@
+{
+  "runtimes": [
+    {
+      "wp": "WP-02",
+      "module": "validate-docs.mjs",
+      "digest": "005975e3"
+    },
+    {
+      "wp": "WP-03",
+      "module": "census-runtime.mjs",
+      "digest": "9f16e998"
+    },
+    {
+      "wp": "WP-04",
+      "module": "health-runtime.mjs",
+      "digest": "0675cb76"
+    },
+    {
+      "wp": "WP-05",
+      "module": "freeze-runtime.mjs",
+      "digest": "a134b8c1"
+    },
+    {
+      "wp": "WP-06",
+      "module": "graph-runtime.mjs",
+      "digest": "11290af4"
+    },
+    {
+      "wp": "WP-07",
+      "module": "drift-runtime.mjs",
+      "digest": "79cf4407"
+    },
+    {
+      "wp": "WP-08",
+      "module": "evidence-runtime.mjs",
+      "digest": "f65bf9a3"
+    },
+    {
+      "wp": "WP-09",
+      "module": "release-runtime.mjs",
+      "digest": "76c2f048"
+    },
+    {
+      "wp": "WP-10",
+      "module": "enforce-runtime.mjs",
+      "digest": "dc20edc6"
+    },
+    {
+      "wp": "WP-11",
+      "module": "cert-runtime.mjs",
+      "digest": "f0703be0"
+    },
+    {
+      "wp": "WP-12",
+      "module": "orchestrator.mjs",
+      "digest": "a1531f8d"
+    },
+    {
+      "wp": "WP-13",
+      "module": "optimizer.mjs",
+      "digest": "a1531f8d"
+    },
+    {
+      "wp": "WP-14",
+      "module": "activation.mjs",
+      "digest": "43b2fcf7"
+    },
+    {
+      "wp": "WP-15",
+      "module": "assurance.mjs",
+      "digest": "1e27cd1a"
+    },
+    {
+      "wp": "WP-16",
+      "module": "production-cert.mjs",
+      "digest": "9c2a0590"
+    },
+    {
+      "wp": "WP-17",
+      "module": "audit.mjs",
+      "digest": "dbf65748"
+    },
+    {
+      "wp": "WP-18",
+      "module": "lockdown.mjs",
+      "digest": "ae8cdfdf"
+    },
+    {
+      "wp": "WP-19",
+      "module": "evolution.mjs",
+      "digest": "71aee69f"
+    },
+    {
+      "wp": "WP-20",
+      "module": "succession.mjs",
+      "digest": "64cce42c"
+    },
+    {
+      "wp": "WP-21",
+      "module": "active-constitution.mjs",
+      "digest": "9145bee6"
+    },
+    {
+      "wp": "WP-22",
+      "module": "enforce-constitution.mjs",
+      "digest": "8c6b5368"
+    },
+    {
+      "wp": "WP-23",
+      "module": "gateway.mjs",
+      "digest": "6223bfe0"
+    },
+    {
+      "wp": "WP-24",
+      "module": "execution-orchestrator.mjs",
+      "digest": "19e9601c"
+    },
+    {
+      "wp": "WP-25",
+      "module": "supervision.mjs",
+      "digest": "3efcd3f2"
+    },
+    {
+      "wp": "WP-26",
+      "module": "closure.mjs",
+      "digest": "f6daa9fd"
+    }
+  ],
+  "releaseDigest": "4903e8fb"
+}

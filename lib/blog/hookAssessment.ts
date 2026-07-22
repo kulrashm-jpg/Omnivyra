@@ -10,6 +10,7 @@
  */
 
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { parseModelOutputOr } from '../../backend/services/ai/safety';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ Return ONLY valid JSON:
       ],
     });
 
-    const raw = result.output ? JSON.parse(result.output) : null;
+    const raw = parseModelOutputOr<any>(result.output, null, { surface: 'blog.hookAssessment' });
     if (raw && typeof raw.strength === 'string' && typeof raw.note === 'string') {
       return {
         strength: ['strong', 'moderate', 'weak'].includes(raw.strength)
