@@ -53,6 +53,9 @@
 import type { CompanyProfile } from './companyProfileService';
 import type { PolishFlags } from './recommendationPolishService';
 import { sanitizeTopicForDisplay } from './recommendationPolishService';
+// RELEASE-READINESS-001 — fail-safe observability for the degraded (catch) path only.
+// Emits a bounded counter; never narrative text, profile text or a tenant id.
+import { recordStrategicIntelligenceFailed } from '../observability/strategicIntelligenceMetrics';
 
 /** The six strategic narrative fields carried on `card.intelligence`. */
 export type StrategicRecommendationIntelligence = {
@@ -327,6 +330,12 @@ export function enrichRecommendationIntelligence(
       } as StrategicallyEnrichedRecommendation;
     });
   } catch {
+    // RELEASE-READINESS-001 — the ONLY observable signal that enrichment degraded.
+    // The historical `catch` swallows the error and returns a generic narrative, so
+    // without this counter a production failure is completely silent. The emitter is
+    // itself fail-safe (it cannot throw) and returns void — the fallback below is
+    // byte-identical to the restored behaviour.
+    recordStrategicIntelligenceFailed('producer_fallback');
     return recommendations.map((rec) => ({
       ...rec,
       intelligence: {

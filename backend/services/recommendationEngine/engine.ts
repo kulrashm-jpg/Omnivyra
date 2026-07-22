@@ -42,6 +42,12 @@ import {
   enrichRecommendationIntelligence,
   strategicRecommendationIntelligenceEnabled,
 } from '../strategicRecommendationIntelligenceService';
+// RELEASE-READINESS-001 — fail-safe enrichment observability (HARDEN-001 registry).
+import {
+  recordStrategicIntelligenceInvoked,
+  recordStrategicIntelligenceSucceeded,
+  recordStrategicIntelligenceSkipped,
+} from '../../observability/strategicIntelligenceMetrics';
 import { buildCompanyStrategyDNA } from '../companyStrategyDNAService';
 import { analyzeStrategySignals } from '../recommendationStrategyFeedbackService';
 import { sequenceRecommendations } from '../recommendationSequencingService';
@@ -867,14 +873,26 @@ const generateRecommendationsCore = async (
   // restored at its historical position (after polish, before card rendering).
   // Flag OFF ⇒ `trendsUsed` is carried forward unchanged, byte-identical to the
   // no-op pass-through this replaces.
+  //
+  // RELEASE-READINESS-001 — instrumentation only. Every `record*` call below is a
+  // fail-safe no-op wrapper over the HARDEN-001 registry: it cannot throw, emits
+  // counts/durations/fixed enums only (never narrative text or a tenant id), and
+  // does not touch `trendsUsed`. Flag-OFF output stays byte-identical.
   if (strategicRecommendationIntelligenceEnabled()) {
+    recordStrategicIntelligenceInvoked('primary');
+    const enrichmentStartedAt = Date.now();
     const enriched = enrichRecommendationIntelligence(
       trendsUsed as unknown as Array<Record<string, unknown> & { topic: string }>,
       profile,
     );
     if (enriched.length > 0) {
       trendsUsed = enriched as unknown as TrendSignalNormalized[];
+      recordStrategicIntelligenceSucceeded('primary', Date.now() - enrichmentStartedAt);
+    } else {
+      recordStrategicIntelligenceSkipped('empty_result', 'primary');
     }
+  } else {
+    recordStrategicIntelligenceSkipped('flag_disabled', 'primary');
   }
 
   const { getExcludedThemeTopicsForCompany } = await import('../companyThemeStateService');
@@ -935,16 +953,27 @@ const generateRecommendationsCore = async (
     // PRODUCT-RESTORE-001 Phase 3 — same restoration on the fallback path.
     // Flag OFF ⇒ `enrichedFallback` is empty and the ternary selects
     // `polishedFallback`, byte-identical to the no-op pass-through this replaces.
-    const enrichedFallback = strategicRecommendationIntelligenceEnabled()
-      ? enrichRecommendationIntelligence(
-          polishedFallback as unknown as Array<Record<string, unknown> & { topic: string }>,
-          profile,
-        )
-      : [];
-    const processedFallback =
-      enrichedFallback.length > 0
-        ? (enrichedFallback as unknown as TrendSignalNormalized[])
-        : polishedFallback;
+    //
+    // RELEASE-READINESS-001 — instrumentation only; see the primary seam above.
+    // The if/else below is the exact ternary it replaces: flag OFF, or an empty
+    // producer result, both still select `polishedFallback`.
+    let processedFallback = polishedFallback;
+    if (strategicRecommendationIntelligenceEnabled()) {
+      recordStrategicIntelligenceInvoked('fallback');
+      const fallbackEnrichmentStartedAt = Date.now();
+      const enrichedFallback = enrichRecommendationIntelligence(
+        polishedFallback as unknown as Array<Record<string, unknown> & { topic: string }>,
+        profile,
+      );
+      if (enrichedFallback.length > 0) {
+        processedFallback = enrichedFallback as unknown as TrendSignalNormalized[];
+        recordStrategicIntelligenceSucceeded('fallback', Date.now() - fallbackEnrichmentStartedAt);
+      } else {
+        recordStrategicIntelligenceSkipped('empty_result', 'fallback');
+      }
+    } else {
+      recordStrategicIntelligenceSkipped('flag_disabled', 'fallback');
+    }
     trendsUsed = [...trendsUsed, ...processedFallback].slice(0, MIN_THEME_COUNT);
   }
 
