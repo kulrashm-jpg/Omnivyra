@@ -35,6 +35,13 @@ import { deriveDisqualifiedSignals } from '../companyMissionContext';
 import { buildCompanyContext } from '../companyContextService';
 import { getCompanyContextIntelligence } from '../companyContextIntelligenceService';
 import { polishRecommendations } from '../recommendationPolishService';
+// PRODUCT-RESTORE-001 — restored Strategic Recommendation Intelligence producer
+// (deleted as collateral in 6cd30522; see PRODUCT-ARCH-001). Flag-gated: default OFF
+// preserves the current no-op pass-through exactly.
+import {
+  enrichRecommendationIntelligence,
+  strategicRecommendationIntelligenceEnabled,
+} from '../strategicRecommendationIntelligenceService';
 import { buildCompanyStrategyDNA } from '../companyStrategyDNAService';
 import { analyzeStrategySignals } from '../recommendationStrategyFeedbackService';
 import { sequenceRecommendations } from '../recommendationSequencingService';
@@ -856,9 +863,19 @@ const generateRecommendationsCore = async (
   if (polished.length > 0) {
     trendsUsed = polished as unknown as TrendSignalNormalized[];
   }
-  // Intelligence enrichment was removed upstream; this step is now a no-op
-  // pass-through (equivalent to the prior empty-result branch). trendsUsed
-  // is carried forward unchanged.
+  // PRODUCT-RESTORE-001 Phase 3 — Strategic Recommendation Intelligence enrichment,
+  // restored at its historical position (after polish, before card rendering).
+  // Flag OFF ⇒ `trendsUsed` is carried forward unchanged, byte-identical to the
+  // no-op pass-through this replaces.
+  if (strategicRecommendationIntelligenceEnabled()) {
+    const enriched = enrichRecommendationIntelligence(
+      trendsUsed as unknown as Array<Record<string, unknown> & { topic: string }>,
+      profile,
+    );
+    if (enriched.length > 0) {
+      trendsUsed = enriched as unknown as TrendSignalNormalized[];
+    }
+  }
 
   const { getExcludedThemeTopicsForCompany } = await import('../companyThemeStateService');
   const { generateThemeKey } = await import('../themeKeyService');
@@ -915,9 +932,19 @@ const generateRecommendationsCore = async (
     const biased = applyPersonaPlatformBias(fallbackSignals, personaSummary, profile);
     const polished = polishRecommendations(biased, profile, input.strategicPayload);
     const polishedFallback = polished.length > 0 ? (polished as unknown as TrendSignalNormalized[]) : biased;
-    // Intelligence enrichment removed upstream; no-op pass-through
-    // (equivalent to the prior empty-result branch).
-    const processedFallback = polishedFallback;
+    // PRODUCT-RESTORE-001 Phase 3 — same restoration on the fallback path.
+    // Flag OFF ⇒ `enrichedFallback` is empty and the ternary selects
+    // `polishedFallback`, byte-identical to the no-op pass-through this replaces.
+    const enrichedFallback = strategicRecommendationIntelligenceEnabled()
+      ? enrichRecommendationIntelligence(
+          polishedFallback as unknown as Array<Record<string, unknown> & { topic: string }>,
+          profile,
+        )
+      : [];
+    const processedFallback =
+      enrichedFallback.length > 0
+        ? (enrichedFallback as unknown as TrendSignalNormalized[])
+        : polishedFallback;
     trendsUsed = [...trendsUsed, ...processedFallback].slice(0, MIN_THEME_COUNT);
   }
 
