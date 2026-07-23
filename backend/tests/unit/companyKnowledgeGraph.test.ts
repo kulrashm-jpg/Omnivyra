@@ -11,6 +11,7 @@ import {
   isQuestionEligible,
   profileKnowledgeReadiness,
   buildKnowledgeGrounding,
+  readFieldConfidenceBand,
   KNOWLEDGE_NODES,
 } from '../../services/companyProfile/companyKnowledgeGraph';
 import type { CompanyProfile } from '../../services/companyProfile/types';
@@ -169,6 +170,156 @@ describe('Grounding block — the single what-is-known + what-to-ask-next source
     expect(ground.nextQuestion).not.toBeNull();
     // never proposes a satisfied node
     expect(['company', 'products_services']).not.toContain(ground.nextQuestion?.nodeId);
+  });
+});
+
+describe('Phase A — company_name vs name key resolution (graph bug fix)', () => {
+  test('company node resolves band from the canonical `name` key', () => {
+    const g = buildCompanyKnowledgeGraph(base({ name: 'Acme', field_confidence: { name: 'High' } }));
+    expect(g.byId.company.confidence).toBe('high');
+    expect(g.byId.company.state).toBe('observed');
+    expect(g.byId.company.satisfied).toBe(true);
+  });
+
+  test('company node falls back to the legacy `company_name` key the refine path writes', () => {
+    // Regression: refine writes the band under `company_name`, graph read `name` → missed → low.
+    const g = buildCompanyKnowledgeGraph(base({ name: 'Acme', field_confidence: { company_name: 'High' } }));
+    expect(g.byId.company.confidence).toBe('high');
+    expect(g.byId.company.state).toBe('observed');
+  });
+
+  test('`name` is preferred over `company_name` when both carry a band', () => {
+    const g = buildCompanyKnowledgeGraph(base({ name: 'Acme', field_confidence: { name: 'Low', company_name: 'High' } }));
+    expect(g.byId.company.confidence).toBe('low');
+  });
+
+  test('missing name band still defaults to low (backward compatible)', () => {
+    const g = buildCompanyKnowledgeGraph(base({ name: 'Acme' }));
+    expect(g.byId.company.confidence).toBe('low');
+    expect(g.byId.company.state).toBe('inferred');
+  });
+});
+
+describe('Phase A — union-tolerant readFieldConfidenceBand', () => {
+  test('resolves a string band', () => {
+    expect(readFieldConfidenceBand({ name: 'High' }, 'name')).toBe('high');
+    expect(readFieldConfidenceBand({ name: 'medium' }, 'name')).toBe('medium');
+    expect(readFieldConfidenceBand({ name: 'LOW' }, 'name')).toBe('low');
+  });
+
+  test('resolves the {confidence} object shape (string and numeric)', () => {
+    expect(readFieldConfidenceBand({ name: { confidence: 'high' } }, 'name')).toBe('high');
+    expect(readFieldConfidenceBand({ name: { confidence: 0.9 } }, 'name')).toBe('high');
+    expect(readFieldConfidenceBand({ name: { confidence: 0.5 } }, 'name')).toBe('medium');
+    expect(readFieldConfidenceBand({ name: { confidence: 0.1 } }, 'name')).toBe('low');
+  });
+
+  test('resolves a bare numeric band', () => {
+    expect(readFieldConfidenceBand({ name: 0.8 }, 'name')).toBe('high');
+  });
+
+  test('unrecognized / missing → undefined, then next key wins', () => {
+    expect(readFieldConfidenceBand({ name: 'Needs Review' }, 'name')).toBeUndefined();
+    expect(readFieldConfidenceBand({}, 'name')).toBeUndefined();
+    expect(readFieldConfidenceBand(null, 'name')).toBeUndefined();
+    expect(readFieldConfidenceBand({ name: 'Needs Review', company_name: 'High' }, 'name', 'company_name')).toBe('high');
+  });
+
+  test('the graph tolerates the {confidence} object shape end-to-end', () => {
+    const fc = { products_services: { confidence: 'high' } } as unknown as Record<string, string>;
+    const g = buildCompanyKnowledgeGraph(base({ products_services: 'Analytics', field_confidence: fc }));
+    expect(g.byId.products_services.confidence).toBe('high');
+    expect(g.byId.products_services.state).toBe('observed');
+  });
+});
+
+describe('Phase A — corrected state (user edit that differs from prior AI value)', () => {
+  test('locked field whose prior AI value DIFFERS is corrected (from messaging trail)', () => {
+    const g = buildCompanyKnowledgeGraph(base({
+      unique_value: 'Real-time retail insight',
+      user_locked_fields: ['unique_value'],
+      field_confidence: { unique_value: 'High' },
+      report_settings: {
+        user_guidance: { messaging: { differentiation: { ai_value: 'Cheaper than rivals', updated_at: '2026-01-02T00:00:00Z' } } },
+      } as CompanyProfile['report_settings'],
+    }));
+    expect(g.byId.unique_value.state).toBe('corrected');
+    expect(g.byId.unique_value.source).toBe('user');
+    expect(g.byId.unique_value.timestamp).toBe('2026-01-02T00:00:00Z');
+  });
+
+  test('locked field whose prior AI value MATCHES stays confirmed (approval, not correction)', () => {
+    const g = buildCompanyKnowledgeGraph(base({
+      unique_value: 'Cheaper than rivals',
+      user_locked_fields: ['unique_value'],
+      field_confidence: { unique_value: 'High' },
+      report_settings: {
+        user_guidance: { messaging: { differentiation: { ai_value: 'Cheaper than rivals' } } },
+      } as CompanyProfile['report_settings'],
+    }));
+    expect(g.byId.unique_value.state).toBe('confirmed');
+  });
+
+  test('locked field with no recoverable prior value stays confirmed (never guesses)', () => {
+    const g = buildCompanyKnowledgeGraph(base({
+      target_audience: 'Retail chains', user_locked_fields: ['target_audience'], field_confidence: { target_audience: 'Low' },
+    }));
+    expect(g.byId.target_audience.state).toBe('confirmed');
+  });
+
+  test('corrected is also recoverable from the user_guidance audit trail', () => {
+    const g = buildCompanyKnowledgeGraph(base({
+      industry: 'Retail SaaS',
+      user_locked_fields: ['industry'],
+      field_confidence: { industry: 'High' },
+      report_settings: {
+        user_guidance: { audit: [{ action: 'edit', target: 'industry', before: 'Generic software', after: 'Retail SaaS', created_at: '2026-02-02T00:00:00Z' }] },
+      } as CompanyProfile['report_settings'],
+    }));
+    expect(g.byId.industry.state).toBe('corrected');
+    expect(g.byId.industry.timestamp).toBe('2026-02-02T00:00:00Z');
+  });
+});
+
+describe('Phase A — timestamp + provenance are populated where available', () => {
+  test('discovered provenance flows onto the node', () => {
+    const g = buildCompanyKnowledgeGraph(base({
+      geography: 'US',
+      field_confidence: { geography: 'Low' },
+      report_settings: {
+        discovered_metadata: {
+          provenance: { geography: { source: 'website_crawl', discoveredAt: '2026-03-03T00:00:00Z', lastVerified: '2026-03-04T00:00:00Z', verificationStatus: 'verified' } },
+        },
+      } as unknown as CompanyProfile['report_settings'],
+    }));
+    expect(g.byId.geography.provenance?.origin).toBe('discovered');
+    expect(g.byId.geography.provenance?.source).toBe('website_crawl');
+    expect(g.byId.geography.timestamp).toBe('2026-03-04T00:00:00Z');
+  });
+
+  test('ai_refined values carry ai_refiner provenance + refine timestamp', () => {
+    const g = buildCompanyKnowledgeGraph(base({
+      products_services: 'Analytics', field_confidence: { products_services: 'High' },
+      source: 'ai_refined', last_refined_at: '2026-04-04T00:00:00Z',
+    }));
+    expect(g.byId.products_services.provenance?.origin).toBe('ai_refined');
+    expect(g.byId.products_services.timestamp).toBe('2026-04-04T00:00:00Z');
+  });
+
+  test('locked values carry user provenance', () => {
+    const g = buildCompanyKnowledgeGraph(base({
+      target_audience: 'Retail chains', user_locked_fields: ['target_audience'], field_confidence: { target_audience: 'Low' },
+      updated_at: '2026-05-05T00:00:00Z',
+    }));
+    expect(g.byId.target_audience.provenance?.origin).toBe('user');
+    expect(g.byId.target_audience.provenance?.source).toBe('user_locked');
+    expect(g.byId.target_audience.timestamp).toBe('2026-05-05T00:00:00Z');
+  });
+
+  test('unknown nodes carry no provenance or timestamp (never fabricated)', () => {
+    const g = buildCompanyKnowledgeGraph(base());
+    expect(g.byId.company.provenance).toBeUndefined();
+    expect(g.byId.company.timestamp).toBeUndefined();
   });
 });
 

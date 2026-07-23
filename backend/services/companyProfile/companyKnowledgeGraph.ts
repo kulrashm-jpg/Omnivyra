@@ -18,7 +18,7 @@
  * refine pipeline, the completeness calculators, or the campaign QA-state engine.
  */
 
-import type { CompanyProfile } from './types';
+import type { CompanyProfile, UserGuidanceStrategicSection } from './types';
 
 // ── Node state model ─────────────────────────────────────────────────────────
 
@@ -44,6 +44,25 @@ export interface KnowledgeNode {
   minConfidence?: KnowledgeConfidence;
 }
 
+/**
+ * Richer, per-node provenance. Additive to `source` (which stays a coarse enum
+ * for existing consumers). Populated from what the canonical profile already
+ * carries — `report_settings.discovered_metadata.provenance`, user locks, the
+ * refine trail — never fabricated. Absent when genuinely unavailable.
+ */
+export interface KnowledgeProvenance {
+  /** Coarse origin classification for the resolved value. */
+  origin: 'user' | 'discovered' | 'ai_refined' | 'profile';
+  /** Free-form source label when known (e.g. 'website_crawl', 'ai_refiner', 'user_locked'). */
+  source?: string;
+  /** ISO timestamp the value was first discovered (system-discovered fields only). */
+  discoveredAt?: string;
+  /** ISO timestamp the value was last verified, when tracked. */
+  lastVerified?: string;
+  /** Verification status carried by discovered provenance, when tracked. */
+  verificationStatus?: string;
+}
+
 export interface KnowledgeNodeResolution {
   id: string;
   label: string;
@@ -57,6 +76,17 @@ export interface KnowledgeNodeResolution {
   resolvedValue: string | null;
   satisfied: boolean;
   question: string;
+  /**
+   * ISO timestamp for when this node's value was last established, sourced from
+   * the best available signal (discovered provenance → refine time → profile
+   * update). Optional & additive: undefined when no timestamp is recoverable.
+   */
+  timestamp?: string;
+  /**
+   * Per-node provenance (additive). Undefined for unknown nodes and when no
+   * provenance signal is recoverable — never fabricated.
+   */
+  provenance?: KnowledgeProvenance;
 }
 
 // ── Canonical node registry ──────────────────────────────────────────────────
@@ -163,14 +193,55 @@ function resolveTeam(p: CompanyProfile): string | null {
   return str(p.report_settings?.company_facts?.team_size) || null;
 }
 
-const bandToConfidence = (band: string | undefined): KnowledgeConfidence => {
-  switch (String(band ?? '').toLowerCase()) {
+/** Map a string band ('High'/'Medium'/'Low', any case) → band, or undefined if unrecognized. */
+const bandStringToConfidence = (band: string): KnowledgeConfidence | undefined => {
+  switch (band.trim().toLowerCase()) {
     case 'high': return 'high';
     case 'medium': return 'medium';
     case 'low': return 'low';
-    default: return 'low';
+    default: return undefined; // e.g. 'Needs Review', '' → not a usable band
   }
 };
+
+/** Map a numeric confidence (0–1 scale) → band, matching the provenance service convention. */
+const numberToConfidence = (n: number): KnowledgeConfidence =>
+  n >= 0.75 ? 'high' : n >= 0.4 ? 'medium' : 'low';
+
+/**
+ * THE canonical confidence-read helper. `field_confidence[key]` is an undeclared
+ * union across the codebase: some paths (refine, problem/transformation) write a
+ * STRING band ('High'|'Medium'|'Low'), while others read it as an OBJECT
+ * `{ confidence }` where confidence is a band string OR a 0–1 number
+ * (companyProfileProvenanceService, knowledge/companyKnowledgeModel). This helper
+ * returns a canonical band from EITHER shape, tolerating both.
+ *
+ * Accepts multiple keys and returns the first that yields a usable band — used to
+ * resolve the company/name node from EITHER `name` (preferred) OR the legacy
+ * `company_name` key the website-refine path writes under. Returns undefined when
+ * no key yields a recognizable band (caller decides the default).
+ */
+export function readFieldConfidenceBand(
+  fieldConfidence: Record<string, unknown> | null | undefined,
+  ...keys: string[]
+): KnowledgeConfidence | undefined {
+  if (!fieldConfidence) return undefined;
+  for (const key of keys) {
+    const raw = fieldConfidence[key];
+    if (raw === undefined || raw === null) continue;
+    if (typeof raw === 'string') {
+      const b = bandStringToConfidence(raw);
+      if (b) return b;
+      continue; // present but unrecognized (e.g. 'Needs Review') → try next key
+    }
+    if (typeof raw === 'number') return numberToConfidence(raw);
+    if (typeof raw === 'object') {
+      const c = (raw as { confidence?: unknown }).confidence;
+      if (typeof c === 'string') { const b = bandStringToConfidence(c); if (b) return b; }
+      else if (typeof c === 'number') return numberToConfidence(c);
+    }
+  }
+  return undefined;
+}
 
 /** Canonical column a node's confidence band is keyed under in field_confidence. */
 const NODE_CONFIDENCE_KEY: Record<string, string> = {
@@ -181,6 +252,15 @@ const NODE_CONFIDENCE_KEY: Record<string, string> = {
   team: 'team_size', core_problem: 'core_problem_statement', desired_transformation: 'desired_transformation',
 };
 
+/**
+ * Legacy/alternate keys the same node's confidence band may be written under.
+ * The website-refine path writes the company name band under `company_name`
+ * (not `name`), so the company node must resolve from either — `name` preferred.
+ */
+const NODE_CONFIDENCE_FALLBACK_KEYS: Record<string, string[]> = {
+  company: ['company_name'],
+};
+
 // ── Build the graph ──────────────────────────────────────────────────────────
 
 export interface CompanyKnowledgeGraph {
@@ -188,27 +268,129 @@ export interface CompanyKnowledgeGraph {
   byId: Record<string, KnowledgeNodeResolution>;
 }
 
+// ── Per-node provenance + correction recovery (additive, consume-only) ────────
+
+interface DiscoveredFieldProvenance {
+  source?: string;
+  confidence?: string;
+  discoveredAt?: string;
+  lastVerified?: string | null;
+  verificationStatus?: string;
+  fieldOrigin?: string;
+}
+
+/**
+ * Read the existing `report_settings.discovered_metadata.provenance` map (the
+ * same structure enrichmentProvenance builds and companyProfileProvenanceService
+ * reads). Not on the CompanyProfile type — accessed structurally, never written.
+ */
+function readDiscoveredProvenance(profile: CompanyProfile): Record<string, DiscoveredFieldProvenance> {
+  const rs = (profile.report_settings ?? null) as unknown as { discovered_metadata?: { provenance?: unknown } } | null;
+  const prov = rs?.discovered_metadata?.provenance;
+  return prov && typeof prov === 'object' ? (prov as Record<string, DiscoveredFieldProvenance>) : {};
+}
+
+/** Node ids whose prior AI value is recoverable from the strategic messaging trail. */
+const MESSAGING_SECTION_BY_NODE: Record<string, UserGuidanceStrategicSection> = {
+  brand_positioning: 'positioning',
+  unique_value: 'differentiation',
+  target_audience: 'audience_framing',
+  desired_transformation: 'transformation_framing',
+};
+
+/**
+ * Recover a prior AI-inferred value for a node so a user edit that CHANGED it can
+ * be classed 'corrected' (vs 'confirmed'). Reads only durable traces the profile
+ * already persists — the strategic messaging `ai_value` and the user_guidance
+ * audit `before` values. Returns null when no prior value is recoverable (caller
+ * then keeps 'confirmed' — never guesses a correction).
+ */
+function recoverPriorAiValue(profile: CompanyProfile, nodeId: string): { value: string; timestamp?: string } | null {
+  const guidance = profile.report_settings?.user_guidance ?? null;
+  if (!guidance) return null;
+
+  // 1. Strategic messaging section: the AI's original suggestion for this node.
+  const section = MESSAGING_SECTION_BY_NODE[nodeId];
+  if (section && guidance.messaging) {
+    const field = guidance.messaging[section];
+    const ai = str(field?.ai_value);
+    if (ai) return { value: ai, timestamp: field?.updated_at ?? undefined };
+  }
+
+  // 2. Audit trail: most-recent `before` value for a matching field target.
+  const audit = guidance.audit;
+  if (Array.isArray(audit)) {
+    const keys = new Set([nodeId, NODE_CONFIDENCE_KEY[nodeId]].filter(Boolean));
+    for (let i = audit.length - 1; i >= 0; i--) {
+      const e = audit[i];
+      if (e && e.target && keys.has(String(e.target)) && e.before != null) {
+        const before = str(e.before);
+        if (before) return { value: before, timestamp: e.created_at ?? undefined };
+      }
+    }
+  }
+  return null;
+}
+
+const norm = (v: string | null | undefined): string => str(v).toLowerCase();
+
 export function buildCompanyKnowledgeGraph(profile: CompanyProfile): CompanyKnowledgeGraph {
   const locked = new Set((profile.user_locked_fields ?? []).map((f) => String(f)));
-  const fieldConf = profile.field_confidence ?? {};
+  const fieldConf = (profile.field_confidence ?? {}) as Record<string, unknown>;
+  const discovered = readDiscoveredProvenance(profile);
 
   const nodes: KnowledgeNodeResolution[] = KNOWLEDGE_NODES.map((node) => {
     const resolvedValue = node.id === 'team' ? resolveTeam(profile) : resolveNodeValue(profile, node.id);
     const has = !!resolvedValue;
     const confKey = NODE_CONFIDENCE_KEY[node.id];
-    const confidence: KnowledgeConfidence = has ? bandToConfidence(fieldConf[confKey]) : 'none';
+    const fallbackKeys = NODE_CONFIDENCE_FALLBACK_KEYS[node.id] ?? [];
+    // Union-tolerant read, preferring the canonical key then any legacy fallback (name → company_name).
+    const band = readFieldConfidenceBand(fieldConf, confKey, ...fallbackKeys);
+    const confidence: KnowledgeConfidence = has ? (band ?? 'low') : 'none';
+    const isLocked = locked.has(confKey) || fallbackKeys.some((k) => locked.has(k));
 
     let state: KnowledgeState;
     let source: KnowledgeNodeResolution['source'];
-    if (!has) { state = 'unknown'; source = 'unknown'; }
-    else if (locked.has(confKey)) { state = 'confirmed'; source = 'user'; }
-    else if (confidence === 'high') { state = 'observed'; source = 'profile'; }
-    else { state = 'inferred'; source = 'inferred'; }
+    let timestamp: string | undefined;
+    let provenance: KnowledgeProvenance | undefined;
+
+    if (!has) {
+      state = 'unknown';
+      source = 'unknown';
+    } else if (isLocked) {
+      // User-supplied value. 'corrected' iff a recoverable prior AI value DIFFERS.
+      const prior = recoverPriorAiValue(profile, node.id);
+      const corrected = !!prior && norm(prior.value) !== norm(resolvedValue);
+      state = corrected ? 'corrected' : 'confirmed';
+      source = 'user';
+      provenance = { origin: 'user', source: 'user_locked' };
+      timestamp = (corrected ? prior?.timestamp : undefined) ?? profile.last_refined_at ?? profile.updated_at ?? undefined;
+    } else {
+      state = confidence === 'high' ? 'observed' : 'inferred';
+      source = confidence === 'high' ? 'profile' : 'inferred';
+      const disc = discovered[confKey] ?? (fallbackKeys.map((k) => discovered[k]).find(Boolean));
+      if (disc) {
+        provenance = {
+          origin: 'discovered',
+          source: disc.source,
+          discoveredAt: disc.discoveredAt,
+          lastVerified: disc.lastVerified ?? undefined,
+          verificationStatus: disc.verificationStatus,
+        };
+        timestamp = disc.lastVerified ?? disc.discoveredAt ?? undefined;
+      } else if (profile.source === 'ai_refined' || band !== undefined) {
+        provenance = { origin: 'ai_refined', source: 'ai_refiner' };
+        timestamp = profile.last_refined_at ?? profile.updated_at ?? undefined;
+      } else {
+        provenance = { origin: 'profile' };
+        timestamp = profile.updated_at ?? undefined;
+      }
+    }
 
     const min = node.minConfidence ?? 'low';
     const satisfied = has && CONFIDENCE_RANK[confidence] >= CONFIDENCE_RANK[min];
 
-    return { id: node.id, label: node.label, section: node.section, value: node.value, state, confidence, source, resolvedValue, satisfied, question: node.question };
+    return { id: node.id, label: node.label, section: node.section, value: node.value, state, confidence, source, resolvedValue, satisfied, question: node.question, timestamp, provenance };
   });
 
   const byId: Record<string, KnowledgeNodeResolution> = {};
