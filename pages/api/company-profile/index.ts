@@ -27,10 +27,37 @@ import { getLegacySuperAdminSession } from '../../../backend/services/superAdmin
 import { extractDomain, validatePublicWebsite } from '../../../backend/services/companyMatchService';
 import { filterCompatibleCompanyRoleRows } from '../../../backend/services/companyMembershipIntegrityService';
 import { buildUnifiedCompetitorIntelligence } from '../../../backend/services/unifiedCompetitorIntelligenceService';
+import {
+  buildCompanyKnowledgeGraph,
+  profileKnowledgeReadiness,
+} from '../../../backend/services/companyProfile/companyKnowledgeGraph';
+import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 import { sendAuthError } from '../../../backend/services/sendAuthError';
 
 const DEFAULT_STRATEGIC_ASPECTS = ['Growth', 'Awareness', 'Conversion'];
+
+/**
+ * CONVERSATION-INTELLIGENCE-001 Phase B — canonical profile readiness (LIVE path).
+ *
+ * The canonical readiness signal is `profileKnowledgeReadiness` (knowledge-
+ * completeness, value-weighted, monotonic). Phase B first surfaced it on the
+ * DEAD /api/company-profile/completeness endpoint; this is the SAME field on the
+ * LIVE completeness path (this endpoint, via ?includeCompleteness), which the
+ * frontend actually fetches (hooks/useCompanyProfileState reads
+ * overall_profile_completion here). Same rollout flag is reused (never a new one).
+ *
+ * Surfaced ADDITIVELY behind the flag (default OFF): with the flag off the
+ * response is byte-identical to before this change (no field is altered or
+ * rerouted); when shadow/enforce the canonical `knowledge_readiness` field
+ * appears alongside the untouched legacy fields for downstream consumption.
+ */
+const PROFILE_KNOWLEDGE_READINESS_FLAG = defineRolloutFlag({
+  key: 'profile-knowledge-readiness',
+  description:
+    'Surface the canonical knowledge-completeness readiness (profileKnowledgeReadiness) on the company-profile completeness endpoints. Additive; default off.',
+  defaultMode: 'off',
+});
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
@@ -337,6 +364,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           response.problem_transformation_completion = 0;
           response.overall_profile_completion = 0;
           response.section_scores = {};
+        }
+
+        // Canonical knowledge readiness — additive, flag-gated (default OFF ⇒
+        // field absent ⇒ response byte-identical to today). Derived from the SAME
+        // resolvedProfile already loaded in this branch (no new I/O). Wrapped so
+        // any throw is swallowed: this endpoint serves on every profile load, so
+        // readiness computation must NEVER break the profile/completeness response.
+        try {
+          const { mode: knowledgeReadinessMode } = resolveRolloutSync(
+            PROFILE_KNOWLEDGE_READINESS_FLAG,
+            { tenantId: companyId },
+          );
+          if (knowledgeReadinessMode !== 'off' && resolvedProfile) {
+            const graph = buildCompanyKnowledgeGraph(resolvedProfile);
+            response.knowledge_readiness = profileKnowledgeReadiness(graph);
+          }
+        } catch {
+          // Additive telemetry only — legacy response is unaffected on failure.
         }
       } else {
         response.problem_transformation_completion = 0;
