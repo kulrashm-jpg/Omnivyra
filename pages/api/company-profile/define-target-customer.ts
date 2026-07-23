@@ -287,17 +287,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     let nextQuestion = parsed.nextQuestion || 'Anything else you’d like to add about your commercial strategy?';
 
-    // Phase C pilot (flag-gated; OFF ⇒ this block is inert and the line above is
-    // returned verbatim, byte-identically to before). ON ⇒ delegate question
-    // governance to the canonical orchestrator: refuse any AI-emitted question
-    // the graph marks ineligible (a satisfied node, in any phrasing) and replace
-    // it with the orchestrator's highest-value next gap. Fail-safe: any error
-    // leaves the AI question untouched. No extraction here (Phase D).
+    // Phase C + E pilot (flag-gated; OFF ⇒ this block is inert and the line above
+    // is returned verbatim, byte-identically to before). ON ⇒ delegate to the
+    // canonical orchestrator:
+    //   Phase E (completion intelligence) — if the knowledge core is satisfied,
+    //     the interview naturally STOPS: return a completion + descriptive handoff
+    //     signal instead of asking another question (the stop decision is the
+    //     graph's enoughToProceed; no second threshold, no downstream call).
+    //   Phase C (never-re-ask) — otherwise, refuse any AI-emitted question the
+    //     graph marks ineligible (a satisfied node, in any phrasing) and replace
+    //     it with the orchestrator's highest-value next gap.
+    // Fail-safe: any error leaves the AI question untouched. No extraction here
+    // (Phase D).
     if (profile && parsed.nextQuestion) {
       try {
         const { mode } = resolveRolloutSync(PROFILE_CONVERSATION_ORCHESTRATOR_FLAG, { tenantId: companyId });
         if (mode !== 'off') {
-          const decision = orchestrateProfileConversation(profile, conversation);
+          const decision = orchestrateProfileConversation(profile, conversation, { stopWhenEnough: true });
+          if (decision.complete && decision.transition.ready) {
+            // Terminal state: enough is known — hand off to productive work rather
+            // than loop. Additive completion fields; no downstream workflow invoked.
+            return res.status(200).json({
+              complete: true,
+              nextQuestion: null,
+              transition: decision.transition,
+              readiness: decision.readiness,
+            });
+          }
           if (!isQuestionEligibleForOrchestration(decision, parsed.nextQuestion)) {
             nextQuestion = decision.nextQuestion?.question || nextQuestion;
           }
