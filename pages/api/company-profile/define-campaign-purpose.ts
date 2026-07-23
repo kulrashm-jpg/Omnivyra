@@ -4,12 +4,66 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * Define Campaign Purpose & Strategic Intent.
  * Guided conversation to capture campaign_purpose_intent JSONB.
  * Reuses same pattern as define-target-customer.
+ *
+ * CONVERSATION-INTELLIGENCE-003 — this route is now migrated onto the canonical
+ * Company Profile conversation intelligence (the SAME implementation certified on
+ * the define-target-customer pilot). It reuses — never forks — the canonical
+ * Company Knowledge Graph, Conversation Orchestrator, Readiness Evaluator,
+ * Knowledge Extraction, and Completion Intelligence, behind the SAME two rollout
+ * flags as the pilot (so one toggle governs the whole Company Profile
+ * conversation uniformly). Both flags default OFF; when OFF this route is
+ * byte-identical to before (original prompt, original response contract).
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletion } from '../../../backend/services/aiGateway';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
+import { buildCompanyKnowledgeGraph, buildKnowledgeGrounding } from '../../../backend/services/companyProfile/companyKnowledgeGraph';
+import {
+  orchestrateProfileConversation,
+  isQuestionEligibleForOrchestration,
+} from '../../../backend/services/companyProfile/profileConversationOrchestrator';
+import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
+
+/**
+ * CONVERSATION-INTELLIGENCE — canonical question-governance flag (default OFF).
+ * REUSES the pilot's flag key (no new flag family): one toggle governs question
+ * selection across every migrated Company Profile interview route uniformly.
+ *
+ * OFF  → byte-identical to before: the AI-emitted nextQuestion is returned
+ *        verbatim (the orchestrator + knowledge grounding are never invoked).
+ * ON   → the canonical orchestrator gates question selection (refuse any AI
+ *        question that maps to an already-satisfied knowledge node — structural
+ *        never-re-ask + semantic dedup) and, once the knowledge core is
+ *        satisfied, naturally STOPS with a completion + handoff signal. The
+ *        prompt is also grounded with what the graph already knows.
+ */
+const PROFILE_CONVERSATION_ORCHESTRATOR_FLAG = defineRolloutFlag({
+  key: 'profile-conversation-orchestrator',
+  description:
+    'Route company-profile conversation question-selection through the canonical profileConversationOrchestrator (never re-ask known info + semantic dedup + natural completion). Covers define-target-customer + define-campaign-purpose. Default off.',
+  defaultMode: 'off',
+});
+
+/**
+ * CONVERSATION-INTELLIGENCE — canonical multi-field chat extraction (default OFF).
+ * REUSES the pilot's flag key.
+ *
+ * OFF  → byte-identical to before: the user's answers are never extracted for
+ *        profile knowledge (the extraction seam is never even imported — it lives
+ *        behind a dynamic import inside the gated block).
+ * ON   → the user's latest answer is extracted for EVERY recoverable profile
+ *        field through the ONE extraction machinery (buildExtractionPrompt +
+ *        gateway + zod validation) and persisted through the ONE write seam
+ *        (saveProfile), so the interview advances by knowledge, not just by turn.
+ */
+const PROFILE_CHAT_EXTRACTION_FLAG = defineRolloutFlag({
+  key: 'profile-chat-extraction',
+  description:
+    'Extract a company-profile conversation answer into ALL recoverable profile fields (reusing buildExtractionPrompt) and persist via saveProfile so the interview advances by knowledge. Covers define-target-customer + define-campaign-purpose. Default off.',
+  defaultMode: 'off',
+});
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -29,10 +83,61 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!access) return;
 
   try {
-    const profile = await getProfile(companyId, { autoRefine: false });
+    let profile = await getProfile(companyId, { autoRefine: false });
+
+    // CONVERSATION-INTELLIGENCE-003 — canonical multi-field chat extraction
+    // (flag-gated; OFF ⇒ this block is inert, the seam module is never imported,
+    // and the route is byte-identical to before). ON ⇒ extract the user's latest
+    // answer for ALL recoverable profile fields via the ONE extraction machinery
+    // and persist through the ONE write seam (saveProfile). The refreshed profile
+    // then grounds both the AI question and the orchestrator gate below.
+    // Fail-safe: any error leaves the profile untouched.
+    try {
+      const extractionMode = resolveRolloutSync(PROFILE_CHAT_EXTRACTION_FLAG, { tenantId: companyId }).mode;
+      if (extractionMode !== 'off' && conversation.length > 0) {
+        let lastUserIdx = -1;
+        for (let i = conversation.length - 1; i >= 0; i -= 1) {
+          if (String(conversation[i]?.role ?? '').toLowerCase() === 'user') { lastUserIdx = i; break; }
+        }
+        const lastUserMessage = lastUserIdx >= 0 ? String(conversation[lastUserIdx]?.content ?? '').trim() : '';
+        if (lastUserMessage) {
+          // The question that prompted the answer = nearest prior non-user turn.
+          let questionAsked: string | null = null;
+          for (let i = lastUserIdx - 1; i >= 0; i -= 1) {
+            if (String(conversation[i]?.role ?? '').toLowerCase() !== 'user') {
+              questionAsked = String(conversation[i]?.content ?? '');
+              break;
+            }
+          }
+          const { extractAndPersistProfileKnowledge } = await import(
+            '../../../backend/services/companyProfile/chatKnowledgeExtraction'
+          );
+          const { savedProfile } = await extractAndPersistProfileKnowledge({
+            companyId,
+            message: lastUserMessage,
+            questionAsked,
+            profile,
+          });
+          if (savedProfile) profile = savedProfile;
+        }
+      }
+    } catch (extractionErr: any) {
+      console.warn('[define-campaign-purpose][chat-extraction] skipped:', extractionErr?.message || extractionErr);
+    }
+
     const companyContext = profile
       ? `Company: ${profile.name || companyId}. Industry: ${profile.industry || 'Not set'}. Target: ${profile.target_customer_segment || 'Not set'}.`
       : 'Company not yet profiled.';
+
+    // Canonical Company Knowledge Graph grounding (flag-gated so OFF stays
+    // byte-identical): the single authority for what is already known ACROSS the
+    // whole profile — so when the program is enabled this conversation never
+    // re-asks anything the graph already knows, in any phrasing.
+    const orchestratorMode = resolveRolloutSync(PROFILE_CONVERSATION_ORCHESTRATOR_FLAG, { tenantId: companyId }).mode;
+    const kgKnownBlock =
+      profile && orchestratorMode !== 'off'
+        ? buildKnowledgeGrounding(buildCompanyKnowledgeGraph(profile)).known ?? ''
+        : '';
 
     const systemPrompt =
       'You are a campaign strategy assistant. Capture campaign purpose and strategic intent through a short guided conversation.\n\n' +
@@ -54,7 +159,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       { role: 'system', content: systemPrompt },
       {
         role: 'user',
-        content: `Context: ${companyContext}\n\n${
+        content: `Context: ${companyContext}\n\n${kgKnownBlock ? `${kgKnownBlock}\n\n` : ''}${
           conversation.length === 0
             ? 'Start the questionnaire. Ask the first question about campaign purpose.'
             : 'Conversation so far:\n' +
@@ -141,11 +246,43 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         campaign_purpose_intent: campaignPurposeIntent,
       });
     }
-    return res.status(200).json({
-      nextQuestion:
-        parsed.nextQuestion ||
-        'Anything else you’d like to add about your campaign purpose?',
-    });
+
+    let nextQuestion =
+      parsed.nextQuestion ||
+      'Anything else you’d like to add about your campaign purpose?';
+
+    // CONVERSATION-INTELLIGENCE-003 — canonical orchestrator gate + completion
+    // (flag-gated; OFF ⇒ this block is inert and the line above is returned
+    // verbatim, byte-identically to before). ON ⇒ delegate to the canonical
+    // orchestrator:
+    //   Completion intelligence — if the knowledge core is satisfied, the
+    //     interview naturally STOPS: return a completion + descriptive handoff
+    //     signal instead of asking another question (the stop decision is the
+    //     graph's enoughToProceed; no second threshold, no downstream call).
+    //   Never-re-ask — otherwise, refuse any AI-emitted question the graph marks
+    //     ineligible (a satisfied node, in any phrasing) and replace it with the
+    //     orchestrator's highest-value next gap.
+    // Fail-safe: any error leaves the AI question untouched.
+    if (profile && parsed.nextQuestion && orchestratorMode !== 'off') {
+      try {
+        const decision = orchestrateProfileConversation(profile, conversation, { stopWhenEnough: true });
+        if (decision.complete && decision.transition.ready) {
+          return res.status(200).json({
+            complete: true,
+            nextQuestion: null,
+            transition: decision.transition,
+            readiness: decision.readiness,
+          });
+        }
+        if (!isQuestionEligibleForOrchestration(decision, parsed.nextQuestion)) {
+          nextQuestion = decision.nextQuestion?.question || nextQuestion;
+        }
+      } catch {
+        // fail-safe: never break the conversation over the governance overlay.
+      }
+    }
+
+    return res.status(200).json({ nextQuestion });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return res.status(500).json({
