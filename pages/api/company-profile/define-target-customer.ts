@@ -28,6 +28,28 @@ const PROFILE_CONVERSATION_ORCHESTRATOR_FLAG = defineRolloutFlag({
   defaultMode: 'off',
 });
 
+/**
+ * CONVERSATION-INTELLIGENCE-001 Phase D — multi-field chat extraction (default OFF).
+ *
+ * OFF  → this route behaves BYTE-IDENTICALLY to before: the user's answers are
+ *        never extracted for profile knowledge (the extraction seam is never
+ *        even imported — it lives behind a dynamic import inside the gated block).
+ * ON   → the user's latest answer is extracted for EVERY recoverable profile
+ *        field (not just this section's) through the ONE extraction machinery
+ *        (buildExtractionPrompt + gateway + zod validation) and persisted through
+ *        the ONE write seam (saveProfile). The refreshed profile then grounds both
+ *        the AI question and the orchestrator gate below — so the interview never
+ *        re-asks what an answer already revealed (closes Phase C's loop end-to-end).
+ * Scoped, independent flag (extraction ⟂ question-governance); reuses the shared
+ * Rollout Kit — no new flag family, no new persistence.
+ */
+const PROFILE_CHAT_EXTRACTION_FLAG = defineRolloutFlag({
+  key: 'profile-chat-extraction',
+  description:
+    'Extract a company-profile conversation answer into ALL recoverable profile fields (reusing buildExtractionPrompt) and persist via saveProfile so the interview advances by knowledge. Pilot: define-target-customer. Default off.',
+  defaultMode: 'off',
+});
+
 // Commercial fields collected in Phase 1. Field naming matches company_profiles DB columns.
 const FIELDS_DESCRIPTION = [
   'target_customer_segment: who they sell to (e.g. SMB, enterprise, vertical)',
@@ -77,7 +99,49 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!access) return;
 
   try {
-    const profile = await getProfile(companyId, { autoRefine: false });
+    let profile = await getProfile(companyId, { autoRefine: false });
+
+    // CONVERSATION-INTELLIGENCE-001 Phase D — multi-field chat extraction
+    // (flag-gated; OFF ⇒ this block is inert, the seam module is never imported,
+    // and the route is byte-identical to before). ON ⇒ extract the user's latest
+    // answer for ALL recoverable profile fields via the ONE extraction machinery
+    // and persist through the ONE write seam (saveProfile). The refreshed profile
+    // then grounds both the AI question and the orchestrator gate below, so a
+    // single answer advances the interview by knowledge, not just by section.
+    // Fail-safe: any error leaves the profile untouched.
+    try {
+      const extractionMode = resolveRolloutSync(PROFILE_CHAT_EXTRACTION_FLAG, { tenantId: companyId }).mode;
+      if (extractionMode !== 'off' && conversation.length > 0) {
+        let lastUserIdx = -1;
+        for (let i = conversation.length - 1; i >= 0; i -= 1) {
+          if (String(conversation[i]?.role ?? '').toLowerCase() === 'user') { lastUserIdx = i; break; }
+        }
+        const lastUserMessage = lastUserIdx >= 0 ? String(conversation[lastUserIdx]?.content ?? '').trim() : '';
+        if (lastUserMessage) {
+          // The question that prompted the answer = nearest prior non-user turn.
+          let questionAsked: string | null = null;
+          for (let i = lastUserIdx - 1; i >= 0; i -= 1) {
+            if (String(conversation[i]?.role ?? '').toLowerCase() !== 'user') {
+              questionAsked = String(conversation[i]?.content ?? '');
+              break;
+            }
+          }
+          const { extractAndPersistProfileKnowledge } = await import(
+            '../../../backend/services/companyProfile/chatKnowledgeExtraction'
+          );
+          const { savedProfile } = await extractAndPersistProfileKnowledge({
+            companyId,
+            message: lastUserMessage,
+            questionAsked,
+            profile,
+          });
+          if (savedProfile) profile = savedProfile;
+        }
+      }
+    } catch (extractionErr: any) {
+      console.warn('[define-target-customer][phase-d-extraction] skipped:', extractionErr?.message || extractionErr);
+    }
+
     const companyContext = profile
       ? `Company: ${profile.name || companyId}. Industry: ${profile.industry || 'Not set'}. Category: ${profile.category || 'Not set'}.`
       : 'Company not yet profiled.';
