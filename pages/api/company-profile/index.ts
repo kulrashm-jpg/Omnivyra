@@ -38,19 +38,33 @@ import { sendAuthError } from '../../../backend/services/sendAuthError';
 const DEFAULT_STRATEGIC_ASPECTS = ['Growth', 'Awareness', 'Conversion'];
 
 /**
- * CONVERSATION-INTELLIGENCE-001 Phase B — canonical profile readiness (LIVE path).
+ * CONVERSATION-INTELLIGENCE-001 Phase B → CONVERSATION-INTELLIGENCE-002 —
+ * canonical profile readiness (LIVE path) + readiness consolidation.
  *
- * The canonical readiness signal is `profileKnowledgeReadiness` (knowledge-
- * completeness, value-weighted, monotonic). Phase B first surfaced it on the
- * DEAD /api/company-profile/completeness endpoint; this is the SAME field on the
- * LIVE completeness path (this endpoint, via ?includeCompleteness), which the
- * frontend actually fetches (hooks/useCompanyProfileState reads
- * overall_profile_completion here). Same rollout flag is reused (never a new one).
+ * The ONE canonical readiness evaluator is `profileKnowledgeReadiness`
+ * (knowledge-completeness, value-weighted, monotonic). Phase B first surfaced it
+ * ADDITIVELY (the `knowledge_readiness` field) here — the LIVE completeness path
+ * (this endpoint, via ?includeCompleteness) the frontend actually fetches
+ * (hooks/useCompanyProfileState reads overall_profile_completion here).
  *
- * Surfaced ADDITIVELY behind the flag (default OFF): with the flag off the
- * response is byte-identical to before this change (no field is altered or
- * rerouted); when shadow/enforce the canonical `knowledge_readiness` field
- * appears alongside the untouched legacy fields for downstream consumption.
+ * CONV-INTEL-002 COMPLETES the consolidation: under the SAME rollout flag
+ * (`profile-knowledge-readiness`, reused — never a new one/evaluator), the LIVE
+ * `overall_profile_completion` number is REROUTED to derive from the canonical
+ * evaluator so exactly ONE readiness DECISION exists. Staging:
+ *   - flag OFF (default) ⇒ the block is skipped entirely ⇒ `overall_profile_completion`
+ *     keeps the field-count `calculateCompanyProfileCompleteness` value and the
+ *     response is BYTE-IDENTICAL to before this change (no `knowledge_readiness`).
+ *   - flag ON (shadow/enforce) ⇒ `overall_profile_completion` = the knowledge
+ *     readiness score (value-weighted satisfied share, 0–100) AND the canonical
+ *     `knowledge_readiness` object is surfaced additively.
+ *
+ * The field-count survives ONLY as the flag-OFF fallback — DELETION IS DEFERRED
+ * to a post-soak follow-up (removing it now would force an immediate, un-gated
+ * UI change by eliminating the fallback). Per-section DISPLAY fields
+ * (`section_scores`, `problem_transformation_completion`, `completeness`,
+ * `profile_completeness`) remain field-count derived — they are a display
+ * breakdown, not a readiness decision, and are out of scope for this reroute.
+ * `calculateIntelligenceReadiness` is a separate firmographic signal, untouched.
  */
 const PROFILE_KNOWLEDGE_READINESS_FLAG = defineRolloutFlag({
   key: 'profile-knowledge-readiness',
@@ -366,11 +380,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           response.section_scores = {};
         }
 
-        // Canonical knowledge readiness — additive, flag-gated (default OFF ⇒
-        // field absent ⇒ response byte-identical to today). Derived from the SAME
-        // resolvedProfile already loaded in this branch (no new I/O). Wrapped so
-        // any throw is swallowed: this endpoint serves on every profile load, so
-        // readiness computation must NEVER break the profile/completeness response.
+        // Canonical knowledge readiness — additive + LIVE reroute, flag-gated
+        // (default OFF ⇒ block skipped ⇒ `overall_profile_completion` keeps the
+        // field-count value set above ⇒ response byte-identical to today, and no
+        // `knowledge_readiness`). Derived from the SAME resolvedProfile already
+        // loaded in this branch (no new I/O). Wrapped so any throw is swallowed:
+        // this endpoint serves on every profile load, so readiness computation
+        // must NEVER break the profile/completeness response — on failure the
+        // legacy field-count value stands.
         try {
           const { mode: knowledgeReadinessMode } = resolveRolloutSync(
             PROFILE_KNOWLEDGE_READINESS_FLAG,
@@ -378,10 +395,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           );
           if (knowledgeReadinessMode !== 'off' && resolvedProfile) {
             const graph = buildCompanyKnowledgeGraph(resolvedProfile);
-            response.knowledge_readiness = profileKnowledgeReadiness(graph);
+            const readiness = profileKnowledgeReadiness(graph);
+            response.knowledge_readiness = readiness;
+            // Readiness → completion% mapping: `readiness.score` is already the
+            // value-weighted satisfied share (0–100) — monotonic, knowledge-based,
+            // independent of question/message count — so it IS the canonical
+            // percentage. Rerouting the LIVE number here makes profileKnowledgeReadiness
+            // the single readiness DECISION; the field-count above is now only the
+            // flag-OFF fallback (deletion deferred post-soak).
+            response.overall_profile_completion = readiness.score;
           }
         } catch {
-          // Additive telemetry only — legacy response is unaffected on failure.
+          // Additive + reroute both fail-safe — legacy field-count value stands.
         }
       } else {
         response.problem_transformation_completion = 0;

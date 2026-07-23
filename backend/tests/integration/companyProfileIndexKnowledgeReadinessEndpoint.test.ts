@@ -1,21 +1,28 @@
 /**
- * CONVERSATION-INTELLIGENCE-001 Phase B — LIVE completeness path backward-compat.
+ * CONVERSATION-INTELLIGENCE-001 Phase B → CONVERSATION-INTELLIGENCE-002 — LIVE
+ * completeness path backward-compat + readiness CONSOLIDATION.
  *
- * Phase B first surfaced the canonical knowledge readiness on the DEAD
- * /api/company-profile/completeness endpoint. This proves the SAME additive,
- * flag-gated field is now surfaced on the LIVE completeness path — the
- * /api/company-profile (index) handler via ?includeCompleteness — which the
- * frontend actually fetches (hooks/useCompanyProfileState reads
- * overall_profile_completion here).
+ * Phase B first surfaced the canonical knowledge readiness ADDITIVELY on the LIVE
+ * completeness path — the /api/company-profile (index) handler via
+ * ?includeCompleteness — which the frontend actually fetches
+ * (hooks/useCompanyProfileState reads overall_profile_completion here).
+ *
+ * CONV-INTEL-002 COMPLETES the consolidation: under the SAME flag, the LIVE
+ * `overall_profile_completion` number is REROUTED from the field-count
+ * calculateCompanyProfileCompleteness to the canonical profileKnowledgeReadiness
+ * evaluator, so exactly ONE readiness DECISION drives the live number.
  *
  * Guarantees asserted:
- *   - flag OFF (default) → the response is byte-identical to before the change:
- *     every legacy field is present and unchanged and NO `knowledge_readiness`
- *     field is added.
- *   - flag ON → every legacy field is byte-identical to the flag-off response and
- *     the canonical `knowledge_readiness` field appears additively.
+ *   - flag OFF (default) → the response is BYTE-IDENTICAL to before the change:
+ *     `overall_profile_completion` is the field-count value, every legacy field is
+ *     present and unchanged, and NO `knowledge_readiness` field is added.
+ *   - flag ON → `overall_profile_completion` is now the knowledge readiness score
+ *     (NOT the field-count) and the canonical `knowledge_readiness` object appears
+ *     additively; every OTHER legacy field (the per-section DISPLAY breakdown)
+ *     stays byte-identical to the flag-off response.
  *   - FAIL-SAFE → a profile that makes the knowledge graph throw still returns the
- *     profile + completeness (200), with no `knowledge_readiness` and no error.
+ *     profile + completeness (200) with the field-count `overall_profile_completion`,
+ *     no `knowledge_readiness`, and no error.
  *
  * The real field-count completeness calculator and the real knowledge-graph
  * evaluator are exercised; only the I/O seams (profile load, access, intelligence,
@@ -144,18 +151,21 @@ describe('company-profile index (LIVE completeness path) — canonical readiness
     );
   });
 
-  test('flag ENFORCE: every legacy field byte-identical + knowledge_readiness added', async () => {
+  test('flag ENFORCE: overall_profile_completion REROUTED to knowledge readiness; other legacy fields byte-identical + knowledge_readiness added', async () => {
     const off = await run();
     const legacySnapshot = { ...off.body };
 
     process.env[MODE_ENV] = 'enforce';
     const on = await run();
 
-    // Every legacy field is byte-identical to the flag-off response.
+    // Every legacy field EXCEPT the rerouted overall_profile_completion is
+    // byte-identical to the flag-off response (the per-section DISPLAY breakdown
+    // is untouched — only the readiness DECISION number is consolidated).
     for (const key of Object.keys(legacySnapshot)) {
+      if (key === 'overall_profile_completion') continue;
       expect(on.body[key]).toEqual(legacySnapshot[key]);
     }
-    // Exactly one additive key.
+    // Exactly one additive key (knowledge_readiness); no keys removed.
     expect(Object.keys(on.body).sort()).toEqual(
       [...Object.keys(legacySnapshot), 'knowledge_readiness'].sort()
     );
@@ -167,6 +177,27 @@ describe('company-profile index (LIVE completeness path) — canonical readiness
     expect(kr).toHaveProperty('enoughToProceed');
     // Core-6 satisfied in the fixture → decision from KNOWLEDGE, not field count.
     expect(kr.enoughToProceed).toBe(true);
+    // CONSOLIDATION: the LIVE number now IS the knowledge readiness score, and it
+    // is NOT the field-count value it replaced (duplicate decision eliminated).
+    expect(on.body.overall_profile_completion).toBe(kr.score);
+    expect(on.body.overall_profile_completion).not.toBe(legacySnapshot.overall_profile_completion);
+  });
+
+  test('Before vs After: flag OFF = field-count; flag ON = knowledge-derived (they differ)', async () => {
+    const {
+      calculateCompanyProfileCompleteness,
+    } = jest.requireActual('../../services/companyProfile/fieldConstants');
+    const fieldCount = calculateCompanyProfileCompleteness(PROFILE).score;
+
+    const off = await run();
+    expect(off.body.overall_profile_completion).toBe(fieldCount); // OLD number
+
+    process.env[MODE_ENV] = 'enforce';
+    const on = await run();
+    // NEW number: knowledge readiness score, deterministic and knowledge-derived.
+    expect(on.body.overall_profile_completion).toBe(on.body.knowledge_readiness.score);
+    // The user-visible change is real: the two numbers are not equal.
+    expect(on.body.overall_profile_completion).not.toBe(fieldCount);
   });
 
   test('flag SHADOW also surfaces the field (any non-off mode)', async () => {
