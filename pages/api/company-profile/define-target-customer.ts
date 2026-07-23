@@ -4,6 +4,29 @@ import { runCompletion } from '../../../backend/services/aiGateway';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { buildCompanyKnowledgeGraph, buildKnowledgeGrounding } from '../../../backend/services/companyProfile/companyKnowledgeGraph';
+import {
+  orchestrateProfileConversation,
+  isQuestionEligibleForOrchestration,
+} from '../../../backend/services/companyProfile/profileConversationOrchestrator';
+import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
+
+/**
+ * CONVERSATION-INTELLIGENCE-001 Phase C — pilot rollout flag (default OFF).
+ *
+ * OFF  → this route behaves BYTE-IDENTICALLY to before: the AI-emitted
+ *        nextQuestion is returned verbatim (the orchestrator is never invoked).
+ * ON   → the canonical orchestrator gates question selection: any AI-emitted
+ *        question the knowledge graph marks INELIGIBLE (it maps to an
+ *        already-satisfied node — structural never-re-ask + semantic dedup) is
+ *        refused and replaced with the orchestrator's highest-value next gap.
+ * Reuses the shared Rollout Kit — no new flag family, no new persistence.
+ */
+const PROFILE_CONVERSATION_ORCHESTRATOR_FLAG = defineRolloutFlag({
+  key: 'profile-conversation-orchestrator',
+  description:
+    'Route company-profile conversation question-selection through the canonical profileConversationOrchestrator (never re-ask known info + semantic dedup). Pilot: define-target-customer. Default off.',
+  defaultMode: 'off',
+});
 
 // Commercial fields collected in Phase 1. Field naming matches company_profiles DB columns.
 const FIELDS_DESCRIPTION = [
@@ -198,9 +221,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         campaign_purpose_intent: campaignPurposeIntent,
       });
     }
-    return res.status(200).json({
-      nextQuestion: parsed.nextQuestion || 'Anything else you’d like to add about your commercial strategy?',
-    });
+    let nextQuestion = parsed.nextQuestion || 'Anything else you’d like to add about your commercial strategy?';
+
+    // Phase C pilot (flag-gated; OFF ⇒ this block is inert and the line above is
+    // returned verbatim, byte-identically to before). ON ⇒ delegate question
+    // governance to the canonical orchestrator: refuse any AI-emitted question
+    // the graph marks ineligible (a satisfied node, in any phrasing) and replace
+    // it with the orchestrator's highest-value next gap. Fail-safe: any error
+    // leaves the AI question untouched. No extraction here (Phase D).
+    if (profile && parsed.nextQuestion) {
+      try {
+        const { mode } = resolveRolloutSync(PROFILE_CONVERSATION_ORCHESTRATOR_FLAG, { tenantId: companyId });
+        if (mode !== 'off') {
+          const decision = orchestrateProfileConversation(profile, conversation);
+          if (!isQuestionEligibleForOrchestration(decision, parsed.nextQuestion)) {
+            nextQuestion = decision.nextQuestion?.question || nextQuestion;
+          }
+        }
+      } catch {
+        // fail-safe: never break the conversation over the governance overlay.
+      }
+    }
+
+    return res.status(200).json({ nextQuestion });
   } catch (err: any) {
     console.error('Define target customer failed:', err);
     return res.status(500).json({
