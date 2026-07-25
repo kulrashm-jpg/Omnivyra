@@ -24,7 +24,8 @@ import { bootstrapCompetitorDataset, type CompetitorBootstrapResult } from './co
 import { seedSerpQueryQueue, type SerpQuerySeed } from './serpAcquisitionService';
 import { buildPredictiveStrategicIntelligence, type PredictiveStrategicIntelligence } from './predictiveStrategicIntelligenceService';
 import { buildAuthorityMarketPosition, type AuthorityMarketPosition } from './authorityMarketPositionService';
-import { buildRecommendationIntelligence, type RecommendationIntelligence } from './recommendationIntelligenceService';
+// PRODUCT-RESTORE-001 Phase 1: explicit domain name (was the ambiguous `RecommendationIntelligence`).
+import { buildRecommendationIntelligence, type SeoGrowthRecommendationIntelligence } from './recommendationIntelligenceService';
 import {
   buildLeadGenerationAuthorityIntelligence,
   type LeadGenerationAuthorityIntelligence,
@@ -89,7 +90,7 @@ export type AnalyticsEnterpriseSnapshot = {
   };
   predictive_intelligence: PredictiveStrategicIntelligence;
   authority_market_position: AuthorityMarketPosition;
-  recommendation_intelligence: RecommendationIntelligence;
+  recommendation_intelligence: SeoGrowthRecommendationIntelligence;
   lead_generation_authority_intelligence: LeadGenerationAuthorityIntelligence;
   executive_summary: AnalyticsExecutiveSummary;
   opportunities: EnterpriseOpportunity[];

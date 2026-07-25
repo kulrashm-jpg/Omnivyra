@@ -1,0 +1,139 @@
+name: Strategic Recommendation Intelligence
+
+# RELEASE-READINESS-001 — scoped regression gate for the Strategic Recommendation
+# Intelligence capability (PRODUCT-RESTORE-001 / -IMPLEMENTATION-001..003 /
+# -VALIDATION-001 / -RELEASE-001).
+#
+# WHY THIS EXISTS
+# The six strategic narrative fields (problem_being_solved, gap_being_filled,
+# why_now, authority_reason, expected_transformation, campaign_angle) were deleted
+# as collateral in a 901-file bulk commit and nothing caught it: the producer had no
+# CI coverage and an ambiguous type name let the deletion compile. This workflow is
+# the guard that makes a second silent deletion impossible — it runs the
+# compatibility harness (angle-token, angle-classification, execution-stage parity,
+# nullability, determinism, schema/serialization), the producer/restoration suite,
+# the downstream consumers (card enrichment, sequencing, blueprint, strategic-content
+# validator) and the observability contracts (fail-safe, no-PII, flag-OFF inert).
+#
+# DELIBERATELY SCOPED — NOT a whole-repo jest job.
+# The repo has ~55 integration suites plus pre-existing red suites (recommendation
+# engine Supabase-mock failures, companyContextFoundationFix mission-context
+# failures) that are unrelated to this capability. A whole-repo job would be red on
+# day one for reasons no author of this capability can fix, and a permanently red
+# gate protects nothing. This job runs ONLY the suites listed below, all of which are
+# green at the commit that introduced it. It follows the scoping pattern of
+# .github/workflows/stability.yml and .github/workflows/thread-runtime-observability.yml.
+#
+# ADVISORY UNTIL REGISTERED.
+# A workflow file makes a check RUN; only GitHub branch protection makes it BLOCK a
+# merge. To make this gate blocking, an admin must add the check named
+#   "Strategic narrative regression lock"
+# to the required status checks for the protected branch. Until then this job is
+# informational only. No file in this repository can perform that registration.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/strategic-recommendation-intelligence.yml'
+      # producer + the single flag decision point
+      - 'backend/services/strategicRecommendationIntelligenceService.ts'
+      - 'backend/services/recommendationEngine/**'
+      # narrative inputs and downstream consumers of card.intelligence
+      - 'backend/services/recommendationPolishService.ts'
+      - 'backend/services/recommendationSequencingService.ts'
+      - 'backend/services/recommendationBlueprintService.ts'
+      - 'backend/services/recommendationCardEnrichmentService.ts'
+      - 'backend/services/recommendationIntelligenceService.ts'
+      - 'backend/services/companyStrategyDNAService.ts'
+      - 'backend/services/strategicContentTransformationValidator.ts'
+      - 'lib/content/cardToContentBridgeSignals.ts'
+      # observability seam for the capability
+      - 'backend/observability/strategicIntelligenceMetrics.ts'
+      - 'backend/observability/metrics.ts'
+      - 'backend/observability/registry.ts'
+      # the guard rails themselves
+      - 'backend/tests/support/**'
+      - 'backend/tests/unit/strategicNarrativeCompatibility.test.ts'
+      - 'backend/tests/unit/strategicRecommendationIntelligenceRestore.test.ts'
+      - 'backend/tests/unit/strategicIntelligenceObservability.test.ts'
+      - 'backend/tests/unit/recommendationIntelligenceEnrichment.test.ts'
+      - 'backend/tests/unit/recommendationCardEnrichment.test.ts'
+      - 'backend/tests/unit/recommendationSequencing.test.ts'
+      - 'backend/tests/unit/recommendationBlueprintService.test.ts'
+      - 'backend/tests/unit/strategicContentTransformationValidator.test.ts'
+      - 'package.json'
+  push:
+    branches: [main]
+    tags: ['v*', 'release-*']
+  workflow_dispatch:
+
+concurrency:
+  group: strategic-recommendation-intelligence-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  strategic-narrative-contracts:
+    name: Strategic narrative regression lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # HERMETIC: every suite in this job is a pure unit test — no DB, no network, no
+    # LLM. The producer itself is a pure function. These are deliberately FAKE
+    # placeholder values whose only job is to satisfy config/env.schema.ts
+    # validateEnv() (valid-URL + non-empty checks) at module import time. No real
+    # Supabase project is ever contacted. Do NOT replace these with real credentials
+    # — doing so adds prod-data risk for zero benefit.
+    # (Same rationale and values as thread-runtime-observability.yml.)
+    env:
+      SUPABASE_URL: https://placeholder.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
+      REDIS_URL: 'redis://localhost:6379'
+      OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+      ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      # The capability flag is deliberately LEFT UNSET so CI exercises the shipped
+      # default (OFF). The suites below drive the producer directly, so coverage does
+      # not depend on the flag; leaving it unset also proves the default is inert.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # PRODUCT-IMPLEMENTATION-001 — the reusable compatibility harness and its
+      # suite. These are the contracts that gate every future narrative change:
+      # campaign_angle token contract, deriveAngleType classification, execution-stage
+      # parity, authority_reason nullability, determinism, and schema / key-order /
+      # serialization backward compatibility. A failure here means a narrative change
+      # would silently reclassify cards or break a downstream consumer.
+      - name: Compatibility contracts (PRODUCT-IMPLEMENTATION-001)
+        run: npx jest backend/tests/unit/strategicNarrativeCompatibility.test.ts --no-coverage --colors
+
+      # PRODUCT-RESTORE-001 + -IMPLEMENTATION-002 (D-prime) + -003 (B-prime) — the
+      # producer itself: rules A-F, restored verbatim where unchanged, plus the two
+      # authorized recommendation-aware enhancements. Also pins the historical
+      # enrichment expectations.
+      - name: Producer + restoration contracts (PRODUCT-RESTORE-001)
+        run: npx jest backend/tests/unit/strategicRecommendationIntelligenceRestore.test.ts backend/tests/unit/recommendationIntelligenceEnrichment.test.ts --no-coverage --colors
+
+      # PRODUCT-VALIDATION-001 — the downstream consumers of `card.intelligence`.
+      # These are what actually regressed to generic copy while the producer was
+      # missing: card enrichment, execution sequencing, campaign blueprint, and the
+      # strategic-content-transformation validator.
+      - name: Downstream consumer contracts (PRODUCT-VALIDATION-001)
+        run: npx jest backend/tests/unit/recommendationCardEnrichment.test.ts backend/tests/unit/recommendationSequencing.test.ts backend/tests/unit/recommendationBlueprintService.test.ts backend/tests/unit/strategicContentTransformationValidator.test.ts --no-coverage --colors
+
+      # RELEASE-READINESS-001 — instrumentation contracts. Enforces that the metrics
+      # layer is fail-safe (a throwing sink cannot break enrichment), emits NO
+      # company-specific narrative content (counts / durations / fixed enums only),
+      # and is inert (identical output with observability ON vs OFF; capability flag
+      # default OFF, enabled only by the exact string "true").
+      - name: Observability contracts (RELEASE-READINESS-001)
+        run: npx jest backend/tests/unit/strategicIntelligenceObservability.test.ts --no-coverage --colors

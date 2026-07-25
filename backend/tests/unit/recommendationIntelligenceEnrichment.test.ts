@@ -2,10 +2,12 @@
  * Recommendation Intelligence Enrichment unit tests.
  */
 
+// PRODUCT-RESTORE-001: the producer was restored into an explicitly-named module
+// (the historical filename now belongs to the unrelated SEO/growth analytics domain).
 import {
   enrichRecommendationIntelligence,
-  type RecommendationIntelligence,
-} from '../../services/recommendationIntelligenceService';
+  type StrategicRecommendationIntelligence as RecommendationIntelligence,
+} from '../../services/strategicRecommendationIntelligenceService';
 import type { CompanyProfile } from '../../services/companyProfileService';
 import type { PolishFlags } from '../../services/recommendationPolishService';
 
@@ -63,11 +65,14 @@ describe('recommendationIntelligenceEnrichment', () => {
       const generic = mkRec('popular topic', { volume: 50000 });
       const profile: CompanyProfile | null = { company_id: 'c1' };
       const enriched = enrichRecommendationIntelligence([diamond, generic], profile);
+      // PRODUCT-IMPLEMENTATION-003 (B′): the diamond/default CORE selection below is the
+      // historical behaviour this test pins; B′ appends a per-recommendation qualifier
+      // ('alignment is strong but coverage is thin' vs the high-demand branch) + topic anchor.
       expect((enriched[0].intelligence as RecommendationIntelligence).gap_being_filled).toBe(
-        'Underserved but high-alignment opportunity.'
+        'Underserved but high-alignment opportunity — alignment is strong but coverage is thin for niche topic.'
       );
       expect((enriched[1].intelligence as RecommendationIntelligence).gap_being_filled).toBe(
-        'Existing demand lacking clear authority-driven guidance.'
+        'Existing demand lacking clear authority-driven guidance — demand is already concentrated for popular topic.'
       );
     });
 

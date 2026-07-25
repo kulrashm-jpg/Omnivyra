@@ -7,7 +7,8 @@
 import { buildCompanyMissionContext } from '../../services/companyMissionContext';
 import { buildProfileKeywords } from '../../services/trends/trendAlignmentService';
 import { buildCoreProblemTokens, buildWeightedAlignmentTokens } from '../../services/recommendationEngineService';
-import { enrichRecommendationIntelligence } from '../../services/recommendationIntelligenceService';
+// PRODUCT-RESTORE-001: producer restored into an explicitly-named module.
+import { enrichRecommendationIntelligence } from '../../services/strategicRecommendationIntelligenceService';
 import {
   buildCompanyContext,
   buildForcedCompanyContext,
@@ -130,8 +131,10 @@ describe('companyContextFoundationFix', () => {
       const recs = [{ topic: 'Productivity', source: 'test', geo: 'US', volume: 100 }];
       const enriched = enrichRecommendationIntelligence(recs, profile);
       expect(enriched).toHaveLength(1);
+      // PRODUCT-IMPLEMENTATION-003 (B′): historical core preserved verbatim, now composed
+      // with a per-recommendation qualifier + topic anchor.
       expect(enriched[0].intelligence.gap_being_filled).toBe(
-        'Audience lacks awareness of: hidden cost of context switching'
+        'Audience lacks awareness of: hidden cost of context switching — demand is already concentrated for Productivity.'
       );
     });
 
@@ -139,7 +142,9 @@ describe('companyContextFoundationFix', () => {
       const profile = mkProfile({});
       const diamond = [{ topic: 'Niche', source: 'test', geo: 'US', volume: 100, polish_flags: { diamond_candidate: true } }];
       const enriched = enrichRecommendationIntelligence(diamond, profile);
-      expect(enriched[0].intelligence.gap_being_filled).toBe('Underserved but high-alignment opportunity.');
+      expect(enriched[0].intelligence.gap_being_filled).toBe(
+        'Underserved but high-alignment opportunity — demand is already concentrated for Niche.'
+      );
     });
   });
 

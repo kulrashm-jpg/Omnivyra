@@ -1,7 +1,8 @@
 import type { AuthorityMarketPosition } from './authorityMarketPositionService';
 import type { ExternalCompetitiveIntelligence } from './externalCompetitiveIntelligenceService';
 import type { GscSeoIntelligence } from './gscSeoIntelligenceService';
-import type { RecommendationIntelligence } from './recommendationIntelligenceService';
+// PRODUCT-RESTORE-001 Phase 1: explicit domain name (was the ambiguous `RecommendationIntelligence`).
+import type { SeoGrowthRecommendationIntelligence } from './recommendationIntelligenceService';
 import type { EnterpriseOpportunity } from './analyticsEnterpriseSnapshotService';
 
 export type LeadGenerationAuthoritySignal = {
@@ -48,7 +49,7 @@ export function buildLeadGenerationAuthorityIntelligence(params: {
   gsc: GscSeoIntelligence | null;
   external: ExternalCompetitiveIntelligence;
   authority: AuthorityMarketPosition;
-  recommendations: RecommendationIntelligence;
+  recommendations: SeoGrowthRecommendationIntelligence;
 }): LeadGenerationAuthorityIntelligence {
   const signals: LeadGenerationAuthoritySignal[] = [];
   const highIntentQueries = (params.gsc?.top_queries ?? [])

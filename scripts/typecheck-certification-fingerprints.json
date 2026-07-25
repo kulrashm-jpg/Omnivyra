@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-07-21",
+  "generated": "2026-07-22",
   "typescript": "5.9.2",
   "note": [
     "PB-011 per-error identity baseline for the backend certification surface.",
@@ -29,7 +29,7 @@
       }
     },
     "tsconfig.backend-tests.json": {
-      "total": 470,
+      "total": 443,
       "files": {
         "backend/tests/integration/campaign_preemption_execution.test.ts": [
           {
@@ -592,13 +592,6 @@
             "count": 1
           }
         ],
-        "backend/tests/unit/companyContextFoundationFix.test.ts": [
-          {
-            "code": "TS2724",
-            "message": "'\"../../services/recommendationIntelligenceService\"' has no exported member named 'enrichRecommendationIntelligence'. Did you mean 'RecommendationIntelligence'?",
-            "count": 1
-          }
-        ],
         "backend/tests/unit/competitorEngineService.test.ts": [
           {
             "code": "TS2339",
@@ -1091,43 +1084,6 @@
           {
             "code": "TS2493",
             "message": "Tuple type '[]' of length '0' has no element at index '0'.",
-            "count": 1
-          }
-        ],
-        "backend/tests/unit/recommendationIntelligenceEnrichment.test.ts": [
-          {
-            "code": "TS2339",
-            "message": "Property 'authority_reason' does not exist on type 'RecommendationIntelligence'.",
-            "count": 3
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'campaign_angle' does not exist on type 'RecommendationIntelligence'.",
-            "count": 4
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'expected_transformation' does not exist on type 'RecommendationIntelligence'.",
-            "count": 7
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'gap_being_filled' does not exist on type 'RecommendationIntelligence'.",
-            "count": 2
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'problem_being_solved' does not exist on type 'RecommendationIntelligence'.",
-            "count": 7
-          },
-          {
-            "code": "TS2339",
-            "message": "Property 'why_now' does not exist on type 'RecommendationIntelligence'.",
-            "count": 2
-          },
-          {
-            "code": "TS2724",
-            "message": "'\"../../services/recommendationIntelligenceService\"' has no exported member named 'enrichRecommendationIntelligence'. Did you mean 'RecommendationIntelligence'?",
             "count": 1
           }
         ],

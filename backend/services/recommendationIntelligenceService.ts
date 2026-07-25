@@ -18,16 +18,41 @@ export type StrategicRecommendation = {
   evidence_refs: string[];
 };
 
-export type RecommendationIntelligence = {
+/**
+ * PRODUCT-RESTORE-001 · Phase 1 — TYPE COLLISION RESOLUTION.
+ *
+ * This module is the **SEO / growth analytics** recommendation domain: a status +
+ * a list of scored `StrategicRecommendation`s, consumed by the enterprise analytics
+ * snapshot and lead-generation authority services.
+ *
+ * It is NOT the *Strategic Recommendation Intelligence* narrative layer (the six
+ * per-card fields `problem_being_solved` / `gap_being_filled` / `why_now` /
+ * `authority_reason` / `expected_transformation` / `campaign_angle`). That is a
+ * different domain and now lives in `strategicRecommendationIntelligenceService.ts`
+ * as `StrategicRecommendationIntelligence`.
+ *
+ * Both concepts were previously exported under the single ambiguous name
+ * `RecommendationIntelligence` (PRODUCT-ARCH-001 §5), which is why the narrative
+ * layer's producer could be deleted without a compile error. Each domain now has an
+ * explicit name. Type-only change — no runtime behavior is affected.
+ */
+export type SeoGrowthRecommendationIntelligence = {
   status: 'ready' | 'limited' | 'unavailable';
   recommendations: StrategicRecommendation[];
 };
+
+/**
+ * @deprecated Ambiguous — prefer {@link SeoGrowthRecommendationIntelligence}. Retained
+ * for backward compatibility with any importer not yet migrated. Do NOT use this name
+ * for the narrative layer; see `strategicRecommendationIntelligenceService.ts`.
+ */
+export type RecommendationIntelligence = SeoGrowthRecommendationIntelligence;
 
 export function buildRecommendationIntelligence(input: {
   opportunities: EnterpriseOpportunity[];
   authority: AuthorityMarketPosition;
   predictive: PredictiveStrategicIntelligence;
-}): RecommendationIntelligence {
+}): SeoGrowthRecommendationIntelligence {
   const enrich = (base: Omit<StrategicRecommendation,
     'business_impact' | 'implementation_difficulty' | 'estimated_seo_impact' | 'estimated_discoverability_impact' | 'strategic_urgency' | 'expected_authority_gain'
   >): StrategicRecommendation => ({

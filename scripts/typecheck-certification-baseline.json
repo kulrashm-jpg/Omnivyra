@@ -1,7 +1,7 @@
 {
   "projects": {
     "tsconfig.backend.json": 1,
-    "tsconfig.backend-tests.json": 470
+    "tsconfig.backend-tests.json": 443
   },
   "measured": "2026-07-21, branch feat/intel-egress-coordination-foundation, typescript 5.9.2 (re-measured by PB-010)",
   "note": [
