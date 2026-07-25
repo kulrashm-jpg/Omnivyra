@@ -6,10 +6,7 @@ import { impactScore } from './reportDecisionUtils';
 import { supabase } from '../db/supabaseClient';
 import axios from 'axios';
 import { config } from '@/config';
-import {
-  listKnownCompetitorProfiles,
-  type CompetitorEnrichmentProfile,
-} from './competitorEnrichmentKnowledge';
+import type { CompetitorEnrichmentProfile } from './competitorEnrichmentKnowledge';
 import type { CompetitorSecondaryTag } from './competitorTaxonomy';
 import type {
   CompetitorCapabilityVector,
@@ -72,7 +69,8 @@ import {
 
 export { generateDiscoveryKeywords } from "./reportCompetitorIntelligenceServiceHelpers";
 
-import { type CompetitorClassification, type ComparisonMetrics, type CompetitorComparisonEntry, type CompetitorGap, type CompetitorIntelligenceResult, groupCompetitorsByTier, buildCompetitiveSummary, MAX_COMPETITORS, MAX_COMPETITOR_ENGINE_OUTPUT, MAX_COMPETITOR_PAGES, MAX_CRAWL_DEPTH, MIN_SERP_DOMAINS_PER_KEYWORD, toDetectedCompetitor, devCompetitorScoringDebug, buildManualCompetitorCandidates, buildStoredCompetitorCandidates, buildAiInferredCompetitorCandidates, buildProviderCompetitorCandidates, buildUnifiedCandidatePool, buildKnownDatasetCandidates, expandDiscoveryKeywords, extractTopKeywords } from './reportCompetitorIntelligenceServiceModel';
+import { type CompetitorClassification, type ComparisonMetrics, type CompetitorComparisonEntry, type CompetitorGap, type CompetitorIntelligenceResult, groupCompetitorsByTier, buildCompetitiveSummary, MAX_COMPETITORS, MAX_COMPETITOR_ENGINE_OUTPUT, MAX_COMPETITOR_PAGES, MAX_CRAWL_DEPTH, MIN_SERP_DOMAINS_PER_KEYWORD, toDetectedCompetitor, devCompetitorScoringDebug, buildManualCompetitorCandidates, buildStoredCompetitorCandidates, buildProviderCompetitorCandidates, expandDiscoveryKeywords, extractTopKeywords } from './reportCompetitorIntelligenceServiceModel';
+import { assembleEvidenceCompetitorCandidates, deriveCompetitorEvidenceStatus, type CompetitorEvidenceStatus } from './competitorCandidateAssembly';
 
 async function crawlDomainSignals(domain: string, referenceKeywords: string[]): Promise<DomainCrawlSignals | null> {
   const seedUrls = [
@@ -265,6 +263,40 @@ function buildGapDefinitions(params: {
   return gaps.sort((a, b) => b.impact_score * b.confidence_score - a.impact_score * a.confidence_score).slice(0, 4);
 }
 
+/**
+ * Graceful empty-state result. When evidence yields no validated competitors we return a valid,
+ * empty CompetitorIntelligenceResult carrying `competitor_evidence_status: 'insufficient_public_data'`
+ * — never throw, never fabricate. Consumers render a thin/empty competitor section honestly.
+ */
+function emptyCompetitorIntelligenceResult(input: {
+  domain: string;
+  companyContext: CompanyCompetitiveContext;
+  companyMetrics: ComparisonMetrics;
+  keywordCount: number;
+  serpDomainsFound: number;
+  serpStatus: 'live' | 'fallback';
+}): CompetitorIntelligenceResult {
+  return {
+    summary: `Public competitive evidence for ${input.domain} was insufficient to name peers without fabrication. No competitors are shown rather than inventing them.`,
+    detected_competitors: [],
+    market_alternatives: [],
+    competitors_by_tier: { tier_1: [], tier_2: [], tier_3: [] },
+    comparison: { company: input.companyMetrics, competitors: [] },
+    generated_gaps: [],
+    competitive_summary: buildCompetitiveSummary({ competitors: [], companyContext: input.companyContext, domain: input.domain }),
+    keyword_gap: { missing_keywords: [], weak_keywords: [], strong_keywords: [] },
+    answer_gap: { missing_answers: [], weak_answers: [], strong_answers: [] },
+    discovery_metadata: {
+      keyword_count: input.keywordCount,
+      serp_domains_found: input.serpDomainsFound,
+      serp_status: input.serpStatus,
+      is_fallback_used: false,
+      competitor_evidence_status: 'insufficient_public_data',
+    },
+    ...devCompetitorScoringDebug(),
+  };
+}
+
 export function buildCompetitorIntelligence(params: {
   decisions: PersistedDecisionObject[];
   resolvedInput?: ResolvedReportInput | null;
@@ -293,53 +325,36 @@ export function buildCompetitorIntelligence(params: {
     companyContext,
     geography,
   });
-  const knownDatasetCandidates = buildKnownDatasetCandidates({
-    companyContext,
-    keywords: discoveryKeywords,
-    geography,
+  // Canonical evidence-only assembly — stored / manual / provider evidence, no hardcoded or
+  // keyword→company injection. The sync path performs no SERP (it cannot await); reports needing
+  // fresh SERP discovery use buildCompetitorIntelligenceActive.
+  const candidates = assembleEvidenceCompetitorCandidates({
+    evidenceCandidates: [...manualCandidates, ...storedCandidates, ...providerCandidates],
   });
-  const aiInferredCandidates = buildAiInferredCompetitorCandidates({
-    companyContext,
-    keywords: discoveryKeywords,
-    geography,
-  });
-  const candidates = buildUnifiedCandidatePool({
-    manual: manualCandidates,
-    stored: storedCandidates,
-    provider: providerCandidates,
-    aiInferred: aiInferredCandidates,
-    ecosystem: knownDatasetCandidates,
-  });
-  let ranked = getFinalCompetitorsSync({
+  const ranked = getFinalCompetitorsSync({
     candidates,
     context: companyContext,
     max: MAX_COMPETITOR_ENGINE_OUTPUT,
     includeMarketSubstitutes: true,
   });
-  let splitOutput = splitRankedCompetitorsForOutput(ranked, MAX_COMPETITORS, MARKET_SUBSTITUTE_MAX_COUNT);
+  const splitOutput = splitRankedCompetitorsForOutput(ranked, MAX_COMPETITORS, MARKET_SUBSTITUTE_MAX_COUNT);
   assertCompetitorOutputPartition(splitOutput, 'report_competitor_intelligence_sync');
-  if (splitOutput.competitors.length < MIN_SERP_DOMAINS_PER_KEYWORD && knownDatasetCandidates.length > 0) {
-    const retryRanked = getFinalCompetitorsSync({
-      candidates: [...candidates, ...knownDatasetCandidates],
-      context: companyContext,
-      max: MAX_COMPETITOR_ENGINE_OUTPUT,
-      includeMarketSubstitutes: true,
-    });
-    const retrySplitOutput = splitRankedCompetitorsForOutput(retryRanked, MAX_COMPETITORS, MARKET_SUBSTITUTE_MAX_COUNT);
-    assertCompetitorOutputPartition(retrySplitOutput, 'report_competitor_intelligence_sync_retry');
-    if (retrySplitOutput.competitors.length > splitOutput.competitors.length) {
-      ranked = retryRanked;
-      splitOutput = retrySplitOutput;
-    }
-  }
   const discovered = classifyCompetitors(splitOutput.competitors.map(toDetectedCompetitor));
   const marketAlternatives = splitOutput.market_alternatives.map(toDetectedCompetitor);
-
-  if (discovered.length === 0) {
-    throw new Error(`competitor_discovery_empty_after_final_gate:${domain}`);
-  }
+  const evidenceStatus = deriveCompetitorEvidenceStatus(discovered.length);
 
   const companyMetrics = computeCompanyMetrics(params);
+  if (discovered.length === 0) {
+    return emptyCompetitorIntelligenceResult({
+      domain,
+      companyContext,
+      companyMetrics,
+      keywordCount: discoveryKeywords.length,
+      serpDomainsFound: 0,
+      serpStatus: 'fallback',
+    });
+  }
+
   const comparisonEntries = discovered.map((competitor, index) => {
     const metrics = liftMetrics(companyMetrics, competitor, index);
     return {
@@ -394,7 +409,8 @@ export function buildCompetitorIntelligence(params: {
       keyword_count: discoveryKeywords.length,
       serp_domains_found: 0,
       serp_status: 'fallback',
-      is_fallback_used: candidates.length > manualCandidates.length,
+      is_fallback_used: false,
+      competitor_evidence_status: evidenceStatus,
     },
     ...devCompetitorScoringDebug(),
   };
@@ -471,43 +487,20 @@ export async function buildCompetitorIntelligenceActive(params: {
     geography,
   });
 
-  const serpCandidates: CompetitorCandidate[] = serpDomains.map((item, index) => ({
-      name: domainToName(item),
-      domain: item,
-      category: companyContext.marketFocus ?? businessType ?? 'Search competitor',
-      classification: (
-        index === 0
-          ? 'direct_competitor'
-          : index === 1
-            ? 'seo_competitor'
-            : 'authority_leader'
-      ) as CompetitorClassification,
-      source: 'serp_live' as const,
-      rationale: `Discovered from top SERP domains for high-priority keywords (${keywords.slice(0, 3).join(', ') || 'core demand terms'}).`,
+  // Canonical evidence-only assembly: manual/stored/provider evidence + SERP-live domains.
+  // No hardcoded roster, no keyword→company map, no count-based padding.
+  const candidatePool = assembleEvidenceCompetitorCandidates({
+    evidenceCandidates: [...manualCandidates, ...storedCandidates, ...providerCandidates],
+    serpDomains,
+    serpContext: {
+      marketFocus: companyContext.marketFocus,
+      businessType,
       geography,
-      productSignals: companyContext.primaryService ? [companyContext.primaryService] : null,
-      discoverySources: ['serp'],
-    }));
-  const knownDatasetCandidates = buildKnownDatasetCandidates({
-    companyContext,
-    keywords,
-    geography,
+      primaryService: companyContext.primaryService,
+      rationale: `Discovered from top SERP domains for high-priority keywords (${keywords.slice(0, 3).join(', ') || 'core demand terms'}).`,
+    },
   });
-  const aiInferredCandidates = buildAiInferredCompetitorCandidates({
-    companyContext,
-    keywords,
-    geography,
-  });
-  const needsKnownDataset = serpDomains.length === 0 || serpCandidates.length + manualCandidates.length + storedCandidates.length < MIN_SERP_DOMAINS_PER_KEYWORD;
-  const candidatePool = buildUnifiedCandidatePool({
-    manual: manualCandidates,
-    stored: storedCandidates,
-    provider: providerCandidates,
-    serp: serpCandidates,
-    aiInferred: aiInferredCandidates,
-    ecosystem: knownDatasetCandidates,
-  });
-  let ranked = await getFinalCompetitors({
+  const ranked = await getFinalCompetitors({
     candidates: candidatePool,
     context: companyContext,
     max: MAX_COMPETITOR_ENGINE_OUTPUT,
@@ -515,47 +508,37 @@ export async function buildCompetitorIntelligenceActive(params: {
     companyId: params.companyId,
     includeMarketSubstitutes: true,
   });
-  let splitOutput = splitRankedCompetitorsForOutput(ranked, MAX_COMPETITORS, MARKET_SUBSTITUTE_MAX_COUNT);
+  const splitOutput = splitRankedCompetitorsForOutput(ranked, MAX_COMPETITORS, MARKET_SUBSTITUTE_MAX_COUNT);
   assertCompetitorOutputPartition(splitOutput, 'report_competitor_intelligence_active');
-  if (splitOutput.competitors.length < MIN_SERP_DOMAINS_PER_KEYWORD && knownDatasetCandidates.length > 0) {
-    const retryRanked = await getFinalCompetitors({
-      candidates: [...candidatePool, ...knownDatasetCandidates],
-      context: companyContext,
-      max: MAX_COMPETITOR_ENGINE_OUTPUT,
-      useNetwork: false,
-      useStoredCache: false,
-      companyId: params.companyId,
-      includeMarketSubstitutes: true,
-    });
-    const retrySplitOutput = splitRankedCompetitorsForOutput(retryRanked, MAX_COMPETITORS, MARKET_SUBSTITUTE_MAX_COUNT);
-    assertCompetitorOutputPartition(retrySplitOutput, 'report_competitor_intelligence_active_retry');
-    if (retrySplitOutput.competitors.length > splitOutput.competitors.length) {
-      ranked = retryRanked;
-      splitOutput = retrySplitOutput;
-    }
-  }
   const discovered = classifyCompetitors(splitOutput.competitors.map(toDetectedCompetitor));
   const marketAlternatives = splitOutput.market_alternatives.map(toDetectedCompetitor);
+  const evidenceStatus = deriveCompetitorEvidenceStatus(discovered.length);
+
+  const companyMetrics = computeCompanyMetrics({
+    decisions: params.decisions,
+    resolvedInput: params.resolvedInput,
+  });
 
   if (discovered.length === 0) {
-    console.error('[competitor-discovery][empty-after-final-gate]', {
+    console.info('[competitor-discovery][insufficient-public-data]', {
       keywords_generated: keywords,
       serp_domains_found: serpDomains.length,
-      final_candidates_count: 0,
       domain,
     });
-    throw new Error(`competitor_discovery_empty_after_final_gate:${domain}`);
+    return emptyCompetitorIntelligenceResult({
+      domain,
+      companyContext,
+      companyMetrics,
+      keywordCount: keywords.length,
+      serpDomainsFound: serpDomains.length,
+      serpStatus,
+    });
   }
 
   console.info('[competitor-discovery][summary]', {
     keywords_generated: keywords,
     serp_domains_found: serpDomains.length,
     final_candidates_count: discovered.length,
-  });
-
-  const companyMetrics = computeCompanyMetrics({
-    decisions: params.decisions,
-    resolvedInput: params.resolvedInput,
   });
 
   const companyKeywordSet = new Set(keywords.map((item) => item.toLowerCase()));
@@ -658,7 +641,8 @@ export async function buildCompetitorIntelligenceActive(params: {
       keyword_count: keywords.length,
       serp_domains_found: serpDomains.length,
       serp_status: serpStatus,
-      is_fallback_used: needsKnownDataset || ranked.some((competitor) => competitor.source === 'known_category_dataset' || competitor.source === 'market_substitute'),
+      is_fallback_used: ranked.some((competitor) => competitor.source === 'market_substitute'),
+      competitor_evidence_status: evidenceStatus,
     },
     ...devCompetitorScoringDebug(),
   };

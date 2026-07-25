@@ -157,62 +157,48 @@ function makeDrishiqInput(): ResolvedReportInput {
 }
 
 describe('reportCompetitorStrategyService', () => {
-  it('builds light, diagnostic, and strategic report layers from final competitor intelligence', () => {
+  it('builds strategy layers over evidence-only competitors and injects no hardcoded HubSpot/Adobe', () => {
+    // No manual competitors and no live SERP (sync path) → evidence-only means an empty competitor
+    // set. The former HubSpot/Adobe Marketo keyword-injection is gone; strategy layers still render.
     const intelligence = buildCompetitorIntelligence({
       decisions: [],
       resolvedInput: makeOmnivyraInput(),
     });
 
     assertValidCompetitorList(intelligence.detected_competitors as any[]);
+    expect(intelligence.detected_competitors).toHaveLength(0);
+    expect(intelligence.detected_competitors.some((item) => item.name === 'HubSpot')).toBe(false);
+    expect(intelligence.discovery_metadata?.competitor_evidence_status).toBe('insufficient_public_data');
 
     const snapshot = buildCompetitiveSnapshotReport(intelligence);
-    expect(snapshot.competitors).toHaveLength(3);
-    expect(snapshot.competitors.every((item) => item.tier && item.threat_level && item.differentiation)).toBe(true);
-    expect(snapshot.competitive_snapshot_summary.top_threat).toBe('HubSpot');
-    expect(snapshot.competitive_snapshot_summary.action).toContain('HubSpot');
+    expect(snapshot.competitors).toHaveLength(0);
+    expect(snapshot.competitive_snapshot_summary.top_threat).not.toBe('HubSpot');
 
     const pressure = buildCompetitivePressureAnalysis(intelligence);
-    const hubSpotPressure = pressure.competitors.find((item) => item.name === 'HubSpot');
-    expect(hubSpotPressure?.threat_level).toBe('high');
-    expect(hubSpotPressure?.authority_score).toBeGreaterThan(0.7);
-    expect(hubSpotPressure?.pressure_on).toEqual(expect.arrayContaining(['SEO', 'Brand authority']));
-    expect(pressure.competitors.every((item) => item.action.length > 20)).toBe(true);
-    expect(pressure.summary.next_action).toContain('HubSpot');
+    expect(pressure.competitors.some((item) => item.name === 'HubSpot')).toBe(false);
 
     const growth = buildCompetitiveStrategyMap(intelligence);
-    expect(growth.competitive_strategy_map.tier_breakdown.tier_1.map((item) => item.name)).toEqual(
-      expect.arrayContaining(['HubSpot', 'Adobe Marketo Engage']),
-    );
-    expect(growth.competitive_strategy_map.strategic_actions.how_to_beat_tier_1).toContain('HubSpot');
-    expect(growth.competitive_strategy_map.opportunity_map.weak_competitor_areas.length).toBeGreaterThan(0);
-    expect(growth.competitive_strategy_map.strategic_actions.how_to_differentiate_from_tier_2.length).toBeGreaterThan(20);
-    expect(growth.competitive_strategy_map.strategic_actions.how_to_ignore_tier_3.length).toBeGreaterThan(20);
+    expect(growth.competitive_strategy_map.tier_breakdown.tier_1.some((item) => item.name === 'HubSpot')).toBe(false);
+    // Company-derived strategic position is independent of competitor evidence and still renders.
     expect(growth.strategic_position.positioning_statement).toContain('Omnivyra');
-    expect(growth.strategic_position.primary_battlefield.length).toBeGreaterThan(20);
-    expect(growth.strategic_position.avoidance_zone.length).toBeGreaterThan(20);
     expect(growth.strategic_position.messaging_angle).toContain('Omnivyra');
   });
 
-  it('keeps Drishiq snapshot intelligence focused on Wysa without manual competitors', () => {
+  it('does not fabricate a Wysa competitor for Drishiq when there is no manual/SERP evidence', () => {
     const intelligence = buildCompetitorIntelligence({
       decisions: [],
       resolvedInput: makeDrishiqInput(),
     });
 
     assertValidCompetitorList(intelligence.detected_competitors as any[]);
+    // Wysa used to be injected from the knowledge base by keyword-match. Evidence-only: no Wysa.
+    expect(intelligence.detected_competitors).toHaveLength(0);
+    expect(intelligence.detected_competitors.some((item) => item.name === 'Wysa')).toBe(false);
+    expect(intelligence.discovery_metadata?.competitor_evidence_status).toBe('insufficient_public_data');
 
     const snapshot = buildCompetitiveSnapshotReport(intelligence);
-    const pressure = buildCompetitivePressureAnalysis(intelligence);
-    const wysaPressure = pressure.competitors.find((item) => item.name === 'Wysa');
-
-    expect(snapshot.competitive_snapshot_summary.top_threat).toBe('Wysa');
-    expect(snapshot.competitors[0]).toMatchObject({
-      name: 'Wysa',
-      tier: 'Tier 1',
-      threat_level: 'high',
-    });
-    expect(wysaPressure?.threat_level).toBe('high');
-    expect(wysaPressure?.pressure_on).toEqual(expect.arrayContaining(['Conversion', 'AI visibility']));
+    expect(snapshot.competitors).toHaveLength(0);
+    expect(snapshot.competitive_snapshot_summary.top_threat).not.toBe('Wysa');
     expect(snapshot.competitive_snapshot_summary.immediate_positioning_angle).toContain('Drishiq');
   });
 });

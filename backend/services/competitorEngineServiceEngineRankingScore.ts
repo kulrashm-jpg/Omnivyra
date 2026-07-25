@@ -43,7 +43,7 @@ import { type CompetitorSource, type CompetitorClassification, type CompetitorTi
 
 import { buildCompetitorPositioning, inferCompetitorArchetypeCandidates, withArchetypeEnrichment, contextTokens, extractCompetitiveContextFromProfile, buildCompetitorFitSignals } from './competitorEngineServiceEngineDiscovery';
 
-import { hasArchetypeNativePeerEvidence, hasArchetypeNativeContextEvidence, getFinalCompetitorsSync } from './competitorEngineServiceEngineRankingFinal';
+import { getFinalCompetitorsSync } from './competitorEngineServiceEngineRankingFinal';
 
 export function buildCompetitorFitRationale(
   context: CompanyCompetitiveContext,
@@ -103,7 +103,6 @@ function sourceEvidenceBoost(source: CompetitorSource): number {
   if (source === 'website' || source === 'social') return 0.45;
   if (source === 'serp_live' || source === 'known_category_dataset') return 0.35;
   if (source === 'market_substitute') return 0.35;
-  if (source === 'archetype_native_peer') return 0.32;
   return 0;
 }
 
@@ -160,14 +159,6 @@ export function evaluateCompetitorCandidate(
     problemOverlap = roundDimension(Math.max(problemOverlap, 0.58));
     icpOverlap = roundDimension(Math.max(icpOverlap, FINAL_COMPETITOR_MIN_ICP_OVERLAP));
   }
-  if (
-    enrichedCandidate.source === 'archetype_native_peer' &&
-    hasArchetypeNativePeerEvidence(candidateSignalText(enrichedCandidate, domain)) &&
-    hasArchetypeNativeContextEvidence(context)
-  ) {
-    problemOverlap = roundDimension(Math.max(problemOverlap, FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP));
-    icpOverlap = roundDimension(Math.max(icpOverlap, FINAL_COMPETITOR_MIN_ICP_OVERLAP));
-  }
   const marketOverlap = roundDimension((geographyOverlap * 0.55) + (segmentOverlap * 0.45));
   const productDepth = roundDimension(featureDepth);
   const revenue = revenueAdjustment(companyRevenueTier, competitorRevenueTier);
@@ -194,16 +185,8 @@ export function evaluateCompetitorCandidate(
     geographyFit: toPercentScore(geographyOverlap),
     seoIntentFit: toPercentScore(seoIntentFit),
   };
-  let overallScore = weightedCompetitorScore(dimensions);
-  let finalScore = roundDimension(overallScore / 100);
-  if (
-    enrichedCandidate.source === 'archetype_native_peer' &&
-    hasArchetypeNativePeerEvidence(candidateSignalText(enrichedCandidate, domain)) &&
-    hasArchetypeNativeContextEvidence(context)
-  ) {
-    finalScore = roundDimension(Math.max(finalScore, FINAL_COMPETITOR_MIN_SCORE / 100));
-    overallScore = Math.max(overallScore, FINAL_COMPETITOR_MIN_SCORE);
-  }
+  const overallScore = weightedCompetitorScore(dimensions);
+  const finalScore = roundDimension(overallScore / 100);
 
   const tags = enrichedCandidate.tags ?? normalizeCompetitorTags({
     productType: enrichedCandidate.productType,
@@ -289,12 +272,6 @@ export function rankCompetitorCandidates(params: {
     .map((candidate) => {
       const enrichedCandidate = enrichCompetitorCandidateSync(candidate);
       const businessFirstOnly = isBusinessFirstOnlyArchetype(params.context.entityArchetype);
-      const explicitlyValidatedArchetypePeer = Boolean(enrichedCandidate.competitorIntelligence?.reasoning);
-      if (
-        enrichedCandidate.source === 'archetype_native_peer' &&
-        businessFirstOnly &&
-        !explicitlyValidatedArchetypePeer
-      ) return null;
       const domain = normalizeCompetitorDomain(enrichedCandidate.domain ?? enrichedCandidate.name);
       const name = cleanText(enrichedCandidate.enrichment?.name) ?? cleanText(enrichedCandidate.name) ?? domainToName(domain);
       if (!name) return null;
@@ -320,9 +297,7 @@ export function rankCompetitorCandidates(params: {
           productType: gateProductType,
           functionalOverlap: breakdown.problem_overlap,
           segmentOverlap: Math.max(breakdown.icp_overlap, breakdown.market_overlap),
-          isMediaContent:
-            MEDIA_CONTENT_BRAND_SIGNALS.test(gateText) ||
-            enrichedCandidate.source === 'archetype_native_peer',
+          isMediaContent: MEDIA_CONTENT_BRAND_SIGNALS.test(gateText),
           trustedProduct: TRUSTED_SOURCES.has(enrichedCandidate.source),
         });
         if (competitionTier === 'facilitated' || competitionTier === 'excluded') return null;

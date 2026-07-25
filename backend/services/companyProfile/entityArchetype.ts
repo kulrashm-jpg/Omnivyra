@@ -289,6 +289,20 @@ export function inferEntityArchetype(params: {
 
   const strongProductSignal = /\b(saas|software|platform|app|tool|api|dashboard|automation|product development system|product tool|software subscription|api access|open app|sign up|pricing plans?|book a demo)\b/;
   const genericProductMediaSignal = /\b(product management|product leaders?|product growth|premium products?|product thinking|product advice|building product|product strategy|product newsletter)\b/;
+
+  // Capability-vs-identity guard: audience vocabulary ("newsletter", "community",
+  // "engagement", "subscribers") is capability, not identity, when it describes what a
+  // product DOES for its customers. "Software that sends newsletters" is not "a newsletter".
+  // We only treat audience vocabulary as the entity's own identity when there is
+  // first-person / ownership evidence that the entity itself publishes, hosts, or convenes.
+  const publisherIdentitySignal = /\b(our newsletter|our publication|our podcast|our community|our essays|our editorial|we publish|we write|we host|i write|i publish|my newsletter|my publication|hosted by|edited by|written by|author of|subscribe to our|join our (newsletter|community)|read our)\b/;
+  // Product/feature framing: the audience terms are wrapped around a customer the software serves.
+  const capabilityFramedAudienceSignal = /\b(engagement software|engagement platform|community software|community platform|newsletter software|newsletter platform|newsletter tool|analytics platform|analytics software|marketing automation|customer engagement|customer retention|lifecycle (marketing|growth)|for (your )?(customers|audience|users|marketers|teams|businesses|brands|creators)|help(s)? (you|teams|businesses|brands|companies|marketers|creators)|power your|grow your|build your (audience|community))\b/;
+  const capabilityFramedAudienceContext =
+    strongProductSignal.test(text) &&
+    !genericProductMediaSignal.test(text) &&
+    capabilityFramedAudienceSignal.test(text) &&
+    !publisherIdentitySignal.test(text);
   if (strongProductSignal.test(text) && !genericProductMediaSignal.test(text)) {
     addScore(scores, evidence, 'PRODUCT_COMPANY', 'software/platform ownership', 5, text, strongProductSignal);
   } else if (strongProductSignal.test(text)) {
@@ -303,10 +317,21 @@ export function inferEntityArchetype(params: {
   addScore(scores, evidence, 'CONSULTANT_OPERATOR', 'operator/advisory surface', 4, text, /\b(consultant|operator|advisor|advisory|fractional|mentor|coach|playbook|systems thinking)\b/);
   addScore(scores, evidence, 'CONSULTANT_OPERATOR', 'narrative operator surface', 4, text, /\b(public building|build(ing)? in public|founder journal|life map|system declaration|project log|writing to think|experimentation home|operating philosophy|systems-building|revenue generation engine)\b/);
   addScore(scores, evidence, 'COMMUNITY_LED', 'commercial community access', 5, text, /\b(private slack|slack community|discord community|members-only|membership access|community access|thriving private slack|cohort community)\b/);
-  addScore(scores, evidence, 'COMMUNITY_LED', 'community/member surface', 2, text, /\b(community|members?|membership|join us|discord|slack|circle|network|ecosystem)\b/);
+  // Only credit the generic community/member surface as identity when it is not merely a
+  // product capability (e.g. "community platform for your customers").
+  if (!capabilityFramedAudienceContext) {
+    addScore(scores, evidence, 'COMMUNITY_LED', 'community/member surface', 2, text, /\b(community|members?|membership|join us|discord|slack|circle|network|ecosystem)\b/);
+  }
   addScore(scores, evidence, 'THOUGHT_LEADER', 'worldview/thesis surface', 5, text, /\b(thought leadership|worldview|thesis|essays?|manifesto|principles|contrarian|intellectual|philosophy|keynote speaking|narrative strategy|start with why|infinite game|operating philosophy)\b/);
-  addScore(scores, evidence, 'MEDIA_NEWSLETTER', 'media/newsletter surface', 6, text, /\b(newsletter|publication|subscribe|subscribers?|readers?|editorial|media|podcast|show|episodes?|advice column)\b/);
-  addScore(scores, evidence, 'MEDIA_NEWSLETTER', 'publication cadence', 4, text, /\b(weekly|daily|every week|each week|deeply researched|latest stories|articles|posts|essays|journalism)\b/);
+  // Media/newsletter vocabulary counts as the entity's identity only when it is not
+  // product-capability framing. When it is (engagement/newsletter software for customers),
+  // award a small qualified mention so it cannot cross the identity thresholds below.
+  if (capabilityFramedAudienceContext) {
+    addScore(scores, evidence, 'MEDIA_NEWSLETTER', 'media/newsletter capability mention', 2, text, /\b(newsletter|publication|subscribe|subscribers?|readers?|editorial|media|podcast|show|episodes?|advice column)\b/);
+  } else {
+    addScore(scores, evidence, 'MEDIA_NEWSLETTER', 'media/newsletter surface', 6, text, /\b(newsletter|publication|subscribe|subscribers?|readers?|editorial|media|podcast|show|episodes?|advice column)\b/);
+    addScore(scores, evidence, 'MEDIA_NEWSLETTER', 'publication cadence', 4, text, /\b(weekly|daily|every week|each week|deeply researched|latest stories|articles|posts|essays|journalism)\b/);
+  }
 
   const firstPersonCount = densityScore(text, [/\bi\b/g, /\bmy\b/g, /\bme\b/g]);
   const orgCount = densityScore(text, [/\bwe\b/g, /\bour\b/g, /\bcompany\b/g]);
@@ -316,6 +341,7 @@ export function inferEntityArchetype(params: {
   }
   const mediaOverrideEligible =
     scores.MEDIA_NEWSLETTER >= 6 &&
+    !capabilityFramedAudienceContext &&
     countSignals(text, [
       /\b(newsletter|publication|advice column|editorial|media)\b/,
       /\b(subscribers?|readers?|subscribe)\b/,
@@ -328,7 +354,7 @@ export function inferEntityArchetype(params: {
   }
   const pureProductOwnership =
     scores.PRODUCT_COMPANY >= 5 &&
-    scores.MEDIA_NEWSLETTER < 6 &&
+    (scores.MEDIA_NEWSLETTER < 6 || capabilityFramedAudienceContext) &&
     scores.CREATOR_EDUCATOR < 5 &&
     scores.COMMUNITY_LED < 5 &&
     scores.PERSONAL_BRAND < 4;

@@ -71,37 +71,11 @@ function competitorEvidenceText(competitor: Partial<RankedCompetitor>): string {
   ].filter(Boolean).join(' ');
 }
 
-export function hasArchetypeNativePeerEvidence(value: string | null | undefined): boolean {
-  return /\b(newsletter|publication|podcast|creator|course|community|membership|author|speaker|thesis|worldview|operator|public builder|public building|audience-led|trust substitute|editorial|subscribers?|readers?)\b/.test(
-    String(value ?? '').toLowerCase(),
-  );
-}
-
-export function hasArchetypeNativeContextEvidence(context: CompanyCompetitiveContext): boolean {
-  return hasArchetypeNativePeerEvidence([
-    context.marketFocus,
-    context.primaryService,
-    context.targetCustomer,
-    context.idealCustomerProfile,
-    context.brandPositioning,
-    context.businessModel,
-  ].filter(Boolean).join(' '));
-}
-
 function hasStrictCategoryFit(
   competitor: Partial<RankedCompetitor>,
   context: CompanyCompetitiveContext,
 ): boolean {
   if (UNRELATED_COMPETITOR_TEXT_PATTERN.test(competitorEvidenceText(competitor))) return false;
-  if (competitor.source === 'archetype_native_peer') {
-    const archetypePeerEvidence = hasArchetypeNativePeerEvidence(competitorEvidenceText(competitor));
-    if (
-      archetypePeerEvidence &&
-      hasArchetypeNativeContextEvidence(context) &&
-      Number(competitor.problem_overlap ?? 0) >= FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP &&
-      Number(competitor.icp_overlap ?? 0) >= FINAL_COMPETITOR_MIN_ICP_OVERLAP
-    ) return true;
-  }
   const topCategories = detectedCompanyCategories(context);
   if (topCategories.length === 0) return true;
   const competitorCategory = normalizeCompetitorCategory(
@@ -163,19 +137,9 @@ function applyHybridCompositionPreservation(
   context: CompanyCompetitiveContext,
   max?: number,
 ): RankedCompetitor[] {
-  const limit = finalCompetitorOutputLimit(max);
-  const selected = sorted.slice(0, limit);
-  const archetype = context.entityArchetype ?? null;
-  if (!isArchetypeInfluential(archetype) || archetype?.primary_archetype !== 'HYBRID_ENTITY') return selected;
-  const hasAudiencePeer = selected.some((competitor) => competitor.source === 'archetype_native_peer');
-  const hasCommercialPeer = selected.some((competitor) => competitor.source !== 'archetype_native_peer' && competitor.source !== 'market_substitute');
-  const nextAudiencePeer = sorted.find((competitor) => competitor.source === 'archetype_native_peer' && !selected.includes(competitor));
-  const nextCommercialPeer = sorted.find((competitor) => competitor.source !== 'archetype_native_peer' && competitor.source !== 'market_substitute' && !selected.includes(competitor));
-  const replacement = !hasAudiencePeer ? nextAudiencePeer : !hasCommercialPeer ? nextCommercialPeer : null;
-  if (!replacement || selected.length === 0) return selected;
-  const last = selected[selected.length - 1];
-  if (Number(replacement.final_score ?? 0) + 0.08 < Number(last.final_score ?? 0)) return selected;
-  return [...selected.slice(0, -1), replacement].sort(sortFinalCompetitors);
+  // Archetype-native (audience) peers are no longer a producible source, so the former
+  // hybrid audience/commercial interleaving is inert — return the top-N by final rank.
+  return sorted.slice(0, finalCompetitorOutputLimit(max));
 }
 
 function finalCompetitorRankingPoolSize(candidateCount: number, max?: number): number {
@@ -332,9 +296,11 @@ function toRevalidationCandidate(candidate: CompetitorCandidate): CompetitorCand
     (cleanText(candidate.description) || cleanText(candidate.useCase) || (candidate.productSignals?.length ?? 0) > 0) &&
     (cleanText(candidate.targetCustomer) || cleanText(candidate.businessModel)),
   );
+  // Inline enrichment is preserved only for genuinely self-evidenced sources. It must NOT be
+  // preserved for archetype-native peers: their inline fields were synthesized from the subject
+  // company's own profile, which let them bypass the overlap gate via self-comparison.
   const preserveInlineEnrichment =
     candidate.source === 'market_substitute' ||
-    candidate.source === 'archetype_native_peer' ||
     (TRUSTED_SOURCES.has(candidate.source) && hasStrategicInlineEvidence);
   const revalidationCandidate = {
     ...candidate,
@@ -413,7 +379,7 @@ export function buildCompetitorIntelligenceContext(
   options?: { max?: number; includeBusinessFirst?: boolean },
 ): string {
   const items = competitors
-    .filter((competitor) => options?.includeBusinessFirst || competitor.source === 'archetype_native_peer' || competitor.competitor_intelligence)
+    .filter((competitor) => options?.includeBusinessFirst || competitor.competitor_intelligence)
     .slice(0, options?.max ?? 5)
     .map((competitor) => {
       const intelligence = competitor.competitor_intelligence;

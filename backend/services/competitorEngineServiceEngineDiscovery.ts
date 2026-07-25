@@ -388,11 +388,9 @@ export function withArchetypeEnrichment(candidate: CompetitorCandidate): Competi
       ? Number(candidate.confidenceScore)
       : 0.72,
     sources: [
-      candidate.source === 'archetype_native_peer'
-        ? 'archetype_native_peer'
-        : candidate.source === 'market_substitute'
-          ? 'market_substitute_archetype'
-          : 'trusted_inline_candidate',
+      candidate.source === 'market_substitute'
+        ? 'market_substitute_archetype'
+        : 'trusted_inline_candidate',
     ],
   };
 

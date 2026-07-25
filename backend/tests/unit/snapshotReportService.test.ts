@@ -169,9 +169,12 @@ describe('snapshotReportService', () => {
     expect(report.visual_intelligence.seo_capability_radar.content_quality_score).not.toBeNull();
     expect(report.visual_intelligence.seo_capability_radar.data_source_strength.content_quality_score).toBeTruthy();
     expect(report.geo_aeo_visuals.ai_answer_presence_radar.data_source_strength).toBeTruthy();
-    expect(report.top_priorities.length).toBeGreaterThanOrEqual(2);
-    expect(report.pipeline_audit.final_insights).toBeGreaterThanOrEqual(3);
-    expect(report.pipeline_audit.final_actions).toBeGreaterThanOrEqual(2);
+    // Evidence-only: with a single real decision and no SERP/manual competitors, priorities and
+    // insights are derived from genuine evidence — not padded by keyword-injected KB competitors
+    // (which previously fabricated extra competitor gaps). The honest count is smaller.
+    expect(report.top_priorities.length).toBeGreaterThanOrEqual(1);
+    expect(report.pipeline_audit.final_insights).toBeGreaterThanOrEqual(1);
+    expect(report.pipeline_audit.final_actions).toBeGreaterThanOrEqual(1);
     expect(report.summary).toContain(report.primary_problem);
   });
 

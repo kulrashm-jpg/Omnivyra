@@ -105,22 +105,7 @@ import { classifyCompanyBusiness } from './companyProfile/businessClassification
 import { buildSavePayload } from './companyProfile/savePayload';
 import { safeParseRecommendationContext, withRecommendationContextDefaults } from '../../utils/safeJson';
 import {
-  findKnownCompetitorProfile,
-  listKnownCompetitorProfiles,
-  type CompetitorEnrichmentProfile,
-} from './competitorEnrichmentKnowledge';
-import {
-  assertCompetitorOutputPartition,
-  buildCandidatesFromNames,
-  dedupeCompetitorCandidates,
-  extractCompetitiveContextFromProfile,
-  getFinalCompetitors,
-  hasPassedFinalCompetitorGate,
-  HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE,
-  splitRankedCompetitorsForOutput,
-  type CompanyCompetitiveContext,
   type CompetitorCandidate,
-  type RankedCompetitor,
 } from './competitorEngineService';
 import {
 
@@ -416,45 +401,6 @@ export function expandRefineDiscoveryKeywords(profile: CompanyProfile, keywords:
   return ensureMinimumDiscoveryKeywords(profile, expanded).slice(0, 10);
 }
 
-function knownProfileToCompetitorCandidate(
-  profile: CompetitorEnrichmentProfile,
-  index: number,
-  geography: string | null | undefined,
-): CompetitorCandidate {
-  return {
-    name: profile.name,
-    domain: profile.domain,
-    category: profile.category,
-    tags: profile.tags,
-    classification: index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader',
-    source: 'known_category_dataset',
-    description: profile.description,
-    targetCustomer: profile.icp.age_group,
-    useCase: profile.icp.use_case ?? profile.icp.user_intent,
-    geography: geography ?? profile.geography,
-    businessModel: profile.business_model,
-    productType: profile.product_type,
-    scaleSignals: profile.scale_signals,
-    confidenceScore: profile.confidence_score,
-    productSignals: [profile.product_type, profile.category, ...profile.tags].filter(Boolean),
-    rationale: 'Selected from the known category competitor dataset after refine discovery needed validated candidates.',
-  };
-}
-
-export function knownDatasetCompetitorCandidates(geography: string | null | undefined): CompetitorCandidate[] {
-  return listKnownCompetitorProfiles().map((profile, index) => knownProfileToCompetitorCandidate(profile, index, geography));
-}
-
-function knownDatasetCompetitorCandidatesByName(
-  names: string[],
-  geography: string | null | undefined,
-): CompetitorCandidate[] {
-  return names
-    .map((name) => findKnownCompetitorProfile(name))
-    .filter((profile): profile is CompetitorEnrichmentProfile => Boolean(profile))
-    .map((profile, index) => knownProfileToCompetitorCandidate(profile, index, geography));
-}
-
 export function buildProfileForCompetitorDiscovery(
   workingProfile: CompanyProfile,
   extraction: CompanyProfileExtractionOutput,
@@ -501,53 +447,6 @@ export type RefineCompetitorDiscovery = {
   keywords: string[];
   serpDomains: string[];
 };
-
-const REFINE_CATEGORY_PROFILES: Array<{
-  key: string;
-  pattern: RegExp;
-  competitorNames: string[];
-  context: Partial<CompanyCompetitiveContext>;
-}> = [
-  {
-    key: 'ai_guided_wellness_and_clarity',
-    pattern: /\b(ai clarity|clarity engine|clarity assistant|personalized guidance|personal guidance|self[- ]?reflection|mental wellness|mental health|mental clarity|personal development|personal growth|decision[- ]?making|decision support|life decision|therapy chatbot|emotional wellbeing|wellbeing)\b/i,
-    competitorNames: ['Wysa', 'Woebot Health', 'Reflectly', 'Replika', 'Headspace', 'Calm'],
-    context: {
-      marketFocus: 'AI mental wellness, guided clarity, and self-reflection support',
-      primaryService: 'AI clarity engine for self-reflection, emotional wellbeing, and life decisions',
-      targetCustomer: 'individuals seeking personal clarity and guided self-reflection',
-      idealCustomerProfile: 'people seeking private emotional support, mental clarity, and structured reflection',
-      brandPositioning: 'AI-guided personal clarity and mental wellness platform',
-      businessModel: 'B2C software platform',
-    },
-  },
-  {
-    key: 'crm_marketing_automation_growth',
-    pattern: /\b(crm|ai marketing|marketing automation|campaign planning|campaign management|campaign intelligence|sales automation|customer operations|revenue operations|lead nurturing|lead generation|seo intelligence|b2b marketing|growth intelligence)\b/i,
-    competitorNames: ['HubSpot', 'Salesforce', 'ActiveCampaign', 'Adobe Marketo Engage', 'Semrush'],
-    context: {
-      marketFocus: 'CRM, marketing automation, and AI growth intelligence',
-      primaryService: 'AI marketing automation and customer growth platform',
-      targetCustomer: 'B2B founders, marketers, and growth teams',
-      idealCustomerProfile: 'lean growth teams managing campaigns and customer acquisition',
-      brandPositioning: 'AI-powered marketing operations and growth intelligence platform',
-      businessModel: 'B2B SaaS',
-    },
-  },
-];
-
-export function matchingRefineCategoryProfiles(signalText: string) {
-  return REFINE_CATEGORY_PROFILES.filter((profile) => profile.pattern.test(signalText));
-}
-
-export function prioritizedKnownDatasetCompetitorCandidatesForSignal(
-  signalText: string,
-  geography: string | null | undefined,
-): CompetitorCandidate[] {
-  const competitorNames = matchingRefineCategoryProfiles(signalText)
-    .flatMap((profile) => profile.competitorNames);
-  return knownDatasetCompetitorCandidatesByName(Array.from(new Set(competitorNames)), geography);
-}
 
 export function profileDiscoverySignalText(profile: CompanyProfile, keywords: string[] = []): string {
   return [
@@ -658,144 +557,11 @@ export function buildArchetypeNativeDiscoverySeeds(
   return seeds.slice(0, 10);
 }
 
-export function archetypeCandidate(
-  params: {
-    name: string;
-    category: string;
-    description: string;
-    profile: CompanyProfile;
-    archetype: EntityArchetypeIntelligence;
-    classification?: CompetitorCandidate['classification'];
-    productType?: CompetitorCandidate['productType'];
-    productSignals?: string[];
-  },
-): CompetitorCandidate {
-  const audience = profileAudienceLabel(params.profile, params.archetype);
-  const valueSurface = cleanCompetitorText(params.archetype.primary_value_surface);
-  const commercialMode = cleanCompetitorText(params.archetype.commercial_mode);
-  return {
-    name: params.name,
-    source: 'archetype_native_peer',
-    classification: params.classification ?? 'authority_leader',
-    category: params.category,
-    description: params.description,
-    targetCustomer: audience,
-    useCase: valueSurface ?? profileTopicLabel(params.profile, params.archetype),
-    geography: params.profile.geography ?? null,
-    businessModel: commercialMode ?? 'audience-led commercial model',
-    productType: params.productType ?? 'content-based',
-    productSignals: [
-      params.archetype.primary_archetype,
-      ...(params.archetype.secondary_archetypes ?? []),
-      valueSurface,
-      commercialMode,
-      ...(params.productSignals ?? []),
-    ].filter((item): item is string => Boolean(cleanCompetitorText(item))),
-    confidenceScore: 0.74,
-    rationale: `Archetype-native peer inferred from ${params.archetype.primary_archetype} identity, audience overlap, value surface, and monetization context.`,
-    competitorIntelligence: {
-      archetype_peer_category: params.category,
-      audience_overlap: audience,
-      narrative_overlap: valueSurface ?? profileTopicLabel(params.profile, params.archetype),
-      trust_model: params.category.toLowerCase().includes('publication')
-        ? 'recurring audience trust through publishing cadence'
-        : params.category.toLowerCase().includes('community')
-          ? 'member trust through expert access and peer participation'
-          : 'person-led authority and audience trust',
-      publication_identity: params.category.toLowerCase().includes('newsletter') || params.category.toLowerCase().includes('publication') || params.category.toLowerCase().includes('media')
-        ? params.category
-        : null,
-      ecosystem_role: params.category,
-      monetization_adjacency: commercialMode ?? null,
-      creator_operator_identity: params.category.toLowerCase().includes('operator') || params.category.toLowerCase().includes('creator') ? params.category : null,
-      educational_role: params.category.toLowerCase().includes('education') || params.category.toLowerCase().includes('community') ? params.category : null,
-      worldview_adjacency: params.category.toLowerCase().includes('thought') || params.category.toLowerCase().includes('operator') ? valueSurface : null,
-      platform_native_context: (params.productSignals ?? []).some((signal) => /\b(substack|youtube|linkedin|podcast|newsletter)\b/i.test(signal))
-        ? (params.productSignals ?? []).join(', ')
-        : null,
-      reasoning: `Preserved archetype-native context from ${params.archetype.primary_archetype} candidate generation.`,
-    },
-  };
-}
-
-type ArchetypePeerPackEntry = {
-  name: string;
-  category: string;
-  description: string;
-  values: string[];
-  productSignals: string[];
-};
-
-export const ARCHETYPE_NAMED_PEER_PACKS: ArchetypePeerPackEntry[] = [
-  {
-    name: 'Morning Brew',
-    category: 'Newsletter and publication peers',
-    description: 'Business media publication competing through daily editorial cadence, audience trust, newsletter distribution, and media monetization.',
-    values: ['MEDIA_NEWSLETTER'],
-    productSignals: ['newsletter', 'publication', 'business media', 'editorial cadence', 'advertising'],
-  },
-  {
-    name: 'The Hustle',
-    category: 'Newsletter and publication peers',
-    description: 'Business and technology newsletter publication competing for reader attention through sharp editorial packaging and subscriber trust.',
-    values: ['MEDIA_NEWSLETTER'],
-    productSignals: ['newsletter', 'publication', 'business media', 'subscribers'],
-  },
-  {
-    name: "Lenny's Newsletter",
-    category: 'Newsletter and publication peers',
-    description: 'Product and growth newsletter/community business competing through expert editorial advice, paid subscriptions, and professional community trust.',
-    values: ['MEDIA_NEWSLETTER', 'COMMUNITY_LED', 'HYBRID_ENTITY'],
-    productSignals: ['newsletter', 'product growth', 'paid subscription', 'private community'],
-  },
-  {
-    name: 'Ali Abdaal',
-    category: 'Creator education peers',
-    description: 'Creator educator competing through YouTube authority, productivity education, books, courses, and newsletter audience trust.',
-    values: ['CREATOR_EDUCATOR', 'PERSONAL_BRAND'],
-    productSignals: ['creator educator', 'youtube', 'courses', 'books', 'newsletter'],
-  },
-  {
-    name: 'Justin Welsh',
-    category: 'Creator education peers',
-    description: 'Solo creator educator competing through audience-building education, digital products, LinkedIn-native authority, and operator playbooks.',
-    values: ['CREATOR_EDUCATOR', 'PERSONAL_BRAND', 'CONSULTANT_OPERATOR'],
-    productSignals: ['creator educator', 'digital products', 'linkedin creator', 'operator playbooks'],
-  },
-  {
-    name: 'Simon Sinek',
-    category: 'Thought-leader peers',
-    description: 'Author and speaker competing through leadership worldview, frameworks, courses, talks, and thesis-led education.',
-    values: ['THOUGHT_LEADER', 'CREATOR_EDUCATOR', 'PERSONAL_BRAND'],
-    productSignals: ['author', 'speaker', 'leadership', 'courses', 'worldview'],
-  },
-  {
-    name: 'Seth Godin',
-    category: 'Thought-leader peers',
-    description: 'Author, speaker, and marketer competing through long-running thought leadership, books, workshops, and worldview-led audience trust.',
-    values: ['THOUGHT_LEADER', 'PERSONAL_BRAND'],
-    productSignals: ['author', 'speaker', 'marketing thought leadership', 'books', 'workshops'],
-  },
-  {
-    name: 'Sahil Bloom',
-    category: 'Operator creator peers',
-    description: 'Founder, investor, and newsletter operator competing through public writing, frameworks, audience trust, and creator-business monetization.',
-    values: ['MEDIA_NEWSLETTER', 'PERSONAL_BRAND', 'CONSULTANT_OPERATOR', 'HYBRID_ENTITY'],
-    productSignals: ['newsletter', 'public writing', 'founder-led brand', 'operator creator'],
-  },
-  {
-    name: 'Packy McCormick',
-    category: 'Operator creator peers',
-    description: 'Operator-writer and investor competing through technology narrative, public analysis, founder ecosystem reach, and newsletter trust.',
-    values: ['MEDIA_NEWSLETTER', 'CONSULTANT_OPERATOR', 'HYBRID_ENTITY'],
-    productSignals: ['newsletter', 'operator writer', 'technology narrative', 'founder ecosystem'],
-  },
-  {
-    name: 'Reforge',
-    category: 'Community and membership peers',
-    description: 'Professional education and membership community competing through expert-led courses, operator frameworks, and peer learning for product and growth leaders.',
-    values: ['COMMUNITY_LED', 'CREATOR_EDUCATOR', 'HYBRID_ENTITY'],
-    productSignals: ['courses', 'membership', 'operator education', 'professional community'],
-  },
-];
+// NOTE: Hardcoded competitor injection has been removed from this module.
+// The former `archetypeCandidate` helper and `ARCHETYPE_NAMED_PEER_PACKS` roster
+// (Morning Brew, Lenny's Newsletter, Justin Welsh, Seth Godin, …) injected static named
+// entities as "competitors" based purely on an archetype label. Competitors are now
+// evidence-driven only (stored/user/AI-extracted names + SERP-live discovery), validated
+// by the ranking engine's multi-signal gate. Archetype contributes discovery search seeds
+// (`buildArchetypeNativeDiscoverySeeds`) and descriptive metadata only — never candidates.
 

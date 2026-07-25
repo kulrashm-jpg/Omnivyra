@@ -100,20 +100,18 @@ import { generateMarketingIntelligenceDraft } from './companyProfile/marketingIn
 import { inferEntityArchetype, isArchetypeInfluential, isAudienceLedArchetype, isBusinessFirstOnlyArchetype } from './companyProfile/entityArchetype';
 import {
   applyApprovedStrategicGuidance,
-  applyUserGuidedCompetitorSteering,
 } from './companyProfile/userGuidance';
+import { assembleEvidenceCompetitorCandidates } from './competitorCandidateAssembly';
 import { classifyCompanyBusiness } from './companyProfile/businessClassification';
 import { buildSavePayload } from './companyProfile/savePayload';
 import { safeParseRecommendationContext, withRecommendationContextDefaults } from '../../utils/safeJson';
 import {
   findKnownCompetitorProfile,
-  listKnownCompetitorProfiles,
   type CompetitorEnrichmentProfile,
 } from './competitorEnrichmentKnowledge';
 import {
   assertCompetitorOutputPartition,
   buildCandidatesFromNames,
-  dedupeCompetitorCandidates,
   extractCompetitiveContextFromProfile,
   getFinalCompetitors,
   hasPassedFinalCompetitorGate,
@@ -126,144 +124,20 @@ import {
 import {
 
   discoverCompetitorDomainsFromSerp,
-  domainToName,
   generateDiscoveryKeywords,
   normalizeDomain as normalizeCompetitorDiscoveryDomain,
 } from './reportCompetitorIntelligenceServiceHelpers';
 
-import { COMPANY_PROFILES_TABLE, COMPANY_PROFILE_FALLBACK_COLUMNS, MARKET_PULSE_DEFAULT_CATEGORY_SET, normalizeNonEmptyText, normalizeStringArray, normalizeRecommendationContext, mapStrategyProfileToExistingFields, fillMissingText, ensureMinimumDiscoveryKeywords, expandRefineDiscoveryKeywords, knownDatasetCompetitorCandidates, buildProfileForCompetitorDiscovery, type RefineCompetitorDiscovery, matchingRefineCategoryProfiles, prioritizedKnownDatasetCompetitorCandidatesForSignal, profileDiscoverySignalText, archetypeValues, profileAudienceLabel, profileTopicLabel, buildArchetypeNativeDiscoverySeeds, archetypeCandidate, ARCHETYPE_NAMED_PEER_PACKS } from './companyProfileServiceCore';
+import { COMPANY_PROFILES_TABLE, COMPANY_PROFILE_FALLBACK_COLUMNS, MARKET_PULSE_DEFAULT_CATEGORY_SET, normalizeNonEmptyText, normalizeStringArray, normalizeRecommendationContext, mapStrategyProfileToExistingFields, fillMissingText, ensureMinimumDiscoveryKeywords, expandRefineDiscoveryKeywords, buildProfileForCompetitorDiscovery, type RefineCompetitorDiscovery, buildArchetypeNativeDiscoverySeeds } from './companyProfileServiceCore';
 
 import { storedCompetitorNames } from './companyProfileServiceRest1Rest2';
 
-function buildNamedArchetypePeerCandidates(
-  profile: CompanyProfile,
-  archetype?: EntityArchetypeIntelligence | null,
-): CompetitorCandidate[] {
-  if (!isArchetypeInfluential(archetype) || isBusinessFirstOnlyArchetype(archetype)) return [];
-  const values = new Set(archetypeValues(archetype));
-  const topic = profileTopicLabel(profile, archetype).toLowerCase();
-  const audience = profileAudienceLabel(profile, archetype).toLowerCase();
-  const selected = ARCHETYPE_NAMED_PEER_PACKS.filter((entry) =>
-    entry.values.some((value) => values.has(value)) ||
-    entry.productSignals.some((signal) => topic.includes(signal.toLowerCase()) || audience.includes(signal.toLowerCase()))
-  ).slice(0, 5);
-
-  return selected.map((entry) => archetypeCandidate({
-    name: entry.name,
-    category: entry.category,
-    description: entry.description,
-    profile,
-    archetype,
-    classification: entry.values.includes(archetype.primary_archetype) ? 'direct_competitor' : 'authority_leader',
-    productSignals: entry.productSignals,
-  }));
-}
-
-function buildArchetypeNativeCompetitorCandidates(
-  profile: CompanyProfile,
-  archetype?: EntityArchetypeIntelligence | null,
-): CompetitorCandidate[] {
-  if (!isArchetypeInfluential(archetype) || isBusinessFirstOnlyArchetype(archetype)) return [];
-  const values = archetypeValues(archetype);
-  const topic = profileTopicLabel(profile, archetype);
-  const audience = profileAudienceLabel(profile, archetype);
-  const candidates: CompetitorCandidate[] = [];
-  const add = (candidate: CompetitorCandidate) => {
-    const key = candidate.name.toLowerCase();
-    if (!candidates.some((existing) => existing.name.toLowerCase() === key)) candidates.push(candidate);
-  };
-
-  if (values.includes('MEDIA_NEWSLETTER')) {
-    add(archetypeCandidate({
-      name: `${topic} newsletters and publications`,
-      category: 'Newsletter and publication peers',
-      description: `Newsletters, publications, and podcasts serving ${audience} with similar editorial territory, trust model, and publishing cadence.`,
-      profile,
-      archetype,
-      classification: 'direct_competitor',
-      productSignals: ['newsletter', 'publication', 'readers', 'subscribers', 'editorial cadence'],
-    }));
-  }
-  if (values.includes('MEDIA_NEWSLETTER')) {
-    add(archetypeCandidate({
-      name: `${topic} Substack and podcast peers`,
-      category: 'Platform-native media peers',
-      description: `Substack publications, podcasts, and platform-native media operators competing for ${audience}'s recurring attention and trust.`,
-      profile,
-      archetype,
-      classification: 'seo_competitor',
-      productSignals: ['substack', 'podcast', 'platform-native media', 'publication'],
-    }));
-  }
-  if (values.includes('CREATOR_EDUCATOR')) {
-    add(archetypeCandidate({
-      name: `${topic} creator educators and course communities`,
-      category: 'Creator education peers',
-      description: `Creator-led education businesses, courses, workshops, and learning communities competing for ${audience}'s trust and learning budget.`,
-      profile,
-      archetype,
-      classification: 'direct_competitor',
-      productSignals: ['creator educator', 'courses', 'workshops', 'learning community'],
-    }));
-    add(archetypeCandidate({
-      name: `${topic} YouTube and LinkedIn educators`,
-      category: 'Platform-native creator peers',
-      description: `YouTube educators, LinkedIn creators, and platform-native teachers competing for ${audience}'s attention, trust, and learning intent.`,
-      profile,
-      archetype,
-      classification: 'seo_competitor',
-      productSignals: ['youtube educator', 'linkedin creator', 'platform-native creator', 'courses'],
-    }));
-  }
-  if (values.includes('THOUGHT_LEADER')) {
-    add(archetypeCandidate({
-      name: `${topic} authors, speakers, and thesis-led educators`,
-      category: 'Thought-leader peers',
-      description: `Authors, speakers, and thesis-led educators competing through worldview, authority, frameworks, and leadership narrative.`,
-      profile,
-      archetype,
-      classification: 'authority_leader',
-      productSignals: ['author', 'speaker', 'worldview', 'frameworks', 'authority'],
-    }));
-  }
-  if (values.includes('COMMUNITY_LED')) {
-    add(archetypeCandidate({
-      name: `${topic} membership communities`,
-      category: 'Community and membership peers',
-      description: `Membership communities, expert networks, and audience-led groups competing for belonging, access, trust, and recurring participation.`,
-      profile,
-      archetype,
-      classification: 'seo_competitor',
-      productSignals: ['membership', 'community', 'network', 'access'],
-    }));
-  }
-  if (values.includes('CONSULTANT_OPERATOR') || values.includes('PERSONAL_BRAND')) {
-    add(archetypeCandidate({
-      name: `${topic} operator-creators and public builders`,
-      category: 'Operator creator peers',
-      description: `Operator-creators, public builders, and advisor-writers competing through lived operating experience, public documentation, and trusted expertise.`,
-      profile,
-      archetype,
-      classification: 'authority_leader',
-      productSignals: ['operator creator', 'public building', 'advisory', 'systems thinking'],
-    }));
-  }
-  if (values.includes('HYBRID_ENTITY')) {
-    add(archetypeCandidate({
-      name: `${topic} hybrid audience-led businesses`,
-      category: 'Hybrid business and audience peers',
-      description: `Businesses blending commercial offers with media, education, community, authority, or founder-led audience trust.`,
-      profile,
-      archetype,
-      classification: 'direct_competitor',
-      productSignals: ['hybrid entity', 'audience-led business', 'commercial offer', 'trust substitute'],
-    }));
-  }
-
-  for (const namedCandidate of buildNamedArchetypePeerCandidates(profile, archetype)) add(namedCandidate);
-
-  return candidates.slice(0, 12);
-}
+// REMOVED: buildNamedArchetypePeerCandidates + buildArchetypeNativeCompetitorCandidates.
+// These generated competitor candidates from the entity archetype — a hardcoded named roster
+// (Justin Welsh, Seth Godin, Lenny's Newsletter, …) and synthetic category labels
+// ("{topic} newsletters and publications"). Archetype no longer generates or injects
+// competitors. It contributes discovery search seeds (buildArchetypeNativeDiscoverySeeds,
+// which feed SERP and return real evidence) and descriptive metadata only.
 
 export function applyArchetypeContextToProfile(
   profile: CompanyProfile,
@@ -335,30 +209,9 @@ export function applyArchetypeContextToProfile(
 }
 
 export function competitorValidationContextForProfile(profile: CompanyProfile): CompanyCompetitiveContext {
-  const baseContext = extractCompetitiveContextFromProfile(profile);
-  const signalText = profileDiscoverySignalText(profile);
-  const matchedCategory = matchingRefineCategoryProfiles(signalText)[0];
-  if (matchedCategory) return { ...baseContext, ...matchedCategory.context };
-  return baseContext;
-}
-
-function refineDiscoverySignalText(
-  profile: CompanyProfile,
-  extraction: CompanyProfileExtractionOutput,
-  discovery: RefineCompetitorDiscovery,
-): string {
-  return [
-    profileDiscoverySignalText(profile, discovery.keywords),
-    extraction.industry?.value,
-    extraction.category?.value,
-    extraction.products_services?.value,
-    extraction.target_audience?.value,
-    extraction.goals?.value,
-    extraction.content_themes?.value,
-    extraction.brand_voice?.value,
-    extraction.unique_value_proposition?.value,
-    ...discovery.keywords,
-  ].filter(Boolean).join(' ').toLowerCase();
+  // Validation context is derived purely from the company's real profile — no hardcoded
+  // category-keyword context augmentation.
+  return extractCompetitiveContextFromProfile(profile);
 }
 
 export function buildRefineRecoveryContexts(params: {
@@ -367,7 +220,6 @@ export function buildRefineRecoveryContexts(params: {
   extraction: CompanyProfileExtractionOutput;
   discovery: RefineCompetitorDiscovery;
 }): CompanyCompetitiveContext[] {
-  const signalText = refineDiscoverySignalText(params.profile, params.extraction, params.discovery);
   const contexts: CompanyCompetitiveContext[] = [];
   const pushContext = (context: CompanyCompetitiveContext) => {
     const key = [
@@ -396,20 +248,7 @@ export function buildRefineRecoveryContexts(params: {
     brandPositioning: params.baseContext.brandPositioning ?? params.profile.unique_value ?? null,
   });
 
-  matchingRefineCategoryProfiles(signalText).forEach((categoryProfile) => {
-    pushContext({ ...params.baseContext, ...categoryProfile.context });
-  });
-
   return contexts;
-}
-
-export function buildPrioritizedRefineFallbackCandidates(params: {
-  profile: CompanyProfile;
-  extraction: CompanyProfileExtractionOutput;
-  discovery: RefineCompetitorDiscovery;
-}): CompetitorCandidate[] {
-  const signalText = refineDiscoverySignalText(params.profile, params.extraction, params.discovery);
-  return prioritizedKnownDatasetCompetitorCandidatesForSignal(signalText, params.profile.geography ?? null);
 }
 
 export async function discoverRefineCompetitorCandidates(
@@ -420,12 +259,13 @@ export async function discoverRefineCompetitorCandidates(
     storedCompetitorNames(profile),
     'profile_ai',
   );
+  // Archetype seeds only shape SERP queries (they return real discovered domains); they never
+  // become candidates themselves.
   const archetypeSeeds = buildArchetypeNativeDiscoverySeeds(profile, archetype);
   const keywords = ensureMinimumDiscoveryKeywords(profile, [
     ...archetypeSeeds,
     ...generateDiscoveryKeywords(profile),
   ]);
-  const archetypeCandidates = buildArchetypeNativeCompetitorCandidates(profile, archetype);
   const ownDomain =
     normalizeCompetitorDiscoveryDomain(profile.website_url)
     ?? normalizeCompetitorDiscoveryDomain(profile.name)
@@ -436,8 +276,10 @@ export async function discoverRefineCompetitorCandidates(
     geography: profile.geography ?? null,
   });
   let serpDomains = initialDiscovery.domains;
+  let expandedKeywordsUsed = false;
 
   if (serpDomains.length === 0) {
+    // Evidence-based recovery: widen the SERP query, never inject hardcoded names.
     const retryKeywords = expandRefineDiscoveryKeywords(profile, keywords);
     const retryDiscovery = await discoverCompetitorDomainsFromSerp({
       keywords: retryKeywords,
@@ -445,48 +287,40 @@ export async function discoverRefineCompetitorCandidates(
       geography: profile.geography ?? null,
     });
     serpDomains = retryDiscovery.domains;
+    expandedKeywordsUsed = true;
   }
 
-  const serpCandidates = serpDomains.map((domain, index) => ({
-    name: domainToName(domain),
-    domain,
-    source: 'serp_live' as const,
-    classification: index === 0 ? 'direct_competitor' as const : index === 1 ? 'seo_competitor' as const : 'authority_leader' as const,
-    rationale: 'Discovered through refine SERP competitor discovery.',
-  }));
-  const prioritizedFallbackCandidates = prioritizedKnownDatasetCompetitorCandidatesForSignal(
-    profileDiscoverySignalText(profile, keywords),
-    profile.geography ?? null,
-  );
-  const fallbackCandidates = prioritizedFallbackCandidates.length > 0
-    ? prioritizedFallbackCandidates
-    : knownDatasetCompetitorCandidates(profile.geography ?? null);
-  const candidates = applyUserGuidedCompetitorSteering(profile, dedupeCompetitorCandidates([
-    ...storedCompetitorCandidates,
-    ...archetypeCandidates,
-    ...(serpCandidates.length > 0 ? serpCandidates : fallbackCandidates),
-  ]));
-  const fallbackWithArchetype = applyUserGuidedCompetitorSteering(profile, dedupeCompetitorCandidates([
-    ...storedCompetitorCandidates,
-    ...archetypeCandidates,
-    ...fallbackCandidates,
-  ]));
+  // Candidates are evidence-driven ONLY, assembled by the canonical assembler shared with the
+  // report pipeline: stored/user/AI-extracted names grounded in the company's own profile, plus
+  // SERP-live discovered domains, with user-guided steering applied. No hardcoded or
+  // archetype-synthesized fallback — thin evidence yields a small/empty set and the caller
+  // surfaces an honest "insufficient public data" state.
+  const candidates = assembleEvidenceCompetitorCandidates({
+    evidenceCandidates: storedCompetitorCandidates,
+    serpDomains,
+    serpContext: {
+      marketFocus: profile.category ?? null,
+      geography: profile.geography ?? null,
+      rationale: 'Discovered through refine SERP competitor discovery.',
+    },
+    userGuidedProfile: profile,
+  });
 
   console.info('[refine][competitor-discovery]', {
     keywords_generated: keywords,
-    archetype_keywords_generated: archetypeSeeds,
+    archetype_discovery_seeds: archetypeSeeds,
     stored_competitors: storedCompetitorCandidates.map((candidate) => candidate.name),
-    archetype_candidates_generated: archetypeCandidates.map((candidate) => candidate.name),
     user_guided_competitors: profile.report_settings?.user_guidance?.competitors?.length ?? 0,
     serp_domains_found: serpDomains.length,
+    expanded_keywords_used: expandedKeywordsUsed,
     final_candidates_count: candidates.length,
-    fallback_used: serpCandidates.length === 0,
-    fallback_scope: prioritizedFallbackCandidates.length > 0 ? 'category_specific' : 'broad_known_dataset',
+    evidence_only: true,
   });
 
   return {
     candidates,
-    fallbackCandidates: fallbackWithArchetype,
+    // Recovery retries re-rank the same evidence under relaxed contexts — no extra injection.
+    fallbackCandidates: candidates,
     keywords,
     serpDomains,
   };
