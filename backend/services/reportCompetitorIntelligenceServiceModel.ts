@@ -7,9 +7,9 @@ import { supabase } from '../db/supabaseClient';
 import axios from 'axios';
 import { config } from '@/config';
 import {
-  listKnownCompetitorProfiles,
   type CompetitorEnrichmentProfile,
 } from './competitorEnrichmentKnowledge';
+import type { CompetitorEvidenceStatus } from './competitorCandidateAssembly';
 import type { CompetitorSecondaryTag } from './competitorTaxonomy';
 import type {
   CompetitorCapabilityVector,
@@ -21,7 +21,6 @@ import type {
 } from '../../types/competitor';
 import {
   assertCompetitorOutputPartition,
-  dedupeCompetitorCandidates,
   getFinalCompetitors,
   getFinalCompetitorsSync,
   getLatestDebugCompetitorScoring,
@@ -187,6 +186,8 @@ export type CompetitorIntelligenceResult = {
     serp_domains_found: number;
     serp_status: 'live' | 'fallback';
     is_fallback_used: boolean;
+    /** Canonical evidence status — honest empty-state signal (never fabricated to hit a count). */
+    competitor_evidence_status?: CompetitorEvidenceStatus;
   };
   debugCompetitorScoring?: DebugCompetitorScoring;
 };
@@ -256,12 +257,6 @@ const MAX_KEYWORD_SOURCE_PAGES = 50;
 export const MAX_COMPETITOR_PAGES = 5;
 export const MAX_CRAWL_DEPTH = 2;
 export const MIN_SERP_DOMAINS_PER_KEYWORD = 3;
-const STOPWORDS = new Set([
-  'the', 'and', 'for', 'with', 'from', 'into', 'that', 'this', 'your', 'you', 'our', 'are', 'was',
-  'have', 'has', 'will', 'can', 'how', 'why', 'what', 'when', 'where', 'who', 'not', 'all', 'any',
-  'about', 'service', 'services', 'company', 'business', 'solutions', 'solution', 'platform',
-  'home', 'page', 'contact', 'blog', 'pricing', 'learn', 'more', 'demo', 'free', 'best',
-]);
 const METRIC_KEYS: Array<keyof ComparisonMetrics> = [
   'content_depth',
   'authority_score',
@@ -468,58 +463,11 @@ export function buildStoredCompetitorCandidates(params: {
     } satisfies CompetitorCandidate));
 }
 
-export function buildAiInferredCompetitorCandidates(params: {
-  companyContext: CompanyCompetitiveContext;
-  keywords: string[];
-  geography: string | null;
-}): CompetitorCandidate[] {
-  const contextText = discoveryTextFromContext(params.companyContext, params.keywords);
-  const candidates: CompetitorCandidate[] = [];
-  if (/\b(crm|sales|lead|pipeline|marketing|campaign|growth|automation)\b/.test(contextText)) {
-    candidates.push(
-      {
-        name: 'HubSpot',
-        domain: 'hubspot.com',
-        source: 'profile_ai',
-        classification: 'direct_competitor',
-        category: 'CRM, marketing automation, and growth operations',
-        description: 'CRM and marketing automation platform evaluated by buyers solving campaign, lead, sales, and growth workflow problems.',
-        productSignals: ['CRM', 'marketing automation', 'sales enablement', 'analytics', 'lead scoring', 'pipeline management'],
-        useCase: 'Unifying customer, campaign, lead, and revenue workflows',
-        geography: params.geography ?? 'Global',
-        confidenceScore: 0.82,
-        discoverySources: ['ai-inferred', 'ecosystem'],
-      },
-      {
-        name: 'Zoho',
-        domain: 'zoho.com',
-        source: 'profile_ai',
-        classification: 'seo_competitor',
-        category: 'CRM and business workflow suite',
-        description: 'Business software suite with CRM, automation, analytics, support, and marketing workflows.',
-        productSignals: ['CRM', 'workflow automation', 'analytics', 'marketing automation', 'customer support'],
-        useCase: 'Operating sales, marketing, support, and business workflows in one suite',
-        geography: params.geography ?? 'Global',
-        confidenceScore: 0.78,
-        discoverySources: ['ai-inferred', 'ecosystem'],
-      },
-      {
-        name: 'Salesforce',
-        domain: 'salesforce.com',
-        source: 'profile_ai',
-        classification: 'authority_leader',
-        category: 'Enterprise CRM and revenue operations',
-        description: 'Enterprise CRM and revenue workflow platform evaluated for sales, service, marketing, automation, and analytics.',
-        productSignals: ['CRM', 'sales enablement', 'marketing automation', 'analytics', 'enterprise workflows', 'AI assistant'],
-        useCase: 'Managing customer lifecycle, sales pipeline, and enterprise go-to-market workflows',
-        geography: params.geography ?? 'Global',
-        confidenceScore: 0.8,
-        discoverySources: ['ai-inferred', 'ecosystem'],
-      },
-    );
-  }
-  return candidates;
-}
+// REMOVED: buildAiInferredCompetitorCandidates. It was not AI-inferred — it was a hardcoded
+// keyword→company map (crm/marketing/growth/automation → HubSpot/Zoho/Salesforce) mislabeled as
+// 'profile_ai'. Competitors are now evidence-driven only, assembled by the canonical
+// `assembleEvidenceCompetitorCandidates`. The knowledge base enriches discovered competitors; it
+// never injects them.
 
 export function buildProviderCompetitorCandidates(params: {
   decisions: PersistedDecisionObject[];
@@ -555,139 +503,12 @@ export function buildProviderCompetitorCandidates(params: {
     });
 }
 
-export function buildUnifiedCandidatePool(params: {
-  manual: CompetitorCandidate[];
-  stored?: CompetitorCandidate[];
-  provider?: CompetitorCandidate[];
-  serp?: CompetitorCandidate[];
-  aiInferred?: CompetitorCandidate[];
-  ecosystem?: CompetitorCandidate[];
-}): CompetitorCandidate[] {
-  return dedupeCompetitorCandidates([
-    ...params.manual,
-    ...(params.stored ?? []),
-    ...(params.provider ?? []),
-    ...(params.serp ?? []),
-    ...(params.aiInferred ?? []),
-    ...(params.ecosystem ?? []),
-  ]);
-}
-
-function discoveryTextFromContext(context: CompanyCompetitiveContext, keywords: string[] = []): string {
-  return [
-    context.marketFocus,
-    context.primaryService,
-    context.targetCustomer,
-    context.idealCustomerProfile,
-    context.brandPositioning,
-    context.businessModel,
-    context.geography,
-    ...keywords,
-  ].filter(Boolean).join(' ').toLowerCase();
-}
-
-function profileSearchText(profile: CompetitorEnrichmentProfile): string {
-  return [
-    profile.name,
-    profile.domain,
-    profile.category,
-    profile.description,
-    profile.business_model,
-    profile.product_type,
-    profile.icp.age_group,
-    profile.icp.use_case,
-    profile.icp.user_intent,
-    profile.geography,
-    Object.values(profile.scale_signals).filter(Boolean).join(' '),
-  ].filter(Boolean).join(' ').toLowerCase();
-}
-
-function discoveryTokens(value: string): string[] {
-  return value
-    .split(/[^a-z0-9]+/)
-    .map((token) => token.trim())
-    .filter((token) => (token.length >= 3 || token === 'ai') && !STOPWORDS.has(token));
-}
-
-function scoreKnownProfileForContext(
-  profile: CompetitorEnrichmentProfile,
-  context: CompanyCompetitiveContext,
-  keywords: string[],
-): number {
-  const contextText = discoveryTextFromContext(context, keywords);
-  const profileText = profileSearchText(profile);
-  const hasSpecificContext = discoveryTokens(contextText).length > 0;
-  const wellnessContext = /\b(mental|wellness|wellbeing|therapy|therapeutic|reflection|self reflection|self-reflection|clarity|emotional|mood|journaling|meditation|mindfulness|stress|anxiety)\b/.test(contextText);
-  const wellnessProfile = /\b(mental|wellness|wellbeing|therapy|therapeutic|reflection|journaling|meditation|mindfulness|emotional|mood|companion|cbt|anxiety|stress)\b/.test(profileText);
-  const marketingContext = /\b(marketing|crm|sales|campaign|growth|seo|content|revenue|customer|automation|lead|pipeline|demand)\b/.test(contextText);
-  const marketingProfile = /\b(marketing|crm|sales|campaign|growth|seo|content|customer|automation|lead|pipeline|revenue)\b/.test(profileText);
-  const sustainabilityContext = /\b(sustainability|esg|climate|impact analytics|carbon)\b/.test(contextText);
-  const sustainabilityProfile = /\b(sustainability|esg|climate|carbon|impact analytics)\b/.test(profileText);
-  const outsourcingProfile = /\b(outsourcing|staffing|virtual employee|offshore)\b/.test(profileText);
-
-  if (outsourcingProfile) return -100;
-  if (sustainabilityProfile && !sustainabilityContext) return -80;
-  if (wellnessContext && !wellnessProfile) return -40;
-  if (marketingContext && !marketingProfile) return -40;
-
-  let score = Math.round(profile.confidence_score * 20);
-  if (wellnessContext && wellnessProfile) score += 45;
-  if (marketingContext && marketingProfile) score += 45;
-  if (sustainabilityContext && sustainabilityProfile) score += 45;
-  if (!hasSpecificContext && marketingProfile) score += 20;
-
-  const profileTokenSet = new Set(discoveryTokens(profileText));
-  discoveryTokens(contextText).forEach((token) => {
-    if (profileTokenSet.has(token)) score += 4;
-  });
-
-  return score;
-}
-
-export function buildKnownDatasetCandidates(params: {
-  companyContext: CompanyCompetitiveContext;
-  keywords: string[];
-  geography: string | null;
-  max?: number;
-}): CompetitorCandidate[] {
-  return listKnownCompetitorProfiles()
-    .map((profile) => ({
-      profile,
-      score: scoreKnownProfileForContext(profile, params.companyContext, params.keywords),
-    }))
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score || right.profile.confidence_score - left.profile.confidence_score)
-    .slice(0, params.max ?? MAX_COMPETITORS + 3)
-    .map(({ profile }, index) => ({
-      name: profile.name,
-      domain: profile.domain,
-      category: profile.category,
-      tags: profile.tags,
-      classification: (
-        index === 0
-          ? 'direct_competitor'
-          : index === 1
-            ? 'seo_competitor'
-            : 'authority_leader'
-      ) as CompetitorClassification,
-      source: 'known_category_dataset' as const,
-      description: profile.description,
-      targetCustomer: profile.icp.age_group,
-      useCase: profile.icp.use_case ?? profile.icp.user_intent,
-      geography: params.geography ?? profile.geography,
-      businessModel: profile.business_model,
-      productType: profile.product_type,
-      scaleSignals: profile.scale_signals,
-      confidenceScore: profile.confidence_score,
-      productSignals: [profile.product_type, profile.category, ...profile.tags].filter(Boolean),
-      discoverySources: ['ecosystem'],
-      rationale: buildFitRationale(
-        params.companyContext,
-        params.geography,
-        'Selected from the known category competitor dataset after SERP discovery returned too few usable domains.',
-      ),
-    }));
-}
+// REMOVED: buildUnifiedCandidatePool, buildKnownDatasetCandidates, scoreKnownProfileForContext,
+// profileSearchText, discoveryTextFromContext, discoveryTokens.
+// The unified pool now lives in the canonical `assembleEvidenceCompetitorCandidates`
+// (competitorCandidateAssembly.ts). buildKnownDatasetCandidates injected the entire enrichment KB
+// as candidates via a keyword→relevance score — hardcoded generation. The KB is now used for
+// ENRICHMENT of independently-discovered competitors only (applyKnownCompetitorEnrichment).
 
 export function expandDiscoveryKeywords(
   keywords: string[],

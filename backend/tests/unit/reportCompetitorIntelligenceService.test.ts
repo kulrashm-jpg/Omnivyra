@@ -190,9 +190,12 @@ describe('reportCompetitorIntelligenceService', () => {
     });
 
     const names = intelligence.detected_competitors.map((item) => item.name);
-    expect(names).toEqual(expect.arrayContaining(['Wysa', 'Woebot Health', 'Reflectly']));
+    // Evidence-only: engine-validated manual competitors survive; irrelevant ones are filtered.
+    // (No hardcoded/KB padding — the surviving set is whatever passes the engine gate.)
+    expect(names).toEqual(expect.arrayContaining(['Wysa', 'Woebot Health']));
     expect(names).not.toContain('Optimal Virtual Employee');
     expect(names).not.toContain('Headspace');
+    expect(intelligence.detected_competitors.every((item) => item.source === 'manual')).toBe(true);
     expect(intelligence.detected_competitors.some((item) => item.discoverySources?.includes('manual'))).toBe(true);
     expect(intelligence.detected_competitors.every((item) => item.score_card?.dimensions && item.score_card.discoverySources?.length)).toBe(true);
     assertNoMarketSubstituteCompetitors(intelligence.detected_competitors as any[]);
@@ -226,11 +229,14 @@ describe('reportCompetitorIntelligenceService', () => {
       resolvedInput: makeResolvedInput({ competitors: ['Wysa', 'Woebot Health', 'Reflectly'] }),
     });
 
-    expect(intelligence.detected_competitors).toHaveLength(3);
+    // Evidence-only: manual competitors are enriched, scored, and gate-filtered on their own
+    // merits (no KB padding to force a count). Survivors are all manual-sourced.
+    expect(intelligence.detected_competitors.length).toBeGreaterThanOrEqual(2);
+    expect(intelligence.detected_competitors.length).toBeLessThanOrEqual(3);
+    expect(intelligence.detected_competitors.every((item) => item.source === 'manual')).toBe(true);
     expect(intelligence.detected_competitors.some((item) => item.discoverySources?.includes('manual'))).toBe(true);
     expect(intelligence.detected_competitors.every((item) => item.score_card?.dimensions && item.score_card.discoverySources?.length)).toBe(true);
     assertValidCompetitorList(intelligence.detected_competitors as any[]);
-    expect(intelligence.detected_competitors.some((item) => item.discoverySources?.includes('manual'))).toBe(true);
     expect(intelligence.detected_competitors.every((item) => item.enrichment_confidence_score >= 0.6)).toBe(true);
     expect(intelligence.detected_competitors.every((item) => item.positioning.differentiation.length > 20)).toBe(true);
     expect(intelligence.competitive_summary.key_risk.length).toBeGreaterThan(20);
@@ -272,7 +278,7 @@ describe('reportCompetitorIntelligenceService', () => {
     expect(report.summary.toLowerCase()).toContain('content coverage');
   }, 90000);
 
-  it('uses known category competitors when discovery has no manual input or live SERP domains', async () => {
+  it('returns an honest empty-state (no hardcoded/KB padding) when there is no manual input or live SERP', async () => {
     const baseline = buildCompetitorIntelligence({
       decisions: [],
       resolvedInput: makeResolvedInput({ competitors: [] }),
@@ -283,26 +289,22 @@ describe('reportCompetitorIntelligenceService', () => {
       resolvedInput: makeResolvedInput({ competitors: [] }),
     });
 
-    expect(baseline.detected_competitors.length).toBeGreaterThanOrEqual(3);
-    expect(intelligence.detected_competitors.length).toBeGreaterThanOrEqual(3);
-    expect(baseline.detected_competitors.every((item) => item.source === 'known_category_dataset')).toBe(true);
-    expect(intelligence.detected_competitors.every((item) => item.source === 'known_category_dataset')).toBe(true);
-    assertValidCompetitorList(baseline.detected_competitors as any[]);
-    assertValidCompetitorList(intelligence.detected_competitors as any[]);
-    assertSortedByTierThenScore(baseline.detected_competitors as any[]);
-    assertSortedByTierThenScore(intelligence.detected_competitors as any[]);
-    expect(baseline.competitive_summary.top_threats.length).toBeGreaterThanOrEqual(2);
-    expect(intelligence.competitive_summary.positioning_statement.length).toBeGreaterThan(20);
-    expect(baseline.generated_gaps.length).toBeGreaterThanOrEqual(1);
-    expect(intelligence.discovery_metadata?.serp_status).toBe('fallback');
-    expect(intelligence.discovery_metadata?.is_fallback_used).toBe(true);
+    // Evidence-only: with no manual competitors and no live SERP domains, competitors are NEVER
+    // fabricated from the knowledge base or a keyword→company map. The result is empty but valid,
+    // and the honest evidence status is surfaced.
+    expect(baseline.detected_competitors).toHaveLength(0);
+    expect(intelligence.detected_competitors).toHaveLength(0);
+    expect(baseline.detected_competitors.some((item) => item.source === 'known_category_dataset')).toBe(false);
+    expect(intelligence.detected_competitors.some((item) => item.source === 'known_category_dataset')).toBe(false);
+    expect(baseline.discovery_metadata?.competitor_evidence_status).toBe('insufficient_public_data');
+    expect(intelligence.discovery_metadata?.competitor_evidence_status).toBe('insufficient_public_data');
+    // Empty result is still structurally valid — no throw, no crash.
+    expect(baseline.competitors_by_tier).toBeDefined();
+    expect(Array.isArray(baseline.generated_gaps)).toBe(true);
+    expect(typeof intelligence.summary).toBe('string');
   }, 90000);
 
-  it('derives report-specific competitor strategy layers from final-gated competitors', () => {
-    const drishiq = buildCompetitorIntelligence({
-      decisions: [],
-      resolvedInput: makeResolvedInput({ competitors: [] }),
-    });
+  it('degrades report strategy layers gracefully (no HubSpot/KB injection) when no competitors are discovered', () => {
     const omnivyra = buildCompetitorIntelligence({
       decisions: [],
       resolvedInput: makeResolvedInput({
@@ -324,25 +326,18 @@ describe('reportCompetitorIntelligenceService', () => {
       }),
     });
 
-    const snapshot = buildCompetitiveSnapshotReport(drishiq);
-    expect(snapshot.competitors.length).toBeLessThanOrEqual(3);
-    expect(snapshot.competitive_snapshot_summary.top_threat).toBe('Wysa');
-    expect(snapshot.competitors[0]).toMatchObject({
-      name: 'Wysa',
-      tier: 'Tier 1',
-      threat_level: 'high',
-    });
+    // No manual/SERP evidence → no competitors, and NO hardcoded HubSpot/Salesforce/Adobe injection.
+    expect(omnivyra.detected_competitors).toHaveLength(0);
+    expect(omnivyra.detected_competitors.some((item) => item.name === 'HubSpot')).toBe(false);
+    expect(omnivyra.discovery_metadata?.competitor_evidence_status).toBe('insufficient_public_data');
 
+    // Downstream battle-card / positioning / strategy builders must not crash on an empty set.
+    const snapshot = buildCompetitiveSnapshotReport(omnivyra);
+    expect(snapshot.competitors).toHaveLength(0);
     const pressure = buildCompetitivePressureAnalysis(omnivyra);
-    const hubSpot = pressure.competitors.find((competitor) => competitor.name === 'HubSpot');
-    expect(hubSpot?.threat_level).toBe('high');
-    expect(hubSpot?.pressure_on).toEqual(expect.arrayContaining(['SEO', 'Brand authority', 'Content', 'Conversion']));
-    expect(pressure.summary.next_action.length).toBeGreaterThan(20);
-
+    expect(pressure.competitors).toHaveLength(0);
+    expect(pressure.competitors.some((competitor) => competitor.name === 'HubSpot')).toBe(false);
     const strategy = buildCompetitiveStrategyMap(omnivyra);
-    expect(strategy.competitive_strategy_map.tier_breakdown.tier_1.map((item) => item.name)).toEqual(expect.arrayContaining(['HubSpot', 'Adobe Marketo Engage']));
-    expect(strategy.competitive_strategy_map.opportunity_map.whitespace_opportunities.length).toBeGreaterThan(0);
-    expect(strategy.competitive_strategy_map.strategic_actions.how_to_beat_tier_1).toContain('Beat');
-    expect(strategy.strategic_position.primary_battlefield).toContain('crm marketing automation');
+    expect(strategy.competitive_strategy_map.tier_breakdown.tier_1).toHaveLength(0);
   }, 90000);
 });

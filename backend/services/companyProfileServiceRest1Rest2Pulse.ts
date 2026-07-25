@@ -111,7 +111,6 @@ import { buildSavePayload } from './companyProfile/savePayload';
 import { safeParseRecommendationContext, withRecommendationContextDefaults } from '../../utils/safeJson';
 import {
   findKnownCompetitorProfile,
-  listKnownCompetitorProfiles,
   type CompetitorEnrichmentProfile,
 } from './competitorEnrichmentKnowledge';
 import {
@@ -135,9 +134,9 @@ import {
   normalizeDomain as normalizeCompetitorDiscoveryDomain,
 } from './reportCompetitorIntelligenceServiceHelpers';
 
-import { COMPANY_PROFILES_TABLE, COMPANY_PROFILE_FALLBACK_COLUMNS, MARKET_PULSE_DEFAULT_CATEGORY_SET, normalizeNonEmptyText, normalizeStringArray, normalizeRecommendationContext, mapStrategyProfileToExistingFields, fillMissingText, ensureMinimumDiscoveryKeywords, expandRefineDiscoveryKeywords, knownDatasetCompetitorCandidates, buildProfileForCompetitorDiscovery, type RefineCompetitorDiscovery, matchingRefineCategoryProfiles, prioritizedKnownDatasetCompetitorCandidatesForSignal, profileDiscoverySignalText, archetypeValues, profileAudienceLabel, profileTopicLabel, buildArchetypeNativeDiscoverySeeds, archetypeCandidate, ARCHETYPE_NAMED_PEER_PACKS } from './companyProfileServiceCore';
+import { COMPANY_PROFILES_TABLE, COMPANY_PROFILE_FALLBACK_COLUMNS, MARKET_PULSE_DEFAULT_CATEGORY_SET, normalizeNonEmptyText, normalizeStringArray, normalizeRecommendationContext, mapStrategyProfileToExistingFields, fillMissingText, ensureMinimumDiscoveryKeywords, expandRefineDiscoveryKeywords, buildProfileForCompetitorDiscovery, type RefineCompetitorDiscovery, profileDiscoverySignalText, archetypeValues, profileAudienceLabel, profileTopicLabel, buildArchetypeNativeDiscoverySeeds } from './companyProfileServiceCore';
 
-import { applyArchetypeContextToProfile, competitorValidationContextForProfile, buildRefineRecoveryContexts, buildPrioritizedRefineFallbackCandidates, discoverRefineCompetitorCandidates, inferBusinessModelLabel, textFromValue, normalizeFieldValueList, inferCompanyDomainShape, inferPartnershipPriorities, inferCriticalHiringFunctions, inferRegulatoryPolicySensitivity, inferMarketPulseCategories, withExistingList, withExistingText, buildIndustryReview, rankedMarketAlternativesForProfile, rankedCompetitorDetailsForProfile } from './companyProfileServiceRest1Enrich';
+import { applyArchetypeContextToProfile, competitorValidationContextForProfile, buildRefineRecoveryContexts, discoverRefineCompetitorCandidates, inferBusinessModelLabel, textFromValue, normalizeFieldValueList, inferCompanyDomainShape, inferPartnershipPriorities, inferCriticalHiringFunctions, inferRegulatoryPolicySensitivity, inferMarketPulseCategories, withExistingList, withExistingText, buildIndustryReview, rankedMarketAlternativesForProfile, rankedCompetitorDetailsForProfile } from './companyProfileServiceRest1Enrich';
 
 import { sanitizeStoredCompetitorsForRead, revalidateStoredCompetitorsForProfileRead, refineProfileForPrompts, refineProfileWithAI } from './companyProfileServiceRest1Rest2Competitors';
 

@@ -240,6 +240,11 @@ export const FINAL_BLOCKED_SOURCES = new Set<CompetitorSource>([
   'decision_evidence',
   'inferred_keyword_peer',
   'serp_unavailable_fallback',
+  // Archetype-native peers were hardcoded/synthetic named entities whose fit-signals were
+  // fabricated from the SUBJECT company's own profile (self-comparison → always passed). The
+  // producer path is removed; this block guarantees no such candidate can ever reach output
+  // even if one is reintroduced upstream.
+  'archetype_native_peer',
 ]);
 
 export const TIER_PRIORITY: Record<CompetitorTier, number> = {

@@ -111,7 +111,6 @@ import { buildSavePayload } from './companyProfile/savePayload';
 import { safeParseRecommendationContext, withRecommendationContextDefaults } from '../../utils/safeJson';
 import {
   findKnownCompetitorProfile,
-  listKnownCompetitorProfiles,
   type CompetitorEnrichmentProfile,
 } from './competitorEnrichmentKnowledge';
 import {
@@ -135,11 +134,12 @@ import {
   normalizeDomain as normalizeCompetitorDiscoveryDomain,
 } from './reportCompetitorIntelligenceServiceHelpers';
 
-import { COMPANY_PROFILES_TABLE, COMPANY_PROFILE_FALLBACK_COLUMNS, MARKET_PULSE_DEFAULT_CATEGORY_SET, normalizeNonEmptyText, normalizeStringArray, normalizeRecommendationContext, mapStrategyProfileToExistingFields, fillMissingText, ensureMinimumDiscoveryKeywords, expandRefineDiscoveryKeywords, knownDatasetCompetitorCandidates, buildProfileForCompetitorDiscovery, type RefineCompetitorDiscovery, matchingRefineCategoryProfiles, prioritizedKnownDatasetCompetitorCandidatesForSignal, profileDiscoverySignalText, archetypeValues, profileAudienceLabel, profileTopicLabel, buildArchetypeNativeDiscoverySeeds, archetypeCandidate, ARCHETYPE_NAMED_PEER_PACKS } from './companyProfileServiceCore';
+import { COMPANY_PROFILES_TABLE, COMPANY_PROFILE_FALLBACK_COLUMNS, MARKET_PULSE_DEFAULT_CATEGORY_SET, normalizeNonEmptyText, normalizeStringArray, normalizeRecommendationContext, mapStrategyProfileToExistingFields, fillMissingText, ensureMinimumDiscoveryKeywords, expandRefineDiscoveryKeywords, buildProfileForCompetitorDiscovery, type RefineCompetitorDiscovery, profileDiscoverySignalText, archetypeValues, profileAudienceLabel, profileTopicLabel, buildArchetypeNativeDiscoverySeeds } from './companyProfileServiceCore';
 
-import { applyArchetypeContextToProfile, competitorValidationContextForProfile, buildRefineRecoveryContexts, buildPrioritizedRefineFallbackCandidates, discoverRefineCompetitorCandidates, inferBusinessModelLabel, textFromValue, normalizeFieldValueList, inferCompanyDomainShape, inferPartnershipPriorities, inferCriticalHiringFunctions, inferRegulatoryPolicySensitivity, inferMarketPulseCategories, withExistingList, withExistingText, buildIndustryReview, rankedMarketAlternativesForProfile, rankedCompetitorDetailsForProfile } from './companyProfileServiceRest1Enrich';
+import { applyArchetypeContextToProfile, competitorValidationContextForProfile, buildRefineRecoveryContexts, discoverRefineCompetitorCandidates, inferBusinessModelLabel, textFromValue, normalizeFieldValueList, inferCompanyDomainShape, inferPartnershipPriorities, inferCriticalHiringFunctions, inferRegulatoryPolicySensitivity, inferMarketPulseCategories, withExistingList, withExistingText, buildIndustryReview, rankedMarketAlternativesForProfile, rankedCompetitorDetailsForProfile } from './companyProfileServiceRest1Enrich';
 
 import { rankedCompetitorIntelligenceForProfile, rankedCompetitorQualityForProfile, buildAiMarketPulseSettings, upsertCompanyProfilePayload, shouldRefineProfile, storeRefinementAudit, stripCompetitorFieldsFromReportSettings } from './companyProfileServiceRest1Rest2Pulse';
+import { deriveCompetitorEvidenceStatus } from './competitorCandidateAssembly';
 // CKRE-002 §3 — refresh gate (orchestration only; does NOT modify AI prompts/models/extraction).
 import { evaluateRefreshGate, finalizeAiRefresh, type RefreshGateResult } from './crawl/refreshOrchestrator';
 
@@ -607,18 +607,12 @@ async function buildRefinedPayload(
     includeMarketSubstitutes: true,
   });
 
-  if (rankedCompetitors.length < 3 && competitorDiscovery.fallbackCandidates.length > 0) {
-    const prioritizedFallbackCandidates = buildPrioritizedRefineFallbackCandidates({
-      profile: workingProfile,
-      extraction,
-      discovery: competitorDiscovery,
-    });
+  // Recovery re-ranks the SAME evidence-driven candidates (stored + SERP-live) under relaxed
+  // contexts. There is no hardcoded/archetype re-injection — if the evidence does not support
+  // more competitors, the result stays smaller and the honest empty-state below records why.
+  if (rankedCompetitors.length < 3 && competitorDiscovery.candidates.length > 0) {
     const retryRankedCompetitors = await getFinalCompetitors({
-      candidates: [
-        ...competitorDiscovery.candidates,
-        ...prioritizedFallbackCandidates,
-        ...competitorDiscovery.fallbackCandidates,
-      ],
+      candidates: competitorDiscovery.candidates,
       context: contextForCompetitorFit,
       max: 8,
       minScore: 42,
@@ -632,12 +626,7 @@ async function buildRefinedPayload(
 
   rankedCompetitors = rankedCompetitors.filter((competitor) => hasPassedFinalCompetitorGate(competitor, 42));
 
-  if (rankedCompetitors.length < 3 && competitorDiscovery.fallbackCandidates.length > 0) {
-    const prioritizedFallbackCandidates = buildPrioritizedRefineFallbackCandidates({
-      profile: workingProfile,
-      extraction,
-      discovery: competitorDiscovery,
-    });
+  if (rankedCompetitors.length < 3 && competitorDiscovery.candidates.length > 0) {
     for (const recoveryContext of buildRefineRecoveryContexts({
       baseContext: contextForCompetitorFit,
       profile: workingProfile,
@@ -645,11 +634,7 @@ async function buildRefinedPayload(
       discovery: competitorDiscovery,
     })) {
       const recoveryRankedCompetitors = (await getFinalCompetitors({
-        candidates: [
-          ...competitorDiscovery.candidates,
-          ...prioritizedFallbackCandidates,
-          ...competitorDiscovery.fallbackCandidates,
-        ],
+        candidates: competitorDiscovery.candidates,
         context: recoveryContext,
         max: 8,
         minScore: 42,
@@ -702,6 +687,10 @@ async function buildRefinedPayload(
   const competitorIntelligence = rankedCompetitorIntelligenceForProfile(rankedCompetitorsClean);
   const competitorQuality = rankedCompetitorQualityForProfile(rankedCompetitorsClean);
   const marketAlternatives = rankedMarketAlternativesForProfile(rankedCompetitorsClean);
+  // Honest empty-state via the canonical status helper: competitors are evidence-driven and never
+  // fabricated, so a thin/empty result is a real signal about available public data — surfaced
+  // here so downstream consumers can explain it instead of silently padding.
+  const competitorEvidenceStatus = deriveCompetitorEvidenceStatus(rankedCompetitorsClean.length);
   const marketPulseWithAlternatives = marketPulseSettings || workingProfile.report_settings?.market_pulse
     ? {
         ...(workingProfile.report_settings?.market_pulse ?? {}),
@@ -712,6 +701,7 @@ async function buildRefinedPayload(
         competitor_details: competitorDetails,
         competitor_quality: competitorQuality,
         market_alternatives: marketAlternatives,
+        competitor_evidence_status: competitorEvidenceStatus,
       }
     : null;
 
