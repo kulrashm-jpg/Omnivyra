@@ -38,6 +38,24 @@ output (currently **2961/2961**).
 The residual risk for standalone modules is therefore **procedural, not structural** — the
 project must actually be *run*. `npm run typecheck` and `npm run typecheck:ci` both run it.
 
+### Projects outside the typecheck gates
+
+Three further `tsconfig` projects exist but are **not** part of `typecheck-all.js` / `typecheck:ci`:
+
+| Project | Role | Consumer |
+|---|---|---|
+| `tsconfig.build.json` | **Production Next.js build** type-check (`allowJs:false`; excludes `backend`, `pages/api`, tests) | `next.config.js` `typescript.tsconfigPath` → `next build` (via `scripts/safe-build.js`). No `ignoreBuildErrors`. |
+| `tsconfig.worker.json` | **Railway worker** compile (commonjs, **emits** `dist`) | `.github/workflows/typecheck-baseline.yml` (`tsc -p … --noEmit`) + worker build |
+| `backend/tsconfig.json` | **Legacy** standalone strict (`strict:true`, emits `dist`) | **Unreferenced** by any `package.json`/`scripts/`/CI gate — see TECH-DEBT register **TD-004** |
+
+**Production correctness** = `tsconfig.build.json` (frontend bundle) + `tsconfig.backend.json` (backend/API) + `tsconfig.worker.json` (worker). Never certify "clean" against a single project.
+
+> **Companion guide.** For the **test-tier classification** (how to tell an infrastructure test
+> failure from a code regression), the release-gate operational summary, and the per-branch
+> certification checklist, see the companion:
+> **`docs/pmo/RELEASE-ENGINEERING-001-typescript-and-test-contract.md`**. That document defers to
+> **this** one for the tsconfig projects and baselines.
+
 ## 2. Jest does **not** type-check. "Tests green" ≠ "tests type-check."
 
 Root `tsconfig.json` sets `"isolatedModules": true`, so **ts-jest runs transpile-only**.
@@ -75,13 +93,21 @@ the newly covered test surface rather than pretending it is clean.
 
 | Guard | Baseline file | Scope | Current |
 |---|---|---|---|
-| `npm run typecheck:ci` (pre-existing, **required** check) | `scripts/typecheck-baseline.json` | aggregate of `tsconfig.json` (6) + `tsconfig.backend.json` (1) + `tsconfig.scripts.json` (47) | 54 actual vs baseline 86 → PASS |
-| `npm run typecheck:certification` (PB-009, scalar) | `scripts/typecheck-certification-baseline.json` | `tsconfig.backend.json` = **1**, `tsconfig.backend-tests.json` = **470** (PB-010 lowered it from 508) | at baseline |
-| `npm run typecheck:certification` (PB-011, per-error identity) | `scripts/typecheck-certification-fingerprints.json` | every individual diagnostic on both projects: 1 + 470 fingerprints across 116 files | at baseline |
+| `npm run typecheck:ci` (pre-existing, **required** check) | `scripts/typecheck-baseline.json` | aggregate of `tsconfig.json` (0) + `tsconfig.backend.json` (0) + `tsconfig.scripts.json` (47) | 47 actual vs baseline **47** → PASS |
+| `npm run typecheck:certification` (PB-009, scalar) | `scripts/typecheck-certification-baseline.json` | `tsconfig.backend.json` = **1**, `tsconfig.backend-tests.json` = **443** (PB-011 lowered it 470→443) | at baseline |
+| `npm run typecheck:certification` (PB-011, per-error identity) | `scripts/typecheck-certification-fingerprints.json` | every individual diagnostic on both projects: 1 + 443 fingerprints | at baseline |
+
+> **Current-state note (DOC-HYGIENE-001, 2026-07-26).** The `typecheck:ci` aggregate baseline was
+> lowered **86 → 47** after TECH-DEBT-001 brought `tsconfig.json` (frontend) and
+> `tsconfig.backend.json` (backend/API) to **0**; the remaining 47 are entirely `tsconfig.scripts.json`
+> tooling debt (TECH-DEBT register **TD-001**). The certification baseline still records
+> `tsconfig.backend.json` = 1 (the now-fixed `pages/api/company-profile/index.ts` error); actual is 0,
+> so a re-lock to 0 is pending (**TD-006**). Historical run figures in older PMO records (`PB-012`,
+> `PROGRAM-A-ENGINEERING-BASELINE`, `RELEASE-READINESS-001`) predate these reductions.
 
 The two guards are deliberately **separate**. The PB-009 surface carries hundreds of
 pre-existing errors; folding it into the aggregate would have required **raising** the
-baseline from 86, which that file's own contract forbids. `typecheck:ci` and
+`typecheck:ci` baseline, which that file's own contract forbids. `typecheck:ci` and
 `scripts/typecheck-all.js` are therefore left byte-for-byte unchanged.
 
 A baseline may only ever be **lowered**, in a dedicated reviewed commit. Gaming a count with

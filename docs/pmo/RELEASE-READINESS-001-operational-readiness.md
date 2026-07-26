@@ -164,3 +164,6 @@ suites unrelated to this capability, and a permanently red gate protects nothing
    restoration actually touched, passes. Fixing that mock is separate work.
 4. **`scripts/typecheck-baseline.json` (the legacy, non-certification baseline) reads 86 while actual is
    54.** Pre-existing and out of scope here; locking it is a separate dedicated commit.
+   → **Resolved (TECH-DEBT-001 / DOC-HYGIENE-001, 2026-07-26):** baseline lowered **86 → 47** after
+   `tsconfig.json` and `tsconfig.backend.json` reached 0; current guidance lives in the canonical
+   `docs/TYPESCRIPT-VALIDATION-STRATEGY.md`.
