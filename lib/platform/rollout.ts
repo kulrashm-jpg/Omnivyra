@@ -28,9 +28,12 @@
  *
  * Fail-safe: any resolution failure yields 'off' (legacy behavior).
  * No production flag is defined in Batch A — first consumer is W2-1.
+ *
+ * BUILD-CERTIFICATION-001: this module is reachable from CLIENT bundles, so it
+ * must not import (statically or dynamically) the Redis/BullMQ layer. The
+ * Redis-backed admin surface and the async/shadow execution runner live in the
+ * server-only ./rolloutAdmin module and share this module's admin-config cache.
  */
-import { recordRawCounter } from '../../backend/observability';
-
 export type RolloutMode = 'off' | 'shadow' | 'enforce';
 
 export interface RolloutFlagDef {
@@ -112,7 +115,8 @@ export interface RolloutAdminConfig {
 }
 
 interface CacheEntry { data: RolloutAdminConfig | null; ts: number }
-const ADMIN_CACHE_TTL_MS = 30_000;
+/** Admin-config cache TTL. Shared with the server-only rolloutAdmin loader. */
+export const ROLLOUT_ADMIN_CACHE_TTL_MS = 30_000;
 let adminCache: CacheEntry | null = null;
 
 /** Test seam: drop the cached admin config so the next resolve re-reads. */
@@ -120,37 +124,22 @@ export function __resetRolloutAdminCache(): void {
   adminCache = null;
 }
 
-async function loadAdminConfig(): Promise<RolloutAdminConfig | null> {
-  if (adminCache && Date.now() - adminCache.ts < ADMIN_CACHE_TTL_MS) return adminCache.data;
-  let data: RolloutAdminConfig | null = null;
-  try {
-    // Redis is optional infrastructure for this kit: absent/unreachable Redis
-    // (tests, local dev without Redis) degrades to env-only resolution.
-    // F-06: access goes through the canonical Redis layer.
-    const { redisConfigured, getStandaloneRedis } = await import('../redis/canonicalClient');
-    if (process.env.NODE_ENV !== 'test' && redisConfigured()) {
-      const client = await getStandaloneRedis('rate_limit');
-      const raw = await Promise.race<string | null>([
-        client.get(ROLLOUT_CONFIG_KEY),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_500)),
-      ]);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.flags) {
-          data = parsed as RolloutAdminConfig;
-        }
-      }
-    }
-  } catch {
-    data = null; // fail-safe: env-only resolution
-  }
-  adminCache = { data, ts: Date.now() };
-  return data;
+/**
+ * Internal seams for the server-only ./rolloutAdmin loader to read/write the
+ * SAME admin-config cache that resolveRolloutSync warms on. Kept here (not in
+ * rolloutAdmin) so this client-safe module owns the cache and carries no Redis
+ * import; the loader in rolloutAdmin populates it.
+ */
+export function __getRolloutAdminCache(): CacheEntry | null {
+  return adminCache;
+}
+export function __setRolloutAdminCache(entry: CacheEntry | null): void {
+  adminCache = entry;
 }
 
 // ── Resolution ───────────────────────────────────────────────────────────────
 
-function resolveFromSources(
+export function resolveFromSources(
   flag: RolloutFlag,
   override: RolloutFlagOverride | undefined,
   tenantId?: string,
@@ -176,19 +165,6 @@ function resolveFromSources(
     }
   }
   return { mode, source };
-}
-
-/** Resolve the effective mode (env + cached admin override + tenant targeting). */
-export async function resolveRollout(
-  flag: RolloutFlag,
-  opts: { tenantId?: string } = {},
-): Promise<RolloutDecision> {
-  try {
-    const admin = await loadAdminConfig();
-    return resolveFromSources(flag, admin?.flags?.[flag.key], opts.tenantId);
-  } catch {
-    return { mode: 'off', source: 'fail-safe' };
-  }
 }
 
 /**
@@ -260,38 +236,6 @@ export function applyRolloutPatch(
   return { config: base, previous, next };
 }
 
-/**
- * Canonical operator write: read → apply → persist the admin-config namespace,
- * then drop the in-process cache so the next resolve re-reads (no redeploy).
- * Requires Redis (the admin-config transport); without it, only env controls
- * exist and this throws so the caller can report the limitation honestly.
- */
-export async function setRolloutOverride(
-  flagKey: string,
-  patch: RolloutOverridePatch,
-): Promise<{ previous: RolloutFlagOverride | null; next: RolloutFlagOverride | null }> {
-  const flag = getRolloutFlag(flagKey);
-  if (!flag) throw new Error(`unknown rollout flag: ${flagKey}`);
-
-  const { redisConfigured, getStandaloneRedis } = await import('../redis/canonicalClient');
-  if (!redisConfigured()) {
-    throw new Error('rollout admin config unavailable: Redis not configured (use env controls)');
-  }
-  const client = await getStandaloneRedis('rate_limit');
-  const raw = await client.get(ROLLOUT_CONFIG_KEY);
-  let current: RolloutAdminConfig | null = null;
-  if (raw) {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.flags) {
-      current = parsed as RolloutAdminConfig;
-    }
-  }
-  const { config, previous, next } = applyRolloutPatch(current, flagKey, patch);
-  await client.set(ROLLOUT_CONFIG_KEY, JSON.stringify(config));
-  __resetRolloutAdminCache(); // next resolveRollout() re-reads; resolveRolloutSync warms on it
-  return { previous, next };
-}
-
 // ── Shadow execution ─────────────────────────────────────────────────────────
 
 export interface RolloutRunArgs<T> {
@@ -306,58 +250,8 @@ export interface RolloutRunArgs<T> {
   onDivergence?: (info: { flag: string; legacy: T; candidate: T }) => void;
 }
 
-function defaultEquivalent<T>(a: T, b: T): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function count(flag: RolloutFlag, result: string): void {
-  try {
-    recordRawCounter('rollout.shadow', 1, { flag: flag.key, result });
-  } catch { /* fail-safe */ }
-}
-
-/**
- * Execute under the flag's effective mode. The GATE-C contract: in shadow the
- * caller's observable result is ALWAYS the legacy result; candidate failures
- * and divergences are recorded, never surfaced.
- */
-export async function runWithRollout<T>(flag: RolloutFlag, args: RolloutRunArgs<T>): Promise<T> {
-  const { mode } = await resolveRollout(flag, { tenantId: args.tenantId });
-
-  if (mode === 'off') return args.legacy();
-
-  if (mode === 'enforce') {
-    try { recordRawCounter('rollout.enforce', 1, { flag: flag.key }); } catch { /* fail-safe */ }
-    return args.candidate();
-  }
-
-  // shadow — run both; legacy remains authoritative.
-  const [legacy, candidate] = await Promise.allSettled([args.legacy(), args.candidate()]);
-
-  if (legacy.status === 'rejected') {
-    // Legacy failed: propagate exactly as production would today. Record
-    // whether the candidate would have survived (a useful promotion signal).
-    count(flag, candidate.status === 'fulfilled' ? 'legacy_error_candidate_ok' : 'both_error');
-    throw legacy.reason;
-  }
-  if (candidate.status === 'rejected') {
-    count(flag, 'candidate_error');
-    return legacy.value;
-  }
-
-  let equivalent: boolean | undefined;
-  try {
-    equivalent = (args.isEquivalent ?? defaultEquivalent)(legacy.value, candidate.value);
-  } catch {
-    count(flag, 'compare_error');
-    return legacy.value;
-  }
-
-  count(flag, equivalent ? 'match' : 'divergence');
-  if (!equivalent && args.onDivergence) {
-    try {
-      args.onDivergence({ flag: flag.key, legacy: legacy.value, candidate: candidate.value });
-    } catch { /* fail-safe */ }
-  }
-  return legacy.value;
-}
+// The shadow-execution runner (runWithRollout) and the Redis-backed admin
+// surface (resolveRollout, setRolloutOverride) live in the server-only
+// ./rolloutAdmin module — importing them into this client-reachable file would
+// pull the Redis/BullMQ layer (child_process/net/fs/dns/worker_threads) into
+// client bundles. Server callers import them from './rolloutAdmin'.

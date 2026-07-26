@@ -27,11 +27,10 @@ import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import {
   getRolloutFlag,
-  setRolloutOverride,
-  resolveRollout,
   type RolloutMode,
   type RolloutOverridePatch,
 } from '../../../lib/platform/rollout';
+import { setRolloutOverride, resolveRollout } from '../../../lib/platform/rolloutAdmin';
 // Side-effect import: registers the `canonical-grounding` flag so it is a valid
 // write target (same registration the read surface relies on).
 import '../../../backend/services/context/canonicalProfileAdapter';

@@ -12,15 +12,14 @@
  */
 import {
   defineRolloutFlag,
-  resolveRollout,
   resolveRolloutSync,
-  runWithRollout,
   listRolloutFlags,
   getRolloutFlag,
   applyRolloutPatch,
   __resetRolloutAdminCache,
   type RolloutAdminConfig,
 } from '../../../lib/platform/rollout';
+import { resolveRollout, runWithRollout } from '../../../lib/platform/rolloutAdmin';
 import { registry } from '../../../backend/observability/registry';
 
 const ENV_KEYS = [

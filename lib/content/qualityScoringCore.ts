@@ -6,13 +6,18 @@ import {
   type ValidationIssue,
 } from '../blog/blogValidation';
 
-// Company context scoring — re-exported for convenience
-export {
-  scoreCompanyContext,
-  type CompanyIdentity,
-  type CompanyContextScoreResult,
-} from './companyContextBlock';
-import { scoreCompanyContext, type CompanyIdentity } from './companyContextBlock';
+// Company context scoring — re-exported for convenience.
+// BUILD-CERTIFICATION-001: source the VALUE (scoreCompanyContext) directly from
+// the pure Scoring sub-module, NOT the companyContextBlock barrel. The barrel
+// also re-exports the Builders part, which imports the Redis-backed
+// canonicalContentContextResolver — reaching this scoring code from the
+// ContentQualityPanel CLIENT component would pull child_process/net/fs/dns/
+// worker_threads into the client bundle and fail `next build`. Types are erased
+// at compile time, so importing them from the barrel is bundle-safe.
+export { scoreCompanyContext } from './companyContextBlockScoring';
+export type { CompanyIdentity, CompanyContextScoreResult } from './companyContextBlock';
+import { scoreCompanyContext } from './companyContextBlockScoring';
+import type { CompanyIdentity } from './companyContextBlock';
 
 export type ContentFormMeta = FormMeta;
 export type ContentQualityScore = QualityScore;

@@ -223,3 +223,47 @@ jobs:
           name: typecheck-certification-report
           path: typecheck-certification.log
           if-no-files-found: warn
+
+  production-build:
+    # ####################################################################
+    # BUILD-CERTIFICATION-001 — production build gate.
+    # A green backend/worker typecheck does NOT prove the app bundles:
+    # client/server boundary violations (server-only Node built-ins such as
+    # child_process/net/fs/dns/worker_threads reaching a client bundle) surface
+    # ONLY in `next build`. This job fails the pipeline when the production build
+    # fails, closing the gap that let a broken build reach the deploy step.
+    # NOTE: the webpack COMPILE (where boundary errors occur) runs before static
+    # generation, so this catches the boundary class even if runtime env is
+    # minimal; provide build-time env via repo secrets if static generation needs it.
+    # ####################################################################
+    name: Production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Production build (client/server boundary + webpack compile)
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee production-build.log
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-build-log
+          path: production-build.log
+          if-no-files-found: warn

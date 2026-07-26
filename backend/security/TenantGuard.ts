@@ -42,7 +42,8 @@ import { logger } from '../services/logger';
 import { logSecurityEvent } from './audit/SecurityAuditService';
 import { seedRequestContextFromRequest } from '../services/requestContext';
 // W2-1 (Foundation primitives): rollout lifecycle + request-scoped memo.
-import { defineRolloutFlag, resolveRolloutSync, runWithRollout } from '../../lib/platform/rollout';
+import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
+import { runWithRollout } from '../../lib/platform/rolloutAdmin';
 import { memoRequest } from '../services/requestScopedMemo';
 
 // ── Public types ─────────────────────────────────────────────────────────────
