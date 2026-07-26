@@ -14,6 +14,9 @@ import { trackActivationEvent } from '../lib/analytics/activationEvents';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 import { type FieldType, type Lead, COLOR_PRESETS, fmtDate, SOURCE_LABELS, CopyButton, generateEmbedCode, downloadHtmlFile } from './LeadsViewModel';
+// Type-only import of the owning hook so the derived prop type `S` resolves (the page wires
+// `<LeadsView d={useLeadsPage()} />`). Matches the split-view pattern used by BlogIntelView.
+import type { useLeadsPage } from '../hooks/useLeadsPage';
 
 type S = ReturnType<typeof useLeadsPage>;
 export default function LeadsView({ d }: { d: S }) {

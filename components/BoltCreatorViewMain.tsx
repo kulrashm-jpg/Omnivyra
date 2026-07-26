@@ -24,6 +24,9 @@ import {
 } from '../lib/shared/bolt/creatorFormatCapability';
 import { platformSupportsCapability } from '../lib/shared/social/platformCapabilities';
 import { VIEW_OPTIONS, CONTENT_FORMATS, DURATION_OPTIONS, GOAL_OPTIONS, AUDIENCE_OPTIONS, STRATEGIC_FOCUS_OPTIONS, INTELLIGENCE_SOURCES, TagInput, StrategyCard, DelayedStrategyGenerationProgress } from './BoltCreatorViewModel';
+// Type-only import of the owning hook so the derived prop type `S` resolves (the page wires
+// `<BoltCreatorView d={useBoltCreator()} />`). Matches the split-view pattern used by BlogIntelView.
+import type { useBoltCreator } from '../hooks/useBoltCreator';
 
 type S = ReturnType<typeof useBoltCreator>;
 export default function BoltCreatorView({ d }: { d: S }) {

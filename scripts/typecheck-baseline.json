@@ -1,4 +1,4 @@
 {
-  "baseline": 86,
-  "note": "Known pre-existing fenced TypeScript errors across all 3 projects (json/backend/scripts) as of main 7f5309f6. CI fails if the count INCREASES. Lower this number (never raise it) as debt is genuinely fixed. Do NOT use suppressions/blanket any to game it."
+  "baseline": 47,
+  "note": "Non-regression ceiling: total `error TS` across the 3 typecheck-all projects (tsconfig.json / tsconfig.backend.json / tsconfig.scripts.json). CI FAILS if the count INCREASES. Lower this number (never raise it) as debt is genuinely fixed. Do NOT use suppressions/blanket any to game it. As of TECH-DEBT-001 (2026-07-26): tsconfig.json=0 and tsconfig.backend.json=0 are CLEAN; the remaining 47 are all tsconfig.scripts.json (scripts/** tooling debt — TECH-DEBT register TD-001). Previously 86 as of main 7f5309f6."
 }
