@@ -82,6 +82,32 @@ export async function fetchLeadProfile(companyId: string, key: string): Promise<
   return res.json();
 }
 
+/* ── W2b — Operational console (consumes the single Operations API; no new backend) ── */
+
+export interface OperationalOverlay {
+  status: string | null;
+  assignee: string | null;
+  notes: Array<{ id: string; body: string; author_id: string | null; pinned: boolean; created_at: string }>;
+  tasks: Array<{ id: string; title: string; task_type: string; status: string; priority: string; owner_id: string | null; due_at: string | null }>;
+}
+
+const OPS = '/api/lead-intelligence/operations';
+
+export async function fetchOperationalOverlay(companyId: string, entityId: string): Promise<OperationalOverlay> {
+  const p = new URLSearchParams({ company_id: companyId, entity_id: entityId });
+  const res = await apiFetch(`${OPS}?${p.toString()}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to load operational state');
+  return res.json();
+}
+
+/** All mutations flow through the ONE Operations API action dispatcher. */
+export async function operationsAction(companyId: string, action: string, payload: Record<string, unknown>): Promise<unknown> {
+  const res = await apiFetch(OPS, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ company_id: companyId, action, ...payload }) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((json as { error?: string }).error || 'Operation failed');
+  return json;
+}
+
 /** Repository-backed export → trigger a client download (auth-safe via apiFetch Bearer). */
 export async function downloadLeadExport(
   companyId: string,
