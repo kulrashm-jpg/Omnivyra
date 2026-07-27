@@ -23,26 +23,61 @@ export function envExecutionEnabled(): boolean {
   return process.env.GTM_EXECUTION_ENABLED === 'true';
 }
 
-/** Is execution enabled for (tenant, campaign, connector)? Default OFF, layered. */
+/**
+ * ES-102 — does a control row APPLY to this dispatch? Company-isolated per layer:
+ *  - global:    the singleton (__global__) global row
+ *  - tenant:    a tenant row owned by THIS company
+ *  - campaign:  a campaign row for THIS campaign, owned by this company OR global
+ *  - connector: a connector row for THIS connector, owned by this company OR global
+ * A row that does not clearly apply is ignored (never used to enable, never to mask a stop).
+ */
+function controlApplies(r: Row, companyId: string, campaignId: string | null, connector: string | null): boolean {
+  const ownedHere = r.company_id === companyId || r.company_id === '__global__';
+  switch (r.scope) {
+    case 'global':    return r.company_id === '__global__';
+    case 'tenant':    return r.company_id === companyId;
+    case 'campaign':  return campaignId != null && r.scope_id === campaignId && ownedHere;
+    case 'connector': return connector != null && r.scope_id === connector && ownedHere;
+    default:          return false;
+  }
+}
+
+/**
+ * ES-102 — PURE, deterministic, MOST-RESTRICTIVE control evaluation (unit-testable).
+ * Precedence (restrictive always wins; emergency stop is never maskable):
+ *   1. env OFF                                            → disabled
+ *   2. ANY applicable row with emergency_stop            → disabled  (cannot be masked by any enabled row)
+ *   3. no explicitly-enabled global row                  → disabled  (default OFF)
+ *   4. ANY applicable row with enabled=false             → disabled  (most-restrictive layer wins)
+ *   5. otherwise                                          → enabled
+ */
+export function evaluateControls(
+  rows: Row[], ctx: { companyId: string; campaignId: string | null; connector: string | null; envEnabled: boolean },
+): ControlDecision {
+  if (!ctx.envEnabled) return { enabled: false, reason: 'global_env_off' };
+  const applicable = rows.filter((r) => controlApplies(r, ctx.companyId, ctx.campaignId, ctx.connector));
+  // 2 — emergency stop anywhere applicable hard-halts; never maskable.
+  const stop = applicable.find((r) => r.emergency_stop);
+  if (stop) return { enabled: false, reason: `${stop.scope}_emergency_stop` };
+  // 3 — a global row must exist and be explicitly enabled.
+  const global = applicable.find((r) => r.scope === 'global');
+  if (!global || !global.enabled) return { enabled: false, reason: 'global_disabled' };
+  // 4 — most-restrictive: any applicable disabled layer wins.
+  const disabled = applicable.find((r) => !r.enabled);
+  if (disabled) return { enabled: false, reason: `${disabled.scope}_disabled` };
+  return { enabled: true, reason: 'enabled' };
+}
+
+/** Is execution enabled for (tenant, campaign, connector)? Default OFF; most-restrictive layer wins. */
 export async function isExecutionEnabled(companyId: string, campaignId: string | null, connector: string | null): Promise<ControlDecision> {
   if (!envExecutionEnabled()) return { enabled: false, reason: 'global_env_off' };
   let rows: Row[] = [];
   try {
     const { data } = await ownedDbTable(T).select('scope, scope_id, enabled, emergency_stop, company_id')
-      .in('company_id', ['__global__', companyId]).limit(200);
+      .in('company_id', ['__global__', companyId]).limit(500);
     rows = (data as Row[]) ?? [];
   } catch { return { enabled: false, reason: 'control_lookup_error_failclosed' }; }
-
-  const global = rows.find((r) => r.scope === 'global' && r.company_id === '__global__');
-  if (!global || !global.enabled || global.emergency_stop) return { enabled: false, reason: 'global_disabled' };
-
-  const scopes: Array<[string, string | null]> = [['tenant', '__none__'], ['campaign', campaignId], ['connector', connector]];
-  for (const [scope, id] of scopes) {
-    const r = rows.find((x) => x.scope === scope && (id == null ? true : x.scope_id === id) && (scope === 'tenant' ? x.company_id === companyId : true));
-    if (r?.emergency_stop) return { enabled: false, reason: `${scope}_emergency_stop` };
-    if (r && !r.enabled) return { enabled: false, reason: `${scope}_disabled` };
-  }
-  return { enabled: true, reason: 'enabled' };
+  return evaluateControls(rows, { companyId, campaignId, connector, envEnabled: true });
 }
 
 export async function setControl(input: { companyId: string | null; scope: 'global' | 'tenant' | 'campaign' | 'connector'; scopeId?: string | null; enabled?: boolean; emergencyStop?: boolean; reason?: string; actor?: string | null }): Promise<void> {

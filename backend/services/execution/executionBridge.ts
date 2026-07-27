@@ -13,13 +13,17 @@
 import { isExecutionEnabled } from './executionControlService';
 import { isSuppressed } from './suppressionService';
 import { checkQuota } from './executionQuotaService';
+import { getApprovalDecision } from './executionApprovalService';
 import { recordExecutionAudit, type ExecutionStage, type ExecutionDecision } from './executionAuditService';
 import { dispatchEmail, validateEmailTarget, previewEmail, type EmailMessage } from './emailExecutionConnector';
 
 export interface DispatchRequest {
   companyId: string; campaignId: string; entityId: string; channel: 'email';
-  recipient: string; message: EmailMessage; actor: string | null; approved: boolean;
+  recipient: string; message: EmailMessage; actor: string | null;
   correlationId?: string | null;
+  // NOTE: approval is NOT accepted from the caller (ES-101). It is read from authoritative
+  // server state keyed by (companyId, campaignId, version). `version` = the message version
+  // being dispatched (defaults to messageId / 'default').
 }
 export interface StageDecision { stage: ExecutionStage; decision: ExecutionDecision; reason?: string }
 export interface DispatchResult {
@@ -56,9 +60,11 @@ export async function dispatchGuarded(req: DispatchRequest): Promise<DispatchRes
   }
   await rec('control', 'allowed');
 
-  // 2 — approval (no bypass)
-  if (!req.approved) { await rec('approval', 'blocked', 'not_approved'); return blocked('approval', 'not_approved', 'blocked'); }
-  await rec('approval', 'allowed');
+  // 2 — approval (SERVER-OWNED; client cannot assert it — ES-101). Fail-closed.
+  const version = req.message?.messageId ?? 'default';
+  const approval = await getApprovalDecision(req.companyId, req.campaignId, version);
+  if (!approval.approved) { await rec('approval', 'blocked', approval.reason, { version }); return blocked('approval', approval.reason, 'blocked'); }
+  await rec('approval', 'allowed', undefined, { version, approver: approval.approver });
 
   // 3 — suppression (the ONE platform; fail-closed)
   const supp = await isSuppressed(req.companyId, req.channel, req.recipient);
