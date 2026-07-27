@@ -45,6 +45,36 @@ export const DEFAULT_STATE_MODEL: StateModelConfig = {
   },
 };
 
+/** Campaign lifecycle (draft → active → paused → completed/archived). */
+export const CAMPAIGN_STATE_MODEL: StateModelConfig = {
+  states: ['draft', 'active', 'paused', 'completed', 'archived'],
+  initial: 'draft',
+  terminal: ['completed', 'archived'],
+  transitions: {
+    draft: ['active', 'archived'],
+    active: ['paused', 'completed', 'archived'],
+    paused: ['active', 'completed', 'archived'],
+    completed: ['archived'],
+    archived: ['active'],
+  },
+};
+
+/** Audience lifecycle (lighter). */
+export const AUDIENCE_STATE_MODEL: StateModelConfig = {
+  states: ['draft', 'active', 'paused', 'archived'],
+  initial: 'draft',
+  terminal: ['archived'],
+  transitions: { draft: ['active', 'archived'], active: ['paused', 'archived'], paused: ['active', 'archived'], archived: ['active'] },
+};
+
+/** Select the state model for an entity type. The operational core stays ONE engine;
+ *  only the transition config differs per entity — no duplicate state machine. */
+export function modelForEntity(entityType: string): StateModelConfig {
+  if (entityType === 'gtm_campaign') return CAMPAIGN_STATE_MODEL;
+  if (entityType === 'audience') return AUDIENCE_STATE_MODEL;
+  return DEFAULT_STATE_MODEL; // canonical_lead / opportunity / default
+}
+
 export function isKnownState(state: string, config: StateModelConfig = DEFAULT_STATE_MODEL): boolean {
   return config.states.includes(state);
 }

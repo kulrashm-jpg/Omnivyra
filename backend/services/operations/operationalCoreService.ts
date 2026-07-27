@@ -21,10 +21,10 @@
 import { ownedDbTable } from '../../db/writeOwner';
 import { appendLeadEvent } from '../leadIntelligence/leadIntelligenceRepository';
 import { trackEvent } from '../telemetry/telemetryDispatcher';
-import { validateTransition, DEFAULT_STATE_MODEL, type StateModelConfig } from '../../../lib/operations/operationalStateModel';
+import { validateTransition, modelForEntity, type StateModelConfig } from '../../../lib/operations/operationalStateModel';
 import type { CanonicalLeadSource } from '../../../lib/leadIntelligence';
 
-export type OperationalEntityType = 'canonical_lead' | 'opportunity';
+export type OperationalEntityType = 'canonical_lead' | 'opportunity' | 'audience' | 'gtm_campaign';
 
 export interface OperationalEntityRef {
   companyId: string;
@@ -70,10 +70,10 @@ export async function getStatus(ref: OperationalEntityRef): Promise<{ status: st
   return data ? { status: String((data as any).status), changed_at: String((data as any).changed_at) } : null;
 }
 
-export async function setStatus(ref: OperationalEntityRef, actor: Actor, status: string, reason?: string, config: StateModelConfig = DEFAULT_STATE_MODEL): Promise<{ status: string; previous: string | null }> {
+export async function setStatus(ref: OperationalEntityRef, actor: Actor, status: string, reason?: string, config?: StateModelConfig): Promise<{ status: string; previous: string | null }> {
   const current = await getStatus(ref);
   const previous = current?.status ?? null;
-  const check = validateTransition(previous, status, config);
+  const check = validateTransition(previous, status, config ?? modelForEntity(ref.entityType));
   if (!check.ok) throw new OperationalError(`invalid_transition:${check.reason}`, 409);
 
   const { error } = await ownedDbTable(S).upsert({
