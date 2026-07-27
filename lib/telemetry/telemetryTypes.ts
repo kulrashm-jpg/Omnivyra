@@ -43,6 +43,10 @@ export type TelemetryEventType =
   | 'campaign.resumed'
   | 'campaign.completed'
   | 'campaign.archived'
+  | 'campaign.recommended'
+  // operational core (W2) + guarded execution (W5.1) — dynamic stage/decision events
+  | `operations.${string}`
+  | `execution.${string}`
   // ai
   | 'ai.generated'
   | 'ai.accepted'
