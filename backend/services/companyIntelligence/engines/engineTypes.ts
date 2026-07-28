@@ -28,6 +28,14 @@ export interface CompanyIntelligenceContext {
   financial?: { fundingStage?: string; totalRaised?: string; valuation?: string; revenueBand?: string; profitability?: string; runway?: string; source?: string; observedAt?: string };
   competitors?: Array<{ name: string; source: string; observedAt: string }>; // reference only — no ownership
   risks?: Array<{ type: string; detail?: string; impact?: 'low' | 'medium' | 'high'; source: string; observedAt: string }>;
+  enrichment?: CompanyEnrichmentInput;           // CI-D404 advanced enrichment
+}
+
+export interface CompanyEnrichmentInput {
+  subsidiaries?: string[]; acquisitions?: string[]; certifications?: string[]; patents?: string[]; trademarks?: string[];
+  regulatoryRegistrations?: string[]; standards?: string[]; research?: string[]; openSource?: string[];
+  developerEcosystem?: string[]; communityEcosystem?: string[]; sustainability?: string[];
+  source?: string; observedAt?: string;
 }
 
 export interface CompanyEngineOutput {

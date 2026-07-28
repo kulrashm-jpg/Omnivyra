@@ -3,7 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletion } from '../../../backend/services/aiGateway';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
-import { buildCompanyUnderstanding } from '../../../backend/services/context/companyUnderstandingService';
+import { buildCompetitorGroundingContext } from '../../../backend/services/context/companyUnderstandingService';
 
 /**
  * Competitive-intelligence chat.
@@ -53,7 +53,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // fields + Wikidata firmographics + Wikipedia description; Crunchbase/
     // Bloomberg when keyed). This grounds discovery in what the company actually
     // is — not a single field — so competitors are same-category and accurate.
-    const companyRead = await buildCompanyUnderstanding(companyId, p);
+    const companyRead = await buildCompetitorGroundingContext(companyId, p);
     const grounding = [
       companyRead.groundingText,
       str(p.content_themes) ? `Content themes: ${str(p.content_themes)}` : '',

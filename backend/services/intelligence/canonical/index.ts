@@ -7,3 +7,5 @@ export * from './contracts';
 export * from './primitives';
 export * from './scoring';
 export * from './helpers';
+export * from './fusion';
+export * from './explain';

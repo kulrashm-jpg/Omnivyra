@@ -14,3 +14,9 @@ export { runRisk } from './risk';
 export { runCrossEngine } from './crossEngine';
 export { assembleCompanyUnderstanding, type CompanyAssemblyResult } from './assembly';
 export { validateCompanyShadowBatch, type CompanyShadowReport, type CompanyShadowValidation } from './shadowValidation';
+// Phase D
+export { runEnrichment } from './enrichment';
+export { explainCompany, explainCompanyAll, type Explanation } from './explainability';
+export { assessCompanyAuthoritativeReadiness, type CompanyAuthoritativeReadiness } from './authoritativeReadiness';
+export { fuseEvidence, type FusionResult } from '../../intelligence/canonical';
+

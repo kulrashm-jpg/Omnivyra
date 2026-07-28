@@ -14,6 +14,7 @@ import { runCustomerPartner } from './customerPartner';
 import { runFinancial } from './financial';
 import { runCompetitive } from './competitive';
 import { runRisk } from './risk';
+import { runEnrichment } from './enrichment';
 import { runCrossEngine } from './crossEngine';
 import { buildCompanyUnderstanding } from '../builder';
 import { projectCompany } from '../projection';
@@ -44,6 +45,7 @@ export function assembleCompanyUnderstanding(ctx: CompanyIntelligenceContext): C
   const primaries: CompanyEngineOutput[] = [
     runTechnology(ctx), runProduct(ctx), runGrowth(ctx), runExecutive(ctx),
     runCustomerPartner(ctx), runFinancial(ctx), runCompetitive(ctx), runRisk(ctx),
+    runEnrichment(ctx), // CI-D404 — abstain-safe (absent enrichment ⇒ Phase C output preserved)
   ];
   const derived: CompanyEngineOutput[] = [runCrossEngine(primaries, ctx)];
   const engines = [...primaries, ...derived];

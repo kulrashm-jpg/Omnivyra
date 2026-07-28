@@ -52,7 +52,7 @@ describe('CI-C309 cross-engine synthesis (grounded, owns nothing)', () => {
 describe('CI-C310 assembly is the sole owner', () => {
   it('assembles one Understanding + projection; merges evidence; blends score', () => {
     const { understanding, projection, engines } = assembleCompanyUnderstanding(rich());
-    expect(engines.length).toBe(9); // 8 primary + cross-engine
+    expect(engines.length).toBe(10); // 8 Phase-C primary + Phase-D enrichment + cross-engine (abstain-safe)
     expect(understanding.facets.identity.value?.name).toBe('Acme'); // from profile baseline
     expect(understanding.facets.technology.value).not.toBeNull();    // from tech engine
     expect(understanding.score.dimensions.momentum.value).toBeGreaterThan(0);
