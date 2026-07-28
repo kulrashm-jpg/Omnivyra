@@ -21,3 +21,9 @@ export { toShadowRecord, toLegacyFields, type LegacyIntentFields } from './persi
 export { computeIntentUnderstandingShadow, compareToInput, type IntentShadowBundle, type IntentShadowComparison } from './shadowRuntime';
 export { explainIntent, explainIntentAll, type Explanation } from './explainability';
 export { isIntentUnderstandingEnabled, isIntentProjectionAuthoritative } from './flags';
+// Phase C — enrichment engines (deterministic contributors; assembly is sole owner).
+export {
+  assembleIntentIntelligence, type IntentAssemblyResult, type IntentIntelligenceContext, type IntentEngineOutput,
+  runObjective, runEvidence, runConfidence, runConflict, runContext, runInterpretation,
+  intentHealthSummary, type IntentHealthSummary,
+} from './engines';
