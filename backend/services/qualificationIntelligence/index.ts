@@ -23,3 +23,9 @@ export { toShadowRecord, toLegacyFields, type LegacyQualificationFields } from '
 export { computeQualificationUnderstandingShadow, compareToInput, type QualificationShadowBundle, type QualificationShadowComparison } from './shadowRuntime';
 export { explainQualification, explainQualificationAll, type Explanation } from './explainability';
 export { isQualificationUnderstandingEnabled, isQualificationProjectionAuthoritative } from './flags';
+// Phase C — enrichment engines (deterministic contributors; assembly is sole owner).
+export {
+  assembleQualificationIntelligence, type QualificationAssemblyResult, type QualificationIntelligenceContext, type QualificationEngineOutput,
+  runCriteria, runEvidence, runConfidence, runPolicy, runContext, runEvaluation,
+  qualificationHealthSummary, type QualificationHealthSummary,
+} from './engines';
