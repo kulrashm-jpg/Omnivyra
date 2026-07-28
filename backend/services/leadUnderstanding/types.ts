@@ -141,10 +141,14 @@ export type GraphNodeType = 'lead' | 'company' | 'offering' | 'competitor' | 'ca
   // Program 2 (Company Intelligence) additive extension — non-breaking union widening (references only).
   | 'executive' | 'customer' | 'partner' | 'product' | 'technology' | 'market'
   // Program 3 (Offering Intelligence) additive extension — non-breaking (references only).
-  | 'feature' | 'pricing_plan' | 'persona' | 'industry' | 'integration';
+  | 'feature' | 'pricing_plan' | 'persona' | 'industry' | 'integration'
+  // Program 5 (Visitor Intelligence) additive extension — non-breaking (visitor is the only visitor-owned node; everything else referenced).
+  | 'visitor';
 export type GraphEdgeType = 'belongs_to' | 'engaged_with' | 'influences' | 'reports_to' | 'competes_with' | 'targets' | 'converted_from' | 'references' | 'member_of'
   // Program 3 additive offering relations — non-breaking.
-  | 'has_feature' | 'priced_as' | 'serves_persona';
+  | 'has_feature' | 'priced_as' | 'serves_persona'
+  // Program 5 additive visitor relations — non-breaking (references only).
+  | 'identified_as' | 'acquired_via';
 export interface GraphNodeRef { type: GraphNodeType; id: string; }   // reference ONLY — no duplicate entity ownership
 export interface GraphEdge {
   id: string;
