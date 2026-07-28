@@ -83,7 +83,7 @@ describe('LI-C206..208 derived engines synthesize existing evidence', () => {
 describe('LI-C209 assembly is the sole owner', () => {
   it('assembles one Understanding + projection; merges evidence; blends score', () => {
     const { understanding, projection, engines } = assembleLeadUnderstanding(rich());
-    expect(engines.length).toBe(8);
+    expect(engines.length).toBe(11); // 8 Phase-C + 3 Phase-D contributors (abstain-safe)
     expect(understanding.score.dimensions.intent.value).toBeGreaterThan(0);
     // no single engine's contribution equals the final blended dimension unless truly singular
     expect(understanding.facets.identity.value?.seniority).toBe('vp');

@@ -14,3 +14,12 @@ export { runCrossEngine } from './crossEngine';
 export { assembleLeadUnderstanding, type AssemblyResult } from './assembly';
 export { assessQuality, type QualityScorecard } from './quality';
 export { validateShadowBatch, type ShadowValidationReport, type LeadShadowValidation } from './shadowValidation';
+// Phase D
+export { runEnrichment } from './enrichment';
+export { runBehavioral } from './behavioral';
+export { runStrategic } from './strategic';
+export { predict, type LeadPredictions, type Prediction, type PredictionName } from './predictive';
+export { explain, explainAll, type Explanation } from './explainability';
+export { fuseEvidence, DEFAULT_SOURCE_WEIGHTS, type FusionResult } from './fusion';
+export { toLegacyView, validateConvergence, type LegacyLeadView, type ConvergenceResult } from './convergence';
+export { assessAuthoritativeReadiness, type AuthoritativeReadiness } from './authoritativeReadiness';

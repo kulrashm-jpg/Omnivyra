@@ -27,6 +27,17 @@ export interface RawRelationship { personId: string; role?: RelationshipRole; re
 export type QualificationDimension = 'budget' | 'authority' | 'need' | 'timing' | 'urgency' | 'procurement' | 'org_readiness' | 'competitive' | 'strategic' | 'maturity' | 'expansion' | 'implementation';
 export interface QualificationInput { value?: string; known: boolean; source?: string; observedAt?: string; }
 
+// ── Phase D inputs (all optional; engines abstain when absent → Phase C behavior preserved) ──────
+export type BuyingStage = 'awareness' | 'consideration' | 'evaluation' | 'decision' | 'customer';
+export interface EnrichmentInput {
+  executiveProfile?: string; verifiedContact?: boolean; roleEvolution?: string[]; careerProgression?: string[];
+  organizationHistory?: string[]; certifications?: string[]; skills?: string[]; publicInfluence?: string;
+  speaking?: string[]; authoredContent?: string[]; patents?: string[]; publications?: string[]; advisoryRoles?: string[];
+  source?: string; observedAt?: string;
+}
+export interface BehaviouralEvent { label: string; stage?: BuyingStage; source: string; observedAt: string; value?: number; }
+export interface StrategicInput { initiatives?: string[]; transformation?: string[]; growthStrategy?: string[]; marketExpansion?: string[]; source?: string; observedAt?: string; }
+
 export interface LeadIntelligenceContext {
   key: LeadIdentityKey;
   asOf: string;                                  // deterministic "now" (decay/freshness anchor)
@@ -39,6 +50,10 @@ export interface LeadIntelligenceContext {
   companyId?: string;                            // upstream Company Understanding node (graph ref only)
   offeringId?: string;
   competitorId?: string;
+  // Phase D (optional)
+  enrichment?: EnrichmentInput;                  // LI-D301 advanced enrichment
+  behaviouralHistory?: BehaviouralEvent[];       // LI-D303 longitudinal behaviour
+  strategicInputs?: StrategicInput;              // LI-D305 strategic inputs
 }
 
 export interface EngineOutput {

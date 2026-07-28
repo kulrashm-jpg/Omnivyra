@@ -12,6 +12,9 @@ import { runBuyingSignal } from './buyingSignal';
 import { runIntent } from './intent';
 import { runRelationship } from './relationship';
 import { runQualification } from './qualification';
+import { runEnrichment } from './enrichment';
+import { runBehavioral } from './behavioral';
+import { runStrategic } from './strategic';
 import { runPrioritization } from './prioritization';
 import { runRecommendation } from './recommendation';
 import { runCrossEngine } from './crossEngine';
@@ -41,9 +44,11 @@ function mergeFacets(engines: EngineOutput[]): Partial<LeadFacets> {
 }
 
 export function assembleLeadUnderstanding(ctx: LeadIntelligenceContext): AssemblyResult {
-  // 1 — primary engines (independent evidence producers).
+  // 1 — primary engines (independent evidence producers). Phase D contributors (enrichment/behavioral/
+  // strategic) abstain when their optional inputs are absent ⇒ Phase C output is preserved unchanged.
   const primaries: EngineOutput[] = [
     runPersonaIcp(ctx), runBuyingSignal(ctx), runIntent(ctx), runRelationship(ctx), runQualification(ctx),
+    runEnrichment(ctx), runBehavioral(ctx), runStrategic(ctx),
   ];
   // 2 — derived engines (synthesize evidence the primaries already produced).
   const derived: EngineOutput[] = [
