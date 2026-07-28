@@ -26,3 +26,9 @@ export {
   runProgression, runMomentum, runContinuity, runCompletion, runMilestone, runTransition,
   journeyHealthSummary, type JourneyHealthSummary,
 } from './engines';
+// Phase D — frozen canonical contract + governance + migration prohibitions.
+export {
+  JOURNEY_CANONICAL_CONTRACT, JOURNEY_CONTRACT_VERSION, JOURNEY_PUBLISHED_EDGE_TYPES,
+  JOURNEY_GOVERNANCE_RULES, JOURNEY_MIGRATION_PROHIBITIONS,
+  validateJourneyContract, type JourneyContractConformance,
+} from './contract';
