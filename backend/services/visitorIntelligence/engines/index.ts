@@ -13,3 +13,8 @@ export { runAcquisition } from './acquisition';
 export { visitorConfidence, type VisitorConfidence } from './confidence';
 export { visitorHealthSummary, type VisitorHealthSummary, type VisitorHealthStatus } from './healthSummary';
 export { assembleVisitorIntelligence, type VisitorAssemblyResult } from './assembly';
+// Phase C — validation / readiness (pure, report/assessment only; no enablement).
+export { validateVisitorCrossUnderstanding, type VisitorCrossUnderstandingReport } from './crossUnderstanding';
+export { validateVisitorShadowBatch, type VisitorShadowReport, type VisitorShadowValidation } from './shadowValidation';
+export { assessVisitorAuthoritativeReadiness, type VisitorAuthoritativeReadiness } from './authoritativeReadiness';
+export { assessVisitorConsumerReadiness, VISITOR_DOWNSTREAM_CONSUMERS, type VisitorConsumerReadiness, type VisitorDownstreamConsumer } from './consumerReadiness';

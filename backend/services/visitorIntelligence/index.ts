@@ -25,3 +25,11 @@ export {
   runBehavioral, runEngagement, runSession, runActivityPattern, runAcquisition,
   visitorConfidence, type VisitorConfidence, visitorHealthSummary, type VisitorHealthSummary, type VisitorHealthStatus,
 } from './engines';
+// Phase C — validation / readiness (pure, report/assessment only).
+export {
+  validateVisitorCrossUnderstanding, type VisitorCrossUnderstandingReport,
+  validateVisitorShadowBatch, type VisitorShadowReport,
+  assessVisitorAuthoritativeReadiness, type VisitorAuthoritativeReadiness,
+  assessVisitorConsumerReadiness, VISITOR_DOWNSTREAM_CONSUMERS, type VisitorConsumerReadiness,
+} from './engines';
+export { summarizeVisitorRun, type VisitorRunSummary } from './metrics';
