@@ -139,8 +139,12 @@ export interface ReasoningTrace {
 // ── Graph (LI-B106) ─────────────────────────────────────────────────────────────────────────────
 export type GraphNodeType = 'lead' | 'company' | 'offering' | 'competitor' | 'campaign' | 'content' | 'signal' | 'opportunity' | 'team' | 'organization'
   // Program 2 (Company Intelligence) additive extension — non-breaking union widening (references only).
-  | 'executive' | 'customer' | 'partner' | 'product' | 'technology' | 'market';
-export type GraphEdgeType = 'belongs_to' | 'engaged_with' | 'influences' | 'reports_to' | 'competes_with' | 'targets' | 'converted_from' | 'references' | 'member_of';
+  | 'executive' | 'customer' | 'partner' | 'product' | 'technology' | 'market'
+  // Program 3 (Offering Intelligence) additive extension — non-breaking (references only).
+  | 'feature' | 'pricing_plan' | 'persona' | 'industry' | 'integration';
+export type GraphEdgeType = 'belongs_to' | 'engaged_with' | 'influences' | 'reports_to' | 'competes_with' | 'targets' | 'converted_from' | 'references' | 'member_of'
+  // Program 3 additive offering relations — non-breaking.
+  | 'has_feature' | 'priced_as' | 'serves_persona';
 export interface GraphNodeRef { type: GraphNodeType; id: string; }   // reference ONLY — no duplicate entity ownership
 export interface GraphEdge {
   id: string;
