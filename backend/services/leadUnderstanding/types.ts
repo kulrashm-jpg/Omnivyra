@@ -145,14 +145,18 @@ export type GraphNodeType = 'lead' | 'company' | 'offering' | 'competitor' | 'ca
   // Program 5 (Visitor Intelligence) additive extension — non-breaking (visitor is the only visitor-owned node; everything else referenced).
   | 'visitor'
   // Program 6 (Journey Intelligence) additive extension — non-breaking (journey is the only journey-owned node; touchpoint/stage/milestone are journey-scoped references).
-  | 'journey' | 'touchpoint' | 'stage' | 'milestone';
+  | 'journey' | 'touchpoint' | 'stage' | 'milestone'
+  // Program 7 (Intent Intelligence) additive extension — non-breaking (intent is the only intent-owned node; everything else referenced).
+  | 'intent';
 export type GraphEdgeType = 'belongs_to' | 'engaged_with' | 'influences' | 'reports_to' | 'competes_with' | 'targets' | 'converted_from' | 'references' | 'member_of'
   // Program 3 additive offering relations — non-breaking.
   | 'has_feature' | 'priced_as' | 'serves_persona'
   // Program 5 additive visitor relations — non-breaking (references only).
   | 'identified_as' | 'acquired_via'
   // Program 6 additive journey relations — non-breaking (references only; ordering lives in facets, not the graph).
-  | 'journey_of' | 'has_touchpoint' | 'reached_stage' | 'achieved_milestone' | 'transitioned_to';
+  | 'journey_of' | 'has_touchpoint' | 'reached_stage' | 'achieved_milestone' | 'transitioned_to'
+  // Program 7 additive intent relations — non-breaking (references only; no reasoning edges — interpretation lives in facets).
+  | 'intent_of' | 'intent_toward';
 export interface GraphNodeRef { type: GraphNodeType; id: string; }   // reference ONLY — no duplicate entity ownership
 export interface GraphEdge {
   id: string;
