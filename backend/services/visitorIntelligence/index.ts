@@ -33,3 +33,9 @@ export {
   assessVisitorConsumerReadiness, VISITOR_DOWNSTREAM_CONSUMERS, type VisitorConsumerReadiness,
 } from './engines';
 export { summarizeVisitorRun, type VisitorRunSummary } from './metrics';
+// Phase D — frozen canonical contract + governance + migration prohibitions.
+export {
+  VISITOR_CANONICAL_CONTRACT, VISITOR_CONTRACT_VERSION, VISITOR_PUBLISHED_EDGE_TYPES,
+  VISITOR_GOVERNANCE_RULES, VISITOR_MIGRATION_PROHIBITIONS,
+  validateVisitorContract, type VisitorContractConformance,
+} from './contract';
