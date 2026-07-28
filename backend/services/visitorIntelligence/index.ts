@@ -19,3 +19,9 @@ export { toShadowRecord, toLegacyFields, type LegacyVisitorFields } from './pers
 export { computeVisitorUnderstandingShadow, compareToRaw, type VisitorShadowBundle, type VisitorShadowComparison } from './shadowRuntime';
 export { explainVisitor, explainVisitorAll, type Explanation } from './explainability';
 export { isVisitorUnderstandingEnabled, isVisitorProjectionAuthoritative } from './flags';
+// Phase B — enrichment engines (deterministic contributors; assembly is sole owner).
+export {
+  assembleVisitorIntelligence, type VisitorAssemblyResult, type VisitorIntelligenceContext, type VisitorEngineOutput,
+  runBehavioral, runEngagement, runSession, runActivityPattern, runAcquisition,
+  visitorConfidence, type VisitorConfidence, visitorHealthSummary, type VisitorHealthSummary, type VisitorHealthStatus,
+} from './engines';
