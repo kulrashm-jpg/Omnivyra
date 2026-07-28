@@ -20,3 +20,9 @@ export { toShadowRecord, toLegacyFields, type LegacyJourneyFields } from './pers
 export { computeJourneyUnderstandingShadow, compareToRaw, type JourneyShadowBundle, type JourneyShadowComparison } from './shadowRuntime';
 export { explainJourney, explainJourneyAll, type Explanation } from './explainability';
 export { isJourneyUnderstandingEnabled, isJourneyProjectionAuthoritative } from './flags';
+// Phase C — enrichment engines (deterministic contributors; assembly is sole owner).
+export {
+  assembleJourneyIntelligence, type JourneyAssemblyResult, type JourneyIntelligenceContext, type JourneyEngineOutput,
+  runProgression, runMomentum, runContinuity, runCompletion, runMilestone, runTransition,
+  journeyHealthSummary, type JourneyHealthSummary,
+} from './engines';
