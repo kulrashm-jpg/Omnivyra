@@ -27,3 +27,9 @@ export {
   runObjective, runEvidence, runConfidence, runConflict, runContext, runInterpretation,
   intentHealthSummary, type IntentHealthSummary,
 } from './engines';
+// Phase D — frozen canonical contract + governance + migration prohibitions.
+export {
+  INTENT_CANONICAL_CONTRACT, INTENT_CONTRACT_VERSION, INTENT_PUBLISHED_EDGE_TYPES,
+  INTENT_GOVERNANCE_RULES, INTENT_MIGRATION_PROHIBITIONS,
+  validateIntentContract, type IntentContractConformance,
+} from './contract';
