@@ -29,6 +29,14 @@ export interface OfferingIntelligenceContext {
   adoption?: { customers?: string; traction?: string; deploymentMaturity?: string; retention?: string; expansion?: string; usageMomentum?: string; source?: string; observedAt?: string };
   lifecycle?: { stage?: 'introduction' | 'growth' | 'maturity' | 'decline'; roadmap?: string[]; releaseCadence?: string; source?: string; observedAt?: string };
   competitors?: Array<{ name: string; overlap?: string[]; source: string; observedAt: string }>; // reference only
+  enrichment?: OfferingEnrichmentInput;            // OI-D401 advanced enrichment
+}
+
+export interface OfferingEnrichmentInput {
+  editions?: string[]; regionalAvailability?: string[]; releaseChannels?: string[]; featureFlags?: string[];
+  ecosystemMaturity?: string; marketplacePresence?: string[]; developerAdoption?: string;
+  customerSuccess?: string; implementationComplexity?: string; onboardingMaturity?: string;
+  source?: string; observedAt?: string;
 }
 
 export interface OfferingEngineOutput {

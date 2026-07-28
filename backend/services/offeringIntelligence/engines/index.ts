@@ -10,3 +10,10 @@ export { runMarketFit, runPersona, runAdoption, runLifecycle, runCompetitive } f
 export { runCrossEngine } from './crossEngine';
 export { assembleOfferingUnderstanding, type OfferingAssemblyResult } from './assembly';
 export { validateOfferingShadowBatch, type OfferingShadowReport, type OfferingShadowValidation } from './shadowValidation';
+// Phase D
+export { runEnrichment } from './enrichment';
+export { explainOffering, explainOfferingAll, type Explanation } from './explainability';
+export { validateCrossUnderstanding, type CrossUnderstandingReport } from './crossUnderstanding';
+export { assessOfferingAuthoritativeReadiness, type OfferingAuthoritativeReadiness } from './authoritativeReadiness';
+export { fuseEvidence, type FusionResult } from '../../intelligence/canonical';
+

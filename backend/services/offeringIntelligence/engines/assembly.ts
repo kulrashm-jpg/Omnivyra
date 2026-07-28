@@ -10,6 +10,7 @@ import type { OfferingIntelligenceContext, OfferingEngineOutput } from './engine
 import { runFeature, runPricing, runPackaging, runPositioning } from './intrinsic1';
 import { runIntegration, runCompliance, runCategoryCapability } from './intrinsic2';
 import { runMarketFit, runPersona, runAdoption, runLifecycle, runCompetitive } from './market';
+import { runEnrichment } from './enrichment';
 import { runCrossEngine } from './crossEngine';
 import { buildOfferingUnderstanding } from '../builder';
 import { projectOffering } from '../projection';
@@ -37,6 +38,7 @@ export function assembleOfferingUnderstanding(ctx: OfferingIntelligenceContext):
     runFeature(ctx), runPricing(ctx), runPackaging(ctx), runPositioning(ctx),
     runIntegration(ctx), runCompliance(ctx), runCategoryCapability(ctx),
     runMarketFit(ctx), runPersona(ctx), runAdoption(ctx), runLifecycle(ctx), runCompetitive(ctx),
+    runEnrichment(ctx), // OI-D401 — abstain-safe (absent enrichment ⇒ Phase C output preserved)
   ];
   const derived: OfferingEngineOutput[] = [runCrossEngine(primaries, ctx)];
   const engines = [...primaries, ...derived];

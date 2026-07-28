@@ -60,7 +60,7 @@ describe('OI-C313 cross-engine synthesis (grounded, owns nothing)', () => {
 describe('OI-C314 assembly is the sole owner', () => {
   it('assembles one Understanding + projection; merges evidence; blends score', () => {
     const { understanding, projection, engines } = assembleOfferingUnderstanding(rich());
-    expect(engines.length).toBe(13); // 12 primary + cross-engine
+    expect(engines.length).toBe(14); // 12 Phase-C primary + Phase-D enrichment + cross-engine (abstain-safe)
     expect(understanding.facets.identity.value?.name).toBe('Widget Pro'); // from seed baseline
     expect(understanding.score.dimensions.market_fit.value).toBeGreaterThan(0);
     expect(understanding.score.dimensions.differentiation.value).toBeGreaterThan(0);
