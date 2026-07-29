@@ -82,6 +82,9 @@ export const normalizeExtractionOutput = (raw: any): any => {
     competitors: normalizeField(normalizedInput.competitors),
     unique_value_proposition: normalizeField(normalizedInput.unique_value_proposition),
     content_themes: normalizeField(normalizedInput.content_themes),
+    business_model: normalizeField(normalizedInput.business_model),
+    provider_type: normalizeField(normalizedInput.provider_type),
+    solution_domains: normalizeField(normalizedInput.solution_domains),
     missing_fields: Array.isArray(normalizedInput.missing_fields) ? normalizedInput.missing_fields : undefined,
   };
 };
@@ -128,6 +131,9 @@ export const buildExtractionWithDefaults = (raw: any): CompanyProfileExtractionO
     competitors: coerceField(normalized.competitors),
     unique_value_proposition: coerceField(normalized.unique_value_proposition),
     content_themes: coerceField(normalized.content_themes),
+    business_model: coerceField(normalized.business_model),
+    provider_type: coerceField(normalized.provider_type),
+    solution_domains: coerceField(normalized.solution_domains),
     missing_fields: Array.isArray(normalized.missing_fields)
       ? normalized.missing_fields
       : [],

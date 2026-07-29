@@ -5,6 +5,7 @@ import { buildCompanyContext } from './companyContextService';
 import { getCompanyContextIntelligence } from './companyContextIntelligenceService';
 import { ownedDbTable } from '../db/writeOwner';
 import { buildExecutorContext, type MarketPulseExecutorContext } from './marketPulse/executorContext';
+import { adoptMarketPulseIdentity } from '@/backend/services/companyIntelligence/adoption/consumers/marketPulseConsumer';
 import { scoreFinding } from './marketPulse/scoringService';
 import { sendIntelligenceAlert } from './intelligenceAlertService';
 import { computeTrust } from './marketPulse/trustScoringService';
@@ -179,7 +180,16 @@ export async function getMarketPulseContext(
   const collaborationContext = await getMarketPulseCollaborationContext({ companyId }).catch(() => null);
   const productionHardening = await getMarketPulseProductionHardening(companyId, options).catch(() => null);
   const companyContext = buildCompanyContext(profile, { intelligence: intelligenceContext });
-  const settings = (profile?.report_settings?.market_pulse ?? {}) as MarketPulseProfileSettings;
+  // U3·Consumer-3: Market Pulse obtains its projection-owned interpretive identity (business_model /
+  // operating_model / domain_role) through the canonical seam's worldView, before the report/prompt/UI is
+  // built from these settings. Flag OFF (default) ⇒ same settings, byte-identical. provider_type /
+  // solution_domains / competitors are unchanged (not projection-owned here).
+  const settings = adoptMarketPulseIdentity(
+    (profile?.report_settings?.market_pulse ?? {}) as MarketPulseProfileSettings,
+    profile,
+    companyId,
+    new Date().toISOString(),
+  );
   const operatingMarkets = normalizeStringArray(settings.primary_operating_markets);
   const expansionMarkets = normalizeStringArray(settings.target_expansion_markets);
   const preferredRegions = normalizeStringArray(settings.preferred_regions);

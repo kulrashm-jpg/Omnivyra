@@ -3,7 +3,10 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletion } from '../../../backend/services/aiGateway';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
-import { buildCompanyUnderstanding } from '../../../backend/services/context/companyUnderstandingService';
+import { adoptCompetitorCompanyIdentity } from '@/backend/services/companyIntelligence/adoption/consumers/competitorIntelligenceConsumer';
+import { isCompanyProjectionAuthoritative } from '@/backend/services/companyIntelligence/flags';
+import { buildCompetitorUnderstandingSystemPrompt } from '@/backend/services/competitorIdentityHardening';
+import { buildCompetitorGroundingContext } from '../../../backend/services/context/companyUnderstandingService';
 
 /**
  * Competitive-intelligence chat.
@@ -28,9 +31,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!access) return;
 
   try {
-    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false });
-    if (!profile) return res.status(404).json({ error: 'Company profile not found' });
+    const rawProfile = await getProfile(companyId, { autoRefine: false, languageRefine: false });
+    if (!rawProfile) return res.status(404).json({ error: 'Company profile not found' });
 
+    // U3·Consumer-8 (FINAL): the competitor-grounding context obtains the OWNER company's projection-owned
+    // identity (category) through the canonical seam, so grounding is anchored on canonical identity rather
+    // than a raw stored field. Flag OFF (default) ⇒ same profile, byte-identical grounding.
+    const profile = adoptCompetitorCompanyIdentity(rawProfile, companyId, new Date().toISOString());
     const p = profile as unknown as Record<string, unknown>;
     const str = (v: unknown) => String(v ?? '').trim();
 
@@ -53,7 +60,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // fields + Wikidata firmographics + Wikipedia description; Crunchbase/
     // Bloomberg when keyed). This grounds discovery in what the company actually
     // is — not a single field — so competitors are same-category and accurate.
-    const companyRead = await buildCompanyUnderstanding(companyId, p);
+    const companyRead = await buildCompetitorGroundingContext(companyId, p);
     const grounding = [
       companyRead.groundingText,
       str(p.content_themes) ? `Content themes: ${str(p.content_themes)}` : '',
@@ -87,9 +94,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         messages: [
           {
             role: 'system',
-            content:
-              'You are a sharp competitive-intelligence analyst. In 3–4 confident, specific sentences, state your understanding of THIS company: the exact product CATEGORY it competes in, what it actually sells, who it serves, and the competitive arena — grounded strictly in the profile (never invent). ' +
-              'Return JSON ONLY: { "understanding": string }.',
+            // U4 Hardening: authoritative ⇒ the canonical identity is GIVEN; the LLM reasons about the
+            // competitive arena and never re-infers the company's category. Flag OFF ⇒ legacy prompt.
+            content: buildCompetitorUnderstandingSystemPrompt(isCompanyProjectionAuthoritative()),
           },
           { role: 'user', content: `Company profile:\n${grounding}` },
         ],

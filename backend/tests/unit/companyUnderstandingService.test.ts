@@ -15,7 +15,7 @@ jest.mock('../../services/intelligence/adapters/wikidataAdapter', () => ({
   lookupCompanyFirmographicsFromWikidata: (...args: unknown[]) => mockWikidata(...args),
 }));
 
-import { buildCompanyUnderstanding } from '../../services/context/companyUnderstandingService';
+import { buildCompetitorGroundingContext } from '../../services/context/companyUnderstandingService';
 
 function wikipediaMock() {
   return (url: string) => {
@@ -39,7 +39,7 @@ const baseProfile = {
   target_audience: 'Retail chains',
 };
 
-describe('companyUnderstandingService.buildCompanyUnderstanding', () => {
+describe('companyUnderstandingService.buildCompetitorGroundingContext', () => {
   beforeEach(() => {
     mockSafeFetch.mockReset();
     mockWikidata.mockReset();
@@ -51,7 +51,7 @@ describe('companyUnderstandingService.buildCompanyUnderstanding', () => {
     mockSafeFetch.mockImplementation(wikipediaMock());
     mockWikidata.mockResolvedValue({ founded_year: '1990', team_size: '500', revenue_range: '$10M-$50M', matched_label: 'Acme Corporation' });
 
-    const u = await buildCompanyUnderstanding('c1', baseProfile);
+    const u = await buildCompetitorGroundingContext('c1', baseProfile);
 
     expect(u.sources).toEqual(expect.arrayContaining(['profile', 'wikidata', 'wikipedia']));
     expect(u.signals.wikipediaSummary).toContain('analytics software');
@@ -65,7 +65,7 @@ describe('companyUnderstandingService.buildCompanyUnderstanding', () => {
     mockSafeFetch.mockImplementation(() => Promise.resolve({ ok: false }));
     mockWikidata.mockResolvedValue({ founded_year: null, team_size: null, revenue_range: '$1B+', matched_label: 'Acme' });
 
-    const u = await buildCompanyUnderstanding('c1', { ...baseProfile, revenue_range: '$5M-$10M' });
+    const u = await buildCompetitorGroundingContext('c1', { ...baseProfile, revenue_range: '$5M-$10M' });
     expect(u.signals.revenueRange).toBe('$5M-$10M'); // profile wins
   });
 
@@ -73,7 +73,7 @@ describe('companyUnderstandingService.buildCompanyUnderstanding', () => {
     mockSafeFetch.mockImplementation(() => Promise.resolve({ ok: false }));
     mockWikidata.mockResolvedValue({ founded_year: null, team_size: null, revenue_range: '$1B+', matched_label: 'Acme' });
 
-    const u = await buildCompanyUnderstanding('c1', baseProfile);
+    const u = await buildCompetitorGroundingContext('c1', baseProfile);
     expect(u.signals.revenueRange).toBe('$1B+');
   });
 
@@ -81,7 +81,7 @@ describe('companyUnderstandingService.buildCompanyUnderstanding', () => {
     mockSafeFetch.mockRejectedValue(new Error('network down'));
     mockWikidata.mockRejectedValue(new Error('wikidata down'));
 
-    const u = await buildCompanyUnderstanding('c1', baseProfile);
+    const u = await buildCompetitorGroundingContext('c1', baseProfile);
     expect(u.sources).toEqual(['profile']);
     expect(u.signals.wikipediaSummary).toBeNull();
     expect(u.signals.foundedYear).toBeNull();
@@ -92,7 +92,7 @@ describe('companyUnderstandingService.buildCompanyUnderstanding', () => {
     mockSafeFetch.mockImplementation(() => Promise.resolve({ ok: false }));
     mockWikidata.mockResolvedValue({ founded_year: null, team_size: null, revenue_range: null, matched_label: null });
 
-    const u = await buildCompanyUnderstanding('c1', baseProfile);
+    const u = await buildCompetitorGroundingContext('c1', baseProfile);
     expect(u.gatedProviders).toEqual({ crunchbase: 'no_key', bloomberg: 'no_key' });
     expect(u.sources).not.toContain('crunchbase');
     expect(u.sources).not.toContain('bloomberg');

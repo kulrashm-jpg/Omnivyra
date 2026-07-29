@@ -13,6 +13,7 @@
 import type { CompanyProfile } from '../companyProfileService';
 import type { CompanyContext } from '../companyContextService';
 import { buildCompanyContext } from '../companyContextService';
+import { adoptContentArchitectIdentity } from '../companyIntelligence/adoption/consumers/contentArchitectConsumer';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Types
@@ -240,6 +241,9 @@ export function buildCompanyContextFoundation(
   profile: CompanyProfile | null,
   contextOverride?: CompanyContext,
 ): CompanyContextFoundation {
+  // U3·Consumer-2: Content Architect obtains its projection-owned `category` identity through the
+  // canonical seam before context/prompt construction. Flag OFF (default) ⇒ same profile, byte-identical.
+  profile = adoptContentArchitectIdentity(profile, (profile as { company_id?: string } | null)?.company_id ?? '', new Date().toISOString());
   const context = contextOverride ?? buildCompanyContext(profile, { includeEmpty: true });
 
   const businessIdentity: BusinessIdentity = {

@@ -18,7 +18,7 @@
 import { safeFetch } from '../../../lib/security/safeFetch';
 import { lookupCompanyFirmographicsFromWikidata } from '../intelligence/adapters/wikidataAdapter';
 
-export interface CompanyUnderstanding {
+export interface CompetitorGroundingContext {
   name: string;
   website: string;
   signals: {
@@ -106,10 +106,10 @@ async function fetchBloomberg(_name: string): Promise<{ description: string } | 
  * Build the multi-source understanding for a company. `profile` is the canonical
  * profile record (as returned by getCanonicalProfile). Never throws.
  */
-export async function buildCompanyUnderstanding(
+export async function buildCompetitorGroundingContext(
   _companyId: string,
   profile: Record<string, unknown>,
-): Promise<CompanyUnderstanding> {
+): Promise<CompetitorGroundingContext> {
   const name = str(profile.name);
   const website = str(profile.website) || str(profile.canonical_website) || str(profile.domain);
   const industry = [str(profile.industry), str(profile.category)].filter(Boolean).join(' / ');
@@ -133,7 +133,7 @@ export async function buildCompanyUnderstanding(
   if (crunchbase) sources.push('crunchbase');
   if (bloomberg) sources.push('bloomberg');
 
-  const signals: CompanyUnderstanding['signals'] = {
+  const signals: CompetitorGroundingContext['signals'] = {
     industry,
     products,
     valueProp,

@@ -32,6 +32,7 @@ import {
   profileKnowledgeReadiness,
 } from '../../../backend/services/companyProfile/companyKnowledgeGraph';
 import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
+import { adoptCompanyProfileIdentity } from '../../../backend/services/companyIntelligence/adoption/consumers/companyProfileConsumer';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 import { sendAuthError } from '../../../backend/services/sendAuthError';
 
@@ -310,7 +311,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           }
         }
       }
-      const response: Record<string, unknown> = { profile: responseProfile };
+      // U3·Consumer-1: the Company Profile display consumer obtains its `category` identity through the
+      // canonical projection seam (COMPANY-UNDERSTANDING-IMPLEMENTATION-001). Flag OFF (default) ⇒ same
+      // record, byte-identical response; flag ON ⇒ projected category. Isolated to this response only.
+      const projectedProfile = adoptCompanyProfileIdentity(responseProfile, companyId ?? '', new Date().toISOString());
+      const response: Record<string, unknown> = { profile: projectedProfile };
       response.company_profile_review = getCompanyProfileReviewStatus(resolvedProfile);
 
       // Recommendation tab: profile-driven strategic config. Content Architect overrides from profile.strategic_inputs.
