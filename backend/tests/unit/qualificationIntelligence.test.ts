@@ -111,7 +111,7 @@ describe('Q-B208 graph publication — references-only (qualification owns only 
 describe('Q-B209 platform compatibility — consumed by UNMODIFIED Programs 1–7 APIs', () => {
   it('a QualificationUnderstanding flows into openIntelligencePlatform natively (first-class citizen)', () => {
     const { understanding: qual } = assembleQualificationUnderstanding(input('q-1', [{ criterionId: 'budget', outcome: 'satisfied', observedAt: ASOF }]));
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const _ok: CanonicalEntityUnderstanding = qual;
     const s = openIntelligencePlatform([qual, lead], ASOF, { focusKey: 'qualification:q-1', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('qualification');

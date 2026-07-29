@@ -84,7 +84,7 @@ describe('V-B206/207 confidence framework + health summary (reuse shared primiti
 describe('V-B209 platform compatibility — enriched visitor still integrates via UNMODIFIED APIs', () => {
   it('flows into openIntelligencePlatform as a first-class graph citizen', () => {
     const { understanding: visitor } = assembleVisitorIntelligence(CTX);
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const session = openIntelligencePlatform([visitor, lead], ASOF, { focusKey: 'visitor:v-1001', depth: 2 });
     expect(session.context().entities.map((e) => e.type)).toContain('visitor');
     expect(session.traverse('visitor:v-1001', 'lead:L1')).toEqual(['visitor:v-1001', 'lead:L1']);

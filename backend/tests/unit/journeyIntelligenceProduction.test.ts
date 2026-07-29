@@ -51,7 +51,7 @@ describe('J-D402 canonical Journey contract (frozen + conformant + ordering-safe
 describe('J-D401/D403 consumer adoption + platform consumption (no parallel model)', () => {
   it('functions through the unmodified platform as a first-class citizen', () => {
     const { understanding: journey } = assembleJourneyIntelligence(ctx('j-1'));
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const s = openIntelligencePlatform([journey, lead], ASOF, { focusKey: 'journey:j-1', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('journey');
     expect(s.traverse('journey:j-1', 'visitor:v-1001')).toEqual(['journey:j-1', 'visitor:v-1001']);

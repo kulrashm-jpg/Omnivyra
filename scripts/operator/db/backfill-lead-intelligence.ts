@@ -19,6 +19,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { enforceOperatorSafety } from '../../_core/operatorSafety';
 
 function loadEnvLocal() {
   if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) return;
@@ -38,6 +39,16 @@ const limitArg = ((): number => { const i = args.indexOf('--limit'); return i >=
 const DRY = args.includes('--dry');
 
 async function main() {
+  // Operator safety invariant (W1.2): a remote-mutating operator entry point MUST
+  // clear enforceOperatorSafety() before ANY client initialization.
+  const safety = enforceOperatorSafety({
+    scriptName: 'scripts/operator/db/backfill-lead-intelligence.ts',
+    mutationTarget: 'db/lead_intelligence',
+    intendedAction: 'backfill legacy leads into canonical Lead Intelligence via the adoption pipeline',
+    example: 'npx tsx scripts/operator/db/backfill-lead-intelligence.ts --target-env=local --apply [--company <id>] [--limit N]',
+  });
+  if (!safety.allowed) return;
+
   // Import + use the admin client EARLY so it initializes (prod env) before ingest.
   const { supabase } = await import('../../../backend/db/supabaseClient');
 

@@ -83,7 +83,7 @@ describe('Falsification — ownership / graph references-only / platform compati
   });
   it('J-C309 enriched journey integrates via the UNMODIFIED platform (first-class citizen)', () => {
     const { understanding: journey } = assembleJourneyIntelligence(CTX);
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const s = openIntelligencePlatform([journey, lead], ASOF, { focusKey: 'journey:j-1001', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('journey');
     expect(s.traverse('journey:j-1001', 'visitor:v-1001')).toEqual(['journey:j-1001', 'visitor:v-1001']);

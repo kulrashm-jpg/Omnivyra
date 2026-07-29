@@ -88,7 +88,7 @@ describe('Falsification — ownership / graph references-only / platform compati
   });
   it('I-C309 enriched intent integrates via the UNMODIFIED platform (first-class citizen)', () => {
     const { understanding: intent } = assembleIntentIntelligence(CTX);
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const s = openIntelligencePlatform([intent, lead], ASOF, { focusKey: 'intent:int-1001', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('intent');
     expect(s.traverse('intent:int-1001', 'visitor:v-1001')).toEqual(['intent:int-1001', 'visitor:v-1001']);

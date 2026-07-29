@@ -91,7 +91,7 @@ describe('I-B208 graph publication — references-only (intent owns only its roo
 describe('I-B209 platform compatibility — consumed by UNMODIFIED Programs 1–6 APIs', () => {
   it('an IntentUnderstanding flows into openIntelligencePlatform natively (first-class citizen)', () => {
     const { understanding: intent } = assembleIntentUnderstanding(INPUT);
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const _ok: CanonicalEntityUnderstanding = intent;
     const s = openIntelligencePlatform([intent, lead], ASOF, { focusKey: 'intent:int-1001', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('intent');

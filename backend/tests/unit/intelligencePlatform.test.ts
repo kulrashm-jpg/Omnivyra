@@ -22,7 +22,7 @@ const OLD = '2026-01-01T00:00:00.000Z';
 function linkedUnderstandings(): CanonicalEntityUnderstanding[] {
   const company = assembleCompanyUnderstanding({ key: { companyId: 'C1' }, asOf: ASOF, profile: { companyId: 'C1', asOf: ASOF, name: 'Acme', competitors: ['RivalCo'] }, competitors: [{ name: 'RivalCo', source: 'serp', observedAt: ASOF }], executives: [{ name: 'Jane', role: 'CEO', source: 'news', observedAt: ASOF }] }).understanding;
   const offering = assembleOfferingUnderstanding({ key: { companyId: 'C1', offeringId: 'widget' }, asOf: ASOF, seed: { companyId: 'C1', asOf: ASOF, name: 'Widget', offeringType: 'product' }, personas: [{ name: 'Analyst', role: 'user', source: 'crm', observedAt: ASOF }], competitors: [{ name: 'RivalViz', source: 'serp', observedAt: ASOF }] }).understanding;
-  const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+  const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
   const ev = (label: string, at = ASOF) => [mkEvidence('link', { label, source: 'crm', observedAt: at })];
   const linkedLead: CanonicalEntityUnderstanding = { ...lead, graph: { root: lead.graph.root, edges: [
     edge({ type: 'belongs_to', from: node('lead', 'L1'), to: node('company', 'C1'), evidence: ev('lead_at_company') }),

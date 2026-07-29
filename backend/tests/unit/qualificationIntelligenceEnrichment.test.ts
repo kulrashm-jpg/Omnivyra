@@ -100,7 +100,7 @@ describe('Falsification — ownership / graph references-only / platform compati
   });
   it('Q-C309 enriched qualification integrates via the UNMODIFIED platform (first-class citizen)', () => {
     const { understanding: qual } = assembleQualificationIntelligence(CTX);
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const s = openIntelligencePlatform([qual, lead], ASOF, { focusKey: 'qualification:q-1', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('qualification');
     expect(s.traverse('qualification:q-1', 'lead:L1')).toEqual(['qualification:q-1', 'lead:L1']);

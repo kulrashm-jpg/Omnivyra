@@ -53,7 +53,7 @@ describe('I-D401/D403 consumer adoption + platform consumption + competing prese
   it('functions through the unmodified platform; competing intents preserved', () => {
     const { understanding: intent, projection } = assembleIntentIntelligence(ctx('int-1'));
     expect(projection.competingObjectives).toContain('comparison');           // competing preserved into Phase D
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const s = openIntelligencePlatform([intent, lead], ASOF, { focusKey: 'intent:int-1', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('intent');
     expect(s.traverse('intent:int-1', 'visitor:v-1001')).toEqual(['intent:int-1', 'visitor:v-1001']);

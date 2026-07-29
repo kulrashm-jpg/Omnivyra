@@ -75,7 +75,7 @@ describe('V-C303 evidence integrity + V-C304 scoring (falsify: dup/orphan eviden
 describe('V-C306 platform compatibility (falsify: requires downstream modification)', () => {
   it('visitor is a first-class citizen in an UNMODIFIED platform session', () => {
     const { understanding: visitor } = assembleVisitorIntelligence(ctx('v-1'));
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const s = openIntelligencePlatform([visitor, lead], ASOF, { focusKey: 'visitor:v-1', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('visitor');
     expect(s.traverse('visitor:v-1', 'lead:L1')).toEqual(['visitor:v-1', 'lead:L1']);

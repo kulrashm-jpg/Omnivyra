@@ -73,7 +73,7 @@ describe('V-A110 platform compatibility — consumed by UNMODIFIED Program-4 API
   function siblings(): CanonicalEntityUnderstanding[] {
     const company = assembleCompanyUnderstanding({ key: { companyId: 'C1' }, asOf: ASOF, profile: { companyId: 'C1', asOf: ASOF, name: 'Acme' }, competitors: [], executives: [{ name: 'Jane', role: 'CEO', source: 'news', observedAt: ASOF }] }).understanding;
     const offering = assembleOfferingUnderstanding({ key: { companyId: 'C1', offeringId: 'widget' }, asOf: ASOF, seed: { companyId: 'C1', asOf: ASOF, name: 'Widget', offeringType: 'product' } }).understanding;
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     return [company, offering, lead];
   }
   it('a VisitorUnderstanding flows into openIntelligencePlatform natively (structural CanonicalEntityUnderstanding)', () => {

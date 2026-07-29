@@ -83,7 +83,7 @@ describe('J-B208 graph publication — references-only (journey owns only its ro
 describe('J-B209 platform compatibility — consumed by UNMODIFIED Program 1–5 APIs', () => {
   it('a JourneyUnderstanding flows into openIntelligencePlatform natively (first-class citizen)', () => {
     const { understanding: journey } = assembleJourneyUnderstanding(RAW);
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const _ok: CanonicalEntityUnderstanding = journey;              // structural conformance
     const s = openIntelligencePlatform([journey, lead], ASOF, { focusKey: 'journey:j-1001', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('journey');

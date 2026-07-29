@@ -49,7 +49,7 @@ describe('V-D401/D403 consumer adoption + platform consumption (no parallel mode
     const r = assessVisitorConsumerReadiness(ctx('v-1'));
     expect(r.ready).toBe(true);
     const { understanding: visitor } = assembleVisitorIntelligence(ctx('v-1'));
-    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF, edges: [] });
+    const lead = buildLeadUnderstanding({ key: { leadKey: 'L1', companyId: 'C1' }, builtAt: ASOF });
     const s = openIntelligencePlatform([visitor, lead], ASOF, { focusKey: 'visitor:v-1', depth: 2 });
     expect(s.context().entities.map((e) => e.type)).toContain('visitor');
     expect(s.traverse('visitor:v-1', 'lead:L1')).toEqual(['visitor:v-1', 'lead:L1']);
