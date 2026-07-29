@@ -31,6 +31,7 @@ import { buildStrategicContextString } from '../../lib/shared/campaign/campaignO
 // governance from the campaign's company profile and threads it onto
 // the pipeline `item` so system prompts pick up the preamble.
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
+import { adoptExecutionCompanyIdentity } from '@/backend/services/companyIntelligence/adoption/consumers/executionIntelligenceConsumer';
 import { buildGovernancePromptContext } from './creator/strategyGovernancePromptContext';
 // R3-P2 — Content Workspace adoption. Same single resolver as
 // processBlockSchedule: APPROVED workspace copy is canonical; generation is
@@ -366,11 +367,15 @@ export async function generateContentForDailyPlans(
     try {
       const profile = await getProfile(campaignCompanyId, { autoRefine: false });
       if (profile) {
+        // U3·Consumer-7: the execution/BOLT governance prompt obtains its projection-owned `category`
+        // identity through the canonical seam. Flag OFF (default) ⇒ same profile, byte-identical. `industry`
+        // and `category_list` are not projection-owned and are unchanged.
+        const identityProfile = adoptExecutionCompanyIdentity(profile, campaignCompanyId, new Date().toISOString());
         governance = buildGovernancePromptContext({
           companyContext: {
             industry: profile.industry ?? null,
             industry_list: profile.industry_list ?? null,
-            category: profile.category ?? null,
+            category: identityProfile.category ?? null,
             category_list: profile.category_list ?? null,
           },
           contentType: 'image', // BOLT-scheduled posts share the image-lane policy

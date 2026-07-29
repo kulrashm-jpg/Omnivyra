@@ -257,6 +257,18 @@ export type CompanyProfile = {
   platform_content_type_prefs?: Record<string, string[]> | null;
   /** Persisted report defaults and integration-derived report setup state. */
   report_settings?: {
+    // U4.5: canonical evidence-derived company identity, produced at the write path (shadow until the
+    // COMPANY_UNDERSTANDING_AUTHORITATIVE rollout). Additive/optional — legacy identity fields are unchanged.
+    canonical_understanding?: {
+      company_id: string;
+      version: number;
+      built_at: string;
+      identity_source: 'evidence';
+      producer: string;
+      understanding: unknown;
+      projection: unknown;
+      parity: number | null;
+    } | null;
     company_facts?: {
       team_size?: string | null;
       founded_year?: string | null;
@@ -482,6 +494,12 @@ export type CompanyProfileExtractionOutput = {
   competitors?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
   unique_value_proposition?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
   content_themes?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
+  // U4.6 (DECISION-001 Policy B) — grounded evidence for the interpretive identity fields. Extract only when
+  // the website explicitly shows it (pricing/CTA/sales-motion → business_model; product-vs-service/agency/
+  // media structure → provider_type; offerings → solution_domains); otherwise source='missing' (abstain).
+  business_model?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
+  provider_type?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
+  solution_domains?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
   missing_fields?: string[];
 };
 

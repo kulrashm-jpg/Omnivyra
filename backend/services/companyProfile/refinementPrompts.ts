@@ -99,15 +99,20 @@ export const buildExtractionPrompt = (
     '- company_name\n- industry_list\n- category_list\n- geography_list\n' +
     '- products_services\n- target_audience\n- brand_voice\n- goals\n' +
     '- competitors_list\n- unique_value_proposition\n- content_themes_list\n- website_url\n' +
-    '- social_profiles (object with linkedin, facebook, instagram, x, youtube, tiktok, reddit, pinterest, whatsapp, blog)\n\n' +
+    '- social_profiles (object with linkedin, facebook, instagram, x, youtube, tiktok, reddit, pinterest, whatsapp, blog)\n' +
+    '- business_model\n- provider_type\n- solution_domains\n\n' +
     'Important:\n' +
     '- category_list should reflect what the company does (product/service categories), not just industry.\n' +
     '- Prefer 3-7 concise categories when evidence supports it.\n' +
     '- Use website headings, product/service sections, and positioning statements to infer categories.\n' +
     '- Avoid overly generic categories like "technology" unless explicitly stated.\n' +
-    '- industry_list, category_list, geography_list, competitors_list, content_themes_list must be arrays.\n' +
+    '- industry_list, category_list, geography_list, competitors_list, content_themes_list, solution_domains must be arrays.\n' +
     '- Do not return empty arrays if evidence exists.\n' +
-    '- If multiple industries or geographies apply, include all.\n\n' +
+    '- If multiple industries or geographies apply, include all.\n' +
+    '- business_model: how the company makes money, GROUNDED IN OBSERVABLE SITE EVIDENCE only — e.g. pricing/plans/"subscribe" ⇒ subscription/SaaS; "add to cart"/store ⇒ ecommerce/D2C; "book a demo"/"request a quote"/"contact sales" ⇒ B2B sales-led; "hire us"/service packages ⇒ services. If the site does not show it, set source="missing".\n' +
+    '- provider_type: what KIND of provider the site shows it is — software/product, service_provider, agency, marketplace, media/creator, or hardware. Ground it in the site structure/offerings; do NOT confuse a capability it sells with its own identity. If unclear, source="missing".\n' +
+    '- solution_domains: the concrete problem/solution areas the OFFERINGS address (from product/feature/service sections). If the site does not support it, source="missing".\n' +
+    '- For business_model, provider_type, solution_domains: QUOTE the grounding evidence via confidence and ABSTAIN (source="missing") rather than guess. Never invent.\n\n' +
     (archetypeContext ? `Entity archetype context:\n${archetypeContext}\n\n` : '') +
     'Evidence:\n' +
     JSON.stringify(cleanedEvidence);

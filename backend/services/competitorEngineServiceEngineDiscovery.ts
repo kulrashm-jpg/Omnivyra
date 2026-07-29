@@ -11,6 +11,9 @@ import type {
   DebugCompetitorScoring,
 } from '../../types/competitor';
 import { isAudienceLedArchetype, isArchetypeInfluential, isBusinessFirstOnlyArchetype } from './companyProfile/entityArchetype';
+import { adoptCompetitorCompanyIdentity } from './companyIntelligence/adoption/consumers/competitorIntelligenceConsumer';
+import { isCompanyProjectionAuthoritative } from './companyIntelligence/flags';
+import { mayFabricateSparseIdentity } from './competitorIdentityHardening';
 import type { EntityArchetypeIntelligence } from './companyProfile/types';
 import type { ResolvedReportInput } from './reportInputResolver';
 import {
@@ -432,6 +435,12 @@ export function contextTokens(context: CompanyCompetitiveContext): {
 }
 
 export function extractCompetitiveContextFromProfile(profile: CompanyProfile | null | undefined): CompanyCompetitiveContext {
+  // U3·Consumer-8 (FINAL): competitor search obtains the OWNER company's projection-owned identity
+  // (category / business_model / operating_model / domain_role) through the canonical seam before shaping
+  // discovery. Flag OFF (default) ⇒ same profile, byte-identical. Competitor evidence (named_competitors /
+  // competitor_details) and all other fields are preserved — identity flows in, competitor results never
+  // flow back into identity.
+  profile = adoptCompetitorCompanyIdentity(profile, (profile as { company_id?: string } | null | undefined)?.company_id ?? '', new Date().toISOString());
   const companyFacts = profile?.report_settings?.company_facts ?? null;
   const marketPulse = profile?.report_settings?.market_pulse ?? null;
   const entityArchetype = profile?.report_settings?.entity_archetype ?? null;
@@ -596,6 +605,11 @@ export function extractCompetitiveContextFromResolvedInput(
     /\b(b2b services|business services|services|business|company)\b/i.test(extractedContext.marketFocus ?? '');
 
   if (hasSpecificContext && !sparseGenericContext) return extractedContext;
+
+  // U4 Hardening: Competitor Intelligence must not FABRICATE the owner's identity from a hardcoded template.
+  // When the canonical projection is authoritative, abstain and rely on canonical identity (supplied
+  // upstream via resolveCompanyProjection); flag OFF (default) preserves the legacy sparse-context fallback.
+  if (!mayFabricateSparseIdentity(isCompanyProjectionAuthoritative())) return extractedContext;
 
   return {
     ...extractedContext,

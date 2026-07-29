@@ -31,6 +31,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import { adoptLeadCompanyIdentity } from './companyIntelligence/adoption/consumers/leadIntelligenceConsumer';
 
 export type CompanyContextField = {
   /** Lower-cased + trimmed values for matching. Deduped. */
@@ -235,12 +236,17 @@ export async function loadCompanyContext(companyId: string): Promise<CompanyCont
     safeFetchProfile(companyId, loadErrors),
   ]);
 
+  // U3·Consumer-5: the source-recommendation surface consumes the company's `category` (→ industry
+  // bucket). It obtains that identity through the canonical projection seam. Flag OFF (default) ⇒ same
+  // profile row, byte-identical. `industry`/`category_list` are not projection-owned and are unchanged.
+  const identityProfile = adoptLeadCompanyIdentity(profile, companyId, new Date().toISOString());
+
   // ---- industry ----
   appendField(context.industry, splitToList(company?.industry), 'companies.industry');
   appendField(context.industry, splitToList(profile?.industry_list), 'company_profiles.industry_list');
   appendField(context.industry, splitToList(profile?.industry), 'company_profiles.industry');
-  appendField(context.industry, splitToList(profile?.category_list), 'company_profiles.category_list');
-  appendField(context.industry, splitToList(profile?.category), 'company_profiles.category');
+  appendField(context.industry, splitToList(identityProfile?.category_list), 'company_profiles.category_list');
+  appendField(context.industry, splitToList(identityProfile?.category), 'company_profiles.category');
 
   // ---- products ----
   // Phase-1 simplification: products & services share company_profiles.products_services

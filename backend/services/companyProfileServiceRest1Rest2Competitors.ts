@@ -12,6 +12,8 @@ import { isSelfOrPlatformDomain } from './companyProfile/competitorDomainFilter'
  */
 
 import { randomUUID } from 'crypto';
+import { isCompanyUnderstandingEnabled } from './companyIntelligence/flags';
+import { produceCanonicalIdentity, writeInputsFromProfileAndExtraction } from './companyIntelligence/production/canonicalIdentityProducer';
 import { runCompletionWithOperation } from './aiGateway';
 import { refineLanguageOutput } from './languageRefinementService';
 import { supabase } from '../db/supabaseClient';
@@ -792,6 +794,12 @@ async function buildRefinedPayload(
       competitor_intelligence: competitorIntelligence.length > 0 ? competitorIntelligence : workingProfile.report_settings?.competitor_intelligence ?? null,
       industry_review: industryReview,
       market_pulse: marketPulseWithAlternatives,
+      // U4.5: produce + persist canonical evidence-derived identity (SHADOW — gated by
+      // COMPANY_UNDERSTANDING_ENABLED, default OFF). Legacy identity fields above are unchanged; this is the
+      // first canonical writer. When absent (flag OFF) the prior value is preserved by the spread above.
+      ...(isCompanyUnderstandingEnabled()
+        ? { canonical_understanding: produceCanonicalIdentity(writeInputsFromProfileAndExtraction(workingProfile as unknown as Parameters<typeof writeInputsFromProfileAndExtraction>[0], extraction as unknown as Record<string, { value?: unknown; values?: unknown } | undefined>, new Date().toISOString())).record }
+        : {}),
     },
   };
 }

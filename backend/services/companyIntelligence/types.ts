@@ -22,7 +22,16 @@ export type CompanyDimensionScore = DimensionScore<CompanyScoreDimension>;
 export type CompanyScore = CanonicalScore<CompanyScoreDimension>;
 
 // ── World view (adopted from the ontology canonical design) ─────────────────────────────────────
-export interface CompanyWorldView { category?: string; businessModel?: string; primaryMotion?: string; marketPosition?: string; }
+export interface CompanyWorldView {
+  category?: string;
+  businessModel?: string;
+  primaryMotion?: string;   // operating_model (Policy A — abstains unless evidenced)
+  marketPosition?: string;  // domain_role (Policy A — abstains unless evidenced)
+  // U4.6 (DECISION-001 Policy B — evidence-derived): additive/optional. The C3 seam view + consumers read
+  // only the fields above, so the projection contract is unchanged.
+  providerType?: string;
+  solutionDomains?: string[];
+}
 
 // ── Company facet domains (canonical ontology; every field abstains when unevidenced) ───────────
 export interface IdentityValue { name?: string; domain?: string; legalName?: string; foundedYear?: string; geography?: string; }
