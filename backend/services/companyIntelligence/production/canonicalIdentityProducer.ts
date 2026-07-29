@@ -42,7 +42,13 @@ export function collectWriteEvidence(input: WriteEvidenceInputs): EvidenceSource
       companyId: input.companyId, observedAt: input.asOf,
       name: clean(input.name), domain: clean(input.domain),
       products: list(input.products), services: list(input.services),
-      industry: clean(input.industry), competitors: list(input.competitors),
+      // PRODUCTION-IDENTITY-IMPLEMENTATION-001 Phase A.5 — Canonical Independence:
+      // `input.industry` traces to the DERIVED legacy `profile.industry` classification and MUST NOT
+      // participate. Industry is derived solely from grounded evidence (the `ai` extraction source below /
+      // website crawl). Removing it makes the canonical producer mathematically independent of the legacy
+      // stored identity (profile.industry / profile.category / entity_archetype / industry_review), none of
+      // which now reach EvidenceSources. Quote-or-abstain: with no grounded industry evidence, industry abstains.
+      competitors: list(input.competitors),
     },
   };
   if (input.ai) {
@@ -125,7 +131,10 @@ export function writeInputsFromProfileAndExtraction(profile: ProfileFactsLike, e
     name: clean(profile.name),
     domain: clean(profile.website_url),
     products: factsProducts,
-    industry: clean(profile.industry),
+    // Phase A.5 — do NOT source the derived legacy `profile.industry` classification into the producer.
+    // Industry evidence comes only from the grounded `ai` extraction (`extraction.industry`) below. This
+    // keeps WriteEvidenceInputs.industry unpopulated on the write path, so no derived identity can leak in
+    // even if `collectWriteEvidence` were changed later. (Interface field kept optional for compatibility.)
     competitors: list(profile.competitors_list) ?? list(profile.competitors),
     ai: extraction
       ? {
