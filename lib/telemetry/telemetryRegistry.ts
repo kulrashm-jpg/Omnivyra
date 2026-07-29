@@ -47,6 +47,7 @@ export const TELEMETRY_EVENTS: Record<TelemetryEventType, TelemetryEventDefiniti
   'campaign.resumed':       def('campaign.resumed', 'campaign', 'campaign', 'count', DAYS(365), {}, 'A campaign was resumed.'),
   'campaign.completed':     def('campaign.completed', 'campaign', 'campaign', 'count', LIFETIME, {}, 'A campaign reached completion.'),
   'campaign.archived':      def('campaign.archived', 'campaign', 'campaign', 'count', LIFETIME, {}, 'A campaign was archived.'),
+  'campaign.recommended':   def('campaign.recommended', 'campaign', 'campaign', 'count', DAYS(365), { source: 'string' }, 'A campaign was recommended by the intelligence layer.'),
   // ── ai ───────────────────────────────────────────────────────────────────────
   'ai.generated':           def('ai.generated', 'ai', 'ai_asset', 'count', DAYS(365), { creatorType: 'string', assetType: 'string' }, 'An asset was produced with AI.'),
   'ai.accepted':            def('ai.accepted', 'ai', 'ai_suggestion', 'rate', DAYS(365), { surface: 'string' }, 'An AI suggestion was accepted.'),

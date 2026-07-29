@@ -15,6 +15,7 @@ import {
   computeLeadDedupeKey,
   buildCampaignIntelligence,
   buildTimeline,
+  materializeCanonicalScores,
   CANONICAL_LEAD_SOURCE_LABELS,
   type CanonicalLead,
   type CanonicalLeadView,
@@ -34,7 +35,10 @@ function toRow(lead: CanonicalLead): Record<string, unknown> {
     source: lead.source,
     unified_person_id: lead.unifiedPersonId ?? null,
     status: lead.status ?? null,
-    scores: lead.scores ?? {},
+    // G3 (LC-102): materialize canonical scores via the ONE scorer
+    // (buildBuyingIntentProfile) so website/capture leads persist a real intent
+    // instead of null. No-op for source-scored leads (System-B) and when disabled.
+    scores: materializeCanonicalScores(lead),
     identity: lead.identity,
     attribution: lead.attribution,
     campaign: buildCampaignIntelligence(lead),

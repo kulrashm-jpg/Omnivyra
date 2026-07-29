@@ -26,5 +26,6 @@ export * from './leadKey';
 export * from './profileTypes';
 export * from './profileEnrichment';
 export * from './buyingIntent';
+export * from './scoreMaterialization';
 export * from './leadActions';
 export * from './companyIntelligence';

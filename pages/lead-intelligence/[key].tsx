@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '@/components/CompanyContext';
 import LeadProfileView from '@/components/lead-intelligence/LeadProfileView';
+import OperationalPanel from '@/components/lead-intelligence/OperationalPanel';
 import { fetchLeadProfile } from '@/components/lead-intelligence/leadIntelligenceClient';
 import type { LeadProfile } from '@/lib/leadIntelligence';
 
@@ -53,7 +54,11 @@ export default function LeadProfilePage() {
           ) : error ? (
             <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error}</div>
           ) : profile ? (
-            <LeadProfileView profile={profile} onExport={onExport} />
+            <>
+              {/* W2b — operational console (consumes the single Operations API) */}
+              <OperationalPanel companyId={selectedCompanyId} entityId={profile.leadKey} />
+              <LeadProfileView profile={profile} onExport={onExport} />
+            </>
           ) : null}
         </div>
       </main>

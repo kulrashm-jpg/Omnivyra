@@ -47,6 +47,7 @@ import {
   websiteBehaviourProjection,
   sourceDetailProjection,
   buildBuyingIntentProfile,
+  ensureMaterializedScores,
   buildLeadActionPlan,
   buildCompanyIntelligence,
   resolveCompanyKey,
@@ -100,7 +101,11 @@ async function collectViews(companyId: string, readers: LeadSourceReaders): Prom
     ...legacyLeads.map((r) => projectExistingRow('website', r)),
     ...canonical.map((r) => projectExistingRow('crm', r)),
   ];
-  return dedupeViews(views);
+  // G3 (LC-102): guarantee every view carries a canonical score from the ONE scorer.
+  // Durable rows are already materialized at write; legacy/unbackfilled rows are
+  // materialized here so List, Detail, Filters and Sorting all agree. No-op for
+  // source-scored leads and when the kill-switch is off.
+  return dedupeViews(views).map(ensureMaterializedScores);
 }
 
 /** The unified, paginated, filtered, searched lead read. */

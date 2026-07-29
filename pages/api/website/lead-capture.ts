@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { captureWebsiteLead, LeadCaptureError } from '../../../backend/services/leadCaptureService';
 import { resolveTenantForWebsite } from '../../../backend/services/tenantResolutionService';
+import { evaluateCaptureProtection } from '../../../backend/services/leadCaptureProtection';
 import { LEAD_CAPTURE_INTENTS, isLeadIntent } from '../../../lib/website/leadCaptureConfig';
 
 /**
@@ -27,6 +28,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (str(body.company_website)) {
     const cfg = isLeadIntent(intent) ? LEAD_CAPTURE_INTENTS[intent] : LEAD_CAPTURE_INTENTS.contact_sales;
     return res.status(200).json({ status: 'created', leadId: null, intent: cfg.intent, confirmation: cfg.confirmation });
+  }
+
+  // G1 (LC-102): abuse protection WRAPS the existing pipeline — runs after the
+  // honeypot, before tenant resolution. Fail-open; never blocks legitimate capture.
+  const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0]?.trim() || null;
+  const guard = await evaluateCaptureProtection({
+    ip,
+    userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
+    email: str(body.email),
+    nonce: str(body.submission_id) ?? str(body.nonce),
+    captchaToken: str(body.captcha_token) ?? str(body.cf_turnstile_response),
+  });
+  if (!guard.allowed) {
+    if (guard.retryAfterMs) res.setHeader('Retry-After', String(Math.ceil(guard.retryAfterMs / 1000)));
+    return res.status(guard.httpStatus ?? 429).json({ error: guard.reason ?? 'blocked' });
   }
 
   // Canonical tenant resolution — the only entry point into public ingestion.

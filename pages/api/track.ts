@@ -6,6 +6,11 @@ import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFact
  * Receives batched events from tracker.js v4.
  * Body: { events: TrackEvent[] }  OR single TrackEvent (backward-compat)
  *
+ * G4 (LC-102): this is the BLOG CONTENT-PERFORMANCE tracker (writes `blog_analytics`),
+ * NOT the canonical lead/visitor tracker. The canonical lead pipeline is
+ * /omnivera-tracker.js → /api/website-events/track → tracking_events. See
+ * lib/website/canonicalTracking.ts. Do not route lead/visitor behaviour here.
+ *
  * Security: bot filter, account validation, domain validation.
  * New in v4: referrer_source, intent_meta stored per event.
  */
