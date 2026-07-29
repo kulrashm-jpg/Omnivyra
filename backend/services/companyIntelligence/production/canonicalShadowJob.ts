@@ -70,24 +70,90 @@ export function applyCanonicalUnderstandingOnly(
   return { ...(existing ?? {}), canonical_understanding: record };
 }
 
-/**
- * Round-trip-safe canonical serialization: recursively SORT object keys and drop `undefined`, so the value
- * is compared by structure/content — not by key insertion order. PostgreSQL `jsonb` does not preserve object
- * key order, so a snapshot read back after persistence has a different key order than the freshly-produced
- * record; a plain `JSON.stringify` comparison then spuriously differs and the idempotent no-op never fires.
- * Sorting both sides makes the comparison stable across a DB round-trip. (Arrays keep their order — order is
- * semantic there.)
- */
-function stableStringify(v: unknown): string {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v ?? null);
-  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
-  const obj = v as Record<string, unknown>;
-  const keys = Object.keys(obj).filter((k) => obj[k] !== undefined).sort();
-  return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+// ── Semantic idempotency — persist only when the MEANINGFUL company identity changes, never on metadata ──
+
+/** The meaningful identity extracted from a canonical record — the ONLY thing that gates persistence. */
+interface SemanticIdentity {
+  category: string | null;
+  segment: string | null;          // industry / market segment
+  businessModel: string | null;
+  providerType: string | null;
+  solutionDomains: string[] | null;
+  customerSegments: string[] | null;
+  products: string[] | null;
+  services: string[] | null;
+  name: string | null;
+  domain: string | null;
 }
 
-/** Structural equality that survives PostgreSQL jsonb persistence (key-order- and undefined-insensitive). */
-const sameCanonical = (a: unknown, b: unknown): boolean => stableStringify(a ?? null) === stableStringify(b ?? null);
+const normStr = (v: unknown): string | null => {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  return s ? s : null;
+};
+const normList = (v: unknown): string[] | null => {
+  if (!Array.isArray(v)) return null;
+  const out = v.map((x) => String(x).trim().toLowerCase()).filter(Boolean).sort(); // order-insensitive
+  return out.length ? out : null;
+};
+
+/**
+ * Extract the semantic identity from a canonical record. Deliberately EXCLUDES `built_at`, freshness
+ * timestamps, evidence refs, version, producer, and every other metadata/observability field — those must
+ * never trigger a write.
+ */
+function extractSemanticIdentity(rec: unknown): SemanticIdentity {
+  const f = ((rec as { understanding?: { facets?: Record<string, { value?: Record<string, unknown> | null }> } })?.understanding?.facets) ?? {};
+  const wv = (f.worldView?.value ?? {}) as Record<string, unknown>;
+  const id = (f.identity?.value ?? {}) as Record<string, unknown>;
+  const off = (f.offerings?.value ?? {}) as Record<string, unknown>;
+  const cust = (f.customers?.value ?? {}) as Record<string, unknown>;
+  const mp = (f.marketPosition?.value ?? {}) as Record<string, unknown>;
+  return {
+    category: normStr(wv.category),
+    segment: normStr(mp.segment),
+    businessModel: normStr(wv.businessModel),
+    providerType: normStr(wv.providerType),
+    solutionDomains: normList(wv.solutionDomains),
+    customerSegments: normList(cust.segments),
+    products: normList(off.products),
+    services: normList(off.services),
+    name: normStr(id.name),
+    domain: normStr(id.domain),
+  };
+}
+
+const grounded = (v: string | string[] | null): boolean => v !== null && (Array.isArray(v) ? v.length > 0 : v.length > 0);
+const fieldEqual = (a: string | string[] | null, b: string | string[] | null): boolean =>
+  (Array.isArray(a) || Array.isArray(b)) ? JSON.stringify(a) === JSON.stringify(b) : a === b;
+
+export type EvolutionReason = 'INITIAL' | 'IMPROVED' | 'CHANGED' | 'IDENTICAL' | 'DEGRADATION_PROTECTED';
+
+/**
+ * Evidence-evolution persistence policy (per-field, composed to a whole-record decision):
+ *   A  abstention → grounded  = IMPROVED  → persist (knowledge gained)
+ *   B  grounded   → same       = no signal (semantically identical)
+ *   C  grounded   → different  = CHANGED   → persist (identity evolved)
+ *   D  grounded   → abstention = DEGRADATION → do NOT auto-overwrite (identity is never erased by a transient
+ *                                              loss of evidence; a real change needs an explicit freshness policy)
+ * Composition: ANY degradation (D) blocks the write even if other fields improved/changed — a later stable
+ * extraction persists cleanly. Otherwise any improvement (A) or change (C) persists; a purely-identical or
+ * metadata-only diff (built_at, freshness, ordering, evidence) does not.
+ */
+export function decideCanonicalPersistence(prior: unknown, next: unknown): { persist: boolean; reason: EvolutionReason } {
+  if (prior == null) return { persist: true, reason: 'INITIAL' };
+  const a = extractSemanticIdentity(prior);
+  const b = extractSemanticIdentity(next);
+  let improved = false, changed = false, degraded = false;
+  for (const k of Object.keys(a) as Array<keyof SemanticIdentity>) {
+    const pg = grounded(a[k]), ng = grounded(b[k]);
+    if (!pg && ng) improved = true;                                 // A
+    else if (pg && ng && !fieldEqual(a[k], b[k])) changed = true;   // C
+    else if (pg && !ng) degraded = true;                            // D
+  }
+  if (degraded) return { persist: false, reason: 'DEGRADATION_PROTECTED' };
+  if (improved || changed) return { persist: true, reason: changed ? 'CHANGED' : 'IMPROVED' };
+  return { persist: false, reason: 'IDENTICAL' };
+}
 
 /** Persistence seam. The writer MUST update only the report_settings column — never identity columns. */
 export interface ShadowPersistDeps {
@@ -98,7 +164,8 @@ export interface ShadowPersistDeps {
 export interface ShadowJobResult {
   companyId: string;
   executed: true;
-  wrote: boolean;        // false ⇒ idempotent no-op (canonical already identical)
+  wrote: boolean;        // false ⇒ semantic no-op (identity unchanged / metadata-only / degradation-protected)
+  reason: EvolutionReason; // why the write did/didn't happen (observability)
   abstained: string[];
   version: number;
   builtAt: string;
@@ -107,7 +174,9 @@ export interface ShadowJobResult {
 
 /**
  * Orchestrate the isolated shadow job: produce canonical from grounded evidence, then persist ONLY
- * canonical_understanding — idempotently (skip the write when the canonical record is unchanged).
+ * canonical_understanding — with SEMANTIC idempotency. The write fires only when the meaningful company
+ * identity evolves (improvement or change); metadata-only diffs (built_at, freshness, ordering, evidence)
+ * and transient evidence degradations never trigger a write. See decideCanonicalPersistence.
  */
 export async function runCanonicalShadowJob(
   companyId: string,
@@ -119,11 +188,12 @@ export async function runCanonicalShadowJob(
   const { record, abstained } = produceShadowCanonical(evidence, asOf);
   const existing = await deps.readReportSettings(companyId);
   const prior = (existing ?? {})['canonical_understanding'];
-  if (sameCanonical(prior, record)) {
-    return { companyId, executed: true, wrote: false, abstained, version: record.version, builtAt: record.built_at, durationMs: Date.now() - t0 };
+  const decision = decideCanonicalPersistence(prior, record);
+  if (!decision.persist) {
+    return { companyId, executed: true, wrote: false, reason: decision.reason, abstained, version: record.version, builtAt: record.built_at, durationMs: Date.now() - t0 };
   }
   await deps.writeReportSettings(companyId, applyCanonicalUnderstandingOnly(existing, record));
-  return { companyId, executed: true, wrote: true, abstained, version: record.version, builtAt: record.built_at, durationMs: Date.now() - t0 };
+  return { companyId, executed: true, wrote: true, reason: decision.reason, abstained, version: record.version, builtAt: record.built_at, durationMs: Date.now() - t0 };
 }
 
 /**

@@ -57,11 +57,12 @@ describe('Phase D.1 · idempotency survives a PostgreSQL jsonb round-trip', () =
     expect(deps.store().canonical_understanding).toBeDefined();
   });
 
-  it('a genuinely different snapshot (different asOf) still writes', async () => {
+  it('timestamp-only change (different asOf, same evidence) does NOT write (semantic idempotency)', async () => {
     const deps = jsonbDeps({});
-    await runCanonicalShadowJob('embro', ASOF, EVIDENCE, deps);
-    const changed = await runCanonicalShadowJob('embro', '2026-07-30T00:00:00.000Z', EVIDENCE, deps);
-    expect(changed.wrote).toBe(true);            // built_at differs ⇒ not a no-op
-    expect(deps.writes).toBe(2);
+    const first = await runCanonicalShadowJob('embro', ASOF, EVIDENCE, deps);
+    const second = await runCanonicalShadowJob('embro', '2026-07-30T00:00:00.000Z', EVIDENCE, deps);
+    expect(first.wrote).toBe(true);
+    expect(second.wrote).toBe(false);            // identity unchanged; only built_at differs ⇒ metadata-only, no write
+    expect(deps.writes).toBe(1);
   });
 });
