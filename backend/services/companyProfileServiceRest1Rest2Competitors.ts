@@ -122,6 +122,7 @@ import {
   extractCompetitiveContextFromProfile,
   getFinalCompetitors,
   hasPassedFinalCompetitorGate,
+  competitorAlwaysRankEnabled,
   HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE,
   splitRankedCompetitorsForOutput,
   type CompanyCompetitiveContext,
@@ -199,7 +200,7 @@ export async function revalidateStoredCompetitorsForProfileRead(profile: Company
     const splitReadCompetitors = splitRankedCompetitorsForOutput(finalCompetitors, 8, 0);
     assertCompetitorOutputPartition(splitReadCompetitors, 'profile_read_competitor_output');
     const finalNames = splitReadCompetitors.competitors
-      .filter((competitor) => hasPassedFinalCompetitorGate(competitor, 42))
+      .filter((competitor) => competitorAlwaysRankEnabled() || hasPassedFinalCompetitorGate(competitor, 42))
       .map((competitor) => competitor.name);
     if (finalNames.length !== rawNames.length || finalNames.some((name, index) => name !== rawNames[index])) {
       console.info('[company-profile][stored-competitors-revalidated]', {
@@ -626,7 +627,13 @@ async function buildRefinedPayload(
     if (retryRankedCompetitors.length > rankedCompetitors.length) rankedCompetitors = retryRankedCompetitors;
   }
 
-  rankedCompetitors = rankedCompetitors.filter((competitor) => hasPassedFinalCompetitorGate(competitor, 42));
+  // COMPETITOR-RANKING-IMPLEMENTATION-001 — in always-rank mode the engine has
+  // already surfaced-and-tiered the candidates, so re-applying the hard score gate
+  // here would re-suppress exactly what we intend to show. Skip it; keep the ranked
+  // list. Legacy mode retains the original hard filter byte-for-byte.
+  if (!competitorAlwaysRankEnabled()) {
+    rankedCompetitors = rankedCompetitors.filter((competitor) => hasPassedFinalCompetitorGate(competitor, 42));
+  }
 
   if (rankedCompetitors.length < 3 && competitorDiscovery.candidates.length > 0) {
     for (const recoveryContext of buildRefineRecoveryContexts({
@@ -644,9 +651,12 @@ async function buildRefinedPayload(
         useStoredCache: false,
         companyId: workingProfile.company_id,
         includeMarketSubstitutes: true,
-      })).filter((competitor) => hasPassedFinalCompetitorGate(competitor, 42));
-      if (recoveryRankedCompetitors.length > rankedCompetitors.length) {
-        rankedCompetitors = recoveryRankedCompetitors;
+      }));
+      const recoveryFiltered = competitorAlwaysRankEnabled()
+        ? recoveryRankedCompetitors
+        : recoveryRankedCompetitors.filter((competitor) => hasPassedFinalCompetitorGate(competitor, 42));
+      if (recoveryFiltered.length > rankedCompetitors.length) {
+        rankedCompetitors = recoveryFiltered;
       }
       if (rankedCompetitors.length >= 3) break;
     }

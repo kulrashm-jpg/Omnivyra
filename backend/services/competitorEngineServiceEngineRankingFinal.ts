@@ -39,7 +39,7 @@ import {
   type CompetitorFeedbackMemory,
 } from './competitorFeedbackService';
 
-import { type CompetitorSource, type CompetitorClassification, type CompetitorTier, type CompetitorThreatLevel, type CompetitorPositioning, type CompanyCompetitiveContext, type CompetitorCandidate, type RankedCompetitor, type ScoredCompetitor, type CompetitorScoreBreakdown, TRUSTED_SOURCES, FINAL_COMPETITOR_MIN_SCORE, MARKET_SUBSTITUTE_MAX_COUNT, FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP, FINAL_COMPETITOR_MIN_ICP_OVERLAP, FINAL_COMPETITOR_MIN_FINAL_SCORE, FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE, FINAL_COMPETITOR_MIN_COUNT, FINAL_COMPETITOR_MAX_COUNT, HIGH_AUTHORITY_MISMATCH_AUTHORITY, HIGH_AUTHORITY_MISMATCH_PROBLEM, FINAL_BLOCKED_SOURCES, TIER_PRIORITY, COMPANY_SUFFIX_PATTERN, UNRELATED_COMPETITOR_TEXT_PATTERN, AI_FEATURE_TOKENS, DELIVERY_MODEL_TOKENS, cleanText, firstFromList, splitToList, normalizeCompetitorDomain, domainToName, tokenizeCompetitorText, overlapRatio, boostedOverlapRatio, roundDimension, inferSegment, classifyRevenueTier, revenueAdjustment, toPercentScore, competitorIntelligenceTier, weightedCompetitorScore, buildCompanyCapabilityVector, buildCandidateCapabilityVector, capabilityVectorOverlap, discoverySourceFromCandidate, candidateDiscoverySources, employeeScaleFitForCandidate, classifyNormalizedCompetitorCategory, MEDIA_CONTENT_BRAND_SIGNALS, classifyProductFirstCompetition, competitorReasoning, failedCompetitorDimensions, computeCompetitorAuthorityScore, candidateSignalText, inferCompetitorIntelligence, competitorIntelligenceText, includesAnyToken, contextLabel } from './competitorEngineServiceModel';
+import { type CompetitorSource, type CompetitorClassification, type CompetitorTier, type CompetitorThreatLevel, type CompetitorPositioning, type CompanyCompetitiveContext, type CompetitorCandidate, type RankedCompetitor, type ScoredCompetitor, type CompetitorScoreBreakdown, TRUSTED_SOURCES, FINAL_COMPETITOR_MIN_SCORE, MARKET_SUBSTITUTE_MAX_COUNT, FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP, FINAL_COMPETITOR_MIN_ICP_OVERLAP, FINAL_COMPETITOR_MIN_FINAL_SCORE, FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE, FINAL_COMPETITOR_MIN_COUNT, FINAL_COMPETITOR_MAX_COUNT, HIGH_AUTHORITY_MISMATCH_AUTHORITY, HIGH_AUTHORITY_MISMATCH_PROBLEM, FINAL_BLOCKED_SOURCES, TIER_PRIORITY, COMPANY_SUFFIX_PATTERN, UNRELATED_COMPETITOR_TEXT_PATTERN, AI_FEATURE_TOKENS, DELIVERY_MODEL_TOKENS, cleanText, firstFromList, splitToList, normalizeCompetitorDomain, domainToName, tokenizeCompetitorText, overlapRatio, boostedOverlapRatio, roundDimension, inferSegment, classifyRevenueTier, revenueAdjustment, toPercentScore, competitorIntelligenceTier, weightedCompetitorScore, buildCompanyCapabilityVector, buildCandidateCapabilityVector, capabilityVectorOverlap, discoverySourceFromCandidate, candidateDiscoverySources, employeeScaleFitForCandidate, classifyNormalizedCompetitorCategory, MEDIA_CONTENT_BRAND_SIGNALS, classifyProductFirstCompetition, competitorReasoning, failedCompetitorDimensions, computeCompetitorAuthorityScore, candidateSignalText, inferCompetitorIntelligence, competitorIntelligenceText, includesAnyToken, contextLabel, competitorAlwaysRankEnabled } from './competitorEngineServiceModel';
 
 import { buildCompetitorPositioning, inferCompetitorArchetypeCandidates, withArchetypeEnrichment, contextTokens, extractCompetitiveContextFromProfile, buildCompetitorFitSignals } from './competitorEngineServiceEngineDiscovery';
 
@@ -118,14 +118,82 @@ function dedupeRankedCompetitors(competitors: RankedCompetitor[]): RankedCompeti
   return Array.from(byKey.values());
 }
 
+function competitorConfidenceValue(competitor: RankedCompetitor): number {
+  return Number(
+    competitor.enrichment_confidence_score ??
+      competitor.enrichment?.confidence_score ??
+      (competitor.score_card?.confidence != null ? Number(competitor.score_card.confidence) / 100 : 0),
+  );
+}
+
+function competitorEvidenceQuality(competitor: RankedCompetitor): number {
+  // Evidence quality ≈ how much grounded signal backs the candidate. Reuses the
+  // same overlap dimensions the scoring engine already produced (no new scoring).
+  return (
+    Number(competitor.problem_overlap ?? 0) +
+    Number(competitor.icp_overlap ?? 0) +
+    Number(competitor.market_overlap ?? 0) +
+    (Array.isArray(competitor.reasoning) ? competitor.reasoning.length * 0.1 : 0)
+  );
+}
+
+function competitorFreshnessValue(competitor: RankedCompetitor): number {
+  const observedAt =
+    (competitor as { observed_at?: string | null }).observed_at ??
+    (competitor as { latest_evidence_at?: string | null }).latest_evidence_at ??
+    null;
+  if (!observedAt) return 0;
+  const ts = new Date(observedAt).getTime();
+  return Number.isFinite(ts) ? ts : 0;
+}
+
 function sortFinalCompetitors(left: RankedCompetitor, right: RankedCompetitor): number {
+  // COMPETITOR-RANKING-IMPLEMENTATION-001 ordering:
+  // Tier → Overall Score → Confidence → Evidence Quality → Freshness → Name.
   const tierDelta = (TIER_PRIORITY[left.tier] ?? 99) - (TIER_PRIORITY[right.tier] ?? 99);
   if (tierDelta !== 0) return tierDelta;
   const finalDelta = Number(right.final_score ?? 0) - Number(left.final_score ?? 0);
   if (finalDelta !== 0) return finalDelta;
   const relevanceDelta = Number(right.relevance_score ?? 0) - Number(left.relevance_score ?? 0);
   if (relevanceDelta !== 0) return relevanceDelta;
+  const confidenceDelta = competitorConfidenceValue(right) - competitorConfidenceValue(left);
+  if (confidenceDelta !== 0) return confidenceDelta;
+  const evidenceDelta = competitorEvidenceQuality(right) - competitorEvidenceQuality(left);
+  if (evidenceDelta !== 0) return evidenceDelta;
+  const freshnessDelta = competitorFreshnessValue(right) - competitorFreshnessValue(left);
+  if (freshnessDelta !== 0) return freshnessDelta;
   return left.name.localeCompare(right.name);
+}
+
+/**
+ * COMPETITOR-RANKING-IMPLEMENTATION-001 — the visibility floor for always-rank mode.
+ *
+ * Returns false ONLY on genuine insufficiency (invalid / malformed / blocked /
+ * unrelated / no-evidence). Confidence and score are deliberately NOT consulted
+ * here — they drive ranking (tier + sort), not visibility. A candidate that clears
+ * this floor is surfaced with whatever tier the scoring engine already assigned.
+ */
+function hasMeaningfulCompetitorEvidence(
+  competitor: RankedCompetitor,
+  context: CompanyCompetitiveContext,
+): boolean {
+  if (!cleanText(competitor.name)) return false; // malformed / no name
+  if (!competitor.source || FINAL_BLOCKED_SOURCES.has(competitor.source)) return false; // blocked source
+  // Self/platform domains are scrubbed downstream (refine + read-time scrub).
+  if (UNRELATED_COMPETITOR_TEXT_PATTERN.test(competitorEvidenceText(competitor))) return false; // genuinely unrelated
+  // Semantic category guard is a "not a competitor in this category" determination
+  // (e.g. an ai_companion app for a mental-wellness product), NOT a confidence/score
+  // threshold — so it remains a genuine suppression, protecting against cross-category
+  // mislabeling. Confidence and score are what we deliberately STOP gating on.
+  if (!hasStrictCategoryFit(competitor, context)) return false;
+  const evidenceSignal =
+    Number(competitor.score_card?.overallScore ?? 0) > 0 ||
+    Number(competitor.relevance_score ?? 0) > 0 ||
+    Number(competitor.final_score ?? 0) > 0 ||
+    Number(competitor.problem_overlap ?? 0) > 0 ||
+    Number(competitor.icp_overlap ?? 0) > 0 ||
+    Number(competitor.market_overlap ?? 0) > 0;
+  return evidenceSignal; // no meaningful evidence at all → suppress
 }
 
 function finalCompetitorOutputLimit(max?: number): number {
@@ -155,13 +223,20 @@ function filterFinalCompetitorsWithAudit(params: {
   max?: number;
   minScore?: number;
   feedbackMemory?: CompetitorFeedbackMemory | null;
+  alwaysRank?: boolean;
 }): RankedCompetitor[] {
   const minScore = params.minScore ?? FINAL_COMPETITOR_MIN_SCORE;
+  // Explicit override wins (the strategic-report path opts OUT to keep its strict
+  // quality gate); otherwise the global kill-switch decides. Default ON.
+  const alwaysRank = params.alwaysRank ?? competitorAlwaysRankEnabled();
   const audit = {
     initial_candidates: params.competitors.length,
+    mode: alwaysRank ? ('always_rank' as const) : ('legacy_threshold' as const),
     removed_due_to_threshold: 0,
     removed_due_to_category: 0,
     removed_due_to_confidence: 0,
+    removed_insufficient_evidence: 0,
+    demoted_not_suppressed: 0,
     suppressed_by_feedback: [] as string[],
     boosted_by_feedback: [] as string[],
     final_count: 0,
@@ -169,6 +244,7 @@ function filterFinalCompetitorsWithAudit(params: {
   };
   const filtered: RankedCompetitor[] = [];
   const fallbackFiltered: RankedCompetitor[] = [];
+  const ranked: RankedCompetitor[] = [];
   const rejected: DebugCompetitorScoring['rejected'] = [];
 
   for (const competitor of dedupeRankedCompetitors(params.competitors)) {
@@ -177,6 +253,34 @@ function filterFinalCompetitorsWithAudit(params: {
       audit.suppressed_by_feedback.push(competitor.name);
       continue;
     }
+
+    // COMPETITOR-RANKING-IMPLEMENTATION-001 — always-rank surfacing.
+    // Confidence and score no longer HIDE a candidate; they RANK it. Only
+    // genuinely insufficient evidence (invalid / blocked / unrelated / no-signal)
+    // is suppressed. The scoring engine's tier is trusted as-is (no re-derivation
+    // from numeric business thresholds here), so a weak candidate that scored into
+    // Tier 2/3 stays a Tier 2/3 "Likely/Related" instead of vanishing.
+    if (alwaysRank) {
+      if (!hasMeaningfulCompetitorEvidence(competitor, params.context)) {
+        audit.removed_insufficient_evidence += 1;
+        rejected.push({
+          company: competitor.name,
+          score: competitor.score_card?.overallScore ?? competitor.relevance_score ?? 0,
+          failedDimensions: ['insufficientEvidence', ...failedCompetitorDimensions(competitor)],
+        });
+        continue;
+      }
+      const boostedRanked = applyCompetitorFeedbackBoost(competitor, feedbackDecision);
+      if (boostedRanked !== competitor) audit.boosted_by_feedback.push(competitor.name);
+      // Transparency only — candidates below the legacy gate are demoted (kept at
+      // their lower tier), not dropped.
+      if (!hasPassedFinalCompetitorGate(boostedRanked as Partial<RankedCompetitor>, minScore)) {
+        audit.demoted_not_suppressed += 1;
+      }
+      ranked.push(boostedRanked);
+      continue;
+    }
+
     const enrichmentConfidence = Number(
       competitor.enrichment_confidence_score ?? competitor.enrichment?.confidence_score ?? 0,
     );
@@ -217,7 +321,7 @@ function filterFinalCompetitorsWithAudit(params: {
     }
   }
 
-  const accepted = filtered.length > 0 ? filtered : fallbackFiltered;
+  const accepted = alwaysRank ? ranked : filtered.length > 0 ? filtered : fallbackFiltered;
   const sortedCompetitors = accepted
     .sort(sortFinalCompetitors)
     .filter((competitor, _index, sorted) => {
@@ -430,8 +534,10 @@ export async function getFinalCompetitors(params: {
   companyId?: string | null;
   feedbackMemory?: CompetitorFeedbackMemory | null;
   includeMarketSubstitutes?: boolean;
+  alwaysRank?: boolean;
 }): Promise<RankedCompetitor[]> {
   const minScore = params.minScore ?? FINAL_COMPETITOR_MIN_SCORE;
+  const alwaysRank = params.alwaysRank ?? competitorAlwaysRankEnabled();
   const feedbackMemory = params.feedbackMemory ?? (params.companyId
     ? await loadCompetitorFeedbackMemory({
         companyId: params.companyId,
@@ -455,8 +561,13 @@ export async function getFinalCompetitors(params: {
       candidates: enriched,
       context: params.context,
       max: finalCompetitorRankingPoolSize(enriched.length, params.max),
-      minScore: FINAL_COMPETITOR_MIN_SCORE,
-      allowTrustedBelowThreshold: false,
+      // COMPETITOR-RANKING-IMPLEMENTATION-001 — in always-rank mode the ranking
+      // stage no longer HIDES sub-threshold candidates; it lets them through with
+      // their score so the tier-based final filter can surface & rank them. Legacy
+      // mode keeps the hard 40-score ranking floor byte-for-byte. (The scoring
+      // algorithm itself — scoreCompetitorCandidate — is unchanged either way.)
+      minScore: alwaysRank ? 0 : FINAL_COMPETITOR_MIN_SCORE,
+      allowTrustedBelowThreshold: alwaysRank ? true : false,
     });
     return filterFinalCompetitorsWithAudit({
       competitors: ranked,
@@ -464,6 +575,7 @@ export async function getFinalCompetitors(params: {
       max: params.max,
       minScore,
       feedbackMemory,
+      alwaysRank,
     });
   };
 
@@ -490,8 +602,10 @@ export function getFinalCompetitorsSync(params: {
   minScore?: number;
   feedbackMemory?: CompetitorFeedbackMemory | null;
   includeMarketSubstitutes?: boolean;
+  alwaysRank?: boolean;
 }): RankedCompetitor[] {
   const minScore = params.minScore ?? FINAL_COMPETITOR_MIN_SCORE;
+  const alwaysRank = params.alwaysRank ?? competitorAlwaysRankEnabled();
   const candidates = dedupeCompetitorCandidates([
     ...params.candidates,
     ...buildFeedbackMissingCompetitorCandidates(params.feedbackMemory),
@@ -502,8 +616,10 @@ export function getFinalCompetitorsSync(params: {
       candidates: pipelineCandidates,
       context: params.context,
       max: finalCompetitorRankingPoolSize(pipelineCandidates.length, params.max),
-      minScore: FINAL_COMPETITOR_MIN_SCORE,
-      allowTrustedBelowThreshold: false,
+      // COMPETITOR-RANKING-IMPLEMENTATION-001 — always-rank lets sub-threshold
+      // candidates flow to the tier-based final filter (see async pipeline note).
+      minScore: alwaysRank ? 0 : FINAL_COMPETITOR_MIN_SCORE,
+      allowTrustedBelowThreshold: alwaysRank ? true : false,
     });
     return filterFinalCompetitorsWithAudit({
       competitors: ranked,
@@ -511,6 +627,7 @@ export function getFinalCompetitorsSync(params: {
       max: params.max,
       minScore,
       feedbackMemory: params.feedbackMemory,
+      alwaysRank,
     });
   };
 
