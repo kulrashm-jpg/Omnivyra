@@ -6,6 +6,7 @@ import {
   runCampaignContentAssist,
   type ContentAssistLlm,
 } from '../../../backend/services/campaign/campaignContentAssistService';
+import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
 
 /**
  * POST /api/campaign-content/assist
@@ -46,6 +47,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+
+  // Deterministic company grounding: the assist output stays in the active
+  // company's voice and may not name any other company (leak prevention).
+  const grounding = await resolveCompanyGroundingGuard(companyId);
+  request.grounding = grounding.directive;
 
   // Output budget: one proposal ≈ the content length; alternatives scale it.
   // Content is capped at 8000 chars (~2000 tokens) in validation, so this is

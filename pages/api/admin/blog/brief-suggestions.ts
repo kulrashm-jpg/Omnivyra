@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { resolveCompanyGroundingGuard } from '../../../../backend/services/context/canonicalContentContextResolver';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
@@ -69,6 +70,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!company_id || typeof company_id !== 'string') {
     return res.status(400).json({ error: 'company_id required' });
   }
+  const grounding = await resolveCompanyGroundingGuard(company_id);
   if (!topic || typeof topic !== 'string' || !topic.trim()) {
     return res.status(400).json({ error: 'topic required' });
   }
@@ -125,7 +127,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           role: 'system',
           content:
             'You are a senior content strategist. Generate concise, practical custom suggestions for pre-generation briefing fields. ' +
-            'Output valid JSON only. Be specific and non-generic. Keep each option short (8-22 words).',
+            'Output valid JSON only. Be specific and non-generic. Keep each option short (8-22 words).\n\n' +
+            grounding.directive,
         },
         {
           role: 'user',

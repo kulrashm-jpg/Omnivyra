@@ -42,7 +42,7 @@ export interface RepurposeOutput {
 
 // ── Prompt construction ───────────────────────────────────────────────────────
 
-export function buildRepurposeSystemPrompt(): string {
+export function buildRepurposeSystemPrompt(grounding?: string): string {
   return `You are a content repurposing assistant for B2B marketing teams.
 
 CRITICAL RULES — MUST FOLLOW:
@@ -51,7 +51,7 @@ CRITICAL RULES — MUST FOLLOW:
 - Do NOT add arguments, claims, or angles absent from the provided content
 - Every sentence must be traceable back to the provided title, summary, key_insights, or headings
 - Keep brand tone consistent with the requested tone parameter
-- Return ONLY valid JSON — no prose, no markdown fences
+- Return ONLY valid JSON — no prose, no markdown fences${grounding ? `\n\n${grounding}` : ''}
 
 Your output must be JSON matching this exact schema:
 {

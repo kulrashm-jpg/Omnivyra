@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from './aiGateway';
+import { resolveCompanyGroundingGuard } from './context/canonicalContentContextResolver';
 
 export type CreatorPackagingVariant = {
   caption: string;
@@ -80,6 +81,9 @@ Rules:
 - Return JSON only.`;
 
   try {
+    // Deterministic company grounding: packaging speaks for the active company
+    // only; never name a company that is not part of this campaign's inputs.
+    const grounding = await resolveCompanyGroundingGuard(companyId ?? null);
     const result = await runCompletionWithOperation({
       companyId,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -89,7 +93,7 @@ Rules:
       messages: [
         {
           role: 'system',
-          content: 'You create creator campaign packaging. Respond with valid JSON only.',
+          content: `You create creator campaign packaging. Respond with valid JSON only.\n${grounding.directive}`,
         },
         { role: 'user', content: prompt },
       ],

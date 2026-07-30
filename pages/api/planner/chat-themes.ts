@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
 
 /**
  * POST /api/planner/chat-themes
@@ -122,8 +123,9 @@ Rules:
 
 Return only JSON.`;
 
+    const grounding = await resolveCompanyGroundingGuard(companyId);
     const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: systemPrompt + '\n\n' + grounding.directive },
     ];
 
     for (const turn of chatHistory.slice(-6)) {

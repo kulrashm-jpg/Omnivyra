@@ -18,6 +18,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
+import { resolveCompanyGroundingGuard } from '../../../../backend/services/context/canonicalContentContextResolver';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
@@ -131,6 +132,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── AI generation ─────────────────────────────────────────────────────────
   let output: RepurposeOutput | null = null;
 
+  // Deterministic company grounding: repurposed posts speak for the active
+  // company only (public blogs → no company; the directive still forbids
+  // naming any company not present in the blog content).
+  const grounding = await resolveCompanyGroundingGuard(companyId);
+
   const runAi = () => runCompletionWithOperation({
     operation:       'blogRepurpose',
     companyId,
@@ -140,7 +146,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     temperature:     0.5,
     response_format: { type: 'json_object' },
     messages: [
-      { role: 'system', content: buildRepurposeSystemPrompt() },
+      { role: 'system', content: buildRepurposeSystemPrompt(grounding.directive) },
       { role: 'user',   content: buildRepurposeUserPrompt(input) },
     ],
   });

@@ -3,7 +3,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getThreadMessages } from '../../../backend/services/engagementMessageService';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
+import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
@@ -46,11 +48,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
     if (!access) return;
 
+    // Resource-ownership authorization: enforceCompanyAccess only proves the
+    // caller owns `organizationId`. `thread_id` is a separate client-supplied
+    // resource id, loaded below via the RLS-bypassing service-role client — so a
+    // member of company X could otherwise pass company Y's thread and pull Y's
+    // conversation into the prompt. Ownership lives on
+    // engagement_threads.organization_id (engagement_messages has no org column);
+    // verify it BEFORE any message content is read.
+    const { data: ownerThread } = await supabase
+      .from('engagement_threads')
+      .select('organization_id')
+      .eq('id', threadId)
+      .maybeSingle();
+    if (!ownerThread || ownerThread.organization_id !== organizationId) {
+      return res.status(403).json({ error: 'Thread not found or access denied' });
+    }
+
     const messages = await getThreadMessages(threadId);
     const threadContext = messages
       .map((message) => `${message.author?.display_name ?? message.author?.username ?? 'User'}: ${message.content ?? ''}`)
       .join('\n')
       .slice(0, 2500);
+
+    // Deterministic company grounding: constrain the reply to the active company
+    // and forbid naming any other company not present in this thread/draft.
+    const grounding = await resolveCompanyGroundingGuard(organizationId);
 
     const result = await wirePhase2Route({
       surface:        'engagement.refine-suggestion',
@@ -71,7 +93,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         {
           role: 'system',
           content:
-            'You refine social engagement replies. Keep the response concise, human, and directly grounded in the conversation. Output only the revised reply text.',
+            'You refine social engagement replies. Keep the response concise, human, and directly grounded in the conversation. Output only the revised reply text.\n\n' +
+            grounding.directive,
         },
         {
           role: 'user',

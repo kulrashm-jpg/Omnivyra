@@ -566,7 +566,7 @@ export function useDailyPlan({ week, campaignId, campaignData, onSave, initialDa
       const response = await fetch('/api/ai/generate-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ campaignId, weekNumber: week.weekNumber, weekData: week, campaignData, campaignGoals: campaignData.goals || [], brandVoice: 'DrishiQ - clarity engine that solves life miseries', useAI: true, requestType: 'daily-suggestions' }),
+        body: JSON.stringify({ campaignId, weekNumber: week.weekNumber, weekData: week, campaignData, campaignGoals: campaignData.goals || [], useAI: true, requestType: 'daily-suggestions' }),
       });
       if (response.ok) {
         const result = await response.json();

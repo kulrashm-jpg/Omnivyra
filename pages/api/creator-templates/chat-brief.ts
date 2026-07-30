@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
+import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { resolveCreatorCopyContext } from '../../../backend/services/creator/creatorCopyContextResolver';
 
@@ -90,7 +91,7 @@ Respond with STRICT JSON only:
 Fill every brief field with your best inference so far; keep each concise. No markdown, no text outside the JSON.`;
 
   const llmMessages = [
-    { role: 'system' as const, content: system },
+    { role: 'system' as const, content: system + '\n\n' + (await resolveCompanyGroundingGuard(companyId)).directive },
     {
       role: 'user' as const,
       content: `Current draft brief (may be empty): ${JSON.stringify(currentBrief)}`,

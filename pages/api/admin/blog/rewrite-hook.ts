@@ -22,6 +22,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
+import { resolveCompanyGroundingGuard } from '../../../../backend/services/context/canonicalContentContextResolver';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
@@ -62,6 +63,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const angleContext = angle_type ? `\nEditorial angle: ${angle_type}` : '';
 
+  // Deterministic company grounding: the rewritten hook is for the active
+  // company only and may not name any other company.
+  const grounding = await resolveCompanyGroundingGuard(company_id);
+
   const referenceId = createHash('sha256')
     .update([company_id, topic, currentHook].join('|'))
     .digest('hex')
@@ -94,7 +99,9 @@ STRONG hook criteria:
 - Matches the blog topic and editorial angle provided
 
 Return ONLY valid JSON: { "new_hook": "<p>…rewritten paragraph…</p>" }
-The value must be a complete <p> tag with the rewritten text inside. No markdown, no extra keys.`,
+The value must be a complete <p> tag with the rewritten text inside. No markdown, no extra keys.
+
+${grounding.directive}`,
         },
         {
           role:    'user',

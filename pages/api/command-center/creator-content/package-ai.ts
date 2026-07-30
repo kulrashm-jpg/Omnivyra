@@ -46,7 +46,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const { runCompletionWithOperation } = await import('../../../../backend/services/aiGateway');
+    const { resolveCompanyGroundingGuard } = await import('../../../../backend/services/context/canonicalContentContextResolver');
     const { config } = await import('@/config');
+    // Deterministic company grounding: transforms stay in the active company's
+    // voice and never name a company absent from the provided text.
+    const grounding = await resolveCompanyGroundingGuard(companyId || null);
     const resp = await runCompletionWithOperation({
       operation: 'creator_package_ai',
       companyId,
@@ -54,7 +58,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       temperature: 0.5,
       max_tokens: 1200,
       messages: [
-        { role: 'system', content: `${OP_PROMPT[op]} Output plain text only — no JSON, no markdown fences, no rendering markup.` },
+        { role: 'system', content: `${OP_PROMPT[op]} Output plain text only — no JSON, no markdown fences, no rendering markup.\n\n${grounding.directive}` },
         { role: 'user', content: [instruction, text].filter(Boolean).join('\n\n') },
       ],
     });

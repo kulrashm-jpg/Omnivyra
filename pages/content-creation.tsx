@@ -186,7 +186,6 @@ export default function ContentCreation() {
           contentType,
           campaignData,
           campaignGoals,
-          brandVoice: 'DrishiQ - clarity engine that solves life miseries',
           useAI: true
         })
       });

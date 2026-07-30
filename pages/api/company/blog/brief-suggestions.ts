@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import { resolveCompanyGroundingGuard } from '@/backend/services/context/canonicalContentContextResolver';
 import { getCanonicalProfile as getProfile, getCanonicalGroundingContext } from '@/backend/services/context/canonicalProfileAdapter';
 import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { buildFormattedStyleInstructions } from '@/lib/content/writingStyleEngine';
@@ -68,6 +69,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!topic || typeof topic !== 'string' || !topic.trim()) {
     return res.status(400).json({ error: 'topic required' });
   }
+  const companyGrounding = await resolveCompanyGroundingGuard(company_id);
 
   // Verify user authentication and company access
   const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
@@ -122,7 +124,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           role: 'system',
           content:
             'You are a senior content strategist. Generate concise, practical custom suggestions for pre-generation briefing fields. ' +
-            'Output valid JSON only. Be specific and non-generic. Keep each option short (8-22 words).',
+            'Output valid JSON only. Be specific and non-generic. Keep each option short (8-22 words).\n\n' +
+            companyGrounding.directive,
         },
         {
           role: 'user',

@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
 
 /**
  * POST /api/planner/generate-workspace-content
@@ -79,7 +80,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // Prompt (single-sourced; identical strings to the pre-migration inline build).
     const contextLines = buildContextLines({ theme, objective, week });
-    const systemPrompt = WORKSPACE_SYSTEM_PROMPT;
+    const grounding = await resolveCompanyGroundingGuard(companyId);
+    const systemPrompt = WORKSPACE_SYSTEM_PROMPT + '\n\n' + grounding.directive;
     const userPrompt = buildWorkspaceUserPrompt({
       brandContext, contextLines, platforms: platforms as string[], topic, contentTypes: contentTypeMap,
     });
