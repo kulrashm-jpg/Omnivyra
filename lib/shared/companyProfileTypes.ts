@@ -174,11 +174,17 @@ export type CompanyProfile = {
       solution_domains?: string[] | null;
       competitor_details?: Array<{
         name: string;
+        domain?: string | null;
         category?: string | null;
         tier?: string | null;
         score?: number | null;
         confidence?: number | null;
         rationale?: string | null;
+        // COMPETITOR-RESPONSE-001 — additive presentation fields.
+        evidence_summary?: string | null;
+        why_included?: string | null;
+        evidence_sources?: string[] | null;
+        observed_at?: string | null;
       }> | null;
       competitor_quality?: {
         highest_score?: number | null;

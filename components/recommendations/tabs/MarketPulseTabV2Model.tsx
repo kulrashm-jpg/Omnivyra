@@ -51,6 +51,11 @@ export type ContextResponse = {
       score?: number | null;
       confidence?: number | null;
       rationale?: string | null;
+      // COMPETITOR-RESPONSE-001 — additive presentation fields.
+      evidence_summary?: string | null;
+      why_included?: string | null;
+      evidence_sources?: string[] | null;
+      observed_at?: string | null;
     }>;
     competitor_quality?: {
       highest_score?: number | null;
