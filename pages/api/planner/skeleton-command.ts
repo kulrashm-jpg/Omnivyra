@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
 
 /**
  * POST /api/planner/skeleton-command
@@ -114,6 +115,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (!companyId || typeof companyId !== 'string') return res.status(400).json({ error: 'companyId is required' });
     if (!message  || typeof message  !== 'string') return res.status(400).json({ error: 'message is required' });
+    const grounding = await resolveCompanyGroundingGuard(companyId);
 
     const access = await enforceCompanyAccess({ req, res, companyId: companyId.trim(), requireCampaignId: false });
     if (!access) return;
@@ -244,7 +246,7 @@ Use null in delete_filter for fields not specified. Use [] for unused arrays.`;
       temperature: 0.1,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: systemPrompt + '\n\n' + grounding.directive },
         {
           role: 'user',
           content: `Existing activities (${actList.length}):\n${JSON.stringify(actList, null, 2)}\n\nInstruction: ${message.trim()}`,

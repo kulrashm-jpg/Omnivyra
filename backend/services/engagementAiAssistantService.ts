@@ -9,6 +9,7 @@ import { evaluateCommunityAiEngagement, isOmnivyraEnabled } from './omnivyraClie
 import { getThreadMessages } from './engagementMessageService';
 import { supabase } from '../db/supabaseClient';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
+import { resolveCompanyGroundingGuard } from '@/backend/services/context/canonicalContentContextResolver';
 import { runCompletionWithOperation } from './aiGateway';
 import { isDmMessageType, stripSenderColonPrefix } from '../../lib/engagement/messageRoles';
 // WAVE-1A-002/1B-002 §C6: canonical prompt-safety + outbound-moderation primitives (shared).
@@ -166,6 +167,8 @@ type LlmSuggestionInput = {
   targetAuthor: string | null;
   targetMessage: string;
   brandVoice: string;
+  /** Deterministic company-grounding directive (active company + no foreign names). */
+  groundingDirective: string;
   // Recent conversation turns — important for DMs where the latest message
   // alone is rarely enough context. Ordered oldest → newest.
   conversation: ConversationTurn[];
@@ -184,7 +187,7 @@ async function generateReplySuggestionsViaOpenAi(
     return null;
   }
 
-  const { originalPost, parentComment, targetAuthor, brandVoice, platform, kind, conversation } = input;
+  const { originalPost, parentComment, targetAuthor, brandVoice, platform, kind, conversation, groundingDirective } = input;
   // Clean the target message before the LLM sees it. Otherwise the model
   // ends up echoing the "Kuldeep: ..." prefix back and producing replies
   // that read like awkward template fills.
@@ -239,7 +242,10 @@ async function generateReplySuggestionsViaOpenAi(
     'Return ONLY a JSON object: {"replies":[{"text":"...","tone":"accept|decline|clarify|defer|professional|friendly|educational"}, ...]}',
   ];
 
-  const system = (isDm ? dmRules : commentRules).join('\n');
+  const baseSystem = (isDm ? dmRules : commentRules).join('\n');
+  // Prepend the authoritative company-grounding directive so the reply can
+  // never name a company outside this thread/active company (leak prevention).
+  const system = groundingDirective ? `${groundingDirective}\n\n${baseSystem}` : baseSystem;
 
   const userParts: string[] = [];
 
@@ -375,6 +381,21 @@ export async function generateReplySuggestions(
     throw new Error('Message not found');
   }
 
+  // Resource-ownership authorization (defense-in-depth): the message is loaded
+  // by id via the RLS-bypassing service-role client. Its owning thread MUST
+  // belong to the authorized organization before any of its content enters the
+  // prompt — otherwise a future caller that skipped the route-level check could
+  // reopen a cross-tenant leak. engagement_messages has no org column, so verify
+  // via engagement_threads.organization_id.
+  const { data: ownerThread } = await supabase
+    .from('engagement_threads')
+    .select('organization_id')
+    .eq('id', message.thread_id)
+    .maybeSingle();
+  if (!ownerThread || ownerThread.organization_id !== organization_id) {
+    throw new Error('Thread does not belong to the authorized organization');
+  }
+
   // Original post text — for People-Reaction threads, the comment itself is
   // a response to a post whose body lives on engagement_threads.raw_payload.
   // Without this, the model has no idea what the conversation is *about* and
@@ -496,6 +517,11 @@ export async function generateReplySuggestions(
       return (entry || profile?.brand_voice || 'professional').toString().trim();
     }));
 
+  // Deterministic company grounding for every reply path: the active company is
+  // organization_id and the model may not name any other company absent from
+  // the thread. Best-effort; never blocks reply generation.
+  const grounding = await resolveCompanyGroundingGuard(organization_id);
+
   const fallback = () =>
     buildContextualFallbackReplies({
       platform: message.platform ?? '',
@@ -521,6 +547,7 @@ export async function generateReplySuggestions(
     targetAuthor: targetAuthorName,
     targetMessage: message.content ?? '',
     brandVoice: voice || 'professional',
+    groundingDirective: grounding.directive,
     conversation: conversationTurns,
   };
 
@@ -587,9 +614,10 @@ export async function generateReplySuggestions(
         target_author: targetAuthorName ?? undefined,
         reply_suggestion_directive:
           'Return reply suggestions as materially different response paths, not paraphrases. Prefer accept/help, decline/boundary, and clarify/defer when applicable.',
-        alignment_directive: isDmContext
+        alignment_directive: (isDmContext
           ? 'This is a 1:1 direct message — read the conversation history first, do NOT re-greet, reply directly to the latest message. Sound like a human texting back, not a public-facing brand statement. Suggestions must be different response choices, not restyled duplicates.'
-          : 'The reply MUST reference both the original post topic and the specific comment text. Address the commenter by first name when available. Avoid generic acknowledgements. Suggestions must be different response choices, not restyled duplicates.',
+          : 'The reply MUST reference both the original post topic and the specific comment text. Address the commenter by first name when available. Avoid generic acknowledgements. Suggestions must be different response choices, not restyled duplicates.') +
+          `\n\n${grounding.directive}`,
       },
       engagement_metrics: {},
       brand_voice: voice || 'professional',

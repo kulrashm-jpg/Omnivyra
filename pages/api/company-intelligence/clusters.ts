@@ -1,6 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { resolveUserContext } from '../../../backend/services/userContextService';
+import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getCompanyClusters } from '../../../backend/services/companyIntelligenceService';
 import { formatForUserOutput } from '../../../backend/utils/refineUserFacingResponse';
 
@@ -12,10 +12,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const user = await resolveUserContext(req);
-    const companyId = user?.defaultCompanyId ?? (req.query.companyId as string);
+    // Explicit workspace param wins over the ambient default; enforceCompanyAccess
+    // then denies any company the caller is not a member of (incl. the dev-shim's
+    // global-latest fallback on auth error).
+    const companyId = (req.query.companyId as string) || user?.defaultCompanyId;
     if (!companyId) {
       return res.status(400).json({ error: 'companyId required' });
     }
+    const access = await enforceCompanyAccess({ req, res, companyId });
+    if (!access) return;
 
     const windowHours = Math.min(168, Math.max(1, parseInt(String(req.query.windowHours ?? 24), 10) || 24));
     const skipCache = String(req.query.skipCache ?? '').toLowerCase() === 'true';

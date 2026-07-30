@@ -38,7 +38,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const { runCompletionWithOperation } = await import('../../../../backend/services/aiGateway');
+    const { resolveCompanyGroundingGuard } = await import('../../../../backend/services/context/canonicalContentContextResolver');
     const { config } = await import('@/config');
+    // Deterministic company grounding: content is for the active company only
+    // and may not name any other company absent from the brief.
+    const grounding = await resolveCompanyGroundingGuard(companyId || null);
     const resp = await runCompletionWithOperation({
       operation: 'creator_intake_ai_content',
       companyId,
@@ -46,7 +50,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       temperature: 0.6,
       max_tokens: 900,
       messages: [
-        { role: 'system', content: `You write STRUCTURED marketing content for a ${assetFamily} asset. Output plain text only — a clear headline on the first line, then supporting paragraphs, any key statistics (e.g. "92% faster"), and a closing call-to-action. Do NOT output JSON, markdown fences, slide markup, or rendering instructions — just readable content the downstream engine will structure.` },
+        { role: 'system', content: `You write STRUCTURED marketing content for a ${assetFamily} asset. Output plain text only — a clear headline on the first line, then supporting paragraphs, any key statistics (e.g. "92% faster"), and a closing call-to-action. Do NOT output JSON, markdown fences, slide markup, or rendering instructions — just readable content the downstream engine will structure.\n\n${grounding.directive}` },
         { role: 'user', content: [description, briefLines].filter(Boolean).join('\n\n') },
       ],
     });

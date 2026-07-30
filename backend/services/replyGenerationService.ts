@@ -25,6 +25,7 @@
  */
 
 import { runCompletion } from './aiGateway';
+import { resolveCompanyGroundingGuard } from './context/canonicalContentContextResolver';
 import { createHash } from 'crypto';
 import type { SentimentLabel } from './engagementIngestService';
 import { wirePhase2Route } from './billing/phase2RouteWiring';
@@ -128,7 +129,12 @@ export async function generateReply(input: ReplyInput): Promise<ReplyOutput> {
     PLATFORM_REPLY_BUDGET[platform] ?? 400,
   );
 
+  // Deterministic company grounding: reply only for the active company; never
+  // name a company absent from the comment/post (execution-context leak fix).
+  const grounding = await resolveCompanyGroundingGuard(input.company_id ?? null);
+
   const systemPrompt = `You are a community manager writing replies on ${platform}.
+${grounding.directive}
 Tone: ${toneGuide}${brandVoice}
 Strategy: ${strategy}
 Platform rules: ${replyRules}

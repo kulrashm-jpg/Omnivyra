@@ -2,6 +2,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletion } from '../../../backend/services/aiGateway';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
 
 type CardContentType =
@@ -388,6 +389,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) {
     return res.status(400).json({ error: 'companyId is required' });
   }
+
+  // Authorization: identity alone (getSupabaseUserFromRequest) is not enough —
+  // verify the caller is a member of this company before grounding/billing an
+  // AI call against it.
+  const access = await enforceCompanyAccess({ req, res, companyId: String(companyId) });
+  if (!access) return;
 
   // Validate and moderate message
   const policyResult = await validateAndModerateUserMessage(String(message), {

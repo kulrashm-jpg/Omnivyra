@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { processContent, PLATFORM_CHAR_LIMITS } from '@/backend/services/unifiedContentProcessor';
 import { optimizeDiscoverabilityForPlatform } from '@/backend/services/contentGeneration/discoverabilityHelpers';
 import { runCompletionWithOperation } from '@/backend/services/aiGateway';
@@ -396,6 +397,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     if (!content) {
       return res.status(400).json({ error: 'content is required' });
+    }
+
+    // Authorization: when a companyId is supplied, the caller must be a member —
+    // otherwise a valid user could ground the rewrite in (and bill) another
+    // company's profile. Identity-only auth above is insufficient.
+    if (companyId) {
+      const access = await enforceCompanyAccess({ req, res, companyId });
+      if (!access) return;
     }
 
     let companyContext: CompanyContext | null = null;

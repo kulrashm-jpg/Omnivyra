@@ -396,3 +396,78 @@ export async function resolveContentContext(
   }
   return normalizeContentContext(profile, opts, id);
 }
+
+/* ── Company Grounding Guard (execution-context leakage prevention) ─────────── */
+
+/**
+ * The deterministic company-grounding directive injected into EVERY prose-
+ * generating AI capability that does not already build the full generation
+ * context block (engagement replies/refine, suggestions, triage, chat assists,
+ * etc.). Root-cause fix for cross-company leakage ("…your work at Drishiq…"):
+ * the model is told, as an authoritative system instruction, exactly which
+ * company it is speaking for and that it may NOT name any other company that
+ * is not present in the request payload.
+ *
+ * This is a RENDERING helper over the canonical resolver — it performs NO
+ * independent context resolution (Part 4: single source of truth). The active
+ * company is always the caller-supplied companyId; there is no fallback company,
+ * no cache override, no default.
+ */
+export interface CompanyGroundingGuard {
+  /** Active company/brand name ('' when the profile is empty/unknown). */
+  brand: string;
+  /** Allow-listed brand/product names the model may use verbatim. */
+  allowedNames: string[];
+  /**
+   * The system-prompt directive to inject. Always non-empty: even with no
+   * profile it still forbids naming any company not present in the request.
+   */
+  directive: string;
+}
+
+/**
+ * Build the grounding directive from an already-resolved context. Pure +
+ * deterministic (unit-testable without a fetch).
+ */
+export function buildCompanyGroundingDirective(ctx: NormalizedContentContext): CompanyGroundingGuard {
+  const brand = ctx.brand;
+  const allowedNames = ctx.identityNames;
+  const lines: string[] = ['COMPANY GROUNDING (authoritative — this overrides any other company reference):'];
+
+  if (brand) {
+    lines.push(
+      `- You are writing on behalf of "${brand}". First-person references ("we", "our", "our company", "us", "my team") mean "${brand}" and ONLY "${brand}".`,
+    );
+  } else {
+    lines.push(
+      '- Write only about the company, people, and facts explicitly provided in this request. Do not assume or invent a company identity.',
+    );
+  }
+
+  if (allowedNames.length > 0) {
+    lines.push(
+      `- The only brand/product names you may state as your own are: ${allowedNames.map((n) => `"${n}"`).join(', ')} (copy verbatim).`,
+    );
+  }
+
+  lines.push(
+    '- Do NOT mention, reference, or imply ANY other company, product, brand, or past employer by name unless that exact name appears in the conversation, draft, or content provided in THIS request.',
+    '- If you are unsure whether a name belongs here, omit it. Never recall a company from earlier requests, training data, or memory.',
+  );
+
+  return { brand, allowedNames, directive: lines.join('\n') };
+}
+
+/**
+ * THE canonical company-grounding guard entry point for non-generation AI
+ * paths. Resolves the active company's context ONCE through resolveContentContext
+ * and renders the grounding directive. Best-effort: a failed/empty resolution
+ * still returns a directive that forbids naming out-of-context companies.
+ */
+export async function resolveCompanyGroundingGuard(
+  companyId?: string | null,
+  opts?: ResolveContentContextOptions,
+): Promise<CompanyGroundingGuard> {
+  const ctx = await resolveContentContext(companyId, opts);
+  return buildCompanyGroundingDirective(ctx);
+}

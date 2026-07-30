@@ -9,6 +9,7 @@ import { hardenText, hardenBlock, moderateBeforePersist } from './ai/safety';
 import { parseTemplateStructure, blocksToPromptStructure } from './taggedResponseInterpreter';
 import { getPlatformFormatRules } from './platformResponseFormatter';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
+import { resolveCompanyGroundingGuard } from '@/backend/services/context/canonicalContentContextResolver';
 import { getThreadMemory } from './conversationMemoryService';
 import {
   getTopReplyIntelligence,
@@ -68,6 +69,21 @@ export async function generateResponse(
 
   let conversationContext = '';
   if (input.thread_id) {
+    // Resource-ownership authorization (defense-in-depth): thread_id is a
+    // client-addressed resource whose memory is loaded via the RLS-bypassing
+    // service-role client. Verify the thread belongs to the authorized org
+    // before its memory can enter the prompt, so a future unscoped caller can't
+    // reopen a cross-tenant leak (ownership lives on
+    // engagement_threads.organization_id).
+    const { data: ownerThread } = await supabase
+      .from('engagement_threads')
+      .select('organization_id')
+      .eq('id', input.thread_id)
+      .maybeSingle();
+    if (!ownerThread || ownerThread.organization_id !== input.organization_id) {
+      return { text: '', error: 'thread does not belong to the authorized organization' };
+    }
+
     const summary = await getThreadMemory(input.thread_id);
     if (summary) {
       // WAVE-1A-002 §C6: conversation memory is untrusted DATA — escape before prompt.
@@ -146,7 +162,12 @@ export async function generateResponse(
     brandContext = 'Brand voice: professional. ';
   }
 
+  // Deterministic company grounding — the reply may reference ONLY the active
+  // company and never a company absent from the message/thread (leak prevention).
+  const grounding = await resolveCompanyGroundingGuard(input.organization_id);
+
   const systemPrompt = `You are a social media engagement assistant. Generate a natural, authentic reply based on the template structure.
+${grounding.directive}
 ${brandContext}
 Tone: ${input.tone}.
 Platform: ${input.platform}.

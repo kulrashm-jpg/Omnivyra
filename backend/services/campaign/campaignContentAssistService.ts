@@ -53,6 +53,13 @@ export interface ContentAssistRequest {
   instruction?: string;
   /** alternatives only — how many proposals (2–4). */
   count?: number;
+  /**
+   * Deterministic company-grounding directive (active company + no foreign
+   * company names). Resolved by the route from the caller's companyId and
+   * injected into the system prompt. Absent ⇒ no grounding line (pure/offline
+   * tests stay byte-identical).
+   */
+  grounding?: string;
 }
 
 export interface ContentAssistValidation {
@@ -104,7 +111,7 @@ export function buildContentAssistMessages(request: ContentAssistRequest): Conte
   const system = `You are an expert social media copywriter assisting a marketing team inside their campaign workspace.
 You NEVER change the user's intent — you execute exactly the requested transformation on the provided content.
 Return ONLY a valid JSON object: {"proposals": [${proposalCount > 1 ? `${proposalCount} strings` : 'one string'}]}.
-Each proposal is the COMPLETE transformed content, ready to publish — no commentary, no markdown fences, no labels.`;
+Each proposal is the COMPLETE transformed content, ready to publish — no commentary, no markdown fences, no labels.${request.grounding ? `\n\n${request.grounding}` : ''}`;
   const contextLines: string[] = [];
   if (request.platform) contextLines.push(`Platform: ${request.platform}`);
   if (request.contentType) contextLines.push(`Content type: ${request.contentType}`);

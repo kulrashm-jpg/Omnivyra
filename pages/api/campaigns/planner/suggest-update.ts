@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
+import { resolveCompanyGroundingGuard } from '../../../../backend/services/context/canonicalContentContextResolver';
 
 /**
  * POST /api/campaigns/planner/suggest-update
@@ -27,6 +28,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = (req.body?.companyId as string) || campaignId;
 
   try {
+    const grounding = await resolveCompanyGroundingGuard(companyId);
     const access = await enforceCompanyAccess({
       req,
       res,
@@ -68,7 +70,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       model: 'gpt-4o-mini',
       temperature: 0.3,
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: systemPrompt + '\n\n' + grounding.directive },
         { role: 'user', content: userPrompt },
       ],
       operation: 'plannerSuggestUpdate',

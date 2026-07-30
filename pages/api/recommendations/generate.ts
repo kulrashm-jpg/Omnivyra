@@ -6,6 +6,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
+import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
 import { getStrategyHistoryForCompany } from '../../../backend/services/strategyHistoryService';
 import { formatForUserOutput } from '../../../backend/utils/refineUserFacingResponse';
 import { createHash } from 'crypto';
@@ -248,6 +249,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             '- confidence (0 to 1)\n' +
             `Company Profile:\n${JSON.stringify(profile || {}, null, 2)}\n` +
             `Opportunity:\n${JSON.stringify(manualContext || {}, null, 2)}`;
+          const grounding = await resolveCompanyGroundingGuard(companyId);
           const completion = await generateRecommendation({
             companyId,
             referenceType: 'recommendation_generation',
@@ -257,7 +259,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             temperature: 0.3,
             response_format: { type: 'json_object' },
             messages: [
-              { role: 'system', content: 'You are a campaign strategist.' },
+              { role: 'system', content: 'You are a campaign strategist.\n\n' + grounding.directive },
               { role: 'user', content: message },
             ],
           });

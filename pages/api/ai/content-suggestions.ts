@@ -7,6 +7,8 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
+import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { createHash } from 'crypto';
 import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
 import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
@@ -33,6 +35,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId || !topic) {
       return res.status(400).json({ error: 'companyId and topic are required' });
     }
+
+    // Authorization: the client-supplied companyId must be verified against the
+    // caller's membership BEFORE any profile lookup / grounding / AI invocation.
+    // Without this, a caller could ground+generate for a company they do not own.
+    const access = await enforceCompanyAccess({ req, res, companyId: String(companyId) });
+    if (!access) return;
+
+    // Deterministic company grounding: before/after rewrite snippets are for the
+    // active company only and may not name any other company.
+    const grounding = await resolveCompanyGroundingGuard(String(companyId));
 
     const prompt = `You are a content strategist. Analyze this content brief and provide improvement suggestions.
 
@@ -82,7 +94,7 @@ Prioritize: hook strength, audience relevance, platform optimization, CTA clarit
       temperature: 0.6,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: 'You are a content optimization expert. Return only valid JSON.' },
+        { role: 'system', content: `You are a content optimization expert. Return only valid JSON.\n${grounding.directive}` },
         { role: 'user', content: prompt },
       ],
       operation: 'contentSuggestions',
