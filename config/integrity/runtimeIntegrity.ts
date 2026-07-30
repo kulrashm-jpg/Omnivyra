@@ -182,7 +182,10 @@ export function collectStartupEnvWriteFindings(scripts: Record<string, string>):
   }
 
   for (const file of startupFiles) {
-    const source = readRepoFile(file);
+    // Strip comments before token detection (as the operator-safety scan already does) so prose that
+    // merely mentions env-file precedence — e.g. `// (ENV_FILE > .env.cert > .env.local)` — is not
+    // mis-detected as a `> .env` write. Real code-level env writes survive stripping and are still flagged.
+    const source = stripComments(readRepoFile(file));
     const writeTokens = STARTUP_ENV_WRITE_TOKENS.filter((token) => source.includes(token));
     if (writeTokens.length === 0) continue;
     const touchesEnvFile = /(?:^|[^A-Za-z0-9_])\.env(?:\.local|\.production|\.preview|\.test)?\b/.test(source)

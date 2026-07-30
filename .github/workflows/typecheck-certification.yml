@@ -239,8 +239,21 @@ jobs:
     name: Production build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # This job validates COMPILATION + prerender (client/server boundary + webpack), NOT a real deploy.
+    # The webpack compile runs before static generation and needs no live services; the app's env schema,
+    # however, hard-fails page collection when required vars are absent. There are ZERO getStaticProps/
+    # getStaticPaths pages (no build-time data fetch), so schema-valid PLACEHOLDER values let the build
+    # complete without production credentials and are never connected. Runtime validation for real deploys
+    # is unchanged — Railway/Vercel provide their own real secrets.
     env:
       CI: 'true'
+      SUPABASE_URL: 'https://placeholder.supabase.co'
+      SUPABASE_SERVICE_ROLE_KEY: 'ci-placeholder-service-role-key'
+      NEXT_PUBLIC_SUPABASE_URL: 'https://placeholder.supabase.co'
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: 'ci-placeholder-anon-key'
+      REDIS_URL: 'redis://localhost:6379'
+      OPENAI_API_KEY: 'sk-ci-placeholder'
+      ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
