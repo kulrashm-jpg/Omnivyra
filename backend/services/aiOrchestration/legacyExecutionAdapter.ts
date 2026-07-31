@@ -41,7 +41,10 @@ export const LegacyExecutionAdapter = {
       retryPolicy:      plan.reliability.retryPolicy ?? null,
       routingPolicy:    plan.routingPolicyKey ?? plan.routingPolicyId ?? null,
       safety:           plan.safety ?? null,
-      cachePolicy:      plan.caching ?? null,
+      // ResolvedCaching is an interface (no implicit index signature), so it is not
+      // ASSIGNABLE to Record<string, unknown>; the cast is behavior-preserving (erased
+      // at runtime). Fixes net-new TS2322 caught by the backend type certification.
+      cachePolicy:      (plan.caching ?? null) as Record<string, unknown> | null,
       seedPolicy:       plan.params.seedPolicy ?? null,
       costLimit:        plan.limits.maxCostUsdPerCall ?? null,
       tokenLimit:       plan.limits.tokenCeiling ?? null,
