@@ -48,6 +48,11 @@ import { guardAiRequest, providerFromModel } from './ai/aiRequestGuard';
 // W2-4 (audit B-58): hoisted from per-call dynamic import() sites.
 import { assertModelPricingExists, recordCostAnomaly } from './pricingService';
 import { resolveRolloutSync } from '../../lib/platform/rollout';
+// AI-ORCH 2A-2.1 — fire-and-forget SHADOW observation hook (gated OFF by default;
+// never awaited, never throws, discards output; legacy execution stays authoritative).
+import { maybeRunResolverShadow } from './aiOrchestration/resolverShadow';
+import { resolveOrchestrationMode } from './aiOrchestration/orchestrationMode';
+import { resolveGatewayExecutionSelection } from './aiOrchestration/gatewaySynchronousResolve';
 
 import { type RetryTrackingContext, callProviderWithRetry, buildMetadata } from './aiGatewayProvidersRetry';
 
@@ -110,9 +115,60 @@ const executeGatewayCompletion = async (
 
   // ── Resolve LLM config for this company (provider, model, apiKey) ───────────
   const llmConfig = await resolveLlmConfig(request.companyId);
-  const activeProvider = llmConfig.provider;
+  let activeProvider = llmConfig.provider;
   // BYOK companies use their chosen model; platform key companies respect plan downgrade
-  const activeModel = llmConfig.isCompanyConfig ? llmConfig.model : resolvedModel;
+  let activeModel = llmConfig.isCompanyConfig ? llmConfig.model : resolvedModel;
+
+  // ── AI-ORCH 2A-2.1 / 3C / 3D: resolver observation + synchronous config source ──
+  // Legacy config is now fully resolved (provider/model) and execution has NOT begun.
+  // ONE branch on the rollout mode (read once) — default OFF ⇒ neither path runs ⇒
+  // byte-identical to production. SHADOW keeps the fire-and-forget observation hook.
+  // DUAL/CANARY/FULL take the synchronous resolve + parity-gated selection (3C/3D):
+  // the gateway consumes the resolver-generated provider/model ONLY when authority=
+  // resolver AND parity is byte-identical; any divergence, disabled master switch, or
+  // resolver failure falls back to legacy. Rollback = set the mode to `off` (no deploy).
+  const orchestrationMode = resolveOrchestrationMode();
+  const legacyFields = {
+    // Genuine gateway execution fields (Phase 3B): UNSET where the request omits them.
+    streaming: request.stream,
+    structuredOutput: request.response_format ? true : undefined,
+  } as const;
+  if (orchestrationMode === 'shadow') {
+    // Observation only — never awaited, never throws, discards its output; legacy stays authoritative.
+    maybeRunResolverShadow(
+      request.companyId ?? null,
+      request.operation,
+      activeProvider,
+      activeModel,
+      request.temperature,
+      request.max_tokens ?? null,
+      { legacyFields },
+    );
+  } else if (orchestrationMode !== 'off') {
+    // DUAL / CANARY / FULL — synchronous, parity-gated. Returns null (⇒ keep legacy) for
+    // DUAL and for any fallback/failure; returns the resolver's provider/model only when
+    // it is byte-identical to legacy under CANARY/FULL authority.
+    const selected = await resolveGatewayExecutionSelection({
+      companyId: request.companyId ?? null,
+      operation: request.operation,
+      legacyProvider: activeProvider,
+      legacyModel: activeModel,
+      // Caller intent (Request > Profile inheritance, AI-ORCH 3G):
+      temperature: request.temperature,
+      maxOutputTokens: request.max_tokens ?? null,
+      streaming: request.stream,
+      structuredOutput: request.response_format ? true : undefined,
+      responseFormat: request.response_format?.type ?? undefined,
+      // Central reliability policy: the gateway's genuine per-op timeout (retries policy-owned).
+      timeoutMs: resolveProviderTimeoutMs(request.max_tokens, request.operation),
+    });
+    if (selected && selected.source === 'resolver') {
+      // source=resolver ⇒ parity byte-identical ⇒ the resolver provider equals the
+      // legacy provider (already one of the supported providers); the cast is safe.
+      activeProvider = (selected.provider as typeof activeProvider | null) ?? activeProvider;
+      activeModel = selected.model ?? activeModel;
+    }
+  }
 
   const environment = process.env.NODE_ENV || 'development';
   const isMock = environment === 'test' || !!process.env.JEST_WORKER_ID;
