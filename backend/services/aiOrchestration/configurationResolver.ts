@@ -74,6 +74,27 @@ export interface ResolverDeps {
   loadActiveProfileVersion(profileId: string): Promise<ResolverProfileVersion | null>;
 }
 
+/**
+ * AI-ORCH 3G — caller-supplied execution parameters that OVERRIDE profile defaults.
+ * Precedence: Request override → Company/BYOK → Profile → Platform → Provider. A value
+ * that is present (not undefined) wins; UNSET (undefined) keeps the profile default —
+ * UNSET is never synthesized into a value. `reliabilityCentralized` moves timeout/retry
+ * OWNERSHIP to the central operational policy: when true, the resolver takes reliability
+ * ONLY from these overrides (profile reliability is not emitted).
+ */
+export interface ResolverRequestOverrides {
+  temperature?: number | null;
+  maxOutputTokens?: number | null;
+  structuredOutput?: boolean | null;
+  responseFormat?: string | null;
+  streaming?: boolean | null;
+  reasoning?: string | null;
+  toolCalling?: boolean | null;
+  timeoutMs?: number | null;
+  maxRetries?: number | null;
+  reliabilityCentralized?: boolean;
+}
+
 export interface ResolverInput {
   capabilityId?: string | null;
   operation?: string | null;
@@ -81,6 +102,8 @@ export interface ResolverInput {
   /** Legacy-resolved provider/model adopted for TIER-mode profiles (heuristic-free). */
   legacyProvider?: string | null;
   legacyModel?: string | null;
+  /** AI-ORCH 3G — caller-supplied execution params; present values override the profile. */
+  overrides?: ResolverRequestOverrides;
 }
 
 export interface ResolverOutput {
@@ -151,7 +174,42 @@ function toSemantics(v: {
 
 // ── Resolver ────────────────────────────────────────────────────────────────
 
+/**
+ * AI-ORCH 3G — public entry: resolve the plan, then apply request-parameter inheritance
+ * as a pure post-overlay (Request wins over the profile default; UNSET keeps the profile).
+ * The core resolution (provider/model/capability/profile selection) is UNCHANGED.
+ */
 export async function resolveExecutionPlan(input: ResolverInput, deps: ResolverDeps): Promise<ResolverOutput> {
+  const out = await resolveExecutionPlanCore(input, deps);
+  const o = input.overrides;
+  if (!o) return out;
+  // present (not undefined/null) override wins; otherwise keep the profile value.
+  const pick = <T>(ov: T | null | undefined, prof: T | null | undefined): T | null =>
+    (ov !== undefined && ov !== null) ? ov : (prof ?? null);
+  const reliability = o.reliabilityCentralized
+    // Central policy OWNS reliability: take ONLY the overrides; do not emit profile reliability.
+    ? { timeoutMs: o.timeoutMs ?? null, maxRetries: o.maxRetries ?? null, retryPolicy: null, partialAllowed: out.plan.reliability.partialAllowed ?? null }
+    : { ...out.plan.reliability, timeoutMs: pick(o.timeoutMs, out.plan.reliability.timeoutMs), maxRetries: pick(o.maxRetries, out.plan.reliability.maxRetries) };
+  return {
+    ...out,
+    plan: {
+      ...out.plan,
+      params: {
+        ...out.plan.params,
+        temperature:      pick(o.temperature, out.plan.params.temperature),
+        maxOutputTokens:  pick(o.maxOutputTokens, out.plan.params.maxOutputTokens),
+        streaming:        pick(o.streaming, out.plan.params.streaming),
+        structuredOutput: pick(o.structuredOutput, out.plan.params.structuredOutput),
+        responseFormat:   pick(o.responseFormat, out.plan.params.responseFormat),
+        reasoningLevel:   pick(o.reasoning, out.plan.params.reasoningLevel),
+        toolCalling:      pick(o.toolCalling, out.plan.params.toolCalling),
+      },
+      reliability,
+    },
+  };
+}
+
+async function resolveExecutionPlanCore(input: ResolverInput, deps: ResolverDeps): Promise<ResolverOutput> {
   const steps: ResolutionTraceStep[] = [];
   let seq = 0;
   const step = (s: Omit<ResolutionTraceStep, 'sequence'>) => { steps.push({ sequence: seq++, ...s }); };

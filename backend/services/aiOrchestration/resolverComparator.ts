@@ -186,6 +186,19 @@ function valueKey(v: unknown): string {
 }
 
 /**
+ * Whether a RAW field value is genuinely unset (the source omitted it) — mirrors the
+ * snapshot's unset rule (null/undefined/empty-string/empty-object) BEFORE any
+ * normalization default is applied. Used to keep UNSET distinguishable from an
+ * explicit value so an omitted field never counts as an execution difference.
+ */
+function isRawUnset(v: unknown): boolean {
+  if (v === undefined || v === null) return true;
+  if (typeof v === 'string') return v.trim() === '';
+  if (typeof v === 'object' && !Array.isArray(v)) return Object.keys(v as object).length === 0;
+  return false;
+}
+
+/**
  * Compare a legacy config and a resolved plan for EXECUTION EQUIVALENCE via canonical
  * snapshots. Returns raw + normalized diffs, both snapshot hashes, and the level:
  *   IDENTICAL             — raw AND normalized identical on every execution field.
@@ -220,7 +233,13 @@ export function compareExecutionEquivalence(
     const normEqual = valueKey(normL) === valueKey(normR);
 
     if (!normEqual) {
-      const oneUnset = normL === UNSET || normR === UNSET;
+      // Fidelity (Phase 3B): a field OMITTED on one side must never register as an
+      // EXECUTION_DIFFERENCE merely because a documented normalization default (e.g.
+      // streaming UNSET→false) then differs from the other side's explicit value. The
+      // omitting side expressed no execution intent, so this is a
+      // CONFIGURATION_DIFFERENCE (resolver-more-complete), not behavioural divergence.
+      // A genuine EXECUTION_DIFFERENCE requires BOTH sides to carry an explicit value.
+      const oneUnset = isRawUnset(rawL) || isRawUnset(rawR) || normL === UNSET || normR === UNSET;
       const category: DifferenceCategory = oneUnset ? 'CONFIGURATION_DIFFERENCE' : 'EXECUTION_DIFFERENCE';
       normalizedDiffs.push({ field, legacy: normL, resolved: normR, category });
       rawDiffs.push({ field, legacy: rawL, resolved: rawR, category });

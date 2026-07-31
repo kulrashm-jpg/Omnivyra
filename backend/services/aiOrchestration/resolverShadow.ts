@@ -120,7 +120,20 @@ export async function runConfigResolverShadow(args: ShadowRunArgs): Promise<bool
 
   // (2) FAIL-SAFE — everything below is swallowed on error.
   try {
-    const { plan, metadata, trace } = await resolveExecutionPlan(args.input, args.deps);
+    // AI-ORCH 3G — the shadow comparison inherits the SAME caller intent the legacy path
+    // used (Request > Profile), so observation reflects what CANARY would actually resolve.
+    // Explicit input.overrides (if any) win over the legacy-derived ones.
+    const inputWithOverrides: typeof args.input = {
+      ...args.input,
+      overrides: {
+        temperature: args.legacy.temperature,
+        maxOutputTokens: args.legacy.maxOutputTokens,
+        streaming: args.legacy.streaming,
+        structuredOutput: args.legacy.structuredOutput,
+        ...args.input.overrides,
+      },
+    };
+    const { plan, metadata, trace } = await resolveExecutionPlan(inputWithOverrides, args.deps);
     const parity = compareToLegacy(args.legacy, plan);
     recordParity(parity);
     // AI-ORCH 2A-2.2 — canonical execution-equivalence classification.
@@ -192,6 +205,15 @@ export interface MaybeShadowOptions {
   schedule?: (fn: () => void) => void;
   /** Sink override (default: debug console). */
   sink?: (o: ShadowObservation) => void;
+  /**
+   * Phase 3B — additional GENUINE gateway execution fields (streaming, structuredOutput,
+   * timeoutMs, maxRetries, …) captured from the request/gateway at the shadow point, so
+   * the parity comparison covers every execution-affecting field. Merged into the legacy
+   * config. Fields the gateway did not determine are left UNSET (undefined) here —
+   * never synthesized — and the comparator classifies an omitted field as a
+   * CONFIGURATION_DIFFERENCE, never an EXECUTION_DIFFERENCE.
+   */
+  legacyFields?: Partial<LegacyExecutionConfig>;
 }
 
 /**
@@ -235,7 +257,11 @@ export function maybeRunResolverShadow(
         await runConfigResolverShadow({
           input: { operation, orgId, legacyProvider: provider, legacyModel: model },
           deps,
-          legacy: { provider, model, temperature, maxOutputTokens: maxTokens },
+          // Base positional fields + any genuine gateway execution fields (Phase 3B).
+          // Positional base wins for provider/model/temperature/maxOutputTokens; the
+          // rest (streaming, structuredOutput, timeoutMs, …) come from legacyFields,
+          // UNSET where the gateway did not determine them.
+          legacy: { ...opts?.legacyFields, provider, model, temperature, maxOutputTokens: maxTokens },
           sink: opts?.sink,
         });
       } catch {
