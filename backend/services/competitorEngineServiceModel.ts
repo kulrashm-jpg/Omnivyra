@@ -28,6 +28,7 @@ import {
   normalizeCompetitorTags,
   type CompetitorSecondaryTag,
   type StandardCompetitorCategory,
+  type CategoryAffinity,
 } from './competitorTaxonomy';
 import {
   applyCompetitorFeedbackBoost,
@@ -583,7 +584,8 @@ export function classifyNormalizedCompetitorCategory(params: {
   dimensions: CompetitorDimensionScores;
   revenueTier: CompetitorRevenueTier;
   competitor: CompetitorCandidate;
-  affinity: 'same' | 'functional' | 'substitute';
+  // 'unknown' behaves like any non-'same' affinity here (the only check is `!== 'same'`).
+  affinity: CategoryAffinity;
 }): NormalizedCompetitorCategory | null {
   if (params.overallScore < 40) return null;
 
@@ -660,7 +662,8 @@ export function competitorReasoning(params: {
   dimensions: CompetitorDimensionScores;
   category: NormalizedCompetitorCategory;
   revenueTier: CompetitorRevenueTier;
-  affinity: 'same' | 'functional' | 'substitute';
+  // 'unknown' pushes no affinity reason (only '===' same/functional add one).
+  affinity: CategoryAffinity;
   competitor: CompetitorCandidate;
 }): string[] {
   const reasons: string[] = [];

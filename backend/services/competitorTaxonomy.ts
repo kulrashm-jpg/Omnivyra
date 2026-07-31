@@ -8,7 +8,23 @@ export type StandardCompetitorCategory =
   | 'productivity_self_improvement'
   | 'crm_marketing_automation'
   | 'marketing_seo_software'
-  | 'ai_platform';
+  | 'ai_platform'
+  // COMPETITOR-TAXONOMY-P0-001 — explicit abstention. Produced only when the P0
+  // flag is on and no category regex matches (previously these collapsed into a
+  // false 'marketing_seo_software', causing cross-category Tier-1 leaks). 'unknown'
+  // is deliberately NOT in STANDARD_COMPETITOR_CATEGORIES and never forms affinity;
+  // qualification defers to evidence instead.
+  | 'unknown';
+
+/**
+ * COMPETITOR-TAXONOMY-P0-001 — reversible hardening flag (default ON).
+ * COMPETITOR_TAXONOMY_P0=0 (or 'false') restores the legacy default-category
+ * collapse + affinity floor byte-for-byte.
+ */
+export function competitorTaxonomyP0Enabled(): boolean {
+  const raw = process.env.COMPETITOR_TAXONOMY_P0;
+  return raw !== '0' && raw !== 'false';
+}
 
 export type CompetitorSecondaryTag =
   | 'chatbot'
@@ -85,9 +101,12 @@ export function normalizeCompetitorCategory(
     return 'productivity_self_improvement';
   }
 
-  // Default for Omnivyra (a marketing platform). Was 'productivity_self_improvement' (Drishiq/wellness legacy).
-  // Only affects inputs that match NO category above — order preserved so classified inputs are unchanged.
-  return 'marketing_seo_software';
+  // COMPETITOR-TAXONOMY-P0-001 — inputs matching NO category above are genuinely
+  // out-of-taxonomy. Legacy behavior asserted a false 'marketing_seo_software',
+  // which collapsed unrelated companies into one bucket → spurious 'same' affinity
+  // → Tier-1 leaks. With the P0 flag on we ABSTAIN ('unknown') and let evidence
+  // decide downstream. Flag off = legacy default, byte-for-byte.
+  return competitorTaxonomyP0Enabled() ? 'unknown' : 'marketing_seo_software';
 }
 
 export function normalizeCompetitorTags(params: {
@@ -118,10 +137,77 @@ export function normalizeCompetitorTags(params: {
   return Array.from(tags);
 }
 
+/**
+ * COMPETITOR-TAXONOMY-P2 — taxonomy-coverage detection (additive; does NOT alter
+ * `normalizeCompetitorCategory`).
+ *
+ * `normalizeCompetitorCategory` is TOTAL: it always returns a category, and for any
+ * input that matches NONE of the known category vocabularies it silently returns the
+ * default (`marketing_seo_software`). That makes an *unseen industry* (logistics,
+ * legaltech, agritech, …) indistinguishable from a genuine marketing company, and
+ * collapses every unseen-industry entity into ONE bucket — where `categoryAffinity`
+ * then reports 'same' for utterly unrelated pairs. This is the taxonomy-coverage
+ * dependency the multi-signal model removes.
+ *
+ * This detector reports whether the taxonomy actually has *evidence-backed coverage*
+ * for a given input, i.e. whether the text matches any positive category signal, vs.
+ * falling through to the default. It is the ONE place the "is this a known category?"
+ * question is answered, so the bounded-prior model can down-weight / abstain the
+ * taxonomy signal when coverage is absent.
+ *
+ * NOTE: the vocabulary below intentionally mirrors the positive signals inside
+ * `normalizeCompetitorCategory`. Keep the two in sync when categories are added
+ * (covered by competitorQualificationModel tests).
+ */
+const KNOWN_CATEGORY_SIGNAL_PATTERNS: RegExp[] = [
+  /\b(therapy|therapist|counselling|counseling|licensed therapist|online therapy|clinical|therapeutic)\b/,
+  /\b(meditation|mindfulness|sleep|breathwork|relaxation|calm)\b/,
+  /\b(journal|journaling|diary|mood tracking|self-reflection|reflection)\b/,
+  /\b(ai companion|companion|friend|relationship|conversation partner|replika)\b/,
+  /\b(coach|coaching|consultant|consulting|advisor|mentor|human-led|life direction|clarity consultant|spiritual|astrology|tarot)\b/,
+  /\b(mental wellness|mental wellbeing|mental health|wellness|wellbeing|emotional wellbeing|emotional support|cbt|anxiety|stress|clarity ai|ai clarity|guided clarity)\b/,
+  /\b(crm|marketing automation|sales automation|customer operations|campaign orchestration|campaign automation|lead nurturing|account-based marketing|revenue operations|social media management|social media scheduling|social scheduling)\b/,
+  /\b(seo|content marketing|content generation|copywriting|ai writing|digital marketing|competitive research|search visibility|marketing intelligence|growth software)\b/,
+  /\b(ai platform|developer api|general-purpose ai|general purpose ai|foundation model|chatgpt|models)\b/,
+  /\b(productivity|self improvement|self-improvement|habit|goal|focus|personal growth|virtual staffing|outsourcing)\b/,
+];
+
+export type CategoryCoverage = 'in_coverage' | 'out_of_coverage';
+
+/**
+ * True taxonomy coverage for an input. `in_coverage` iff the raw category is already a
+ * canonical category OR the combined text matches a known category signal; otherwise
+ * `out_of_coverage` (the input would fall to the default bucket — an unseen industry).
+ */
+export function classifyCategoryCoverage(
+  rawCategory?: string | null,
+  contextText?: string | null,
+): CategoryCoverage {
+  const raw = normalizeText(rawCategory);
+  if ((STANDARD_COMPETITOR_CATEGORIES as string[]).includes(raw)) return 'in_coverage';
+  const text = normalizeText([rawCategory, contextText].filter(Boolean).join(' '));
+  if (!text.trim()) return 'out_of_coverage';
+  return KNOWN_CATEGORY_SIGNAL_PATTERNS.some((pattern) => pattern.test(text))
+    ? 'in_coverage'
+    : 'out_of_coverage';
+}
+
+export type CategoryAffinity = 'same' | 'functional' | 'substitute' | 'unknown';
+
 export function categoryAffinity(
   companyCategory: StandardCompetitorCategory,
   competitorCategory: StandardCompetitorCategory,
-): 'same' | 'functional' | 'substitute' {
+): CategoryAffinity {
+  // COMPETITOR-TAXONOMY-P0-001 (refined) — 'unknown' is a FIRST-CLASS affinity state
+  // meaning "category could not be determined", NOT a substitute. It carries no
+  // adjacency judgement at all: callers must DEFER to evidence (hasStrictCategoryFit)
+  // and MUST NOT let it seed the 'same'/'functional' overlap floors or a Tier boost.
+  // Because it is never 'same'/'functional', the scoring floors stay inert and the
+  // candidate is judged purely on measured evidence — the same numeric outcome the
+  // interim 'substitute' overload produced, now represented honestly. 'unknown' is
+  // only ever produced when the P0 flag is on, so this branch is inert in legacy mode.
+  // (Checked before the equality test so two 'unknown' inputs do NOT collapse to 'same'.)
+  if (companyCategory === 'unknown' || competitorCategory === 'unknown') return 'unknown';
   if (companyCategory === competitorCategory) return 'same';
 
   const functionalPairs = new Set([

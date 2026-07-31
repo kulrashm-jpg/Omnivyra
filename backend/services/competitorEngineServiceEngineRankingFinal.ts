@@ -45,6 +45,20 @@ import { buildCompetitorPositioning, inferCompetitorArchetypeCandidates, withArc
 
 import { isAuthorityDominatedMismatch, rankCompetitorCandidates, finalCompetitorKey, dedupeCompetitorCandidates, detectedCompanyCategories } from './competitorEngineServiceEngineRankingScore';
 
+// COMPETITOR-TAXONOMY-P2 — shadow multi-signal qualification. Import is side-effect-free;
+// the observer no-ops unless COMPETITOR_MULTISIGNAL_SHADOW is enabled (default OFF), so the
+// live decision path below is byte-identical until the shadow is promoted.
+import { observeShadowQualification } from './competitor/qualification/competitorQualificationShadow';
+// COMPETITOR-TAXONOMY-P3-PROMOTION-INFRASTRUCTURE-001 — the promotion framework. Legacy is the
+// default authority, so these are inert (byte-identical) until COMPETITOR_QUALIFICATION_ENGINE
+// is flipped to `multisignal`. Routing decides keep/drop only — scoring, tier, and response
+// schema are unchanged.
+import {
+  multiSignalEngineAuthoritative,
+  routeQualificationKeep,
+  recordAuthorityGauge,
+} from './competitor/qualification/competitorQualificationRouter';
+
 // Module-level dev-debug latch — moved here from the Model part because the ASSIGNMENTS live
 // in filterFinalCompetitorsWithAudit below (an imported binding cannot be assigned across
 // modules). The getter stays public via the competitorEngineService barrel.
@@ -83,6 +97,13 @@ function hasStrictCategoryFit(
     competitorEvidenceText(competitor),
   );
   return topCategories.some((companyCategory) => {
+    const affinity = categoryAffinity(companyCategory, competitorCategory);
+    // COMPETITOR-TAXONOMY-P0-001 (refined) — UNKNOWN is a first-class affinity state
+    // meaning "category could not be determined". It is NEVER a substitute-style
+    // rejection: DEFER competitor qualification ENTIRELY to evidence by passing the
+    // category gate, so the (un-floored) overlap/score + tier decide. 'unknown' only
+    // arises when the P0 flag is on, so this branch is inert in legacy mode.
+    if (affinity === 'unknown') return true;
     if (companyCategory === 'mental_wellness_ai' && competitorCategory === 'ai_companion') {
       const evidence = competitorEvidenceText(competitor).toLowerCase();
       const wellnessUseCase =
@@ -91,7 +112,6 @@ function hasStrictCategoryFit(
         /\b(companionship|relationship|conversation partner|romantic|friend|connection)\b/.test(evidence);
       return wellnessUseCase && !companionUseCase;
     }
-    const affinity = categoryAffinity(companyCategory, competitorCategory);
     return affinity === 'same' || affinity === 'functional';
   });
 }
@@ -229,13 +249,21 @@ function filterFinalCompetitorsWithAudit(params: {
   // Explicit override wins (the strategic-report path opts OUT to keep its strict
   // quality gate); otherwise the global kill-switch decides. Default ON.
   const alwaysRank = params.alwaysRank ?? competitorAlwaysRankEnabled();
+  // COMPETITOR-TAXONOMY-P3 — resolved ONCE per invocation. Default 'live_taxonomy' ⇒ the
+  // multisignal branch below never runs ⇒ output is byte-identical to legacy. The gauge records
+  // the active engine (rollback-state visibility); it is fail-safe and never affects output.
+  const multisignalAuthoritative = multiSignalEngineAuthoritative();
+  recordAuthorityGauge();
   const audit = {
     initial_candidates: params.competitors.length,
     mode: alwaysRank ? ('always_rank' as const) : ('legacy_threshold' as const),
+    engine: multisignalAuthoritative ? ('multisignal' as const) : ('live_taxonomy' as const),
     removed_due_to_threshold: 0,
     removed_due_to_category: 0,
     removed_due_to_confidence: 0,
     removed_insufficient_evidence: 0,
+    removed_by_multisignal: 0,
+    accepted_by_multisignal: 0,
     demoted_not_suppressed: 0,
     suppressed_by_feedback: [] as string[],
     boosted_by_feedback: [] as string[],
@@ -251,6 +279,35 @@ function filterFinalCompetitorsWithAudit(params: {
     const feedbackDecision = getCompetitorFeedbackDecision(params.feedbackMemory, competitor);
     if (feedbackDecision?.suppressed) {
       audit.suppressed_by_feedback.push(competitor.name);
+      continue;
+    }
+
+    // COMPETITOR-TAXONOMY-P3-PROMOTION-INFRASTRUCTURE-001 — authoritative routing.
+    // When the multisignal engine owns production decisions, the keep/drop decision is mapped
+    // from the multi-signal qualification (borderline handled per the configured policy). The
+    // candidate object — its scoring, tier, positioning, and response shape — is preserved
+    // exactly; only its inclusion changes. `legacyKeep` is the always-rank visibility gate, used
+    // for agreement metrics and for the OBSERVE borderline policy (defer to legacy).
+    if (multisignalAuthoritative) {
+      const legacyKeep = hasMeaningfulCompetitorEvidence(competitor, params.context);
+      const routed = routeQualificationKeep({
+        candidate: competitor,
+        context: params.context,
+        legacyKeep,
+      });
+      if (!routed.keep) {
+        audit.removed_by_multisignal += 1;
+        rejected.push({
+          company: competitor.name,
+          score: competitor.score_card?.overallScore ?? competitor.relevance_score ?? 0,
+          failedDimensions: [`multisignal:${routed.decision}`, ...failedCompetitorDimensions(competitor)],
+        });
+        continue;
+      }
+      audit.accepted_by_multisignal += 1;
+      const boostedRanked = applyCompetitorFeedbackBoost(competitor, feedbackDecision);
+      if (boostedRanked !== competitor) audit.boosted_by_feedback.push(competitor.name);
+      ranked.push(boostedRanked);
       continue;
     }
 
@@ -321,7 +378,9 @@ function filterFinalCompetitorsWithAudit(params: {
     }
   }
 
-  const accepted = alwaysRank ? ranked : filtered.length > 0 ? filtered : fallbackFiltered;
+  // Multisignal-authoritative candidates are collected in `ranked` (like always-rank); the same
+  // downstream sort → market-substitute cap → output-limit pipeline then applies unchanged.
+  const accepted = alwaysRank || multisignalAuthoritative ? ranked : filtered.length > 0 ? filtered : fallbackFiltered;
   const sortedCompetitors = accepted
     .sort(sortFinalCompetitors)
     .filter((competitor, _index, sorted) => {
@@ -340,6 +399,14 @@ function filterFinalCompetitorsWithAudit(params: {
   console.info('[competitor-feedback][trace]', {
     suppressed_by_feedback: audit.suppressed_by_feedback,
     boosted_by_feedback: audit.boosted_by_feedback,
+  });
+  // COMPETITOR-TAXONOMY-P2 — shadow scoring alongside the live model. No-op unless the
+  // shadow flag is on; only reads the pool + live survivors and logs a comparison. Never
+  // mutates `finalCompetitors`, so OFF ⇒ byte-identical output.
+  observeShadowQualification({
+    consideredCandidates: dedupeRankedCompetitors(params.competitors),
+    liveKept: finalCompetitors,
+    context: params.context,
   });
   return finalCompetitors;
 }
@@ -538,6 +605,14 @@ export async function getFinalCompetitors(params: {
 }): Promise<RankedCompetitor[]> {
   const minScore = params.minScore ?? FINAL_COMPETITOR_MIN_SCORE;
   const alwaysRank = params.alwaysRank ?? competitorAlwaysRankEnabled();
+  // COMPETITOR-PRODUCTION-HARDENING-001 (M2) — when the multisignal engine is authoritative it
+  // must be the SOLE qualification authority. The ranking stage's legacy score floor
+  // (minScore=40 when alwaysRank is off) would otherwise pre-filter candidates BEFORE they reach
+  // the authority router. `rankFloorLifted` forces the same non-pre-filtering candidate flow that
+  // always-rank already uses (scores are still computed identically; only the visibility floor is
+  // lifted), so every scored candidate reaches the router. Scoring, discovery, tier, and response
+  // are unchanged.
+  const rankFloorLifted = alwaysRank || multiSignalEngineAuthoritative();
   const feedbackMemory = params.feedbackMemory ?? (params.companyId
     ? await loadCompetitorFeedbackMemory({
         companyId: params.companyId,
@@ -566,8 +641,9 @@ export async function getFinalCompetitors(params: {
       // their score so the tier-based final filter can surface & rank them. Legacy
       // mode keeps the hard 40-score ranking floor byte-for-byte. (The scoring
       // algorithm itself — scoreCompetitorCandidate — is unchanged either way.)
-      minScore: alwaysRank ? 0 : FINAL_COMPETITOR_MIN_SCORE,
-      allowTrustedBelowThreshold: alwaysRank ? true : false,
+      // M2: the floor is also lifted whenever the multisignal engine is authoritative.
+      minScore: rankFloorLifted ? 0 : FINAL_COMPETITOR_MIN_SCORE,
+      allowTrustedBelowThreshold: rankFloorLifted ? true : false,
     });
     return filterFinalCompetitorsWithAudit({
       competitors: ranked,
@@ -606,6 +682,9 @@ export function getFinalCompetitorsSync(params: {
 }): RankedCompetitor[] {
   const minScore = params.minScore ?? FINAL_COMPETITOR_MIN_SCORE;
   const alwaysRank = params.alwaysRank ?? competitorAlwaysRankEnabled();
+  // COMPETITOR-PRODUCTION-HARDENING-001 (M2) — see the async path: lift the ranking-stage score
+  // floor whenever multisignal is authoritative so every scored candidate reaches the router.
+  const rankFloorLifted = alwaysRank || multiSignalEngineAuthoritative();
   const candidates = dedupeCompetitorCandidates([
     ...params.candidates,
     ...buildFeedbackMissingCompetitorCandidates(params.feedbackMemory),
@@ -618,8 +697,9 @@ export function getFinalCompetitorsSync(params: {
       max: finalCompetitorRankingPoolSize(pipelineCandidates.length, params.max),
       // COMPETITOR-RANKING-IMPLEMENTATION-001 — always-rank lets sub-threshold
       // candidates flow to the tier-based final filter (see async pipeline note).
-      minScore: alwaysRank ? 0 : FINAL_COMPETITOR_MIN_SCORE,
-      allowTrustedBelowThreshold: alwaysRank ? true : false,
+      // M2: the floor is also lifted whenever the multisignal engine is authoritative.
+      minScore: rankFloorLifted ? 0 : FINAL_COMPETITOR_MIN_SCORE,
+      allowTrustedBelowThreshold: rankFloorLifted ? true : false,
     });
     return filterFinalCompetitorsWithAudit({
       competitors: ranked,
