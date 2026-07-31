@@ -48,6 +48,9 @@ import { guardAiRequest, providerFromModel } from './ai/aiRequestGuard';
 // W2-4 (audit B-58): hoisted from per-call dynamic import() sites.
 import { assertModelPricingExists, recordCostAnomaly } from './pricingService';
 import { resolveRolloutSync } from '../../lib/platform/rollout';
+// AI-ORCH 2A-2.1 — fire-and-forget SHADOW observation hook (gated OFF by default;
+// never awaited, never throws, discards output; legacy execution stays authoritative).
+import { maybeRunResolverShadow } from './aiOrchestration/resolverShadow';
 
 import { type RetryTrackingContext, callProviderWithRetry, buildMetadata } from './aiGatewayProvidersRetry';
 
@@ -113,6 +116,20 @@ const executeGatewayCompletion = async (
   const activeProvider = llmConfig.provider;
   // BYOK companies use their chosen model; platform key companies respect plan downgrade
   const activeModel = llmConfig.isCompanyConfig ? llmConfig.model : resolvedModel;
+
+  // ── AI-ORCH 2A-2.1: SHADOW observation (the ONE integration point) ──────────
+  // Legacy config is now fully resolved (provider/model) and execution has NOT begun.
+  // Fire-and-forget: gated OFF by default (zero overhead), never awaited, never
+  // throws, discards its output. It cannot affect provider/model/params/response —
+  // legacy execution below remains 100% authoritative.
+  maybeRunResolverShadow(
+    request.companyId ?? null,
+    request.operation,
+    activeProvider,
+    activeModel,
+    request.temperature,
+    request.max_tokens ?? null,
+  );
 
   const environment = process.env.NODE_ENV || 'development';
   const isMock = environment === 'test' || !!process.env.JEST_WORKER_ID;
