@@ -331,6 +331,8 @@ export function enforceFinalCompetitorIntelligenceSync(params: {
     context: companyContext,
     max: MAX_COMPETITOR_ENGINE_OUTPUT,
     includeMarketSubstitutes: true,
+    // COMPETITOR-RANKING-IMPLEMENTATION-001 — strategic report keeps the strict gate.
+    alwaysRank: false,
   });
   const splitOutput = splitRankedCompetitorsForOutput(finalRanked, MAX_COMPETITORS, MARKET_SUBSTITUTE_MAX_COUNT);
   assertCompetitorOutputPartition(splitOutput, 'report_competitor_intelligence_enforce');

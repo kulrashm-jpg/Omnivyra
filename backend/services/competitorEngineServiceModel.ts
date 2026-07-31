@@ -28,6 +28,7 @@ import {
   normalizeCompetitorTags,
   type CompetitorSecondaryTag,
   type StandardCompetitorCategory,
+  type CategoryAffinity,
 } from './competitorTaxonomy';
 import {
   applyCompetitorFeedbackBoost,
@@ -232,6 +233,25 @@ export const FINAL_COMPETITOR_MIN_FINAL_SCORE = 0.4;
 export const FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE = 0.6;
 export const FINAL_COMPETITOR_MIN_COUNT = 3;
 export const FINAL_COMPETITOR_MAX_COUNT = 6;
+
+/**
+ * COMPETITOR-RANKING-IMPLEMENTATION-001 — reversible kill-switch.
+ *
+ * When enabled (the default), confidence and score no longer gate VISIBILITY:
+ * candidates with meaningful evidence are always surfaced, ranked into their
+ * scoring-assigned tier (Tier 1 Direct / Tier 2 Likely / Tier 3 Related), so the
+ * Competitor section is never empty merely because everything fell below the old
+ * 0.6 confidence / 40 score cutoffs. Suppression is reserved for genuine
+ * insufficiency (invalid, blocked, duplicate, unrelated, or no-evidence records)
+ * and explicit user "Not a Competitor" feedback.
+ *
+ * Set COMPETITOR_ALWAYS_RANK=0 (or 'false') to fall back to the legacy
+ * hard-threshold filter byte-for-byte. Default ON.
+ */
+export function competitorAlwaysRankEnabled(): boolean {
+  const raw = process.env.COMPETITOR_ALWAYS_RANK;
+  return raw !== '0' && raw !== 'false';
+}
 
 export const HIGH_AUTHORITY_MISMATCH_AUTHORITY = 0.7;
 export const HIGH_AUTHORITY_MISMATCH_PROBLEM = 0.4;
@@ -564,7 +584,8 @@ export function classifyNormalizedCompetitorCategory(params: {
   dimensions: CompetitorDimensionScores;
   revenueTier: CompetitorRevenueTier;
   competitor: CompetitorCandidate;
-  affinity: 'same' | 'functional' | 'substitute';
+  // 'unknown' behaves like any non-'same' affinity here (the only check is `!== 'same'`).
+  affinity: CategoryAffinity;
 }): NormalizedCompetitorCategory | null {
   if (params.overallScore < 40) return null;
 
@@ -641,7 +662,8 @@ export function competitorReasoning(params: {
   dimensions: CompetitorDimensionScores;
   category: NormalizedCompetitorCategory;
   revenueTier: CompetitorRevenueTier;
-  affinity: 'same' | 'functional' | 'substitute';
+  // 'unknown' pushes no affinity reason (only '===' same/functional add one).
+  affinity: CategoryAffinity;
   competitor: CompetitorCandidate;
 }): string[] {
   const reasons: string[] = [];

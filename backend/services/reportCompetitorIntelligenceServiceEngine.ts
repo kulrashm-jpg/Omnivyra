@@ -336,6 +336,9 @@ export function buildCompetitorIntelligence(params: {
     context: companyContext,
     max: MAX_COMPETITOR_ENGINE_OUTPUT,
     includeMarketSubstitutes: true,
+    // COMPETITOR-RANKING-IMPLEMENTATION-001 — the strategic report keeps the strict
+    // quality gate (always-rank is scoped to the profile Competitor section).
+    alwaysRank: false,
   });
   const splitOutput = splitRankedCompetitorsForOutput(ranked, MAX_COMPETITORS, MARKET_SUBSTITUTE_MAX_COUNT);
   assertCompetitorOutputPartition(splitOutput, 'report_competitor_intelligence_sync');
@@ -507,6 +510,8 @@ export async function buildCompetitorIntelligenceActive(params: {
     useNetwork: true,
     companyId: params.companyId,
     includeMarketSubstitutes: true,
+    // COMPETITOR-RANKING-IMPLEMENTATION-001 — strategic report keeps the strict gate.
+    alwaysRank: false,
   });
   const splitOutput = splitRankedCompetitorsForOutput(ranked, MAX_COMPETITORS, MARKET_SUBSTITUTE_MAX_COUNT);
   assertCompetitorOutputPartition(splitOutput, 'report_competitor_intelligence_active');

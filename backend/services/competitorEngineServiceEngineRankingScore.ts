@@ -30,6 +30,7 @@ import {
   normalizeCompetitorTags,
   type CompetitorSecondaryTag,
   type StandardCompetitorCategory,
+  type CategoryAffinity,
 } from './competitorTaxonomy';
 import {
   applyCompetitorFeedbackBoost,
@@ -73,10 +74,15 @@ function buildScoringRationale(
 function classifyCompetitiveTier(params: {
   problemOverlap: number;
   icpOverlap: number;
-  affinity: 'same' | 'functional' | 'substitute';
+  affinity: CategoryAffinity;
 }): CompetitorTier {
   if (params.affinity === 'same' && params.problemOverlap >= 0.6 && params.icpOverlap >= 0.5) return 'Tier 1';
-  if (params.problemOverlap >= 0.45 && params.affinity !== 'substitute') return 'Tier 2';
+  // A positive affinity ('same'/'functional') may lift a candidate to Tier 2 on
+  // problem overlap alone. Neither 'substitute' NOR 'unknown' qualifies: a substitute
+  // is a judged non-fit, and 'unknown' carries no affinity signal — both must earn
+  // Tier 2 through evidence via the >=0.55 rule below. (Excluding 'unknown' here keeps
+  // behavior byte-identical to the interim 'substitute' overload.)
+  if (params.problemOverlap >= 0.45 && params.affinity !== 'substitute' && params.affinity !== 'unknown') return 'Tier 2';
   if (params.problemOverlap >= 0.55) return 'Tier 2';
   return 'Tier 3';
 }

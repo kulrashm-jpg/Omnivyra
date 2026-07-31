@@ -23,6 +23,31 @@ import { type ProfileState, type BrandAssetField, type InlineQuestionFieldKey, n
 import { StatusChip, SavedHint, IntelligenceContextSections } from './companyProfileFormSupportB';
 import { useCompanyProfileFormController } from './companyProfileFormController';
 
+// COMPETITOR-RESPONSE-001 — presentation-only formatters for the Competitor section.
+// Confidence is stored 0..1 (enrichment confidence); render as a percentage.
+function formatCompetitorConfidence(confidence: number | null | undefined): string {
+  const value = Number(confidence ?? 0);
+  if (!Number.isFinite(value) || value <= 0) return '—';
+  const pct = value <= 1 ? value * 100 : value;
+  return `${Math.round(pct)}%`;
+}
+
+// Freshness label from the observation timestamp already stamped on the row.
+function formatCompetitorFreshness(observedAt: string | null | undefined): string | null {
+  if (!observedAt) return null;
+  const ts = new Date(observedAt).getTime();
+  if (!Number.isFinite(ts)) return null;
+  const days = Math.floor((Date.now() - ts) / 86_400_000);
+  if (days <= 0) return 'Observed today';
+  if (days === 1) return 'Observed yesterday';
+  if (days < 30) return `Observed ${days} days ago`;
+  const months = Math.round(days / 30);
+  if (months <= 1) return 'Observed 1 month ago';
+  if (months < 12) return `Observed ${months} months ago`;
+  const years = Math.round(months / 12);
+  return years <= 1 ? 'Observed 1 year ago' : `Observed ${years} years ago`;
+}
+
 export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeof useCompanyProfileFormController> }) {
   const {
     d, REFINE_STEPS, REFINE_STEP_DELAYS, actionableRefinementQuestions, activeProfile, addIdentityGuidance,
@@ -288,18 +313,52 @@ export default function CompanyProfileFormSectionsB({ f }: { f: ReturnType<typeo
                       </span>
                     </div>
                     {competitorDetails.length > 0 ? (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {competitorDetails.map((competitor) => (
-                        <span
+                    <div className="mt-2 space-y-2">
+                      {competitorDetails.map((competitor) => {
+                        const freshness = formatCompetitorFreshness(competitor.observed_at);
+                        const sources = Array.isArray(competitor.evidence_sources) ? competitor.evidence_sources : [];
+                        return (
+                        <div
                           key={competitor.name}
-                          className="rounded-full border border-slate-200 bg-white px-2 py-1"
+                          className="rounded-lg border border-slate-200 bg-white p-2.5"
                         >
-                          {competitor.name}: {Math.round(Number(competitor.score ?? 0))}%
-                          {!competitorThresholdMet && competitor.domain ? (
-                            <span className="ml-1 text-slate-500">({competitor.domain})</span>
+                          {/* Company · Tier · Confidence */}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold text-slate-900">{competitor.name}</span>
+                            {competitor.tier ? (
+                              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">
+                                {competitor.tier}
+                              </span>
+                            ) : null}
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                              {formatCompetitorConfidence(competitor.confidence)} confidence
+                            </span>
+                            {competitor.domain ? (
+                              <span className="text-[11px] text-slate-400">{competitor.domain}</span>
+                            ) : null}
+                          </div>
+                          {/* Evidence Summary */}
+                          {competitor.evidence_summary ? (
+                            <div className="mt-1 text-slate-700">{competitor.evidence_summary}</div>
                           ) : null}
-                        </span>
-                      ))}
+                          {/* Why Included */}
+                          {competitor.why_included ? (
+                            <div className="mt-0.5 text-slate-500">
+                              <span className="font-medium text-slate-600">Why:</span> {competitor.why_included}
+                            </div>
+                          ) : null}
+                          {/* Freshness · Evidence Sources */}
+                          {(freshness || sources.length > 0) ? (
+                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                              {freshness ? <span>{freshness}</span> : null}
+                              {sources.length > 0 ? (
+                                <span>Sources: {sources.join(', ')}</span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                        );
+                      })}
                     </div>
                     ) : null}
                     {lowConfidenceDomainContext ? (

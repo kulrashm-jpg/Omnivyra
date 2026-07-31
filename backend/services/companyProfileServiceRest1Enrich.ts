@@ -8,6 +8,11 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import { randomUUID } from 'crypto';
+import {
+  buildCompetitorEvidenceSummary,
+  buildCompetitorWhyIncluded,
+  buildCompetitorEvidenceSources,
+} from './competitorResponsePresentation';
 import { runCompletionWithOperation } from './aiGateway';
 import { refineLanguageOutput } from './languageRefinementService';
 import { supabase } from '../db/supabaseClient';
@@ -680,7 +685,13 @@ export function rankedMarketAlternativesForProfile(competitors: RankedCompetitor
   }));
 }
 
-export function rankedCompetitorDetailsForProfile(competitors: RankedCompetitor[]) {
+export function rankedCompetitorDetailsForProfile(
+  competitors: RankedCompetitor[],
+  // COMPETITOR-RESPONSE-001 — the observation timestamp for Freshness. Defaults to
+  // now (this refine IS when these competitors were observed); pass a fixed value
+  // in tests. No backend call — a build-time stamp, not a new query.
+  observedAt: string = new Date().toISOString(),
+) {
   return splitRankedCompetitorsForOutput(competitors, 8, 3).competitors.map((competitor) => ({
     name: competitor.name,
     domain: competitor.domain,
@@ -689,6 +700,12 @@ export function rankedCompetitorDetailsForProfile(competitors: RankedCompetitor[
     score: competitor.relevance_score,
     confidence: competitor.enrichment_confidence_score,
     rationale: competitor.rationale,
+    // COMPETITOR-RESPONSE-001 — additive presentation fields derived from evidence
+    // already produced by the engine (no discovery/scoring/ranking change).
+    evidence_summary: buildCompetitorEvidenceSummary(competitor),
+    why_included: buildCompetitorWhyIncluded(competitor),
+    evidence_sources: buildCompetitorEvidenceSources(competitor),
+    observed_at: observedAt,
   }));
 }
 
