@@ -11,17 +11,28 @@ import type { CanonicalLeadView, LeadProfile, LeadStats } from '../../../lib/lea
 
 const pushMock = jest.fn();
 jest.mock('next/router', () => ({ useRouter: () => ({ push: pushMock, query: {} }) }));
+// OPT-005 Phase 2C: the panels now read through SWR with the client's fetch
+// functions as fetchers and its pure key builders for cache keys. Keep the
+// fetch functions mocked (same assertions as before) but let the real key
+// builders through via requireActual.
 jest.mock('../../../components/lead-intelligence/leadIntelligenceClient', () => ({
+  ...jest.requireActual('../../../components/lead-intelligence/leadIntelligenceClient'),
   fetchLeadStats: jest.fn(),
   fetchLeads: jest.fn(),
   downloadLeadExport: jest.fn(),
   emptyFilters: () => ({ search: '', source: [], status: '', campaign: '', content: '', owner: '', from: '', to: '', intentMin: '', interest: '' }),
 }));
 
+import { SWRConfig } from 'swr';
 import * as client from '../../../components/lead-intelligence/leadIntelligenceClient';
 import OverviewPanel from '../../../components/lead-intelligence/OverviewPanel';
 import LeadListPanel from '../../../components/lead-intelligence/LeadListPanel';
 import LeadProfileView from '../../../components/lead-intelligence/LeadProfileView';
+
+/** Fresh, isolated SWR cache per render so mocked data never bleeds across tests. */
+const withSwr = (ui: React.ReactElement) => (
+  <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>{ui}</SWRConfig>
+);
 
 const view = (over: Partial<CanonicalLeadView> = {}): CanonicalLeadView => ({
   organizationId: 'co1', source: 'website', sourceLabel: 'Website', unifiedPersonId: null,
@@ -41,7 +52,7 @@ describe('Phase 7 — Workspace UI', () => {
   it('Overview renders repository stats + distributions + recent activity', async () => {
     (client.fetchLeadStats as jest.Mock).mockResolvedValue(stats);
     (client.fetchLeads as jest.Mock).mockResolvedValue({ rows: [view()], total: 5, limit: 8, offset: 0 });
-    render(<OverviewPanel companyId="co1" />);
+    render(withSwr(<OverviewPanel companyId="co1" />));
     expect(await screen.findByText('Total Leads')).toBeInTheDocument();
     expect(screen.getByText('Lead Source Distribution')).toBeInTheDocument();
     expect(screen.getByText('Intent Distribution')).toBeInTheDocument();
@@ -52,7 +63,7 @@ describe('Phase 7 — Workspace UI', () => {
 
   it('Lead list renders rows from the repository + source chips', async () => {
     (client.fetchLeads as jest.Mock).mockResolvedValue({ rows: [view(), view({ source: 'community', sourceLabel: 'Community', identity: { contactId: 'c2', platform: 'reddit' }, sourceRef: { table: 'opportunity_feed_items', id: 'O1' } })], total: 2, limit: 25, offset: 0 });
-    render(<LeadListPanel companyId="co1" />);
+    render(withSwr(<LeadListPanel companyId="co1" />));
     expect(await screen.findByText('jane@acme.com')).toBeInTheDocument();
     expect(screen.getByText('Showing 1–2 of 2')).toBeInTheDocument();
     expect(screen.getByText('MarketPulse')).toBeInTheDocument(); // a source chip
@@ -61,7 +72,7 @@ describe('Phase 7 — Workspace UI', () => {
 
   it('Lead list shows the empty state (no client-side anything)', async () => {
     (client.fetchLeads as jest.Mock).mockResolvedValue({ rows: [], total: 0, limit: 25, offset: 0 });
-    render(<LeadListPanel companyId="co1" />);
+    render(withSwr(<LeadListPanel companyId="co1" />));
     expect(await screen.findByText(/No leads match your filters/i)).toBeInTheDocument();
     expect(screen.getByText('No results')).toBeInTheDocument();
   });
@@ -69,7 +80,7 @@ describe('Phase 7 — Workspace UI', () => {
   it('Lead list export triggers the repository export', async () => {
     (client.fetchLeads as jest.Mock).mockResolvedValue({ rows: [view()], total: 1, limit: 25, offset: 0 });
     (client.downloadLeadExport as jest.Mock).mockResolvedValue(undefined);
-    render(<LeadListPanel companyId="co1" />);
+    render(withSwr(<LeadListPanel companyId="co1" />));
     await screen.findByText('jane@acme.com');
     fireEvent.click(screen.getByText('CSV'));
     expect(client.downloadLeadExport).toHaveBeenCalledWith('co1', expect.any(Object), 'csv');
