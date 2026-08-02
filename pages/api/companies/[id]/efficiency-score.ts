@@ -7,11 +7,15 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { resolveCompanyAccess } from '../../../../backend/services/contentArchitectService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
   const companyId = req.query.id as string;
+
+  const access = await resolveCompanyAccess(req, res, companyId);
+  if (!access) return;
 
   try {
     const { data, error } = await supabase

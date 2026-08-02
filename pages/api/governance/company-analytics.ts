@@ -7,6 +7,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getCompanyGovernanceAnalytics } from '../../../backend/services/GovernanceAnalyticsService';
+import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -18,6 +19,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) {
     return res.status(400).json({ error: 'companyId is required' });
   }
+
+  const access = await resolveCompanyAccess(req, res, companyId);
+  if (!access) return;
 
   const analytics = await getCompanyGovernanceAnalytics(companyId);
   return res.status(200).json(analytics);
