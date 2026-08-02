@@ -50,3 +50,10 @@ jobs:
       # a request-supplied tenant id without an approved authorization call.
       - name: Tenant-authz guard
         run: npm run check:authz
+
+      # AUTH-ENFORCEMENT Phase 1 (C-3/C-4): route-policy inventory + validation
+      # warnings. Non-blocking by design in Phase 1 (docs/security/
+      # AUTH-ENFORCEMENT-ARCHITECTURE.md v3 §5); ROUTE_POLICY_STRICT=1 promotes
+      # findings to failures in Phase 2.
+      - name: Route-policy inventory (warn)
+        run: npm run check:route-policy

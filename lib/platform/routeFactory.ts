@@ -32,6 +32,7 @@ import {
   runWithRequestExecutionContext,
   seedFromApiRequest,
 } from './requestContext';
+import type { RoutePolicy } from './routePolicy';
 
 /** A wrapper that decorates a handler — the future middleware unit (guard, cache…). */
 export type RouteMiddleware = (handler: NextApiHandler) => NextApiHandler;
@@ -49,6 +50,15 @@ export interface CreateApiRouteOptions {
    * enabling it is an (additive) externally-visible change, deferred to Wave 0.
    */
   exposeRequestId?: boolean;
+  /**
+   * AUTH-ENFORCEMENT Phase 1 (Task 3a): declarative authorization policy
+   * (docs/security/AUTH-ENFORCEMENT-ARCHITECTURE.md v3 §3.4). OBSERVATION
+   * ONLY in Phase 1 — when declared and the route-policy-gate rollout flag is
+   * non-off, the policy is evaluated and logged; it never blocks, never
+   * writes to the response. Absent ⇒ this option adds one undefined-check and
+   * nothing else. Enforcement (fail-closed, INV-10) arrives in Phase 2.
+   */
+  policy?: RoutePolicy;
 }
 
 /**
@@ -111,6 +121,19 @@ export function createApiRoute(
         }
       } catch {
         /* context seeding must never break the route */
+      }
+
+      // AUTH-ENFORCEMENT Phase 1: observation-only policy gate. Dynamically
+      // imported so routes WITHOUT a policy (all of them in Task 3a) never
+      // load the gate or the security module graph. Fail-safe by Decision 2:
+      // observation can never affect the route.
+      if (opts.policy) {
+        try {
+          const { observePolicy } = await import('./policyGate');
+          await observePolicy(opts.policy, opts.route ?? normalizeRoute(req.url), req);
+        } catch {
+          /* observation must never break the route */
+        }
       }
 
       try {
