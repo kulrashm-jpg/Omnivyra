@@ -97,11 +97,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (req.method === 'GET') {
     try {
-      await getCompanyConfigRows(companyId);
-      const sources = await getEnabledApis(companyId);
-      const availableApis = await getAvailableApis(companyId);
-      const companyDefaultApiIds = await getCompanyDefaultApiIds(companyId);
-      const accessRows = await getUserApiAccess(user.id);
+      // OPT-010 W2-6: five independent reads (keyed only on companyId /
+      // user.id) collapse from five serial round-trips into ONE wave. The
+      // first is the cache warm whose result was always discarded.
+      const [, sources, availableApis, companyDefaultApiIds, accessRows] = await Promise.all([
+        getCompanyConfigRows(companyId),
+        getEnabledApis(companyId),
+        getAvailableApis(companyId),
+        getCompanyDefaultApiIds(companyId),
+        getUserApiAccess(user.id),
+      ]);
       const accessMap = accessRows.reduce<Record<string, any>>((acc, row) => {
         acc[row.api_source_id] = row;
         return acc;
@@ -412,22 +417,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const existingEnabled = await getEnabledApiIdsFromCompanyConfig(companyId);
       const existingSet = new Set(existingEnabled);
 
-      for (const apiId of availableIds) {
-        const enabled = desiredIds.includes(apiId);
-        const { error: configError } = await supabase.from('company_api_configs').upsert(
-          {
-            company_id: companyId,
-            api_source_id: apiId,
-            enabled,
-            polling_frequency: 'daily',
-            priority: 'MEDIUM',
-            purposes: [],
-            include_filters: {},
-            exclude_filters: {},
-            updated_at: nowIso,
-          },
-          { onConflict: 'company_id,api_source_id' }
-        );
+      // OPT-010 W2-6: ONE bulk upsert replaces the per-catalog-entry loop.
+      // APPROVED BEHAVIOR DISCLOSURE: a single statement is all-or-nothing —
+      // the old loop could 500 mid-way leaving a partial write set; now a
+      // failure writes nothing (strict improvement, same 500 response).
+      const configRows = Array.from(availableIds).map((apiId) => ({
+        company_id: companyId,
+        api_source_id: apiId,
+        enabled: desiredIds.includes(apiId),
+        polling_frequency: 'daily',
+        priority: 'MEDIUM',
+        purposes: [],
+        include_filters: {},
+        exclude_filters: {},
+        updated_at: nowIso,
+      }));
+      if (configRows.length > 0) {
+        const { error: configError } = await supabase
+          .from('company_api_configs')
+          .upsert(configRows, { onConflict: 'company_id,api_source_id' });
         if (configError) {
           console.error('access POST bulk company_api_configs upsert failed', configError);
           return res.status(500).json({

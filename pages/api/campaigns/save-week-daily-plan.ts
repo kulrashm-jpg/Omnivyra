@@ -72,33 +72,51 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const campaignStart = String(campaign.start_date);
 
-    for (const item of items) {
-      const id = item?.id;
-      const dayOfWeek = typeof item?.dayOfWeek === 'string' ? item.dayOfWeek.trim() : '';
-      if (!id || !dayOfWeek || !DAYS_ORDER.includes(dayOfWeek)) continue;
+    // OPT-010 W2-4: ONE batched .in() select (scoped to the same campaign_id +
+    // week_number filters) replaces the per-item lookups, and the per-item
+    // updateActivity writes run concurrently — each targets a distinct row id,
+    // and setWriteAllowed() inside updateActivity is a documented no-op
+    // (executionPlannerService.ts:51), so no shared state is involved.
+    // Invalid or missing items are skipped exactly as before.
+    const validItems = items
+      .filter((item) => {
+        const id = item?.id;
+        const dayOfWeek = typeof item?.dayOfWeek === 'string' ? item.dayOfWeek.trim() : '';
+        return Boolean(id && dayOfWeek && DAYS_ORDER.includes(dayOfWeek));
+      })
+      .map((item) => ({ id: item.id, dayOfWeek: item.dayOfWeek.trim() }));
 
-      const date = computeDayDate({ campaignStart, weekNumber, dayOfWeek });
+    const { data: rows } =
+      validItems.length > 0
+        ? await supabase
+            .from('daily_content_plans')
+            .select('id, content')
+            .in('id', validItems.map((i) => i.id))
+            .eq('campaign_id', campaignId)
+            .eq('week_number', weekNumber)
+        : { data: [] as Array<{ id: string; content: unknown }> };
+    const rowById = new Map(
+      (rows ?? []).map((r: { id: string; content: unknown }) => [r.id, r])
+    );
 
-      const { data: row } = await supabase
-        .from('daily_content_plans')
-        .select('id, content')
-        .eq('id', id)
-        .eq('campaign_id', campaignId)
-        .eq('week_number', weekNumber)
-        .maybeSingle();
+    await Promise.all(
+      validItems.map(async ({ id, dayOfWeek }) => {
+        const row = rowById.get(id);
+        if (!row) return;
 
-      if (!row) continue;
+        const date = computeDayDate({ campaignStart, weekNumber, dayOfWeek });
 
-      let content = row.content;
-      const parsed = tryParseJson(content);
-      if (parsed && typeof parsed === 'object') {
-        const dayIndex = dayNameToIndex(dayOfWeek);
-        const updated = { ...parsed, dayIndex, day_name: dayOfWeek, weekNumber };
-        content = JSON.stringify(updated);
-      }
+        let content = row.content;
+        const parsed = tryParseJson(content);
+        if (parsed && typeof parsed === 'object') {
+          const dayIndex = dayNameToIndex(dayOfWeek);
+          const updated = { ...parsed, dayIndex, day_name: dayOfWeek, weekNumber };
+          content = JSON.stringify(updated);
+        }
 
-      await updateActivity(id, { day_of_week: dayOfWeek, date, content }, 'board');
-    }
+        await updateActivity(id, { day_of_week: dayOfWeek, date, content }, 'board');
+      })
+    );
 
     await supabase
       .from('weekly_content_refinements')

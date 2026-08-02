@@ -161,25 +161,34 @@ async function manualEdit(body: any, res: NextApiResponse) {
   try {
     const { campaignId, weekNumber, editedContent, editNotes, userId } = body;
 
-    // Update content_plans with manual edits
-    for (const item of editedContent) {
-      const { error } = await supabase
-        .from('content_plans')
-        .update({
-          content: item.content,
-          topic: item.topic,
-          hashtags: item.hashtags,
-          manual_edits: {
-            edited_at: new Date().toISOString(),
-            edited_by: userId,
-            edit_notes: item.editNotes || editNotes,
-            changes: item.changes || [],
-          },
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', item.id);
-
-      if (error) throw error;
+    // Update content_plans with manual edits.
+    // OPT-010 W2-5: the per-item updates run concurrently — each targets a
+    // distinct content_plans id. APPROVED BEHAVIOR DISCLOSURE: previously a
+    // failure aborted the loop fail-fast, leaving a committed PREFIX of rows;
+    // now every update is attempted and the first error is thrown after the
+    // batch settles — same 500 response, but the partial set on failure is
+    // no longer prefix-ordered.
+    const updateResults = await Promise.all(
+      (editedContent as Array<Record<string, unknown>>).map((item) =>
+        supabase
+          .from('content_plans')
+          .update({
+            content: item.content,
+            topic: item.topic,
+            hashtags: item.hashtags,
+            manual_edits: {
+              edited_at: new Date().toISOString(),
+              edited_by: userId,
+              edit_notes: item.editNotes || editNotes,
+              changes: item.changes || [],
+            },
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', item.id as string)
+      )
+    );
+    for (const result of updateResults) {
+      if (result.error) throw result.error;
     }
 
     console.warn('DEPRECATED: weekly_content_refinements write path triggered (weekly-refinement upsert)');

@@ -48,38 +48,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }));
 
     console.warn('DEPRECATED: weekly_content_refinements write path triggered (save-comprehensive-plan)');
-    for (const weekData of weeklyRefinementUpdates) {
-      const { error: weekError } = await supabase
-        .from('weekly_content_refinements')
-        .upsert(
-          {
-            ...weekData,
-            created_at: weekData.updated_at
-          },
-          {
-            onConflict: 'campaign_id,week_number'
-          }
-        );
-
-      if (weekError) {
-        console.error(`Error updating week ${weekData.week_number}:`, weekError);
-      }
-    }
-
-    // If there's existing content, incorporate it into the plan
+    // OPT-010 W2-2: ONE bulk upsert replaces the per-week loop. The second
+    // loop that re-wrote existing_content/content_notes is folded in — the
+    // rows above already carry those exact values (lines 44-45), so it was a
+    // redundant second write of identical data. Per-week deprecation warns
+    // for content-bearing weeks are preserved below (log parity).
     for (const week of weeklyPlans) {
       if (week.existingContent && week.existingContent.trim()) {
         console.warn('DEPRECATED: weekly_content_refinements write path triggered (save-comprehensive-plan update)');
-        await supabase
-          .from('weekly_content_refinements')
-          .update({
-            existing_content: week.existingContent,
-            content_notes: week.contentNotes || '',
-            updated_at: new Date().toISOString()
-          })
-          .eq('campaign_id', campaignId)
-          .eq('week_number', week.weekNumber);
       }
+    }
+    const { error: weekError } = await supabase
+      .from('weekly_content_refinements')
+      .upsert(
+        weeklyRefinementUpdates.map((weekData: Record<string, unknown>) => ({
+          ...weekData,
+          created_at: weekData.updated_at
+        })),
+        {
+          onConflict: 'campaign_id,week_number'
+        }
+      );
+
+    if (weekError) {
+      console.error('Error updating weekly refinements (bulk):', weekError);
     }
 
     return res.status(200).json({

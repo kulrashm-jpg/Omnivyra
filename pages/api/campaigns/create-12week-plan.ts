@@ -180,56 +180,61 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let weeklyRefinements: any[] = [];
     try {
       console.warn('DEPRECATED: weekly_content_refinements write path triggered (create-12week-plan)');
-      for (const row of derivedRefinements) {
-        const { data: refinement, error: refinementError } = await supabase
-          .from('weekly_content_refinements')
-          .insert({
+      // OPT-010 W2-3: ONE bulk INSERT+RETURNING replaces 12 sequential ones.
+      // Rows come back in insert order, so week ordering and the response's
+      // weeklyRefinements.length are preserved.
+      const refinementNowIso = new Date().toISOString();
+      const { data: insertedRefinements, error: refinementError } = await supabase
+        .from('weekly_content_refinements')
+        .insert(
+          derivedRefinements.map((row) => ({
             campaign_id: row.campaign_id,
             week_number: row.week_number,
             theme: row.theme,
             focus_area: row.focus_area,
             ai_suggestions: row.ai_suggestions ?? [],
             refinement_status: row.refinement_status ?? 'ai_enhanced',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-        if (!refinementError && refinement) weeklyRefinements.push(refinement);
-        else if (refinementError) console.log(`Week ${row.week_number} refinement error:`, refinementError);
-      }
+            created_at: refinementNowIso,
+            updated_at: refinementNowIso
+          }))
+        )
+        .select();
+      if (!refinementError && insertedRefinements) weeklyRefinements = insertedRefinements;
+      else if (refinementError) console.log('Weekly refinements bulk insert error:', refinementError);
     } catch (error) {
       console.log('Weekly refinements table might not exist yet:', error);
     }
 
     const perfDurationWeeks = blueprint.duration_weeks || blueprint.weeks.length || durationWeeks;
     try {
+      // OPT-010 W2-3: ONE bulk INSERT replaces the per-week performance rows.
+      // Dates derive from the loop-invariant startDateObj exactly as before.
+      const performanceNowIso = new Date().toISOString();
+      const performanceRows = [];
       for (let week = 1; week <= perfDurationWeeks; week++) {
         const weekStartDate = new Date(startDateObj);
         weekStartDate.setDate(startDateObj.getDate() + (week - 1) * 7);
-        
-        const weekEndDate = new Date(weekStartDate);
-        weekEndDate.setDate(weekStartDate.getDate() + 6);
+        performanceRows.push({
+          campaign_id: campaignId,
+          performance_date: weekStartDate.toISOString().split('T')[0],
+          total_reach: 1000, // Default targets
+          total_engagement: 50,
+          total_conversions: 10,
+          platform_breakdown: {},
+          content_type_breakdown: {},
+          ai_suggestions_implemented: 0,
+          improvement_score: 0.0,
+          created_at: performanceNowIso,
+          updated_at: performanceNowIso
+        });
+      }
 
-        const { error: performanceError } = await supabase
-          .from('campaign_performance')
-          .insert({
-            campaign_id: campaignId,
-            performance_date: weekStartDate.toISOString().split('T')[0],
-            total_reach: 1000, // Default targets
-            total_engagement: 50,
-            total_conversions: 10,
-            platform_breakdown: {},
-            content_type_breakdown: {},
-            ai_suggestions_implemented: 0,
-            improvement_score: 0.0,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          });
+      const { error: performanceError } = await supabase
+        .from('campaign_performance')
+        .insert(performanceRows);
 
-        if (performanceError) {
-          console.log(`Week ${week} performance error:`, performanceError);
-        }
+      if (performanceError) {
+        console.log('Campaign performance bulk insert error:', performanceError);
       }
     } catch (error) {
       console.log('Campaign performance table might not exist yet:', error);

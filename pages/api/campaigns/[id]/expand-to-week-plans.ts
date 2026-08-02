@@ -50,17 +50,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       suggestions: (w) => (w.topics_to_cover as string[])?.slice(0, 5) ?? [],
     });
 
-    let inserted = 0;
-    let updated = 0;
+    // OPT-010 W2-1: ONE prefetch + at most two batched writes replace the
+    // per-week select-then-insert/update loop (2 round-trips × weeks).
+    // inserted/updated counts derive from the prefetch — same values the
+    // loop counted. created_at is set only on the insert batch, so existing
+    // rows keep their original created_at exactly as the old UPDATE did.
+    const weekNumbers = refinements.map((r) => r.week_number);
+    const { data: existingRows } = await supabase
+      .from('weekly_content_refinements')
+      .select('id, week_number')
+      .eq('campaign_id', campaignId)
+      .in('week_number', weekNumbers);
+    const existingWeeks = new Set(
+      (existingRows ?? []).map((r: { week_number: number }) => r.week_number)
+    );
 
-    for (const row of refinements) {
-      const { data: existing } = await supabase
-        .from('weekly_content_refinements')
-        .select('id')
-        .eq('campaign_id', campaignId)
-        .eq('week_number', row.week_number)
-        .maybeSingle();
-
+    const nowIso = new Date().toISOString();
+    const buildPayload = (row: (typeof refinements)[number]): Record<string, unknown> => {
       const payload: Record<string, unknown> = {
         campaign_id: row.campaign_id,
         week_number: row.week_number,
@@ -68,25 +74,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         focus_area: row.focus_area,
         ai_suggestions: row.ai_suggestions ?? [],
         refinement_status: row.refinement_status ?? 'ai_enhanced',
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       };
       if (twelveWeekPlanId) payload.campaign_week_plan_id = twelveWeekPlanId;
+      return payload;
+    };
 
-      if (existing) {
-        const { error } = await supabase
-          .from('weekly_content_refinements')
-          .update(payload)
-          .eq('id', existing.id);
-        if (!error) updated++;
-      } else {
-        const { error } = await supabase
-          .from('weekly_content_refinements')
-          .insert({
-            ...payload,
-            created_at: new Date().toISOString(),
-          });
-        if (!error) inserted++;
-      }
+    const newRows = refinements.filter((r) => !existingWeeks.has(r.week_number));
+    const updateRows = refinements.filter((r) => existingWeeks.has(r.week_number));
+
+    let inserted = 0;
+    let updated = 0;
+
+    if (newRows.length > 0) {
+      const { error } = await supabase
+        .from('weekly_content_refinements')
+        .insert(newRows.map((r) => ({ ...buildPayload(r), created_at: nowIso })));
+      if (!error) inserted = newRows.length;
+    }
+    if (updateRows.length > 0) {
+      // Upsert on (campaign_id, week_number) acts as a batched UPDATE for
+      // rows the prefetch proved exist; created_at deliberately omitted.
+      const { error } = await supabase
+        .from('weekly_content_refinements')
+        .upsert(updateRows.map(buildPayload), { onConflict: 'campaign_id,week_number' });
+      if (!error) updated = updateRows.length;
     }
 
     // Sync campaign_versions stage - detailed week plans is between campaign_week_plan and daily_plan

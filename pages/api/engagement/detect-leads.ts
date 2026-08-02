@@ -50,47 +50,75 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       threadIds = (threads ?? []).map((t: { id: string }) => t.id);
     }
 
+    // OPT-010 W2-8: TWO batched prefetches replace 2 queries per thread
+    // (up to 100 round-trips), and per-message processing runs with BOUNDED
+    // concurrency (5) instead of fully serial. Thread context strings are
+    // built from the grouped prefetch — same derivation as before.
+    type MsgRow = { id: string; thread_id: string; content?: string; author_id?: string };
+
+    const { data: allMessages } =
+      threadIds.length > 0
+        ? await supabase
+            .from('engagement_messages')
+            .select('id, thread_id, content, author_id')
+            .in('thread_id', threadIds)
+        : { data: [] as MsgRow[] };
+
+    const messagesByThread = new Map<string, MsgRow[]>();
+    for (const m of (allMessages ?? []) as MsgRow[]) {
+      const list = messagesByThread.get(m.thread_id) ?? [];
+      list.push(m);
+      messagesByThread.set(m.thread_id, list);
+    }
+
+    const allMessageIds = ((allMessages ?? []) as MsgRow[]).map((m) => m.id);
+    const { data: intel } =
+      allMessageIds.length > 0
+        ? await supabase
+            .from('engagement_message_intelligence')
+            .select('message_id, intent, sentiment')
+            .in('message_id', allMessageIds)
+        : { data: [] as Array<{ message_id: string; intent?: string; sentiment?: string }> };
+
+    const intelByMsg = new Map<string, { intent?: string; sentiment?: string }>();
+    for (const i of intel ?? []) {
+      intelByMsg.set((i as { message_id: string }).message_id, {
+        intent: (i as { intent?: string }).intent,
+        sentiment: (i as { sentiment?: string }).sentiment,
+      });
+    }
+
+    const CONCURRENCY = 5;
     let totalDetected = 0;
     let totalProcessed = 0;
 
     for (const tid of threadIds) {
-      const { data: messages } = await supabase
-        .from('engagement_messages')
-        .select('id, thread_id, content, author_id')
-        .eq('thread_id', tid);
-
-      const { data: intel } = await supabase
-        .from('engagement_message_intelligence')
-        .select('message_id, intent, sentiment')
-        .in('message_id', (messages ?? []).map((m: { id: string }) => m.id));
-
-      const intelByMsg = new Map<string, { intent?: string; sentiment?: string }>();
-      for (const i of intel ?? []) {
-        intelByMsg.set((i as { message_id: string }).message_id, {
-          intent: (i as { intent?: string }).intent,
-          sentiment: (i as { sentiment?: string }).sentiment,
-        });
-      }
-
-      const threadContext = (messages ?? [])
-        .map((m: { content?: string }) => (m.content ?? '').toString().slice(0, 100))
+      const messages = messagesByThread.get(tid) ?? [];
+      const threadContext = messages
+        .map((m) => (m.content ?? '').toString().slice(0, 100))
         .join(' ');
 
-      for (const m of messages ?? []) {
-        const msg = m as { id: string; thread_id: string; content?: string; author_id?: string };
-        const im = intelByMsg.get(msg.id);
-        const result = await processMessageForLeads({
-          organization_id: organizationId,
-          message_id: msg.id,
-          thread_id: msg.thread_id,
-          author_id: msg.author_id ?? null,
-          content: (msg.content ?? '').toString(),
-          intent: im?.intent ?? null,
-          sentiment: im?.sentiment ?? null,
-          thread_context: threadContext,
-        });
-        totalProcessed++;
-        if (result.detected) totalDetected++;
+      for (let i = 0; i < messages.length; i += CONCURRENCY) {
+        const chunk = messages.slice(i, i + CONCURRENCY);
+        const results = await Promise.all(
+          chunk.map((msg) => {
+            const im = intelByMsg.get(msg.id);
+            return processMessageForLeads({
+              organization_id: organizationId,
+              message_id: msg.id,
+              thread_id: msg.thread_id,
+              author_id: msg.author_id ?? null,
+              content: (msg.content ?? '').toString(),
+              intent: im?.intent ?? null,
+              sentiment: im?.sentiment ?? null,
+              thread_context: threadContext,
+            });
+          })
+        );
+        for (const result of results) {
+          totalProcessed++;
+          if (result.detected) totalDetected++;
+        }
       }
     }
 

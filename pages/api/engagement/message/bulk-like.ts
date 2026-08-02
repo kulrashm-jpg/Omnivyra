@@ -24,30 +24,32 @@ type Body = {
   organization_id?: string;
 };
 
+type LikeContext = {
+  messageById: Map<string, { id: string; thread_id: string; platform_message_id: string | null }>;
+  threadOrgById: Map<string, string>;
+  playbookId: string | null;
+};
+
+/**
+ * OPT-010 W2-7: the three lookups that previously ran PER MESSAGE (message
+ * select, thread select, listPlaybooks — the last identical on every call)
+ * now come from batched prefetches. The decision sequence is byte-identical:
+ * message missing → false; thread missing or foreign org → false; no active
+ * playbook → false. The platform executeAction below stays SERIAL.
+ */
 async function likeMessage(
   organizationId: string,
   messageId: string,
   platform: string,
-  userId?: string
+  ctx: LikeContext
 ): Promise<boolean> {
-  const { data: message } = await supabase
-    .from('engagement_messages')
-    .select('id, thread_id, platform_message_id, post_comment_id, platform')
-    .eq('id', messageId)
-    .maybeSingle();
+  const message = ctx.messageById.get(messageId);
   if (!message) return false;
 
-  const { data: thread } = await supabase
-    .from('engagement_threads')
-    .select('organization_id')
-    .eq('id', message.thread_id)
-    .maybeSingle();
-  if (!thread || thread.organization_id !== organizationId) return false;
+  const threadOrg = ctx.threadOrgById.get(message.thread_id);
+  if (!threadOrg || threadOrg !== organizationId) return false;
 
-  const playbooks = (await listPlaybooks(organizationId, organizationId)).filter(
-    (p: { status?: string }) => p.status === 'active'
-  );
-  const playbookId = playbooks[0]?.id ?? null;
+  const playbookId = ctx.playbookId;
   if (!playbookId) return false;
 
   const normalizedPlatform = ((platform || 'linkedin').toLowerCase() === 'x') ? 'twitter' : (platform || 'linkedin');
@@ -140,9 +142,45 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(400).json({ error: 'message_ids or thread_ids required' });
     }
 
+    // OPT-010 W2-7: prefetch once — full message rows, their threads' org
+    // ids, and the org's active playbook (loop-invariant). 3 queries total
+    // instead of 3 per message; platform executeAction calls remain serial.
+    const idList = messageIds.map((m) => m.id);
+    const { data: fullMessages } =
+      idList.length > 0
+        ? await supabase
+            .from('engagement_messages')
+            .select('id, thread_id, platform_message_id, post_comment_id, platform')
+            .in('id', idList)
+        : { data: [] as any[] };
+    const messageById = new Map(
+      (fullMessages ?? []).map((m: any) => [m.id as string, m])
+    );
+    const threadIdList = Array.from(
+      new Set((fullMessages ?? []).map((m: any) => m.thread_id as string).filter(Boolean))
+    );
+    const { data: threadRows } =
+      threadIdList.length > 0
+        ? await supabase
+            .from('engagement_threads')
+            .select('id, organization_id')
+            .in('id', threadIdList)
+        : { data: [] as any[] };
+    const threadOrgById = new Map(
+      (threadRows ?? []).map((t: any) => [t.id as string, t.organization_id as string])
+    );
+    const activePlaybooks = (await listPlaybooks(organizationId, organizationId)).filter(
+      (p: { status?: string }) => p.status === 'active'
+    );
+    const ctx: LikeContext = {
+      messageById,
+      threadOrgById,
+      playbookId: activePlaybooks[0]?.id ?? null,
+    };
+
     let liked = 0;
     for (const { id, platform } of messageIds) {
-      const ok = await likeMessage(organizationId, id, platform, roleGate?.userId);
+      const ok = await likeMessage(organizationId, id, platform, ctx);
       if (ok) liked += 1;
     }
 
