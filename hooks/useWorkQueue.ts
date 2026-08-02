@@ -1,10 +1,18 @@
 /**
  * Hook for fetching daily work queue (actionable threads per platform).
- * Polls every 60 seconds.
+ *
+ * OPT-005 Phase 1: backed by SWR — shared cache entry per org; `refresh`
+ * is SWR `mutate` (cache-bypassing revalidation pushed to all subscribers).
+ * Public signature unchanged.
+ *
+ * Parity with the previous hand-rolled hook (risk review §9):
+ *  - error  → work queue blanks to the empty shape
+ *  - loading → isValidating (refresh flips it, as before)
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { apiFetch } from '@/lib/apiFetch';
+import { useCallback } from 'react';
+import useSWR from 'swr';
+import { ApiFetchError } from '@/lib/swr/swrClient';
 
 export type PlatformWorkItem = {
   platform: string;
@@ -18,62 +26,47 @@ export type WorkQueue = {
   platforms: PlatformWorkItem[];
 };
 
-const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour (unchanged)
+
+const EMPTY_QUEUE: WorkQueue = { total_actionable_threads: 0, platforms: [] };
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiFetchError && error.message) return error.message;
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
 
 export function useWorkQueue(
   organizationId: string
 ): { workQueue: WorkQueue; loading: boolean; error: string | null; refresh: () => Promise<void> } {
-  const [workQueue, setWorkQueue] = useState<WorkQueue>({
-    total_actionable_threads: 0,
-    platforms: [],
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const key = organizationId?.trim()
+    ? `/api/engagement/work-queue?${new URLSearchParams({
+        organization_id: organizationId,
+        organizationId: organizationId,
+      }).toString()}`
+    : null;
 
-  const fetchQueue = useCallback(async () => {
-    if (!organizationId?.trim()) {
-      setWorkQueue({ total_actionable_threads: 0, platforms: [] });
-      setLoading(false);
-      setError(null);
-      return;
-    }
+  const { data, error, isValidating, mutate } = useSWR<{
+    total_actionable_threads?: number;
+    platforms?: PlatformWorkItem[];
+  }>(key, { refreshInterval: REFRESH_INTERVAL_MS });
 
-    setLoading(true);
-    setError(null);
+  const refresh = useCallback(async () => {
+    await mutate();
+  }, [mutate]);
 
-    const params = new URLSearchParams({
-      organization_id: organizationId,
-      organizationId: organizationId,
-    });
+  const workQueue: WorkQueue =
+    error || !data
+      ? EMPTY_QUEUE
+      : {
+          total_actionable_threads: data.total_actionable_threads ?? 0,
+          platforms: Array.isArray(data.platforms) ? data.platforms : [],
+        };
 
-    try {
-      const res = await apiFetch(`/api/engagement/work-queue?${params.toString()}`);
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(body.error || body.message || 'Failed to fetch work queue');
-      }
-      if (body.error) throw new Error(body.error);
-      setWorkQueue({
-        total_actionable_threads: body.total_actionable_threads ?? 0,
-        platforms: Array.isArray(body.platforms) ? body.platforms : [],
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch work queue');
-      setWorkQueue({ total_actionable_threads: 0, platforms: [] });
-    } finally {
-      setLoading(false);
-    }
-  }, [organizationId]);
-
-  useEffect(() => {
-    fetchQueue();
-  }, [fetchQueue]);
-
-  useEffect(() => {
-    if (!organizationId?.trim()) return;
-    const interval = setInterval(fetchQueue, REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [organizationId, fetchQueue]);
-
-  return { workQueue, loading, error, refresh: fetchQueue };
+  return {
+    workQueue,
+    loading: isValidating,
+    error: error ? errorMessage(error, 'Failed to fetch work queue') : null,
+    refresh,
+  };
 }

@@ -2,13 +2,18 @@
  * Notification Bell
  * Shows unread count badge; opens a dropdown of recent notifications.
  * Polls every 60 s. Marks individual or all-read via PATCH /api/notifications.
+ *
+ * OPT-005 Phase 1: the list is an SWR cache entry. The visibility poll below
+ * is the SINGLE revalidation owner for this key — SWR focus/reconnect
+ * revalidation is disabled so cadences never double up. Mark-read keeps its
+ * post-PATCH local update via mutate(..., { revalidate: false }).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import useSWR from 'swr';
 import { Bell, X, CheckCheck, Users } from 'lucide-react';
 import { useVisibilityPolling } from '../lib/client/dataKit';
 import { apiFetch } from '../lib/apiFetch';
-import { runSharedPoll } from '../utils/pollingGuards';
 
 type AppNotification = {
   id: string;
@@ -34,43 +39,32 @@ function NotifIcon({ type }: { type: string }) {
   return <Bell className="h-4 w-4 text-gray-400" />;
 }
 
+const NOTIFICATIONS_KEY = '/api/notifications';
+
 export function NotificationBell() {
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
-  const fetchInFlightRef = useRef<Promise<void> | null>(null);
+
+  // SWR owns fetch/dedupe/cache. dedupingInterval preserves the previous
+  // runSharedPoll minIntervalMs=5000; errors are non-fatal exactly as before
+  // (last-known list keeps rendering, badge doesn't flicker).
+  const { data, mutate } = useSWR<{ notifications?: AppNotification[] }>(NOTIFICATIONS_KEY, {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    dedupingInterval: 5_000,
+  });
+  const notifications: AppNotification[] = data?.notifications ?? [];
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
-  const fetchNotifications = useCallback(async () => {
-    if (fetchInFlightRef.current) return fetchInFlightRef.current;
-    fetchInFlightRef.current = runSharedPoll<void>('notifications:list', async () => {
-      try {
-        const res = await apiFetch('/api/notifications');
-        if (!res.ok) return;
-        const json = await res.json();
-        setNotifications(json.notifications ?? []);
-      } catch {
-        // non-fatal
-      }
-    }, { startupDelayMs: 1500, minIntervalMs: 5000 })
-      .then(() => undefined)
-      .finally(() => {
-        fetchInFlightRef.current = null;
-      });
-    return fetchInFlightRef.current;
-  }, []);
-
-  // Initial fetch + 60 s poll.
-  // W4-8 (audit B-53): the poll is now VISIBILITY-AWARE via the F-13 kit —
+  // W4-8 (audit B-53): the poll is VISIBILITY-AWARE via the F-13 kit —
   // hidden/background tabs stop polling entirely and refresh immediately on
-  // return. Same 60 s cadence while visible; same fetcher (in-flight dedupe
-  // above preserved).
-  useEffect(() => {
-    fetchNotifications();
-  }, [fetchNotifications]);
-  useVisibilityPolling(fetchNotifications, 60_000);
+  // return. Same 60 s cadence while visible; SWR mutate() is the fetcher and
+  // this poll is the key's single revalidation owner.
+  useVisibilityPolling(() => {
+    void mutate();
+  }, 60_000);
 
   // Close on outside click
   useEffect(() => {
@@ -89,8 +83,15 @@ export function NotificationBell() {
     try {
       const url = id ? `/api/notifications?id=${id}` : '/api/notifications';
       await apiFetch(url, { method: 'PATCH' });
-      setNotifications((prev) =>
-        prev.map((n) => (!id || n.id === id) ? { ...n, is_read: true } : n)
+      // Same post-PATCH local update as before, now written into the shared
+      // cache entry (revalidate:false — the next poll reconciles).
+      await mutate(
+        (current) => ({
+          notifications: (current?.notifications ?? []).map((n) =>
+            (!id || n.id === id) ? { ...n, is_read: true } : n
+          ),
+        }),
+        { revalidate: false }
       );
     } finally {
       setLoading(false);

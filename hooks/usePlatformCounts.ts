@@ -1,9 +1,20 @@
 /**
  * Hook for fetching per-platform inbox counts.
+ *
+ * OPT-005 Phase 1: backed by SWR — all mounted consumers share ONE cache
+ * entry per org, and `refresh` is SWR `mutate`, which bypasses the cache,
+ * revalidates once and pushes the fresh counts to every subscriber (the
+ * mutation-propagation contract that made this route ineligible for HTTP
+ * caching in OPT-002). Public signature unchanged.
+ *
+ * Parity with the previous hand-rolled hook (risk review §9):
+ *  - error  → counts blank to {} (consumers assume reset on failure)
+ *  - loading → isValidating (refresh flips it, as before)
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { apiFetch } from '@/lib/apiFetch';
+import { useCallback } from 'react';
+import useSWR from 'swr';
+import { ApiFetchError } from '@/lib/swr/swrClient';
 
 export type PlatformCount = {
   thread_count: number;
@@ -13,56 +24,36 @@ export type PlatformCount = {
 
 export type PlatformCounts = Record<string, PlatformCount>;
 
-const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour (unchanged)
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiFetchError && error.message) return error.message;
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
 
 export function usePlatformCounts(
   organizationId: string
 ): { counts: PlatformCounts; loading: boolean; error: string | null; refresh: () => Promise<void> } {
-  const [counts, setCounts] = useState<PlatformCounts>({});
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const key = organizationId?.trim()
+    ? `/api/engagement/platform-counts?${new URLSearchParams({
+        organization_id: organizationId,
+        organizationId: organizationId,
+      }).toString()}`
+    : null;
 
-  const fetchCounts = useCallback(async () => {
-    if (!organizationId?.trim()) {
-      setCounts({});
-      setLoading(false);
-      setError(null);
-      return;
-    }
+  const { data, error, isValidating, mutate } = useSWR<{ counts?: PlatformCounts }>(key, {
+    refreshInterval: REFRESH_INTERVAL_MS,
+  });
 
-    setLoading(true);
-    setError(null);
+  const refresh = useCallback(async () => {
+    await mutate();
+  }, [mutate]);
 
-    const params = new URLSearchParams({
-      organization_id: organizationId,
-      organizationId: organizationId,
-    });
-
-    try {
-      const res = await apiFetch(`/api/engagement/platform-counts?${params.toString()}`);
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(body.error || body.message || 'Failed to fetch platform counts');
-      }
-      if (body.error) throw new Error(body.error);
-      setCounts(body.counts ?? {});
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch platform counts');
-      setCounts({});
-    } finally {
-      setLoading(false);
-    }
-  }, [organizationId]);
-
-  useEffect(() => {
-    fetchCounts();
-  }, [fetchCounts]);
-
-  useEffect(() => {
-    if (!organizationId?.trim()) return;
-    const interval = setInterval(fetchCounts, REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [organizationId, fetchCounts]);
-
-  return { counts, loading, error, refresh: fetchCounts };
+  return {
+    counts: error ? {} : (data?.counts ?? {}),
+    loading: isValidating,
+    error: error ? errorMessage(error, 'Failed to fetch platform counts') : null,
+    refresh,
+  };
 }

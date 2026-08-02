@@ -1,10 +1,16 @@
 /**
  * Hook for fetching company-connected social platforms.
  * Used by Engagement Command Center to show only configured platform tabs.
+ *
+ * OPT-005 Phase 1: backed by SWR — shared cache entry per org (this data
+ * changes only on connect/disconnect; TTL-bounded staleness accepted, same
+ * as the OPT-002 assessment). Public signature unchanged; error → [] parity
+ * with the previous hand-rolled hook.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { apiFetch } from '@/lib/apiFetch';
+import { useCallback } from 'react';
+import useSWR from 'swr';
+import { ApiFetchError } from '@/lib/swr/swrClient';
 
 const PLATFORM_LABELS: Record<string, string> = {
   linkedin: 'LinkedIn',
@@ -32,56 +38,41 @@ export type CompanyIntegration = {
   label: string;
 };
 
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiFetchError && error.message) return error.message;
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
 export function useCompanyIntegrations(organizationId: string): {
   platforms: CompanyIntegration[];
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
 } {
-  const [platforms, setPlatforms] = useState<CompanyIntegration[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const key = organizationId?.trim()
+    ? `/api/engagement/integrations?${new URLSearchParams({
+        organization_id: organizationId,
+        organizationId: organizationId,
+      }).toString()}`
+    : null;
 
-  const fetchIntegrations = useCallback(async () => {
-    if (!organizationId?.trim()) {
-      setPlatforms([]);
-      setLoading(false);
-      setError(null);
-      return;
-    }
+  const { data, error, isValidating, mutate } = useSWR<{ platforms?: string[] }>(key);
 
-    setLoading(true);
-    setError(null);
+  const refresh = useCallback(async () => {
+    await mutate();
+  }, [mutate]);
 
-    const params = new URLSearchParams({
-      organization_id: organizationId,
-      organizationId: organizationId,
-    });
+  const list = !error && Array.isArray(data?.platforms) ? data.platforms : [];
+  const platforms: CompanyIntegration[] = list.map((p: string) => ({
+    platform: (p || '').toLowerCase().trim(),
+    label: PLATFORM_LABELS[(p || '').toLowerCase().trim()] || p || 'Unknown',
+  }));
 
-    try {
-      const res = await apiFetch(`/api/engagement/integrations?${params.toString()}`);
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(body.error || body.message || 'Failed to fetch integrations');
-      }
-      const list = Array.isArray(body.platforms) ? body.platforms : [];
-      setPlatforms(
-        list.map((p: string) => ({
-          platform: (p || '').toLowerCase().trim(),
-          label: PLATFORM_LABELS[(p || '').toLowerCase().trim()] || p || 'Unknown',
-        }))
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch integrations');
-      setPlatforms([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [organizationId]);
-
-  useEffect(() => {
-    fetchIntegrations();
-  }, [fetchIntegrations]);
-
-  return { platforms, loading, error, refresh: fetchIntegrations };
+  return {
+    platforms,
+    loading: isValidating,
+    error: error ? errorMessage(error, 'Failed to fetch integrations') : null,
+    refresh,
+  };
 }

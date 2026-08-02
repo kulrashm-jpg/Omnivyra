@@ -2,7 +2,10 @@ import '../styles/globals.css';
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
 import Script from 'next/script';
+import { SWRConfig } from 'swr';
 import { CompanyProvider } from '../components/CompanyContext';
+import { SWR_GLOBAL_CONFIG } from '../lib/swr/swrClient';
+import { SwrCachePurgeWatcher } from '../components/swr/SwrCachePurgeWatcher';
 import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
@@ -317,8 +320,14 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
 function MyApp({ Component, pageProps }: AppProps) {
   return (
+    // OPT-005 Phase 1: SWRConfig is the OUTERMOST provider — _app persists
+    // across soft navigations, so the client cache lives for the tab session
+    // and is independent of auth-state re-renders. The purge watcher below
+    // (inside CompanyProvider) owns the invalidation matrix.
+    <SWRConfig value={SWR_GLOBAL_CONFIG}>
     <CompanyProvider>
       <TourProvider>
+        <SwrCachePurgeWatcher />
         {/* W5-4: expose the self-hosted families as CSS variables globally.
             styled-jsx global — no wrapper element, no cascade change. */}
         <style jsx global>{`
@@ -343,6 +352,7 @@ function MyApp({ Component, pageProps }: AppProps) {
         {process.env.NODE_ENV === 'development' ? <AuthDevPanel /> : null}
       </TourProvider>
     </CompanyProvider>
+    </SWRConfig>
   );
 }
 
