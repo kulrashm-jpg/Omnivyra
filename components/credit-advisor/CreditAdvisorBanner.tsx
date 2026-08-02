@@ -7,10 +7,11 @@
  * Read-only; its own lightweight fetch (no popup show/persist logic).
  */
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
+import useSWR from 'swr';
 import { Gauge, AlertTriangle, CheckCircle2, ArrowRight } from 'lucide-react';
-import { apiFetch } from '@/lib/apiFetch';
+import { executiveReportKey } from '@/hooks/useExecutiveIntelligence';
 import type {
   ExecutiveIntelligenceReport,
   RiskLevel,
@@ -26,23 +27,12 @@ const STRIP: Record<RiskLevel, string> = {
 };
 
 export default function CreditAdvisorBanner({ orgId }: { orgId: string | null | undefined }) {
-  const [report, setReport] = useState<ExecutiveIntelligenceReport | null>(null);
-
-  useEffect(() => {
-    if (!orgId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiFetch(`/api/credits/executive?org_id=${orgId}`);
-        if (!res.ok) return;
-        const data = (await res.json()) as ExecutiveIntelligenceReport;
-        if (!cancelled) setReport(data);
-      } catch {
-        /* banner is best-effort; stay silent on failure */
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [orgId]);
+  // OPT-005 Phase 2A: SAME SWR key as useExecutiveIntelligence — the banner
+  // and the popup hook now share one request/cache entry per org. Banner
+  // stays best-effort: on error `data` is undefined and it renders nothing,
+  // exactly like the previous silent catch.
+  const { data } = useSWR<ExecutiveIntelligenceReport>(orgId ? executiveReportKey(orgId) : null);
+  const report = data ?? null;
 
   if (!report) return null;
   const { banner } = report;

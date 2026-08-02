@@ -8,8 +8,15 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { apiFetch } from '@/lib/apiFetch';
+import useSWR from 'swr';
+import { ApiFetchError } from '@/lib/swr/swrClient';
 import type { ExecutiveIntelligenceReport } from '@/backend/services/creditAdvisor/creditAdvisorTypes';
+
+/** OPT-005 Phase 2A: shared SWR key — CreditAdvisorBanner uses the SAME key,
+ * so the two consumers of /api/credits/executive now share one request. */
+export function executiveReportKey(orgId: string): string {
+  return `/api/credits/executive?org_id=${orgId}`;
+}
 
 export type DismissKind = 'dismiss' | 'today' | 'forever' | 'remind';
 
@@ -59,59 +66,52 @@ export interface ExecutiveIntelligenceState {
 export function useExecutiveIntelligence(
   orgId: string | null | undefined,
 ): ExecutiveIntelligenceState {
-  const [report, setReport] = useState<ExecutiveIntelligenceReport | null>(null);
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [error, setError] = useState<string | null>(null);
   const [visible, setVisible] = useState(false);
 
+  // OPT-005 Phase 2A: SWR facade — global apiFetch fetcher; shared cache
+  // entry with CreditAdvisorBanner. Public signature unchanged.
+  const { data, error: swrError } = useSWR<ExecutiveIntelligenceReport>(
+    orgId ? executiveReportKey(orgId) : null,
+  );
+
+  const report = data ?? null;
+  const status: 'loading' | 'ready' | 'error' =
+    !orgId || (!data && !swrError) ? 'loading' : swrError ? 'error' : 'ready';
+  const error =
+    status === 'error'
+      ? swrError instanceof ApiFetchError
+        ? `Request failed (${swrError.status})`
+        : (swrError as Error)?.message ?? 'failed'
+      : null;
+
+  // ── Phase 31 smart-display decision — same logic, now driven by report
+  // arrival (runs identically for a cache-served report on remount, which
+  // is what the previous per-mount refetch produced).
   useEffect(() => {
-    if (!orgId) {
-      setStatus('loading');
-      return;
+    if (!orgId || !report) return;
+    const prefs = readPrefs(orgId);
+    const now = Date.now();
+    const today = todayStr();
+    const sig = report.display.signature;
+
+    const suppressed =
+      prefs.dismissedForever === true ||
+      (prefs.remindAt != null && now < prefs.remindAt) ||
+      (prefs.dismissUntil != null && prefs.dismissUntil >= today);
+
+    const signatureChanged = prefs.lastSignature !== sig;
+    const shownToday = prefs.lastShownDate === today;
+
+    const show =
+      !suppressed && report.display.base_should_show && (!shownToday || signatureChanged);
+
+    if (show) {
+      setVisible(true);
+      writePrefs(orgId, { lastShownDate: today, lastSignature: sig });
+    } else {
+      setVisible(false);
     }
-    let cancelled = false;
-    (async () => {
-      setStatus('loading');
-      try {
-        const res = await apiFetch(`/api/credits/executive?org_id=${orgId}`);
-        if (!res.ok) {
-          if (!cancelled) { setStatus('error'); setError(`Request failed (${res.status})`); }
-          return;
-        }
-        const data = (await res.json()) as ExecutiveIntelligenceReport;
-        if (cancelled) return;
-        setReport(data);
-        setStatus('ready');
-
-        // ── Phase 31 smart-display decision ──────────────────────────────
-        const prefs = readPrefs(orgId);
-        const now = Date.now();
-        const today = todayStr();
-        const sig = data.display.signature;
-
-        const suppressed =
-          prefs.dismissedForever === true ||
-          (prefs.remindAt != null && now < prefs.remindAt) ||
-          (prefs.dismissUntil != null && prefs.dismissUntil >= today);
-
-        const signatureChanged = prefs.lastSignature !== sig;
-        const shownToday = prefs.lastShownDate === today;
-
-        const show =
-          !suppressed && data.display.base_should_show && (!shownToday || signatureChanged);
-
-        if (show) {
-          setVisible(true);
-          writePrefs(orgId, { lastShownDate: today, lastSignature: sig });
-        } else {
-          setVisible(false);
-        }
-      } catch (err: any) {
-        if (!cancelled) { setStatus('error'); setError(err?.message ?? 'failed'); }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [orgId]);
+  }, [orgId, report]);
 
   const dismiss = useCallback(
     (kind: DismissKind) => {

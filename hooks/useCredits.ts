@@ -9,14 +9,25 @@
  * `status === 'ready'`. A `0` in any other state is a placeholder, NOT a real
  * balance — consumers must branch on `status`, never infer from the number.
  * `loading` / `error` are kept as legacy mirrors for backward compatibility.
+ *
+ * OPT-005 Phase 2A: backed by SWR — all mounted consumers (up to three chrome
+ * components at once) share ONE cache entry and ONE request per org, and the
+ * realtime subscription is a per-org tab-lifetime singleton
+ * (lib/swr/creditsRealtime.ts) triggering a cache revalidation on INSERT —
+ * exactly what each per-mount channel did before, minus the duplicates.
+ * Revalidation owners are unchanged: the 5-minute poll (now SWR
+ * refreshInterval) + realtime. Focus/reconnect revalidation is disabled so no
+ * new trigger is introduced. Public signature and the status state machine
+ * are identical.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { getSupabaseBrowser } from '@/lib/supabaseBrowser';
+import { useCallback, useEffect } from 'react';
+import useSWR, { useSWRConfig } from 'swr';
 import type { CategoryUsage } from '@/components/ui/CreditMeter';
 import { getFeatureDisplayGroup } from '@/shared/monetization/featureRegistry';
-import { runSharedPoll } from '@/utils/pollingGuards';
 import { apiFetch } from '@/lib/apiFetch';
+import { ApiFetchError } from '@/lib/swr/swrClient';
+import { creditsBalanceKey, ensureCreditsRealtime } from '@/lib/swr/creditsRealtime';
 
 /**
  * Explicit lifecycle states — each renders distinctly so a fetch failure can
@@ -40,6 +51,9 @@ export interface CreditsState {
   /** Human-readable message when status === 'error'; null otherwise. */
   error: string | null;
 }
+
+/** 5-minute fallback poll — unchanged cadence, now expressed as refreshInterval. */
+export const CREDITS_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * Lightweight structured diagnostic. One line per discrete failure transition
@@ -113,140 +127,120 @@ function parseWallet(
   };
 }
 
+type CreditsData =
+  | { kind: 'ready'; total: number; remaining: number; categories: CategoryUsage[] }
+  | { kind: 'unavailable' };
+
+/**
+ * Credits fetcher — goes through apiFetch (Bearer + OPT-004 memo) and maps
+ * the response through the SAME state machine as the previous implementation:
+ * non-200 → thrown error (auth-specific message, via ApiFetchError.status);
+ * malformed → thrown error; wallet null → 'unavailable'; parsed → 'ready'.
+ * Errors are thrown so SWR never caches them as data.
+ */
+async function fetchCreditsState(url: string): Promise<CreditsData> {
+  const res = await apiFetch(url);
+
+  if (!res.ok) {
+    const isAuth = res.status === 401 || res.status === 403;
+    diag(isAuth ? 'auth_failure' : 'non_200_response', { httpStatus: res.status });
+    throw new ApiFetchError(url, res.status, {
+      error: isAuth ? `Not authorized (HTTP ${res.status})` : `Request failed (HTTP ${res.status})`,
+    });
+  }
+
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    diag('malformed_payload', { reason: 'json_parse_failed' });
+    throw new ApiFetchError(url, res.status, { error: 'Malformed credits payload' });
+  }
+  if (!json || typeof json !== 'object') {
+    diag('malformed_payload', { reason: 'non_object_response' });
+    throw new ApiFetchError(url, res.status, { error: 'Malformed credits payload' });
+  }
+
+  const credits = (json as Record<string, unknown>).credits;
+  if (credits == null) {
+    diag('missing_wallet', { url });
+    return { kind: 'unavailable' };
+  }
+
+  const parsed = parseWallet(credits);
+  if (!parsed) {
+    diag('malformed_payload', { reason: 'invalid_wallet_shape' });
+    throw new ApiFetchError(url, res.status, { error: 'Malformed credits payload' });
+  }
+
+  return { kind: 'ready', total: parsed.total, remaining: parsed.remaining, categories: parsed.categories };
+}
+
 export function useCredits(companyId: string | null | undefined): CreditsState & { refetch: () => void } {
-  const [state, setState] = useState<CreditsState>({
-    status: 'loading',
-    totalCredits: 0,
-    remainingCredits: 0,
-    categories: [],
-    loading: true,
-    error: null,
+  const key = companyId ? creditsBalanceKey(companyId) : null;
+  const { mutate: globalMutate } = useSWRConfig();
+
+  const { data, error, isValidating, mutate } = useSWR<CreditsData>(key, fetchCreditsState, {
+    refreshInterval: CREDITS_REFRESH_INTERVAL_MS,
+    // Revalidation owners unchanged from the previous implementation:
+    // the 5-minute poll above + the realtime INSERT below. No new triggers.
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    // Parity with the old runSharedPoll minIntervalMs: 1000.
+    dedupingInterval: 1000,
   });
 
-  const fetch = useCallback(async () => {
-    if (!companyId) return;
-    await runSharedPoll(`credits:${companyId}`, async () => {
-      setState(s => ({ ...s, status: 'loading', loading: true, error: null }));
-      try {
-        // Explicit auth propagation — canonical apiFetch wrapper attaches
-        // Bearer token from the Supabase browser singleton and falls back
-        // to refreshSession() if the token is null. Without this the
-        // request authenticated as anonymous and the badge silently fell
-        // back to 0.
-        const res = await apiFetch(
-          `/api/admin/credits?companyId=${encodeURIComponent(companyId)}`,
-        );
-
-        // ── Non-200 → explicit error state (auth vs other) ──────────────────
-        if (!res.ok) {
-          const isAuth = res.status === 401 || res.status === 403;
-          diag(isAuth ? 'auth_failure' : 'non_200_response', { httpStatus: res.status });
-          setState(s => ({
-            ...s,
-            status: 'error',
-            loading: false,
-            error: isAuth ? `Not authorized (HTTP ${res.status})` : `Request failed (HTTP ${res.status})`,
-          }));
-          return;
-        }
-
-        // ── Malformed envelope → explicit error state ───────────────────────
-        let json: unknown;
-        try {
-          json = await res.json();
-        } catch {
-          diag('malformed_payload', { reason: 'json_parse_failed' });
-          setState(s => ({ ...s, status: 'error', loading: false, error: 'Malformed credits payload' }));
-          return;
-        }
-        if (!json || typeof json !== 'object') {
-          diag('malformed_payload', { reason: 'non_object_response' });
-          setState(s => ({ ...s, status: 'error', loading: false, error: 'Malformed credits payload' }));
-          return;
-        }
-
-        // ── Authenticated but no credit account yet → unavailable ───────────
-        const credits = (json as Record<string, unknown>).credits;
-        if (credits == null) {
-          diag('missing_wallet', { companyId });
-          setState({
-            status: 'unavailable',
-            totalCredits: 0,
-            remainingCredits: 0,
-            categories: [],
-            loading: false,
-            error: null,
-          });
-          return;
-        }
-
-        // ── Wallet present but structurally invalid → error (no coercion) ───
-        const parsed = parseWallet(credits);
-        if (!parsed) {
-          diag('malformed_payload', { reason: 'invalid_wallet_shape' });
-          setState(s => ({ ...s, status: 'error', loading: false, error: 'Malformed credits payload' }));
-          return;
-        }
-
-        // ── Verified numeric balance (0 here means a REAL zero) ─────────────
-        setState({
-          status: 'ready',
-          totalCredits: parsed.total,
-          remainingCredits: parsed.remaining,
-          categories: parsed.categories,
-          loading: false,
-          error: null,
-        });
-      } catch (err: any) {
-        // Transient fetch failure (network / abort). Distinct from the
-        // handled non-200 / malformed branches above; surfaced as 'error'
-        // and self-heals on the next poll / realtime tick.
-        diag('fetch_exception', { message: err?.message ?? 'unknown' });
-        setState(s => ({
-          ...s,
-          status: 'error',
-          loading: false,
-          error: err?.message ?? 'Failed to load credits',
-        }));
-      }
-    }, { startupDelayMs: 3000, minIntervalMs: 1000 });
-  }, [companyId]);
-
+  // ONE realtime channel per org (tab-lifetime singleton). Revalidates via
+  // the GLOBAL mutate so the callback stays valid across mounts/unmounts.
   useEffect(() => {
     if (!companyId) return;
-    fetch();
+    ensureCreditsRealtime(companyId, () => {
+      void globalMutate(creditsBalanceKey(companyId));
+    });
+  }, [companyId, globalMutate]);
 
-    // Poll every 5 minutes as fallback
-    const pollId = setInterval(fetch, 5 * 60 * 1000);
+  const refetch = useCallback(() => {
+    void mutate();
+  }, [mutate]);
 
-    // Realtime: refetch instantly whenever a credit transaction is inserted for this org
-    const supabase = getSupabaseBrowser();
-    const channel = supabase
-      .channel(`credit_balance_${companyId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'credit_transactions',
-          filter: `organization_id=eq.${companyId}`,
-        },
-        () => { void fetch(); },
-      )
-      .subscribe((channelStatus) => {
-        // Observability only — subscription semantics unchanged. A failed
-        // realtime channel just means we fall back to the 5-min poll.
-        const s = String(channelStatus);
-        if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') {
-          diag('realtime_sync_failure', { channelStatus: s });
-        }
-      });
+  // ── State mapping — identical machine to the previous implementation ─────
+  // Old behavior: every poll tick set status 'loading' while keeping the
+  // previous totals; error branches also kept previous totals. SWR retains
+  // last-good `data` across revalidations and errors, so the same holds.
+  let totalCredits = 0;
+  let remainingCredits = 0;
+  let categories: CategoryUsage[] = [];
+  if (data?.kind === 'ready') {
+    totalCredits = data.total;
+    remainingCredits = data.remaining;
+    categories = data.categories;
+  }
 
-    return () => {
-      clearInterval(pollId);
-      void supabase.removeChannel(channel);
-    };
-  }, [companyId, fetch]);
+  let status: CreditsStatus;
+  if (!companyId || isValidating || (!data && !error)) {
+    status = 'loading';
+  } else if (error) {
+    status = 'error';
+  } else if (data!.kind === 'unavailable') {
+    status = 'unavailable';
+  } else {
+    status = 'ready';
+  }
 
-  return { ...state, refetch: fetch };
+  const errorMessage =
+    status === 'error'
+      ? error instanceof Error && error.message
+        ? error.message
+        : 'Failed to load credits'
+      : null;
+
+  return {
+    status,
+    totalCredits,
+    remainingCredits,
+    categories,
+    loading: status === 'loading',
+    error: errorMessage,
+    refetch,
+  };
 }
