@@ -16,6 +16,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { canStartActivity } from '../../../../backend/services/billing/admissionControl';
+import { getWalletSnapshot } from '../../../../backend/services/creditPriorityService';
 
 const MAX_ACTIONS = 40;
 // Presentation heuristic only — does not gate anything.
@@ -37,10 +38,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
 
+  // OPT-010 A2: ONE wallet read for the whole request. Previously every
+  // canStartActivity call re-fetched the identical organization_credits row
+  // (up to 40 sequential reads). The snapshot is passed through the additive
+  // walletSnapshot option; evaluation semantics are unchanged.
+  const walletSnapshot = await getWalletSnapshot(companyId);
+
   const warnings: Array<{ activity: string; wouldBlock: boolean; shortfall: number; requiredCredits: number; effectiveCredits: number }> = [];
   let effectiveCredits = 0;
   for (const activity of actions) {
-    const d = await canStartActivity({ organizationId: companyId, activity }); // read-only — never blocks
+    const d = await canStartActivity({ organizationId: companyId, activity, walletSnapshot }); // read-only — never blocks
     effectiveCredits = d.effectiveCredits;
     warnings.push({
       activity,

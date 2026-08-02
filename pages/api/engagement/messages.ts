@@ -154,6 +154,151 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           .filter((id): id is string => Boolean(id))
       )
     );
+
+    // OPT-010 A4: the pending-outbound block below depends only on the request
+    // inputs and messageRows — NOT on the thread/action reads that follow — so
+    // it runs CONCURRENTLY with that dependent chain. Logic and both query
+    // guards are byte-identical to the previous serial block; only the start
+    // time moved. Awaited where its result is consumed.
+    //
+    // Surface pending outbound DM actions as virtual "queued" messages
+    // so the conversation pane can render them inline alongside the real
+    // platform messages. The user sees:
+    //   - the chain of incoming messages from the other party (real rows)
+    //   - their own queued reply with a "Queued · not yet delivered"
+    //     marker and a Cancel button
+    // Once the extension actually delivers the action, the row is marked
+    // executed and a real outbound engagement_messages row gets ingested
+    // on the next sync — at which point this virtual entry is replaced
+    // by the real one.
+    const pendingActionsPromise = (async () => {
+      const threadIdsForPending = threadId
+        ? [threadId, ...siblingThreadIds]
+        : threadIds ?? [];
+      const pendingActions: Array<{
+        id: string;
+        thread_id: string | null;
+        platform: string | null;
+        content: string;
+        created_at: string;
+        participant_target: string;
+        claimed: boolean;
+        acknowledged: boolean;
+        lease_expires_at: string | null;
+        lease_expired: boolean;
+      }> = [];
+      if (threadIdsForPending.length === 0) return pendingActions;
+      const { data: pendingRows } = await supabase
+        .from('engagement_threads')
+        .select('id, platform, platform_thread_id, raw_payload')
+        .in('id', Array.from(new Set(threadIdsForPending.filter(Boolean))));
+      const platformThreadIdToThreadId = new Map<string, string>();
+      const targetToThreadIds = new Map<string, string[]>();
+      const threadPlatformById = new Map<string, string | null>();
+      const addPendingTarget = (tid: string, value: unknown) => {
+        const target = typeof value === 'string' ? value.trim() : '';
+        if (!target) return;
+        for (const key of [target, target.toLowerCase()]) {
+          const current = targetToThreadIds.get(key) ?? [];
+          if (!current.includes(tid)) targetToThreadIds.set(key, [...current, tid]);
+        }
+      };
+      for (const row of pendingRows ?? []) {
+        const t = row as {
+          id: string;
+          platform?: string | null;
+          platform_thread_id?: string | null;
+          raw_payload?: Record<string, unknown> | null;
+        };
+        const ptid = t.platform_thread_id ?? null;
+        const rp = t.raw_payload ?? {};
+        threadPlatformById.set(t.id, t.platform ?? null);
+        addPendingTarget(t.id, t.id);
+        addPendingTarget(t.id, ptid);
+        addPendingTarget(t.id, rp.thread_url);
+        addPendingTarget(t.id, rp.participant_profile_url);
+        addPendingTarget(t.id, rp.participant_username);
+        addPendingTarget(t.id, rp.participant_name);
+        if (ptid) platformThreadIdToThreadId.set(ptid, t.id);
+      }
+      const requestedThreadSet = new Set(threadIdsForPending.filter(Boolean));
+      for (const row of messageRows) {
+        const tid = typeof row.thread_id === 'string' ? row.thread_id : null;
+        if (!tid || !requestedThreadSet.has(tid)) continue;
+        const rp = (row.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {}) as Record<string, unknown>;
+        addPendingTarget(tid, row.id);
+        addPendingTarget(tid, row.platform_message_id);
+        addPendingTarget(tid, rp.sender_name);
+        addPendingTarget(tid, rp.author_name);
+        addPendingTarget(tid, rp.sender_profile_url);
+        addPendingTarget(tid, rp.author_profile_url);
+      }
+      // The action's target_id is now the recipient identity (display name
+      // or profile URL) for new actions, but legacy rows still use the
+      // platform_thread_id. Match by either — fetch all pending DMs for
+      // the org's matching set, then filter post-hoc.
+      const platformThreadIds = Array.from(platformThreadIdToThreadId.keys());
+      if (platformThreadIds.length > 0 || targetToThreadIds.size > 0) {
+        const { data: actions } = await supabase
+          .from('community_ai_actions')
+          .select('id, platform, target_id, suggested_text, final_text, created_at, updated_at, status, dispatch_lease_id, dispatch_lease_expires_at, dispatch_acknowledged_at, action_type')
+          .eq('organization_id', organizationId)
+          .in('action_type', ['dm', 'reply'])
+          .eq('status', 'pending');
+        // Defensive: only surface actions whose target_id maps to one of
+        // the requested threads. We compare against platform_thread_id
+        // (legacy shape) only — the new recipient-identity target ids
+        // can't be matched here without an authors join. Acceptable
+        // tradeoff: legacy rows get the queued UI; brand-new ones light
+        // up after we add the participant lookup below.
+        for (const a of actions ?? []) {
+          const action = a as {
+            id: string;
+            platform?: string | null;
+            target_id?: string | null;
+            final_text?: string | null;
+            suggested_text?: string | null;
+            created_at?: string | null;
+            updated_at?: string | null;
+            dispatch_lease_id?: string | null;
+            dispatch_lease_expires_at?: string | null;
+            dispatch_acknowledged_at?: string | null;
+          };
+          const target = (action.target_id ?? '').trim();
+          const matchedIds = targetToThreadIds.get(target)
+            ?? targetToThreadIds.get(target.toLowerCase())
+            ?? (platformThreadIdToThreadId.has(target) ? [platformThreadIdToThreadId.get(target) as string] : []);
+          if (matchedIds.length === 0) continue;
+          const content = (action.final_text ?? action.suggested_text ?? '').toString();
+          if (!content.trim()) continue;
+          const leaseExpiresMs = action.dispatch_lease_expires_at
+            ? Date.parse(action.dispatch_lease_expires_at)
+            : Number.NaN;
+          for (const matchedId of matchedIds) {
+            pendingActions.push({
+              id: action.id,
+              thread_id: matchedId,
+              platform: action.platform ?? threadPlatformById.get(matchedId) ?? null,
+              content,
+              created_at: action.created_at ?? action.updated_at ?? new Date().toISOString(),
+              participant_target: target,
+              claimed: Boolean(action.dispatch_lease_id),
+              acknowledged: Boolean(action.dispatch_acknowledged_at),
+              lease_expires_at: action.dispatch_lease_expires_at ?? null,
+              lease_expired: Number.isFinite(leaseExpiresMs) ? leaseExpiresMs < Date.now() : false,
+            });
+          }
+        }
+      }
+      return pendingActions;
+    })();
+    // F-2 (OPT-010 refinement): mark the promise handled at creation. If the
+    // dependent chain below throws BEFORE the await, a rejection from this
+    // concurrent block would otherwise be unhandled (process-fatal on modern
+    // Node). This no-op handler closes only that window — the await below
+    // still receives the identical rejection and propagates it through the
+    // route's existing catch, unchanged.
+    pendingActionsPromise.catch(() => {});
     const actionTargetsByThread = new Map<string, Set<string>>();
     const addActionTarget = (thread: string, value: unknown) => {
       const target = typeof value === 'string' ? value.trim() : '';
@@ -315,135 +460,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       };
     });
 
-    // Surface pending outbound DM actions as virtual "queued" messages
-    // so the conversation pane can render them inline alongside the real
-    // platform messages. The user sees:
-    //   - the chain of incoming messages from the other party (real rows)
-    //   - their own queued reply with a "Queued · not yet delivered"
-    //     marker and a Cancel button
-    // Once the extension actually delivers the action, the row is marked
-    // executed and a real outbound engagement_messages row gets ingested
-    // on the next sync — at which point this virtual entry is replaced
-    // by the real one.
-    const threadIdsForPending = threadId
-      ? [threadId, ...siblingThreadIds]
-      : threadIds ?? [];
-    let pendingActions: Array<{
-      id: string;
-      thread_id: string | null;
-      platform: string | null;
-      content: string;
-      created_at: string;
-      participant_target: string;
-      claimed: boolean;
-      acknowledged: boolean;
-      lease_expires_at: string | null;
-      lease_expired: boolean;
-    }> = [];
-    if (threadIdsForPending.length > 0) {
-      const { data: pendingRows } = await supabase
-        .from('engagement_threads')
-        .select('id, platform, platform_thread_id, raw_payload')
-        .in('id', Array.from(new Set(threadIdsForPending.filter(Boolean))));
-      const platformThreadIdToThreadId = new Map<string, string>();
-      const targetToThreadIds = new Map<string, string[]>();
-      const threadPlatformById = new Map<string, string | null>();
-      const addPendingTarget = (tid: string, value: unknown) => {
-        const target = typeof value === 'string' ? value.trim() : '';
-        if (!target) return;
-        for (const key of [target, target.toLowerCase()]) {
-          const current = targetToThreadIds.get(key) ?? [];
-          if (!current.includes(tid)) targetToThreadIds.set(key, [...current, tid]);
-        }
-      };
-      for (const row of pendingRows ?? []) {
-        const t = row as {
-          id: string;
-          platform?: string | null;
-          platform_thread_id?: string | null;
-          raw_payload?: Record<string, unknown> | null;
-        };
-        const ptid = t.platform_thread_id ?? null;
-        const rp = t.raw_payload ?? {};
-        threadPlatformById.set(t.id, t.platform ?? null);
-        addPendingTarget(t.id, t.id);
-        addPendingTarget(t.id, ptid);
-        addPendingTarget(t.id, rp.thread_url);
-        addPendingTarget(t.id, rp.participant_profile_url);
-        addPendingTarget(t.id, rp.participant_username);
-        addPendingTarget(t.id, rp.participant_name);
-        if (ptid) platformThreadIdToThreadId.set(ptid, t.id);
-      }
-      const requestedThreadSet = new Set(threadIdsForPending.filter(Boolean));
-      for (const row of messageRows) {
-        const tid = typeof row.thread_id === 'string' ? row.thread_id : null;
-        if (!tid || !requestedThreadSet.has(tid)) continue;
-        const rp = (row.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {}) as Record<string, unknown>;
-        addPendingTarget(tid, row.id);
-        addPendingTarget(tid, row.platform_message_id);
-        addPendingTarget(tid, rp.sender_name);
-        addPendingTarget(tid, rp.author_name);
-        addPendingTarget(tid, rp.sender_profile_url);
-        addPendingTarget(tid, rp.author_profile_url);
-      }
-      // The action's target_id is now the recipient identity (display name
-      // or profile URL) for new actions, but legacy rows still use the
-      // platform_thread_id. Match by either — fetch all pending DMs for
-      // the org's matching set, then filter post-hoc.
-      const platformThreadIds = Array.from(platformThreadIdToThreadId.keys());
-      if (platformThreadIds.length > 0 || targetToThreadIds.size > 0) {
-        const { data: actions } = await supabase
-          .from('community_ai_actions')
-          .select('id, platform, target_id, suggested_text, final_text, created_at, updated_at, status, dispatch_lease_id, dispatch_lease_expires_at, dispatch_acknowledged_at, action_type')
-          .eq('organization_id', organizationId)
-          .in('action_type', ['dm', 'reply'])
-          .eq('status', 'pending');
-        // Defensive: only surface actions whose target_id maps to one of
-        // the requested threads. We compare against platform_thread_id
-        // (legacy shape) only — the new recipient-identity target ids
-        // can't be matched here without an authors join. Acceptable
-        // tradeoff: legacy rows get the queued UI; brand-new ones light
-        // up after we add the participant lookup below.
-        for (const a of actions ?? []) {
-          const action = a as {
-            id: string;
-            platform?: string | null;
-            target_id?: string | null;
-            final_text?: string | null;
-            suggested_text?: string | null;
-            created_at?: string | null;
-            updated_at?: string | null;
-            dispatch_lease_id?: string | null;
-            dispatch_lease_expires_at?: string | null;
-            dispatch_acknowledged_at?: string | null;
-          };
-          const target = (action.target_id ?? '').trim();
-          const matchedIds = targetToThreadIds.get(target)
-            ?? targetToThreadIds.get(target.toLowerCase())
-            ?? (platformThreadIdToThreadId.has(target) ? [platformThreadIdToThreadId.get(target) as string] : []);
-          if (matchedIds.length === 0) continue;
-          const content = (action.final_text ?? action.suggested_text ?? '').toString();
-          if (!content.trim()) continue;
-          const leaseExpiresMs = action.dispatch_lease_expires_at
-            ? Date.parse(action.dispatch_lease_expires_at)
-            : Number.NaN;
-          for (const matchedId of matchedIds) {
-            pendingActions.push({
-              id: action.id,
-              thread_id: matchedId,
-              platform: action.platform ?? threadPlatformById.get(matchedId) ?? null,
-              content,
-              created_at: action.created_at ?? action.updated_at ?? new Date().toISOString(),
-              participant_target: target,
-              claimed: Boolean(action.dispatch_lease_id),
-              acknowledged: Boolean(action.dispatch_acknowledged_at),
-              lease_expires_at: action.dispatch_lease_expires_at ?? null,
-              lease_expired: Number.isFinite(leaseExpiresMs) ? leaseExpiresMs < Date.now() : false,
-            });
-          }
-        }
-      }
-    }
+    // Surface pending outbound DM actions as virtual "queued" messages —
+    // computed concurrently above (OPT-010 A4); consumed here.
+    const pendingActions = await pendingActionsPromise;
 
     const pendingVirtualMessages = pendingActions.map((p) => ({
       id: `pending:${p.id}`,

@@ -10,6 +10,10 @@ const catalog = { resolveActivityEconomics: jest.fn() };
 jest.mock('../../services/activityEconomyCatalog', () => catalog);
 const admission = { canStartActivity: jest.fn() };
 jest.mock('../../services/billing/admissionControl', () => admission);
+// OPT-010 A2: the warnings route now fetches the wallet snapshot ONCE itself
+// and passes it through canStartActivity's walletSnapshot option.
+const wallet = { getWalletSnapshot: jest.fn() };
+jest.mock('../../services/creditPriorityService', () => wallet);
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn() } }));
 
 import activityEconomics from '../../../pages/api/company/economics/activity-economics';
@@ -31,6 +35,10 @@ async function run(handler: any, query: Record<string, any>, method = 'GET') {
 beforeEach(() => {
   jest.clearAllMocks();
   ctxMod.enforceCompanyAccess.mockResolvedValue({ userId: 'u', companyId: 'c' });
+  wallet.getWalletSnapshot.mockResolvedValue({
+    free_balance: 30, paid_balance: 0, incentive_balance: 0,
+    reserved_free: 0, reserved_paid: 0, reserved_incentive: 0,
+  });
   catalog.resolveActivityEconomics.mockImplementation((a: string) => {
     if (a === 'content_basic') return { activity: a, activityClass: 'SHORT_GENERATION', entryConsumption: 2, minimumCredits: 3, maximumCredits: 15, reservationCredits: 13 };
     throw new Error('unknown');
@@ -85,5 +93,10 @@ describe('warnings (TASK 5 — read-only, never blocks)', () => {
     expect(ok.wouldBlock).toBe(false);
     // read-only evaluator only — canStartActivity used, nothing else
     expect(admission.canStartActivity).toHaveBeenCalledTimes(2);
+    // OPT-010 A2: exactly ONE wallet read for the whole request, passed through
+    expect(wallet.getWalletSnapshot).toHaveBeenCalledTimes(1);
+    expect(admission.canStartActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ walletSnapshot: expect.any(Object) })
+    );
   });
 });

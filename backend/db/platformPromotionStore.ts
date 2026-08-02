@@ -125,3 +125,43 @@ export async function getComplianceReport(assetId: string, platform: string): Pr
   if (error) return null;
   return data;
 }
+
+/**
+ * OPT-010 A6 (additive): batched variants of the three point getters above —
+ * ONE `.in()` query per table instead of one query per (asset, platform).
+ * Result maps are keyed `${content_asset_id}:${platform}`. Pairs with more
+ * than one row map to NOTHING, preserving the `.single()` error→null
+ * semantics of the per-row getters exactly.
+ */
+async function batchByAssetPlatform(table: string, assetIds: string[]): Promise<Map<string, any>> {
+  const out = new Map<string, any>();
+  if (assetIds.length === 0) return out;
+  const { data, error } = await supabase
+    .from(table)
+    .select('*')
+    .in('content_asset_id', assetIds);
+  if (error || !Array.isArray(data)) return out;
+  const counts = new Map<string, number>();
+  for (const row of data as Array<{ content_asset_id?: string; platform?: string }>) {
+    const key = `${row.content_asset_id}:${row.platform}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if ((counts.get(key) ?? 0) === 1) {
+      out.set(key, row);
+    } else {
+      out.delete(key); // duplicate ⇒ .single() would have errored ⇒ null
+    }
+  }
+  return out;
+}
+
+export async function getPromotionMetadataForAssets(assetIds: string[]): Promise<Map<string, any>> {
+  return batchByAssetPlatform('promotion_metadata', assetIds);
+}
+
+export async function getPlatformVariantsForAssets(assetIds: string[]): Promise<Map<string, any>> {
+  return batchByAssetPlatform('platform_content_variants', assetIds);
+}
+
+export async function getComplianceReportsForAssets(assetIds: string[]): Promise<Map<string, any>> {
+  return batchByAssetPlatform('platform_compliance_reports', assetIds);
+}

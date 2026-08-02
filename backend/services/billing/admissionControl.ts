@@ -24,7 +24,7 @@
  *     this phase, so production behavior is unchanged.
  */
 
-import { getWalletSnapshot } from '../creditPriorityService';
+import { getWalletSnapshot, type WalletSnapshot } from '../creditPriorityService';
 import { resolveActivityEconomics } from '../activityEconomyCatalog';
 import { incrCounter } from './billingMetrics';
 import { logger } from '../logger';
@@ -95,6 +95,14 @@ function emit(decision: AdmissionDecision, input: { organizationId: string; acti
 export async function canStartActivity(input: {
   organizationId: string;
   activity: string;
+  /**
+   * OPT-010 A2 (additive, optional): a wallet snapshot the CALLER already
+   * fetched for this organization. When provided, the internal
+   * getWalletSnapshot read is skipped — semantics are otherwise identical
+   * (the evaluator is read-only either way). Pass `null` to mean "caller
+   * looked and found no credit account". Omit for the original behavior.
+   */
+  walletSnapshot?: WalletSnapshot | null;
 }): Promise<AdmissionDecision> {
   // TASK 2 — required exposure comes from the single economics source.
   let requiredCredits: number;
@@ -114,7 +122,8 @@ export async function canStartActivity(input: {
     return decision;
   }
 
-  const wallet = await getWalletSnapshot(input.organizationId);
+  const wallet =
+    input.walletSnapshot !== undefined ? input.walletSnapshot : await getWalletSnapshot(input.organizationId);
   if (!wallet) {
     const decision: AdmissionDecision = {
       allowed: false,

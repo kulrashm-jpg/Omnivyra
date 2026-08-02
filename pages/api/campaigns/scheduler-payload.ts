@@ -18,7 +18,11 @@ import {
 import { buildSchedulerPayload } from '../../../backend/services/schedulerPayloadBuilder';
 import { validateCampaignHealth } from '../../../backend/services/campaignHealthService';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
-import { getComplianceReport, getPlatformVariant, getPromotionMetadata } from '../../../backend/db/platformPromotionStore';
+import {
+  getComplianceReportsForAssets,
+  getPlatformVariantsForAssets,
+  getPromotionMetadataForAssets,
+} from '../../../backend/db/platformPromotionStore';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
@@ -91,14 +95,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       weekNumber: Number(weekNumber),
       status: 'approved',
     });
+    // OPT-010 A6: three batched .in() queries replace 3×N sequential point
+    // reads. Same tables, same per-(asset, platform) single-row semantics;
+    // maps are built in the same loop order, so payload shape is unchanged.
+    const approvedAssetIds = Array.from(new Set(approvedAssets.map((a) => a.asset_id)));
+    const [metadataByAsset, variantsByAsset, complianceByAsset] = await Promise.all([
+      getPromotionMetadataForAssets(approvedAssetIds),
+      getPlatformVariantsForAssets(approvedAssetIds),
+      getComplianceReportsForAssets(approvedAssetIds),
+    ]);
     const assetMetadata = new Map<string, any>();
     const assetVariants = new Map<string, any>();
     const complianceReports = new Map<string, any>();
     for (const asset of approvedAssets) {
       const key = `${asset.day}-${asset.platform}`;
-      const metadata = await getPromotionMetadata(asset.asset_id, asset.platform);
-      const variant = await getPlatformVariant(asset.asset_id, asset.platform);
-      const compliance = await getComplianceReport(asset.asset_id, asset.platform);
+      const lookup = `${asset.asset_id}:${asset.platform}`;
+      const metadata = metadataByAsset.get(lookup);
+      const variant = variantsByAsset.get(lookup);
+      const compliance = complianceByAsset.get(lookup);
       if (metadata) assetMetadata.set(key, metadata);
       if (variant) assetVariants.set(key, variant);
       if (compliance) complianceReports.set(key, compliance);

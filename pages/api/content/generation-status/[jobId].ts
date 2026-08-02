@@ -35,12 +35,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       'creator-story',
       'bolt-content-jobs',
     ];
+    // OPT-010 A1: look the job up in all queues CONCURRENTLY instead of one
+    // Redis round-trip at a time (the common queue, bolt-content-jobs, is last
+    // in the list, so the serial walk hit the 10-hop worst case routinely).
+    // Priority is preserved exactly: results are scanned in queueNames order,
+    // so if the same id ever existed in two queues the earlier one still wins.
+    const lookups = await Promise.all(
+      queueNames.map((queueName) =>
+        getContentQueue(queueName).getJob(jobId).catch(() => null),
+      ),
+    );
     let job = null;
-
-    for (const queueName of queueNames) {
-      const queue = getContentQueue(queueName);
-      job = await queue.getJob(jobId);
-      if (job) break;
+    for (const found of lookups) {
+      if (found) { job = found; break; }
     }
 
     if (!job) {

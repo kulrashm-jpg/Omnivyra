@@ -7,7 +7,7 @@ import {
   hasCommunityAiCapability,
 } from '../../../backend/services/rbac/communityAiCapabilities';
 import { logCommunityAiActionEvent } from '../../../backend/services/communityAiActionLogService';
-import { notifyCommunityAi } from '../../../backend/services/communityAiNotificationService';
+import { notifyCommunityAiBulk } from '../../../backend/services/communityAiNotificationService';
 import { sendCommunityAiWebhooks } from '../../../backend/services/communityAiWebhookService';
 
 type ActionsRequest = {
@@ -43,20 +43,60 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const ids = (actions || []).map((action) => action.id).filter(Boolean);
-    let logRows: Array<{
+    const playbookIdsForFetch = Array.from(
+      new Set((actions || []).map((action) => action.playbook_id).filter(Boolean))
+    ) as string[];
+    // Pure filter of the actions result — computed here so the notification
+    // dedup read can join the parallel wave below.
+    const highRiskPending = (actions || []).filter(
+      (action) =>
+        action.status === 'pending' &&
+        action.risk_level === 'high' &&
+        action.requires_human_approval === true
+    );
+    const highRiskActionIds = highRiskPending.map((action) => action.id);
+
+    // OPT-010 A3: these four reads each depend ONLY on the actions result
+    // (and scope) — previously they ran as four sequential round-trips.
+    const [logsResult, playbooksResult, rulesResult, existingNotificationsResult] = await Promise.all([
+      ids.length > 0
+        ? supabase
+            .from('community_ai_action_logs')
+            .select('action_id, event_type, created_at, event_payload')
+            .in('action_id', ids)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] as any[] }),
+      playbookIdsForFetch.length > 0
+        ? supabase
+            .from('community_ai_playbooks')
+            .select('id, tone, safety')
+            .eq('tenant_id', scope.tenantId)
+            .eq('organization_id', scope.organizationId)
+            .in('id', playbookIdsForFetch)
+        : Promise.resolve({ data: [] as any[] }),
+      supabase
+        .from('community_ai_auto_rules')
+        .select('id, rule_name, condition, action_type, max_risk_level, is_active')
+        .eq('tenant_id', scope.tenantId)
+        .eq('organization_id', scope.organizationId)
+        .eq('is_active', true),
+      highRiskActionIds.length > 0
+        ? supabase
+            .from('community_ai_notifications')
+            .select('action_id, event_type')
+            .eq('tenant_id', scope.tenantId)
+            .eq('organization_id', scope.organizationId)
+            .in('action_id', highRiskActionIds)
+            .eq('event_type', 'high_risk_pending')
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+
+    const logRows: Array<{
       action_id: string;
       event_type: string;
       created_at: string;
       event_payload?: any;
-    }> = [];
-    if (ids.length > 0) {
-      const { data: logs } = await supabase
-        .from('community_ai_action_logs')
-        .select('action_id, event_type, created_at, event_payload')
-        .in('action_id', ids)
-        .order('created_at', { ascending: false });
-      logRows = logs || [];
-    }
+    }> = (logsResult.data as any[]) || [];
 
     const lastEventMap = logRows.reduce<
       Record<string, { event_type: string; created_at: string; event_payload?: any }>
@@ -71,35 +111,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return acc;
     }, {});
 
-    const playbookIds = Array.from(
-      new Set((actions || []).map((action) => action.playbook_id).filter(Boolean))
-    ) as string[];
-    let playbookMap: Record<string, { tone: any; safety: any }> = {};
-    if (playbookIds.length > 0) {
-      const { data: playbooks } = await supabase
-        .from('community_ai_playbooks')
-        .select('id, tone, safety')
-        .eq('tenant_id', scope.tenantId)
-        .eq('organization_id', scope.organizationId)
-        .in('id', playbookIds);
-      playbookMap = (playbooks || []).reduce<Record<string, { tone: any; safety: any }>>(
-        (acc, playbook: any) => {
-          acc[playbook.id] = {
-            tone: playbook.tone ?? null,
-            safety: playbook.safety ?? null,
-          };
-          return acc;
-        },
-        {}
-      );
-    }
+    const playbookMap = ((playbooksResult.data as any[]) || []).reduce<Record<string, { tone: any; safety: any }>>(
+      (acc, playbook: any) => {
+        acc[playbook.id] = {
+          tone: playbook.tone ?? null,
+          safety: playbook.safety ?? null,
+        };
+        return acc;
+      },
+      {}
+    );
 
-    const activeRules = (await supabase
-      .from('community_ai_auto_rules')
-      .select('id, rule_name, condition, action_type, max_risk_level, is_active')
-      .eq('tenant_id', scope.tenantId)
-      .eq('organization_id', scope.organizationId)
-      .eq('is_active', true)).data || [];
+    const activeRules = (rulesResult.data as any[]) || [];
 
     const riskRank: Record<string, number> = { low: 1, medium: 2, high: 3 };
     const normalizeRisk = (value?: string | null) => {
@@ -179,37 +202,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       })(),
     }));
 
-    const highRiskPending = (actions || []).filter(
-      (action) =>
-        action.status === 'pending' &&
-        action.risk_level === 'high' &&
-        action.requires_human_approval === true
-    );
-
     if (highRiskPending.length > 0) {
-      const actionIds = highRiskPending.map((action) => action.id);
-      const { data: existingNotifications } = await supabase
-        .from('community_ai_notifications')
-        .select('action_id, event_type')
-        .eq('tenant_id', scope.tenantId)
-        .eq('organization_id', scope.organizationId)
-        .in('action_id', actionIds)
-        .eq('event_type', 'high_risk_pending');
-
       const existingSet = new Set(
-        (existingNotifications || []).map((row) => `${row.action_id}:${row.event_type}`)
+        (((existingNotificationsResult.data as any[]) || []) as Array<{ action_id: string; event_type: string }>).map(
+          (row) => `${row.action_id}:${row.event_type}`
+        )
       );
 
-      for (const action of highRiskPending) {
-        const key = `${action.id}:high_risk_pending`;
-        if (existingSet.has(key)) continue;
-        await notifyCommunityAi({
+      // OPT-010 A3: dedup preserved (same key scheme); the per-action insert
+      // loop becomes ONE bulk insert. Webhooks stay per-action fire-and-forget.
+      const missing = highRiskPending.filter(
+        (action) => !existingSet.has(`${action.id}:high_risk_pending`)
+      );
+      await notifyCommunityAiBulk(
+        missing.map((action) => ({
           tenant_id: scope.tenantId,
           organization_id: scope.organizationId,
           action_id: action.id,
-          event_type: 'high_risk_pending',
+          event_type: 'high_risk_pending' as const,
           message: `High-risk action pending approval on ${action.platform}`,
-        });
+        }))
+      );
+      for (const action of missing) {
         void sendCommunityAiWebhooks({
           tenant_id: scope.tenantId,
           organization_id: scope.organizationId,

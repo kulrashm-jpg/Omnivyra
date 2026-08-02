@@ -72,13 +72,15 @@ export async function getDailyWorkQueue(organizationId: string): Promise<DailyWo
     return { platforms: [], total_actionable_threads: 0 };
   }
 
-  const orgAuthorIds = await getOrgAuthorIds(organizationId);
-
-  const { data: threads, error: threadErr } = await supabase
-    .from('engagement_threads')
-    .select('id, platform, priority_score, unread_count')
-    .eq('organization_id', organizationId)
-    .eq('ignored', false);
+  // OPT-010 A5: both reads key only on organizationId — run them concurrently.
+  const [orgAuthorIds, { data: threads, error: threadErr }] = await Promise.all([
+    getOrgAuthorIds(organizationId),
+    supabase
+      .from('engagement_threads')
+      .select('id, platform, priority_score, unread_count')
+      .eq('organization_id', organizationId)
+      .eq('ignored', false),
+  ]);
 
   if (threadErr || !threads?.length) {
     const result: PlatformWorkItem[] = PLATFORMS.map((p) => ({
@@ -92,21 +94,23 @@ export async function getDailyWorkQueue(organizationId: string): Promise<DailyWo
 
   const threadIds = threads.map((t: { id: string }) => t.id);
 
-  const { data: classifications } = await supabase
-    .from('engagement_thread_classification')
-    .select('thread_id, triage_priority')
-    .in('thread_id', threadIds)
-    .eq('organization_id', organizationId);
+  // OPT-010 A5: both reads depend only on threadIds — run them concurrently.
+  const [{ data: classifications }, { data: messages }] = await Promise.all([
+    supabase
+      .from('engagement_thread_classification')
+      .select('thread_id, triage_priority')
+      .in('thread_id', threadIds)
+      .eq('organization_id', organizationId),
+    supabase
+      .from('engagement_messages')
+      .select('id, thread_id, author_id, platform_created_at')
+      .in('thread_id', threadIds)
+      .order('platform_created_at', { ascending: false }),
+  ]);
   const triageByThread = new Map<string, number>();
   (classifications ?? []).forEach((c: { thread_id: string; triage_priority?: number }) => {
     triageByThread.set(c.thread_id, Number(c.triage_priority ?? 0));
   });
-
-  const { data: messages } = await supabase
-    .from('engagement_messages')
-    .select('id, thread_id, author_id, platform_created_at')
-    .in('thread_id', threadIds)
-    .order('platform_created_at', { ascending: false });
 
   const latestByThread = new Map<string, { author_id: string | null }>();
   for (const m of messages ?? []) {

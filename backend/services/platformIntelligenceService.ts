@@ -642,8 +642,31 @@ function isMissingRelationError(message?: string): boolean {
   );
 }
 
+// OPT-010 A7: process-level memo for the immutable reference tables
+// (platform_master / platform_content_rules) — the same cache/inflight pattern
+// as backend/utils/platformPostingTimes.ts. getPlatformRules previously ran
+// two uncached queries per call and is called ~4× per generated row in
+// generate-weekly-structure, i.e. hundreds of identical round-trips per run.
+const platformRulesCache = new Map<string, PlatformRulesBundle | null>();
+const platformRulesInflight = new Map<string, Promise<PlatformRulesBundle | null>>();
+
 export async function getPlatformRules(platformKey: string): Promise<PlatformRulesBundle | null> {
   const key = normalizePlatformKey(platformKey);
+  if (platformRulesCache.has(key)) return platformRulesCache.get(key)!;
+  const pending = platformRulesInflight.get(key);
+  if (pending) return pending;
+  // fetchPlatformRules never rejects (catch-all fallback below), so the
+  // inflight entry is always cleared through the .then.
+  const load = fetchPlatformRules(key).then((bundle) => {
+    platformRulesCache.set(key, bundle);
+    platformRulesInflight.delete(key);
+    return bundle;
+  });
+  platformRulesInflight.set(key, load);
+  return load;
+}
+
+async function fetchPlatformRules(key: string): Promise<PlatformRulesBundle | null> {
   try {
     const { data: platform, error: platformError } = await supabase
       .from('platform_master')
