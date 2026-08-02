@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { setPrivateCache, CACHE_TTL } from '../../../lib/platform/httpCache';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -69,6 +70,10 @@ async function handler(
       req.query.domain as string | undefined,
     );
 
+    // OPT-002: P3 private, NEAR_LIVE (30 s) — response carries the
+    // progress-adjacent hasGeneratingReport flag; duplicate generation is
+    // guarded server-side in reports/generate (credit reservation 402/409).
+    setPrivateCache(res, CACHE_TTL.NEAR_LIVE);
     return res.status(200).json({
       success: true,
       reports: result.reports,

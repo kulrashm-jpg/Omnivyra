@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { setPrivateCache, CACHE_TTL } from '../../../lib/platform/httpCache';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { getLeadStats } from '../../../backend/services/leadIntelligence/leadIntelligenceReadService';
@@ -37,6 +38,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       interest: str(q.interest),
     },
   });
+  // OPT-002: P3 private, STANDARD (60 s). TTL-only invalidation — lead ops
+  // mutate via /operations (different URI); no consumer refetches stats after.
+  setPrivateCache(res, CACHE_TTL.STANDARD);
   return res.status(200).json(stats);
 }
 

@@ -15,6 +15,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { setPrivateCache, setPrivateNoStore, CACHE_TTL } from '../../../lib/platform/httpCache';
 import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import {
@@ -43,6 +44,15 @@ async function handler(
 
   if (req.method === 'GET') {
     const journey = await buildOnboardingJourney(user.id);
+    // OPT-002: state-dependent policy. An IN-PROGRESS journey is the client's
+    // resume-from-server truth and must never be cached (P4 no-store); once
+    // platformReady the payload is terminal and stable (P3, 300 s). The stage
+    // POST below shares this URI, so the browser also auto-invalidates on it.
+    if (journey.platformReady) {
+      setPrivateCache(res, CACHE_TTL.STABLE);
+    } else {
+      setPrivateNoStore(res);
+    }
     return res.status(200).json(journey);
   }
 

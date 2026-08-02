@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
+import { setPrivateCache, CACHE_TTL } from '../../lib/platform/httpCache';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getConnectionStatus } from '@/backend/services/connectionHealthStatus';
@@ -45,6 +46,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       connection_status: getConnectionStatus(row.token_expires_at),
     }));
 
+    // OPT-002: P3 private, STANDARD (60 s). TTL-only invalidation — connect/
+    // disconnect happen on other URIs/pages with no refetch contract here.
+    setPrivateCache(res, CACHE_TTL.STANDARD);
     return res.status(200).json(list);
   } catch (err: any) {
     console.error('Error fetching accounts:', err);

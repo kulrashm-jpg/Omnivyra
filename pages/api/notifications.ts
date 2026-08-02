@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
+import { setPrivateCache, CACHE_TTL } from '../../lib/platform/httpCache';
 
 /**
  * GET  /api/notifications       — fetch recent notifications for the current user
@@ -6,6 +7,10 @@ import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFact
  * PATCH /api/notifications?id=  — mark a single notification as read
  *
  * Auth: Bearer token or Supabase session cookie.
+ *
+ * Caching (OPT-002): GET 200 is P3 private, NEAR_LIVE (30 s). Invalidation:
+ * NotificationBell updates local state optimistically after PATCH; the
+ * mark-all PATCH shares this URI so the browser also auto-invalidates.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -58,6 +63,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .limit(50);
 
     if (error) return res.status(500).json({ error: error.message });
+    setPrivateCache(res, CACHE_TTL.NEAR_LIVE);
     return res.status(200).json({ notifications: data ?? [] });
   }
 

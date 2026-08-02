@@ -10,6 +10,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
+import { setPrivateCache, CACHE_TTL } from '../../../lib/platform/httpCache';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
@@ -28,6 +29,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .maybeSingle();
 
     if (error) return res.status(500).json({ error: 'Failed to load prefs' });
+    // OPT-002: P3 private, STANDARD (60 s). The PUT below shares this exact
+    // URI (?companyId=), so the browser auto-invalidates the cached GET on
+    // every successful save; the client also updates its state optimistically.
+    setPrivateCache(res, CACHE_TTL.STANDARD);
     return res.status(200).json({ prefs: (data?.platform_content_type_prefs as Record<string, string[]>) ?? {} });
   }
 

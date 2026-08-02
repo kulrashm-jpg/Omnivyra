@@ -8,6 +8,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { setPrivateCache, CACHE_TTL } from '../../../lib/platform/httpCache';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { normalizePlatform } from '../../../utils/platformIcons';
 import {
@@ -57,6 +58,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       )
     ).sort();
 
+    // OPT-002: P3 private, STANDARD (60 s). TTL-only invalidation — connect/
+    // disconnect happen on other URIs; the consumer never refetches after them.
+    setPrivateCache(res, CACHE_TTL.STANDARD);
     return res.status(200).json({ platforms });
   } catch (err) {
     console.error('[engagement/integrations]', err);
