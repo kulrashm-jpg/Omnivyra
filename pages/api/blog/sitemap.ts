@@ -53,4 +53,13 @@ ${urls}
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
-export default __createApiRoute(handler, { route: '/api/blog/sitemap' });
+// AUTH-ENFORCEMENT Phase 1 (Task 3b Batch 2a): declarative policy, observation-only.
+export default __createApiRoute(handler, {
+  route: '/api/blog/sitemap',
+  policy: {
+    v: 1,
+    category: 'public',
+    justification:
+      'Purpose: SEO sitemap submitted to search engines. Exposure: slugs and dates of published marketing-blog posts only (public_blogs, status=published). Rationale: exists to be crawled; shared-cache directive is intentional and INV-6-legal only under this category. Contract: Search Engine Content.',
+  },
+});

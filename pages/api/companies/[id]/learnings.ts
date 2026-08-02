@@ -27,4 +27,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
-export default __createApiRoute(handler, { route: '/api/companies/:id/learnings' });
+// AUTH-ENFORCEMENT Phase 1 (Task 3b Batch 1): declarative policy, observation-only.
+// Enforcement remains resolveCompanyAccess in the handler; the declaration mirrors it.
+export default __createApiRoute(handler, {
+  route: '/api/companies/:id/learnings',
+  policy: { v: 1, category: 'company-scoped', companyIdFrom: 'path.id' },
+});

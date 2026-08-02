@@ -66,4 +66,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
-export default __createApiRoute(handler, { route: '/api/blogs/public' });
+// AUTH-ENFORCEMENT Phase 1 (Task 3b Batch 2a): declarative policy, observation-only.
+export default __createApiRoute(handler, {
+  route: '/api/blogs/public',
+  policy: {
+    v: 1,
+    category: 'public',
+    justification:
+      'Purpose: published blog feed for external site embeds. Exposure: excerpt-level fields of published posts only (title, slug, excerpt, image, category, tags, dates); status=published filter enforced in the query. Rationale: open by design per the in-file trade-off note; company_id is a content selector, not an authorization input. Contract: Embeddable Content.',
+  },
+});

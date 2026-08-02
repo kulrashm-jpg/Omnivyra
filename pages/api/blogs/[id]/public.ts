@@ -43,4 +43,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
-export default __createApiRoute(handler, { route: '/api/blogs/:id/public' });
+// AUTH-ENFORCEMENT Phase 1 (Task 3b Batch 2a): declarative policy, observation-only.
+export default __createApiRoute(handler, {
+  route: '/api/blogs/:id/public',
+  policy: {
+    v: 1,
+    category: 'public',
+    justification:
+      'Purpose: published blog post lookup for the public company-blog page. Exposure: full render payload of a single published post (content, content_blocks, SEO fields); status=published filter applied before both lookup paths. Rationale: the post is already published — publishing is the authorization; the public page depends on this being open per the in-file note. Contract: Published Content.',
+  },
+});

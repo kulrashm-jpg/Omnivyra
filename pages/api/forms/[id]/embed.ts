@@ -44,4 +44,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
-export default __createApiRoute(handler, { route: '/api/forms/:id/embed' });
+// AUTH-ENFORCEMENT Phase 1 (Task 3b Batch 2b): declarative policy, observation-only.
+// checkFormOrigin above is DELIVERY TRUST (design §3.8) — handler business logic,
+// never to be replaced by the policy gate or removed in V-11 cleanup.
+export default __createApiRoute(handler, {
+  route: '/api/forms/:id/embed',
+  policy: {
+    v: 1,
+    category: 'public',
+    justification:
+      'Purpose: minimal form configuration for the embeddable JS snippet on external sites. Exposure: form id, owning company_id and website_id (required by the embed to submit leads), field definitions, brand config, and the origin decision. Rationale: no principal exists by design; the trust boundary is the owner-configured origin allowlist (checkFormOrigin, 403 on mismatch, open when the owner configures no allowlist) plus the unguessable form id — Delivery Trust in the handler, not principal authorization. Contract: Embeddable Configuration.',
+  },
+});
