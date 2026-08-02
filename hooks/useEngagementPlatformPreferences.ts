@@ -1,6 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+/**
+ * OPT-005 Phase 2B: SWR facade. The PATCH keeps its post-write local update,
+ * now written through the shared cache entry via
+ * mutate(updater, { revalidate: false }) so every mounted consumer sees it.
+ * `loading` maps to isValidating — the previous implementation flipped
+ * loading on every fetch INCLUDING refresh(), unlike the inbox/messages
+ * hooks. Public signature unchanged.
+ */
+import { useCallback, useMemo } from 'react';
+import useSWR from 'swr';
 import { apiFetch } from '@/lib/apiFetch';
 import { normalizePlatform } from '@/utils/platformIcons';
+import { useState } from 'react';
 
 type PlatformPreference = {
   platform: string;
@@ -8,55 +18,31 @@ type PlatformPreference = {
 };
 
 export function useEngagementPlatformPreferences(organizationId: string) {
-  const [preferences, setPreferences] = useState<PlatformPreference[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [updatingPlatform, setUpdatingPlatform] = useState<string | null>(null);
 
+  const key = organizationId?.trim()
+    ? `/api/engagement/platform-preferences?${new URLSearchParams({
+        organization_id: organizationId,
+        organizationId,
+      }).toString()}`
+    : null;
+
+  const { data, error: swrError, isValidating, mutate } = useSWR<{ preferences?: PlatformPreference[] }>(key);
+
   const refresh = useCallback(async () => {
-    if (!organizationId?.trim()) {
-      setPreferences([]);
-      setLoading(false);
-      setError(null);
-      return;
-    }
+    await mutate();
+  }, [mutate]);
 
-    setLoading(true);
-    setError(null);
-
-    const params = new URLSearchParams({
-      organization_id: organizationId,
-      organizationId,
-    });
-
-    try {
-      const response = await apiFetch(`/api/engagement/platform-preferences?${params.toString()}`);
-      const body = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(body.error || body.message || 'Failed to fetch platform preferences');
-      }
-
-      const nextPreferences = Array.isArray(body.preferences) ? body.preferences : [];
-      setPreferences(
-        nextPreferences
-          .map((preference: PlatformPreference) => ({
-            platform: normalizePlatform(preference.platform),
-            enabled: preference.enabled !== false,
-          }))
-          .filter((preference: PlatformPreference) => Boolean(preference.platform))
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch platform preferences');
-      setPreferences([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [organizationId]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const preferences: PlatformPreference[] = useMemo(() => {
+    if (swrError) return []; // parity: fetch failure blanks preferences
+    const raw = Array.isArray(data?.preferences) ? data.preferences : [];
+    return raw
+      .map((preference: PlatformPreference) => ({
+        platform: normalizePlatform(preference.platform),
+        enabled: preference.enabled !== false,
+      }))
+      .filter((preference: PlatformPreference) => Boolean(preference.platform));
+  }, [data, swrError]);
 
   const setPlatformEnabled = useCallback(
     async (platform: string, enabled: boolean) => {
@@ -79,17 +65,27 @@ export function useEngagementPlatformPreferences(organizationId: string) {
           throw new Error(body.error || body.message || 'Failed to update platform preference');
         }
 
-        setPreferences((current) => {
-          const remaining = current.filter((preference) => preference.platform !== normalizedPlatform);
-          return [...remaining, { platform: normalizedPlatform, enabled }].sort((a, b) =>
-            a.platform.localeCompare(b.platform)
-          );
-        });
+        // Same post-PATCH local update as before, written into the shared
+        // cache entry (revalidate:false — the server was just told).
+        await mutate(
+          (current) => {
+            const raw = Array.isArray(current?.preferences) ? current.preferences : [];
+            const remaining = raw.filter(
+              (preference) => normalizePlatform(preference.platform) !== normalizedPlatform
+            );
+            return {
+              preferences: [...remaining, { platform: normalizedPlatform, enabled }].sort((a, b) =>
+                a.platform.localeCompare(b.platform)
+              ),
+            };
+          },
+          { revalidate: false }
+        );
       } finally {
         setUpdatingPlatform(null);
       }
     },
-    [organizationId]
+    [organizationId, mutate]
   );
 
   const preferenceMap = useMemo(() => {
@@ -102,8 +98,12 @@ export function useEngagementPlatformPreferences(organizationId: string) {
   return {
     preferences,
     preferenceMap,
-    loading,
-    error,
+    loading: isValidating,
+    error: swrError
+      ? swrError instanceof Error
+        ? swrError.message
+        : 'Failed to fetch platform preferences'
+      : null,
     refresh,
     updatingPlatform,
     setPlatformEnabled,

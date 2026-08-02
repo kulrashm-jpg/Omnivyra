@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
+import useSWR from 'swr';
 import { apiFetch } from '@/lib/apiFetch';
+import { ApiFetchError } from '@/lib/swr/swrClient';
 
 export type LinkedInEngagementOverview = {
   platform: 'linkedin';
@@ -35,45 +37,35 @@ export type LinkedInSyncResult = {
 };
 
 export function useLinkedInEngagementWorkspace(organizationId: string, enabled = true) {
-  const [overview, setOverview] = useState<LinkedInEngagementOverview | null>(null);
-  const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [lastSyncResult, setLastSyncResult] = useState<LinkedInSyncResult | null>(null);
 
+  // OPT-005 Phase 2B: overview is an SWR entry; enabled=false → null key.
+  // `loading` maps to isValidating — the previous implementation flipped
+  // loading on refresh() too. Public signature unchanged.
+  const key =
+    enabled && organizationId?.trim()
+      ? `/api/engagement/linkedin/overview?${new URLSearchParams({
+          organization_id: organizationId,
+          organizationId,
+        }).toString()}`
+      : null;
+
+  const { data, error: swrError, isValidating, mutate } = useSWR<{ overview?: LinkedInEngagementOverview | null }>(key);
+
+  const overview: LinkedInEngagementOverview | null =
+    !key || swrError ? null : (data?.overview ?? null);
+
   const refresh = useCallback(async () => {
-    if (!enabled || !organizationId?.trim()) {
-      setOverview(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
+    await mutate();
+  }, [mutate]);
 
-    setLoading(true);
-    setError(null);
-
-    try {
-      const params = new URLSearchParams({
-        organization_id: organizationId,
-        organizationId,
-      });
-      const response = await apiFetch(`/api/engagement/linkedin/overview?${params.toString()}`);
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(body.error || body.message || 'Failed to load LinkedIn engagement workspace');
-      }
-      setOverview(body.overview ?? null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load LinkedIn engagement workspace');
-      setOverview(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [enabled, organizationId]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const fetchErrorMessage = swrError
+    ? swrError instanceof ApiFetchError && typeof (swrError.info as { error?: unknown })?.error === 'string'
+      ? swrError.message
+      : 'Failed to load LinkedIn engagement workspace'
+    : null;
 
   const syncNow = useCallback(async () => {
     if (!enabled || !organizationId?.trim()) {
@@ -81,7 +73,7 @@ export function useLinkedInEngagementWorkspace(organizationId: string, enabled =
     }
 
     setSyncing(true);
-    setError(null);
+    setSyncError(null);
 
     try {
       const response = await apiFetch('/api/engagement/linkedin/sync', {
@@ -100,21 +92,23 @@ export function useLinkedInEngagementWorkspace(organizationId: string, enabled =
 
       const result = (body.result ?? null) as LinkedInSyncResult | null;
       setLastSyncResult(result);
-      await refresh();
+      // Same post-sync reload as the old `await refresh()` — a revalidation
+      // of the shared overview entry.
+      await mutate();
       return result;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'LinkedIn sync failed');
+      setSyncError(err instanceof Error ? err.message : 'LinkedIn sync failed');
       throw err;
     } finally {
       setSyncing(false);
     }
-  }, [enabled, organizationId, refresh]);
+  }, [enabled, organizationId, mutate]);
 
   return {
     overview,
-    loading,
+    loading: isValidating,
     syncing,
-    error,
+    error: syncError ?? fetchErrorMessage,
     lastSyncResult,
     refresh,
     syncNow,

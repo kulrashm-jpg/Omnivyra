@@ -1,5 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import useSWR from 'swr';
 import { useRouter } from 'next/router';
+import { ApiFetchError } from '../lib/swr/swrClient';
 import { getVisibleCards, CommandCenterCard, Requirement, CardState } from '../config/commandCenterCards';
 import { useCompanyContext } from '../components/CompanyContext';
 import { apiFetch } from '../lib/apiFetch';
@@ -35,6 +37,67 @@ const EMPTY_CAPABILITY_EVALUATION: CapabilityEvaluation = {
   overallPercent: 0,
   summary: { completedCount: 0, inProgressCount: 0, totalCount: 0 },
 };
+
+export type ReportCardApiState = {
+  reportState?: string;
+  hasGeneratingReport?: boolean;
+  hasFreeReportUsed?: boolean;
+};
+
+/**
+ * OPT-005 Phase 2B — the report-card read as an SWR entry (exported for
+ * direct testing; useCommandCenterCore consumes it below).
+ *
+ * Polling parity: refreshInterval is data-dependent — 5000 ms ONLY while
+ * reportState === 'generating', 0 otherwise (the old setInterval polled at
+ * the same cadence and stopped on the same condition).
+ *
+ * OPT-002 integration correction: /api/reports ships a private 30 s HTTP
+ * cache. While a report is generating, the fetcher passes cache:'no-store'
+ * so the 5 s progress poll sees LIVE state; normal loads keep the browser
+ * cache. No route or header changes.
+ */
+export function useReportCardPoll(companyId: string | null) {
+  const generatingRef = useRef(false);
+
+  const fetcher = useCallback(async (url: string) => {
+    try {
+      const response = await apiFetch(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        ...(generatingRef.current ? { cache: 'no-store' as RequestCache } : {}),
+      });
+      if (!response.ok) {
+        throw new ApiFetchError(url, response.status);
+      }
+      return (await response.json()) as ReportCardApiState;
+    } catch (error) {
+      console.error('[command-center] Failed to load report card state:', error);
+      throw error;
+    }
+  }, []);
+
+  const { data } = useSWR<ReportCardApiState>(
+    companyId ? `/api/reports?company_id=${companyId}` : null,
+    fetcher,
+    {
+      refreshInterval: (latest) =>
+        latest && (latest.reportState || 'free_available') === 'generating' ? 5000 : 0,
+      // Global dedupingInterval is 15s — larger than the 5s generating poll,
+      // which would throttle it. Pin a smaller window so the poll cadence is
+      // exactly the old setInterval's 5s.
+      dedupingInterval: 2000,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+    }
+  );
+
+  useEffect(() => {
+    generatingRef.current = (data?.reportState || 'free_available') === 'generating';
+  }, [data]);
+
+  return data ?? null;
+}
 
 // ── Retain-last-good input cache ───────────────────────────────────────────────
 //
@@ -501,55 +564,19 @@ export function useCommandCenter() {
     void loadUserTier();
   }, [authChecked, selectedCompanyId, user?.userId]);
 
+  // OPT-005 Phase 2B: reports read via the SWR poll hook above; the state
+  // shape and update path (setReportCardStatus) are unchanged.
+  const reportCardApiState = useReportCardPoll(
+    authChecked && user?.userId && selectedCompanyId ? selectedCompanyId : null
+  );
   useEffect(() => {
-    if (!authChecked || !user?.userId || !selectedCompanyId) return;
-
-    let cancelled = false;
-    let pollHandle: ReturnType<typeof setInterval> | null = null;
-
-    const fetchReportStatus = async (): Promise<'free_available' | 'generating' | 'used' | null> => {
-      try {
-        if (cancelled) return null;
-
-        const response = await apiFetch(`/api/reports?company_id=${selectedCompanyId}`, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-        });
-
-        if (!response.ok || cancelled) return null;
-
-        const data = await response.json();
-        if (cancelled) return null;
-
-        const nextState = {
-          reportState: (data.reportState || 'free_available') as 'free_available' | 'generating' | 'used',
-          hasGeneratingReport: Boolean(data.hasGeneratingReport),
-          hasFreeReportUsed: Boolean(data.hasFreeReportUsed),
-        };
-        setReportCardStatus(nextState);
-        return nextState.reportState;
-      } catch (error) {
-        console.error('[command-center] Failed to load report card state:', error);
-        return null;
-      }
-    };
-
-    void fetchReportStatus().then((state) => {
-      if (cancelled || state !== 'generating') return;
-      pollHandle = setInterval(async () => {
-        const nextState = await fetchReportStatus();
-        if (nextState !== 'generating' && pollHandle) {
-          clearInterval(pollHandle);
-          pollHandle = null;
-        }
-      }, 5000);
+    if (!reportCardApiState) return;
+    setReportCardStatus({
+      reportState: (reportCardApiState.reportState || 'free_available') as 'free_available' | 'generating' | 'used',
+      hasGeneratingReport: Boolean(reportCardApiState.hasGeneratingReport),
+      hasFreeReportUsed: Boolean(reportCardApiState.hasFreeReportUsed),
     });
-
-    return () => {
-      cancelled = true;
-      if (pollHandle) clearInterval(pollHandle);
-    };
-  }, [authChecked, selectedCompanyId, user?.userId]);
+  }, [reportCardApiState]);
 
   useEffect(() => {
     if (!userRole) return;

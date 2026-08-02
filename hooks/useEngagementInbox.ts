@@ -1,10 +1,19 @@
 /**
  * Data hook for Engagement Command Center inbox.
  * Fetches threads, handles filters, loading, refresh.
+ *
+ * OPT-005 Phase 2B: SWR facade. KEY STABILITY: the lookback start_date is
+ * Date.now()-derived and therefore computed INSIDE the fetcher — it must
+ * never enter the SWR key, or every render would mint a new cache entry.
+ * LOADING SEMANTICS: `loading` maps to SWR isLoading (first load / key
+ * change only) — background revalidation and refresh() silently swap data,
+ * preserving the engineered no-skeleton behavior documented below.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback } from 'react';
+import useSWR from 'swr';
 import { apiFetch } from '@/lib/apiFetch';
+import { ApiFetchError } from '@/lib/swr/swrClient';
 import { ACTIONABLE_INBOX_LOOKBACK_DAYS } from '@/lib/engagement/queueRules';
 
 export type InboxThread = {
@@ -103,6 +112,43 @@ type InboxState = {
   error: string | null;
 };
 
+function sortByLatest(list: InboxThread[]): InboxThread[] {
+  return [...list].sort((a, b) => {
+    const ta = a.latest_message_time ? new Date(a.latest_message_time).getTime() : 0;
+    const tb = b.latest_message_time ? new Date(b.latest_message_time).getTime() : 0;
+    return tb - ta;
+  });
+}
+
+/** STABLE key: org + limit + filters only. start_date is added in the fetcher. */
+function inboxKey(organizationId: string, filters: InboxFilters): string {
+  const params = new URLSearchParams({
+    organization_id: organizationId,
+    organizationId: organizationId,
+    limit: String(INBOX_FETCH_LIMIT),
+  });
+  if (filters.platform) params.set('platform', filters.platform);
+  if (filters.priority) params.set('priority', filters.priority);
+  return `/api/engagement/inbox?${params.toString()}`;
+}
+
+async function fetchInboxList(key: string): Promise<InboxThread[]> {
+  // Date.now()-derived lookback lives HERE, never in the key.
+  const lookbackStart = new Date(
+    Date.now() - ACTIONABLE_INBOX_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
+  const url = `${key}&start_date=${encodeURIComponent(lookbackStart)}`;
+  const res = await apiFetch(url);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiFetchError(url, res.status, {
+      error: body.error || body.message || 'Engagement API failure',
+    });
+  }
+  if (body.error) throw new Error(body.error);
+  return sortByLatest(Array.isArray(body.items) ? body.items : []);
+}
+
 export function useEngagementInbox(
   organizationId: string,
   filters: InboxFilters = {}
@@ -110,89 +156,45 @@ export function useEngagementInbox(
   refresh: () => Promise<void>;
   patchThread: (threadId: string, updater: (thread: InboxThread) => InboxThread) => void;
 } {
-  const [items, setItems] = useState<InboxThread[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const hasFetchedOnce = useRef(false);
+  const key = organizationId?.trim() ? inboxKey(organizationId, filters) : null;
 
-  const fetchInbox = useCallback(async (background = false) => {
-    if (!organizationId?.trim()) {
-      setItems([]);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-
-    // Only flip the loading flag for the FIRST fetch (or for explicit user
-    // refresh). Background polling silently swaps data so the UI doesn't
-    // flash a skeleton every 30 seconds, which felt like the page was
-    // "restarting" on its own.
-    if (!background) setLoading(true);
-    setError(null);
-
-    const lookbackStart = new Date(Date.now() - ACTIONABLE_INBOX_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const params = new URLSearchParams({
-      organization_id: organizationId,
-      organizationId: organizationId,
-      limit: String(INBOX_FETCH_LIMIT),
-      start_date: lookbackStart,
-    });
-    if (filters.platform) params.set('platform', filters.platform);
-    if (filters.priority) params.set('priority', filters.priority);
-
-    try {
-      const res = await apiFetch(`/api/engagement/inbox?${params.toString()}`);
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(body.error || body.message || 'Engagement API failure');
-      }
-      if (body.error) throw new Error(body.error);
-
-      let list = Array.isArray(body.items) ? body.items : [];
-
-      list.sort((a: InboxThread, b: InboxThread) => {
-        const ta = a.latest_message_time ? new Date(a.latest_message_time).getTime() : 0;
-        const tb = b.latest_message_time ? new Date(b.latest_message_time).getTime() : 0;
-        return tb - ta;
-      });
-
-      setItems(list);
-      hasFetchedOnce.current = true;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch inbox');
-      // Don't blow away the previous list on a background-poll failure;
-      // surface the error but keep the last good data on screen.
-      if (!background) setItems([]);
-    } finally {
-      if (!background) setLoading(false);
-    }
-  }, [organizationId, filters.platform, filters.priority]);
-
-  useEffect(() => {
-    fetchInbox(false);
-  }, [fetchInbox]);
-
-  useEffect(() => {
-    if (!organizationId?.trim()) return;
-    const interval = setInterval(() => fetchInbox(true), REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [organizationId, fetchInbox]);
-
-  const patchThread = useCallback((threadId: string, updater: (thread: InboxThread) => InboxThread) => {
-    setItems((current) => {
-      const next = current.map((thread) => (thread.thread_id === threadId ? updater(thread) : thread));
-      next.sort((a, b) => {
-        const ta = a.latest_message_time ? new Date(a.latest_message_time).getTime() : 0;
-        const tb = b.latest_message_time ? new Date(b.latest_message_time).getTime() : 0;
-        return tb - ta;
-      });
-      return next;
-    });
-  }, []);
+  // Only the FIRST fetch (or a key change) flips the loading flag — SWR
+  // isLoading. Background polling and refresh() silently swap data so the
+  // UI doesn't flash a skeleton every 30 seconds, which felt like the page
+  // was "restarting" on its own. (NEVER map loading to isValidating here.)
+  const { data, error, isLoading, mutate } = useSWR<InboxThread[]>(key, fetchInboxList, {
+    refreshInterval: REFRESH_INTERVAL_MS,
+  });
 
   // Public refresh is a *background* refresh — the user already sees the
-  // previous list, so flashing a skeleton on every click-driven refresh
-  // is jarring. Loading state is reserved for the very first load.
-  const refresh = useCallback(() => fetchInbox(true), [fetchInbox]);
-  return { items, loading, error, refresh, patchThread };
+  // previous list; SWR revalidation never flips isLoading.
+  const refresh = useCallback(async () => {
+    await mutate();
+  }, [mutate]);
+
+  const patchThread = useCallback(
+    (threadId: string, updater: (thread: InboxThread) => InboxThread) => {
+      void mutate(
+        (current) => {
+          if (!current) return current;
+          return sortByLatest(
+            current.map((thread) => (thread.thread_id === threadId ? updater(thread) : thread))
+          );
+        },
+        { revalidate: false }
+      );
+    },
+    [mutate]
+  );
+
+  return {
+    // Background-poll failures keep the last good list on screen (SWR
+    // retains data alongside error); a first-load failure has no data and
+    // renders [] — same as before.
+    items: data ?? [],
+    loading: isLoading,
+    error: error ? (error instanceof Error ? error.message : 'Failed to fetch inbox') : null,
+    refresh,
+    patchThread,
+  };
 }

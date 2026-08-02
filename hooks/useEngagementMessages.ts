@@ -1,9 +1,18 @@
 /**
  * Hook for fetching engagement messages in a thread.
+ *
+ * OPT-005 Phase 2B: ONLY the server-message fetch is an SWR entry. The
+ * optimistic queue, its 5-minute content-match reconciler and the merge
+ * algorithm are UNCHANGED local state — they already do what a cache can't
+ * (fuzzy-match a locally-authored message against its later server twin).
+ * `loading` maps to SWR isLoading (first load / thread switch only);
+ * background polling and refresh() silently swap data as before.
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import useSWR from 'swr';
 import { apiFetch } from '@/lib/apiFetch';
+import { ApiFetchError } from '@/lib/swr/swrClient';
 import { compareMessagesAscending } from '@/lib/engagement/messageTime';
 
 export type EngagementMessage = {
@@ -71,84 +80,73 @@ export function useEngagementMessages(
   addOptimisticMessage: (message: EngagementMessage) => void;
   clearOptimisticMessages: () => void;
 } {
-  const [messages, setMessages] = useState<EngagementMessage[]>([]);
   const [optimisticMessages, setOptimisticMessages] = useState<EngagementMessage[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const fetchMessages = useCallback(async (background = false) => {
-    if (!organizationId?.trim() || !threadId?.trim()) {
-      setMessages([]);
-      setOptimisticMessages([]);
-      setLoading(false);
-      setError(null);
-      return;
-    }
+  const siblingParam = siblingThreadIds && siblingThreadIds.length > 0 ? siblingThreadIds.join(',') : '';
+  const key =
+    organizationId?.trim() && threadId?.trim()
+      ? (() => {
+          const params = new URLSearchParams({
+            organization_id: organizationId,
+            thread_id: threadId,
+            limit: '50',
+          });
+          if (siblingParam) params.set('sibling_thread_ids', siblingParam);
+          return `/api/engagement/messages?${params.toString()}`;
+        })()
+      : null;
 
-    // Background refreshes silently swap message data; only the very first
-    // load (or thread switch) flips the loading skeleton.
-    if (!background) setLoading(true);
-    setError(null);
-
-    const params = new URLSearchParams({
-      organization_id: organizationId,
-      thread_id: threadId,
-      limit: '50',
-    });
-    if (siblingThreadIds && siblingThreadIds.length > 0) {
-      params.set('sibling_thread_ids', siblingThreadIds.join(','));
-    }
-
-    try {
-      const res = await apiFetch(`/api/engagement/messages?${params.toString()}`);
+  const { data, error: swrError, isLoading, mutate } = useSWR<EngagementMessage[]>(
+    key,
+    async (url: string) => {
+      const res = await apiFetch(url);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(body.error || body.message || 'Failed to fetch messages');
+        throw new ApiFetchError(url, res.status, {
+          error: body.error || body.message || 'Failed to fetch messages',
+        });
       }
       if (body.error) throw new Error(body.error);
-      const nextMessages = Array.isArray(body.messages) ? body.messages : [];
-      setMessages(nextMessages);
-      setOptimisticMessages((current) =>
-        current.filter(
-          (optimistic) =>
-            !nextMessages.some(
-              (serverMessage: EngagementMessage) =>
-                serverMessage.platform === optimistic.platform &&
-                (serverMessage.content ?? '').trim() === (optimistic.content ?? '').trim() &&
-                Math.abs(
+      return Array.isArray(body.messages) ? body.messages : [];
+    },
+    { refreshInterval: REFRESH_INTERVAL_MS }
+  );
+  const serverMessages = data ?? [];
+
+  // No thread selected → clear the optimistic queue (parity with the old
+  // early-return branch).
+  useEffect(() => {
+    if (!key) setOptimisticMessages([]);
+  }, [key]);
+
+  // Optimistic reconciliation — UNCHANGED predicate, now driven by server
+  // data arrival instead of running inline in the fetch.
+  useEffect(() => {
+    if (!data) return;
+    const nextMessages = data;
+    setOptimisticMessages((current) =>
+      current.filter(
+        (optimistic) =>
+          !nextMessages.some(
+            (serverMessage: EngagementMessage) =>
+              serverMessage.platform === optimistic.platform &&
+              (serverMessage.content ?? '').trim() === (optimistic.content ?? '').trim() &&
+              Math.abs(
+                new Date(
+                  serverMessage.platform_created_at ??
+                    serverMessage.created_at ??
+                    0
+                ).getTime() -
                   new Date(
-                    serverMessage.platform_created_at ??
-                      serverMessage.created_at ??
+                    optimistic.platform_created_at ??
+                      optimistic.created_at ??
                       0
-                  ).getTime() -
-                    new Date(
-                      optimistic.platform_created_at ??
-                        optimistic.created_at ??
-                        0
-                    ).getTime()
-                ) < 5 * 60 * 1000
-            )
-        )
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch messages');
-      // Don't blow away the prior message list on a background-poll
-      // failure — keep the last good data and surface the error.
-      if (!background) setMessages([]);
-    } finally {
-      if (!background) setLoading(false);
-    }
-  }, [organizationId, threadId, siblingThreadIds.join(',')]);
-
-  useEffect(() => {
-    fetchMessages(false);
-  }, [fetchMessages]);
-
-  useEffect(() => {
-    if (!organizationId?.trim() || !threadId?.trim()) return;
-    const interval = setInterval(() => fetchMessages(true), REFRESH_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [organizationId, threadId, fetchMessages]);
+                  ).getTime()
+              ) < 5 * 60 * 1000
+          )
+      )
+    );
+  }, [data]);
 
   const addOptimisticMessage = useCallback((message: EngagementMessage) => {
     setOptimisticMessages((current) => {
@@ -161,18 +159,26 @@ export function useEngagementMessages(
     setOptimisticMessages([]);
   }, []);
 
-  const mergedMessages = [...optimisticMessages, ...messages]
+  // Merge algorithm UNCHANGED.
+  const mergedMessages = [...optimisticMessages, ...serverMessages]
     .sort(compareMessagesAscending)
     .slice(-VISIBLE_THREAD_MESSAGE_LIMIT);
 
   // Public refresh is a *background* refresh — see useEngagementInbox for
-  // the same rationale. Keeps the message list visible across click-driven
-  // refreshes instead of flashing a skeleton.
-  const refresh = useCallback(() => fetchMessages(true), [fetchMessages]);
+  // the same rationale. SWR revalidation never flips isLoading, so the
+  // message list stays visible across click-driven refreshes.
+  const refresh = useCallback(async () => {
+    await mutate();
+  }, [mutate]);
+
   return {
     messages: mergedMessages,
-    loading,
-    error,
+    loading: isLoading,
+    error: swrError
+      ? swrError instanceof Error
+        ? swrError.message
+        : 'Failed to fetch messages'
+      : null,
     refresh,
     addOptimisticMessage,
     clearOptimisticMessages,
