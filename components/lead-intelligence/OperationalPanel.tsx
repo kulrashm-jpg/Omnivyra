@@ -1,6 +1,13 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
+import useSWR, { useSWRConfig } from 'swr';
 import { DEFAULT_STATE_MODEL } from '@/lib/operations/operationalStateModel';
-import { fetchOperationalOverlay, operationsAction, type OperationalOverlay } from './leadIntelligenceClient';
+import {
+  fetchOperationalOverlay,
+  operationsAction,
+  operationalOverlayKey,
+  invalidateLeadIntelligenceReads,
+  type OperationalOverlay,
+} from './leadIntelligenceClient';
 
 /**
  * W2b — Operational console for a single lead. Backend-neutral: it consumes the ONE
@@ -9,25 +16,36 @@ import { fetchOperationalOverlay, operationsAction, type OperationalOverlay } fr
  * status, assignment, notes and tasks; every mutation flows through the single API.
  */
 export default function OperationalPanel({ companyId, entityId }: { companyId: string; entityId: string }) {
-  const [overlay, setOverlay] = useState<OperationalOverlay | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [opError, setOpError] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [taskTitle, setTaskTitle] = useState('');
+  const { mutate: globalMutate } = useSWRConfig();
 
-  const load = useCallback(() => {
-    if (!companyId || !entityId) return;
-    fetchOperationalOverlay(companyId, entityId).then(setOverlay).catch((e) => setError(e.message));
-  }, [companyId, entityId]);
-
-  useEffect(() => { load(); }, [load]);
+  // OPT-005 Phase 2C: the overlay is an SWR entry keyed on the exact request
+  // URL (company + entity). No key without both ids — parity with the old
+  // early return.
+  const overlayKey = companyId && entityId ? operationalOverlayKey(companyId, entityId) : null;
+  const { data, error: fetchError } = useSWR<OperationalOverlay>(
+    overlayKey,
+    () => fetchOperationalOverlay(companyId, entityId)
+  );
+  const overlay: OperationalOverlay | null = data ?? null;
+  const error = opError ?? (fetchError ? (fetchError instanceof Error ? fetchError.message : 'Failed to load operational state') : null);
 
   const run = useCallback(async (action: string, payload: Record<string, unknown>) => {
-    setBusy(true); setError(null);
-    try { await operationsAction(companyId, action, { entity_id: entityId, ...payload }); load(); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Operation failed'); }
+    setBusy(true); setOpError(null);
+    try {
+      await operationsAction(companyId, action, { entity_id: entityId, ...payload });
+      // Centralized invalidation: revalidate stats + leads + overlay for this
+      // company. Revalidate-only (no optimistic write); not awaited so `busy`
+      // releases as soon as the operation lands — same timing as the old
+      // fire-and-forget load().
+      void invalidateLeadIntelligenceReads(globalMutate, companyId);
+    }
+    catch (e) { setOpError(e instanceof Error ? e.message : 'Operation failed'); }
     finally { setBusy(false); }
-  }, [companyId, entityId, load]);
+  }, [companyId, entityId, globalMutate]);
 
   const input = 'rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none';
 

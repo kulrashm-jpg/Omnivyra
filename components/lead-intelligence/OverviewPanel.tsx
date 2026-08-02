@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
+import useSWR from 'swr';
 import { CANONICAL_LEAD_SOURCE_LABELS, type CanonicalLeadSource, type LeadStats, type CanonicalLeadView } from '@/lib/leadIntelligence';
-import { fetchLeadStats, fetchLeads, emptyFilters } from './leadIntelligenceClient';
+import { fetchLeadStats, fetchLeads, emptyFilters, leadStatsKey, leadsKey, type LeadListResult } from './leadIntelligenceClient';
 
 /** Status-bucket labels for the headline tiles — presentation grouping only (no business logic). */
 const STATUS_GROUPS: Record<string, string[]> = {
@@ -49,25 +50,31 @@ function timeAgo(iso: string | null): string {
   return m > 0 ? `${m}m ago` : 'just now';
 }
 
-export default function OverviewPanel({ companyId }: { companyId: string }) {
-  const [stats, setStats] = useState<LeadStats | null>(null);
-  const [recent, setRecent] = useState<CanonicalLeadView[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+/** Fixed query for the "Recent Activity" strip — part of the SWR key. */
+const RECENT_PAGE = { limit: 8, offset: 0 } as const;
+const RECENT_SORT = { by: 'occurredAt', order: 'desc' } as const;
 
-  useEffect(() => {
-    let active = true;
-    if (!companyId) return;
-    setLoading(true); setError(null);
-    Promise.all([
-      fetchLeadStats(companyId),
-      fetchLeads(companyId, emptyFilters(), { limit: 8, offset: 0 }, { by: 'occurredAt', order: 'desc' }),
-    ])
-      .then(([s, list]) => { if (active) { setStats(s); setRecent(list.rows); } })
-      .catch((e) => { if (active) setError(e instanceof Error ? e.message : 'Failed to load'); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [companyId]);
+export default function OverviewPanel({ companyId }: { companyId: string }) {
+  // OPT-005 Phase 2C: stats + recent leads are SWR entries keyed on the exact
+  // request URLs. Loading maps to isLoading (first uncached load / company
+  // change), matching the old always-refetch spinner; cached revisits paint
+  // instantly and revalidate in the background.
+  const { data: statsData, error: statsError, isLoading: statsLoading } = useSWR<LeadStats>(
+    companyId ? leadStatsKey(companyId) : null,
+    () => fetchLeadStats(companyId)
+  );
+  const { data: recentData, error: recentError, isLoading: recentLoading } = useSWR<LeadListResult>(
+    companyId ? leadsKey(companyId, emptyFilters(), RECENT_PAGE, RECENT_SORT) : null,
+    () => fetchLeads(companyId, emptyFilters(), RECENT_PAGE, RECENT_SORT)
+  );
+
+  // Parity: the old hook started loading=true and never resolved without a
+  // companyId, so an empty companyId keeps showing the loading tile.
+  const loading = !companyId || statsLoading || recentLoading;
+  const firstError = statsError ?? recentError;
+  const error = firstError ? (firstError instanceof Error ? firstError.message : 'Failed to load') : null;
+  const stats = statsData ?? null;
+  const recent: CanonicalLeadView[] = recentData?.rows ?? [];
 
   if (loading) return <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-500">Loading overview…</div>;
   if (error) return <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error}</div>;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+import useSWR from 'swr';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import { apiFetch } from '../lib/apiFetch';
@@ -194,16 +195,34 @@ export function useSocialPlatforms() {
     }
   }, [selectedCompanyId]);
 
+  // ── OPT-005 Phase 2C: cache-safe GETs (catalog metadata, content-type
+  // prefs, API requests) are SWR entries keyed on the exact request URLs.
+  // The existing state variables (and their exported setters) are preserved
+  // and fed from the shared cache, so the hook's public API is unchanged.
+  // Company config, social-account status and token-refresh stay raw.
+  const catalogKey = selectedCompanyId ? `/api/external-apis?companyId=${selectedCompanyId}&catalog=1` : null;
+  const contentPrefsKey = selectedCompanyId ? `/api/social-platforms/content-type-prefs?companyId=${selectedCompanyId}` : null;
+  const apiRequestsKey = selectedCompanyId ? `/api/external-apis/requests?companyId=${selectedCompanyId}` : null;
+
+  const { data: catalogData, isLoading: catalogIsLoading, mutate: mutateCatalog } =
+    useSWR<{ apis?: any[] }>(catalogKey);
+  const { data: contentPrefsData, mutate: mutateContentPrefs } =
+    useSWR<{ prefs?: Record<string, string[]> }>(contentPrefsKey);
+  const { data: apiRequestsData, isLoading: apiRequestsIsLoading, mutate: mutateApiRequests } =
+    useSWR<{ requests?: any[] }>(apiRequestsKey);
+
+  useEffect(() => { if (catalogData) setCatalogApis(catalogData.apis || []); }, [catalogData]);
+  useEffect(() => { if (contentPrefsData) setPlatformContentPrefs(contentPrefsData.prefs || {}); }, [contentPrefsData]);
+  useEffect(() => { if (apiRequestsData) setApiRequests(apiRequestsData.requests || []); }, [apiRequestsData]);
+  // Loading flags map to SWR isLoading (first uncached load / company change);
+  // manual reloads and focus revalidations are silent background refreshes.
+  useEffect(() => { setLoadingCatalogApis(catalogIsLoading); }, [catalogIsLoading]);
+  useEffect(() => { setIsLoadingApiRequests(apiRequestsIsLoading); }, [apiRequestsIsLoading]);
+
   const loadCatalogApis = useCallback(async () => {
     if (!selectedCompanyId) return;
-    setLoadingCatalogApis(true);
-    try {
-      // catalog=1 returns all active global preset APIs so the company can browse and select
-      const r = await apiFetch(`/api/external-apis?companyId=${selectedCompanyId}&catalog=1`);
-      if (r.ok) { const d = await r.json(); setCatalogApis(d.apis || []); }
-    } catch { /* non-fatal */ }
-    finally { setLoadingCatalogApis(false); }
-  }, [selectedCompanyId]);
+    await mutateCatalog();
+  }, [selectedCompanyId, mutateCatalog]);
 
   const loadCompanyConfigs = useCallback(async () => {
     if (!selectedCompanyId) return;
@@ -235,11 +254,8 @@ export function useSocialPlatforms() {
 
   const loadContentPrefs = useCallback(async () => {
     if (!selectedCompanyId) return;
-    try {
-      const r = await apiFetch(`/api/social-platforms/content-type-prefs?companyId=${selectedCompanyId}`);
-      if (r.ok) { const d = await r.json(); setPlatformContentPrefs(d.prefs || {}); }
-    } catch { /* non-fatal */ }
-  }, [selectedCompanyId]);
+    await mutateContentPrefs();
+  }, [selectedCompanyId, mutateContentPrefs]);
 
   const saveContentPrefs = async (prefs: Record<string, string[]>) => {
     if (!selectedCompanyId) return;
@@ -250,7 +266,10 @@ export function useSocialPlatforms() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prefs }),
       });
+      // Same post-PUT local update as before, written through the shared
+      // cache entry (revalidate:false — the server was just told).
       setPlatformContentPrefs(prefs);
+      await mutateContentPrefs(() => ({ prefs }), { revalidate: false });
     } catch { /* non-fatal */ }
     finally { setSavingContentPrefs(false); }
   };
@@ -290,13 +309,8 @@ export function useSocialPlatforms() {
 
   const loadApiRequests = useCallback(async () => {
     if (!selectedCompanyId) return;
-    setIsLoadingApiRequests(true);
-    try {
-      const r = await apiFetch(`/api/external-apis/requests?companyId=${selectedCompanyId}`);
-      if (r.ok) { const d = await r.json(); setApiRequests(d.requests || []); }
-    } catch { /* non-fatal */ }
-    finally { setIsLoadingApiRequests(false); }
-  }, [selectedCompanyId]);
+    await mutateApiRequests();
+  }, [selectedCompanyId, mutateApiRequests]);
 
   const submitApiRequest = async () => {
     if (!selectedCompanyId || !requestForm.name.trim() || !requestForm.base_url.trim()) return;
@@ -330,7 +344,18 @@ export function useSocialPlatforms() {
       });
       if (r.ok) {
         notify('success', `Request ${status}.`);
-        await loadApiRequests();
+        // Write the status change through the shared cache entry
+        // (revalidate:false — the server was just told).
+        await mutateApiRequests(
+          (current) => ({
+            requests: (current?.requests ?? apiRequests).map((req: any) =>
+              req.id === id
+                ? { ...req, status, ...(status === 'rejected' ? { rejection_reason } : {}) }
+                : req
+            ),
+          }),
+          { revalidate: false }
+        );
       } else {
         const e = await r.json().catch(() => ({}));
         notify('error', e.error || 'Failed to update request');
@@ -393,10 +418,9 @@ export function useSocialPlatforms() {
   // unhandled rejection lights up the Next.js dev overlay. .catch() on the
   // useEffect invocation closes that gap — production behaviour unchanged.
   useEffect(() => { loadStatus().catch(() => {}); }, [loadStatus]);
-  useEffect(() => { loadCatalogApis().catch(() => {}); }, [loadCatalogApis]);
   useEffect(() => { loadCompanyConfigs().catch(() => {}); }, [loadCompanyConfigs]);
-  useEffect(() => { loadContentPrefs().catch(() => {}); }, [loadContentPrefs]);
-  useEffect(() => { loadApiRequests().catch(() => {}); }, [loadApiRequests]);
+  // OPT-005 Phase 2C: catalog / content-prefs / api-requests now fetch via
+  // their SWR entries on mount — their old mount effects are gone.
 
   // Daily auto-check: re-verify any configured platform whose cache is stale
   useEffect(() => {

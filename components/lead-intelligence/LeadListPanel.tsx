@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
+import useSWR from 'swr';
 import {
   CANONICAL_LEAD_SOURCES,
   CANONICAL_LEAD_SOURCE_LABELS,
@@ -10,6 +11,7 @@ import {
   fetchLeads,
   downloadLeadExport,
   emptyFilters,
+  leadsKey,
   type LeadFilterState,
   type LeadListResult,
   type LeadSortState,
@@ -33,10 +35,8 @@ export default function LeadListPanel({ companyId }: { companyId: string }) {
   const [filters, setFilters] = useState<LeadFilterState>(emptyFilters());
   const [sort, setSort] = useState<LeadSortState>({ by: 'occurredAt', order: 'desc' });
   const [offset, setOffset] = useState(0);
-  const [data, setData] = useState<LeadListResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const patch = useCallback((p: Partial<LeadFilterState>) => { setOffset(0); setFilters((f) => ({ ...f, ...p })); }, []);
   const toggleSource = useCallback((s: string) => {
@@ -44,18 +44,32 @@ export default function LeadListPanel({ companyId }: { companyId: string }) {
     setFilters((f) => ({ ...f, source: f.source.includes(s) ? f.source.filter((x) => x !== s) : [...f.source, s] }));
   }, []);
 
+  // OPT-005 Phase 2C: the list is an SWR entry keyed on the exact request URL
+  // (company + every filter + paging + sort). The original 250 ms debounce is
+  // preserved by only promoting the target key to the active SWR key after the
+  // debounce window — typing never fires per-keystroke requests.
+  const targetQuery = companyId
+    ? { url: leadsKey(companyId, filters, { limit: PAGE_SIZE, offset }, sort), filters, offset, sort }
+    : null;
+  const [activeQuery, setActiveQuery] = useState<typeof targetQuery>(null);
   useEffect(() => {
-    if (!companyId) return;
-    let active = true;
-    setLoading(true); setError(null);
-    const t = setTimeout(() => {
-      fetchLeads(companyId, filters, { limit: PAGE_SIZE, offset }, sort)
-        .then((r) => { if (active) setData(r); })
-        .catch((e) => { if (active) setError(e instanceof Error ? e.message : 'Failed to load'); })
-        .finally(() => { if (active) setLoading(false); });
-    }, 250);
-    return () => { active = false; clearTimeout(t); };
-  }, [companyId, filters, sort, offset]);
+    if (!targetQuery) return;
+    setExportError(null); // parity: the old hook cleared the error on every query change
+    const t = setTimeout(() => setActiveQuery(targetQuery), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, targetQuery?.url]);
+
+  const { data, error: swrError, isLoading } = useSWR<LeadListResult>(
+    activeQuery ? activeQuery.url : null,
+    () => fetchLeads(companyId, activeQuery!.filters, { limit: PAGE_SIZE, offset: activeQuery!.offset }, activeQuery!.sort)
+  );
+
+  // Loading covers the debounce window plus any uncached first fetch of the
+  // active key — the same span the old hook flagged. Cached pages paint
+  // instantly and revalidate in the background.
+  const loading = targetQuery !== null && (targetQuery.url !== activeQuery?.url || isLoading);
+  const error = exportError ?? (swrError ? (swrError instanceof Error ? swrError.message : 'Failed to load') : null);
 
   const total = data?.total ?? 0;
   const rows = data?.rows ?? [];
@@ -72,7 +86,7 @@ export default function LeadListPanel({ companyId }: { companyId: string }) {
   const doExport = async (format: 'csv' | 'excel') => {
     setExporting(true);
     try { await downloadLeadExport(companyId, filters, format); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Export failed'); }
+    catch (e) { setExportError(e instanceof Error ? e.message : 'Export failed'); }
     finally { setExporting(false); }
   };
 

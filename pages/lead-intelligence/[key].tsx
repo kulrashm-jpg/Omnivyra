@@ -1,31 +1,31 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import useSWR from 'swr';
 import { useCompanyContext } from '@/components/CompanyContext';
 import LeadProfileView from '@/components/lead-intelligence/LeadProfileView';
 import OperationalPanel from '@/components/lead-intelligence/OperationalPanel';
-import { fetchLeadProfile } from '@/components/lead-intelligence/leadIntelligenceClient';
+import { fetchLeadProfile, leadProfileKey } from '@/components/lead-intelligence/leadIntelligenceClient';
 import type { LeadProfile } from '@/lib/leadIntelligence';
 
 export default function LeadProfilePage() {
   const { selectedCompanyId } = useCompanyContext();
   const router = useRouter();
   const key = typeof router.query.key === 'string' ? router.query.key : '';
-  const [profile, setProfile] = useState<LeadProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!selectedCompanyId || !key) return;
-    let active = true;
-    setLoading(true); setError(null);
-    fetchLeadProfile(selectedCompanyId, key)
-      .then((p) => { if (active) setProfile(p); })
-      .catch((e) => { if (active) setError(e instanceof Error ? e.message : 'Failed to load lead'); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [selectedCompanyId, key]);
+  // OPT-005 Phase 2C: the profile is an SWR entry keyed on the exact request
+  // URL (company + lead key). Loading covers "router key not ready yet" plus
+  // any uncached first fetch — the same span the old hook flagged; error
+  // contract unchanged ('Lead not found' on 404 comes from the fetcher).
+  const swrKey = selectedCompanyId && key ? leadProfileKey(selectedCompanyId, key) : null;
+  const { data, error: swrError, isLoading } = useSWR<LeadProfile>(
+    swrKey,
+    () => fetchLeadProfile(selectedCompanyId as string, key)
+  );
+  const profile = data ?? null;
+  const loading = !key || isLoading;
+  const error = swrError ? (swrError instanceof Error ? swrError.message : 'Failed to load lead') : null;
 
   const onExport = useCallback(() => {
     if (!profile) return;

@@ -6,6 +6,7 @@
  * client-side — every operation is a query param forwarded to the repository.
  */
 
+import type { ScopedMutator } from 'swr';
 import { apiFetch } from '@/lib/apiFetch';
 import type { CanonicalLeadView, LeadStats, LeadProfile } from '@/lib/leadIntelligence';
 
@@ -51,8 +52,37 @@ function applyFilterParams(p: URLSearchParams, f: LeadFilterState): void {
   if (f.intentMin.trim() && !Number.isNaN(Number(f.intentMin))) p.set('intent_min', f.intentMin.trim());
 }
 
+/* ── OPT-005 Phase 2C — SWR cache keys ──────────────────────────────────────
+ * Each key IS the exact request URL, so the cache entry carries every
+ * parameter that affects the returned data (company, filters, paging, sort).
+ * The fetch functions below build their request URL from the same builders,
+ * guaranteeing key ↔ request parity. */
+
+export function leadStatsKey(companyId: string): string {
+  return `/api/lead-intelligence/stats?company_id=${encodeURIComponent(companyId)}`;
+}
+
+export function leadsKey(
+  companyId: string,
+  filters: LeadFilterState,
+  page: { limit: number; offset: number },
+  sort: LeadSortState,
+): string {
+  const p = new URLSearchParams({ company_id: companyId });
+  applyFilterParams(p, filters);
+  p.set('limit', String(page.limit));
+  p.set('offset', String(page.offset));
+  p.set('sort', sort.by);
+  p.set('order', sort.order);
+  return `/api/lead-intelligence/leads?${p.toString()}`;
+}
+
+export function leadProfileKey(companyId: string, key: string): string {
+  return `/api/lead-intelligence/profile?${new URLSearchParams({ company_id: companyId, key }).toString()}`;
+}
+
 export async function fetchLeadStats(companyId: string): Promise<LeadStats> {
-  const res = await apiFetch(`/api/lead-intelligence/stats?company_id=${encodeURIComponent(companyId)}`);
+  const res = await apiFetch(leadStatsKey(companyId));
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to load lead stats');
   return res.json();
 }
@@ -63,20 +93,13 @@ export async function fetchLeads(
   page: { limit: number; offset: number },
   sort: LeadSortState,
 ): Promise<LeadListResult> {
-  const p = new URLSearchParams({ company_id: companyId });
-  applyFilterParams(p, filters);
-  p.set('limit', String(page.limit));
-  p.set('offset', String(page.offset));
-  p.set('sort', sort.by);
-  p.set('order', sort.order);
-  const res = await apiFetch(`/api/lead-intelligence/leads?${p.toString()}`);
+  const res = await apiFetch(leadsKey(companyId, filters, page, sort));
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to load leads');
   return res.json();
 }
 
 export async function fetchLeadProfile(companyId: string, key: string): Promise<LeadProfile> {
-  const p = new URLSearchParams({ company_id: companyId, key });
-  const res = await apiFetch(`/api/lead-intelligence/profile?${p.toString()}`);
+  const res = await apiFetch(leadProfileKey(companyId, key));
   if (res.status === 404) throw new Error('Lead not found');
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to load lead profile');
   return res.json();
@@ -93,11 +116,32 @@ export interface OperationalOverlay {
 
 const OPS = '/api/lead-intelligence/operations';
 
+export function operationalOverlayKey(companyId: string, entityId: string): string {
+  return `${OPS}?${new URLSearchParams({ company_id: companyId, entity_id: entityId }).toString()}`;
+}
+
 export async function fetchOperationalOverlay(companyId: string, entityId: string): Promise<OperationalOverlay> {
-  const p = new URLSearchParams({ company_id: companyId, entity_id: entityId });
-  const res = await apiFetch(`${OPS}?${p.toString()}`);
+  const res = await apiFetch(operationalOverlayKey(companyId, entityId));
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to load operational state');
   return res.json();
+}
+
+/**
+ * OPT-005 Phase 2C — centralized invalidation after a successful lead
+ * operation: revalidate the stats, leads (every filter variant) and
+ * operational-overlay entries of THIS company only. Revalidate-only —
+ * no optimistic writes. `mutate` is the global mutator from useSWRConfig().
+ */
+export function invalidateLeadIntelligenceReads(mutate: ScopedMutator, companyId: string): Promise<unknown> {
+  const companyParam = `company_id=${encodeURIComponent(companyId)}`;
+  return mutate(
+    (key: unknown) =>
+      typeof key === 'string' &&
+      (key.includes(`${companyParam}&`) || key.endsWith(companyParam)) &&
+      (key.startsWith('/api/lead-intelligence/stats?') ||
+        key.startsWith('/api/lead-intelligence/leads?') ||
+        key.startsWith(`${OPS}?`))
+  );
 }
 
 /** All mutations flow through the ONE Operations API action dispatcher. */
