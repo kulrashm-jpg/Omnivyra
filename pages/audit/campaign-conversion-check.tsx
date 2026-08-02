@@ -1,6 +1,6 @@
-import Head from 'next/head';
 import FreeAuditInput from '../../components/FreeAuditInput';
 import Footer from '../../components/landing/Footer';
+import MarketingPageMeta from '../../components/seo/MarketingPageMeta';
 
 const WHAT_YOU_GET = [
   { icon: '🛬', title: 'Landing Page Readiness', desc: 'Whether the page your campaign sends traffic to is built to convert — or repel.' },
@@ -21,10 +21,11 @@ const EXAMPLE_SCORES = [
 export default function CampaignConversionCheck() {
   return (
     <>
-      <Head>
-        <title>Campaign Conversion Check | Free AI Audit | Omnivyra</title>
-        <meta name="description" content="Find out why your campaign traffic isn't converting. Get an instant AI audit with clear, prioritised fixes." />
-      </Head>
+      <MarketingPageMeta
+        title="Campaign Conversion Check | Free AI Audit | Omnivyra"
+        description="Find out why your campaign traffic isn't converting. Get an instant AI audit with clear, prioritised fixes."
+        path="/audit/campaign-conversion-check"
+      />
 
       <div className="min-h-screen bg-[#F5F9FF]">
 

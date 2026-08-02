@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Head from 'next/head';
 import Link from 'next/link';
+import MarketingPageMeta, { faqPageJsonLd } from '../components/seo/MarketingPageMeta';
 import Footer from '../components/landing/Footer';
 import {
   PLANS, TOPUPS, FEATURE_MATRIX, FAQS, FOUNDING_MEMBER, CURRENCIES,
@@ -56,10 +56,12 @@ export default function PricingPage() {
 
   return (
     <>
-      <Head>
-        <title>Pricing | Omnivyra</title>
-        <meta name="description" content="Omnivyra pricing: credit-based plans with full platform access, in USD or INR. Founding Member pricing available before March 2028." />
-      </Head>
+      <MarketingPageMeta
+        title="Pricing | Omnivyra"
+        description="Omnivyra pricing: credit-based plans with full platform access, in USD or INR. Founding Member pricing available before March 2028."
+        path="/pricing"
+        jsonLd={faqPageJsonLd(FAQS.map((f) => ({ q: f.q, a: f.a })))}
+      />
 
       <main className="min-h-screen bg-[#F5F9FF]" style={{ fontFamily: "'Inter', sans-serif" }}>
         {/* ── Hero + currency toggle ─────────────────────────────── */}

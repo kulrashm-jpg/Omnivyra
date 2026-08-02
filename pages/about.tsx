@@ -1,6 +1,6 @@
-import Head from 'next/head';
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
+import MarketingPageMeta from '../components/seo/MarketingPageMeta';
 
 const BLUE_FIELD = 'linear-gradient(150deg, #071D3A 0%, #0A3770 54%, #0A66C2 100%)';
 const CENTERPIECE_FIELD = 'linear-gradient(160deg, #06182F 0%, #082B55 58%, #0A4F94 100%)';
@@ -352,7 +352,7 @@ function CinematicFooter() {
         <div className="mt-12 grid gap-12 lg:grid-cols-[1.22fr_1fr] lg:items-start">
           <div>
             <Link href="/" aria-label="Omnivyra home" className="inline-flex">
-              <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain" />
+              <img width={465} height={144} src="/logo.webp" alt="Omnivyra" className="h-12 w-auto object-contain" />
             </Link>
             <p className="mt-5 max-w-sm text-sm leading-7 text-[#5D6F83]">
               Built for clarity, control, and direction in modern marketing.
@@ -388,13 +388,11 @@ function CinematicFooter() {
 export default function AboutPage() {
   return (
     <>
-      <Head>
-        <title>About | Omnivyra</title>
-        <meta
-          name="description"
-          content="Omnivyra exists because AI changed marketing faster than marketing systems could evolve."
-        />
-      </Head>
+      <MarketingPageMeta
+        title="About | Omnivyra"
+        description="Omnivyra exists because AI changed marketing faster than marketing systems could evolve."
+        path="/about"
+      />
 
       <main className="relative isolate min-h-screen overflow-hidden bg-[#F5F9FF]" style={{ fontFamily: "var(--font-inter), sans-serif" }}>
         <JourneyField />

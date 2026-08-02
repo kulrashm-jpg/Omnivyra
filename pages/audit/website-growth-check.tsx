@@ -1,6 +1,6 @@
-import Head from 'next/head';
 import FreeAuditInput from '../../components/FreeAuditInput';
 import Footer from '../../components/landing/Footer';
+import MarketingPageMeta from '../../components/seo/MarketingPageMeta';
 
 const WHAT_YOU_GET = [
   { icon: '🔍', title: 'SEO Visibility', desc: 'Where your site ranks and what is stopping it from appearing in searches.' },
@@ -22,10 +22,11 @@ const EXAMPLE_SCORES = [
 export default function WebsiteGrowthCheck() {
   return (
     <>
-      <Head>
-        <title>Website Growth Check | Free AI Audit | Omnivyra</title>
-        <meta name="description" content="Run a 60-second AI website audit to discover what is silently losing you customers — traffic, leads, and conversions." />
-      </Head>
+      <MarketingPageMeta
+        title="Website Growth Check | Free AI Audit | Omnivyra"
+        description="Run a 60-second AI website audit to discover what is silently losing you customers — traffic, leads, and conversions."
+        path="/audit/website-growth-check"
+      />
 
       <div className="min-h-screen bg-[#F5F9FF]">
 

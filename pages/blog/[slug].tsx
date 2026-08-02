@@ -1,6 +1,5 @@
-'use client';
-
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
+import type { GetStaticPaths, GetStaticProps } from 'next';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
@@ -18,11 +17,12 @@ import { ReadingProgressBar } from '../../components/blog/ReadingProgressBar';
 import { BlogSeriesWidget } from '../../components/blog/BlogSeriesWidget';
 import { BlogPerformanceTracker } from '../../components/blog/BlogPerformanceTracker';
 import { TTSPlayer } from '../../components/blog/TTSPlayer';
-import { ArrowLeft, Loader2, Calendar, Clock, Eye, Megaphone } from 'lucide-react';
+import { Calendar, Clock, Eye, Megaphone } from 'lucide-react';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 import { extractTextFromBlocks, estimateReadTimeFromBlocks } from '../../lib/blog/blockUtils';
 import { BlogArticleBody } from '../../components/blog/BlogArticleLayout';
 import { useCompanyContext } from '../../components/CompanyContext';
+import { SITE_URL } from '../../lib/siteUrl';
 import { CampaignPerformanceSignal } from '../../components/blog/CampaignPerformanceSignal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -192,80 +192,80 @@ function categoryClass(cat: string) {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-export default function BlogDetailPage() {
+interface BlogPostDetail {
+  id: string;
+  title: string;
+  slug: string;
+  excerpt: string | null;
+  content_markdown: string;
+  content_html: string | null;
+  featured_image_url: string | null;
+  category: string | null;
+  tags: string[] | null;
+  media_blocks: MediaBlockItem[] | null;
+  content_blocks: ContentBlock[] | null;
+  seo_meta_title: string | null;
+  seo_meta_description: string | null;
+  published_at: string | null;
+  views_count: number;
+  likes_count?: number;
+}
+
+/**
+ * OPT-006 Phase B: ISR. Recent article pages are prebuilt; the rest render
+ * on-demand (`fallback: 'blocking'`) and are cached. Unknown/unpublished slugs
+ * return a real 404 (previously a 200 with an inline "not found" card). The
+ * <Head> block — title/canonical/OG/Article JSON-LD — is now in the crawlable
+ * HTML; previously it sat behind a client-fetch loading gate and no crawler
+ * ever saw it.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const { listRecentPublishedSlugs } = await import('../../backend/services/blog/publicBlogRead');
+  const slugs = await listRecentPublishedSlugs(50);
+  return {
+    paths: slugs.map((slug) => ({ params: { slug } })),
+    fallback: 'blocking',
+  };
+};
+
+export const getStaticProps: GetStaticProps<{ post: BlogPostDetail }> = async ({ params }) => {
+  const slug = typeof params?.slug === 'string' ? params.slug : '';
+  if (!slug.trim()) return { notFound: true, revalidate: 300 };
+  const { getPublishedBlogPost } = await import('../../backend/services/blog/publicBlogRead');
+  const post = await getPublishedBlogPost(slug);
+  if (!post) return { notFound: true, revalidate: 300 };
+  return { props: { post: post as unknown as BlogPostDetail }, revalidate: 300 };
+};
+
+export default function BlogDetailPage({ post }: { post: BlogPostDetail }) {
   const router = useRouter();
-  const slug = router.query.slug as string | undefined;
   const { userRole } = useCompanyContext();
   const isSuperAdmin = (userRole || '').toUpperCase() === 'SUPER_ADMIN';
 
-  const [post, setPost] = useState<{
-    id: string;
-    title: string;
-    slug: string;
-    excerpt: string | null;
-    content_markdown: string;
-    content_html: string | null;
-    featured_image_url: string | null;
-    category: string | null;
-    tags: string[] | null;
-    media_blocks: MediaBlockItem[] | null;
-    content_blocks: ContentBlock[] | null;
-    seo_meta_title: string | null;
-    seo_meta_description: string | null;
-    published_at: string | null;
-    views_count: number;
-    likes_count?: number;
-  } | null>(null);
-
-  const [loading, setLoading] = useState(!!slug);
-  const [notFound, setNotFound] = useState(false);
-
+  // Per-view counting preserved: views_count is incremented ONLY by the detail
+  // API's GET (pages/api/blog/[slug]/index.ts). ISR removed the rendering
+  // fetch, so keep the identical request as a fire-and-forget ping — response
+  // deliberately discarded; the page renders entirely from ISR props.
   useEffect(() => {
-    if (!slug) return;
-    let cancelled = false;
-    setLoading(true); setNotFound(false);
-    fetch(`/api/blog/${encodeURIComponent(slug)}`)
-      .then(res => { if (res.status === 404) { setNotFound(true); return null; } return res.json(); })
-      .then(data => { if (!cancelled && data) setPost(data); })
-      .catch(() => { if (!cancelled) setNotFound(true); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [slug]);
-
-  // ── Loading ────────────────────────────────────────────────────────────────
-  if (!slug || loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-[#F5F9FF]">
-        <Loader2 className="h-10 w-10 animate-spin text-[#0A66C2]" />
-      </div>
-    );
-  }
-
-  // ── Not found ──────────────────────────────────────────────────────────────
-  if (notFound || !post) {
-    return (
-      <div className="min-h-screen bg-[#F5F9FF] px-4 py-16">
-        <div className="mx-auto max-w-xl rounded-2xl border border-gray-100 bg-white p-12 text-center shadow-sm">
-          <h1 className="text-2xl font-bold text-[#0B1F33]">Article not found</h1>
-          <Link href="/blog" className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-[#0A66C2] hover:underline">
-            <ArrowLeft className="h-4 w-4" /> Back to Blog
-          </Link>
-        </div>
-        <Footer />
-      </div>
-    );
-  }
+    fetch(`/api/blog/${encodeURIComponent(post.slug)}`).catch(() => {});
+  }, [post.slug]);
 
   // ── Derived values ────────────────────────────────────────────────────────
-  const siteUrl = typeof window !== 'undefined' ? window.location.origin : (process.env.NEXT_PUBLIC_APP_URL || 'https://www.omnivyra.com');
+  // Build-time constant on BOTH server and client. The previous form preferred
+  // `window.location.origin` client-side and the env value server-side, so the
+  // two renders disagreed whenever the serving host differed from the canonical
+  // origin (preview deploys, localhost, alias domains) — a hydration mismatch,
+  // and preview hosts self-canonicalizing against production.
+  const siteUrl = SITE_URL;
   const canonical = `${siteUrl}/blog/${encodeURIComponent(post.slug)}`;
   const metaTitle = post.seo_meta_title || post.title;
   const metaDesc = post.seo_meta_description || post.excerpt || post.title;
   const readTime = post.content_blocks && post.content_blocks.length > 0
     ? estimateReadTimeFromBlocks(post.content_blocks)
     : estimateReadTimeMarkdown(post.content_markdown);
+  // timeZone pinned: with ISR this formats on the server AND during hydration.
   const publishedDate = post.published_at
-    ? new Date(post.published_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    ? new Date(post.published_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })
     : '';
 
   const contentHtml = post.content_blocks && post.content_blocks.length > 0
@@ -359,7 +359,7 @@ export default function BlogDetailPage() {
               {post.views_count > 0 && (
                 <span className="flex items-center gap-1.5 rounded-lg bg-white border border-gray-100 px-3 py-1.5 shadow-sm">
                   <Eye className="h-3.5 w-3.5 text-[#0A66C2]" />
-                  {post.views_count.toLocaleString()} views
+                  {post.views_count.toLocaleString('en-US')} views
                 </span>
               )}
               {isSuperAdmin && (

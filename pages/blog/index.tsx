@@ -1,11 +1,9 @@
-'use client';
-
-import React, { useEffect, useState } from 'react';
-import Head from 'next/head';
+import React from 'react';
+import type { GetStaticProps } from 'next';
 import Link from 'next/link';
 import Footer from '../../components/landing/Footer';
-import { Loader2 } from 'lucide-react';
 import { getBlogCategoryImage } from '../../lib/blogImages';
+import MarketingPageMeta from '../../components/seo/MarketingPageMeta';
 
 type BlogPost = {
   id: string;
@@ -42,10 +40,14 @@ function estimateReadTime(post: BlogPost): number {
 
 function formatDate(date: string | null, long = false) {
   if (!date) return '';
+  // timeZone pinned: with ISR this runs on the server AND during hydration —
+  // without it, a client a timezone away could format a different calendar day
+  // than the prerendered HTML (hydration mismatch).
   return new Date(date).toLocaleDateString('en-US', {
     year: 'numeric',
     month: long ? 'long' : 'short',
     day: 'numeric',
+    timeZone: 'UTC',
   });
 }
 
@@ -189,53 +191,40 @@ function SupportingEntry({ post, index }: { post: BlogPost; index: number }) {
   );
 }
 
-export default function BlogListingPage() {
-  const [featured, setFeatured] = useState<BlogPost | null>(null);
-  const [supporting, setSupporting] = useState<BlogPost[]>([]);
-  const [loading, setLoading] = useState(true);
+interface BlogListingProps {
+  featured: BlogPost | null;
+  supporting: BlogPost[];
+}
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      fetch('/api/blog?featured_only=1&limit=1').then((r) => (r.ok ? r.json() : { posts: [] })),
-      fetch('/api/blog?limit=4').then((r) => (r.ok ? r.json() : { posts: [] })),
-    ]).then(([featuredRes, listRes]) => {
-      if (cancelled) return;
-      const featuredPost = featuredRes.posts?.[0] || null;
-      const all = listRes.posts || [];
-      const featuredId = featuredPost?.id;
-      const supportingList = all
-        .filter((p: BlogPost) => p.id !== featuredId)
-        .slice(0, 3);
-      setFeatured(featuredPost || all[0] || null);
-      setSupporting(featuredPost ? supportingList : (all.slice(1, 4) as BlogPost[]));
-    }).catch(() => {
-      if (!cancelled) setFeatured(null);
-      if (!cancelled) setSupporting([]);
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, []);
+/**
+ * OPT-006 Phase B: ISR — posts are fetched at build/revalidate time so the
+ * crawlable HTML contains real article links instead of a spinner. Selection
+ * logic is identical to the previous client effect (featured_only=1&limit=1
+ * plus limit=4, deduped). Regenerates at most every 5 minutes.
+ */
+export const getStaticProps: GetStaticProps<BlogListingProps> = async () => {
+  const { listPublishedBlogPosts } = await import('../../backend/services/blog/publicBlogRead');
+  const [featuredArr, all] = await Promise.all([
+    listPublishedBlogPosts({ featuredOnly: true, limit: 1 }),
+    listPublishedBlogPosts({ limit: 4 }),
+  ]);
+  const featuredPost = (featuredArr[0] as BlogPost | undefined) ?? null;
+  const supporting = featuredPost
+    ? (all as unknown as BlogPost[]).filter((p) => p.id !== featuredPost.id).slice(0, 3)
+    : (all as unknown as BlogPost[]).slice(1, 4);
+  return {
+    props: { featured: featuredPost ?? ((all[0] as unknown as BlogPost) ?? null), supporting },
+    revalidate: 300,
+  };
+};
 
-  const siteUrl = typeof window !== 'undefined' ? window.location.origin : '';
+export default function BlogListingPage({ featured, supporting }: BlogListingProps) {
   const metaTitle = 'The Marketing Intelligence Journal | Omnivyra';
   const metaDesc = 'Operational observations on discoverability, execution movement, authority formation, and market interpretation from Omnivyra.';
 
   return (
     <>
-      <Head>
-        <title>{metaTitle}</title>
-        <meta name="description" content={metaDesc} />
-        <link rel="canonical" href={`${siteUrl}/blog`} />
-        <meta property="og:title" content={metaTitle} />
-        <meta property="og:description" content={metaDesc} />
-        <meta property="og:url" content={`${siteUrl}/blog`} />
-        <meta property="og:type" content="website" />
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content={metaTitle} />
-        <meta name="twitter:description" content={metaDesc} />
-      </Head>
+      <MarketingPageMeta title={metaTitle} description={metaDesc} path="/blog" />
 
       <div className="min-h-screen overflow-hidden bg-[#F7FBFF]" style={{ fontFamily: "'Inter', sans-serif" }}>
         <JournalHero />
@@ -265,30 +254,22 @@ export default function BlogListingPage() {
                 </p>
               </div>
 
-              {loading ? (
-                <div className="flex justify-center py-24">
-                  <Loader2 className="h-8 w-8 animate-spin text-[#0A66C2]" />
+              {featured && <FeaturedEntry post={featured} />}
+
+              {supporting.length > 0 && (
+                <section className="mt-8 grid gap-5 lg:grid-cols-3">
+                  {supporting.map((post, index) => (
+                    <SupportingEntry key={post.id} post={post} index={index} />
+                  ))}
+                </section>
+              )}
+
+              {!featured && supporting.length === 0 && (
+                <div className="rounded-[28px] border border-[#CBE2F7]/80 bg-white/[0.76] px-6 py-20 text-center shadow-[0_18px_42px_rgba(8,68,138,0.06)] backdrop-blur">
+                  <p className="text-base leading-8 text-[#5D6F83]">
+                    No public intelligence notes are available yet.
+                  </p>
                 </div>
-              ) : (
-                <>
-                  {featured && <FeaturedEntry post={featured} />}
-
-                  {supporting.length > 0 && (
-                    <section className="mt-8 grid gap-5 lg:grid-cols-3">
-                      {supporting.map((post, index) => (
-                        <SupportingEntry key={post.id} post={post} index={index} />
-                      ))}
-                    </section>
-                  )}
-
-                  {!featured && supporting.length === 0 && (
-                    <div className="rounded-[28px] border border-[#CBE2F7]/80 bg-white/[0.76] px-6 py-20 text-center shadow-[0_18px_42px_rgba(8,68,138,0.06)] backdrop-blur">
-                      <p className="text-base leading-8 text-[#5D6F83]">
-                        No public intelligence notes are available yet.
-                      </p>
-                    </div>
-                  )}
-                </>
               )}
             </div>
           </section>

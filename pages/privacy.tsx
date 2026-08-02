@@ -1,18 +1,25 @@
-import Head from 'next/head';
 import Link from 'next/link';
 import Footer from '../components/landing/Footer';
+import MarketingPageMeta from '../components/seo/MarketingPageMeta';
+
+// OPT-006 Phase C: a static date instead of `new Date()` — the old code baked
+// the BUILD date into the prerender and showed the CURRENT date after
+// hydration (a mismatch, and a "last updated" line that was always today).
+// Update this literal when the policy text actually changes.
+const LAST_UPDATED = '2 August 2026';
 
 export default function PrivacyPolicy() {
   return (
     <>
-      <Head>
-        <title>Privacy Policy | Omnivyra</title>
-        <meta name="description" content="Omnivyra Privacy Policy — how we collect, use, and protect your personal data." />
-      </Head>
+      <MarketingPageMeta
+        title="Privacy Policy | Omnivyra"
+        description="Omnivyra Privacy Policy — how we collect, use, and protect your personal data."
+        path="/privacy"
+      />
       <div className="min-h-screen bg-[#F5F9FF]">
         <main className="mx-auto max-w-3xl px-6 py-16 lg:px-8 lg:py-24">
           <h1 className="text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl">Privacy Policy</h1>
-          <p className="mt-3 text-sm text-[#6B7C93]">Last updated: {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+          <p className="mt-3 text-sm text-[#6B7C93]">Last updated: {LAST_UPDATED}</p>
 
           <div className="mt-10 space-y-8 text-[#0B1F33]">
             <section>

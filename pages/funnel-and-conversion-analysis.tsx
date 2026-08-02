@@ -1,17 +1,15 @@
-import Head from 'next/head';
 import Link from 'next/link';
 import Footer from '../components/landing/Footer';
+import MarketingPageMeta from '../components/seo/MarketingPageMeta';
 
 export default function FunnelAndConversionAnalysisPage() {
   return (
     <>
-      <Head>
-        <title>Funnel and Conversion Analysis | Omnivyra</title>
-        <meta
-          name="description"
-          content="Learn how funnel and conversion analysis reveals drop-offs, bottlenecks, and next best actions so teams can improve marketing performance."
-        />
-      </Head>
+      <MarketingPageMeta
+        title="Funnel and Conversion Analysis | Omnivyra"
+        description="Learn how funnel and conversion analysis reveals drop-offs, bottlenecks, and next best actions so teams can improve marketing performance."
+        path="/funnel-and-conversion-analysis"
+      />
       <main className="min-h-screen bg-[#F5F9FF]" style={{ fontFamily: "'Inter', sans-serif" }}>
         <section className="px-6 py-20 lg:px-8">
           <div className="mx-auto max-w-4xl">

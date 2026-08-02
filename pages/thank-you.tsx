@@ -1,8 +1,8 @@
 import React from 'react';
-import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { isLeadIntent, LEAD_CAPTURE_INTENTS } from '@/lib/website/leadCaptureConfig';
+import MarketingPageMeta from '@/components/seo/MarketingPageMeta';
 
 export default function ThankYouPage() {
   const router = useRouter();
@@ -11,7 +11,13 @@ export default function ThankYouPage() {
 
   return (
     <>
-      <Head><title>Thank you | OmniVyra</title></Head>
+      {/* noindex: post-submission confirmation page — no search value. */}
+      <MarketingPageMeta
+        title="Thank you | OmniVyra"
+        description="Thanks for reaching out to Omnivyra — our team will be in touch shortly."
+        path="/thank-you"
+        noindex
+      />
       <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-[#EEF6FF] to-white px-4 py-16">
         <div className="w-full max-w-md rounded-3xl border border-[#D7E7F8] bg-white p-10 text-center shadow-[0_24px_60px_rgba(10,102,194,0.12)]">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#1E9E5A] text-3xl text-white">✓</div>

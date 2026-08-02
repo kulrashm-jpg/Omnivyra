@@ -1,21 +1,25 @@
-import Head from 'next/head';
 import Link from 'next/link';
 import Footer from '../components/landing/Footer';
+import MarketingPageMeta from '../components/seo/MarketingPageMeta';
+
+// OPT-006 Phase C: static date — see privacy.tsx for rationale.
+const LAST_UPDATED = '2 August 2026';
 
 export default function DataDeletion() {
   return (
     <>
-      <Head>
-        <title>Data Deletion Instructions | Omnivyra</title>
-        <meta name="description" content="How to request deletion of your personal data from Omnivyra." />
-      </Head>
+      <MarketingPageMeta
+        title="Data Deletion Instructions | Omnivyra"
+        description="How to request deletion of your personal data from Omnivyra."
+        path="/data-deletion"
+      />
       <div className="min-h-screen bg-[#F5F9FF]">
         <main className="mx-auto max-w-3xl px-6 py-16 lg:px-8 lg:py-24">
           <h1 className="text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl">
             Data Deletion Instructions
           </h1>
           <p className="mt-3 text-sm text-[#6B7C93]">
-            Last updated: {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
+            Last updated: {LAST_UPDATED}
           </p>
 
           <div className="mt-10 space-y-8 text-[#0B1F33]">

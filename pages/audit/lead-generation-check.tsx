@@ -1,6 +1,6 @@
-import Head from 'next/head';
 import FreeAuditInput from '../../components/FreeAuditInput';
 import Footer from '../../components/landing/Footer';
+import MarketingPageMeta from '../../components/seo/MarketingPageMeta';
 
 const WHAT_YOU_GET = [
   { icon: '🧲', title: 'Lead Capture Gaps', desc: 'Every point where a potential lead arrives but leaves without taking action.' },
@@ -21,10 +21,11 @@ const EXAMPLE_SCORES = [
 export default function LeadGenerationCheck() {
   return (
     <>
-      <Head>
-        <title>Lead Generation Check | Free AI Audit | Omnivyra</title>
-        <meta name="description" content="Find out why your website isn't generating leads. Get an instant AI audit with clear fixes." />
-      </Head>
+      <MarketingPageMeta
+        title="Lead Generation Check | Free AI Audit | Omnivyra"
+        description="Find out why your website isn't generating leads. Get an instant AI audit with clear fixes."
+        path="/audit/lead-generation-check"
+      />
 
       <div className="min-h-screen bg-[#F5F9FF]">
 

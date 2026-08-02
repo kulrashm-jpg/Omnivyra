@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import MarketingPageMeta from '../components/seo/MarketingPageMeta';
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -92,10 +92,11 @@ export default function GetFreeCreditsPage() {
 
   return (
     <>
-      <Head>
-        <title>Get Free Credits | Omnivyra</title>
-        <meta name="description" content="Start with free credits and explore the full Omnivyra platform your way." />
-      </Head>
+      <MarketingPageMeta
+        title="Get Free Credits | Omnivyra"
+        description="Start with free credits and explore the full Omnivyra platform your way."
+        path="/get-free-credits"
+      />
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
 
@@ -103,7 +104,7 @@ export default function GetFreeCreditsPage() {
         <header className="sticky top-0 z-40 border-b border-gray-100 bg-white/95 backdrop-blur-sm">
           <div className="mx-auto flex h-14 max-w-2xl items-center justify-between px-6">
             <Link href="/">
-              <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
+              <img width={465} height={144} src="/logo.webp" alt="Omnivyra" className="h-9 w-auto object-contain" />
             </Link>
             {step > 0 && step < 5 && (
               <span className="text-xs text-[#6B7C93]">

@@ -1,17 +1,15 @@
-import Head from 'next/head';
 import Link from 'next/link';
 import Footer from '../components/landing/Footer';
+import MarketingPageMeta from '../components/seo/MarketingPageMeta';
 
 export default function MarketingPerformanceAnalyticsPage() {
   return (
     <>
-      <Head>
-        <title>Marketing Performance Analytics | Omnivyra</title>
-        <meta
-          name="description"
-          content="Learn how marketing performance analytics helps teams understand conversions, engagement, drop-offs, and the next best actions to improve growth."
-        />
-      </Head>
+      <MarketingPageMeta
+        title="Marketing Performance Analytics | Omnivyra"
+        description="Learn how marketing performance analytics helps teams understand conversions, engagement, drop-offs, and the next best actions to improve growth."
+        path="/marketing-performance-analytics"
+      />
       <main className="min-h-screen bg-[#F5F9FF]" style={{ fontFamily: "'Inter', sans-serif" }}>
         <section className="px-6 py-20 lg:px-8">
           <div className="mx-auto max-w-4xl">

@@ -10,9 +10,9 @@
  * Create Account) rather than duplicating their content.
  */
 
-import Head from 'next/head';
 import Link from 'next/link';
 import Footer from '../components/landing/Footer';
+import MarketingPageMeta, { faqPageJsonLd } from '../components/seo/MarketingPageMeta';
 
 const BLUE_FIELD = 'linear-gradient(150deg, #071D3A 0%, #0A3770 54%, #0A66C2 100%)';
 
@@ -56,18 +56,32 @@ const FAQ: { q: string; a: React.ReactNode }[] = [
   },
 ];
 
+/** Plain-text mirror of FAQ for JSON-LD (the rendered answers contain JSX links). */
+const FAQ_JSONLD: { q: string; a: string }[] = [
+  { q: 'How do I get started?', a: 'Create your account at omnivyra.com/create-account, verify your email, and you will land in your workspace with 300 free credits to start — no card required.' },
+  { q: 'What are credits and how do they work?', a: 'New accounts start with 300 free credits. Credits are consumed by AI generations (content, reports, planning). Your current balance and usage are shown inside the app under Billing.' },
+  { q: 'How much does Omnivyra cost?', a: 'See current plans and pricing on the Omnivyra Pricing page at omnivyra.com/pricing.' },
+  { q: 'Where do I manage billing?', a: 'Manage your plan and view usage and balances inside the app after signing in. Plan details are on the Pricing page.' },
+  { q: 'How do I reset my password?', a: 'On the Log in page, choose "Forgot password" and we will email you a reset link.' },
+  { q: 'I didn’t receive my verification email.', a: 'After signing up we email a confirmation link — click it to verify your account and finish signing in. If it hasn’t arrived, check your spam folder, or return to Create Account and try a different email.' },
+  { q: 'Which platforms are supported?', a: 'Connect your social and content platforms from Settings → Integrations once you’re signed in.' },
+  { q: 'How do I contact support?', a: 'Email support@omnivyra.com, or reach our team through Contact Sales at omnivyra.com/contact-sales.' },
+];
+
 export default function HelpPage() {
   return (
     <>
-      <Head>
-        <title>Help Center | Omnivyra</title>
-        <meta name="description" content="Omnivyra Help Center — getting started, credits, billing, password reset, email verification, and how to contact support." />
-      </Head>
+      <MarketingPageMeta
+        title="Help Center | Omnivyra"
+        description="Omnivyra Help Center — getting started, credits, billing, password reset, email verification, and how to contact support."
+        path="/help"
+        jsonLd={faqPageJsonLd(FAQ_JSONLD)}
+      />
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col" style={{ fontFamily: "'Inter', sans-serif" }}>
         <header className="border-b border-gray-100 bg-white/95">
           <div className="mx-auto flex h-14 max-w-4xl items-center justify-between px-6">
-            <Link href="/" aria-label="Omnivyra home"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
+            <Link href="/" aria-label="Omnivyra home"><img width={465} height={144} src="/logo.webp" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             <nav className="flex items-center gap-4 text-sm">
               <Link href="/login" className="text-[#6B7C93] hover:text-[#0A66C2] transition-colors">Log in</Link>
               <Link href="/create-account" className="rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-4 py-2 font-semibold text-white transition hover:opacity-95">Create account</Link>

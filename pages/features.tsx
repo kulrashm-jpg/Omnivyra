@@ -1,6 +1,6 @@
-import Head from 'next/head';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import MarketingPageMeta from '../components/seo/MarketingPageMeta';
 
 const BLUE_FIELD = 'linear-gradient(150deg, #071D3A 0%, #0A3770 54%, #0A66C2 100%)';
 
@@ -457,7 +457,7 @@ function Footer() {
         <div className="mt-8 grid gap-10 lg:grid-cols-[1.22fr_1fr]">
           <div>
             <Link href="/" aria-label="Omnivyra home" className="inline-flex">
-              <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain" />
+              <img width={465} height={144} src="/logo.webp" alt="Omnivyra" className="h-12 w-auto object-contain" />
             </Link>
             <p className="mt-5 max-w-sm text-sm leading-7 text-[#5D6F83]">
               Operational marketing infrastructure for visibility, execution, and market awareness.
@@ -493,13 +493,11 @@ function Footer() {
 export default function FeaturesPage() {
   return (
     <>
-      <Head>
-        <title>Features | Omnivyra</title>
-        <meta
-          name="description"
-          content="Explore Omnivyra operational marketing infrastructure for visibility intelligence, content operations, campaign orchestration, engagement, Market Pulse, Active Leads, and contextual guidance."
-        />
-      </Head>
+      <MarketingPageMeta
+        title="Features | Omnivyra"
+        description="Explore Omnivyra operational marketing infrastructure for visibility intelligence, content operations, campaign orchestration, engagement, Market Pulse, Active Leads, and contextual guidance."
+        path="/features"
+      />
 
       <main className="relative isolate min-h-screen overflow-x-hidden bg-[#F7FBFF]" style={{ fontFamily: "'Inter', sans-serif" }}>
         <section className="relative z-10 overflow-hidden text-white" style={{ background: BLUE_FIELD }}>

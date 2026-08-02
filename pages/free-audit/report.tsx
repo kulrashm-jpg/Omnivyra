@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import MarketingPageMeta from '../../components/seo/MarketingPageMeta';
 
 const SAMPLE_SCORES = [
   { label: 'Website Intelligence', value: 67 },
@@ -26,10 +26,13 @@ export default function FreeAuditReport() {
 
   return (
     <>
-      <Head>
-        <title>Your Website Audit Report | Omnivyra</title>
-        <meta name="description" content="Your free website intelligence audit results from Omnivyra." />
-      </Head>
+      {/* noindex: this page renders sample "Preview mode" data, not a real report. */}
+      <MarketingPageMeta
+        title="Your Website Audit Report | Omnivyra"
+        description="Your free website intelligence audit results from Omnivyra."
+        path="/free-audit/report"
+        noindex
+      />
       <div className="min-h-screen bg-[#F5F9FF]">
         <div className="mx-auto max-w-2xl px-4 py-12 sm:px-6 sm:py-16">
           <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-[0_4px_20px_rgba(11,94,215,0.08)] sm:p-10">

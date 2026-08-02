@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import Head from 'next/head';
 import { useRouter } from 'next/router';
+import MarketingPageMeta from '../../components/seo/MarketingPageMeta';
 import Link from 'next/link';
 import { trackWebsiteEvent } from '../../lib/websiteAnalytics';
 import { safeFetchJson } from '../../lib/utils/safeFetchJson';
@@ -84,10 +84,11 @@ export default function FreeAuditStart() {
 
   return (
     <>
-      <Head>
-        <title>Free Website Audit | Omnivyra</title>
-        <meta name="description" content="Run a free AI-powered website audit." />
-      </Head>
+      <MarketingPageMeta
+        title="Free Website Audit | Omnivyra"
+        description="Run a free AI-powered website audit."
+        path="/free-audit/start"
+      />
       <div className="min-h-screen bg-[#F5F9FF]">
         <div className="mx-auto max-w-xl px-4 py-12 sm:px-6 sm:py-16">
           {isAnalyzing ? (

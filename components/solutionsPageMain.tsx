@@ -2,8 +2,8 @@
 'use client';
 
 import { useState } from 'react';
-import Head from 'next/head';
 import Link from 'next/link';
+import MarketingPageMeta from './seo/MarketingPageMeta';
 
 import { BLUE_FIELD, type RoleId, type SignalState, type StepContent, type Role, STEPS, ROLES, TRANSFORMATIONS, TESTIMONIALS, stateStyles, roleAtmospheres, OperationalAtmosphere, SignalMemory, PrimaryCtas, CinematicFooter, RoleSelector, ProgressNavigator } from './solutionsPageSections';
 
@@ -446,13 +446,11 @@ export default function SolutionsPage() {
 
   return (
     <>
-      <Head>
-        <title>Solutions for Scaling Marketing Operations | Omnivyra</title>
-        <meta
-          name="description"
-          content="Explore how Omnivyra helps founders, marketing leads, growth teams, creators, agencies, and solo operators scale marketing operations with operational intelligence."
-        />
-      </Head>
+      <MarketingPageMeta
+        title="Solutions for Scaling Marketing Operations | Omnivyra"
+        description="Explore how Omnivyra helps founders, marketing leads, growth teams, creators, agencies, and solo operators scale marketing operations with operational intelligence."
+        path="/solutions"
+      />
 
       <main className="relative isolate overflow-x-hidden bg-[#F7FBFF] text-[#071D3A]">
         <OperationalAtmosphere />
