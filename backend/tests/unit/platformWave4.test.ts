@@ -128,8 +128,11 @@ describe('W4-1/W4-7 response cache + headers', () => {
 describe('F-13 / W4-8 frontend kit', () => {
   test('NotificationBell polls visibility-aware at the same 60 s cadence', () => {
     const src = read('components/NotificationBell.tsx');
-    expect(src).toContain('useVisibilityPolling(fetchNotifications, 60_000)');
-    expect(src).not.toMatch(/setInterval\(fetchNotifications/);
+    // OPT-005 Phase 1: the poll callback is now SWR mutate(), but the W4-8
+    // contract is unchanged — visibility-aware polling at the same 60 s
+    // cadence, never a raw setInterval.
+    expect(src).toMatch(/useVisibilityPolling\([\s\S]{0,80}?60_000\)/);
+    expect(src).not.toMatch(/setInterval\(/);
   });
   test('kit: dedupe map + visibility pause + kill switch', () => {
     const src = read('lib/client/dataKit.ts');
