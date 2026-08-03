@@ -84,8 +84,14 @@ describe('scanRepo + inventory (C-4)', () => {
     expect(inventory.schema).toBe(1);
     expect(inventory.totals.routes).toBe(routes.length);
     expect(inventory.totals.declared + inventory.totals.undeclared).toBe(routes.length);
-    // Task 3b Batch 1 (4 company-scoped) + Batch 2a (3 public) + Batch 2b (1 public) = 8.
-    expect(inventory.totals.declared).toBe(8);
+    // Task 3b Batch 1 (4 company-scoped) + Batch 2a (3 public) + Batch 2b (1 public) = 8,
+    // plus the two INT-003 Wave 1 read endpoints that correctly declare
+    // company-scoped policies (/api/leads/intelligence and
+    // /api/leads/[id]/intelligence) = 10. This count grows by design as routes
+    // adopt declarations; the invariants that matter — every route accounted
+    // for, and zero drift between declaration and implementation — are the two
+    // assertions around this one.
+    expect(inventory.totals.declared).toBe(10);
     // And none of them drift from their implementation.
     expect(inventory.totals.withDrift).toBe(0);
   });

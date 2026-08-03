@@ -88,13 +88,55 @@ describe('INT-001A F3 — snapshot ordering', () => {
 
     const sessions = byTable('visitor_sessions');
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].orders).toEqual([['created_at', true], ['id', true]]);
+    // visitor_sessions has NO created_at column (DDL 20260677:252-275 declares
+    // started_at / last_seen_at only). Ordering by a missing column makes
+    // PostgREST reject the query and readRows fail open to [], which silently
+    // emptied sessions on every generation. Pinned to the real column.
+    expect(sessions[0].orders).toEqual([['started_at', true], ['id', true]]);
 
     // tenant scoping intact on every ordered query
     for (const q of [...events, ...touchpoints, ...sessions]) {
       expect(q.filters).toEqual(expect.arrayContaining([['company_id', 'co-1']]));
       expect(q.limit).not.toBeNull();
     }
+  });
+
+  test('every ORDER BY column the loader uses actually exists in that table DDL (PROD-VAL-1 guard)', async () => {
+    // A column that does not exist makes PostgREST reject the query and
+    // readRows fail open to [] — silently emptying the collection with no
+    // error surfaced anywhere. This pins the order columns to the real schema.
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const ddl = fs.readFileSync(
+      path.join(process.cwd(), 'supabase/migrations/20260677_website_intelligence_foundation_phase1.sql'),
+      'utf8',
+    );
+    const columnsOf = (table: string): string[] => {
+      const m = ddl.match(new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table} \\(([\\s\\S]*?)\\n\\);`));
+      if (!m) throw new Error(`DDL for ${table} not found`);
+      return m[1]
+        .split('\n')
+        .map((l) => l.trim().split(/\s+/)[0].replace(/[^a-z_]/gi, ''))
+        .filter(Boolean);
+    };
+
+    tableResponses.leads = [{ data: [{ id: 'L1', company_id: 'co-1', visitor_session_id: 'vs-1', unified_person_id: 'up-1' }], error: null }];
+    tableResponses.campaign_touchpoints = [{ data: [], error: null }, { data: [], error: null }];
+    await durableSnapshotSource.load('co-1', 'L1');
+
+    const checked: string[] = [];
+    for (const table of ['tracking_events', 'visitor_sessions', 'campaign_touchpoints']) {
+      const cols = columnsOf(table);
+      for (const q of queries.filter((x) => x.table === table)) {
+        for (const [orderCol] of q.orders) {
+          expect(`${table}.${orderCol}`).toBe(cols.includes(orderCol) ? `${table}.${orderCol}` : `${table}.<MISSING COLUMN ${orderCol}>`);
+          checked.push(`${table}.${orderCol}`);
+        }
+      }
+    }
+    expect(checked.length).toBeGreaterThanOrEqual(6); // 3 tables × (timestamp + id)
+    expect(checked).toContain('visitor_sessions.started_at');
+    expect(checked).not.toContain('visitor_sessions.created_at');
   });
 
   test('fingerprint behaviour unchanged: input row order never affects the fingerprint (canonicalized internally)', () => {
