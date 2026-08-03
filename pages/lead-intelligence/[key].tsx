@@ -5,6 +5,7 @@ import { useRouter } from 'next/router';
 import useSWR from 'swr';
 import { useCompanyContext } from '@/components/CompanyContext';
 import LeadProfileView from '@/components/lead-intelligence/LeadProfileView';
+import LeadIntelligenceSection from '@/components/lead-intelligence/LeadIntelligenceSection';
 import OperationalPanel from '@/components/lead-intelligence/OperationalPanel';
 import { fetchLeadProfile, leadProfileKey } from '@/components/lead-intelligence/leadIntelligenceClient';
 import type { LeadProfile } from '@/lib/leadIntelligence';
@@ -58,6 +59,8 @@ export default function LeadProfilePage() {
               {/* W2b — operational console (consumes the single Operations API) */}
               <OperationalPanel companyId={selectedCompanyId} entityId={profile.leadKey} />
               <LeadProfileView profile={profile} onExport={onExport} />
+              {/* INT-003 W2 — persisted engine output (read-only; distinct from the profile panels above) */}
+              <LeadIntelligenceSection companyId={selectedCompanyId} leadId={profile.view.sourceRef?.id ?? null} />
             </>
           ) : null}
         </div>
