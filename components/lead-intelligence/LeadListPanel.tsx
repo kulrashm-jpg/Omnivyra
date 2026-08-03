@@ -16,6 +16,17 @@ import {
   type LeadListResult,
   type LeadSortState,
 } from './leadIntelligenceClient';
+import {
+  fetchLeadListIntelligence,
+  IntelligenceBadges,
+  INTEL_SORT_OPTIONS,
+  INTEL_BANDS,
+  INTEL_FRESHNESS,
+  EMPTY_INTEL_RESULT,
+  type IntelSort,
+  type IntelFilters,
+  type IntelQueryResult,
+} from './LeadListIntelligenceCell';
 
 const PAGE_SIZE = 25;
 
@@ -65,6 +76,34 @@ export default function LeadListPanel({ companyId }: { companyId: string }) {
     () => fetchLeads(companyId, activeQuery!.filters, { limit: PAGE_SIZE, offset: activeQuery!.offset }, activeQuery!.sort)
   );
 
+  // ── INT-003 Wave 3: persisted intelligence for the visible page ───────────
+  // ONE authenticated GET per (page-of-ids × intelligence sort/filter). Plain
+  // effect + apiFetch by design: no SWR, no polling, no background refresh,
+  // no writes. Ordering/filtering are the ENDPOINT's (no client ranking).
+  const [intelSort, setIntelSort] = useState<IntelSort | null>(null);
+  const [intelFilters, setIntelFilters] = useState<IntelFilters>({ band: '', freshness: '', minScore: '' });
+  const [intel, setIntel] = useState<IntelQueryResult>(EMPTY_INTEL_RESULT);
+  const [intelPending, setIntelPending] = useState(false);
+
+  const pageLeadIds = useMemo(
+    () => [...new Set((data?.rows ?? []).map((v) => v.sourceRef?.id).filter((id): id is string => Boolean(id)))],
+    [data],
+  );
+  const pageIdsKey = pageLeadIds.join(',');
+
+  useEffect(() => {
+    if (!companyId || pageLeadIds.length === 0) { setIntel(EMPTY_INTEL_RESULT); return; }
+    let active = true;
+    setIntelPending(true);
+    fetchLeadListIntelligence(companyId, pageLeadIds, intelSort, intelFilters)
+      .then((result) => { if (active) setIntel(result); })
+      .finally(() => { if (active) setIntelPending(false); });
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, pageIdsKey, intelSort, intelFilters.band, intelFilters.freshness, intelFilters.minScore]);
+
+  const intelFiltersActive = Boolean(intelFilters.band || intelFilters.freshness || intelFilters.minScore.trim());
+
   // Loading covers the debounce window plus any uncached first fetch of the
   // active key — the same span the old hook flagged. Cached pages paint
   // instantly and revalidate in the background.
@@ -72,7 +111,30 @@ export default function LeadListPanel({ companyId }: { companyId: string }) {
   const error = exportError ?? (swrError ? (swrError instanceof Error ? swrError.message : 'Failed to load') : null);
 
   const total = data?.total ?? 0;
-  const rows = data?.rows ?? [];
+  const baseRows = data?.rows ?? [];
+  // Endpoint-driven presentation: intelligence filters narrow the visible rows
+  // to the endpoint's filtered set (fail-open: an errored intelligence read
+  // never hides rows); an intelligence sort re-orders rows by the endpoint's
+  // returned order, leads without intelligence keeping their relative order at
+  // the end. No client-side ranking — the order is the API's.
+  const rows = useMemo(() => {
+    let out = baseRows;
+    if (intelFiltersActive && !intel.failed && !intelPending) {
+      out = out.filter((v) => v.sourceRef?.id && intel.byId.has(v.sourceRef.id));
+    }
+    if (intelSort && intel.order.length > 0) {
+      const position = new Map(intel.order.map((id, i) => [id, i]));
+      out = [...out].sort((a, b) => {
+        const ai = a.sourceRef?.id ? position.get(a.sourceRef.id) : undefined;
+        const bi = b.sourceRef?.id ? position.get(b.sourceRef.id) : undefined;
+        if (ai !== undefined && bi !== undefined) return ai - bi;
+        if (ai !== undefined) return -1;
+        if (bi !== undefined) return 1;
+        return 0; // both unknown to the endpoint → keep relative order
+      });
+    }
+    return out;
+  }, [baseRows, intel, intelFiltersActive, intelPending, intelSort]);
   const showingFrom = total === 0 ? 0 : offset + 1;
   const showingTo = Math.min(offset + PAGE_SIZE, total);
   const activeFilterCount = useMemo(
@@ -103,11 +165,29 @@ export default function LeadListPanel({ companyId }: { companyId: string }) {
           onChange={(e) => patch({ search: e.target.value })}
         />
         <div className="flex items-center gap-2">
-          <select className={input} value={`${sort.by}:${sort.order}`} onChange={(e) => { const [by, order] = e.target.value.split(':'); setSort({ by: by as LeadSortState['by'], order: order as LeadSortState['order'] }); }}>
+          <select
+            data-testid="lead-sort"
+            className={input}
+            value={intelSort ? `intel:${intelSort.by}:${intelSort.order}` : `${sort.by}:${sort.order}`}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value.startsWith('intel:')) {
+                const [, by, order] = value.split(':');
+                setIntelSort({ by: by as IntelSort['by'], order: order as IntelSort['order'] });
+                return; // leads query unchanged — ordering comes from the intelligence endpoint
+              }
+              setIntelSort(null);
+              const [by, order] = value.split(':');
+              setSort({ by: by as LeadSortState['by'], order: order as LeadSortState['order'] });
+            }}
+          >
             <option value="occurredAt:desc">Newest first</option>
             <option value="occurredAt:asc">Oldest first</option>
             <option value="intent:desc">Highest intent</option>
             <option value="intent:asc">Lowest intent</option>
+            <optgroup label="Intelligence (persisted)">
+              {INTEL_SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </optgroup>
           </select>
           <button disabled={exporting} onClick={() => doExport('csv')} className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">CSV</button>
           <button disabled={exporting} onClick={() => doExport('excel')} className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Excel</button>
@@ -142,9 +222,21 @@ export default function LeadListPanel({ companyId }: { companyId: string }) {
         <label className="flex items-center gap-2 text-sm text-gray-600">To
           <input className={`${input} flex-1`} type="date" value={filters.to} onChange={(e) => patch({ to: e.target.value })} />
         </label>
-        <button onClick={() => { setOffset(0); setFilters(emptyFilters()); }} className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+        <button onClick={() => { setOffset(0); setFilters(emptyFilters()); setIntelFilters({ band: '', freshness: '', minScore: '' }); setIntelSort(null); }} className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
           Clear filters{activeFilterCount ? ` (${activeFilterCount})` : ''}
         </button>
+        {/* INT-003 W3 — persisted-intelligence filters (endpoint-side; no client ranking) */}
+        <select data-testid="intel-band-filter" className={input} value={intelFilters.band} onChange={(e) => setIntelFilters((f) => ({ ...f, band: e.target.value }))}>
+          <option value="">Any qualification</option>
+          {INTEL_BANDS.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
+        <select data-testid="intel-freshness-filter" className={input} value={intelFilters.freshness} onChange={(e) => setIntelFilters((f) => ({ ...f, freshness: e.target.value }))}>
+          <option value="">Any freshness</option>
+          {INTEL_FRESHNESS.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+        </select>
+        <label className="flex items-center gap-2 text-sm text-gray-600">Intel score ≥
+          <input data-testid="intel-min-score" className={`${input} w-24`} type="number" min={0} max={100} placeholder="0–100" value={intelFilters.minScore} onChange={(e) => setIntelFilters((f) => ({ ...f, minScore: e.target.value }))} />
+        </label>
       </div>
 
       {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
@@ -159,15 +251,16 @@ export default function LeadListPanel({ companyId }: { companyId: string }) {
               <th className="px-4 py-3">Campaign</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Intent</th>
+              <th className="px-4 py-3">Intelligence</th>
               <th className="px-4 py-3">When</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {loading && (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-500">Loading leads…</td></tr>
+              <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-500">Loading leads…</td></tr>
             )}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-12 text-center text-sm text-gray-500">
+              <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-gray-500">
                 No leads match your filters yet. Leads from every connected source will appear here.
               </td></tr>
             )}
@@ -181,6 +274,12 @@ export default function LeadListPanel({ companyId }: { companyId: string }) {
                 <td className="px-4 py-3 text-sm text-gray-700">{v.campaign ?? '—'}</td>
                 <td className="px-4 py-3 text-sm text-gray-700">{v.status ?? 'new'}</td>
                 <td className="px-4 py-3"><IntentBadge view={v} /></td>
+                <td className="px-4 py-3">
+                  <IntelligenceBadges
+                    item={(v.sourceRef?.id && intel.byId.get(v.sourceRef.id)) || null}
+                    pending={intelPending}
+                  />
+                </td>
                 <td className="px-4 py-3 text-sm text-gray-500">{v.occurredAt ? new Date(v.occurredAt).toLocaleDateString() : '—'}</td>
               </tr>
             ))}
