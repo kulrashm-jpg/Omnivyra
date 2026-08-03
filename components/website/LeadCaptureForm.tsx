@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { safeFetchJson, type SafeFetchJsonError } from '@/lib/utils/safeFetchJson';
 import { trackWebsiteEvent } from '@/lib/websiteAnalytics';
 import { captureAttribution } from '@/lib/website/attributionCapture';
+import { recordJourneyEvent } from '@/lib/website/journeyIntelligence';
 import {
   COMPANY_SIZES,
   INDUSTRIES,
@@ -49,11 +50,33 @@ export default function LeadCaptureForm({ intent }: { intent: LeadIntent }) {
   const [done, setDone] = useState<ConfirmationConfig | null>(null);
   const [honeypot, setHoneypot] = useState('');
 
-  const set = (k: keyof FormState, v: string | boolean) => setState((s) => ({ ...s, [k]: v }));
+  // INT-001 Phase 1 — journey behaviour events (append-only, storage-side):
+  // form_start on the first interaction, form_abandon when the visitor leaves
+  // a dirty un-submitted form, form_submit on success. Refs so listeners see
+  // current values without re-binding.
+  const journeyRef = React.useRef({ started: false, submitted: false });
+
+  const set = (k: keyof FormState, v: string | boolean) => {
+    if (!journeyRef.current.started) {
+      journeyRef.current.started = true;
+      recordJourneyEvent('form_start', { intent });
+    }
+    setState((s) => ({ ...s, [k]: v }));
+  };
   const fieldErr = useMemo(() => errors, [errors]);
 
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      if (journeyRef.current.started && !journeyRef.current.submitted) {
+        recordJourneyEvent('form_abandon', { intent });
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [intent]);
+
   // Reset when the intent changes (shared component across all four entry points).
-  useEffect(() => { setState(emptyState(cfg.defaultInterest)); setErrors({}); setDone(null); setSubmitError(null); }, [intent, cfg.defaultInterest]);
+  useEffect(() => { setState(emptyState(cfg.defaultInterest)); setErrors({}); setDone(null); setSubmitError(null); journeyRef.current = { started: false, submitted: false }; }, [intent, cfg.defaultInterest]);
 
   async function onSubmit(ev: React.FormEvent) {
     ev.preventDefault();
@@ -86,6 +109,8 @@ export default function LeadCaptureForm({ intent }: { intent: LeadIntent }) {
       return;
     }
 
+    journeyRef.current.submitted = true;
+    recordJourneyEvent('form_submit', { intent });
     trackWebsiteEvent('lead_created', { lead_source: 'lead_capture', lead_surface: cfg.route, intent });
     const confirmation = res.data.confirmation ?? cfg.confirmation;
     if (confirmation.mode === 'redirect' && confirmation.redirectUrl) { window.location.href = confirmation.redirectUrl; return; }

@@ -34,6 +34,7 @@ import PageLoader from '../components/PageLoader';
 // on first paint of every page.
 import { Inter, Poppins } from 'next/font/google';
 import { initClientPerf, markRouteChange } from '../lib/observability/clientPerf';
+import { captureClickIds, ensureVisitorIds, recordJourneyEvent, recordJourneyPage } from '../lib/website/journeyIntelligence';
 
 const interFont = Inter({
   subsets: ['latin'],
@@ -126,6 +127,47 @@ const WebsiteAnalytics: React.FC = () => {
       </Script>
     </>
   );
+};
+
+// INT-001 Phase 1: first-party visitor-journey bridge. Mints the visitor ids,
+// captures ad click ids first-touch style, and appends the page trail + CTA
+// clicks to the session journey (sessionStorage only — data leaves the browser
+// exclusively inside an explicit lead-capture submission). Consent-gated and
+// fail-safe inside the journeyIntelligence lib; renders nothing.
+const JourneyIntelligenceBridge: React.FC = () => {
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    ensureVisitorIds();
+    captureClickIds();
+    recordJourneyPage(router.asPath);
+
+    const handleRouteChange = (url: string) => {
+      captureClickIds();
+      recordJourneyPage(url);
+    };
+    router.events.on('routeChangeComplete', handleRouteChange);
+    return () => {
+      router.events.off('routeChangeComplete', handleRouteChange);
+    };
+  }, [router.asPath, router.events, router.isReady]);
+
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLElement>('[data-ga-primary-cta]')
+        : null;
+      if (!target) return;
+      recordJourneyEvent('cta_click', {
+        label: target.dataset.gaLabel || target.textContent?.trim().slice(0, 80) || 'primary_cta',
+      });
+    };
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
+
+  return null;
 };
 
 // HARDEN-001A: client performance bridge. Initializes the (env-gated, fail-safe)
@@ -343,6 +385,7 @@ function MyApp({ Component, pageProps }: AppProps) {
           )}
         </Head>
         <WebsiteAnalytics />
+        <JourneyIntelligenceBridge />
         <ClientPerfBridge />
         <RouteProgressBar />
         <AuthGate>

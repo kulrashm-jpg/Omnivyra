@@ -2,6 +2,34 @@ import { ownedDbTable } from '../db/writeOwner';
 import type { AttributionPayload } from './leadAttributionService';
 import { buildTouchSnapshot } from './leadAttributionService';
 
+/**
+ * INT-001 Phase 1 — visitor-session intelligence, computed best-effort at
+ * session creation from the visitor's OWN prior sessions in the SAME tenant:
+ * visit count, returning flag, first-visit timestamp. Bounded read; any
+ * failure degrades to null (the session write proceeds exactly as before).
+ */
+const VISITOR_HISTORY_CAP = 50;
+
+async function readVisitorHistory(companyId: string, anonymousId: string, nowIso: string): Promise<Record<string, unknown> | null> {
+  try {
+    const prior = await ownedDbTable('visitor_sessions')
+      .select('created_at')
+      .eq('company_id', companyId)
+      .eq('anonymous_id', anonymousId)
+      .order('created_at', { ascending: true })
+      .limit(VISITOR_HISTORY_CAP);
+    const rows = Array.isArray(prior?.data) ? (prior.data as Array<{ created_at?: string }>) : [];
+    return {
+      visit_count: rows.length + 1,
+      returning_visitor: rows.length > 0,
+      first_visit_at: rows[0]?.created_at ?? nowIso,
+      latest_visit_at: nowIso,
+    };
+  } catch {
+    return null; // fail-safe — intelligence never blocks the session write
+  }
+}
+
 export async function resolveVisitorSession(input: {
   companyId: string;
   websiteId?: string | null;
@@ -24,6 +52,16 @@ export async function resolveVisitorSession(input: {
     : input.attribution.first_touch ?? lastTouch;
 
   if (existing.data?.id) {
+    const nowIso = new Date().toISOString();
+    // INT-001 Phase 1 (session continuation): merge — never replace — the
+    // stored metadata, refreshing the journey snapshot and the duration.
+    const existingMetadata = ((existing.data as any).metadata && typeof (existing.data as any).metadata === 'object'
+      ? (existing.data as any).metadata
+      : {}) as Record<string, unknown>;
+    const existingVisitor = (existingMetadata.visitor && typeof existingMetadata.visitor === 'object'
+      ? existingMetadata.visitor
+      : {}) as Record<string, unknown>;
+    const startedAtMs = Date.parse(String((existing.data as any).created_at ?? ''));
     await ownedDbTable('visitor_sessions')
       .update({
         website_id: input.websiteId ?? (existing.data as any).website_id ?? null,
@@ -31,12 +69,23 @@ export async function resolveVisitorSession(input: {
         last_referrer: input.attribution.referrer ?? (existing.data as any).last_referrer ?? null,
         last_touch: lastTouch,
         consent_state: input.attribution.consent_state ?? (existing.data as any).consent_state ?? null,
-        last_seen_at: new Date().toISOString(),
+        last_seen_at: nowIso,
+        metadata: {
+          ...existingMetadata,
+          ...(input.attribution.metadata ?? {}),
+          visitor: {
+            ...existingVisitor,
+            latest_visit_at: nowIso,
+            session_duration_ms: Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : null,
+          },
+        },
       })
       .eq('id', existing.data.id);
     return { sessionId: existing.data.id as string, firstTouch, lastTouch };
   }
 
+  const nowIso = new Date().toISOString();
+  const visitorStats = await readVisitorHistory(input.companyId, anonymousId, nowIso);
   const inserted = await ownedDbTable('visitor_sessions')
     .insert({
       company_id: input.companyId,
@@ -55,7 +104,10 @@ export async function resolveVisitorSession(input: {
       first_touch: firstTouch,
       last_touch: lastTouch,
       consent_state: input.attribution.consent_state ?? null,
-      metadata: input.attribution.metadata ?? {},
+      metadata: {
+        ...(input.attribution.metadata ?? {}),
+        ...(visitorStats ? { visitor: visitorStats } : {}),
+      },
     })
     .select('id')
     .single();
@@ -110,7 +162,15 @@ export async function persistCampaignTouchpoint(input: {
       asset_id: input.attribution.asset_id ?? null,
       variant_id: input.attribution.variant_id ?? null,
       creator_strategy_id: input.attribution.creator_strategy_id ?? null,
-      metadata: { attribution: buildTouchSnapshot(input.attribution) },
+      metadata: {
+        attribution: buildTouchSnapshot(input.attribution),
+        // INT-001 Phase 1 (additive): deterministic client-side timestamp for
+        // timeline ordering + the journey snapshot when the client sent one.
+        captured_at: new Date().toISOString(),
+        ...(input.attribution.metadata && typeof (input.attribution.metadata as Record<string, unknown>).journey === 'object'
+          ? { journey: (input.attribution.metadata as Record<string, unknown>).journey }
+          : {}),
+      },
     });
   } catch {
     // Campaign touchpoints are best-effort until the aggregation worker owns retries.

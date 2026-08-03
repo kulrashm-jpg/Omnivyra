@@ -11,6 +11,7 @@ import { resolveUnifiedPerson, type IdentityExternalKeys } from './identityResol
 import { bulkCreateTouchpoints, type TouchpointInput } from './touchpointService';
 import { normalizeSource, type UnifiedSource } from './sourceNormalizationService';
 import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
+import { onLeadEnrichmentChanged } from './leadIntelligenceActivation';
 import { ownedDbTable } from '../db/writeOwner';
 import { adoptLead } from './leadIntelligence/leadIntelligenceRuntime';
 
@@ -117,7 +118,7 @@ async function upsertLegacyLead(companyId: string, row: CrmLeadRecord, unifiedSo
     throw new Error('IDENTITY_REQUIRED_FOR_LEAD');
   }
 
-  await ownedDbTable('leads').insert({
+  const { data: inserted } = await ownedDbTable('leads').insert({
     company_id: companyId,
     name: row.name || row.email,
     email: row.email,
@@ -132,7 +133,12 @@ async function upsertLegacyLead(companyId: string, row: CrmLeadRecord, unifiedSo
       revenue: row.revenue ?? null,
     },
     created_at: row.createdAt ?? new Date().toISOString(),
-  });
+  }).select('id').single();
+
+  // INT-002 Wave 1: CRM data entering the lead row IS an enrichment change —
+  // fire-and-forget regeneration through the designated enrichment hook.
+  const newLeadId = inserted && typeof (inserted as { id?: unknown }).id === 'string' ? (inserted as { id: string }).id : null;
+  if (newLeadId) onLeadEnrichmentChanged(companyId, newLeadId);
 }
 
 async function upsertCanonicalUser(

@@ -149,12 +149,16 @@ export function createLeadIntelligenceOrchestrator(
     const snapshot = assembleLeadCaptureSnapshot({ ...rows, now });
     const inputFingerprint = computeInputFingerprint(snapshot);
 
-    const unchanged =
-      !opts.force &&
-      existing !== null &&
-      existing.rebuildRequestedAt === null &&
-      existing.engineVersion === ENGINE_VERSION &&
-      existing.inputFingerprint === inputFingerprint;
+    // INT-002 final activation (hardening): the skip decision is now the SAME
+    // predicate the freshness resolver uses, so the two can never disagree.
+    // It regenerates on exactly the four intended triggers — fingerprint
+    // change, engine-version change, unsupported/changed envelope schema, and
+    // rebuild requested — plus force. Previously the schema version was
+    // stored but not consulted here, so a record on an unsupported envelope
+    // schema could be skipped forever while resolveIntelligenceFreshness()
+    // classified it 'stale'. Behaviour is unchanged for every record this
+    // build can write (schema 1 and 2 are both supported today).
+    const unchanged = !opts.force && resolveIntelligenceFreshness(existing, inputFingerprint) === 'fresh';
     if (unchanged) {
       return {
         status: 'skipped_unchanged',

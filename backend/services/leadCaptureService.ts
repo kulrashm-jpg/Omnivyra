@@ -18,6 +18,7 @@
 
 import { ownedDbTable } from '../db/writeOwner';
 import { createLead } from './leadService';
+import { triggerLeadIntelligence } from './leadIntelligenceActivation';
 import { extractAttributionPayload, recordLeadAttribution } from './leadAttributionService';
 import { resolveVisitorSession, stitchSessionToLead, persistCampaignTouchpoint } from './attributionResolverService';
 import { LEAD_CAPTURE_INTENTS, isLeadIntent, ATTRIBUTION_FIELDS, LITE_INTENTS, type ConfirmationConfig, type LeadIntent } from '../../lib/website/leadCaptureConfig';
@@ -71,6 +72,57 @@ function pickAttributionFields(rawBody: Record<string, unknown>): Record<string,
 }
 
 const isLite = (intent?: string): boolean => !!intent && (LITE_INTENTS as readonly string[]).includes(intent);
+
+/** INT-001 Phase 1 — bound for the linear touch list stored on the lead. */
+const TOUCH_LIST_CAP = 50;
+
+type JourneyMeta = { pages?: Array<{ p?: string; t?: string }>; click_ids?: Record<string, string> } | null;
+
+function journeyFromAttribution(metadata: Record<string, unknown> | null | undefined): JourneyMeta {
+  const journey = metadata && typeof metadata === 'object' ? (metadata as Record<string, unknown>).journey : null;
+  return journey && typeof journey === 'object' ? (journey as JourneyMeta) : null;
+}
+
+/**
+ * INT-001 Phase 1 (Layer 5) — additive attribution intelligence stored in the
+ * lead's metadata JSONB. Extends stored intelligence WITHOUT changing any
+ * existing attribution rule or the lead_attributions/form_conversions writes:
+ * first/last touch snapshots, a deterministic linear touch list (first touch →
+ * journey page trail → conversion), and the latest campaign snapshot.
+ */
+function buildAttributionIntelligence(input: {
+  firstTouch: Record<string, unknown>;
+  lastTouch: Record<string, unknown>;
+  attribution: Record<string, unknown>;
+  webAttribution: Record<string, string>;
+  journey: JourneyMeta;
+}): Record<string, unknown> {
+  const nowIso = new Date().toISOString();
+  const touchList: Array<Record<string, unknown>> = [
+    { type: 'first_touch', at: null, page: (input.firstTouch as Record<string, unknown>).landing_page ?? null, snapshot: input.firstTouch },
+  ];
+  for (const page of (input.journey?.pages ?? []).slice(-TOUCH_LIST_CAP)) {
+    touchList.push({ type: 'page_view', at: page?.t ?? null, page: page?.p ?? null });
+  }
+  touchList.push({ type: 'conversion', at: nowIso, page: input.attribution.current_page ?? null, snapshot: input.lastTouch });
+  return {
+    first_touch: input.firstTouch,
+    last_touch: input.lastTouch,
+    touch_list: touchList.slice(-TOUCH_LIST_CAP),
+    latest_campaign: {
+      utm_source: input.attribution.utm_source ?? null,
+      utm_medium: input.attribution.utm_medium ?? null,
+      utm_campaign: input.attribution.utm_campaign ?? null,
+      utm_content: input.attribution.utm_content ?? null,
+      utm_term: input.attribution.utm_term ?? null,
+      campaign_id: input.webAttribution.campaign_id ?? null,
+      content_id: input.webAttribution.content_id ?? null,
+      cta_id: input.webAttribution.cta_id ?? null,
+    },
+    click_ids: input.journey?.click_ids ?? {},
+    captured_at: nowIso,
+  };
+}
 
 export function validateWebsiteLead(fields: WebsiteLeadFields, intent?: string): Record<string, string> {
   const errors: Record<string, string> = {};
@@ -133,6 +185,18 @@ export async function captureWebsiteLead(
   const websiteId = attribution.website_id ?? null;
   const session = await resolveVisitorSession({ companyId, websiteId, attribution });
 
+  // INT-001 Phase 1: additive intelligence blocks (journey + attribution
+  // extensions) — stored in metadata only; no existing key changes shape.
+  const webAttribution = pickAttributionFields(submission.rawBody);
+  const journey = journeyFromAttribution(attribution.metadata);
+  const attributionIntelligence = buildAttributionIntelligence({
+    firstTouch: session.firstTouch,
+    lastTouch: session.lastTouch,
+    attribution: attribution as Record<string, unknown>,
+    webAttribution,
+    journey,
+  });
+
   const lead = await createLead(companyId, {
     name: fullName,
     email,
@@ -154,7 +218,10 @@ export async function captureWebsiteLead(
       primary_interest: submission.primaryInterest?.trim() || cfg.defaultInterest,
       message: submission.message?.trim() || null,
       attribution,
-      web_attribution: pickAttributionFields(submission.rawBody),
+      web_attribution: webAttribution,
+      // INT-001 Phase 1 (additive): journey + extended attribution intelligence.
+      ...(journey ? { journey } : {}),
+      attribution_intelligence: attributionIntelligence,
     },
   });
 
@@ -168,6 +235,11 @@ export async function captureWebsiteLead(
   });
   await stitchSessionToLead({ leadId: lead.id, companyId, visitorSessionId: session.sessionId, unifiedPersonId: lead.unified_person_id });
   await persistCampaignTouchpoint({ companyId, websiteId, visitorSessionId: session.sessionId, leadId: lead.id, attribution, touchpointType: 'conversion' });
+
+  // INT-002 Wave 1: generate intelligence AFTER the full attribution chain so
+  // the first snapshot already sees sessions/attributions/touchpoints.
+  // Fire-and-forget + fail-open — the capture response is untouched.
+  triggerLeadIntelligence(companyId, lead.id, 'lead_captured');
 
   return { status: 'created', leadId: lead.id, intent: submission.intent, confirmation: cfg.confirmation };
 }

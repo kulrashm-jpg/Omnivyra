@@ -13,6 +13,7 @@ import {
 } from '../../../backend/services/leadAttributionService';
 import { resolveVisitorSession, stitchSessionToLead, persistCampaignTouchpoint } from '../../../backend/services/attributionResolverService';
 import { checkFormOrigin } from '../../../backend/services/websiteDomainEnforcementService';
+import { triggerLeadIntelligence } from '../../../backend/services/leadIntelligenceActivation';
 
 function setCors(req: NextApiRequest, res: NextApiResponse) {
   const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '*';
@@ -96,6 +97,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
         await stitchSessionToLead({ leadId: lead.id, companyId: auth.company_id, visitorSessionId: session.sessionId, unifiedPersonId: lead.unified_person_id });
         await persistCampaignTouchpoint({ companyId: auth.company_id, websiteId, visitorSessionId: session.sessionId, leadId: lead.id, attribution, touchpointType: 'conversion' });
+        // INT-002 Wave 1: fire-and-forget intelligence generation after the chain.
+        triggerLeadIntelligence(auth.company_id, lead.id, 'lead_captured');
         return res.status(201).json({ lead });
       } catch (err) {
         return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to save lead' });
@@ -163,6 +166,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
         await stitchSessionToLead({ leadId: lead.id, companyId: form.company_id, visitorSessionId: session.sessionId, unifiedPersonId: lead.unified_person_id });
         await persistCampaignTouchpoint({ companyId: form.company_id, websiteId, visitorSessionId: session.sessionId, leadId: lead.id, attribution, touchpointType: 'conversion' });
+        // INT-002 Wave 1: fire-and-forget intelligence generation after the chain.
+        triggerLeadIntelligence(form.company_id, lead.id, 'lead_captured');
         return res.status(201).json({ lead });
       } catch (err) {
         return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to save lead' });
@@ -204,6 +209,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         source: lead.source,
         attribution,
       });
+      // INT-002 Wave 1: fire-and-forget intelligence generation after the chain.
+      triggerLeadIntelligence(companyId, lead.id, 'lead_captured');
       return res.status(201).json({ lead });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to save lead' });

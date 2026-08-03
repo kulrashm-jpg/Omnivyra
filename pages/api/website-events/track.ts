@@ -4,6 +4,10 @@ import { ownedDbTable } from '../../../backend/db/writeOwner';
 import { resolveVisitorSession, persistCampaignTouchpoint } from '../../../backend/services/attributionResolverService';
 import { checkWebsiteOrigin, hashIp } from '../../../backend/services/websiteDomainEnforcementService';
 import { checkInMemoryRateLimit, isLikelyBot } from '../../../backend/services/trackingRateLimitService';
+import { triggerVisitorSessionIntelligence } from '../../../backend/services/leadIntelligenceActivation';
+
+/** INT-002 hardening: max distinct visitor sessions regenerated per request. */
+const MAX_TRIGGERED_SESSIONS_PER_REQUEST = 3;
 
 type TrackingPayload = {
   website_id?: string;
@@ -76,6 +80,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const userAgent = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : '';
   const botFlag = isLikelyBot(userAgent);
   const accepted: string[] = [];
+  const touchedSessionIds = new Set<string>();
 
   for (const event of events) {
     const payload = { ...body, ...event, website_id: websiteId, anonymous_id: event.anonymous_id || anonymousId };
@@ -126,6 +131,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       bot_flag: botFlag,
     });
     if (!insert.error) accepted.push(eventName);
+    if (session.sessionId) touchedSessionIds.add(String(session.sessionId));
 
     if (payload.utm_campaign || payload.utm_source) {
       await persistCampaignTouchpoint({
@@ -136,6 +142,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         touchpointType: eventName === 'page_view' ? 'first_touch' : 'event',
       });
     }
+  }
+
+  // INT-002 Wave 1: regenerate intelligence for leads stitched to the touched
+  // sessions. Fire-and-forget + cooldown-absorbed — the 202 is untouched.
+  // INT-002 final activation (hardening): events in one batch may each carry
+  // their own anonymous_id, so an unauthenticated batch could otherwise fan
+  // out to 25 sessions × SESSION_LEAD_CAP leads of background generation from
+  // a single request. Bound the distinct sessions triggered per request; the
+  // remainder regenerate on their own next tracking request (each session
+  // keeps its own 60 s cooldown).
+  let triggeredSessions = 0;
+  for (const sessionId of touchedSessionIds) {
+    if (triggeredSessions >= MAX_TRIGGERED_SESSIONS_PER_REQUEST) break;
+    triggeredSessions += 1;
+    triggerVisitorSessionIntelligence(website.company_id, sessionId, 'tracking_events');
   }
 
   return res.status(202).json({ ok: true, accepted: accepted.length, events: accepted });
