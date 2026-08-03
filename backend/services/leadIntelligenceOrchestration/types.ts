@@ -77,6 +77,14 @@ export interface PersistenceWriteResult {
 /** Persistence seam — durable implementation targets lead_intelligence_profiles. */
 export interface IntelligencePersistencePort {
   get(companyId: string, leadId: string): Promise<LeadIntelligenceRecord | null>;
+  /**
+   * HARDEN-INT-001 (4) — OPTIONAL batched read. Bulk consumers (Lead List,
+   * dashboard) previously issued one `get` per lead: a 100-lead cohort meant
+   * 100 round trips per page load. Ports that implement this serve the whole
+   * set in one query; ports that do not (injected test doubles) keep working
+   * through the per-lead fallback, so results are identical either way.
+   */
+  getMany?(companyId: string, leadIds: string[]): Promise<Map<string, LeadIntelligenceRecord>>;
   upsert(record: LeadIntelligenceRecord): Promise<PersistenceWriteResult>;
   markRebuildRequested(companyId: string, leadId: string, requestedAt: string): Promise<PersistenceWriteResult>;
 }

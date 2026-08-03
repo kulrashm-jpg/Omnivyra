@@ -23,6 +23,11 @@ import { buildQualificationPlanningSummary } from '../qualificationPlanning';
 import { buildAutomationSummary } from '../automationExecution';
 import type { QualificationPlanningSummary } from '../qualificationPlanning/types';
 import type { AutomationSummary } from '../automationExecution/types';
+import {
+  recordGenerationOutcome,
+  recordVersionUpgrade,
+  type GenerationStage,
+} from '../leadIntelligenceTelemetry';
 import { ENGINE_VERSION, INTELLIGENCE_SCHEMA_VERSION, ORCHESTRATED_ENGINES } from './engineVersion';
 import { computeInputFingerprint } from './fingerprint';
 import { resolveIntelligenceFreshness } from './freshness';
@@ -110,6 +115,63 @@ function buildDiagnostics(args: {
   };
 }
 
+/**
+ * HARDEN-INT-001 (2) — per-lead generation serialization.
+ *
+ * Activation can fire two triggers for the SAME lead concurrently (a capture
+ * trigger and a tracking/session trigger in the same process). Both would read
+ * the same `existing` record, both would compute, and both would upsert —
+ * duplicating engine work and losing the `generationVersion` increment
+ * (both write N+1). Serializing per (company, lead) makes the second call read
+ * what the first wrote, so it fingerprint-skips instead: no duplicate work, no
+ * lost counter, no duplicate persistence. `force` semantics are preserved
+ * because calls queue rather than coalesce. The map is keyed per lead and
+ * removed when its last waiter drains, so memory stays bounded.
+ *
+ * Scope: in-process only. Cross-process concurrency remains last-write-wins,
+ * which is safe for content (engines are deterministic — both writes carry
+ * identical intelligence) and documented in the runbook.
+ */
+/**
+ * HARDEN-INT-002: measured envelope size, the metric that tells operators when
+ * JSONB growth (driven by the 1:1 timeline) is becoming a storage concern.
+ * Never throws and never runs when there is nothing to measure.
+ */
+function envelopeBytesOf(record: LeadIntelligenceRecord | null): number | undefined {
+  if (!record) return undefined;
+  try {
+    return Buffer.byteLength(
+      JSON.stringify({
+        summary: record.intelligence,
+        qualificationPlanning: record.qualificationPlanning,
+        automationPlanning: record.automationPlanning,
+      }),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+type LeadLock = { tail: Promise<unknown>; waiters: number };
+const leadLocks = new Map<string, LeadLock>();
+
+async function withLeadLock<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const lock: LeadLock = leadLocks.get(key) ?? { tail: Promise.resolve(), waiters: 0 };
+  lock.waiters += 1;
+  leadLocks.set(key, lock);
+  const started = lock.tail.then(run, run); // run after the previous settles, either way
+  lock.tail = started.then(
+    () => undefined,
+    () => undefined,
+  );
+  try {
+    return await started;
+  } finally {
+    lock.waiters -= 1;
+    if (lock.waiters === 0) leadLocks.delete(key);
+  }
+}
+
 export function createLeadIntelligenceOrchestrator(
   options: LeadIntelligenceOrchestratorOptions = {},
 ): LeadIntelligenceOrchestrator {
@@ -117,7 +179,38 @@ export function createLeadIntelligenceOrchestrator(
   const snapshotSource = options.snapshotSource ?? durableSnapshotSource;
   const clock = options.clock ?? Date.now;
 
-  async function generate(ref: LeadRef, opts: { force?: boolean } = {}): Promise<IntelligenceGenerationResult> {
+  function generate(ref: LeadRef, opts: { force?: boolean } = {}): Promise<IntelligenceGenerationResult> {
+    // HARDEN-INT-001 (2): serialize concurrent generations of the same lead.
+    // HARDEN-INT-002: ONE instrumentation point for every outcome — the six
+    // return paths inside generateSerialized stay untouched, and the failure
+    // stage is derived from the error each of them already reports.
+    const startedMs = clock();
+    return withLeadLock(`${ref.companyId}::${ref.leadId}`, () => generateSerialized(ref, opts)).then((result) => {
+      const err = result.error ?? '';
+      const stage: GenerationStage = err.startsWith('snapshot load failed')
+        ? 'snapshot'
+        : err === 'lead not found'
+          ? 'not_found'
+          : err.startsWith('engine failure')
+            ? 'engine'
+            : 'engine';
+      recordGenerationOutcome({
+        outcome: result.status,
+        reason: opts.force ? 'force' : 'trigger',
+        durationMs: Math.max(0, clock() - startedMs),
+        companyId: ref.companyId,
+        leadId: ref.leadId,
+        stage,
+        error: result.error,
+        persisted: result.persisted,
+        inputCounts: result.status === 'generated' ? result.record?.diagnostics?.inputCounts : undefined,
+        envelopeBytes: result.status === 'generated' ? envelopeBytesOf(result.record) : undefined,
+      });
+      return result;
+    });
+  }
+
+  async function generateSerialized(ref: LeadRef, opts: { force?: boolean } = {}): Promise<IntelligenceGenerationResult> {
     const startedMs = clock();
     const existing = await persistence.get(ref.companyId, ref.leadId);
 
@@ -228,6 +321,19 @@ export function createLeadIntelligenceOrchestrator(
       generatedAt: summary.generatedAt,
       rebuildRequestedAt: null,
     };
+
+    // HARDEN-INT-002: a version/schema move is the trigger for fleet-wide
+    // regeneration, so operators need to see the wave happen and end.
+    if (existing) {
+      recordVersionUpgrade({
+        fromEngine: existing.engineVersion,
+        toEngine: ENGINE_VERSION,
+        fromSchema: existing.schemaVersion,
+        toSchema: INTELLIGENCE_SCHEMA_VERSION,
+        companyId: ref.companyId,
+        leadId: ref.leadId,
+      });
+    }
 
     const writeResult = await persistence.upsert(record);
     const warnings = [

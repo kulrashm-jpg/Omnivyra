@@ -9,23 +9,44 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
+import { recordSnapshotReadFailure, type SnapshotCollection } from '../leadIntelligenceTelemetry';
 import type { IntelligenceSnapshotSourcePort, RawLeadRows } from './types';
 
 type Row = Record<string, unknown>;
 
+/**
+ * HARDEN-INT-001 (5) — DOCUMENTED LIMITATION, deliberately not changed.
+ *
+ * Collections are ordered ASCENDING and then capped, so a lead that exceeds a
+ * cap contributes its OLDEST rows, not its most recent ones. For a lead with
+ * >1000 tracking events the engines therefore analyse the earliest 1000.
+ *
+ * This is left as-is on purpose: no correctness defect is proven (the caps sit
+ * far above real per-lead volumes), and flipping to newest-N would change the
+ * inputs of every capped lead — changing its fingerprint, its intelligence and
+ * forcing a mass regeneration. Ascending order is also what makes the journey
+ * timeline read chronologically. If capped leads ever become common, the fix
+ * is to select newest-N and re-sort ascending in the assembler, which is a
+ * deliberate, separately-audited semantic change.
+ */
 const LIMITS = { events: 1000, touchpoints: 1000, sessions: 200 };
 
 /**
  * INT-001A (Finding 3) — deterministic snapshot ordering. Every collection is
  * ordered explicitly: primary = the table's own timestamp column, secondary =
  * id (unique) so identical timestamps still order identically across
- * executions. NOTE: campaign_touchpoints has NO created_at — its timestamp is
- * touched_at; ordering by a missing column would error and fail-open to [].
+ * executions. Ordering by a column the table does not have makes PostgREST
+ * reject the query, and readRows fails open to [] — silently emptying that
+ * collection. Each entry below is therefore pinned to a column proven to exist
+ * in the table's DDL (20260677_website_intelligence_foundation_phase1.sql):
+ *   tracking_events.created_at      :297   visitor_sessions.started_at   :272
+ *   campaign_touchpoints.touched_at :369   (neither of the latter two has
+ *                                           a created_at column at all)
  * The input fingerprint is unaffected (it canonicalizes row order itself).
  */
 const ORDER_COLUMNS: Record<string, string> = {
   tracking_events: 'created_at',
-  visitor_sessions: 'created_at',
+  visitor_sessions: 'started_at',
   campaign_touchpoints: 'touched_at',
 };
 
@@ -41,8 +62,16 @@ async function readRows(table: string, tenant: string, col: string, val: string,
       .order(ORDER_COLUMNS[table] ?? 'id', { ascending: true })
       .order('id', { ascending: true })
       .limit(limit);
-    return !error && Array.isArray(data) ? (data as Row[]) : [];
-  } catch {
+    // HARDEN-INT-002: this fail-open is how the visitor_sessions ordering
+    // defect stayed invisible in production — an errored read looked exactly
+    // like "this lead has no sessions". Report it; still degrade to [].
+    if (error) {
+      recordSnapshotReadFailure(table as SnapshotCollection, tenant, String((error as { message?: string }).message ?? error));
+      return [];
+    }
+    return Array.isArray(data) ? (data as Row[]) : [];
+  } catch (e) {
+    recordSnapshotReadFailure(table as SnapshotCollection, tenant, e instanceof Error ? e.message : String(e));
     return [];
   }
 }

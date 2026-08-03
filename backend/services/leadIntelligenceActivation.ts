@@ -24,6 +24,51 @@ import {
   type LeadIntelligenceOrchestrator,
 } from './leadIntelligenceOrchestration';
 import { ownedDbTable } from '../db/writeOwner';
+import {
+  recordActivationDecision,
+  recordActivationFanout,
+} from './leadIntelligenceTelemetry';
+import { logger } from './logger';
+
+/**
+ * HARDEN-INT-002 (6) — SERVERLESS DETACHED EXECUTION.
+ *
+ * Production Runtime Validation flagged an unproven assumption: these triggers
+ * detach work AFTER the HTTP response, and the API tier runs as stateless
+ * Vercel functions, where the execution context is frozen once the response is
+ * sent. A bare `void promise` is therefore not guaranteed to complete — the
+ * failure mode being that generation silently never runs in production.
+ *
+ * The platform's own remedy is already a dependency of this repo
+ * (`@vercel/functions` ▸ `waitUntil`), which registers a promise with the
+ * runtime so the invocation stays alive until it settles. This is the minimal
+ * change — no queue, no worker, no architectural redesign:
+ *   • on Vercel  → the promise is registered and reliably completes;
+ *   • elsewhere  → `waitUntil` is unavailable or throws outside a request
+ *                  context, so we fall back to the previous plain detach,
+ *                  which is correct on long-lived processes (worker/local).
+ * Either way the caller is never blocked and errors never propagate.
+ */
+export function detachBackgroundWork(work: Promise<unknown>): void {
+  const settled = work.catch((e) => {
+    logger.warn('intel_background_work_failed', {
+      detail: e instanceof Error ? e.message : String(e),
+    });
+    return undefined;
+  });
+  try {
+    // Lazily required so non-Vercel runtimes (worker, jest) never load it.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+    const vercel = require('@vercel/functions') as { waitUntil?: (p: Promise<unknown>) => void };
+    if (typeof vercel?.waitUntil === 'function') {
+      vercel.waitUntil(settled);
+      return;
+    }
+  } catch {
+    /* not on Vercel (or no request context) — plain detach below */
+  }
+  void settled;
+}
 
 export type ActivationReason =
   | 'lead_captured'
@@ -86,25 +131,34 @@ export async function runLeadIntelligenceGeneration(
   leadId: string,
   reason: ActivationReason,
 ): Promise<'ran' | 'disabled' | 'cooldown' | 'failed_open'> {
-  if (!activationEnabled()) return 'disabled';
-  if (!companyId || !leadId) return 'failed_open';
+  if (!activationEnabled()) {
+    recordActivationDecision('disabled', reason);
+    return 'disabled';
+  }
+  if (!companyId || !leadId) {
+    recordActivationDecision('failed_open', reason);
+    return 'failed_open';
+  }
   const d = deps();
   // Capture-time triggers always run (the fingerprint skip is the dedupe);
   // high-frequency tracking triggers additionally respect the cooldown.
   if (reason === 'tracking_events' && underCooldown(`lead:${companyId}:${leadId}`, d.now())) {
+    recordActivationDecision('cooldown', reason);
     return 'cooldown';
   }
   try {
     await d.orchestrator.generate({ companyId, leadId });
+    recordActivationDecision('ran', reason);
     return 'ran';
   } catch {
+    recordActivationDecision('failed_open', reason);
     return 'failed_open'; // never propagates — activation must not break capture
   }
 }
 
 /** Fire-and-forget trigger for one lead. */
 export function triggerLeadIntelligence(companyId: string, leadId: string, reason: ActivationReason): void {
-  void runLeadIntelligenceGeneration(companyId, leadId, reason).catch(() => undefined);
+  detachBackgroundWork(runLeadIntelligenceGeneration(companyId, leadId, reason));
 }
 
 /**
@@ -117,9 +171,16 @@ export async function runVisitorSessionRegeneration(
   visitorSessionId: string,
   reason: ActivationReason,
 ): Promise<number> {
-  if (!activationEnabled() || !companyId || !visitorSessionId) return 0;
+  if (!activationEnabled()) {
+    recordActivationDecision('disabled', reason);
+    return 0;
+  }
+  if (!companyId || !visitorSessionId) return 0;
   const d = deps();
-  if (underCooldown(`session:${companyId}:${visitorSessionId}`, d.now())) return 0;
+  if (underCooldown(`session:${companyId}:${visitorSessionId}`, d.now())) {
+    recordActivationDecision('cooldown', reason);
+    return 0;
+  }
   let leadIds: string[] = [];
   try {
     const { data, error } = await ownedDbTable('leads')
@@ -134,6 +195,10 @@ export async function runVisitorSessionRegeneration(
   } catch {
     return 0; // fail-open
   }
+  // Fan-out is the capacity driver for tracking ingestion: one batched POST can
+  // reach SESSION_LEAD_CAP leads per session. Measured so the ceiling is
+  // observable rather than inferred.
+  recordActivationFanout('session_leads', leadIds.length);
   let ran = 0;
   for (const leadId of leadIds) {
     const outcome = await runLeadIntelligenceGeneration(companyId, leadId, reason);
@@ -148,7 +213,7 @@ export function triggerVisitorSessionIntelligence(
   visitorSessionId: string,
   reason: ActivationReason,
 ): void {
-  void runVisitorSessionRegeneration(companyId, visitorSessionId, reason).catch(() => undefined);
+  detachBackgroundWork(runVisitorSessionRegeneration(companyId, visitorSessionId, reason));
 }
 
 /** Designated hook for enrichment writers (CRM ingestion today; vendors later). */

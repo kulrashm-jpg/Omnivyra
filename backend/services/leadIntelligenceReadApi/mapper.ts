@@ -32,6 +32,7 @@ import type {
   TimelineEntryDTO,
 } from './dto';
 import { primaryPersonaOf, primarySegmentOf, topActionOf } from './presentation';
+import { recordTenantMismatch } from '../leadIntelligenceTelemetry';
 
 type Unknown = Record<string, unknown>;
 
@@ -276,6 +277,10 @@ export function toLeadIntelligenceView(
   // treated exactly like an absent record: never throw, never expose foreign
   // data, fail open as never_generated.
   const safeRecord = record && record.companyId === ref.companyId ? record : null;
+  // HARDEN-INT-002: a blocked cross-tenant record is a security event, not a
+  // routine miss — it must be visible even though the response degrades
+  // silently to never_generated.
+  if (record && !safeRecord) recordTenantMismatch(ref.companyId, record.companyId, ref.leadId);
   const freshness = resolveIntelligenceFreshness(safeRecord);
   if (!safeRecord) {
     return {

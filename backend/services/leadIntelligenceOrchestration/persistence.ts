@@ -12,6 +12,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
+import { recordPersistenceFailure } from '../leadIntelligenceTelemetry';
 import type {
   IntelligencePersistencePort,
   LeadIntelligenceRecord,
@@ -105,10 +106,69 @@ export const durableIntelligencePersistence: IntelligencePersistencePort = {
         .eq('company_id', companyId)
         .eq('lead_id', leadId)
         .limit(1);
-      if (error || !Array.isArray(data) || data.length === 0) return null;
+      // HARDEN-INT-002: distinguish "no row" (normal) from "read failed"
+      // (actionable). Only the latter is reported.
+      if (error) {
+        recordPersistenceFailure('get', String((error as { message?: string }).message ?? error), companyId);
+        return null;
+      }
+      if (!Array.isArray(data) || data.length === 0) return null;
       return rowToIntelligenceRecord(data[0] as Row);
-    } catch {
+    } catch (e) {
+      recordPersistenceFailure('get', e instanceof Error ? e.message : String(e), companyId);
       return null;
+    }
+  },
+
+  /**
+   * HARDEN-INT-001 (4): one query for the whole id set instead of one per
+   * lead. Served by the UNIQUE (company_id, lead_id) index. Same tenant
+   * scoping and same fail-open contract as `get` — an error yields an empty
+   * map, which callers render exactly like "never generated".
+   */
+  async getMany(companyId, leadIds) {
+    const out = new Map<string, LeadIntelligenceRecord>();
+    const ids = [...new Set((Array.isArray(leadIds) ? leadIds : []).filter((id) => typeof id === 'string' && id !== ''))];
+    if (!companyId || ids.length === 0) return out;
+
+    // Per-lead fallback. CRITICAL: a batched read that fails must NOT degrade
+    // the whole page to "never generated" — that would silently blank every
+    // row. Falling back to the pre-existing per-lead path guarantees the same
+    // results the caller got before batching, at the old cost.
+    const perLead = async (): Promise<Map<string, LeadIntelligenceRecord>> => {
+      const fallback = new Map<string, LeadIntelligenceRecord>();
+      const records = await Promise.all(ids.map((id) => durableIntelligencePersistence.get(companyId, id)));
+      records.forEach((record, i) => {
+        if (record) fallback.set(ids[i], record);
+      });
+      return fallback;
+    };
+
+    try {
+      const query = ownedDbTable(LEAD_INTELLIGENCE_PROFILES_TABLE).select('*').eq('company_id', companyId);
+      // Not every chain implementation exposes `.in` (older wrappers, test
+      // doubles). Detect rather than assume, and degrade to correctness.
+      if (typeof (query as { in?: unknown }).in !== 'function') return perLead();
+      // HARDEN-INT-002: type-only correction — the driver's builder does not
+      // structurally overlap this shape, so the cast must route through
+      // `unknown` (it also avoids an excessively-deep generic instantiation).
+      // Runtime behaviour is unchanged.
+      const { data, error } = await (
+        query as unknown as { in: (col: string, vals: string[]) => Promise<{ data: unknown; error: unknown }> }
+      ).in('lead_id', ids);
+      if (error) {
+        recordPersistenceFailure('getMany', String((error as { message?: string }).message ?? error), companyId);
+        return perLead();
+      }
+      if (!Array.isArray(data)) return perLead();
+      for (const row of data as Row[]) {
+        const record = rowToIntelligenceRecord(row);
+        if (record && record.companyId === companyId) out.set(record.leadId, record);
+      }
+      return out;
+    } catch (e) {
+      recordPersistenceFailure('getMany', e instanceof Error ? e.message : String(e), companyId);
+      return perLead();
     }
   },
 
@@ -116,8 +176,15 @@ export const durableIntelligencePersistence: IntelligencePersistencePort = {
     try {
       const { error } = await ownedDbTable(LEAD_INTELLIGENCE_PROFILES_TABLE)
         .upsert(toRow(record), { onConflict: 'company_id,lead_id' });
-      return error ? { ok: false, error: String(error.message ?? error) } : { ok: true };
+      if (error) {
+        // THE migration-not-applied signal: intelligence was computed and is
+        // being discarded. Loudest path in the stack.
+        recordPersistenceFailure('upsert', String(error.message ?? error), record.companyId);
+        return { ok: false, error: String(error.message ?? error) };
+      }
+      return { ok: true };
     } catch (e) {
+      recordPersistenceFailure('upsert', e instanceof Error ? e.message : String(e), record.companyId);
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   },
@@ -128,8 +195,13 @@ export const durableIntelligencePersistence: IntelligencePersistencePort = {
         .update({ rebuild_requested_at: requestedAt })
         .eq('company_id', companyId)
         .eq('lead_id', leadId);
-      return error ? { ok: false, error: String(error.message ?? error) } : { ok: true };
+      if (error) {
+        recordPersistenceFailure('mark_rebuild', String(error.message ?? error), companyId);
+        return { ok: false, error: String(error.message ?? error) };
+      }
+      return { ok: true };
     } catch (e) {
+      recordPersistenceFailure('mark_rebuild', e instanceof Error ? e.message : String(e), companyId);
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   },
@@ -155,6 +227,14 @@ export function createInMemoryIntelligenceStore(): IntelligencePersistencePort &
     },
     async get(companyId, leadId) {
       return records.get(key(companyId, leadId)) ?? null;
+    },
+    async getMany(companyId, leadIds) {
+      const out = new Map<string, LeadIntelligenceRecord>();
+      for (const leadId of Array.isArray(leadIds) ? leadIds : []) {
+        const record = records.get(key(companyId, leadId));
+        if (record) out.set(leadId, record);
+      }
+      return out;
     },
     async upsert(record) {
       return write(() => records.set(key(record.companyId, record.leadId), record));
