@@ -1,10 +1,13 @@
 /**
- * INT-003 Wave 4 — Intelligence Dashboard (portfolio analytics).
+ * INT-003 Wave 4 (+ INT-003A hardening) — Latest Lead Intelligence dashboard.
  *
- * PRESENTATION ONLY. Two authenticated GETs per company selection:
- *   1. the existing lead list API (cohort of the latest N leads → ids/keys),
- *   2. ONE bulk read of persisted intelligence list items
- *      (GET /api/leads/intelligence, INT-003 Wave 1).
+ * PRESENTATION ONLY over the LATEST LEAD COHORT — this is deliberately NOT
+ * company-wide analytics (see DASHBOARD_LIMITATIONS in dashboardDataAdapter
+ * for what is missing and WHY). Data acquisition lives behind the
+ * IntelligenceDashboardDataAdapter boundary (INT-003A Gap 2): today that is
+ * the Wave 4 behaviour verbatim — the lead list API's latest cohort + ONE
+ * bulk read of persisted intelligence list items — and a future server-side
+ * Dashboard Aggregate API plugs in as another adapter with zero UI changes.
  * No SWR, no polling, no background refresh, no writes, no orchestration.
  * Every number shown is a count/mean of PERSISTED DTO values — the dashboard
  * derives no new intelligence. Filters select over persisted fields only and
@@ -15,12 +18,12 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
-import { apiFetch } from '@/lib/apiFetch';
-import { leadKeyFor, type CanonicalLeadView } from '@/lib/leadIntelligence';
-import { fetchLeads, emptyFilters } from './leadIntelligenceClient';
 import type { LeadIntelligenceListItemDTO } from '@/backend/services/leadIntelligenceReadApi/dto';
-
-const COHORT_LIMIT = 100;
+import {
+  bulkReadDashboardAdapter,
+  type IntelligenceDashboardDataAdapter,
+  type DashboardCohortLead,
+} from './dashboardDataAdapter';
 
 const BAND_ORDER = ['hot', 'warm', 'cool', 'cold'] as const;
 const FRESHNESS_ORDER = ['fresh', 'stale', 'pending_regeneration', 'never_generated'] as const;
@@ -46,12 +49,7 @@ const pct = (value: number | null | undefined): string =>
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
 type Item = LeadIntelligenceListItemDTO;
-
-interface CohortLead {
-  leadId: string;
-  leadKey: string;
-  label: string;
-}
+type CohortLead = DashboardCohortLead;
 
 interface DashboardFilters {
   band: string;
@@ -124,9 +122,15 @@ export interface IntelligenceDashboardProps {
   companyId: string;
   /** Injected clock for the timeline summary (tests pin it). */
   now?: () => number;
+  /** INT-003A Gap 2: data-source boundary — defaults to today's bulk-read adapter. */
+  adapter?: IntelligenceDashboardDataAdapter;
 }
 
-export default function IntelligenceDashboard({ companyId, now = () => Date.now() }: IntelligenceDashboardProps) {
+export default function IntelligenceDashboard({
+  companyId,
+  now = () => Date.now(),
+  adapter = bulkReadDashboardAdapter,
+}: IntelligenceDashboardProps) {
   const router = useRouter();
   const [pending, setPending] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -140,62 +144,31 @@ export default function IntelligenceDashboard({ companyId, now = () => Date.now(
     let active = true;
     setPending(true);
     setFailed(false);
-    (async () => {
-      try {
-        const leads = await fetchLeads(companyId, emptyFilters(), { limit: COHORT_LIMIT, offset: 0 }, { by: 'occurredAt', order: 'desc' });
+    // INT-003A Gap 2: acquisition happens behind the adapter boundary; the
+    // component only consumes the snapshot. Same requests, same tolerance —
+    // the Wave 4 logic moved verbatim into bulkReadDashboardAdapter.
+    adapter
+      .load(companyId)
+      .then((snapshot) => {
         if (!active) return;
-        const byId = new Map<string, CohortLead>();
-        for (const view of leads.rows as CanonicalLeadView[]) {
-          const leadId = view.sourceRef?.id;
-          if (!leadId || byId.has(leadId)) continue;
-          byId.set(leadId, {
-            leadId,
-            leadKey: leadKeyFor(view),
-            label: view.identity?.email ?? view.identity?.contactId ?? leadId,
-          });
-        }
-        setPortfolioTotal(leads.total);
-        setCohort(byId);
-
-        const ids = [...byId.keys()];
-        if (ids.length === 0) {
-          setItems([]);
-          return;
-        }
-        const params = new URLSearchParams({
-          company_id: companyId,
-          ids: ids.join(','),
-          limit: String(Math.min(Math.max(ids.length, 1), 100)),
-          offset: '0',
-          sort: 'score',
-          order: 'desc',
-        });
-        const res = await apiFetch(`/api/leads/intelligence?${params.toString()}`);
-        if (!active) return;
-        if (!res.ok) {
-          setFailed(true);
-          setItems([]);
-          return;
-        }
-        const body = (await res.json().catch(() => null)) as { items?: unknown } | null;
-        const raw = Array.isArray(body?.items) ? (body!.items as unknown[]) : [];
-        const safe = raw.filter(
-          (x): x is Item => Boolean(x) && typeof x === 'object' && typeof (x as Item).leadId === 'string' && (x as Item).leadId !== '',
-        );
-        setItems(safe);
-      } catch {
+        setPortfolioTotal(snapshot.portfolioTotal);
+        setCohort(snapshot.cohort);
+        setItems(snapshot.items);
+        setFailed(snapshot.failed);
+      })
+      .catch(() => {
         if (active) {
           setFailed(true);
           setItems([]);
         }
-      } finally {
+      })
+      .finally(() => {
         if (active) setPending(false);
-      }
-    })();
+      });
     return () => {
       active = false;
     };
-  }, [companyId]);
+  }, [companyId, adapter]);
 
   const personaOptions = useMemo(
     () => [...new Set(items.map((i) => i.primaryPersona).filter((p): p is string => Boolean(p)))].sort(),
@@ -268,9 +241,11 @@ export default function IntelligenceDashboard({ companyId, now = () => Date.now(
     <div data-testid="intelligence-dashboard" className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-purple-600">Intelligence Dashboard</p>
-          <p className="text-xs text-gray-500">
-            Persisted engine output only — read-only. Analyzing the latest {items.length} of {portfolioTotal} leads.
+          {/* INT-003A Gap 1: cohort-scoped wording — never imply company-wide analytics. */}
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-purple-600">Latest Lead Intelligence</p>
+          <p data-testid="dashboard-cohort-subtitle" className="text-xs text-gray-500">
+            Analytics below represent the currently loaded lead cohort — the latest {items.length} of {portfolioTotal} leads, not
+            company-wide analytics. Persisted engine output only — read-only.
           </p>
         </div>
       </div>
@@ -299,7 +274,7 @@ export default function IntelligenceDashboard({ companyId, now = () => Date.now(
       </div>
 
       {pending ? (
-        <div className="rounded-2xl border border-gray-200 bg-white p-10 text-center text-sm text-gray-500">Loading intelligence portfolio…</div>
+        <div className="rounded-2xl border border-gray-200 bg-white p-10 text-center text-sm text-gray-500">Loading latest lead intelligence…</div>
       ) : failed ? (
         <div className="rounded-2xl border border-gray-200 bg-white p-10 text-center text-sm text-gray-500">Intelligence unavailable.</div>
       ) : items.length === 0 ? (

@@ -16,7 +16,8 @@ export default function IntelligenceDashboardPage() {
 
   return (
     <>
-      <Head><title>Intelligence Dashboard | Omnivyra</title></Head>
+      {/* INT-003A Gap 1: cohort-scoped title — never imply company-wide analytics. */}
+      <Head><title>Latest Lead Intelligence | Omnivyra</title></Head>
       <main className="min-h-screen bg-gray-50 px-4 py-8 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-7xl space-y-6">
           <Link href="/lead-intelligence" className="inline-flex items-center text-sm font-medium text-purple-600 hover:text-purple-700">
