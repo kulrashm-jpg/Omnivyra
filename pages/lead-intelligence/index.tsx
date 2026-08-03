@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '@/components/CompanyContext';
 import OverviewPanel from '@/components/lead-intelligence/OverviewPanel';
@@ -33,9 +34,13 @@ export default function LeadIntelligenceWorkspacePage() {
               Website, blog, forms, CRM, community, engagement, MarketPulse, referral, partner, API, import and more — unified,
               searchable, and scored. Everything here is served by the canonical Lead Intelligence repository.
             </p>
-            <div className="mt-4 flex gap-2">
+            <div className="mt-4 flex items-center gap-2">
               <button className={tabBtn('overview', 'Overview')} onClick={() => select('overview')}>Overview</button>
               <button className={tabBtn('leads', 'All Leads')} onClick={() => select('leads')}>All Leads</button>
+              {/* INT-003 W4 — read-only analytics over persisted intelligence */}
+              <Link href="/lead-intelligence/dashboard" className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-100">
+                Intelligence Dashboard
+              </Link>
             </div>
           </section>
 
