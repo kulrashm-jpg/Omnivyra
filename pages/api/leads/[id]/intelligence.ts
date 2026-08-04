@@ -9,15 +9,15 @@
  * returns the `never_generated` DTO — this route NEVER generates, never
  * invokes the orchestrator, never loads snapshots, never writes.
  *
- * Authorization: SEC-001 standard — resolveCompanyAccess writes its own
- * 400 (missing company) / 401 (unauthenticated) / 403 (foreign tenant).
+ * Authorization: enforceCompanyAccess (canonical company-scoped guard) writes
+ * its own 400 (missing company) / 401 (unauthenticated) / 403 (foreign tenant).
  * Tenant isolation is enforced twice: membership here, and the read mapper's
  * defense-in-depth company check (INT-001A F5).
  */
 
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { resolveCompanyAccess } from '../../../../backend/services/contentArchitectService';
+import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { createLeadIntelligenceReadApi } from '../../../../backend/services/leadIntelligenceReadApi';
 
 const MAX_ID_LENGTH = 128;
@@ -36,7 +36,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'company_id must be a single value' });
   }
   const companyId = req.query.company_id as string | undefined;
-  const access = await resolveCompanyAccess(req, res, companyId ?? null);
+  // STABILIZE-INT-002 (B1, completing STABILIZE-INT-001 (1)): the sibling bulk
+  // route was migrated off resolveCompanyAccess, but this twin was left on it —
+  // so the single-lead read remained reachable via the UNSIGNED, client-settable
+  // `content_architect_session=1` cookie, which that helper short-circuits on
+  // and then honours for ANY company. Same guard as the bulk route now: a real
+  // Supabase session plus TenantGuard membership, writing its own 400/401/403.
+  const access = await enforceCompanyAccess({ req, res, companyId: companyId ?? null });
   if (!access) return;
 
   try {

@@ -12,7 +12,7 @@
 
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import {
   createLeadIntelligenceReadApi,
   type LeadIntelligenceListItemDTO,
@@ -66,7 +66,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'company_id must be a single value' });
   }
   const companyId = req.query.company_id as string | undefined;
-  const access = await resolveCompanyAccess(req, res, companyId ?? null);
+  // STABILIZE-INT-001 (1): canonical company-scoped authorization.
+  // resolveCompanyAccess() short-circuits on isContentArchitectSession(), which
+  // trusts the UNSIGNED, client-settable cookie `content_architect_session=1`
+  // and then grants access to ANY company — so this read was reachable without
+  // authentication. enforceCompanyAccess is the platform's existing guard (no
+  // second auth implementation is introduced): it resolves a real Supabase
+  // session and asserts tenant membership via TenantGuard.assertTenantAccess,
+  // and it writes its own 400/401/403 exactly as the previous helper did.
+  // Every other INT surface already uses this guard; these two read endpoints
+  // were the only deviation.
+  const access = await enforceCompanyAccess({ req, res, companyId: companyId ?? null });
   if (!access) return;
 
   const sort: SortField = SORT_FIELDS.includes(req.query.sort as SortField) ? (req.query.sort as SortField) : 'score';

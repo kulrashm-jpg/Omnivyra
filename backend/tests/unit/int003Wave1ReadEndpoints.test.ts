@@ -60,10 +60,17 @@ const mockAuth = {
   calls: [] as Array<string | null | undefined>,
 };
 
-jest.mock('../../services/contentArchitectService', () => ({
-  resolveCompanyAccess: (req: unknown, res: unknown, companyId?: string | null) => {
-    mockAuth.calls.push(companyId);
-    return mockAuth.impl(req, res, companyId);
+// STABILIZE-INT-002 (B1): both read routes were migrated off
+// resolveCompanyAccess — which short-circuited on the UNSIGNED, client-settable
+// `content_architect_session` cookie and then honoured ANY company — onto the
+// canonical enforceCompanyAccess guard (real Supabase session + TenantGuard
+// membership). The auth seam under test moves with them. The guard's contract
+// is unchanged from this suite's perspective: it writes its own 400/401/403 and
+// returns null on denial, so every existing assertion still applies.
+jest.mock('../../services/userContextService', () => ({
+  enforceCompanyAccess: (input: { req: unknown; res: unknown; companyId?: string | null }) => {
+    mockAuth.calls.push(input.companyId);
+    return mockAuth.impl(input.req, input.res, input.companyId);
   },
 }));
 
