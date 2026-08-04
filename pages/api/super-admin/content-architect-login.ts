@@ -8,6 +8,7 @@ import {
   attachSessionCookie,
 } from '../../../backend/security/SessionAuthorityService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
+import { mintSignedBridgeCookieValue } from '../../../backend/security/bridgeCookie';
 
 interface CanonicalUserRow {
   id: string;
@@ -130,13 +131,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  const sessionCookie = [
-    'content_architect_session=1',
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    'Max-Age=86400',
-  ].join('; ');
+  // SEC-001A: mint a SIGNED bridge value instead of the forgeable static `1`.
+  // Same primitive the super-admin bridge already uses (Phase 2) — HMAC over
+  // issuedAt+nonce, server-verified age, Secure in production. If no signing
+  // secret is configured the legacy cookie is simply not issued: the canonical
+  // auth_session minted above is the supported path, and failing closed is
+  // correct for a deprecated bridge.
+  let sessionCookie: string | null = null;
+  try {
+    sessionCookie = [
+      `content_architect_session=${mintSignedBridgeCookieValue()}`,
+      'Path=/',
+      'HttpOnly',
+      'SameSite=Lax',
+      'Max-Age=86400',
+      ...(process.env.NODE_ENV === 'production' ? ['Secure'] : []),
+    ].join('; ');
+  } catch (err) {
+    logger.warn('content_architect_bridge_cookie_not_issued', {
+      message: err instanceof Error ? err.message : String(err),
+      note: 'no BRIDGE_COOKIE_SECRET/SESSION_COOKIE_SECRET; canonical auth_session is the supported path',
+    });
+  }
   const scopedCompanyId = String(process.env.CONTENT_ARCHITECT_COMPANY_ID ?? '').trim();
   const companyCookie = scopedCompanyId
     ? [
@@ -165,7 +181,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allCookies: string[] = [];
   if (Array.isArray(existing)) allCookies.push(...existing);
   else if (typeof existing === 'string') allCookies.push(existing);
-  allCookies.push(sessionCookie, companyCookie, clearSuperAdmin);
+  if (sessionCookie) allCookies.push(sessionCookie);
+  allCookies.push(companyCookie, clearSuperAdmin);
   res.setHeader('Set-Cookie', allCookies);
 
   return res.status(200).json({ success: true });

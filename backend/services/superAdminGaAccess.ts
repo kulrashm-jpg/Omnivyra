@@ -5,8 +5,11 @@
  * use so they no longer give asymmetric outcomes for the same caller.
  *
  * Auth rule (single source of truth):
- *   1. Legacy bridge cookie `super_admin_session=1` is accepted (matches
- *      pages/api/super-admin/login.ts behavior).
+ *   1. A VALID legacy bridge cookie is accepted — delegated to
+ *      `requireCapability` → IdentityResolver → the signed-cookie resolver.
+ *      SEC-001B: this previously read "`super_admin_session=1` is accepted",
+ *      which has been false since Phase 2 began issuing HMAC-signed values;
+ *      a static `=1` is now rejected as `legacy_format`.
  *   2. Otherwise the caller must be a Supabase user whose `user_company_roles`
  *      contains a SUPER_ADMIN row (delegated to rbacService.isPlatformSuperAdmin).
  *      No `status='active'` filter — that filter was the source of the

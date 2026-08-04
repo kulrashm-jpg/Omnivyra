@@ -22,6 +22,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 // Production cost rates (USD)
 const COST_RATES = {
@@ -110,7 +111,7 @@ async function handler(
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const hasCookie = req.cookies?.super_admin_session === '1';
+  const hasCookie = getLegacySuperAdminSession(req) !== null;
   if (!hasCookie) {
     const { user, error: authError } = await getSupabaseUserFromRequest(req);
     if (authError || !user) return res.status(403).json({ error: 'NOT_AUTHORIZED' });

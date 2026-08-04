@@ -7,12 +7,13 @@ import {
   upsertModel,
 } from '../../../../backend/services/llmProviderService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 const requireSuperAdmin = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
+  if (getLegacySuperAdminSession(req) !== null) return true;
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
   res.status(403).json({ error: 'NOT_AUTHORIZED' });

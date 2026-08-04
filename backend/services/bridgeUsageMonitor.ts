@@ -14,6 +14,7 @@
 
 import { ownedDbTable } from '../db/writeOwner';
 import { logger } from './logger';
+import { LEGACY_BRIDGE_HARD_EXPIRY_AT } from '../security/legacyCookieSuperAdminBridge';
 
 export interface BridgeUsageEntry {
   /** capability + reason form a unique-enough key for the user-facing rollup. */
@@ -41,8 +42,11 @@ export interface BridgeUsageReport {
 }
 
 const DEFAULT_WINDOW_HOURS = 24 * 30; // 30 days
-// Aligned with legacyCookieSuperAdminBridge.ts hard-expiry constant.
-const HARD_EXPIRY_ISO = '2026-08-05T00:00:00.000Z';
+// SEC-001C: derived from the ONE lifecycle constant rather than a second
+// hand-copied literal. The copy could not drift safely — bumping the real
+// expiry would have silently left this monitor reporting the old date, which
+// is precisely the number operators use to decide migration urgency.
+const HARD_EXPIRY_ISO = LEGACY_BRIDGE_HARD_EXPIRY_AT.toISOString();
 
 interface AuditRow {
   occurred_at: string;

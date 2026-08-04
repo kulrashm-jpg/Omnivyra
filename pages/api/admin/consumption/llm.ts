@@ -25,15 +25,20 @@ import {
   ConsumptionTier,
 } from '../../../../backend/services/consumptionAnalyticsService';
 import { supabase } from '../../../../backend/db/supabaseClient';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 async function resolveTier(
   req: NextApiRequest,
   res: NextApiResponse,
   companyId?: string
 ): Promise<{ tier: ConsumptionTier; userId: string; orgId: string | null } | null> {
-  // Super admin cookie session (username/password login — no Supabase token)
-  if (req.cookies?.super_admin_session === '1') {
-    return { tier: 'super_admin', userId: 'super_admin_session', orgId: companyId ?? null };
+  // Super admin cookie session (username/password login — no Supabase token).
+  // SEC-001C: take the userId from the session itself — LEGACY_SUPER_ADMIN_USER_ID
+  // is the same 'super_admin_session' sentinel this used to hardcode, so the
+  // emitted principal is byte-identical while the sentinel now has one owner.
+  const legacy = getLegacySuperAdminSession(req);
+  if (legacy) {
+    return { tier: 'super_admin', userId: legacy.userId, orgId: companyId ?? null };
   }
 
   const auth = await getSupabaseUserFromRequest(req);

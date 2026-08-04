@@ -99,7 +99,15 @@ describe('Validation-7/8/10 — lineage/scheduler isolation + access gate', () =
   });
   it('ops endpoint enforces super-admin (internal-only) + immutable audit', () => {
     const ep = fs.readFileSync('pages/api/internal/render-ops.ts', 'utf8');
-    expect(/super_admin_session === '1'/.test(ep)).toBe(true);
+    // SEC-001B: never a raw `=== '1'` comparison (that matched only a FORGED
+    // cookie once Phase 2 began issuing signed values).
+    // SEC-001C: the gate must be the LIFECYCLE-AWARE canonical helper, and the
+    // route must also accept a canonical DB-backed super admin — without that
+    // second arm it becomes permanently unreachable at the bridge hard expiry.
+    expect(/getLegacySuperAdminSession\(req\)/.test(ep)).toBe(true);
+    expect(/isPlatformSuperAdmin/.test(ep)).toBe(true);
+    expect(/super_admin_session\s*===\s*'1'/.test(ep)).toBe(false);
+    expect(/hasValidLegacySuperAdminCookie/.test(ep)).toBe(false);
     expect(/NOT_OPERATOR/.test(ep)).toBe(true);
     expect(/creator_render_ops_audit/.test(ep)).toBe(true);
     // never writes immutable render lineage tables

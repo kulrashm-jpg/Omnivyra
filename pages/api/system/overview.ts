@@ -10,6 +10,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getCampaignCount } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 const STRATEGIST_PROCESS_TYPES = new Set([
   'generateCampaignPlan',
@@ -61,7 +62,7 @@ async function requireSuperAdminAccess(
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> {
-  const hasSession = req.cookies?.super_admin_session === '1';
+  const hasSession = getLegacySuperAdminSession(req) !== null;
   if (hasSession) return true;
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id) {

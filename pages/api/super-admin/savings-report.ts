@@ -30,9 +30,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { getSavingsReport } from '../../../backend/services/intentExecutionService';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
+  if (getLegacySuperAdminSession(req) !== null) return true;
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
   res.status(403).json({ error: 'NOT_AUTHORIZED' });

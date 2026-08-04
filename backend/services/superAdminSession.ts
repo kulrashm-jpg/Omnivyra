@@ -22,9 +22,8 @@ import { logger } from './logger';
 import { logSecurityEvent } from '../security/audit/SecurityAuditService';
 import {
   LEGACY_BRIDGE_HARD_EXPIRY_AT,
-  isLegacyBridgeDryRun,
+  evaluateBridgeCookieLifecycle,
 } from '../security/legacyCookieSuperAdminBridge';
-import { parseSignedBridgeCookie } from '../security/bridgeCookie';
 
 export const LEGACY_SUPER_ADMIN_USER_ID = 'super_admin_session';
 
@@ -93,8 +92,16 @@ function clientIp(req: NextApiRequest): string | null {
 /**
  * Read the legacy bridge cookie. Returns the synthetic session OR null.
  * Routes using this helper automatically participate in dry-run /
- * hard-expiry / counters; routes that read `req.cookies?.super_admin_session`
- * directly do not — those are a known migration gap to be closed later.
+ * hard-expiry / counters.
+ *
+ * SEC-001B closed the raw-comparison gap (no production route compares the
+ * cookie to a literal any more). SEC-001C closed the remaining one: the 34
+ * routes that briefly used the signature-only `hasValidLegacySuperAdminCookie`
+ * now call THIS function, and that helper has been deleted. This is the SINGLE
+ * canonical entry point for route-level bridge authorization — every caller
+ * therefore participates in dry-run, hard-expiry, audit and counters.
+ *
+ * Pinned by backend/tests/unit/sec001cBridgeUnification.test.ts.
  */
 export function getLegacySuperAdminSession(req: NextApiRequest): LegacySuperAdminSession | null {
   // Phase 2: bridge cookie is now an HMAC-signed payload. Static `=1`
@@ -103,19 +110,24 @@ export function getLegacySuperAdminSession(req: NextApiRequest): LegacySuperAdmi
   const raw = req.cookies?.super_admin_session ?? null;
   if (!raw) return null;
 
-  const parsed = parseSignedBridgeCookie(raw);
-  if (parsed.ok !== true) {
+  // SEC-001C: ONE shared decision procedure (see
+  // legacyCookieSuperAdminBridge.evaluateBridgeCookieLifecycle). This function
+  // still owns its own observability — per-route counters and the audit row —
+  // because the evaluator is deliberately pure.
+  const verdict = evaluateBridgeCookieLifecycle(raw);
+
+  if (verdict.ok !== true && verdict.reason !== 'dry_run' && verdict.reason !== 'hard_expired') {
     counters.totalReads += 1;
     counters.byRoute[routeKey(req)] = (counters.byRoute[routeKey(req)] ?? 0) + 1;
     logger.warn('legacy_bridge_bypass_rejected_signature', {
       route: routeKey(req),
-      reason: parsed.reason,
+      reason: verdict.reason,
       ip: clientIp(req),
     });
     void logSecurityEvent({
       capability: 'super_admin.legacy',
       decision: 'bridge_authority_rejected',
-      reason: `direct-cookie helper rejected bridge cookie (${parsed.reason}) for ${routeKey(req)}`,
+      reason: `direct-cookie helper rejected bridge cookie (${verdict.reason}) for ${routeKey(req)}`,
       viaLegacyBridge: true,
       ip: clientIp(req),
       userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
@@ -128,7 +140,7 @@ export function getLegacySuperAdminSession(req: NextApiRequest): LegacySuperAdmi
   counters.byRoute[route] = (counters.byRoute[route] ?? 0) + 1;
 
   // Dry-run: simulate Wave-3 removal.
-  if (isLegacyBridgeDryRun()) {
+  if (verdict.ok !== true && verdict.reason === 'dry_run') {
     counters.rejectedDryRun += 1;
     logger.warn('legacy_bridge_bypass_rejected_dry_run', {
       route,
@@ -147,7 +159,7 @@ export function getLegacySuperAdminSession(req: NextApiRequest): LegacySuperAdmi
   }
 
   // Hard expiry: the bridge is dead after this date.
-  if (Date.now() >= LEGACY_BRIDGE_HARD_EXPIRY_AT.getTime()) {
+  if (verdict.ok !== true && verdict.reason === 'hard_expired') {
     counters.rejectedHardExpired += 1;
     logger.warn('legacy_bridge_bypass_rejected_hard_expired', {
       route,

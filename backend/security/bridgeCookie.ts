@@ -165,6 +165,27 @@ export function parseSignedBridgeCookie(rawValue: string | null | undefined): Br
 }
 
 /**
+ * SEC-001C — `hasValidLegacySuperAdminCookie` USED TO LIVE HERE. It has been
+ * REMOVED; do not reintroduce it or any equivalent.
+ *
+ * SEC-001B introduced it as the drop-in replacement for the forgeable
+ * `req.cookies.super_admin_session === '1'` comparison, and it did fix the
+ * signature hole. But it verified signature + embedded age ONLY, so the ~34
+ * routes gating on it silently bypassed the bridge LIFECYCLE:
+ * `LEGACY_BRIDGE_HARD_EXPIRY_AT`, `LEGACY_BRIDGE_DRY_RUN`, the bridge audit
+ * trail, and the bypass counters. That left two bridge entry points with
+ * different semantics — the inconsistency SEC-001C exists to remove.
+ *
+ * The single canonical entry point for route-level bridge authorization is
+ * `superAdminSession.getLegacySuperAdminSession(req)`, which layers the
+ * lifecycle on top of `parseSignedBridgeCookie` below. This module stays a
+ * pure CRYPTO leaf (mint / parse / cookie headers) with no lifecycle
+ * knowledge — that is what keeps the dependency graph acyclic.
+ *
+ * Pinned by backend/tests/unit/sec001cBridgeUnification.test.ts.
+ */
+
+/**
  * Build the Set-Cookie header line for the bridge cookie. Adds Secure in
  * production, HttpOnly always, SameSite=Lax (matches the canonical
  * session cookie's posture).

@@ -19,6 +19,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { runAnomalySweep } from '../../../lib/anomaly/sweepDetector';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 async function isAuthorized(req: NextApiRequest): Promise<boolean> {
   // Vercel cron secret (set CRON_SECRET env var, Vercel sends it automatically)
@@ -26,7 +27,7 @@ async function isAuthorized(req: NextApiRequest): Promise<boolean> {
   if (cronSecret && req.headers.authorization === `Bearer ${cronSecret}`) return true;
 
   // Legacy super-admin cookie
-  if (req.cookies?.super_admin_session === '1') return true;
+  if (getLegacySuperAdminSession(req) !== null) return true;
 
   // Supabase SUPER_ADMIN role
   const { user, error } = await getSupabaseUserFromRequest(req);

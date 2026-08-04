@@ -2,9 +2,13 @@
  * Require Super Admin authorization for API handlers.
  * Phase-2: Super Admin Governance Layer
  *
- * Replicates auth logic used by /api/super-admin/* routes.
- * 1. Legacy cookie: req.cookies.super_admin_session === '1'
- * 2. Otherwise: getSupabaseUserFromRequest + isPlatformSuperAdmin
+ * Delegates to `requireSuperAdminUser` (requestAccessService): canonical
+ * authenticated identity + isPlatformSuperAdmin. It does NOT read the legacy
+ * bridge cookie.
+ *
+ * SEC-001B: this header previously documented a `req.cookies.super_admin_session
+ * === '1'` step that the code has not performed for some time. Corrected so the
+ * comment cannot be cited as evidence that a raw-cookie path still exists here.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

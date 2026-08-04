@@ -12,6 +12,7 @@ import gaConnect from '../pages/api/super-admin/ga-connect';
 import gaSelectProperty from '../pages/api/super-admin/ga-select-property';
 import gaAnalyticsSummary from '../pages/api/super-admin/ga-analytics-summary';
 import cronAnalyticsIngestion from '../pages/api/cron/analytics-ingestion';
+import { mintSignedBridgeCookieValue } from '../backend/security/bridgeCookie';
 
 type MockResult = { status: number; body: any; headers: Record<string, string> };
 
@@ -26,13 +27,31 @@ function makeRes(): NextApiResponse & { _result: MockResult } {
 }
 
 function makeReq(opts: { method?: string; cookies?: Record<string,string>; headers?: Record<string,string>; body?: any }): NextApiRequest {
+  const cookies = opts.cookies ?? {};
+  const headers = { ...(opts.headers ?? {}) };
+  // Resolvers read the raw `cookie` header, not the parsed bag — mirror both.
+  if (Object.keys(cookies).length > 0 && !headers.cookie) {
+    headers.cookie = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+  }
   return {
     method: opts.method ?? 'GET',
-    cookies: opts.cookies ?? {},
-    headers: opts.headers ?? {},
+    cookies,
+    headers,
     body: opts.body ?? {},
     query: {},
   } as any;
+}
+
+/**
+ * SEC-001B: this script used to present a static `super_admin_session` value
+ * of "1" and assert a 200 — i.e. it pinned the FORGED-cookie path as
+ * expected behaviour. Since
+ * Phase 2 the bridge cookie is HMAC-signed and a static `=1` is rejected, so
+ * the script must present a genuinely signed value to exercise the operator
+ * path it is meant to verify.
+ */
+function bridgeCookieValue(): string {
+  return mintSignedBridgeCookieValue();
 }
 
 async function call(handler: any, req: NextApiRequest): Promise<MockResult> {
@@ -53,7 +72,7 @@ async function main() {
   console.log('✅ ga-connect rejects unauthenticated with standardized shape');
 
   box('B — ga-connect: cookie path → reaches connect logic, returns 200 + authorizationUrl');
-  const b1 = await call(gaConnect, makeReq({ method: 'POST', cookies: { super_admin_session: '1' } }));
+  const b1 = await call(gaConnect, makeReq({ method: 'POST', cookies: { super_admin_session: bridgeCookieValue() } }));
   console.log({ status: b1.status, hasUrl: typeof b1.body?.authorizationUrl === 'string', code: b1.body?.code });
   if (b1.status !== 200 || typeof b1.body?.authorizationUrl !== 'string') {
     console.log('❌ cookie auth path failed'); process.exit(1);
@@ -61,7 +80,7 @@ async function main() {
   console.log('✅ ga-connect via cookie OK');
 
   box('C — ga-select-property: cookie + missing propertyId → 400 with code');
-  const c1 = await call(gaSelectProperty, makeReq({ method: 'POST', cookies: { super_admin_session: '1' } }));
+  const c1 = await call(gaSelectProperty, makeReq({ method: 'POST', cookies: { super_admin_session: bridgeCookieValue() } }));
   console.log(c1);
   if (c1.status !== 400 || c1.body?.code !== 'GA_MISSING_PROPERTY_ID') {
     console.log('❌ expected 400/GA_MISSING_PROPERTY_ID'); process.exit(1);
@@ -77,7 +96,7 @@ async function main() {
   console.log('✅ ga-analytics-summary auth shape matches ga-connect');
 
   box('E — ga-analytics-summary: cookie path → 200');
-  const e1 = await call(gaAnalyticsSummary, makeReq({ method: 'GET', cookies: { super_admin_session: '1' } }));
+  const e1 = await call(gaAnalyticsSummary, makeReq({ method: 'GET', cookies: { super_admin_session: bridgeCookieValue() } }));
   console.log({ status: e1.status, has_ga_status: Boolean(e1.body?.ga_status), connected: e1.body?.ga_status?.connected });
   if (e1.status !== 200 || !e1.body?.ga_status) {
     console.log('❌ summary cookie path failed:', e1.body); process.exit(1);

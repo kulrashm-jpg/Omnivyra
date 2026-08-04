@@ -3,12 +3,13 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 const requireSuperAdminAccess = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> => {
-  const hasSession = req.cookies?.super_admin_session === '1';
+  const hasSession = getLegacySuperAdminSession(req) !== null;
   if (hasSession) {
     console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
     return true;

@@ -5,6 +5,7 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { hasUsageAccess } from '../../../backend/services/usageAccessService';
 import { resolveOrganizationPlanLimits } from '../../../backend/services/planResolutionService';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 function currentYearMonth(): { year: number; month: number } {
   const now = new Date();
@@ -15,7 +16,7 @@ const requireAuth = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<{ userId: string | null; isSuperAdmin: boolean } | null> => {
-  if (req.cookies?.super_admin_session === '1') {
+  if (getLegacySuperAdminSession(req) !== null) {
     return { userId: null, isSuperAdmin: true };
   }
   const { user, error } = await getSupabaseUserFromRequest(req);

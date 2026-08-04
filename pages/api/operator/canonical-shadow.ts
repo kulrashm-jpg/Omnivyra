@@ -14,14 +14,33 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { acquireGroundedEvidence, makeProductionAcquisitionDeps } from '../../../backend/services/companyIntelligence/production/canonicalEvidenceAcquisition';
 import { runCanonicalShadowJob, makeSupabaseShadowDeps } from '../../../backend/services/companyIntelligence/production/canonicalShadowJob';
 
+/**
+ * Operator-only. Two arms, identical to every other super-admin surface:
+ * the audited legacy bridge session, else a canonical DB-backed platform
+ * super admin. No other role may reach the shadow path.
+ *
+ * SEC-001D: this route was BRIDGE-ONLY (the last one, alongside
+ * activity-control). Its single authorization source is scheduled to die at
+ * LEGACY_BRIDGE_HARD_EXPIRY_AT, which would have made the shadow path
+ * permanently unreachable. `isPlatformSuperAdmin` is strictly harder to
+ * satisfy than the cookie, so this widens nothing.
+ */
+async function isOperator(req: NextApiRequest): Promise<boolean> {
+  if (getLegacySuperAdminSession(req) !== null) return true;
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
+  return false;
+}
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Operator-only: signature-validated legacy super-admin session. No other role may reach the shadow path.
-  if (!getLegacySuperAdminSession(req)) return res.status(403).json({ error: 'Forbidden' });
+  if (!(await isOperator(req))) return res.status(403).json({ error: 'Forbidden' });
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;

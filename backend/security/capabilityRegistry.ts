@@ -84,8 +84,10 @@ export type CanonicalRole =
  * with audit. The role grants enough to access platform admin surfaces;
  * platform mutation requires explicit grant.
  *
- * The legacy cookie super-admin path (super_admin_session=1) maps to a
- * DIFFERENT capability set — see legacyCookieSuperAdminBridge.ts.
+ * The legacy cookie super-admin path maps to a DIFFERENT capability set —
+ * see legacyCookieSuperAdminBridge.ts. (SEC-001B: written as
+ * `super_admin_session=1`; the bridge cookie is HMAC-signed since Phase 2 and
+ * a static `=1` is rejected as `legacy_format`.)
  */
 export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Capability>>> = {
   SUPER_ADMIN: [

@@ -35,6 +35,7 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { runIntegrationHealthCheckWithRetry } from '../../../backend/services/integrationHealthRetry';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 const BATCH_SIZE = 25;
 const STALE_HOURS = 24;
@@ -43,7 +44,7 @@ const SWEEP_TIMEOUT_MS = 4 * 60 * 1000; // 4 min — must finish well inside any
 async function isAuthorized(req: NextApiRequest): Promise<boolean> {
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && req.headers.authorization === `Bearer ${cronSecret}`) return true;
-  if (req.cookies?.super_admin_session === '1') return true;
+  if (getLegacySuperAdminSession(req) !== null) return true;
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
   return false;

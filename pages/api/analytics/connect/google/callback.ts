@@ -5,6 +5,7 @@ import { decodeOAuthState } from '../../../../../backend/auth/oauthState';
 import { handleGoogleOAuthCallback } from '../../../../../backend/services/analyticsIntegrationService';
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
 import { logOAuthEvent, safeHost } from '../../../../../backend/auth/oauthTelemetry';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 function buildRedirectUrl(returnTo: string | null, params: Record<string, string>): string {
   const base = returnTo && returnTo.startsWith('/') ? returnTo : '/integrations?focus=data';
@@ -60,7 +61,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const state = typeof req.query.state === 'string' ? req.query.state : undefined;
   const providerError = typeof req.query.error === 'string' ? req.query.error : '';
   const decodedState = decodeOAuthState(state);
-  const hasSuperAdminSession = req.cookies?.super_admin_session === '1';
+  const hasSuperAdminSession = getLegacySuperAdminSession(req) !== null;
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
 
   console.log('[GA-OAUTH][callback] params', {

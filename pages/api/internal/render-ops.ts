@@ -9,8 +9,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *          queue.cancel. Each writes an IMMUTABLE audit row.
  *
  * SAFETY
- *   - Internal-only: super_admin_session cookie (same gate as the other
- *     /api/super-admin endpoints). Fail-closed → 403 otherwise.
+ *   - Internal-only, super-admin. Fail-closed → 403 otherwise. The gate is
+ *     the same two-step every /api/super-admin endpoint uses: the audited
+ *     legacy bridge session, else a canonical DB-backed platform super admin.
+ *     SEC-001C added the canonical arm — this route previously accepted ONLY
+ *     the bridge, so it would have become permanently unreachable at the
+ *     bridge hard expiry (2026-08-05T00:00:00Z) with no way back in.
  *   - Fail-closed actions via pure builders; NO immutable-lineage
  *     mutation (only governance/provider config + mutable queue state).
  *   - Scheduler-isolated; R3–R6 cores untouched; image-only preserved.
@@ -24,11 +28,25 @@ import {
   buildGovernancePatch, buildProviderPatch, classifyQueueAction, buildOpsAuditRow,
   GLOBAL_GOVERNANCE_SENTINEL,
 } from '@/backend/services/creator/rendering';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
 
 const ACTIVE = ['claimed', 'rendering', 'processing', 'moderation'];
 
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
+/**
+ * SEC-001C: identical to the gate used by the /api/super-admin/* routes.
+ * The canonical DB-backed arm is NOT a bypass — `isPlatformSuperAdmin` is the
+ * migration TARGET the bridge exists to be replaced by, and it is strictly
+ * harder to satisfy than a cookie. Without it this route had a single
+ * authorization source that is scheduled to die, which is an availability
+ * defect, not a security property.
+ */
+async function isSuperAdmin(req: NextApiRequest): Promise<boolean> {
+  if (getLegacySuperAdminSession(req) !== null) return true;
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
+  return false;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -36,7 +54,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
-  if (!isSuperAdmin(req)) {
+  if (!(await isSuperAdmin(req))) {
     return res.status(403).json({ error: 'Operator access required.', code: 'NOT_OPERATOR' });
   }
   const actor = String(req.cookies?.super_admin_actor || 'super_admin');

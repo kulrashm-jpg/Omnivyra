@@ -14,9 +14,14 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
 import { isContentArchitectSession } from '../../../../backend/services/contentArchitectService';
+import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return true;
+  // SEC-001A: the raw === '1' test matched ONLY a forged cookie (Phase 2
+  // issues a signed value), so it authorized attackers and no real operator.
+  // SEC-001C: routed through the lifecycle-aware helper so this gate also
+  // honours the bridge hard expiry, dry-run, audit and bypass counters.
+  if (getLegacySuperAdminSession(req) !== null || isContentArchitectSession(req)) return true;
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
   res.status(403).json({ error: 'NOT_AUTHORIZED' });

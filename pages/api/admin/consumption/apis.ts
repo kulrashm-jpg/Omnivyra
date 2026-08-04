@@ -17,6 +17,7 @@ import {
   getAllOrgsConsumption,
   ConsumptionTier,
 } from '../../../../backend/services/consumptionAnalyticsService';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 async function resolveTier(
   req: NextApiRequest,
@@ -24,7 +25,7 @@ async function resolveTier(
   companyId?: string
 ): Promise<{ tier: ConsumptionTier; orgId: string | null } | null> {
   // Super admin cookie session (username/password login — no Supabase token)
-  if (req.cookies?.super_admin_session === '1') {
+  if (getLegacySuperAdminSession(req) !== null) {
     return { tier: 'super_admin', orgId: companyId ?? null };
   }
 

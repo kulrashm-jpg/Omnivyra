@@ -53,14 +53,80 @@ test('missing companyId: 400, null, no identity lookup', async () => {
   expect(userMock).not.toHaveBeenCalled();
 });
 
-test('content-architect session: allowed for any company without session auth', async () => {
+// SEC-001A: this test previously asserted the vulnerability itself — that an
+// UNSIGNED `content_architect_session=1` cookie granted access to ANY company
+// "without session auth". That is the escalation SEC-001A closes, so the
+// contract is inverted here: the unsigned cookie must NOT short-circuit
+// authorization, and a validly SIGNED cookie must still work until the bridge
+// hard-expires. Both directions are pinned.
+test('content-architect session: an UNSIGNED cookie no longer bypasses authentication', async () => {
   const r = req();
   (r as any).cookies = { content_architect_session: '1' };
+  userMock.mockResolvedValue({ user: null, error: 'no session' });
   const res = createMockRes();
   const access = await resolveCompanyAccess(r, res, 'company-1');
-  expect(access).toEqual({ userId: 'content_architect', role: 'CONTENT_ARCHITECT' });
-  expect(userMock).not.toHaveBeenCalled();
+  expect(access).toBeNull();
+  expect(res.statusCode).toBe(401); // falls through to real authentication, which fails
+  expect(userMock).toHaveBeenCalled(); // no short-circuit
 });
+
+/**
+ * SEC-001D: these two tests control LEGACY_BRIDGE_DRY_RUN explicitly instead of
+ * inheriting whatever the ambient environment has. A bridge-removal rehearsal
+ * is run by setting that flag and looking for failures, so a suite that changes
+ * verdict with the flag produces a spurious signal in exactly the run that is
+ * supposed to be trustworthy. Pinning both directions also proves the
+ * content-architect consumer is VISIBLE to dry-run — i.e. not an invisible
+ * bridge dependency.
+ */
+function withArchitectCookie(
+  dryRun: boolean,
+  assertion: (access: unknown, userWasCalled: () => boolean) => void,
+): () => Promise<void> {
+  return async () => {
+    const savedSecret = process.env.BRIDGE_COOKIE_SECRET;
+    const savedDryRun = process.env.LEGACY_BRIDGE_DRY_RUN;
+    process.env.BRIDGE_COOKIE_SECRET = 'sec001a-resolve-test-secret-thirty-two+';
+    if (dryRun) process.env.LEGACY_BRIDGE_DRY_RUN = '1';
+    else delete process.env.LEGACY_BRIDGE_DRY_RUN;
+
+    const { mintSignedBridgeCookieValue } = require('../../security/bridgeCookie') as
+      typeof import('../../security/bridgeCookie');
+    const { LEGACY_BRIDGE_HARD_EXPIRY_AT } = require('../../security/legacyCookieSuperAdminBridge') as
+      typeof import('../../security/legacyCookieSuperAdminBridge');
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(LEGACY_BRIDGE_HARD_EXPIRY_AT.getTime() - 60_000);
+    try {
+      const r = req();
+      (r as any).cookies = { content_architect_session: mintSignedBridgeCookieValue() };
+      const res = createMockRes();
+      const access = await resolveCompanyAccess(r, res, 'company-1');
+      assertion(access, () => userMock.mock.calls.length > 0);
+    } finally {
+      nowSpy.mockRestore();
+      if (savedSecret === undefined) delete process.env.BRIDGE_COOKIE_SECRET;
+      else process.env.BRIDGE_COOKIE_SECRET = savedSecret;
+      if (savedDryRun === undefined) delete process.env.LEGACY_BRIDGE_DRY_RUN;
+      else process.env.LEGACY_BRIDGE_DRY_RUN = savedDryRun;
+    }
+  };
+}
+
+test(
+  'content-architect session: a SIGNED cookie is still honoured (deprecated bridge, pre-expiry)',
+  withArchitectCookie(false, (access, userWasCalled) => {
+    expect(access).toEqual({ userId: 'content_architect', role: 'CONTENT_ARCHITECT' });
+    expect(userWasCalled()).toBe(false);
+  }),
+);
+
+test(
+  'content-architect session: LEGACY_BRIDGE_DRY_RUN=1 kills the SAME signed cookie (consumer is visible)',
+  withArchitectCookie(true, (access, userWasCalled) => {
+    // Falls through to real authentication, which the mock denies.
+    expect(access).toBeNull();
+    expect(userWasCalled()).toBe(true);
+  }),
+);
 
 test('no authenticated user: 401 UNAUTHORIZED, null', async () => {
   userMock.mockResolvedValue({ user: null, error: 'no session' });

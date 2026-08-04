@@ -17,6 +17,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
 
 interface PlanAnalytics {
   plan_id: string;
@@ -46,7 +47,7 @@ interface PlanAnalyticsResponse {
 
 async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
   // Check for super_admin_session cookie
-  if (req.cookies?.super_admin_session === '1') {
+  if (getLegacySuperAdminSession(req) !== null) {
     return true;
   }
 

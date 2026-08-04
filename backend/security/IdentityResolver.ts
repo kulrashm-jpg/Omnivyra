@@ -369,10 +369,21 @@ async function tryResolvePrincipalFromCanonicalSession(
   });
 }
 
-/** True if request carries either bridge cookie. Cheap presence check. */
+/**
+ * True if request carries either bridge cookie. Cheap PRESENCE check only —
+ * authority is still decided by resolveLegacyCookieSuperAdminPrincipal, which
+ * verifies the signature.
+ *
+ * SEC-001A: both cookies are now signed values (`<payload>.<sig>`), not the
+ * static `=1`. Matching only `=1` would have made this presence check blind to
+ * every validly-issued cookie, silently skipping the bridge branch. It now
+ * matches any non-empty value for either cookie so the presence signal is
+ * correct for both the signed format and a stale legacy one (which the
+ * resolver then rejects and audits).
+ */
 function hasBridgeCookie(req: NextApiRequest): boolean {
   const cookies = req.headers.cookie || '';
-  return /(?:^|; )(?:super_admin_session|content_architect_session)=1/.test(cookies);
+  return /(?:^|; )(?:super_admin_session|content_architect_session)=[^;]+/.test(cookies);
 }
 
 /**

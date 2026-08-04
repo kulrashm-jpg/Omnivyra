@@ -37,6 +37,9 @@ import {
   DEFAULT_INFRA_LIMITS,
   type InfraLimitsConfig,
 } from '../../../backend/services/adminRuntimeConfig';
+import { getLegacySuperAdminSession } from '@/backend/services/superAdminSession';
+import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
 
 // Lazy-imported to avoid loading Redis on non-worker processes
 let _applyOverride: ((l: { redisMaxCommandsPerDay?: number; redisMaxMemoryBytes?: number }) => void) | null = null;
@@ -52,8 +55,20 @@ async function getApplyOverride() {
 // Auth guard
 // ─────────────────────────────────────────────────────────────────────────────
 
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
+/**
+ * SEC-001D: identical two-arm gate to every sibling /api/super-admin/* route.
+ * This route was BRIDGE-ONLY — its sole authorization source is scheduled to
+ * die at LEGACY_BRIDGE_HARD_EXPIRY_AT, after which it would have returned 403
+ * permanently with no credential able to reopen it. The canonical arm is not a
+ * bypass: `isPlatformSuperAdmin` is a DB-backed role check requiring a real
+ * authenticated identity, and it is the migration target the bridge exists to
+ * be replaced by.
+ */
+async function isSuperAdmin(req: NextApiRequest): Promise<boolean> {
+  if (getLegacySuperAdminSession(req) !== null) return true;
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -235,7 +250,7 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
+  if (!(await isSuperAdmin(req))) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   if (req.method === 'GET')   return handleGet(req, res);
