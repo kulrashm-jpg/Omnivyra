@@ -47,3 +47,13 @@ void (async () => {
   console.log(`  complete store: ${full} (${JSON.stringify(byFam)})`);
   console.log(`  gallery projection: ${galleryFile}`);
 })().catch((e) => { console.error(e instanceof Error ? e.stack : e); process.exit(1); });
+
+// TYPECHECK-BASELINE-REDUCTION: this file has no top-level import or export, so
+// TypeScript compiles it as a GLOBAL script and its top-level declarations share
+// one scope with every other global script under tsconfig.scripts.json. That is
+// the root cause of the duplicate-identifier / duplicate-implementation errors,
+// and of the downstream mismatches where a colliding name resolved to another
+// file's type. Declaring it a module scopes its names to this file.
+// Runtime is unchanged: no static import is added and the script still executes
+// top-to-bottom exactly as before.
+export {};

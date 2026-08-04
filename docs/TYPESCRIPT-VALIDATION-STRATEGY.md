@@ -93,14 +93,27 @@ the newly covered test surface rather than pretending it is clean.
 
 | Guard | Baseline file | Scope | Current |
 |---|---|---|---|
-| `npm run typecheck:ci` (pre-existing, **required** check) | `scripts/typecheck-baseline.json` | aggregate of `tsconfig.json` (0) + `tsconfig.backend.json` (0) + `tsconfig.scripts.json` (47) | 47 actual vs baseline **47** → PASS |
+| `npm run typecheck:ci` (pre-existing, **required** check) | `scripts/typecheck-baseline.json` | aggregate of `tsconfig.json` (0) + `tsconfig.backend.json` (0) + `tsconfig.scripts.json` (**0**) | **0 actual vs baseline 0 → PASS (3/3 projects clean)** |
 | `npm run typecheck:certification` (PB-009, scalar) | `scripts/typecheck-certification-baseline.json` | `tsconfig.backend.json` = **1**, `tsconfig.backend-tests.json` = **443** (PB-011 lowered it 470→443) | at baseline |
 | `npm run typecheck:certification` (PB-011, per-error identity) | `scripts/typecheck-certification-fingerprints.json` | every individual diagnostic on both projects: 1 + 443 fingerprints | at baseline |
 
-> **Current-state note (DOC-HYGIENE-001, 2026-07-26).** The `typecheck:ci` aggregate baseline was
+> **Current-state note (TYPECHECK-CLEAN-001, 2026-08-05).** The `typecheck:ci` aggregate baseline is
+> now **0** and all three of its projects are clean (`tsconfig.json` 0 / `tsconfig.backend.json` 0 /
+> `tsconfig.scripts.json` 0). **Any future `error TS` on this surface is a true regression, not
+> accepted debt.** The residual 47 (**TD-001**) were removed by fixing three root causes with no
+> suppressions, no `any`, and no compiler-option changes: 9 scripts compiled as GLOBAL scripts
+> (no top-level import/export) were declared modules with `export {};`, which cleared 17 direct
+> collisions and 24 cascade errors; a falsy test on a boolean-discriminated union in
+> `scripts/ops/railwayEnvAudit.ts` (which cannot narrow because the root tsconfig sets
+> `strict: false`) moved to the canonical `'reason' in x` form; and `scripts/verify-materialization.ts`
+> replaced a direct `CreatorTemplate → Record<string, unknown>` assertion with the canonical double
+> assertion via `unknown` plus a `string[]` annotation. This does **not** touch the certification
+> surface, which still carries **443** genuine `tsconfig.backend-tests.json` errors under its own
+> governed re-baselining process.
+>
+> **Historical (DOC-HYGIENE-001, 2026-07-26).** The aggregate baseline was previously
 > lowered **86 → 47** after TECH-DEBT-001 brought `tsconfig.json` (frontend) and
-> `tsconfig.backend.json` (backend/API) to **0**; the remaining 47 are entirely `tsconfig.scripts.json`
-> tooling debt (TECH-DEBT register **TD-001**). The certification baseline still records
+> `tsconfig.backend.json` (backend/API) to **0**. The certification baseline still records
 > `tsconfig.backend.json` = 1 (the now-fixed `pages/api/company-profile/index.ts` error); actual is 0,
 > so a re-lock to 0 is pending (**TD-006**). Historical run figures in older PMO records (`PB-012`,
 > `PROGRAM-A-ENGINEERING-BASELINE`, `RELEASE-READINESS-001`) predate these reductions.

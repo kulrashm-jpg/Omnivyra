@@ -35,8 +35,16 @@ void (async () => {
   const REQUIRED = ['id', 'assetFamily', 'name', 'category', 'description', 'preview', 'visualLanguage', 'formDefinition', 'renderingContract', 'version', 'status', 'ownership', 'tags', 'metadata', 'designFamily', 'generationDNA', 'lockedRegions', 'editableRegions', 'adaptation'] as const;
   const incomplete: string[] = [];
   for (const t of all) {
-    const miss = REQUIRED.filter((f) => (t as Record<string, unknown>)[f] === undefined || (t as Record<string, unknown>)[f] === null);
-    if (t.assetFamily === 'infographic') { for (const f of ['semanticStructure', 'composition'] as const) if (!(t as Record<string, unknown>)[f]) miss.push(f); }
+    // `CreatorTemplate` has no index signature, so a DIRECT assertion to
+    // Record<string, unknown> is rejected (TS2352 — insufficient overlap). The
+    // repo's established form for probing a typed object dynamically is the
+    // double assertion via `unknown` (apiObservability.ts:70,
+    // creditApprovalService.ts:112, publishProcessor.ts:330).
+    // `miss` is annotated `string[]` because `REQUIRED.filter()` otherwise infers
+    // the narrow literal union of REQUIRED's members, which cannot accept the
+    // infographic-only keys pushed on the next line (TS2345).
+    const miss: string[] = REQUIRED.filter((f) => (t as unknown as Record<string, unknown>)[f] === undefined || (t as unknown as Record<string, unknown>)[f] === null);
+    if (t.assetFamily === 'infographic') { for (const f of ['semanticStructure', 'composition'] as const) if (!(t as unknown as Record<string, unknown>)[f]) miss.push(f); }
     if (miss.length) incomplete.push(`${t.id}: missing ${miss.join(',')}`);
   }
   console.log(`\nRULE 4 completeness: ${incomplete.length === 0 ? 'PASS' : 'FAIL'} (${incomplete.length} incomplete)`);
@@ -109,3 +117,13 @@ void (async () => {
   console.log(`\n=== OVERALL: ${pass ? 'PASS' : 'FAIL'} ===`);
   process.exit(pass ? 0 : 1);
 })().catch((e) => { console.error(e instanceof Error ? e.stack : e); process.exit(1); });
+
+// TYPECHECK-BASELINE-REDUCTION: this file has no top-level import or export, so
+// TypeScript compiles it as a GLOBAL script and its top-level declarations share
+// one scope with every other global script under tsconfig.scripts.json. That is
+// the root cause of the duplicate-identifier / duplicate-implementation errors,
+// and of the downstream mismatches where a colliding name resolved to another
+// file's type. Declaring it a module scopes its names to this file.
+// Runtime is unchanged: no static import is added and the script still executes
+// top-to-bottom exactly as before.
+export {};

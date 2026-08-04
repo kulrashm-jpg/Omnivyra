@@ -246,3 +246,13 @@ main().catch((err) => {
   console.error('[planner-dist-validation] FATAL:', err);
   process.exit(1);
 });
+
+// TYPECHECK-BASELINE-REDUCTION: this file has no top-level import or export, so
+// TypeScript compiles it as a GLOBAL script and its top-level declarations share
+// one scope with every other global script under tsconfig.scripts.json. That is
+// the root cause of the duplicate-identifier / duplicate-implementation errors,
+// and of the downstream mismatches where a colliding name resolved to another
+// file's type. Declaring it a module scopes its names to this file.
+// Runtime is unchanged: no static import is added and the script still executes
+// top-to-bottom exactly as before.
+export {};

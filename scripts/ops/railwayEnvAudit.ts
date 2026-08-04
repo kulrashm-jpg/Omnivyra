@@ -83,11 +83,18 @@ function fetchVariables(): Record<string, string> | { error: string } {
 async function main(): Promise<number> {
   const auth = authCheck();
   if (!auth.ok) {
+    // The repo compiles with `strict: false` (tsconfig.json), so strictNullChecks
+    // is off and a falsy test on the `ok` discriminant does NOT narrow this union.
+    // `'reason' in auth` narrows structurally and does — the same pattern used by
+    // AuthorizationService.ts:170, legacyCookieSuperAdminBridge.ts:91 and
+    // creatorAssetValidationService.ts:84. `authCheck()` always sets `reason` when
+    // `ok` is false, so the fallback is unreachable and output is unchanged.
+    const reason = 'reason' in auth ? auth.reason : 'unknown';
     if (JSON_OUTPUT) {
-      console.log(JSON.stringify({ status: 'RAILWAY_AUTH_FAILED', detail: auth.reason }, null, 2));
+      console.log(JSON.stringify({ status: 'RAILWAY_AUTH_FAILED', detail: reason }, null, 2));
     } else {
       console.error('RAILWAY_AUTH_FAILED');
-      console.error(`  ${auth.reason}`);
+      console.error(`  ${reason}`);
       console.error('  Regenerate RAILWAY_TOKEN in the Railway dashboard and update .env.local.');
     }
     return 2;
