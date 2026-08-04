@@ -219,9 +219,41 @@ interface BlogPostDetail {
  * HTML; previously it sat behind a client-fetch loading gate and no crawler
  * ever saw it.
  */
+/**
+ * RESILIENCE-BLOG-001 — the prebuild query is FAIL-OPEN.
+ *
+ * This query is an optimization, not a correctness requirement: `fallback:
+ * 'blocking'` already generates any slug that was not prebuilt on its first
+ * request, and `getStaticProps` re-fetches the post by slug independently, so
+ * an on-demand page is byte-identical to a prebuilt one. Nothing else consumes
+ * this list — the sitemap and RSS routes query the database themselves at
+ * request time, so SEO coverage does not derive from these paths.
+ *
+ * Previously a database blip during `next build` failed the entire deploy for
+ * the sake of that optimization. On failure we now log once and return no
+ * prebuilt paths; every page is then produced by the unchanged ISR path.
+ *
+ * The SUCCESS path is untouched — same import, same call, same mapping, same
+ * fallback. Only the failure path changed.
+ */
+let prebuildFailureLogged = false;
+
 export const getStaticPaths: GetStaticPaths = async () => {
-  const { listRecentPublishedSlugs } = await import('../../backend/services/blog/publicBlogRead');
-  const slugs = await listRecentPublishedSlugs(50);
+  let slugs: string[] = [];
+  try {
+    const { listRecentPublishedSlugs } = await import('../../backend/services/blog/publicBlogRead');
+    slugs = await listRecentPublishedSlugs(50);
+  } catch (error) {
+    // Log once per process: this runs once per build, but dev re-invokes it.
+    if (!prebuildFailureLogged) {
+      prebuildFailureLogged = true;
+      console.warn(
+        '[blog] getStaticPaths prebuild skipped — falling back to on-demand ISR generation:',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    slugs = [];
+  }
   return {
     paths: slugs.map((slug) => ({ params: { slug } })),
     fallback: 'blocking',
