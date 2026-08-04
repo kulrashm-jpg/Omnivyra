@@ -113,6 +113,7 @@
     "verify:auth001-migration": "node scripts/verify-auth001-migration-readiness.js",
     "verify:onboard001-domains": "node scripts/verify-onboard001-domain-reconciliation.js",
     "predeploy:check": "node scripts/predeploy-check.js",
+    "smoke:intelligence": "tsx scripts/smoke-intelligence.ts",
     "verify:render-parity": "node scripts/verify-render-parity.js",
     "verify:vercel-render-parity": "node scripts/verify-vercel-render-parity.js",
     "check:file-lengths": "node scripts/check-file-lengths.js",
