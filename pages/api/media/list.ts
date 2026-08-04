@@ -3,30 +3,44 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 /**
  * List Media Files API
  * GET /api/media/list
- * 
+ *
+ * Auth: authenticated user. Results are ALWAYS scoped to the caller's own
+ * media; a platform SUPER_ADMIN may target another owner via `user_id`.
+ *
+ * MEDIA-SEC-001. This route previously had NO authentication and treated
+ * `user_id` as an OPTIONAL client-supplied filter. Omitting it made
+ * `listMediaFiles` run `select('*')` with no predicate on the SERVICE-ROLE
+ * client — so an anonymous request returned the most recent media rows across
+ * every tenant, and supplying an arbitrary `user_id` enumerated that user.
+ * The owner is now derived from the authenticated session, never from input.
+ *
  * Query parameters:
- * - user_id (optional)
- * - campaign_id (optional)
+ * - user_id (platform SUPER_ADMIN only; ignored for everyone else)
+ * - campaign_id (optional, filters within the caller's own media)
  * - media_type (optional: image, video, audio, document)
- * - limit (optional, default: 50)
+ * - limit (optional, default: 50, max 200)
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { listMediaFiles } from '../../../backend/services/mediaService';
+import { requireMediaCaller, resolveListOwnerId } from '../../../backend/services/mediaAuthorization';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const caller = await requireMediaCaller(req, res);
+  if (!caller) return;
+
   try {
     const { user_id, campaign_id, media_type, limit } = req.query;
 
     const options: any = {};
 
-    if (user_id && typeof user_id === 'string') {
-      options.userId = user_id;
-    }
+    // Never optional, never client-controlled: the tenant predicate is the
+    // authenticated identity. This is what makes an unscoped read impossible.
+    options.userId = resolveListOwnerId(caller, user_id);
 
     if (campaign_id && typeof campaign_id === 'string') {
       options.campaignId = campaign_id;
@@ -39,11 +53,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       options.mediaType = media_type as any;
     }
 
-    if (limit && typeof limit === 'string') {
-      options.limit = parseInt(limit, 10);
-    } else {
-      options.limit = 50; // Default limit
-    }
+    // Bounded: an unbounded/NaN limit would either error or let one request
+    // pull the entire owner's history.
+    const parsedLimit = typeof limit === 'string' ? parseInt(limit, 10) : NaN;
+    options.limit = Number.isFinite(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 200)
+      : 50;
 
     const mediaFiles = await listMediaFiles(options);
 
