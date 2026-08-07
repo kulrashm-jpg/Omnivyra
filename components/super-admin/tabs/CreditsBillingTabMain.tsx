@@ -104,12 +104,12 @@ export function fmtDate(iso: string | null | undefined): string {
  * middleware to return HTTP 409 IDEMPOTENCY_IN_PROGRESS or
  * IDEMPOTENCY_CONFLICT on the second submission.
  */
-export function makeIdemKey(prefix: string): string {
-  const haveUuid = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function';
-  return haveUuid
-    ? `${prefix}-${crypto.randomUUID()}`
-    : `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
+// Canonical implementation now lives in lib/idempotency.ts so tenant-facing
+// callers reuse it instead of duplicating it. Imported and re-exported here
+// unchanged so this module's existing importers (CreditsBillingTabPanels) and
+// its own local use below are both unaffected.
+import { makeIdemKey } from '../../../lib/idempotency';
+export { makeIdemKey };
 
 function pillClass(state: string): string {
   switch (state) {

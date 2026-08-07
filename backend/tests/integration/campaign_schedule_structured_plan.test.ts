@@ -1,3 +1,35 @@
+import {
+  idempotencyHeaders,
+  makeAssertable,
+  resetIdempotency,
+  withIdempotencyTable,
+} from '../utils/idempotency';
+
+// WS1-E6-T006: this endpoint adopted the caller-scoped withIdempotency
+// middleware. AUTHENTICATION only — the endpoint's own authorization still
+// runs inside the handler and is still asserted below.
+jest.mock('../../security/IdentityResolver', () =>
+  require('../utils/idempotency').identityResolverMock());
+
+const requireCampaignAccessMock = jest.fn();
+// Canonical repository pattern (see backend/tests/unit/creatorScheduleEarlyRejection.test.ts
+// and opt010Wave2.test.ts): mock campaignAccessService and resolve the real
+// CampaignAccessResult shape. Authorization still RUNS in the handler — this
+// supplies an authorized caller, exactly as those suites do. No capability
+// structure is invented and no authorization primitive is modified.
+jest.mock('../../services/campaignAccessService', () => ({
+  requireCampaignAccess: (...args: unknown[]) => requireCampaignAccessMock(...args),
+}));
+
+
+jest.mock('../../db/writeOwner', () => {
+  const actual = jest.requireActual('../../db/writeOwner');
+  return {
+    ...actual,
+    ownedDbTable: jest.fn(require('../utils/idempotency').withIdempotencyTable(actual.ownedDbTable)),
+  };
+});
+
 import handler from '../../../pages/api/campaigns/[id]/schedule-structured-plan';
 import { scheduleStructuredPlan } from '../../services/structuredPlanScheduler';
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -36,8 +68,15 @@ jest.mock('../../services/SchedulerLockService', () => ({
 function chain(result: { data: any; error: any }) {
   return {
     select: jest.fn().mockReturnThis(),
+    insert: jest.fn().mockReturnThis(),
+    update: jest.fn().mockReturnThis(),
+    upsert: jest.fn().mockReturnThis(),
+    delete: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
+    in: jest.fn().mockReturnThis(),
+    order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
+    range: jest.fn().mockReturnThis(),
     maybeSingle: jest.fn().mockResolvedValue(result),
   };
 }
@@ -52,6 +91,15 @@ const createMockRes = () => {
 
 describe('Structured plan scheduling API', () => {
   beforeEach(() => {
+    // Echo back the campaignId the handler passed, mirroring the real
+    // requireCampaignAccess contract.
+    requireCampaignAccessMock.mockImplementation(async (_req: any, _res: any, campaignId: string) => ({
+      userId: 'test-caller-1',
+      companyId: 'company-456',
+      campaignId,
+      campaignAuth: { role: 'COMPANY_ADMIN' },
+    }));
+    resetIdempotency();
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'campaigns') {
         return chain({
@@ -78,7 +126,7 @@ describe('Structured plan scheduling API', () => {
     });
 
     const req = {
-      method: 'POST',
+      method: 'POST', headers: idempotencyHeaders(),
       query: { id: 'campaign-123' },
       body: {
         plan: {
@@ -100,7 +148,7 @@ describe('Structured plan scheduling API', () => {
       },
     } as unknown as NextApiRequest;
 
-    const res = createMockRes();
+    const res = makeAssertable(createMockRes());
 
     await handler(req, res);
 

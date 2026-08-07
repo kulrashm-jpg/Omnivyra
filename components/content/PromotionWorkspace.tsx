@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2, RefreshCw, Save, Calendar, Send, X, AlertTriangle, CheckCircle2, Trash2 } from 'lucide-react';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { createIdempotentOperation } from '../../lib/idempotency';
 import {
   PROMOTION_URL_REQUIRED_MESSAGE,
   promotionCharLimitFor,
@@ -268,9 +269,13 @@ export default function PromotionWorkspace({
       const postId = stageData?.id;
       if (!postId) throw new Error('Scheduler did not return a post id.');
 
+      // OR-07 Action 1: one key per logical publish. `postId` is minted by the
+      // scheduler call above on every run, so each attempt is a genuinely new
+      // operation and correctly gets its own key.
+      const publishOp = createIdempotentOperation(`social-publish-${postId}`);
       const pubRes = await fetchWithAuth('/api/social/publish', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...publishOp.headers },
         body: JSON.stringify({ post_id: postId }),
       });
       const pubData = await pubRes.json().catch(() => ({}));

@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { NextRouter } from 'next/router';
+import { createIdempotentOperation } from '../lib/idempotency';
 import { htmlToPlainText } from '@/components/RichTextEditor';
 import { apiFetch } from '@/lib/apiFetch';
 import type { ScheduleItem } from '../types/activityWorkspace';
@@ -223,9 +224,12 @@ export function useActivityWorkspaceRefinementOps({
 
     setSchedulingByScheduleId((prev) => ({ ...prev, [schedule.id]: true }));
     try {
+      // OR-07 Action 1: keyed on the schedule row being actioned, so a retry of
+      // THIS scheduling reuses the key.
+      const scheduleOp = createIdempotentOperation(`aw-schedule-${schedule.id}`);
       const response = await apiFetch('/api/activity-workspace/schedule', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...scheduleOp.headers },
         body: JSON.stringify({
           campaignId,
           companyId,

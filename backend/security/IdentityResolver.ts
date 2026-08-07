@@ -246,6 +246,52 @@ function diffSeconds(thenIso: string, now: Date): number {
 export async function resolvePrincipal(
   req: NextApiRequest,
 ): Promise<ResolvedPrincipalResult> {
+  // ── Request-local reuse (OR-09 post-audit performance finding) ────────────
+  // Resolution costs one Supabase auth round-trip (5 s timeout) plus ~10 DB
+  // reads: session, capabilities, MFA factors, step-up, device, user row. On a
+  // route that adopts withIdempotency AND authorizes in its handler, this ran
+  // TWICE per request — once for the idempotency scoping key, once inside the
+  // authorization primitive.
+  //
+  // The memo hangs off the request object itself, so it is per-request BY
+  // CONSTRUCTION: a new request is a new object. It cannot span requests, users
+  // or processes, and needs no global map or ALS entry to reason about. The
+  // IN-FLIGHT PROMISE is stored, so two concurrent callers on one request share
+  // a single resolution rather than racing two.
+  //
+  // Semantics are unchanged: a principal is derived from the request, and the
+  // request is immutable for its own lifetime — re-resolving it always produced
+  // the same answer. Nothing in the repository re-resolves expecting fresh
+  // state (verified: requireStepUp operates on an already-resolved principal).
+  const memoized = (req as RequestWithPrincipalMemo)[PRINCIPAL_MEMO];
+  if (memoized) return memoized;
+
+  const inFlight = resolvePrincipalUncached(req);
+  try {
+    Object.defineProperty(req, PRINCIPAL_MEMO, {
+      value: inFlight,
+      enumerable: false,
+      configurable: true,
+      writable: false,
+    });
+  } catch {
+    // A frozen/proxied request simply resolves twice, as before. Never fatal.
+  }
+  return inFlight;
+}
+
+/** Per-request memo slot. Symbol-keyed and non-enumerable so it cannot leak
+ *  into serialization, logging, or request-hashing. */
+const PRINCIPAL_MEMO = Symbol.for('omnivyra.identity.principalMemo');
+type RequestWithPrincipalMemo = NextApiRequest & {
+  [PRINCIPAL_MEMO]?: Promise<ResolvedPrincipalResult>;
+};
+
+/** The unchanged resolution body. Behaviour is byte-identical to the pre-memo
+ *  implementation; only its invocation is deduplicated per request. */
+async function resolvePrincipalUncached(
+  req: NextApiRequest,
+): Promise<ResolvedPrincipalResult> {
   // 1. Try Supabase-backed identity first.
   const auth = await resolveAuthenticatedUser(req);
   if (auth.error === null) {

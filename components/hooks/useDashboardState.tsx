@@ -1,6 +1,7 @@
 /** useDashboardState — composition: core state hook + effects/handlers + the original return. */
 import React from 'react';
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
+import { createIdempotentOperation } from '../../lib/idempotency';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../CompanyContext';
 import { getAuthToken } from '../../utils/getAuthToken';
@@ -204,9 +205,12 @@ export function useDashboardState() {
 
   const handlePublishNow = async (postId: string): Promise<{ success: boolean; error?: string }> => {
     try {
+      // OR-07 Action 1: keyed on the post being published. A retry of
+      // "publish this post" reuses the key; a different post gets its own.
+      const publishOp = createIdempotentOperation(`social-publish-${postId}`);
       const res = await fetchWithAuth('/api/social/publish', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...publishOp.headers },
         body: JSON.stringify({ post_id: postId }),
       });
       const data = await res.json();

@@ -4,6 +4,7 @@
  * Features: Regenerate (per week), click activity → Activity Content Workspace.
  */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { createIdempotentOperation } from '../../lib/idempotency';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { AlertTriangle, ArrowLeft, Calendar, CheckCircle, Loader2, Sparkles, X } from 'lucide-react';
@@ -246,9 +247,12 @@ export default function CampaignDailyPlanPage() {
     setError(null);
     setNotice(null);
     try {
+      // OR-07 Action 1: keyed on the campaign, so retrying this repurpose-and-
+      // schedule reuses the key.
+      const repurposeOp = createIdempotentOperation(`campaign-repurpose-schedule-${id}`);
       const res = await fetchWithAuth(`/api/campaigns/${id}/repurpose-and-schedule`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...repurposeOp.headers },
         body: JSON.stringify({}),
       });
       const data = await res.json().catch(() => ({}));

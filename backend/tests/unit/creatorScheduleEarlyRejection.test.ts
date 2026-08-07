@@ -1,3 +1,24 @@
+import {
+  idempotencyHeaders,
+  makeAssertable,
+  resetIdempotency,
+  withIdempotencyTable,
+} from '../utils/idempotency';
+
+// WS1-E6-T006: this endpoint adopted the caller-scoped withIdempotency
+// middleware. AUTHENTICATION only — the endpoint's own authorization still
+// runs inside the handler and is still asserted below.
+jest.mock('../../security/IdentityResolver', () =>
+  require('../utils/idempotency').identityResolverMock());
+
+jest.mock('../../db/writeOwner', () => {
+  const actual = jest.requireActual('../../db/writeOwner');
+  return {
+    ...actual,
+    ownedDbTable: jest.fn(require('../utils/idempotency').withIdempotencyTable(actual.ownedDbTable)),
+  };
+});
+
 function createRes() {
   return {
     statusCode: 200,
@@ -156,6 +177,7 @@ jest.mock('../../services/campaignScheduleEligibilityService', () => ({
 
 describe('creator schedule early rejection', () => {
   beforeEach(() => {
+    resetIdempotency();
     jest.clearAllMocks();
     setSupabaseRows('reel');
     isGovernanceLocked.mockResolvedValue(false);
@@ -176,11 +198,11 @@ describe('creator schedule early rejection', () => {
     // poisoning the schedule path for autonomous rows.
     const { default: handler } = await import('../../../pages/api/campaigns/[id]/schedule-structured-plan');
     const req = {
-      method: 'POST',
+      method: 'POST', headers: idempotencyHeaders(),
       query: { id: 'campaign-1' },
       body: { plan: { weeks: [{ week: 1 }] } },
     } as any;
-    const res = createRes() as any;
+    const res = makeAssertable(createRes()) as any;
 
     await handler(req, res);
 
@@ -192,11 +214,11 @@ describe('creator schedule early rejection', () => {
   test('repurpose-and-schedule accepts attachment-required creator rows under per-row eligibility', async () => {
     const { default: handler } = await import('../../../pages/api/campaigns/[id]/repurpose-and-schedule');
     const req = {
-      method: 'POST',
+      method: 'POST', headers: idempotencyHeaders(),
       query: { id: 'campaign-1' },
       body: {},
     } as any;
-    const res = createRes() as any;
+    const res = makeAssertable(createRes()) as any;
 
     await handler(req, res);
 
@@ -213,11 +235,11 @@ describe('creator schedule early rejection', () => {
     setSupabaseRows('infographic');
     const { default: handler } = await import('../../../pages/api/campaigns/[id]/schedule-structured-plan');
     const req = {
-      method: 'POST',
+      method: 'POST', headers: idempotencyHeaders(),
       query: { id: 'campaign-1' },
       body: { plan: { weeks: [{ week: 1, content_type_mix: ['infographic'] }] } },
     } as any;
-    const res = createRes() as any;
+    const res = makeAssertable(createRes()) as any;
 
     await handler(req, res);
 

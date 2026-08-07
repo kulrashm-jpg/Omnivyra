@@ -11,6 +11,20 @@
  *  - week/day/slot moves update only the canonical records
  */
 
+import {
+  idempotencyHeaders,
+  makeAssertable,
+  resetIdempotency,
+  withIdempotencyTable,
+} from '../utils/idempotency';
+
+// WS1-E6-T006: this endpoint adopted the caller-scoped withIdempotency
+// middleware. AUTHENTICATION only — the endpoint's own authorization still
+// runs inside the handler and is still asserted below.
+jest.mock('../../security/IdentityResolver', () =>
+  require('../utils/idempotency').identityResolverMock());
+
+
 function createRes() {
   return {
     statusCode: 200,
@@ -56,7 +70,7 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 
 jest.mock('../../db/writeOwner', () => ({
-  ownedDbTable: jest.fn((table: string) => {
+  ownedDbTable: jest.fn(require('../utils/idempotency').withIdempotencyTable((table: string) => {
     let updatePayload: Row | null = null;
     const filters: Row = {};
     const api: any = {
@@ -69,7 +83,7 @@ jest.mock('../../db/writeOwner', () => ({
       },
     };
     return api;
-  }),
+  })),
 }));
 
 jest.mock('../../services/userContextService', () => ({
@@ -146,12 +160,13 @@ function setRow(over: Row = {}) {
 }
 
 async function post(body: Row) {
-  const res = createRes();
-  await handler({ method: 'POST', query: { id: 'plan-1' }, body } as any, res as any);
+  const res = makeAssertable(createRes());
+  await handler({ method: 'POST', headers: idempotencyHeaders(), query: { id: 'plan-1' }, body } as any, res as any);
   return res;
 }
 
 beforeEach(() => {
+    resetIdempotency();
   setRow();
   occupantRows = [];
   socialAccountRow = { id: 'sa-new' };

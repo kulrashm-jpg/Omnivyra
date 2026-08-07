@@ -1,5 +1,6 @@
 /** useMultiPlatformSchedulerController — state/handlers, verbatim. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createIdempotentOperation } from '../lib/idempotency';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -698,7 +699,9 @@ export function useMultiPlatformSchedulerController() {
         error: `Content is over ${selectedOption.label} limit by ${limitCheck.exceeded} characters (${limitCheck.currentCount} / ${limitCheck.maxCount}). Trim the post and try again.`,
       };
     }
-    // WS4 — async asset safety preflight. An attached creator visual can still
+    // Creator-WS4 (creator asset workstream — NOT the Lead Intelligence programme's
+    // WS-4 Content Generation Runtime; the two numbering schemes collide).
+    // Async asset safety preflight. An attached creator visual can still
     // be rendering (async render not finished) or can have failed its text-fit
     // check. Publishing/scheduling either way ships a broken or missing image,
     // so we block with an actionable message BEFORE the network calls. We
@@ -713,7 +716,8 @@ export function useMultiPlatformSchedulerController() {
     return { ok: true as const };
   };
 
-  // WS4 — shared preflight helper. Returns the first blocking reason (a message)
+  // Creator-WS4 (creator asset workstream, not programme WS-4).
+  // Shared preflight helper. Returns the first blocking reason (a message)
   // across all attached creator assets, or null when everything is safe. Kept
   // out of ensureDraftAndPlatform's body so the intent (render-pending vs
   // text-overflow) reads clearly.
@@ -1104,10 +1108,13 @@ export function useMultiPlatformSchedulerController() {
       }
 
       if (mode === 'publish') {
+        // OR-07 Action 1: key derived from the scheduled post being published,
+        // so a retry of THIS publish reuses it while a different post gets its own.
+        const publishOp = createIdempotentOperation(`social-publish-${scheduledPostId}`);
         const publishRes = await fetch('/api/social/publish', {
           method: 'POST',
           credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...publishOp.headers },
           body: JSON.stringify({ post_id: scheduledPostId }),
         });
         const publishData = await publishRes.json().catch(() => ({}));

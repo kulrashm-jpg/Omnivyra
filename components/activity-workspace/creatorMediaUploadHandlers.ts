@@ -17,6 +17,7 @@
  * their own; auto-scheduling happens server-side (autoScheduleReadyCreatorRowById).
  */
 
+import { createIdempotentOperation } from '../../lib/idempotency';
 import {
   isAttachmentRequiredFormat,
   normalizeCreatorFormat,
@@ -145,10 +146,13 @@ export async function postReschedule(input: {
   expectedRevision?: number;
 }): Promise<UploadMediaResult> {
   try {
+    // OR-07 Action 1: keyed on the daily-plan row, so a retried reschedule of
+    // the same row reuses the key.
+    const rescheduleOp = createIdempotentOperation(`aw-reschedule-${input.dailyPlanId}`);
     const response = await fetch(`/api/activity-workspace/${encodeURIComponent(input.dailyPlanId)}/reschedule`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...rescheduleOp.headers },
       body: JSON.stringify({
         ...(input.mediaUrl ? { media_url: input.mediaUrl } : {}),
         ...(input.scheduledAt ? { scheduled_at: input.scheduledAt } : {}),
@@ -259,10 +263,12 @@ export async function discardPersistedUploadSession(input: {
 
 export async function postUnschedule(input: { dailyPlanId: string; reason?: string; expectedRevision?: number }): Promise<UploadMediaResult> {
   try {
+    // OR-07 Action 1: keyed on the daily-plan row being unscheduled.
+    const unscheduleOp = createIdempotentOperation(`aw-unschedule-${input.dailyPlanId}`);
     const response = await fetch(`/api/activity-workspace/${encodeURIComponent(input.dailyPlanId)}/unschedule`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...unscheduleOp.headers },
       body: JSON.stringify({
         ...(input.reason ? { reason: input.reason } : {}),
         ...(typeof input.expectedRevision === 'number' ? { expected_revision: input.expectedRevision } : {}),

@@ -12,6 +12,20 @@
  *   - validation failure → row → upload_failed; scheduled_post NOT updated
  */
 
+import {
+  idempotencyHeaders,
+  makeAssertable,
+  resetIdempotency,
+  withIdempotencyTable,
+} from '../utils/idempotency';
+
+// WS1-E6-T006: this endpoint adopted the caller-scoped withIdempotency
+// middleware. AUTHENTICATION only — the endpoint's own authorization still
+// runs inside the handler and is still asserted below.
+jest.mock('../../security/IdentityResolver', () =>
+  require('../utils/idempotency').identityResolverMock());
+
+
 function createRes() {
   return {
     statusCode: 200,
@@ -78,7 +92,10 @@ function chain(table: string) {
 }
 
 jest.mock('../../db/writeOwner', () => ({
-  ownedDbTable: jest.fn((table: string) => chain(table)),
+  // withIdempotency stores its record in api_idempotency_keys via this same
+  // accessor; the wrapper serves that one table a stateful double and passes
+  // every other table through to this suite's own double, unchanged.
+  ownedDbTable: jest.fn(require('../utils/idempotency').withIdempotencyTable((table: string) => chain(table))),
 }));
 
 jest.mock('../../services/userContextService', () => ({
@@ -157,14 +174,15 @@ function setScheduledRow(opts?: { revision?: number; lifecycle?: string }) {
 
 async function callHandler(body: Record<string, any>) {
   const { default: handler } = await import('../../../pages/api/activity-workspace/[id]/reschedule');
-  const req: any = { method: 'POST', query: { id: 'plan-1' }, body };
-  const res = createRes() as any;
+  const req: any = { method: 'POST', headers: idempotencyHeaders(), query: { id: 'plan-1' }, body };
+  const res = makeAssertable(createRes()) as any;
   await handler(req, res);
   return res;
 }
 
 describe('reschedule API', () => {
   beforeEach(() => {
+    resetIdempotency();
     jest.clearAllMocks();
     ownedUpdates.length = 0;
     queueCalls.cancel.length = 0;
@@ -316,8 +334,8 @@ describe('reschedule API', () => {
 
   test('non-POST method rejected with 405', async () => {
     const { default: handler } = await import('../../../pages/api/activity-workspace/[id]/reschedule');
-    const req: any = { method: 'GET', query: { id: 'plan-1' }, body: {} };
-    const res = createRes() as any;
+    const req: any = { method: 'GET', headers: {}, query: { id: 'plan-1' }, body: {} };
+    const res = makeAssertable(createRes()) as any;
     await handler(req, res);
     expect(res.status).toHaveBeenCalledWith(405);
   });

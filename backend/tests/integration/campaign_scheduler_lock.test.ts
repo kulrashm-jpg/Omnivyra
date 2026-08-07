@@ -4,6 +4,39 @@
  * SCHEDULER_LOCK_ACQUIRED, SCHEDULER_LOCK_RELEASED, SCHEDULER_LOCK_BLOCKED.
  */
 
+import {
+  idempotencyHeaders,
+  makeAssertable,
+  resetIdempotency,
+  withIdempotencyTable,
+} from '../utils/idempotency';
+
+// WS1-E6-T006: this endpoint adopted the caller-scoped withIdempotency
+// middleware. AUTHENTICATION only — the endpoint's own authorization still
+// runs inside the handler and is still asserted below.
+jest.mock('../../security/IdentityResolver', () =>
+  require('../utils/idempotency').identityResolverMock());
+
+const requireCampaignAccessMock = jest.fn();
+// Canonical repository pattern (see backend/tests/unit/creatorScheduleEarlyRejection.test.ts
+// and opt010Wave2.test.ts): mock campaignAccessService and resolve the real
+// CampaignAccessResult shape. Authorization still RUNS in the handler — this
+// supplies an authorized caller, exactly as those suites do. No capability
+// structure is invented and no authorization primitive is modified.
+jest.mock('../../services/campaignAccessService', () => ({
+  requireCampaignAccess: (...args: unknown[]) => requireCampaignAccessMock(...args),
+}));
+
+
+jest.mock('../../db/writeOwner', () => {
+  const actual = jest.requireActual('../../db/writeOwner');
+  return {
+    ...actual,
+    ownedDbTable: jest.fn(require('../utils/idempotency').withIdempotencyTable(actual.ownedDbTable)),
+  };
+});
+
+
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
 }));
@@ -55,19 +88,38 @@ const CAMPAIGN_ID = 'campaign-lock-123';
 const COMPANY_ID = 'company-lock-456';
 
 function chain(result: { data: any; error: any }) {
-  const q: any = {
-    select: jest.fn().mockReturnThis(),
-    eq: jest.fn().mockReturnThis(),
-    limit: jest.fn().mockReturnThis(),
-    maybeSingle: jest.fn().mockResolvedValue(result),
-  };
+const q: any = {
+      // Full PostgREST chain surface, mirroring backend/tests/utils/createSupabaseMock.
+      // Filters and modifiers chain; terminals resolve. Only members the handlers
+      // actually exercise are reachable — none of these invent new capability.
+      select: jest.fn().mockReturnThis(),
+      insert: jest.fn().mockReturnThis(),
+      update: jest.fn().mockReturnThis(),
+      delete: jest.fn().mockReturnThis(),
+      upsert: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      neq: jest.fn().mockReturnThis(),
+      is: jest.fn().mockReturnThis(),
+      in: jest.fn().mockReturnThis(),
+      or: jest.fn().mockReturnThis(),
+      not: jest.fn().mockReturnThis(),
+      gt: jest.fn().mockReturnThis(),
+      gte: jest.fn().mockReturnThis(),
+      lt: jest.fn().mockReturnThis(),
+      lte: jest.fn().mockReturnThis(),
+      order: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      range: jest.fn().mockReturnThis(),
+      single: jest.fn().mockResolvedValue(result),
+      maybeSingle: jest.fn().mockResolvedValue(result),
+    };
   (q as any).then = (resolve: any) => Promise.resolve(result).then(resolve);
   return q;
 }
 
 function createReq(overrides: Partial<{ query: any; body: any; method: string }> = {}) {
   return {
-    method: 'POST',
+    method: 'POST', headers: idempotencyHeaders(),
     query: { id: CAMPAIGN_ID },
     body: {
       plan: {
@@ -106,6 +158,15 @@ function setupCampaign(campaign: {
 
 describe('Scheduler Lock (Stage 19)', () => {
   beforeEach(() => {
+    // Echo back the campaignId the handler passed, mirroring the real
+    // requireCampaignAccess contract.
+    requireCampaignAccessMock.mockImplementation(async (_req: any, _res: any, campaignId: string) => ({
+      userId: 'test-caller-1',
+      companyId: 'company-456',
+      campaignId,
+      campaignAuth: { role: 'COMPANY_ADMIN' },
+    }));
+    resetIdempotency();
     jest.clearAllMocks();
     (acquireSchedulerLock as jest.Mock).mockResolvedValue('lock-uuid-' + Date.now());
     (releaseSchedulerLock as jest.Mock).mockResolvedValue(undefined);
@@ -124,7 +185,7 @@ describe('Scheduler Lock (Stage 19)', () => {
 
   it('first execution acquires lock', async () => {
     const req = createReq();
-    const res = createRes();
+    const res = makeAssertable(createRes());
     await handler(req, res);
 
     expect(acquireSchedulerLock).toHaveBeenCalledWith(CAMPAIGN_ID);
@@ -137,7 +198,7 @@ describe('Scheduler Lock (Stage 19)', () => {
     );
 
     const req = createReq();
-    const res = createRes();
+    const res = makeAssertable(createRes());
     await handler(req, res);
 
     expect(res.statusCode).toBe(409);
@@ -152,7 +213,7 @@ describe('Scheduler Lock (Stage 19)', () => {
     (acquireSchedulerLock as jest.Mock).mockResolvedValue('new-lock-after-stale');
 
     const req = createReq();
-    const res = createRes();
+    const res = makeAssertable(createRes());
     await handler(req, res);
 
     expect(acquireSchedulerLock).toHaveBeenCalledWith(CAMPAIGN_ID);
@@ -165,7 +226,7 @@ describe('Scheduler Lock (Stage 19)', () => {
     (acquireSchedulerLock as jest.Mock).mockResolvedValue(lockId);
 
     const req = createReq();
-    const res = createRes();
+    const res = makeAssertable(createRes());
     await handler(req, res);
 
     expect(releaseSchedulerLock).toHaveBeenCalledWith(CAMPAIGN_ID, lockId);
@@ -178,7 +239,7 @@ describe('Scheduler Lock (Stage 19)', () => {
     (scheduleStructuredPlan as jest.Mock).mockRejectedValue(new Error('Insert failed'));
 
     const req = createReq();
-    const res = createRes();
+    const res = makeAssertable(createRes());
     await handler(req, res);
 
     expect(releaseSchedulerLock).toHaveBeenCalledWith(CAMPAIGN_ID, lockId);
@@ -190,7 +251,7 @@ describe('Scheduler Lock (Stage 19)', () => {
     (acquireSchedulerLock as jest.Mock).mockResolvedValue(lockId);
 
     const req = createReq();
-    const res = createRes();
+    const res = makeAssertable(createRes());
     await handler(req, res);
 
     const calls = (recordGovernanceEvent as jest.Mock).mock.calls.filter(
@@ -208,7 +269,7 @@ describe('Scheduler Lock (Stage 19)', () => {
     (acquireSchedulerLock as jest.Mock).mockResolvedValue(lockId);
 
     const req = createReq();
-    const res = createRes();
+    const res = makeAssertable(createRes());
     await handler(req, res);
 
     const calls = (recordGovernanceEvent as jest.Mock).mock.calls.filter(
@@ -227,7 +288,7 @@ describe('Scheduler Lock (Stage 19)', () => {
     );
 
     const req = createReq();
-    const res = createRes();
+    const res = makeAssertable(createRes());
     await handler(req, res);
 
     const calls = (recordGovernanceEvent as jest.Mock).mock.calls.filter(

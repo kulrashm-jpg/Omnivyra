@@ -27,6 +27,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
+import { createIdempotentOperation } from '../../lib/idempotency';
 import type { GetServerSideProps } from 'next';
 import BillingProviderShell, { type ShellProvider } from '../../components/billing/BillingProviderShell';
 import BillingProfileCaptureForm, { type BillingProfileCaptureValues } from '../../components/billing/BillingProfileCaptureForm';
@@ -107,9 +108,13 @@ export default function BillingShellPage() {
     setFormError(null);
     setFormSaved(false);
     try {
+      // OR-07 Action 1: the billing profile is a single-row upsert for this
+      // org, so the operation identity is the org itself — a retried save
+      // reuses the key.
+      const profileOp = createIdempotentOperation('billing-profile-save');
       const res = await fetch('/api/billing/profile', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...profileOp.headers },
         body: JSON.stringify({
           billing_country: values.billing_country || undefined,
           preferred_currency: values.preferred_currency || undefined,

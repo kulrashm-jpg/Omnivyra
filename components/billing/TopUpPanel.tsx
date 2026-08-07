@@ -8,6 +8,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/apiFetch';
+import { createIdempotentOperation } from '@/lib/idempotency';
 import { resolvePrice, currencySymbol, CURRENCIES, type Currency } from '@/lib/billing/currency';
 import { TOPUPS } from '@/lib/billing/commercialPlans';
 
@@ -38,8 +39,15 @@ async function loadCashfree(): Promise<any | null> {
   try { return (window as any).Cashfree({ mode: 'sandbox' }); } catch { return null; }
 }
 
-async function postJson(url: string, body: unknown): Promise<any> {
-  const res = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+async function postJson(url: string, body: unknown, extraHeaders?: Record<string, string>): Promise<any> {
+  // `extraHeaders` carries the caller's Idempotency-Key. Deliberately NOT
+  // minted here: this helper cannot tell a retry from a new operation, so a
+  // key generated at this level would change on every attempt.
+  const res = await apiFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(extraHeaders ?? {}) },
+    body: JSON.stringify(body),
+  });
   return res.json();
 }
 
@@ -105,10 +113,14 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
 
   const runVerify = useCallback(async (order: any, orderId: string, paymentId: string, signature: string) => {
     setStatus({ kind: 'verifying' });
+    // OR-07 Action 1: verification is naturally idempotent on the provider's
+    // (order, payment) pair — retrying verification of the SAME payment must
+    // reuse the key, so it is derived rather than random.
+    const verifyOp = createIdempotentOperation(`checkout-verify-${orderId}-${paymentId}`);
     const v = await postJson('/api/billing/checkout/verify', {
       org_id: orgId, purchase_id: order.purchase_id, provider: order.provider,
       order_id: orderId, payment_id: paymentId, signature,
-    });
+    }, verifyOp.headers);
     if (v?.ok) {
       const n = v?.credits_granted;
       setStatus({ kind: 'success', msg: n ? `${Number(n).toLocaleString()} credits added` : 'Credits added' });
@@ -125,7 +137,11 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
     setStatus({ kind: 'creating' });
     try {
       // Order via the Payment Orchestrator (internal routing: Razorpay → Cashfree).
-      const order = await postJson('/api/billing/checkout/create-order', { org_id: orgId, package_id: pack.id, currency });
+      // OR-07 Action 1: one key per buy attempt. No order id exists yet, so the
+      // buy invocation IS the operation boundary; a deliberate second purchase
+      // of the same pack is a new operation and correctly gets a new key.
+      const orderOp = createIdempotentOperation(`checkout-create-order-${orgId}-${pack.id}`);
+      const order = await postJson('/api/billing/checkout/create-order', { org_id: orgId, package_id: pack.id, currency }, orderOp.headers);
       if (!order?.ok) { setStatus({ kind: 'failed', msg: order?.error ?? 'Could not create order' }); return; }
 
       setStatus({ kind: 'paying' });

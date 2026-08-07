@@ -61,10 +61,116 @@ function buildRequestHash(req: NextApiRequest, scope: string): string {
   return createHash('sha256').update(stableStringify(payload)).digest('hex');
 }
 
-async function loadExisting(scope: string, key: string): Promise<IdempotencyRecord | null> {
+/**
+ * OR-09 — resolve the AUTHENTICATED principal that owns this idempotency record.
+ *
+ * `resolvePrincipal` is the repository's canonical identity entry point
+ * (IdentityResolver.ts header) and the only resolver covering EVERY
+ * authentication path the existing adopters use: Supabase Bearer/cookie,
+ * DB-backed auth_session, and the legacy super-admin bridge. The lighter
+ * `resolveAuthenticatedUser` handles only the Supabase paths and would 401 the
+ * super-admin routes that make up most of the current adopters.
+ *
+ * This is AUTHENTICATION, not authorization — it answers "who is calling",
+ * never "may they touch this tenant". That distinction is what makes caller
+ * scoping possible without the async, resource-derived tenant lookup that
+ * blocked the alternatives (OR-09 §Constraints).
+ *
+ * Imported DYNAMICALLY, following the convention lib/platform/policyGate.ts
+ * established: IdentityResolver carries a module-load side-effect import
+ * (`./platformCapabilities`) that THROWS on a capability-isolation violation.
+ * A static import here would pull that into every module that imports this
+ * middleware, including the 29 existing adopters.
+ */
+async function resolveCallerId(req: NextApiRequest): Promise<string | null> {
+  try {
+    const { resolvePrincipal } = await import('../security/IdentityResolver');
+    const result = await resolvePrincipal(req);
+    if (result.ok !== true) return null;
+
+    // ── D-2: legacy bridge principals must NOT share one identity ───────────
+    // legacyCookieSuperAdminBridge.ts:110 assigns every bridge principal the
+    // SAME constant userId ('legacy:cookie-super-admin'), so scoping on it
+    // would let two bridge operators replay each other's requests — the very
+    // defect caller scoping exists to remove.
+    //
+    // The bridge credential is a shared env username/password, so no per-human
+    // identity exists at the identity layer. The signed cookie VALUE is however
+    // minted per login: stable for one operator's session, distinct between
+    // operators. Hashing it yields a stable, non-shared scoping key.
+    //
+    // This derives an idempotency scoping key ONLY. Authentication,
+    // authorization, and bridge behaviour are untouched — `principal.userId`
+    // is not modified and nothing here grants or denies access.
+    if (result.principal?.legacyCookieSuperAdmin === true) {
+      const raw = readBridgeCookieValue(req);
+      if (!raw) return null; // fail closed — no cookie, no stable identity
+      return `bridge:${createHash('sha256').update(raw).digest('hex').slice(0, 32)}`;
+    }
+
+    const userId = result.principal?.userId;
+    return typeof userId === 'string' && userId.length > 0 ? userId : null;
+  } catch {
+    // Fail CLOSED. A resolution failure must never degrade to an unscoped
+    // lookup — that is precisely the exposure this change closes.
+    return null;
+  }
+}
+
+/**
+ * Read the raw signed bridge cookie for D-2 scoping-key derivation.
+ *
+ * Deliberately NOT an authentication step and NOT a second bridge
+ * implementation: `resolvePrincipal` has already authenticated the caller by
+ * the time this runs. This only extracts the opaque cookie value to derive a
+ * per-session scoping key, and never parses, validates or trusts it.
+ */
+function readBridgeCookieValue(req: NextApiRequest): string | null {
+  const cookies = req.headers?.cookie || '';
+  const m = cookies.match(/(?:^|; )super_admin_session=([^;]+)/);
+  return m?.[1] ?? null;
+}
+
+/**
+ * D-1 — legacy compatibility for records written before OR-09.
+ *
+ * Those rows carry `caller_id IS NULL` (no owner was recorded). Without this,
+ * a key completed before deploy and retried after would MISS the caller-scoped
+ * lookup and re-execute the handler — running business logic a second time for
+ * no reason other than the row's age.
+ *
+ * Deliberately narrow:
+ *   • explicitly `caller_id IS NULL` — NOT an unscoped lookup; a new,
+ *     caller-owned record can never be found by this path;
+ *   • `status = 'completed'` ONLY — a legacy row is a read-only replay source.
+ *     It can never be claimed, locked, reclaimed, mutated, or used to block a
+ *     new request, so lock and conflict semantics are untouched;
+ *   • consulted ONLY after the caller-scoped lookup misses.
+ *
+ * ACCEPTED RESIDUAL: a pre-OR-09 completed row has no owner, so any caller
+ * presenting its key with a matching payload can replay it. That is inherent —
+ * ownership cannot be reconstructed for rows that never recorded it. The set is
+ * finite, never grows (no new NULL rows can be written), and is confined to the
+ * 29 pre-existing admin adopters.
+ */
+async function loadLegacyCompleted(scope: string, key: string): Promise<IdempotencyRecord | null> {
   const { data, error } = await ownedDbTable('api_idempotency_keys')
     .select('id, idempotency_key, status, request_hash, response_status, response_body, locked_at, request_id')
     .eq('scope', scope)
+    .is('caller_id', null)
+    .eq('idempotency_key', key)
+    .eq('status', 'completed')
+    .maybeSingle();
+
+  if (error) throw new Error(`IDEMPOTENCY_LEGACY_LOOKUP_FAILED:${error.message}`);
+  return (data as IdempotencyRecord | null) ?? null;
+}
+
+async function loadExisting(scope: string, callerId: string, key: string): Promise<IdempotencyRecord | null> {
+  const { data, error } = await ownedDbTable('api_idempotency_keys')
+    .select('id, idempotency_key, status, request_hash, response_status, response_body, locked_at, request_id')
+    .eq('scope', scope)
+    .eq('caller_id', callerId)
     .eq('idempotency_key', key)
     .maybeSingle();
 
@@ -72,9 +178,10 @@ async function loadExisting(scope: string, key: string): Promise<IdempotencyReco
   return (data as IdempotencyRecord | null) ?? null;
 }
 
-async function createRecord(scope: string, key: string, requestHash: string, requestId: string): Promise<void> {
+async function createRecord(scope: string, callerId: string, key: string, requestHash: string, requestId: string): Promise<void> {
   const { error } = await ownedDbTable('api_idempotency_keys').insert({
     scope,
+    caller_id: callerId,
     idempotency_key: key,
     request_hash: requestHash,
     status: 'processing',
@@ -88,6 +195,7 @@ async function createRecord(scope: string, key: string, requestHash: string, req
 
 async function markRecord(
   scope: string,
+  callerId: string,
   key: string,
   patch: Partial<{
     status: 'processing' | 'completed' | 'failed';
@@ -103,6 +211,7 @@ async function markRecord(
       locked_at: patch.status === 'processing' ? new Date().toISOString() : null,
     })
     .eq('scope', scope)
+    .eq('caller_id', callerId)
     .eq('idempotency_key', key);
   if (error) throw new Error(`IDEMPOTENCY_UPDATE_FAILED:${error.message}`);
 }
@@ -132,15 +241,42 @@ export function withIdempotency(
     const requestHash = buildRequestHash(req, scope);
     res.setHeader('X-Request-Id', requestId);
 
+    // OR-09 — caller scoping. Resolved BEFORE any cache access so there is no
+    // code path that reads or writes a record without an owner. An
+    // unauthenticated (or unresolvable) caller is rejected outright rather than
+    // falling back to an unscoped lookup: the whole point of this change is
+    // that a cache entry belongs to exactly one principal.
+    //
+    // The handler still performs its own authentication and authorization,
+    // unchanged. This resolution is solely for record ownership.
+    const callerId = await resolveCallerId(req);
+    if (!callerId) {
+      return res.status(401).json({ error: 'Unauthorized', code: 'IDEMPOTENCY_PRINCIPAL_REQUIRED' });
+    }
+
     const run = async () => {
-      let existing = await loadExisting(scope, idempotencyKey);
+      let existing = await loadExisting(scope, callerId, idempotencyKey);
+
+      // D-1: before creating anything, honour a pre-OR-09 completed record for
+      // this key. Replay-only — the legacy row is never claimed or mutated, so
+      // no lock, conflict or ownership semantics change. A hash mismatch falls
+      // through to the normal caller-scoped path exactly as it would today.
+      if (!existing) {
+        const legacy = await loadLegacyCompleted(scope, idempotencyKey);
+        if (legacy && legacy.request_hash === requestHash) {
+          return res
+            .status(legacy.response_status ?? 200)
+            .json((legacy.response_body as any) ?? { ok: true, replayed: true });
+        }
+      }
+
       if (!existing) {
         try {
-          await createRecord(scope, idempotencyKey, requestHash, requestId);
-          existing = await loadExisting(scope, idempotencyKey);
+          await createRecord(scope, callerId, idempotencyKey, requestHash, requestId);
+          existing = await loadExisting(scope, callerId, idempotencyKey);
         } catch (error: any) {
           if (error?.code !== '23505') throw error;
-          existing = await loadExisting(scope, idempotencyKey);
+          existing = await loadExisting(scope, callerId, idempotencyKey);
         }
       }
 
@@ -202,6 +338,7 @@ export function withIdempotency(
             last_error: 'stale_lock_reclaimed',
           })
           .eq('scope', scope)
+          .eq('caller_id', callerId)
           .eq('idempotency_key', idempotencyKey)
           .eq('status', 'processing');
         // Only reclaim rows that are actually stale (older than cutoff) OR
@@ -239,6 +376,7 @@ export function withIdempotency(
             updated_at: new Date().toISOString(),
           })
           .eq('scope', scope)
+          .eq('caller_id', callerId)
           .eq('idempotency_key', idempotencyKey)
           .eq('status', 'failed')
           .select('id')
@@ -264,7 +402,7 @@ export function withIdempotency(
 
       (res as any).json = async (body: unknown) => {
         capturedBody = body;
-        await markRecord(scope, idempotencyKey, {
+        await markRecord(scope, callerId, idempotencyKey, {
           status: statusCode >= 500 ? 'failed' : 'completed',
           response_status: statusCode,
           response_body: body,
@@ -274,10 +412,10 @@ export function withIdempotency(
       };
 
       try {
-        await markRecord(scope, idempotencyKey, { status: 'processing', last_error: null });
+        await markRecord(scope, callerId, idempotencyKey, { status: 'processing', last_error: null });
         await handler(req, res);
       } catch (error: any) {
-        await markRecord(scope, idempotencyKey, {
+        await markRecord(scope, callerId, idempotencyKey, {
           status: 'failed',
           response_status: statusCode >= 400 ? statusCode : 500,
           response_body: capturedBody ?? { error: 'Internal server error' },

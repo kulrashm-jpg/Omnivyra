@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
+import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
@@ -39,4 +40,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
-export default __createApiRoute(handler, { route: '/api/blogs/:id/publish' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'blogs-publish' }), { route: '/api/blogs/:id/publish' });

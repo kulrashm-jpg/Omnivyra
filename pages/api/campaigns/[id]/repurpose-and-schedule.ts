@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
+import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 
 /**
  * POST /api/campaigns/[id]/repurpose-and-schedule
@@ -215,4 +216,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 }
 
 // W0-1 (Gate A): canonical route pipeline — pass-through observability + request context.
-export default __createApiRoute(handler, { route: '/api/campaigns/:id/repurpose-and-schedule' });
+export default __createApiRoute(withIdempotency(handler, { scope: 'campaigns-repurpose-and-schedule' }), { route: '/api/campaigns/:id/repurpose-and-schedule' });

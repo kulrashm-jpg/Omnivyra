@@ -23,6 +23,13 @@ jest.mock('../../services/requestContext', () => ({
   getOrCreateRequestId: jest.fn(() => 'req-test-1'),
   runWithRequestContext: jest.fn((_ctx: unknown, fn: () => unknown) => fn()),
 }));
+// OR-09: the middleware now resolves the authenticated principal to scope each
+// record to its owner. Mocked here so these stale-lock assertions stay focused
+// on lock semantics — without it the real IdentityResolver graph (session,
+// capabilities, MFA, step-up, bridge) loads inside the test environment.
+jest.mock('../../security/IdentityResolver', () => ({
+  resolvePrincipal: jest.fn(async () => ({ ok: true, principal: { userId: 'user-test-1' } })),
+}));
 
 import { ownedDbTable } from '../../db/writeOwner';
 import { withIdempotency } from '../../middleware/withIdempotency';

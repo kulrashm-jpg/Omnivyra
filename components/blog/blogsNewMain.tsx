@@ -2,6 +2,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createIdempotentOperation } from '../../lib/idempotency';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -432,10 +433,14 @@ export default function BlogNewPage() {
       const blogId = savedId || await saveBlogState({ ...liveState, status: 'draft' });
       if (!blogId) throw new Error('Could not save the blog before posting.');
       setPostBlogStatus({ type: 'info', message: `Draft saved. Queuing publish to ${integration.name}...` });
+      // OR-07 Action 1: keyed on (blog, destination). Retrying the same publish
+      // reuses the key; publishing the same blog to a DIFFERENT CMS is a
+      // distinct operation and gets its own.
+      const publishOp = createIdempotentOperation(`blog-publish-${blogId}-${integration.id}`);
       const res = await fetch(`/api/blogs/${encodeURIComponent(blogId)}/publish`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...publishOp.headers },
         body: JSON.stringify({
           company_id: selectedCompanyId,
           integration_id: integration.id,
@@ -690,7 +695,7 @@ export default function BlogNewPage() {
         <div className="border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
           <div className="mx-auto flex max-w-[1200px] items-center justify-between">
             <Link href="/dashboard" className="flex shrink-0 items-center" aria-label="Home">
-              <img src="/logo.png" alt="Logo" width={100} height={40} className="h-10 w-auto object-contain sm:h-11" />
+              <img src="/logo.webp" alt="Logo" width={465} height={144} className="h-10 w-auto object-contain sm:h-11" />
             </Link>
             <Link href="/blogs/create" className="text-sm font-medium text-gray-600 hover:text-gray-900">
               Back to Create Blog

@@ -1,4 +1,5 @@
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { createIdempotentOperation } from '../../lib/idempotency';
 import type { StructuredPlan } from './types';
 
 type Params = {
@@ -31,9 +32,12 @@ export function useStructuredPlanScheduling({
       setUiErrorMessage(null);
       setUiSuccessMessage(null);
 
+      // OR-07 Action 1: keyed on the campaign, so retrying the scheduling of
+      // this structured plan reuses the key.
+      const planOp = createIdempotentOperation(`campaign-schedule-structured-plan-${campaignId}`);
       const response = await fetchWithAuth(`/api/campaigns/${campaignId}/schedule-structured-plan`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...planOp.headers },
         body: JSON.stringify({ plan: structuredPlan }),
       });
 
