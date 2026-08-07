@@ -16,6 +16,36 @@
 
 import React from 'react';
 import '@testing-library/jest-dom';
+
+// CreatorContentPanelController:121 destructures { user, userName, selectedCompanyId }
+// from useCompanyContext, which throws outside a CompanyProvider.
+//
+// Mocked at the HOOK boundary rather than wrapping the render in the real
+// CompanyProvider: that provider calls getSupabaseBrowser() and fetches
+// /api/company-profile (CompanyContext.tsx:169+), which would pull auth and
+// network into a jsdom UI unit test asserting upload-section rendering.
+//
+// Only the three consumed fields are supplied — nothing invented beyond what the
+// controller reads.
+jest.mock('../../../components/CompanyContext', () => ({
+  useCompanyContext: () => ({
+    user: { user_id: 'u-1' },
+    userName: 'Test User',
+    selectedCompanyId: 'c-1',
+  }),
+}));
+
+// jsdom provides no `fetch`. With a selectedCompanyId now present, the
+// controller's video-workflow effect (CreatorContentPanelController:203+) runs and
+// calls it. Stubbed to an empty-payload OK so the effect completes without
+// network — these tests assert upload-section RENDERING, not that request.
+beforeAll(() => {
+  (global as unknown as { fetch: unknown }).fetch = jest.fn(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({}),
+  })) as unknown as typeof fetch;
+});
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import CreatorContentPanel, {
   type AttachmentRowState,
