@@ -54,9 +54,27 @@ const buildQuery = (table: string) => {
       return query;
     }),
     or: jest.fn().mockReturnThis(),
+    // Chainable filter reached by pricingService.fetchModelPricingRow:136, which
+    // builds `.eq()x4.lte().order().limit().maybeSingle()`. Records into
+    // state.filters like `eq` so resolveQuery can observe it. `gte`/`in`/`limit`/
+    // `order` were already present; only `lte` and `maybeSingle` were missing.
+    lte: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
+      return query;
+    }),
+    // WRITE entry points — profile write-back at
+    // companyProfileServiceRest1Rest2Pulse:381, plus best-effort audit inserts.
+    insert: jest.fn().mockReturnThis(),
+    upsert: jest.fn().mockReturnThis(),
+    update: jest.fn().mockReturnThis(),
+    delete: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
+    // Terminators are `mockReturnThis` HERE: this builder is thenable and
+    // resolveQuery already returns `{ data, error }`, so awaiting resolves via
+    // `then`. The opposite of the recommendation suites.
     single: jest.fn().mockReturnThis(),
+    maybeSingle: jest.fn().mockReturnThis(),
     then: (resolve: any, reject: any) => {
       const result = resolveQuery(table, state);
       return Promise.resolve(result).then(resolve, reject);
@@ -207,6 +225,21 @@ describe('External API company scope', () => {
           }),
           getPlatformStrategies: jest.fn().mockResolvedValue([]),
           recordSignalConfidenceSummary: jest.fn(),
+        }));
+        // The AI runtime. This suite stubs five collaborators to stay hermetic;
+        // the gateway was the sixth it never listed, only because the incomplete
+        // query double threw at the pricing gate before execution reached
+        // aiGatewayCore:814 and constructed a real OpenAI client.
+        //
+        // Mocked at the CALLER boundary, suite-locally, inside the existing
+        // isolateModules() block — `getOpenAiClient` is module-private in
+        // aiGatewayCore so there is no injection seam, and a global `openai` mock
+        // would neutralise the suites that legitimately exercise the gateway.
+        jest.doMock('../../services/aiGatewayProvidersOps', () => ({
+          runCompletionWithOperation: jest.fn().mockResolvedValue({
+            output: '{}',
+            metadata: { provider: 'mock', model: 'mock' },
+          }),
         }));
         jest.doMock('../../services/companyProfileService', () => ({
           getProfile: jest.fn().mockResolvedValue({ geography: 'US', industry_list: [], goals_list: [], content_themes_list: [] }),
