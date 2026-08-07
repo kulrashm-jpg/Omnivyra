@@ -6,6 +6,20 @@ jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn().mockResolvedValue({ company_id: 'comp-1', category: 'marketing' }),
   validateCompanyProfile: jest.fn().mockReturnValue({ status: 'ready', missing_fields: [] }),
 }));
+// The AI runtime. This suite stubs eight collaborators to stay hermetic; the
+// gateway was the ninth it never listed, only because the incomplete query double
+// threw at the pricing gate before execution reached aiGatewayCore:814 and
+// constructed a real OpenAI client.
+//
+// Mocked at the CALLER boundary, suite-locally — `getOpenAiClient` is
+// module-private in aiGatewayCore so there is no injection seam, and a global
+// `openai` mock would neutralise the suites that legitimately exercise the gateway.
+jest.mock('../../services/aiGatewayProvidersOps', () => ({
+  runCompletionWithOperation: jest.fn().mockResolvedValue({
+    output: '{}',
+    metadata: { provider: 'mock', model: 'mock' },
+  }),
+}));
 jest.mock('../../services/externalApiService', () => ({
   fetchTrendsFromApis: jest.fn().mockResolvedValue([
     { topic: 'AI marketing', source: 'YouTube Trends', signal_confidence: 0.9 },
@@ -104,6 +118,18 @@ jest.mock('../../db/supabaseClient', () => {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
     gte: jest.fn().mockReturnThis(),
+    // Reached by pricingService.fetchModelPricingRow:136, which builds
+    // `.eq()x4.lte().order().limit().maybeSingle()`. `gte`/`order`/`limit` were
+    // already present; `lte` and `in` were not.
+    lte: jest.fn().mockReturnThis(),
+    in: jest.fn().mockReturnThis(),
+    contains: jest.fn().mockReturnThis(),
+    // Write entry points — profile write-back at
+    // companyProfileServiceRest1Rest2Pulse:381, plus best-effort audit inserts.
+    insert: jest.fn().mockReturnThis(),
+    upsert: jest.fn().mockReturnThis(),
+    update: jest.fn().mockReturnThis(),
+    delete: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     filter: jest.fn().mockReturnThis(),
