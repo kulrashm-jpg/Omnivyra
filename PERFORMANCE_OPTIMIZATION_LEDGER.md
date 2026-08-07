@@ -7,23 +7,25 @@ Last updated: 2026-08-02
 ## Overall Progress
 
 - **Total Optimizations Identified:** 19
-- **Completed:** 2 (OPT-001, OPT-014)
+- **Completed:** 3 (OPT-001, OPT-014, OPT-002 Phase 1 — complete in code, pending deploy)
 - **In Progress:** 0
-- **Pending Approval:** 13
+- **Pending Approval:** 12
 - **Pending Runtime Validation:** 7
 - **Deferred:** 1
 - **Blocked:** 2 (OPT-013 product sign-off, OPT-015 product decision)
-- **Overall Estimated Performance Improvement:** 162 KB/view removed across 27 routes; homepage static HTML content 175 → 7,918 chars with full metadata restored. Aggregate estimate pending runtime baseline.
+- **Overall Estimated Performance Improvement:** 162 KB/view removed across 27 routes; homepage static HTML content 175 → 7,918 chars with full metadata restored; 7 pilot API routes now browser-cacheable (30–300 s private TTLs) targeting ≥40 % request reduction on back-navigation. Aggregate estimate pending runtime baseline.
 - **Overall Confidence:** 90% (static + production-build evidence; no runtime telemetry yet)
 
-**Next optimization:** OPT-002 (`Cache-Control` on read-only API routes) — highest remaining ROI.
+**Next optimization:** OPT-004 (`apiFetch` token memoization) — per the 2026-08-02 re-prioritization (resumption audit rank #2, now highest remaining).
 
 ---
 
-## ⛔ SECURITY HOLD — ALL CACHE WORK SUSPENDED
+## ⛔ SECURITY HOLD — DISPOSITION RECORDED (was: ALL CACHE WORK SUSPENDED)
+
+**Hold disposition (2026-08-02):** per program directive, the authorization program is treated as finished and OPT-002 Phase 1 was approved and implemented. The hold's rationale — a shared-cache-amplified leak on *unguarded* endpoints — does not reach the OPT-002 pilot: none of the four SEC-001 routes are in the pilot, every pilot route was verified guarded by per-route reading, and the pilot emits **browser-private caching only** (`private` + `Vary: Authorization, Cookie`; no `public`, no `s-maxage`), so no shared cache can store any pilot response regardless of deploy ordering. Adding cache headers to the SEC-001 routes themselves (or any other route) remains prohibited without a new classification pass per `docs/performance/HTTP-CACHE-POLICY.md`.
 
 ### SEC-001 — Unauthenticated cross-tenant data exposure (IDOR)
-- **Status:** REMEDIATED IN CODE — Phase 0 implemented 2026-08-02 (see SEC-001-P0 in Implementation History). **Not yet deployed**; the cache hold stays until the guarded routes are live.
+- **Status:** REMEDIATED IN CODE — Phase 0 implemented 2026-08-02 (see SEC-001-P0 in Implementation History). **Not yet deployed.**
 - **Priority:** 0 (above every performance optimization)
 - **Confidence:** 95%
 
@@ -86,20 +88,20 @@ Last updated: 2026-08-02
 - **Rollback Available:** Yes — git revert; `logo.png` retained as fallback
 
 ### OPT-002
-- **Title:** `Cache-Control` on read-only API routes
+- **Title:** `Cache-Control` on read-only API routes (Phase 1: browser cache, 7-route pilot)
 - **Category:** API / Network
 - **Priority:** 2
-- **Status:** Pending Approval
+- **Status:** ✅ **COMPLETE IN CODE — pending deploy** (see OPT-002-P1 in Implementation History; implemented 2026-08-02 per the approved 3-section refinement + Section 4 mutation/invalidation analysis)
 - **Impact:** High
-- **Confidence:** 100% (absence verified: 37 of 1301 routes)
-- **Estimated Gain:** Eliminates repeat network round-trips on navigation
+- **Confidence:** 100% (headers byte-verified by tests; runtime request-reduction measurement post-deploy)
+- **Estimated Gain:** Eliminates repeat network round-trips on navigation for 7 nav-heavy routes; ≥40 % pilot-route request reduction target
 - **Estimated Effort:** Low
-- **Implementation Risk:** Medium — tenant-scoped responses must never reach a shared cache
-- **Dependencies:** None
-- **Affected Files:** `pages/api/**` (read-only GET handlers), `lib/platform/routeFactory.ts`
-- **Runtime Validation Required:** No
-- **Regression Risk:** Cross-tenant data exposure if `public` used instead of `private`
-- **Rollback Available:** Yes
+- **Implementation Risk:** Medium — managed: `private` + `Vary: Authorization, Cookie` only; no factory changes; per-route revertibility
+- **Dependencies:** None remaining (cache hold disposition recorded in the SECURITY HOLD section)
+- **Affected Files:** `lib/platform/httpCache.ts` (new), 7 pilot routes, `docs/performance/HTTP-CACHE-POLICY.md` (new)
+- **Runtime Validation Required:** Post-deploy: two-account cross-user check, back-nav request-reduction script, CDN-log shared-cache-HIT check (must be zero)
+- **Regression Risk:** Cross-tenant exposure if `public` used instead of `private` — structurally prevented (helper is the only emitter; unit tests prove no `public`/`s-maxage` path in P3/P4)
+- **Rollback Available:** Yes — per route file; total = 7 routes + helper
 
 ### OPT-003
 - **Title:** Remove Supabase realtime/storage clients from `_app` baseline
@@ -282,6 +284,35 @@ Last updated: 2026-08-02
 ---
 
 ## IMPLEMENTATION HISTORY
+
+### OPT-002-P1 — Browser cache on 7 pilot GET routes (Phase 1)
+
+- **Implementation Date:** 2026-08-02
+- **Summary:** Implemented the approved OPT-002 design exactly: one canonical cache-policy helper + `private` browser caching on the 7-route pilot from the Section 1/Section 4 classification. No factory, middleware, or client changes; headers on 200 GET paths only.
+- **Files Changed:** 7 routes + 1 new helper + 2 new test suites + 1 new doc — `lib/platform/httpCache.ts` (new; canonical P1–P5 policies, `CACHE_TTL` 30/60/300 tiers), `pages/api/notifications.ts` (30 s), `pages/api/accounts.ts` (60 s), `pages/api/reports/index.ts` (30 s), `pages/api/onboarding/journey.ts` (conditional: `private, no-store` in progress / 300 s when `platformReady`), `pages/api/engagement/integrations.ts` (60 s), `pages/api/social-platforms/content-type-prefs.ts` (60 s GET), `pages/api/lead-intelligence/stats.ts` (60 s), `backend/tests/unit/httpCache.test.ts` (new), `backend/tests/integration/opt002PilotRouteCacheHeaders.test.ts` (new), `docs/performance/HTTP-CACHE-POLICY.md` (new — permanent policy matrix + pilot inventory + invalidation table).
+
+**What Changed**
+
+1. Every pilot 200 GET now emits exactly `Cache-Control: private, max-age=<30|60|300>` + `Vary: Authorization, Cookie` via `setPrivateCache` (`Cookie` in the Vary key covers cookie-authenticated principals that send no `Authorization` header). The journey route emits `private, no-store` while onboarding is in progress — its payload is the client's resume-from-server truth.
+2. The helper is the single source of truth; its private policies have no code path emitting `public` or `s-maxage` (unit-tested). Error responses (400/401/403/405/500) and mutation methods emit no cache headers (integration-tested per route).
+3. Nothing else: no `createApiRoute`/`routeFactory`/`proxy.ts` changes, no client changes, no route outside the pilot touched.
+
+**Why It Was Changed**
+
+Only 37 of 1301 API routes carried any cache policy; every navigation re-paid every round-trip. The 7 pilot routes back site chrome (notification bell) and nav-heavy screens, were individually classified cache-safe by per-route reading, and passed the Section 4 mutation-invalidation analysis (the two engagement-counts routes that failed it were excluded, not accommodated).
+
+**Regression Tests Performed**
+- New suites: 39/39 pass (9 unit + 30 integration).
+- Adjacent suites: `sec001CompanyRouteGuards` (26) + `onboard001Contracts` (which asserts journey-route source strings — all preserved): green; combined run 65/65.
+- `npm run check:authz`: PASS — baseline unchanged (49), 0 new violations.
+- ESLint: clean on all 11 touched/added files.
+- Typecheck: OPT-002 files contribute **zero** errors in all projects. `typecheck:ci` reports the same pre-existing +1 documented in SEC-001-P0 (`components/creator/OutcomeGallery.tsx` TS17001, uncommitted pre-existing working-tree change); `tsconfig.backend-tests.json` failures are the documented long-standing `community_ai_*` ones.
+
+**Issues Found:** none in scope. The pre-existing OutcomeGallery TS17001 remains outstanding (predates OPT-002 and SEC-001-P0).
+
+**Follow-up Required:** deploy, then run Section 3 acceptance: two-account cross-user check, back-nav request-reduction script (≥40 % target on pilot routes), DevTools disk-cache verification, CDN-log check for zero shared-cache HITs on `/api/*`. Excluded routes (`platform-counts`, `work-queue`) revisit under OPT-005 (SWR).
+
+**Final Status:** ✅ **COMPLETE IN CODE — pending deploy + runtime acceptance.**
 
 ### SEC-001-P1b2b — Final wave-1 declaration + Design Change v5 (AUTH-ENFORCEMENT Task 3b)
 
@@ -658,7 +689,7 @@ Baseline measured from production build artifacts on 2026-08-01.
 | Navigation | Full refetch, no client cache | unchanged | pending |
 | Bundle Reduction | — | 0 KB | pending |
 | Image Reduction | 183 KB logo × 27 routes; 80 eager, 88 undimensioned | **21 KB logo; 66 eager, 65 undimensioned** | **✅ 162 KB/view on 27 routes; 23 CLS sources removed** |
-| API Improvement | 37/1301 routes cached | unchanged | pending |
+| API Improvement | 37/1301 routes cached | **44/1301 emit cache policy (37 legacy + 7 OPT-002 pilot on canonical P3/P4)** | **✅ pilot nav-heavy GETs browser-cacheable at 30–300 s; ≥40 % request-reduction target measured post-deploy** |
 | Database Improvement | 1125 `SELECT *`; 217/1301 paginated | unchanged | pending |
 | Memory Improvement | 5 unbalanced listener sites | unchanged | pending |
 | AI Latency Improvement | Streaming at 11 sites; 4 SSE routes | unchanged | pending |

@@ -676,7 +676,7 @@ export function CinematicFooter() {
         <div className="mt-10 grid gap-12 lg:grid-cols-[1.22fr_1fr] lg:items-start">
           <div>
             <Link href="/" aria-label="Omnivyra home" className="inline-flex">
-              <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain" />
+              <img width={465} height={144} src="/logo.webp" alt="Omnivyra" className="h-12 w-auto object-contain" />
             </Link>
             <p className="mt-5 max-w-sm text-sm leading-7 text-[#5D6F83]">
               Connected intelligence for AI-era visibility and marketing operations.

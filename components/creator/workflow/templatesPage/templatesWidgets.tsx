@@ -785,6 +785,13 @@ export function TemplatePreview({ template, large, sample, continuity }: { templ
         <img
           src={resolved.url}
           alt={`${template.name} preview`}
+          // PERF (OPT-001): gallery renders up to 71 cards, each a full-size
+          // showcase asset (up to 351 KB). Eager-loading the whole grid competed
+          // with the critical path. The parent div already fixes `height`, so
+          // deferring costs no layout stability. `decoding="async"` keeps the
+          // decode off the main thread.
+          loading="lazy"
+          decoding="async"
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
           // Never a broken-image icon: hide the img on load error → the dark
           // frame shows (the deterministic status badge still conveys state).

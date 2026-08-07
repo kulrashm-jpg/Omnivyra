@@ -4,12 +4,19 @@ import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 import { clearBrowserAuthState } from '../utils/authStorage';
 import { apiFetch } from '../lib/apiFetch';
+import { useCompanyContext } from '../components/CompanyContext';
+import { SITE_URL, absoluteUrl } from '../lib/siteUrl';
 import MarketingLandingPage, { LANDING_FAQS } from '../components/landing/MarketingLandingPage';
+
+const OG_IMAGE = absoluteUrl('/logo.png');
 
 export default function Home() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [sessionFound, setSessionFound] = useState(false);
+  // Already-resolved auth state. On a soft navigation from inside the app (the
+  // header logo links here) this is true on the FIRST render, so an authenticated
+  // user never sees a frame of marketing content.
+  const { isAuthenticated, authChecked } = useCompanyContext();
+  const [redirecting, setRedirecting] = useState(false);
 
   useEffect(() => {
     const supabase = getSupabaseBrowser();
@@ -20,13 +27,12 @@ export default function Home() {
 
       if (!session) {
         done = true;
-        setSessionFound(false);
-        setLoading(false);
+        setRedirecting(false);
         return;
       }
 
       done = true;
-      setSessionFound(true);
+      setRedirecting(true);
 
       // Retry up to 3 times on transient errors (404 / 5xx). The 404 case
       // is common in `next dev` when the API route hasn't been compiled
@@ -57,8 +63,9 @@ export default function Home() {
         if (!res || res.status === 401 || res.status === 403) {
           await supabase.auth.signOut();
           clearBrowserAuthState({ preservePkce: false });
-          setSessionFound(false);
-          setLoading(false);
+          // Session was stale — reveal the marketing page rather than stranding
+          // the visitor on a blank screen.
+          setRedirecting(false);
           return;
         }
 
@@ -97,18 +104,43 @@ export default function Home() {
     return () => subscription.unsubscribe();
   }, [router]);
 
-  if (loading && !sessionFound) return null;
+  // Suppress the marketing body ONLY when we affirmatively know the visitor is
+  // authenticated and is being routed into the app.
+  //
+  // Hydration determinism: both inputs are false during prerender AND on the
+  // first client render of a fresh load (`redirecting` starts false;
+  // CompanyContext starts authChecked=false). Server and first client render
+  // therefore always agree. The value can only flip in a later commit, driven
+  // by an effect — never during hydration.
+  //
+  // `<Head>` is intentionally OUTSIDE this condition so metadata and structured
+  // data are present in the static HTML unconditionally.
+  const suppressMarketingBody = redirecting || (authChecked && isAuthenticated);
 
-  if (sessionFound) return null;
+  const pageTitle = 'Active Intelligence for AI-Era Marketing Operations | Omnivyra';
+  const pageDescription =
+    'Omnivyra generates Active Intelligence from digital authority signals, visibility reporting, campaigns, content, market context, recommendations, and connected marketing operations.';
 
   return (
     <>
       <Head>
-        <title>Active Intelligence for AI-Era Marketing Operations | Omnivyra</title>
-        <meta
-          name="description"
-          content="Omnivyra generates Active Intelligence from digital authority signals, visibility reporting, campaigns, content, market context, recommendations, and connected marketing operations."
-        />
+        <title>{pageTitle}</title>
+        <meta name="description" content={pageDescription} />
+        <link rel="canonical" href={`${SITE_URL}/`} />
+
+        {/* Open Graph */}
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="Omnivyra" />
+        <meta property="og:title" content={pageTitle} />
+        <meta property="og:description" content={pageDescription} />
+        <meta property="og:url" content={`${SITE_URL}/`} />
+        <meta property="og:image" content={OG_IMAGE} />
+
+        {/* Twitter */}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={pageTitle} />
+        <meta name="twitter:description" content={pageDescription} />
+        <meta name="twitter:image" content={OG_IMAGE} />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
@@ -127,7 +159,7 @@ export default function Home() {
           }}
         />
       </Head>
-      <MarketingLandingPage />
+      {suppressMarketingBody ? null : <MarketingLandingPage />}
     </>
   );
 }

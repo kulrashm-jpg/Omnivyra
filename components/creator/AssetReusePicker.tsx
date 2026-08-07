@@ -170,7 +170,7 @@ export default function AssetReusePicker({ consumer, assetType, onAttached, onCl
               <>
                 {selected.preview ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={selected.preview} alt={selected.payload.title} style={{ width: '100%', maxHeight: 180, objectFit: 'contain', borderRadius: 8, border: '1px solid #e5e7eb' }} />
+                  <img loading="lazy" decoding="async" src={selected.preview} alt={selected.payload.title} style={{ width: '100%', maxHeight: 180, objectFit: 'contain', borderRadius: 8, border: '1px solid #e5e7eb' }} />
                 ) : <div style={{ width: '100%', height: 120, borderRadius: 8, border: '1px solid #e5e7eb', background: '#f8fafc' }} />}
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', marginTop: 8 }}>{selected.payload.title}</div>
                 <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>v{selected.ref.version} · reused, not regenerated</div>

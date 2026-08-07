@@ -372,7 +372,7 @@ export default function LoginPage() {
         <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
           <header className="border-b border-gray-100 bg-white/95">
             <div className="mx-auto flex h-14 max-w-lg items-center px-6">
-              <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
+              <Link href="/"><img width={465} height={144} src="/logo.webp" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             </div>
           </header>
           <main className="flex flex-1 items-center justify-center px-6 py-12">
@@ -408,7 +408,7 @@ export default function LoginPage() {
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
         <header className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
-            <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
+            <Link href="/"><img width={465} height={144} src="/logo.webp" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             <Link href="/create-account" className="text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors">
               No account? Create one →
             </Link>

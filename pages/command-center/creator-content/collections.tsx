@@ -120,7 +120,7 @@ export default function CollectionsPage() {
                 onClick={() => router.push(`/command-center/creator-content/collections-editor?id=${encodeURIComponent(c.id)}`)}>
                 {c.preview.coverUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={c.preview.coverUrl} alt={`${c.name} cover`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }} />
+                  <img loading="lazy" decoding="async" src={c.preview.coverUrl} alt={`${c.name} cover`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden'; }} />
                 ) : (
                   <Layers size={34} color="#1e3a8a" />
                 )}

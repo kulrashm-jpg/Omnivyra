@@ -97,10 +97,10 @@ export default function AdminBlogListPage() {
           <div className="mx-auto flex max-w-5xl items-center justify-between">
             <Link href="/dashboard" className="flex shrink-0 items-center" aria-label="Home">
               <img
-                src="/logo.png"
+                src="/logo.webp"
                 alt="Omnivyra"
-                width={100}
-                height={40}
+                width={465}
+                height={144}
                 className="h-10 w-auto object-contain sm:h-11"
               />
             </Link>

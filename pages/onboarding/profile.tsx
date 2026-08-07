@@ -152,7 +152,7 @@ export default function ProfilePage() {
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
         <header className="border-b border-gray-100 bg-white/95">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
-            <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
+            <Link href="/"><img width={465} height={144} src="/logo.webp" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             {step === 'form' && <span className="text-xs text-[#6B7C93]">Step 1 of 2</span>}
           </div>
           <div className="h-0.5 w-full bg-gray-100">

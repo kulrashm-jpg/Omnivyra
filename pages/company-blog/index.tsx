@@ -133,7 +133,7 @@ export default function CompanyBlogIndex() {
             >
               {featured.featured_image_url && (
                 <div className="h-64 sm:h-80 w-full overflow-hidden">
-                  <img
+                  <img loading="lazy" decoding="async"
                     src={featured.featured_image_url}
                     alt={featured.title}
                     className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500"
@@ -177,7 +177,7 @@ export default function CompanyBlogIndex() {
                 >
                   {b.featured_image_url ? (
                     <div className="h-44 overflow-hidden">
-                      <img
+                      <img loading="lazy" decoding="async"
                         src={b.featured_image_url}
                         alt={b.title}
                         className="h-full w-full object-cover group-hover:scale-105 transition-transform duration-500"

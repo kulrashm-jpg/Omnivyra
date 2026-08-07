@@ -349,7 +349,7 @@ export default function NewsletterNewPage() {
         <div className="border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
           <div className="mx-auto flex max-w-[1200px] items-center justify-between">
             <Link href="/dashboard" className="flex shrink-0 items-center" aria-label="Home">
-              <img src="/logo.png" alt="Logo" width={100} height={40} className="h-10 w-auto object-contain sm:h-11" />
+              <img src="/logo.webp" alt="Logo" width={465} height={144} className="h-10 w-auto object-contain sm:h-11" />
             </Link>
             <Link href="/newsletters/create" className="text-sm font-medium text-gray-600 hover:text-gray-900">
               &larr; Back to Newsletter Intelligence

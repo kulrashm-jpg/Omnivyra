@@ -51,7 +51,7 @@ export function ReadNextSection({
             <div className="relative aspect-[16/9] w-full overflow-hidden bg-slate-100">
               {post.featured_image_url ? (
                 <>
-                  <img
+                  <img loading="lazy" decoding="async"
                     src={post.featured_image_url}
                     alt=""
                     className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.05]"

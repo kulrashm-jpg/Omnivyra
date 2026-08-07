@@ -59,7 +59,7 @@ export default function CustomerSuccessWorkspacePage() {
       <div className="min-h-screen bg-[#F5F9FF]">
         <header className="border-b border-gray-100 bg-white/95">
           <div className="mx-auto flex h-14 max-w-4xl items-center justify-between px-6">
-            <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
+            <Link href="/"><img width={465} height={144} src="/logo.webp" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             <Link href="/command-center" className="text-sm text-[#6B7C93] hover:text-[#0A66C2]">Dashboard</Link>
           </div>
         </header>

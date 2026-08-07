@@ -440,8 +440,8 @@ const Header: React.FC = () => {
             className="flex items-center gap-2 shrink-0 group"
             title="Home"
           >
-            <img
-              src="/logo.png"
+            <img width={465} height={144}
+              src="/logo.webp"
               alt="Omnivyra"
               className="h-10 w-auto object-contain"
             />

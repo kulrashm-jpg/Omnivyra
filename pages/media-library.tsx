@@ -235,7 +235,7 @@ export default function MediaLibrary() {
                 {viewMode === 'grid' ? (
                   <>
                     {file.media_type === 'image' && (
-                      <img
+                      <img loading="lazy" decoding="async"
                         src={file.file_url}
                         alt={file.file_name}
                         className="w-full h-48 object-cover"
@@ -280,7 +280,7 @@ export default function MediaLibrary() {
                   <>
                     <div className="flex items-center space-x-4 flex-1">
                       {file.media_type === 'image' && (
-                        <img
+                        <img loading="lazy" decoding="async"
                           src={file.file_url}
                           alt={file.file_name}
                           className="w-20 h-20 object-cover rounded"

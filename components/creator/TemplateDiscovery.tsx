@@ -46,7 +46,7 @@ function Row({ t, onSelect, onDetails }: { t: CreatorTemplate; onSelect: () => v
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: space.lg, border: `1px solid ${color.border}`, borderRadius: radius.lg, background: color.surface, padding: space.md }}>
       <button type="button" onClick={onDetails} style={{ width: 64, height: 48, borderRadius: radius.md, overflow: 'hidden', border: `1px solid ${color.border}`, background: color.surface2, padding: 0, cursor: 'pointer', flexShrink: 0 }}>
-        {t.preview.thumbnailUrl ? <img src={t.preview.thumbnailUrl} alt={t.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : null}
+        {t.preview.thumbnailUrl ? <img loading="lazy" decoding="async" src={t.preview.thumbnailUrl} alt={t.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : null}
       </button>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: color.text }}>{t.name}</div>
@@ -70,7 +70,7 @@ function Details({ t, onUse, onClose }: { t: CreatorTemplate; onUse: () => void;
   return (
     <Modal open onClose={onClose} title={t.name} width={680}
       footer={<button type="button" style={{ ...primaryBtn, width: '100%', justifyContent: 'center' }} onClick={onUse}><Check size={16} /> Use this template</button>}>
-      {t.preview.thumbnailUrl ? <img src={t.preview.thumbnailUrl} alt={t.name} style={{ width: '100%', borderRadius: radius.lg, border: `1px solid ${color.border}`, marginBottom: space.lg }} /> : null}
+      {t.preview.thumbnailUrl ? <img loading="lazy" decoding="async" src={t.preview.thumbnailUrl} alt={t.name} style={{ width: '100%', borderRadius: radius.lg, border: `1px solid ${color.border}`, marginBottom: space.lg }} /> : null}
       <div style={{ fontSize: fontSize.sm, color: color.textMuted, marginBottom: space.lg }}>{t.description}</div>
       <div style={{ display: 'flex', gap: space.xl, flexWrap: 'wrap' }}>
         {colmn('Preserved', <Lock size={14} />, a.immutable, color.primary[600])}

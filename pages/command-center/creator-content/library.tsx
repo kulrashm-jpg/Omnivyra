@@ -160,7 +160,7 @@ export default function AssetLibraryPage() {
         <div className={view === 'grid' ? 'aspect-video bg-slate-100 flex items-center justify-center overflow-hidden' : 'w-24 h-16 bg-slate-100 rounded-lg flex items-center justify-center overflow-hidden flex-shrink-0'}>
           {payload?.url ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={payload.url} alt={payload?.title ?? 'asset preview'} className="w-full h-full object-cover" />
+            <img loading="lazy" decoding="async" src={payload.url} alt={payload?.title ?? 'asset preview'} className="w-full h-full object-cover" />
           ) : (
             <span className="text-xs text-slate-400">no preview</span>
           )}
@@ -257,7 +257,7 @@ export default function AssetLibraryPage() {
               <div className="p-4 space-y-4">
                 {currentPayload(detail.asset)?.url && (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={currentPayload(detail.asset)!.url} alt="preview" className="w-full rounded-lg border border-gray-200" />
+                  <img loading="lazy" decoding="async" src={currentPayload(detail.asset)!.url} alt="preview" className="w-full rounded-lg border border-gray-200" />
                 )}
                 <div className="text-xs text-gray-500 space-y-1">
                   <div>Type: <span className="text-gray-800">{detail.asset.metadata?.assetType}</span></div>

@@ -47,7 +47,7 @@ const arrowBtn = (disabled: boolean): React.CSSProperties => ({ display: 'inline
 
 function PreviewImage({ t, label }: { t: CreatorTemplate; label: string }) {
   return t.preview?.thumbnailUrl
-    ? <img src={t.preview.thumbnailUrl} alt={label} decoding="async" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: radius.lg, boxShadow: shadow.md, background: color.surface }} />
+    ? <img loading="lazy" decoding="async" src={t.preview.thumbnailUrl} alt={label} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: radius.lg, boxShadow: shadow.md, background: color.surface }} />
     : <div style={{ color: color.textSubtle, fontSize: fontSize.sm }}>Preview unavailable</div>;
 }
 
@@ -165,7 +165,7 @@ export function OutcomeGallery({ goalId, goalLabel, family, onUse, onBack }: {
             {[items[index], items[index + 1], items[index + 2]].filter(Boolean).map((it) => (
               <div key={(it as CreatorTemplate).id} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: space.sm }}>
                 <div style={{ aspectRatio: '4 / 3', background: color.surface2, borderRadius: radius.lg, border: `1px solid ${color.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                  {(it as CreatorTemplate).preview?.thumbnailUrl ? <img src={(it as CreatorTemplate).preview.thumbnailUrl} alt={(it as CreatorTemplate).description} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : null}
+                  {(it as CreatorTemplate).preview?.thumbnailUrl ? <img loading="lazy" decoding="async" src={(it as CreatorTemplate).preview.thumbnailUrl} alt={(it as CreatorTemplate).description} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : null}
                 </div>
                 <div style={{ fontSize: fontSize.sm, color: color.textMuted, lineHeight: 1.4 }}>{(it as CreatorTemplate).description}</div>
                 <button type="button" style={{ ...primaryBtn, padding: `${space.sm}px ${space.md}px`, fontSize: fontSize.sm }} onClick={() => { onUse(it as CreatorTemplate); setCompareOpen(false); }}><Check size={14} /> Use this one</button>
