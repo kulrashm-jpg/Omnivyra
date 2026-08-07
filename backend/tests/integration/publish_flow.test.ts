@@ -21,7 +21,10 @@ function applyFilters(
   rows: any[],
   filters: Record<string, any>,
   inFilters: Record<string, any[]>,
-  lteFilters?: Record<string, any>
+  lteFilters?: Record<string, any>,
+  // JSONB containment (`.contains(col, obj)`). Optional trailing parameter, so
+  // every existing call site stays valid.
+  containsFilters?: Record<string, any>
 ) {
   let result = rows;
   for (const [k, v] of Object.entries(filters)) {
@@ -38,11 +41,25 @@ function applyFilters(
       result = result.filter((r: any) => r[k] != null && r[k] <= v);
     }
   }
+  // Postgres `@>` semantics: every key/value in the criteria must be present and
+  // equal in the row's JSONB column. Filtering for real rather than returning the
+  // builder — a no-op `contains` would let a row match on `worker_name` alone and
+  // silently defeat the idempotency lookup this filter exists to perform.
+  if (containsFilters) {
+    for (const [k, criteria] of Object.entries(containsFilters)) {
+      result = result.filter((r: any) => {
+        const col = r[k];
+        if (col == null || typeof col !== 'object') return false;
+        return Object.entries(criteria as Record<string, any>)
+          .every(([ck, cv]) => (col as Record<string, any>)[ck] === cv);
+      });
+    }
+  }
   return result;
 }
 
 function buildChain(table: string) {
-  const state: any = { filters: {}, inFilters: {}, lteFilters: {}, updateData: null };
+  const state: any = { filters: {}, inFilters: {}, lteFilters: {}, containsFilters: {}, updateData: null };
   const self: any = {
     select: jest.fn().mockReturnThis(),
     insert: jest.fn().mockImplementation((row: any) => {
@@ -73,11 +90,15 @@ function buildChain(table: string) {
       state.lteFilters[field] = value;
       return self;
     }),
+    contains: jest.fn((field: string, criteria: any) => {
+      state.containsFilters[field] = criteria;
+      return self;
+    }),
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     single: jest.fn().mockImplementation(() => {
       const rows = store[table] || [];
-      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters);
+      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters, state.containsFilters);
       let data = filtered[0] || null;
       if (self._inserted) data = self._inserted;
       if (state.updateData && data) {
@@ -87,14 +108,14 @@ function buildChain(table: string) {
     }),
     maybeSingle: jest.fn().mockImplementation(() => {
       const rows = store[table] || [];
-      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters);
+      const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters, state.containsFilters);
       const data = filtered[0] || null;
       return Promise.resolve({ data, error: null });
     }),
   };
   self.then = jest.fn().mockImplementation((resolve: any) => {
     const rows = store[table] || [];
-    const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters);
+    const filtered = applyFilters(rows, state.filters, state.inFilters, state.lteFilters, state.containsFilters);
     if (state._isDelete) {
       const ids = new Set(filtered.map((r: any) => r.id));
       store[table] = (store[table] || []).filter((r: any) => !ids.has(r.id));
