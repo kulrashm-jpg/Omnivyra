@@ -58,8 +58,12 @@ describe('W1-1 semantic cache tenant scoping', () => {
   });
 
   it('the gateway threads request.companyId into both cache calls', () => {
-    expect(gatewaySrc).toMatch(/getCachedCompletion\([\s\S]{0,220}?request\.cache_version,[\s\S]{0,120}?request\.companyId \?\? null,\s*\)/);
-    expect(gatewaySrc).toMatch(/setCachedCompletion\(request\.operation, effectiveModel, request\.messages, content, request\.cache_version, request\.companyId \?\? null\)/);
+    // The cache-version argument is `effectiveCacheVersion` (aiGatewayProvidersOps
+    // WAVE3 item 3), which IS `request.cache_version` unless the caller supplies a
+    // seed. Anchoring on the local preserves this assertion's meaning; the tenant
+    // requirement — `request.companyId ?? null` in BOTH calls — is unchanged.
+    expect(gatewaySrc).toMatch(/getCachedCompletion\([\s\S]{0,220}?effectiveCacheVersion,[\s\S]{0,120}?request\.companyId \?\? null,\s*\)/);
+    expect(gatewaySrc).toMatch(/setCachedCompletion\(request\.operation, effectiveModel, request\.messages, content, effectiveCacheVersion, request\.companyId \?\? null\)/);
   });
 
   it('signatures accept the optional tenant parameter (backward compatible)', () => {
