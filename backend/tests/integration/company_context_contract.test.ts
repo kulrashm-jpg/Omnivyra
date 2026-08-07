@@ -71,6 +71,44 @@ describe('company_context_contract', () => {
     (supabase.from as jest.Mock).mockImplementation(() => ({
       select: jest.fn().mockReturnThis(),
       eq: jest.fn().mockReturnThis(),
+      // WRITE entry points. A third production path reaches this double: the
+      // profile write-back at companyProfileServiceRest1Rest2Pulse.ts:381
+      // (`.upsert(payload, { onConflict }).select('*').single()`). Plus the
+      // best-effort cost-anomaly and audit-log inserts, which already log and
+      // swallow their own failures.
+      insert: jest.fn().mockReturnThis(),
+      upsert: jest.fn().mockReturnThis(),
+      update: jest.fn().mockReturnThis(),
+      delete: jest.fn().mockReturnThis(),
+      // Chainable FILTERS. A second production path reaches this double:
+      // pricingService.fetchModelPricingRow (pricingService.ts:136, via
+      // assertModelPricingExists <- aiGatewayProvidersOps.ts:314) builds
+      // `.eq().eq().eq().eq().lte().order().limit().maybeSingle()`.
+      lte: jest.fn().mockReturnThis(),
+      gte: jest.fn().mockReturnThis(),
+      order: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      in: jest.fn().mockReturnThis(),
+      contains: jest.fn().mockReturnThis(),
+      // TERMINATOR, not a chainable filter — it resolves to a single row, never
+      // the array `then` yields, so `mockReturnThis()` would fail on shape.
+      //
+      // Reached because the profile read migrated to
+      // canonicalProfileAdapter -> companyProfileServiceRest1Rest2Pulse.fetchProfileRaw
+      // (engine.ts:171 -> canonicalProfileAdapter.ts:305), which this suite's
+      // `services/companyProfileService` mock no longer intercepts. Bridged to
+      // that same mock so each test's configured profile — here the one carrying
+      // `problem_transformation` — reaches the migrated path intact.
+      single: jest.fn().mockImplementation(async () => {
+        const profile = await (getProfile as jest.Mock)('c-1').catch(() => null);
+        return profile
+          ? { data: profile, error: null }
+          : { data: null, error: { code: 'PGRST116' } };
+      }),
+      maybeSingle: jest.fn().mockImplementation(async () => {
+        const profile = await (getProfile as jest.Mock)('c-1').catch(() => null);
+        return { data: profile ?? null, error: null };
+      }),
       then: (resolve: any) => resolve({ data: [{ id: 'link' }], error: null }),
     }));
     const externalApiService = jest.requireMock('../../services/externalApiService');
