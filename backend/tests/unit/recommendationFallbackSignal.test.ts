@@ -53,6 +53,23 @@ jest.mock('../../services/trendNormalizationService', () => ({
   normalizeTrends: jest.fn().mockReturnValue([]),
 }));
 
+
+/**
+ * Serialise a PARSED profile back to the RAW DB row shape.
+ *
+ * fetchProfileRaw reads columns where list fields are delimited text; the
+ * parsing layer above it splits them. The suite mocks getProfile, which returns
+ * the already-parsed shape, so the bridge must undo that to feed the raw path
+ * faithfully.
+ */
+function toRawProfileRow(profile: Record<string, any>): Record<string, any> {
+  const row: Record<string, any> = {};
+  for (const [k, v] of Object.entries(profile)) {
+    row[k] = Array.isArray(v) ? v.join(`,`) : v;
+  }
+  return row;
+}
+
 describe('recommendationFallbackSignalService', () => {
   it('generates signals from authority domains', () => {
     const signals = buildFallbackRecommendationSignals({
@@ -97,6 +114,40 @@ describe('generateRecommendations fallback signals', () => {
     (supabase.from as jest.Mock).mockImplementation(() => ({
       select: jest.fn().mockReturnThis(),
       eq: jest.fn().mockReturnThis(),
+      // WRITE entry points — profile write-back and best-effort audit/anomaly inserts.
+      insert: jest.fn().mockReturnThis(),
+      upsert: jest.fn().mockReturnThis(),
+      update: jest.fn().mockReturnThis(),
+      delete: jest.fn().mockReturnThis(),
+      // Chainable FILTERS — pricingService.fetchModelPricingRow builds
+      // `.eq()x4.lte().order().limit().maybeSingle()`.
+      lte: jest.fn().mockReturnThis(),
+      gte: jest.fn().mockReturnThis(),
+      order: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      in: jest.fn().mockReturnThis(),
+      contains: jest.fn().mockReturnThis(),
+      // TERMINATORS — resolve a single row, never the array `then` yields.
+      // Reached because the profile read migrated to
+      // canonicalProfileAdapter -> companyProfileServiceRest1Rest2Pulse.fetchProfileRaw
+      // (engine.ts:171 -> canonicalProfileAdapter.ts:305), which this suite's
+      // `services/companyProfileService` mock no longer intercepts. Bridged to that
+      // mock so each test's configured profile reaches the migrated path.
+      // `getProfile` returns the PARSED profile (list fields as arrays), but
+      // `fetchProfileRaw` returns a RAW DB row where those columns are delimited
+      // TEXT that production then splits (`value.split(/[,;/|]+/g)`). Handing the
+      // parsed shape to the raw path throws `value.split is not a function`, so
+      // the bridge serialises arrays back to the raw representation.
+      single: jest.fn().mockImplementation(async () => {
+        const profile = await (getProfile as jest.Mock)('c-1').catch(() => null);
+        return profile
+          ? { data: toRawProfileRow(profile), error: null }
+          : { data: null, error: { code: 'PGRST116' } };
+      }),
+      maybeSingle: jest.fn().mockImplementation(async () => {
+        const profile = await (getProfile as jest.Mock)('c-1').catch(() => null);
+        return { data: profile ? toRawProfileRow(profile) : null, error: null };
+      }),
       then: (resolve: any) => resolve({ data: [{ id: 'link' }], error: null }),
     }));
 
