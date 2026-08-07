@@ -1,3 +1,17 @@
+// MEASURED timeout declaration, per the repository standard (cf.
+// longFormOrchestratorCharacterization 180_000, canonicalGroundingLiveEval 1_800_000).
+//
+// These tests exercise full alignment scoring and ranking. Measured durations on
+// a passing run: slowest 25.4s (`alignment_contract_guard`), with nine more in the
+// 13-18s band. Against the 30s global default that is a 15% margin, and forensic
+// runs showed 2 failures in 6 — both `Exceeded timeout of 30000 ms`, on DIFFERENT
+// tests, never an assertion.
+//
+// 60s is twice the measured maximum. Nothing here is weakened, retried or
+// skipped: the suite's cost was previously invisible because 22 of its 23 tests
+// aborted on a broken mock before executing any of this work.
+jest.setTimeout(60_000);
+
 import handler from '../../../pages/api/recommendations/generate';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendations } from '../../services/recommendationEngineService';
@@ -88,6 +102,55 @@ describe('Recommendation engine service', () => {
     (supabase.from as jest.Mock).mockImplementation(() => ({
       select: jest.fn().mockReturnThis(),
       eq: jest.fn().mockReturnThis(),
+      // WRITE entry points. This double modelled reads only; production also
+      // writes through the same builder, and these return it so `.select()` /
+      // `.eq()` can follow.
+      insert: jest.fn().mockReturnThis(),
+      upsert: jest.fn().mockReturnThis(),
+      update: jest.fn().mockReturnThis(),
+      delete: jest.fn().mockReturnThis(),
+      // Chainable FILTERS — these return the builder, so `mockReturnThis` is the
+      // faithful emulation. Production has grown multi-filter chains such as
+      // `.eq().eq().eq().eq().lte()` that this double never modelled.
+      lte: jest.fn().mockReturnThis(),
+      gte: jest.fn().mockReturnThis(),
+      lt: jest.fn().mockReturnThis(),
+      gt: jest.fn().mockReturnThis(),
+      neq: jest.fn().mockReturnThis(),
+      in: jest.fn().mockReturnThis(),
+      is: jest.fn().mockReturnThis(),
+      not: jest.fn().mockReturnThis(),
+      contains: jest.fn().mockReturnThis(),
+      order: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      range: jest.fn().mockReturnThis(),
+      // `.single()` is a TERMINATOR, not a chainable filter: it resolves to a
+      // single row, never the array `then` yields. Emulating it with
+      // `mockReturnThis()` would hand `fetchProfileRaw` an array and fail on
+      // shape instead of on the missing method.
+      //
+      // WHY IT IS REACHED AT ALL. This suite mocks `services/companyProfileService`,
+      // but the profile read migrated to
+      // canonicalProfileAdapter -> companyProfileServiceRest1Rest2Pulse.fetchProfileRaw,
+      // which that mock no longer intercepts. The real query therefore reaches
+      // this double, and `fetchProfileRaw` treats PGRST116 as "no row" — so the
+      // faithful emulation returns a row with the same identifiers the
+      // `getProfile` mock returns.
+      // Bridged to the suite's own `getProfile` mock rather than a fixed row, so
+      // the migrated raw path yields exactly the profile each test configures.
+      // A fixed row would silently starve the alignment tests of the
+      // campaign_focus / geography_list / core-problem fields they rank on, and
+      // they would fail on ranking rather than on plumbing.
+      single: jest.fn().mockImplementation(async () => {
+        const profile = await (getProfile as jest.Mock)('c-1').catch(() => null);
+        return profile
+          ? { data: profile, error: null }
+          : { data: null, error: { code: 'PGRST116' } };
+      }),
+      maybeSingle: jest.fn().mockImplementation(async () => {
+        const profile = await (getProfile as jest.Mock)('c-1').catch(() => null);
+        return { data: profile ?? null, error: null };
+      }),
       then: (resolve: any) => resolve({ data: [{ id: 'link' }], error: null }),
     }));
     (getProfile as jest.Mock).mockResolvedValue({ company_id: 'c-1', category: 'marketing' });
