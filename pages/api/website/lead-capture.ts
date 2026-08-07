@@ -71,6 +71,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       message: str(body.message),
       consent: bool(body.consent),
       rawBody: body,
+      // WS-2 M2: headers carry the user-agent and the edge geography used to
+      // derive coarse device/location context. Nothing raw is persisted.
+      requestHeaders: req.headers as Record<string, unknown>,
     }, { companyId: tenant.tenantId });
     return res.status(result.status === 'created' ? 201 : 200).json(result);
   } catch (err) {

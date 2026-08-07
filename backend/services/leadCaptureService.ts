@@ -21,6 +21,8 @@ import { createLead } from './leadService';
 import { triggerLeadIntelligence } from './leadIntelligenceActivation';
 import { extractAttributionPayload, recordLeadAttribution } from './leadAttributionService';
 import { resolveVisitorSession, stitchSessionToLead, persistCampaignTouchpoint } from './attributionResolverService';
+import { parseUserAgent, extractGeoContext } from './leadIntelligenceEngine/visitorContext';
+import { recordVisitorContext } from './leadIntelligenceTelemetry';
 import { LEAD_CAPTURE_INTENTS, isLeadIntent, ATTRIBUTION_FIELDS, LITE_INTENTS, type ConfirmationConfig, type LeadIntent } from '../../lib/website/leadCaptureConfig';
 
 export interface WebsiteLeadFields {
@@ -42,6 +44,12 @@ export interface WebsiteLeadSubmission extends WebsiteLeadFields {
   intent: string;
   /** raw POST body — the server re-derives attribution from it (client values are enrichment only). */
   rawBody: Record<string, unknown>;
+  /**
+   * WS-2 M2 — request headers, used ONLY to derive coarse device/geography at
+   * the moment of conversion (see visitorContext). Optional: absent headers
+   * simply mean no context is recorded. No raw header value is persisted.
+   */
+  requestHeaders?: Record<string, unknown> | null;
 }
 
 export interface CaptureResult {
@@ -183,7 +191,19 @@ export async function captureWebsiteLead(
   // Server-authoritative attribution + session (client values are enrichment only).
   const attribution = extractAttributionPayload(submission.rawBody);
   const websiteId = attribution.website_id ?? null;
-  const session = await resolveVisitorSession({ companyId, websiteId, attribution });
+  // WS-2 M2: parse the conversion-moment visitor context once, and hand it to
+  // the session writer so the session and the lead agree on the same reading.
+  const headers = submission.requestHeaders ?? null;
+  const deviceContext = parseUserAgent(headers?.['user-agent'] ?? headers?.['User-Agent']);
+  const geoContext = extractGeoContext(headers, (submission.rawBody as { timezone?: unknown }).timezone);
+  recordVisitorContext({ device: !!deviceContext, geo: !!geoContext });
+
+  const session = await resolveVisitorSession({
+    companyId,
+    websiteId,
+    attribution,
+    visitorContext: { device: deviceContext, geo: geoContext },
+  });
 
   // INT-001 Phase 1: additive intelligence blocks (journey + attribution
   // extensions) — stored in metadata only; no existing key changes shape.
@@ -222,6 +242,10 @@ export async function captureWebsiteLead(
       // INT-001 Phase 1 (additive): journey + extended attribution intelligence.
       ...(journey ? { journey } : {}),
       attribution_intelligence: attributionIntelligence,
+      // WS-2 M2 (additive): the device/location of the CONVERSION itself,
+      // which can differ from the visitor's usual session context.
+      ...(deviceContext ? { device: deviceContext } : {}),
+      ...(geoContext ? { geo: geoContext } : {}),
     },
   });
 

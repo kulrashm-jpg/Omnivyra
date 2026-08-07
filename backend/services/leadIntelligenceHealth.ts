@@ -108,6 +108,46 @@ export function checkPersistenceHealth(): HealthIndicator {
 }
 
 /**
+ * SESSION CAPTURE HEALTH — WS-2 M1A (3).
+ *
+ * The capture-side session write is upstream of everything else: a lead whose
+ * session was never persisted keeps `visitor_session_id = null`, and the
+ * snapshot loader keys its events and sessions off that id — so the lead
+ * silently contributes no behavioural signal at all while generation,
+ * persistence and freshness all still report healthy. This indicator makes
+ * that failure visible in the same triage call as the rest.
+ *
+ * Counter-based like `checkPersistenceHealth` — no query, no new dependency.
+ * `missing_table` / `permission` are unhealthy (systemic and self-perpetuating);
+ * anything else is degraded. Recoveries (`recovered_conflict`, `insert_retried`)
+ * never reach the failures counter, so a busy racing tenant reads healthy.
+ */
+export function checkSessionCaptureHealth(): HealthIndicator {
+  try {
+    const counters = readCounters();
+    const failures = sumMatching(counters, INTEL_METRICS.session.failures);
+    if (failures === 0) {
+      return { name: 'sessionCapture', status: 'healthy', detail: 'no session persistence failures recorded in this process' };
+    }
+    const systemic =
+      sumMatching(counters, INTEL_METRICS.session.failures, 'missing_table') +
+      sumMatching(counters, INTEL_METRICS.session.failures, 'permission');
+    const lost = sumMatching(counters, INTEL_METRICS.session.failures, 'insert_failed');
+    return {
+      name: 'sessionCapture',
+      status: systemic > 0 ? 'unhealthy' : 'degraded',
+      detail:
+        systemic > 0
+          ? `${systemic} session write(s) failed on table access — visits are not being linked to sessions`
+          : `${failures} session persistence failure(s) in this process`,
+      data: { failures, systemic, lost },
+    };
+  } catch (e) {
+    return { name: 'sessionCapture', status: 'unknown', detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
  * GENERATION HEALTH — success/failure mix observed by this process. 'unknown'
  * when nothing has been generated yet (a cold instance is not unhealthy).
  */
@@ -202,7 +242,7 @@ export async function checkFreshnessHealth(companyId?: string): Promise<HealthIn
   }
 }
 
-/** Compose all four probes into one report. Never throws. */
+/** Compose all five probes into one report. Never throws. */
 export async function getIntelligenceHealth(companyId?: string): Promise<IntelligenceHealthReport> {
   const migration = await checkMigrationHealth();
   // Freshness needs the table; skip the query entirely when it is absent.
@@ -210,7 +250,7 @@ export async function getIntelligenceHealth(companyId?: string): Promise<Intelli
     migration.status === 'unhealthy'
       ? { name: 'freshness', status: 'unknown' as HealthStatus, detail: 'skipped — persistence table unavailable' }
       : await checkFreshnessHealth(companyId);
-  const indicators = [migration, checkPersistenceHealth(), checkGenerationHealth(), freshness];
+  const indicators = [migration, checkPersistenceHealth(), checkSessionCaptureHealth(), checkGenerationHealth(), freshness];
   return {
     status: indicators.map((i) => i.status).reduce(worseOf, 'healthy' as HealthStatus),
     checkedAt: new Date().toISOString(),

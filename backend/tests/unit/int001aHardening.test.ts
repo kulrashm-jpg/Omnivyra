@@ -176,6 +176,9 @@ const fullRecommendations = (): LeadRecommendations => ({
   meetingProbability: { value: 0.55, confidence: 0.5, explanation: 'x' },
   closeProbability: { value: 0.25, confidence: 0.5, explanation: 'x' },
   nextBestAction: { value: 'Schedule follow-up', confidence: 0.85, explanation: 'x' },
+  // WS-2 M3 — evolution-derived recommendations.
+  riskIndicators: { value: ['Cooling interest'], confidence: 0.6, explanation: 'x' },
+  opportunityMaturity: { value: 'Mid stage — consideration', confidence: 0.6, explanation: 'x' },
 });
 
 const recordFor = (companyId: string, leadId: string): LeadIntelligenceRecord => ({
@@ -191,10 +194,10 @@ const recordFor = (companyId: string, leadId: string): LeadIntelligenceRecord =>
 } as unknown as LeadIntelligenceRecord);
 
 describe('INT-001A F4 — canonical recommendation keys', () => {
-  test('the engine constant is exhaustive against LeadRecommendations (10 unique keys, runtime-verified)', () => {
+  test('the engine constant is exhaustive against LeadRecommendations (12 unique keys, runtime-verified)', () => {
     const canonical = LEAD_RECOMMENDATION_KEYS.map((k) => k.key);
-    expect(canonical).toHaveLength(10);
-    expect(new Set(canonical).size).toBe(10);
+    expect(canonical).toHaveLength(12); // WS-2 M3 added riskIndicators + opportunityMaturity
+    expect(new Set(canonical).size).toBe(12);
     const interfaceKeys = Object.keys(fullRecommendations());
     expect([...canonical].sort()).toEqual([...interfaceKeys].sort());
     for (const { label } of LEAD_RECOMMENDATION_KEYS) expect(label.length).toBeGreaterThan(0);
@@ -235,7 +238,7 @@ describe('INT-001A F5 — tenant mismatch protection', () => {
     expect(view.status).toBe('available');
     expect(view.companyId).toBe('co-1');
     expect(view.version).not.toBeNull();
-    expect(view.recommendations).toHaveLength(10);
+    expect(view.recommendations).toHaveLength(12);
   });
 
   test('end-to-end through the read API: an injected port returning a foreign record yields never_generated', async () => {

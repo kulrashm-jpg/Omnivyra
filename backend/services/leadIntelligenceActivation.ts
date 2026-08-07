@@ -29,6 +29,7 @@ import {
   recordActivationFanout,
 } from './leadIntelligenceTelemetry';
 import { logger } from './logger';
+import { keepAliveAfterResponse } from '../../lib/runtime/keepAlive';
 
 /**
  * HARDEN-INT-002 (6) — SERVERLESS DETACHED EXECUTION.
@@ -39,35 +40,49 @@ import { logger } from './logger';
  * sent. A bare `void promise` is therefore not guaranteed to complete — the
  * failure mode being that generation silently never runs in production.
  *
- * The platform's own remedy is already a dependency of this repo
- * (`@vercel/functions` ▸ `waitUntil`), which registers a promise with the
- * runtime so the invocation stays alive until it settles. This is the minimal
- * change — no queue, no worker, no architectural redesign:
- *   • on Vercel  → the promise is registered and reliably completes;
- *   • elsewhere  → `waitUntil` is unavailable or throws outside a request
- *                  context, so we fall back to the previous plain detach,
- *                  which is correct on long-lived processes (worker/local).
- * Either way the caller is never blocked and errors never propagate.
+ * The remedy is the platform's canonical keep-alive abstraction,
+ * `lib/runtime/keepAlive` ▸ `keepAliveAfterResponse` (STABILIZE-INT-001 (4) —
+ * this module previously carried its own copy of the Vercel detection, which
+ * is exactly the duplicated runtime abstraction that has now been removed):
+ *   • on Vercel  → the promise is registered via `waitUntil` and reliably
+ *                  completes after the response is flushed;
+ *   • elsewhere  → the helper awaits the work, which is correct on long-lived
+ *                  processes (worker/local/jest).
+ * The caller is never blocked in either case, because the helper's promise is
+ * deliberately not awaited here, and errors never propagate.
  */
 export function detachBackgroundWork(work: Promise<unknown>): void {
-  const settled = work.catch((e) => {
-    logger.warn('intel_background_work_failed', {
-      detail: e instanceof Error ? e.message : String(e),
-    });
-    return undefined;
-  });
-  try {
-    // Lazily required so non-Vercel runtimes (worker, jest) never load it.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-    const vercel = require('@vercel/functions') as { waitUntil?: (p: Promise<unknown>) => void };
-    if (typeof vercel?.waitUntil === 'function') {
-      vercel.waitUntil(settled);
-      return;
-    }
-  } catch {
-    /* not on Vercel (or no request context) — plain detach below */
-  }
-  void settled;
+  // STABILIZE-INT-001 (4): the waitUntil resolution itself is NOT reimplemented
+  // here — `lib/runtime/keepAlive` is the platform's canonical abstraction for
+  // work that must outlive the response, and it already owns the Vercel
+  // detection, the optional-dependency import and the non-Vercel fallback.
+  // This function remains only as the two adapters that helper deliberately
+  // does not provide, and that the activation contract requires:
+  //   1. never-reject — keepAliveAfterResponse documents that `work` must not
+  //      throw, so failures are absorbed and logged here first;
+  //   2. never-block — the helper AWAITS the work when no platform waitUntil
+  //      exists, so the returned promise is intentionally not awaited. On
+  //      Vercel the work is registered and the caller returns immediately; on
+  //      long-lived runtimes (worker, local, jest) it simply runs detached.
+  //      Either way the capture/tracking response is never delayed.
+  const settled: Promise<void> = work.then(
+    () => undefined,
+    (e) => {
+      // STABILIZE-INT-002 (D8): guard the handler itself. On Vercel the helper
+      // hands `settled` to waitUntil and returns immediately, so a throw here
+      // would reject `settled` with nothing left to catch it — an
+      // unhandledRejection, which terminates the process by default on Node
+      // ≥15. In the capture tier that is an outage, so it must be impossible.
+      try {
+        logger.warn('intel_background_work_failed', {
+          detail: e instanceof Error ? e.message : String(e),
+        });
+      } catch {
+        /* never convert a handled failure into a rejection */
+      }
+    },
+  );
+  void keepAliveAfterResponse(settled).catch(() => undefined);
 }
 
 export type ActivationReason =

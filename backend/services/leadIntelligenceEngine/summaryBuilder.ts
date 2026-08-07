@@ -17,6 +17,7 @@ import { buildQualification } from './qualificationEngine';
 import { assignSegments } from './segmentationEngine';
 import { buildRecommendations } from './recommendationEngine';
 import { buildLeadTimeline } from './timelineEngine';
+import { buildEvolutionIntelligence } from './evolutionEngine';
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
@@ -29,10 +30,14 @@ export function buildLeadIntelligenceSummary(
 
   const intent = computeIntentIntelligence(snapshot, config, behavior);
   const persona = classifyPersona(snapshot, config, behavior);
-  const qualification = buildQualification({ snapshot, intent, persona }, config, behavior);
+  // WS-2 M3: evolution is replayed ONCE here and shared with qualification,
+  // recommendations and the timeline, exactly as `behavior` already is — so no
+  // consumer recomputes it and all four agree on one history.
+  const evolution = buildEvolutionIntelligence(snapshot, config, behavior);
+  const qualification = buildQualification({ snapshot, intent, persona, evolution }, config, behavior);
   const segments = assignSegments({ snapshot, intent, persona, qualification }, config, behavior);
-  const recommendations = buildRecommendations({ snapshot, intent, persona, qualification, segments }, config, behavior);
-  const timeline = buildLeadTimeline(snapshot, { qualifiedAt: snapshot.now, recommendationGeneratedAt: snapshot.now }, config);
+  const recommendations = buildRecommendations({ snapshot, intent, persona, qualification, segments, evolution }, config, behavior);
+  const timeline = buildLeadTimeline(snapshot, { qualifiedAt: snapshot.now, recommendationGeneratedAt: snapshot.now, evolution }, config);
 
   // Overall confidence = data completeness. Each captured dimension raises trust
   // in the intelligence object; persona certainty contributes a bounded share.
@@ -55,6 +60,7 @@ export function buildLeadIntelligenceSummary(
     segments,
     recommendations,
     timeline,
+    evolution,
     confidence,
     generatedAt: snapshot.now,
   };

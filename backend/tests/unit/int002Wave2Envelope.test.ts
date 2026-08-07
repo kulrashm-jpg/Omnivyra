@@ -93,7 +93,7 @@ beforeEach(() => {
 
 describe('INT-002 Wave 2 — version bump', () => {
   it('bumps engine and schema versions and keeps v1 loadable', () => {
-    expect(ENGINE_VERSION).toBe('lie-2.0.0');
+    expect(ENGINE_VERSION).toBe('lie-2.1.0'); // WS-2 M3: bumped so records regenerate WITH evolution
     expect(INTELLIGENCE_SCHEMA_VERSION).toBe(2);
     expect(SUPPORTED_SCHEMA_VERSIONS).toEqual([1, 2]);
     expect(isSupportedSchemaVersion(1)).toBe(true);
@@ -112,7 +112,7 @@ describe('INT-002 Wave 2 — new records contain all three layers', () => {
     const record = result.record!;
 
     // Envelope versioning.
-    expect(record.engineVersion).toBe('lie-2.0.0');
+    expect(record.engineVersion).toBe('lie-2.1.0');
     expect(record.schemaVersion).toBe(2);
 
     // Layer 1 — Phase 2 summary (unchanged shape).
@@ -232,7 +232,7 @@ describe('INT-002 Wave 2 — staleness and regeneration lifecycle', () => {
     const regen = await orchestrator.generate(REF); // no force needed
     expect(regen.status).toBe('generated');
     const upgraded = regen.record!;
-    expect(upgraded.engineVersion).toBe('lie-2.0.0');
+    expect(upgraded.engineVersion).toBe('lie-2.1.0');
     expect(upgraded.schemaVersion).toBe(2);
     expect(upgraded.generationVersion).toBe(4); // history preserved: 3 + 1
     expect(upgraded.qualificationPlanning).not.toBeNull();

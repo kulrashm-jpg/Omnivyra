@@ -14,9 +14,17 @@
  *    qualification planning and Phase 5 automation planning. Schema-1 rows
  *    remain loadable (planning layers surface as null) and are stale by
  *    engine-version mismatch, so the next generate upgrades them in place.
+ *  - lie-2.1.0 / schema 2 — WS-2 M3: the summary additionally carries
+ *    `evolution` (intent / funnel / journey), two new recommendation keys and
+ *    three new timeline stage types. The SHAPE stays schema 2 because every
+ *    addition is optional and a schema-2 reader loads a 2.1.0 record without
+ *    change — only the engine version moves, which is precisely the mechanism
+ *    that marks existing records stale so they regenerate WITH evolution on
+ *    their next trigger. Without this bump those records would stay "fresh"
+ *    and never gain the new intelligence.
  */
 
-export const ENGINE_VERSION = 'lie-2.0.0';
+export const ENGINE_VERSION = 'lie-2.1.0';
 
 export const INTELLIGENCE_SCHEMA_VERSION = 2;
 

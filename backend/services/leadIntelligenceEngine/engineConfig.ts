@@ -17,6 +17,45 @@ export interface IntentEngineConfig {
   downloadPoints: { points: number; cap: number };
   /** Repeat visitor (more than one session). */
   repeatVisitPoints: { pointsPerExtraSession: number; cap: number };
+  /**
+   * WS-2 M1 (5) — durable visitor loyalty, scored from the persisted visit
+   * ordinal rather than the sessions that happen to be loaded. Separate from
+   * `repeatVisitPoints` (which scores observed sessions) so the two remain
+   * independently tunable and neither double-counts the other's evidence.
+   */
+  loyaltyPoints: { pointsPerVisitBeyondFirst: number; cap: number };
+  /**
+   * Return cadence: a visitor coming back within this window is actively
+   * evaluating. Tiers are checked in order; the first match wins.
+   */
+  cadence: Array<{ withinDays: number; points: number; label: string }>;
+  /**
+   * WS-2 M2 — video engagement. `startedEventNames` / `progressEventNames` /
+   * `completedEventNames` are matched against `tracking_events.event_name`.
+   * Completion scores; a start alone scores less, because starting a video is
+   * a click and finishing one is an investment.
+   */
+  video: {
+    startedEventNames: string[];
+    progressEventNames: string[];
+    completedEventNames: string[];
+    /** Progress ≥ this percent counts as substantial engagement. */
+    substantialProgressPct: number;
+    startedPoints: number;
+    substantialPoints: number;
+    completedPoints: number;
+    cap: number;
+  };
+  /**
+   * WS-2 M2 — on-site search. A visitor who types a query is telling you what
+   * they want in their own words; it is among the highest-signal events a site
+   * can capture, so it scores per distinct query rather than per event.
+   */
+  search: {
+    eventNames: string[];
+    pointsPerDistinctQuery: number;
+    cap: number;
+  };
   /** Scroll depth (%) at or above which a page counts as deeply read. */
   deepScrollThreshold: number;
   deepScrollPoints: { points: number; cap: number };
@@ -29,6 +68,24 @@ export interface IntentEngineConfig {
   frequency: { pointsPerActiveDay: number; cap: number };
   bands: { high: number; medium: number }; // score >= high → 'high', >= medium → 'medium', > 0 → 'low'
   maxScore: number;
+}
+
+/** WS-2 M3 — evolution replay bounds and trend thresholds. */
+export interface EvolutionEngineConfig {
+  /**
+   * Maximum replayed observation points. Replay is O(checkpoints × events), so
+   * this is what keeps a long-history lead from becoming quadratic. Both ends
+   * are always kept; the middle is thinned deterministically.
+   */
+  maxCheckpoints: number;
+  /** Points below peak at which intent is described as decaying. */
+  decayPointsForDecaying: number;
+  /** Days without activity after which a journey reads as stagnant. */
+  stagnantAfterDays: number;
+  /** Days without activity after which intent/journey read as dormant. */
+  dormantAfterDays: number;
+  /** Cadence ratio (earlier mean gap ÷ latest gap) meaning "accelerating". */
+  accelerationRatio: number;
 }
 
 export interface PersonaRule {
@@ -75,6 +132,9 @@ export interface QualificationEngineConfig {
     distinctPageCap: number;
     deepScrollBonus: number;
     downloadBonus: number;
+    /** WS-2 M2 — engagement types this section previously could not observe. */
+    videoBonus: number;
+    searchBonus: number;
   };
   urgency: {
     recency: Array<{ withinDays: number; points: number }>;
@@ -106,6 +166,7 @@ export interface LeadIntelligenceEngineConfig {
   qualification: QualificationEngineConfig;
   segmentation: SegmentationEngineConfig;
   recommendation: RecommendationEngineConfig;
+  evolution: EvolutionEngineConfig;
 }
 
 export const defaultEngineConfig: LeadIntelligenceEngineConfig = {
@@ -124,6 +185,27 @@ export const defaultEngineConfig: LeadIntelligenceEngineConfig = {
     downloadEventNames: ['download', 'file_download', 'asset_download'],
     downloadPoints: { points: 6, cap: 12 },
     repeatVisitPoints: { pointsPerExtraSession: 6, cap: 12 },
+    loyaltyPoints: { pointsPerVisitBeyondFirst: 4, cap: 12 },
+    cadence: [
+      { withinDays: 1, points: 8, label: 'Returned within a day' },
+      { withinDays: 3, points: 5, label: 'Returned within 3 days' },
+      { withinDays: 7, points: 3, label: 'Returned within a week' },
+    ],
+    video: {
+      startedEventNames: ['video_started', 'video_start', 'video_play'],
+      progressEventNames: ['video_progress'],
+      completedEventNames: ['video_completed', 'video_complete', 'video_ended'],
+      substantialProgressPct: 50,
+      startedPoints: 3,
+      substantialPoints: 5,
+      completedPoints: 8,
+      cap: 16,
+    },
+    search: {
+      eventNames: ['search', 'internal_search', 'site_search', 'search_query'],
+      pointsPerDistinctQuery: 6,
+      cap: 18,
+    },
     deepScrollThreshold: 75,
     deepScrollPoints: { points: 3, cap: 9 },
     dwellSecondsThreshold: 45,
@@ -179,6 +261,8 @@ export const defaultEngineConfig: LeadIntelligenceEngineConfig = {
       distinctPageCap: 30,
       deepScrollBonus: 15,
       downloadBonus: 15,
+      videoBonus: 12,
+      searchBonus: 12,
     },
     urgency: {
       recency: [
@@ -201,6 +285,13 @@ export const defaultEngineConfig: LeadIntelligenceEngineConfig = {
     meetingProbability: { base: 0.05, perQualificationPoint: 0.007, max: 0.9 },
     closeProbability: { base: 0.02, perQualificationPoint: 0.004, companyFitFactor: 0.002, max: 0.75 },
   },
+  evolution: {
+    maxCheckpoints: 12,
+    decayPointsForDecaying: 10,
+    stagnantAfterDays: 14,
+    dormantAfterDays: 45,
+    accelerationRatio: 1.5,
+  },
 };
 
 /** Shallow-merge a partial override onto the default config (top-level sections). */
@@ -213,5 +304,6 @@ export function resolveEngineConfig(override?: Partial<LeadIntelligenceEngineCon
     qualification: override.qualification ?? defaultEngineConfig.qualification,
     segmentation: override.segmentation ?? defaultEngineConfig.segmentation,
     recommendation: override.recommendation ?? defaultEngineConfig.recommendation,
+    evolution: override.evolution ?? defaultEngineConfig.evolution,
   };
 }

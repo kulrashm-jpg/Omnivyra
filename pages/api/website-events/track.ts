@@ -5,6 +5,9 @@ import { resolveVisitorSession, persistCampaignTouchpoint } from '../../../backe
 import { checkWebsiteOrigin, hashIp } from '../../../backend/services/websiteDomainEnforcementService';
 import { checkInMemoryRateLimit, isLikelyBot } from '../../../backend/services/trackingRateLimitService';
 import { triggerVisitorSessionIntelligence } from '../../../backend/services/leadIntelligenceActivation';
+import { parseUserAgent, extractGeoContext } from '../../../backend/services/leadIntelligenceEngine/visitorContext';
+import { recordVisitorContext, recordEventIngestion, type EventFamily } from '../../../backend/services/leadIntelligenceTelemetry';
+import { defaultEngineConfig } from '../../../backend/services/leadIntelligenceEngine/engineConfig';
 
 /** INT-002 hardening: max distinct visitor sessions regenerated per request. */
 const MAX_TRIGGERED_SESSIONS_PER_REQUEST = 3;
@@ -79,6 +82,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const userAgent = typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : '';
   const botFlag = isLikelyBot(userAgent);
+
+  // WS-2 M2 — parse visitor context ONCE per request, not once per event. A
+  // batch of 20 events shares one user-agent and one set of edge headers, so
+  // re-parsing per event would be pure waste. Both are total functions that
+  // return null rather than throwing, so a malformed UA or a request with no
+  // edge geography simply persists nothing.
+  const deviceContext = parseUserAgent(userAgent);
+  const geoContext = extractGeoContext(req.headers as Record<string, unknown>, (body as { timezone?: unknown }).timezone);
+  recordVisitorContext({ device: !!deviceContext, geo: !!geoContext });
+  const visitorContext = { device: deviceContext, geo: geoContext };
   const accepted: string[] = [];
   const touchedSessionIds = new Set<string>();
 
@@ -99,6 +112,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       companyId: website.company_id,
       websiteId: website.id,
       attribution: payload,
+      visitorContext,
     });
     const eventName = String(payload.event_name || 'page_view').slice(0, 120);
     const dedupeKey = payload.event_id || `${payload.session_id || payload.anonymous_id}:${eventName}:${payload.current_page || ''}:${payload.properties?.timestamp || ''}`;
@@ -130,6 +144,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       ip_hash: hashIp(ip),
       bot_flag: botFlag,
     });
+    // WS-2 M2: ingestion is now observable per event family. Previously a
+    // rejected insert was silently dropped from `accepted` with no signal at
+    // all — a tracker sending malformed events looked identical to a quiet site.
+    recordEventIngestion(eventFamily(eventName), insert.error ? 'rejected' : 'accepted');
     if (!insert.error) accepted.push(eventName);
     if (session.sessionId) touchedSessionIds.add(String(session.sessionId));
 
@@ -160,6 +178,29 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   return res.status(202).json({ ok: true, accepted: accepted.length, events: accepted });
+}
+
+/**
+ * WS-2 M2 — map an event name onto the closed family set used for telemetry.
+ *
+ * Names come from the tracker and are therefore unbounded; families are not.
+ * The mapping reuses the SAME configured name lists the engines match on, so
+ * a family here can never drift from what behaviour analysis recognises.
+ */
+function eventFamily(eventName: string): EventFamily {
+  const intent = defaultEngineConfig.intent;
+  if (eventName === 'page_view') return 'page_view';
+  if (intent.downloadEventNames.includes(eventName)) return 'download';
+  if (
+    intent.video.startedEventNames.includes(eventName) ||
+    intent.video.progressEventNames.includes(eventName) ||
+    intent.video.completedEventNames.includes(eventName)
+  ) {
+    return 'video';
+  }
+  if (intent.search.eventNames.includes(eventName)) return 'search';
+  if (eventName === 'cta_click' || eventName === 'form_submit' || eventName === 'outbound_click') return 'conversion';
+  return 'other';
 }
 
 function categoryForEvent(eventName: string): 'navigation' | 'engagement' | 'conversion' | 'system' {

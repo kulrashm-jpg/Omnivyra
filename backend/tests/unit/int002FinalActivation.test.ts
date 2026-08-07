@@ -111,15 +111,30 @@ describe('INT-002 final — generation lifecycle triggers', () => {
     expect(h.record()).toMatchObject({ engineVersion: ENGINE_VERSION, generationVersion: 2 });
   });
 
-  test('TRIGGER 3 — unsupported envelope schema regenerates (hardening: previously skipped forever)', async () => {
+  test('TRIGGER 3 — an unsupported OLDER envelope schema regenerates (hardening: previously skipped forever)', async () => {
     const h = harness();
     await h.orchestrator.generate(REF);
-    const unsupported = Math.max(...SUPPORTED_SCHEMA_VERSIONS) + 99;
-    expect(isSupportedSchemaVersion(unsupported)).toBe(false);
-    h.poke({ schemaVersion: unsupported }); // engine version + fingerprint still match
+    const unsupportedOlder = Math.min(...SUPPORTED_SCHEMA_VERSIONS) - 1; // below the range, i.e. a dropped legacy schema
+    expect(isSupportedSchemaVersion(unsupportedOlder)).toBe(false);
+    expect(unsupportedOlder).toBeLessThan(INTELLIGENCE_SCHEMA_VERSION);
+    h.poke({ schemaVersion: unsupportedOlder }); // engine version + fingerprint still match
     const result = await h.orchestrator.generate(REF);
     expect(result.status).toBe('generated'); // was 'skipped_unchanged' before the fix
     expect(h.record()).toMatchObject({ schemaVersion: INTELLIGENCE_SCHEMA_VERSION, generationVersion: 2 });
+  });
+
+  test('DOWN-GRADE PROTECTION — a record written by a NEWER build is skipped and left untouched', async () => {
+    // Rolling deploys run mixed builds. An older instance must never overwrite
+    // an envelope a newer instance wrote, so schema > current is a skip, not a
+    // regeneration — the opposite of the unsupported-older case above.
+    const h = harness();
+    await h.orchestrator.generate(REF);
+    const newer = INTELLIGENCE_SCHEMA_VERSION + 1;
+    h.poke({ schemaVersion: newer });
+    const result = await h.orchestrator.generate(REF);
+    expect(result.status).toBe('skipped_unchanged');
+    expect(result.warnings.join(' ')).toContain('newer build');
+    expect(h.record()).toMatchObject({ schemaVersion: newer, generationVersion: 1 }); // untouched
   });
 
   test('TRIGGER 4 — rebuild requested regenerates and clears the pending flag', async () => {

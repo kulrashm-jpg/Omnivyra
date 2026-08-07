@@ -15,13 +15,19 @@
  *   8. rollback       — does the kill switch cleanly disable generation?
  *
  * Usage:
- *   npm run smoke:intelligence -- --company <companyId> [--lead <leadId>]
- *   npm run smoke:intelligence -- --company <companyId> --read-only
+ *   npm run smoke:intelligence -- --company <companyId>              # read-only (default)
+ *   npm run smoke:intelligence -- --company <companyId> --write      # full, generates 1 lead
+ *   npm run smoke:intelligence -- --company <companyId> --write --i-understand-this-writes-to-production
  *
- * WRITE BEHAVIOUR: steps 5 and 6 generate intelligence for ONE lead, which
- * upserts one row in lead_intelligence_profiles. That is the only write this
- * script performs. `--read-only` skips them (and 8), leaving the run purely
- * observational — use it for a first pass against production.
+ * WRITE BEHAVIOUR — STABILIZE-INT-002 (DEF-4). This script previously WROTE BY
+ * DEFAULT and loaded `.env.local`, which is production by project convention:
+ * running it with no flags mutated production. Safety is now inverted:
+ *   • read-only is the DEFAULT; `--write` is required to generate anything;
+ *   • when the target looks like production, `--write` is additionally refused
+ *     unless `--i-understand-this-writes-to-production` is passed.
+ * The only write, in `--write` mode, is one upsert of the app's own generated
+ * row for ONE lead (plus its generation-version bump). No customer data is
+ * created, modified or deleted in any mode.
  *
  * Exit 0 = every executed check passed. Exit 1 = at least one failed.
  */
@@ -71,16 +77,56 @@ function skip(name: string, why: string): void {
 
 async function main(): Promise<void> {
   const companyId = arg('--company');
-  const readOnly = hasFlag('--read-only');
   let leadId = arg('--lead');
+
+  // STABILIZE-INT-002 (DEF-4): safe-by-default. Writes require an explicit
+  // opt-in, and a production-looking target requires a second, unmistakable
+  // acknowledgement. `--read-only` is still accepted so existing runbooks and
+  // CI invocations keep working.
+  const wantsWrite = hasFlag('--write') && !hasFlag('--read-only');
+  const prodAck = hasFlag('--i-understand-this-writes-to-production');
+  // WS-2 M1B — SAFETY DEFECT FIXED (found by deployment validation).
+  //
+  // This guard resolved the target from NEXT_PUBLIC_SUPABASE_URL first, but the
+  // backend client that performs the write reads SUPABASE_URL *explicitly* and
+  // deliberately does NOT fall back to the public var — see the comment in
+  // backend/db/supabaseClient.ts, which calls that fallback out as env-drift.
+  // So the two could disagree, and `--write` was authorized against the wrong
+  // one: with SUPABASE_URL=production and NEXT_PUBLIC_SUPABASE_URL=localhost,
+  // the guard read "local" and the writes went to production.
+  //
+  // Now: judge the variable the writes actually use, and treat any disagreement
+  // between the two as production-like. Fail safe, never fail open.
+  const writeTargetUrl = process.env.SUPABASE_URL ?? '';
+  const publicUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+  const targetUrl = writeTargetUrl || publicUrl;
+  const isLocal = (u: string): boolean => u !== '' && /localhost|127\.0\.0\.1|:54321/.test(u);
+  const urlsDisagree = writeTargetUrl !== '' && publicUrl !== '' && isLocal(writeTargetUrl) !== isLocal(publicUrl);
+  const looksProduction =
+    process.env.NODE_ENV === 'production' ||
+    process.env.VERCEL_ENV === 'production' ||
+    urlsDisagree ||
+    (targetUrl !== '' && !isLocal(targetUrl));
 
   console.log('── INT platform smoke tests ──');
   if (!companyId) {
     console.log('\nRESULT: BLOCKED — --company <companyId> is required.\n');
     process.exit(1);
   }
+  if (wantsWrite && looksProduction && !prodAck) {
+    console.log(
+      `\nRESULT: BLOCKED — --write targets what looks like PRODUCTION (${targetUrl || 'NODE_ENV=production'}).\n` +
+        'Re-run read-only (drop --write), or add --i-understand-this-writes-to-production to proceed.\n',
+    );
+    process.exit(1);
+  }
+  const readOnly = !wantsWrite;
   console.log(`company:   ${companyId}`);
-  console.log(`mode:      ${readOnly ? 'read-only (no writes)' : 'full (generates 1 lead)'}\n`);
+  console.log(`target:    ${targetUrl || '(unset)'}${looksProduction ? '  [PRODUCTION-LIKE]' : ''}`);
+  if (urlsDisagree) {
+    console.log(`           ⚠ SUPABASE_URL (${writeTargetUrl}) and NEXT_PUBLIC_SUPABASE_URL (${publicUrl}) disagree — treated as production.`);
+  }
+  console.log(`mode:      ${readOnly ? 'read-only (default; no writes)' : 'WRITE (generates 1 lead)'}\n`);
 
   const { ownedDbTable } = await import('../backend/db/writeOwner');
   const { getIntelligenceHealth } = await import('../backend/services/leadIntelligenceHealth');
@@ -145,9 +191,9 @@ async function main(): Promise<void> {
 
   // 5/6 ── generation + fingerprint skip -----------------------------------
   if (readOnly) {
-    skip('generation', '--read-only');
-    skip('fingerprint:skip', '--read-only');
-    skip('rollback:killswitch', '--read-only');
+    skip('generation', 'read-only mode (pass --write to run)');
+    skip('fingerprint:skip', 'read-only mode (pass --write to run)');
+    skip('rollback:killswitch', 'read-only mode (pass --write to run)');
   } else {
     const orchestrator = createLeadIntelligenceOrchestrator();
 

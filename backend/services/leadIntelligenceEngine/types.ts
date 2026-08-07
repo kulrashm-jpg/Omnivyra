@@ -7,6 +7,10 @@
  * database, the clock, or any Phase 0/1 capture code.
  */
 
+import type { CapturedDeviceContext, CapturedGeoContext } from './visitorContext';
+
+export type { CapturedDeviceContext, CapturedGeoContext };
+
 /** Page taxonomy used by intent, segmentation and recommendations. */
 export type PageCategory =
   | 'home'
@@ -45,6 +49,38 @@ export interface CapturedSession {
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;
+  /**
+   * WS-2 M1 (1) — ADDITIVE session dimensions.
+   *
+   * Capture already writes these to `visitor_sessions.metadata.visitor` and
+   * `last_current_page`, but the assembler never mapped them, so every engine
+   * was structurally blind to returning-visitor behaviour, visit frequency,
+   * session duration and exit page. These fields close that gap without
+   * changing how anything is captured or stored.
+   *
+   * All are nullable by construction: a row written before this mapping (or by
+   * a path that computes no visitor stats) yields null, and every consumer
+   * treats null as "unknown" rather than zero.
+   */
+  /** Exit page of the session (`visitor_sessions.last_current_page`). */
+  lastCurrentPage: string | null;
+  /** True when this visitor had prior sessions in the same tenant. */
+  returning: boolean | null;
+  /** 1-based ordinal of this session for the visitor (1 = first ever). */
+  visitCount: number | null;
+  /** ISO timestamp of the visitor's FIRST ever session in this tenant. */
+  firstVisitAt: string | null;
+  /** Measured session length in ms, refreshed on session continuation. */
+  sessionDurationMs: number | null;
+
+  /**
+   * WS-2 M2 — ADDITIVE visitor dimensions, parsed ONCE at capture and stored
+   * in `visitor_sessions.metadata.device` / `.geo`. Null whenever capture could
+   * not determine them (old rows, absent user-agent, no edge geography), so
+   * every consumer must treat null as "unknown" rather than a default.
+   */
+  device: CapturedDeviceContext | null;
+  geo: CapturedGeoContext | null;
 }
 
 /** Normalized campaign touchpoint (mirrors a `campaign_touchpoints` row). */
@@ -72,6 +108,14 @@ export interface CapturedLeadProfile {
   message: string | null;
   source: string | null;
   createdAt: string | null;
+  /**
+   * WS-2 M2 — the device/geography observed at the moment of capture, written
+   * by the lead-capture path into `leads.metadata.device` / `.geo`. Distinct
+   * from the session-level values: this is the context of the CONVERSION,
+   * which may differ from the visitor's usual device. Null when unknown.
+   */
+  device: CapturedDeviceContext | null;
+  geo: CapturedGeoContext | null;
 }
 
 /** The complete engine input. Assembled once, consumed by every engine. */
@@ -197,6 +241,13 @@ export interface LeadRecommendations {
   meetingProbability: RecommendationItem<number>; // 0..1
   closeProbability: RecommendationItem<number>; // 0..1
   nextBestAction: RecommendationItem;
+  /**
+   * WS-2 M3 — what could lose this deal. Derived from evolution (decay,
+   * stagnation, funnel regression), never from a static snapshot reading.
+   */
+  riskIndicators: RecommendationItem<string[]>;
+  /** WS-2 M3 — how far along the opportunity actually is, and why. */
+  opportunityMaturity: RecommendationItem;
 }
 
 /**
@@ -217,6 +268,8 @@ export const LEAD_RECOMMENDATION_KEYS = [
   { key: 'meetingProbability', label: 'Meeting probability' },
   { key: 'closeProbability', label: 'Close probability' },
   { key: 'nextBestAction', label: 'Next best action' },
+  { key: 'riskIndicators', label: 'Risk indicators' },
+  { key: 'opportunityMaturity', label: 'Opportunity maturity' },
 ] as const;
 
 export type LeadRecommendationKey = (typeof LEAD_RECOMMENDATION_KEYS)[number]['key'];
@@ -240,7 +293,107 @@ export type TimelineStageType =
   | 'conversion'
   | 'lead_submitted'
   | 'qualified'
-  | 'recommendation_generated';
+  | 'recommendation_generated'
+  // WS-2 M3 — ADDITIVE evolution stages. Read layers type `type` as an open
+  // string and never whitelist values, so consumers built before M3 pass these
+  // through unchanged rather than rejecting them.
+  | 'journey_milestone'
+  | 'intent_shift'
+  | 'funnel_transition';
+
+// ---------------------------------------------------------------------------
+// WS-2 M3 — evolution intelligence
+// ---------------------------------------------------------------------------
+
+/** Funnel depth, in progression order. */
+export type FunnelStage = 'unaware' | 'awareness' | 'interest' | 'consideration' | 'evaluation' | 'decision';
+
+/** Intent as it stood at one replayed observation point. */
+export interface IntentCheckpoint {
+  at: string; // ISO-8601
+  /** 1-based ordinal of this observation point. */
+  sessionIndex: number;
+  score: number;
+  band: IntentBand;
+  eventsSoFar: number;
+  /** Scoring signals that appear here for the FIRST time. */
+  newSignals: string[];
+}
+
+/** One explainable change in intent between two observation points. */
+export interface IntentTransition {
+  at: string;
+  previous: { score: number; band: IntentBand };
+  current: { score: number; band: IntentBand };
+  delta: number;
+  direction: 'growth' | 'decay' | 'flat';
+  triggeringEvidence: string[];
+  confidence: number;
+  reasoning: string;
+}
+
+export interface IntentEvolution {
+  checkpoints: IntentCheckpoint[];
+  transitions: IntentTransition[];
+  trend: 'accelerating' | 'growing' | 'stable' | 'decaying' | 'dormant' | 'unknown';
+  /** Intent points gained per day across the observed span. */
+  growthRatePerDay: number | null;
+  peakScore: number;
+  peakAt: string | null;
+  currentScore: number;
+  /** Points below the peak — how much intent has been given back. */
+  decayFromPeak: number;
+  /** Days from first known activity to last. */
+  persistenceDays: number | null;
+  confidence: number;
+  reasoning: string;
+}
+
+export interface FunnelTransition {
+  at: string;
+  from: FunnelStage;
+  to: FunnelStage;
+  direction: 'advance' | 'regress';
+  evidence: string[];
+  confidence: number;
+  reasoning: string;
+}
+
+export interface FunnelProgression {
+  stage: FunnelStage;
+  /** Deepest stage ever reached — never walked back by later inactivity. */
+  furthestStage: FunnelStage;
+  history: Array<{ at: string; stage: FunnelStage; evidence: string[] }>;
+  transitions: FunnelTransition[];
+  regressed: boolean;
+  advancementCount: number;
+  regressionCount: number;
+  confidence: number;
+  reasoning: string;
+}
+
+export interface JourneyMilestone {
+  key: string;
+  label: string;
+  at: string;
+  evidence: string;
+}
+
+export interface JourneyEvolution {
+  milestones: JourneyMilestone[];
+  state: 'new' | 'active' | 'accelerating' | 'slowing' | 'stagnant' | 'dormant';
+  /** Ratio of the earlier mean session gap to the most recent one. >1 = faster. */
+  acceleration: number | null;
+  stagnantDays: number | null;
+  confidence: number;
+  reasoning: string;
+}
+
+export interface LeadEvolutionIntelligence {
+  intent: IntentEvolution;
+  funnel: FunnelProgression;
+  journey: JourneyEvolution;
+}
 
 export interface LeadTimelineEntry {
   type: TimelineStageType;
@@ -263,6 +416,12 @@ export interface LeadIntelligenceSummary {
   segments: SegmentAssignment[];
   recommendations: LeadRecommendations;
   timeline: LeadTimelineEntry[];
+  /**
+   * WS-2 M3 — how the lead's intent, funnel position and journey have MOVED,
+   * replayed deterministically from the same captured evidence. Additive: a
+   * consumer written before M3 simply ignores it.
+   */
+  evolution: LeadEvolutionIntelligence;
   /** Overall confidence in this intelligence object (data completeness driven). */
   confidence: number; // 0..1
   generatedAt: string; // === snapshot.now

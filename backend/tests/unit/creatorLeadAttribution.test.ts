@@ -21,9 +21,16 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 
 // trackingLinkService resolves the base URL from the company profile.
-jest.mock('../../services/companyProfileService', () => ({
+//
+// WS-2 M1A (2): this mock previously targeted `companyProfileService`, but the
+// profile read has since moved behind the canonical profile adapter, so the
+// mock stopped intercepting and the real adapter reached the supabase Proxy
+// above — surfacing as four "DB access in pure attribution path" failures that
+// were an out-of-date test double, not a regression in the attribution chain.
+// Mocking the seam the service actually imports restores the purity proof.
+jest.mock('@/backend/services/context/canonicalProfileAdapter', () => ({
   __esModule: true,
-  getProfile: jest.fn(async () => ({ website_url: 'https://acme.example.com' })),
+  getCanonicalProfile: jest.fn(async () => ({ website_url: 'https://acme.example.com' })),
 }));
 
 import { generateTrackingLink } from '../../services/trackingLinkService';

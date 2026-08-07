@@ -131,7 +131,7 @@ describe('INT-001 Phase 6 — canonical read service', () => {
     expect(view.persona!.persona).toBe('CTO');
     expect(view.qualification!.sections.map((s) => s.key)).toEqual(['intent', 'persona', 'companyFit', 'behavior', 'urgency']);
     expect(view.segments.length).toBeGreaterThan(0);
-    expect(view.recommendations.length).toBe(10);
+    expect(view.recommendations.length).toBe(12); // WS-2 M3: +riskIndicators, +opportunityMaturity
     expect(view.timeline.length).toBe(record.intelligence.timeline.length);
     expect(view.overallConfidence).toBe(record.intelligence.confidence);
   });

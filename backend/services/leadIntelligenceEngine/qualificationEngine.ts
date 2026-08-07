@@ -11,6 +11,7 @@
 import type {
   LeadCaptureSnapshot,
   IntentIntelligence,
+  LeadEvolutionIntelligence,
   PersonaIntelligence,
   QualificationIntelligence,
   QualificationSection,
@@ -26,6 +27,15 @@ export interface QualificationInputs {
   snapshot: LeadCaptureSnapshot;
   intent: IntentIntelligence;
   persona: PersonaIntelligence;
+  /**
+   * WS-2 M3 — optional evolution context. Consumed as EVIDENCE ONLY: it adds
+   * no points anywhere. Intent level is already a weighted section, funnel
+   * depth is derived from the very page visits the behaviour section scores,
+   * and multi-session activity is already scored by intent's loyalty/cadence
+   * signals. Scoring any of it again here would double-count the same evidence
+   * under a different name and silently inflate every qualified lead.
+   */
+  evolution?: LeadEvolutionIntelligence;
 }
 
 function companyFitSection(inputs: QualificationInputs, config: LeadIntelligenceEngineConfig): { score: number; reason: string } {
@@ -87,7 +97,41 @@ function behaviorSection(behavior: BehaviorAnalysis, config: LeadIntelligenceEng
   }
   if (behavior.downloadCount > 0) {
     score += cfg.downloadBonus;
-    parts.push('downloaded content');
+    parts.push(
+      behavior.downloadedAssets.length > 0
+        ? `downloaded ${behavior.downloadedAssets.slice(0, 2).join(', ')}`
+        : 'downloaded content',
+    );
+  }
+  // WS-2 M2: video and search are engagement types this section did not
+  // previously observe at all, so they earn points here — unlike the M1 signals
+  // below, which are intent-scored and therefore evidence-only.
+  if (behavior.videoCompleteCount > 0) {
+    score += cfg.videoBonus;
+    parts.push(`completed ${behavior.videoCompleteCount} video(s)`);
+  } else if (behavior.videoStartCount > 0) {
+    parts.push(`started ${behavior.videoStartCount} video(s)`);
+  }
+  if (behavior.searchQueries.length > 0) {
+    score += cfg.searchBonus;
+    parts.push(`searched for ${behavior.searchQueries.slice(0, 2).map((q) => `"${q}"`).join(', ')}`);
+  }
+  // WS-2 M1 (5): measured engagement time, now that sessions carry duration.
+  // Evidence-only for the same non-double-counting reason as urgency.
+  if (behavior.totalSessionDurationMs !== null && behavior.totalSessionDurationMs > 0) {
+    parts.push(`${Math.round(behavior.totalSessionDurationMs / 1000)}s measured on site`);
+  }
+  if (behavior.exitPages.length > 0) {
+    parts.push(`last left from ${behavior.exitPages[0]}`);
+  }
+  // WS-2 M2: device/location describe the reading, not the engagement level —
+  // evidence only, exactly as the M1 loyalty signals are treated.
+  if (behavior.primaryDeviceCategory) {
+    parts.push(
+      behavior.multiDevice === true
+        ? `across ${behavior.deviceCategories.join(' + ')}`
+        : `on ${behavior.primaryDeviceCategory}`,
+    );
   }
 
   return {
@@ -116,6 +160,20 @@ function urgencySection(behavior: BehaviorAnalysis, config: LeadIntelligenceEngi
     score += cfg.acceleratingVisitsPoints;
     parts.push('visit pace accelerating');
   }
+  // WS-2 M1 (5): the durable return signal now reaches urgency reasoning.
+  // Reported as evidence only — it does not add points here, because intent
+  // already scores loyalty and cadence and urgency must not double-count it.
+  if (behavior.returningVisitor === true) {
+    parts.push(
+      behavior.visitCount !== null
+        ? `returning visitor (visit #${behavior.visitCount})`
+        : 'returning visitor',
+    );
+  }
+  if (behavior.minTimeBetweenSessionsMs !== null) {
+    const days = Math.round((behavior.minTimeBetweenSessionsMs / 86_400_000) * 10) / 10;
+    parts.push(`returned after ${days} day(s) at the shortest gap`);
+  }
 
   return {
     score: clamp(score, 0, 100),
@@ -135,6 +193,31 @@ export function buildQualification(
   const companyFit = companyFitSection(inputs, config);
   const behaviorScore = behaviorSection(behavior, config);
   const urgency = urgencySection(behavior, config);
+
+  // WS-2 M3: evolution enriches the REASONING of the existing sections. The
+  // scores are untouched — see the note on QualificationInputs.evolution.
+  const evo = inputs.evolution;
+  if (evo) {
+    const trendNote =
+      evo.intent.trend === 'accelerating' ? 'intent accelerating'
+        : evo.intent.trend === 'growing' ? 'intent growing'
+          : evo.intent.trend === 'decaying' ? `intent decaying (${evo.intent.decayFromPeak} pts below peak ${evo.intent.peakScore})`
+            : evo.intent.trend === 'dormant' ? 'intent dormant'
+              : null;
+    if (trendNote) urgency.reason += `; ${trendNote}`;
+    if (evo.journey.state === 'stagnant' || evo.journey.state === 'dormant') {
+      urgency.reason += `; journey ${evo.journey.state} for ${evo.journey.stagnantDays} day(s)`;
+    } else if (evo.journey.state === 'accelerating') {
+      urgency.reason += '; return cadence accelerating';
+    }
+    behaviorScore.reason += `; funnel stage ${evo.funnel.stage}`;
+    if (evo.funnel.furthestStage !== evo.funnel.stage) {
+      behaviorScore.reason += ` (furthest reached: ${evo.funnel.furthestStage})`;
+    }
+    if (evo.intent.checkpoints.length > 1) {
+      behaviorScore.reason += `; observed across ${evo.intent.checkpoints.length} sessions over ${evo.intent.persistenceDays ?? 0} day(s)`;
+    }
+  }
 
   const personaScore = clamp(Math.round(inputs.persona.confidence * 100), 0, 100);
 

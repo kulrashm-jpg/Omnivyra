@@ -94,9 +94,19 @@ function scanSource(src) {
 // local variable assigned from `req.query.<field>`.
 const RESOLVE_CALL_RE = /resolveCompanyAccess\s*\(\s*req\s*,\s*res\s*,\s*(?:\(?\s*req\s*\.\s*query\s*\.\s*([A-Za-z0-9_]+)|([A-Za-z0-9_$]+))/;
 
+// STABILIZE-INT-002: the second sanctioned company-scoped guard. Routes
+// migrating off resolveCompanyAccess (which short-circuits on the unsigned
+// content_architect_session cookie) onto enforceCompanyAccess were reported as
+// DRIFT-4 "helper changed or removed" — the tool modelled only one helper, so
+// a security IMPROVEMENT looked like policy drift. Both are in the approved
+// set used by check-tenant-authz; the tracer now understands both.
+// Shape: enforceCompanyAccess({ req, res, companyId: <req.query.X | ident> })
+const ENFORCE_CALL_RE =
+  /enforceCompanyAccess\s*\(\s*\{[^}]*?companyId\s*:\s*(?:\(?\s*req\s*\.\s*query\s*\.\s*([A-Za-z0-9_]+)|([A-Za-z0-9_$]+))/;
+
 /** Trace the company id the helper consumes → { field, source } | null (no helper). */
 function derivedCompanySource(src, relPath) {
-  const m = src.match(RESOLVE_CALL_RE);
+  const m = src.match(RESOLVE_CALL_RE) || src.match(ENFORCE_CALL_RE);
   if (!m) return null;
   let field = m[1] || null;
   if (!field && m[2]) {

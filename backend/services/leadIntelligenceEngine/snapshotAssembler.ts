@@ -10,7 +10,9 @@
  */
 
 import type {
+  CapturedDeviceContext,
   CapturedEvent,
+  CapturedGeoContext,
   CapturedLeadProfile,
   CapturedSession,
   CapturedTouchpoint,
@@ -28,6 +30,48 @@ const isoOrNull = (v: unknown): string | null => {
 };
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+
+/** WS-2 M1: strict booleans only — a missing/garbage value is "unknown", not false. */
+const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
+
+/** WS-2 M1: non-negative finite integers only; anything else is "unknown". */
+const posInt = (v: unknown): number | null => {
+  const n = typeof v === 'string' ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? Math.trunc(n) : null;
+};
+
+/**
+ * WS-2 M2: map the stored device/geo blocks. Field-by-field rather than a
+ * blind spread, so a malformed or hostile stored object cannot inject keys the
+ * contract does not declare. An all-null block is returned as `null` so
+ * "absent" and "present but empty" stay indistinguishable to consumers — both
+ * mean unknown.
+ */
+const deviceOf = (v: unknown): CapturedDeviceContext | null => {
+  const d = obj(v);
+  const out: CapturedDeviceContext = {
+    deviceType: str(d.deviceType) ?? str(d.device_type),
+    deviceCategory: str(d.deviceCategory) ?? str(d.device_category),
+    browser: str(d.browser),
+    browserVersion: str(d.browserVersion) ?? str(d.browser_version),
+    os: str(d.os),
+    osVersion: str(d.osVersion) ?? str(d.os_version),
+    platform: str(d.platform),
+  };
+  return Object.values(out).some((x) => x !== null) ? out : null;
+};
+
+const geoOf = (v: unknown): CapturedGeoContext | null => {
+  const g = obj(v);
+  const country = str(g.country);
+  const out: CapturedGeoContext = {
+    timezone: str(g.timezone),
+    country: country && /^[A-Za-z]{2}$/.test(country) ? country.toUpperCase() : null,
+    region: str(g.region),
+    city: str(g.city),
+  };
+  return Object.values(out).some((x) => x !== null) ? out : null;
+};
 
 export interface RawCapturedLeadData {
   leadRow: Row | null | undefined;
@@ -55,6 +99,9 @@ export function assembleLeadCaptureSnapshot(raw: RawCapturedLeadData): LeadCaptu
     message: str(metadata.message),
     source: str(leadRow.source),
     createdAt: isoOrNull(leadRow.created_at),
+    // WS-2 M2: conversion-moment context, written by the lead-capture path.
+    device: deviceOf(metadata.device),
+    geo: geoOf(metadata.geo),
   };
 
   const events: CapturedEvent[] = [];
@@ -82,6 +129,12 @@ export function assembleLeadCaptureSnapshot(raw: RawCapturedLeadData): LeadCaptu
 
   const sessions: CapturedSession[] = (raw.visitorSessionRows ?? []).map((row) => {
     const r = obj(row);
+    // WS-2 M1 (1): the visitor block written by attributionResolverService at
+    // session create/continue. Read tolerantly — a row predating the writer,
+    // or one whose history read failed open, simply has no `visitor` object.
+    const visitor = obj(obj(r.metadata).visitor);
+    // WS-2 M2: device/geo blocks, parsed once at capture (see visitorContext).
+    const sessionMeta = obj(r.metadata);
     return {
       id: str(r.id),
       startedAt: isoOrNull(r.started_at) ?? isoOrNull(r.created_at),
@@ -90,6 +143,13 @@ export function assembleLeadCaptureSnapshot(raw: RawCapturedLeadData): LeadCaptu
       utmSource: str(r.utm_source),
       utmMedium: str(r.utm_medium),
       utmCampaign: str(r.utm_campaign),
+      lastCurrentPage: str(r.last_current_page),
+      returning: bool(visitor.returning_visitor),
+      visitCount: posInt(visitor.visit_count),
+      firstVisitAt: isoOrNull(visitor.first_visit_at),
+      sessionDurationMs: posInt(visitor.session_duration_ms),
+      device: deviceOf(sessionMeta.device),
+      geo: geoOf(sessionMeta.geo),
     };
   });
 

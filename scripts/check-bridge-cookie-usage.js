@@ -30,7 +30,7 @@ const SCAN_DIRS = ['pages', 'backend'];
 
 // Phase 2 ceiling. Lower this in the same PR that migrates a route.
 // Tracking this number here makes the migration odometer reviewable.
-const expectedMaxCount = 27;
+const expectedMaxCount = 1;
 
 // Files that are intentionally bridge-aware. They MUST NOT count toward
 // the migration ceiling.

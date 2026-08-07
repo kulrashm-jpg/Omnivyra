@@ -225,7 +225,15 @@ describe('HARDEN-INT-002 — health indicators', () => {
     expect(report.processScoped).toBe(true);
     const freshness = report.indicators.find((i) => i.name === 'freshness');
     expect(freshness?.detail).toContain('skipped');
-    expect(report.indicators.map((i) => i.name).sort()).toEqual(['freshness', 'generation', 'migration', 'persistence']);
+    // WS-2 M1A (3): sessionCapture joins the rollup — the capture-side session
+    // write is upstream of every other indicator, so it belongs in one triage call.
+    expect(report.indicators.map((i) => i.name).sort()).toEqual([
+      'freshness',
+      'generation',
+      'migration',
+      'persistence',
+      'sessionCapture',
+    ]);
   });
 
   it('never throws — an exploding probe degrades to unknown', async () => {
@@ -234,15 +242,60 @@ describe('HARDEN-INT-002 — health indicators', () => {
   });
 });
 
+describe('STABILIZE-INT-002 — audit remediations', () => {
+  it('D11: no upgrade log when the version did not actually move', async () => {
+    const { recordVersionUpgrade } = await import('../../services/leadIntelligenceTelemetry');
+    recordVersionUpgrade({ fromEngine: ENGINE_VERSION, toEngine: ENGINE_VERSION, fromSchema: 2, toSchema: 2, companyId: 'co-1', leadId: 'L1' });
+    expect(logs.filter((l) => l.event === 'intel_record_upgraded')).toHaveLength(0);
+
+    recordVersionUpgrade({ fromEngine: 'lie-1.0.0', toEngine: ENGINE_VERSION, fromSchema: 1, toSchema: 2, companyId: 'co-1', leadId: 'L1' });
+    expect(logs.filter((l) => l.event === 'intel_record_upgraded')).toHaveLength(1);
+  });
+
+  it('D12: a throwing logger cannot break a telemetry caller', () => {
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => { throw new Error('logger exploded'); });
+    try {
+      expect(() => recordPersistenceFailure('upsert', 'boom', 'co-1')).not.toThrow();
+      expect(counterTotal(INTEL_METRICS.persistence.failures)).toBe(1); // metric still exact
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('D10: the batched read emits the same tenant-mismatch signal as the detail read', async () => {
+    dbState.rows.lead_intelligence_profiles = [
+      { company_id: 'co-OTHER', lead_id: 'L1', intelligence: { summary: { confidence: 0.5 } }, engine_version: ENGINE_VERSION, schema_version: 2, generation_version: 1, generated_at: '2026-08-03T12:00:00.000Z', input_fingerprint: 'f', diagnostics: {} },
+    ];
+    const out = await durableIntelligencePersistence.getMany!('co-1', ['L1']);
+    expect(out.size).toBe(0); // still withheld
+    expect(counterTotal(INTEL_METRICS.read.tenantMismatch)).toBe(1);
+    expect(logs.some((l) => l.event === 'intel_tenant_mismatch_blocked')).toBe(true);
+  });
+});
+
 describe('HARDEN-INT-002 — serverless detached execution', () => {
-  it('hands the promise to waitUntil when the platform provides it', async () => {
-    const seen: Array<Promise<unknown>> = [];
-    jest.doMock('@vercel/functions', () => ({ waitUntil: (p: Promise<unknown>) => seen.push(p) }), { virtual: true });
+  it('delegates keep-alive to the canonical helper rather than resolving waitUntil itself', async () => {
+    // STABILIZE-INT-002 (D7): the local Vercel detection was removed in favour
+    // of lib/runtime/keepAlive, which owns the VERCEL gate and the bundler-safe
+    // import. The contract to pin is therefore delegation — and that the caller
+    // is never blocked, since the helper AWAITS the work off-platform.
+    const seen: Array<Promise<void>> = [];
+    jest.doMock('../../../lib/runtime/keepAlive', () => ({
+      keepAliveAfterResponse: (p: Promise<void>) => {
+        seen.push(p);
+        return Promise.resolve();
+      },
+    }));
     jest.resetModules();
     const { detachBackgroundWork: detach } = await import('../../services/leadIntelligenceActivation');
-    detach(Promise.resolve('ok'));
+
+    let released = false;
+    const slow = new Promise<void>((resolve) => setTimeout(() => { released = true; resolve(); }, 20));
+    detach(slow); // must return immediately
     expect(seen).toHaveLength(1);
-    jest.dontMock('@vercel/functions');
+    expect(released).toBe(false); // caller was not blocked
+
+    jest.dontMock('../../../lib/runtime/keepAlive');
     jest.resetModules();
   });
 

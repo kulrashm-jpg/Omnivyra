@@ -24,10 +24,18 @@ import { buildAutomationSummary } from '../automationExecution';
 import type { QualificationPlanningSummary } from '../qualificationPlanning/types';
 import type { AutomationSummary } from '../automationExecution/types';
 import {
+  recordEvolution,
   recordGenerationOutcome,
   recordVersionUpgrade,
   type GenerationStage,
 } from '../leadIntelligenceTelemetry';
+
+/** WS-2 M3: the subset of the evolution block this instrumentation reads. */
+type EvolutionShape = {
+  intent?: { trend?: string; checkpoints?: unknown[] };
+  funnel?: { stage?: string; advancementCount?: number; regressionCount?: number };
+  journey?: { state?: string };
+};
 import { ENGINE_VERSION, INTELLIGENCE_SCHEMA_VERSION, ORCHESTRATED_ENGINES } from './engineVersion';
 import { computeInputFingerprint } from './fingerprint';
 import { resolveIntelligenceFreshness } from './freshness';
@@ -128,9 +136,21 @@ function buildDiagnostics(args: {
  * because calls queue rather than coalesce. The map is keyed per lead and
  * removed when its last waiter drains, so memory stays bounded.
  *
- * Scope: in-process only. Cross-process concurrency remains last-write-wins,
- * which is safe for content (engines are deterministic — both writes carry
- * identical intelligence) and documented in the runbook.
+ * Scope: in-process ONLY. STABILIZE-INT-002 (D3) corrects the rationale that
+ * previously stood here, which was wrong in both premises:
+ *   • "both writes carry identical intelligence" — FALSE. Two processes load
+ *     their snapshots at different instants, so they compute over different
+ *     inputs. The loser's write can persist OLDER intelligence together with
+ *     its older inputFingerprint; because read paths resolve freshness without
+ *     a fingerprint, that record then reports `fresh` until the next trigger.
+ *   • `generationVersion` monotonicity — FALSE across processes. Both read N
+ *     and write N+1, so increments are lost. Treat the counter as a lower
+ *     bound on generations, not an exact count.
+ * Neither is a correctness risk for CONTENT (the next trigger reconciles, and
+ * the engines are deterministic for identical inputs), but both must be stated
+ * accurately: the production API tier is multi-instance, so this lock protects
+ * only same-instance collisions. Cross-process serialization would require a
+ * shared lock (architecture change — deliberately not attempted here).
  */
 /**
  * HARDEN-INT-002: measured envelope size, the metric that tells operators when
@@ -206,7 +226,53 @@ export function createLeadIntelligenceOrchestrator(
         inputCounts: result.status === 'generated' ? result.record?.diagnostics?.inputCounts : undefined,
         envelopeBytes: result.status === 'generated' ? envelopeBytesOf(result.record) : undefined,
       });
+      // WS-2 M3: evolution shape, recorded HERE because the engines are pure
+      // and must not perform I/O. Only on a real generation — a fingerprint
+      // skip produced no new evolution to describe.
+      if (result.status === 'generated') {
+        const evo = (result.record?.intelligence as { evolution?: EvolutionShape } | undefined)?.evolution;
+        if (evo) {
+          recordEvolution({
+            intentTrend: String(evo.intent?.trend ?? 'unknown'),
+            funnelStage: String(evo.funnel?.stage ?? 'unaware'),
+            journeyState: String(evo.journey?.state ?? 'new'),
+            advancements: Number(evo.funnel?.advancementCount ?? 0),
+            regressions: Number(evo.funnel?.regressionCount ?? 0),
+            checkpoints: Array.isArray(evo.intent?.checkpoints) ? evo.intent.checkpoints.length : 0,
+            timelineEntries: Array.isArray((result.record?.intelligence as { timeline?: unknown[] } | undefined)?.timeline)
+              ? (result.record!.intelligence as { timeline: unknown[] }).timeline.length
+              : 0,
+          });
+        }
+      }
       return result;
+    }).catch((e) => {
+      // STABILIZE-INT-002 (D1): the instrumentation chain previously had NO
+      // rejection handler. Statements outside the inner try/catch blocks
+      // (snapshot assembly, fingerprint, an injected port that throws) rejected
+      // the chain, skipped recordGenerationOutcome entirely and were swallowed
+      // upstream — zero metric, zero log, while health still read "healthy".
+      // That was the exact blind spot this telemetry exists to remove.
+      const error = e instanceof Error ? e.message : String(e);
+      recordGenerationOutcome({
+        outcome: 'failed',
+        reason: opts.force ? 'force' : 'trigger',
+        durationMs: Math.max(0, clock() - startedMs),
+        companyId: ref.companyId,
+        leadId: ref.leadId,
+        stage: 'engine',
+        error,
+        persisted: false,
+      });
+      // Preserve the fail-open contract: callers receive a result, never a throw.
+      return {
+        status: 'failed',
+        record: null,
+        freshness: 'never_generated',
+        persisted: false,
+        warnings: [],
+        error,
+      } as IntelligenceGenerationResult;
     });
   }
 
@@ -251,6 +317,25 @@ export function createLeadIntelligenceOrchestrator(
     // schema could be skipped forever while resolveIntelligenceFreshness()
     // classified it 'stale'. Behaviour is unchanged for every record this
     // build can write (schema 1 and 2 are both supported today).
+    // STABILIZE-INT-002 (D5): never DOWNGRADE a record written by a newer
+    // build. During a rolling deploy the old pods read a future schema as
+    // "unsupported" → stale → regenerate → write their OLDER schema back, so
+    // the two builds rewrite each other for the whole deploy window. Yielding
+    // to the newer writer costs nothing (that record is by definition at least
+    // as current) and makes mixed-version deploys inert instead of thrashing.
+    if (existing && existing.schemaVersion > INTELLIGENCE_SCHEMA_VERSION) {
+      return {
+        status: 'skipped_unchanged',
+        record: existing,
+        freshness: resolveIntelligenceFreshness(existing, inputFingerprint),
+        persisted: false,
+        warnings: [
+          `record written by a newer build (schema ${existing.schemaVersion} > ${INTELLIGENCE_SCHEMA_VERSION}); left untouched`,
+        ],
+        error: null,
+      };
+    }
+
     const unchanged = !opts.force && resolveIntelligenceFreshness(existing, inputFingerprint) === 'fresh';
     if (unchanged) {
       return {
@@ -353,7 +438,15 @@ export function createLeadIntelligenceOrchestrator(
 
   async function requestRebuild(ref: LeadRef, reason = 'manual'): Promise<RebuildRequestResult> {
     const requestedAt = new Date(clock()).toISOString();
-    const marked = await persistence.markRebuildRequested(ref.companyId, ref.leadId, requestedAt);
+    // STABILIZE-INT-002 (D2): mark under the SAME per-lead lock as generation.
+    // Previously this ran unserialized, so a request landing between a
+    // generation's read and its upsert was erased by that upsert (which always
+    // writes rebuild_requested_at: null) — the caller saw accepted:true for a
+    // rebuild that would never run. Serializing makes the mark either precede
+    // the generation (which then consumes it) or follow it (and survive).
+    const marked = await withLeadLock(`${ref.companyId}::${ref.leadId}`, () =>
+      persistence.markRebuildRequested(ref.companyId, ref.leadId, requestedAt),
+    );
     const markError = marked.ok ? null : marked.error ?? 'unknown error';
     if (options.rebuildQueue) {
       try {

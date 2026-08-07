@@ -201,7 +201,7 @@ describe('INT-003 Wave 1 — GET /api/leads/[id]/intelligence', () => {
     expect(view.intent.score).toBeGreaterThan(0);
     expect(view.persona.persona).toBe('CTO');
     expect(view.qualification.sections).toHaveLength(5);
-    expect(view.recommendations).toHaveLength(10);
+    expect(view.recommendations).toHaveLength(12);
     expect(view.recommendations.some((r: { key: string }) => r.key === 'bestChannel')).toBe(true);
     expect(view.timeline.length).toBeGreaterThan(0);
     expect(view.qualificationPlanning.channels.length).toBeGreaterThan(0);

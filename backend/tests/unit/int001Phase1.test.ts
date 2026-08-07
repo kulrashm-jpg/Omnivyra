@@ -133,7 +133,11 @@ describe('INT-001 P1 — visitor session intelligence', () => {
   test('multi-session visitor: history rows → visit_count N+1, returning true, first_visit_at = earliest prior session', async () => {
     queueResponse('visitor_sessions:select', { data: null, error: null });
     queueResponse('visitor_sessions:select', {
-      data: [{ created_at: '2026-06-01T00:00:00Z' }, { created_at: '2026-07-01T00:00:00Z' }],
+      // WS-2 M1B: `started_at`, not `created_at` — visitor_sessions has no
+      // created_at column, so these fixtures encoded a shape the real table
+      // could never return (PostgREST answers 42703). Verified against the
+      // live schema; see attributionResolverService.readVisitorHistory.
+      data: [{ started_at: '2026-06-01T00:00:00Z' }, { started_at: '2026-07-01T00:00:00Z' }],
       error: null,
     });
     queueResponse('visitor_sessions:insert', { data: { id: 'vs-3' }, error: null });
@@ -178,7 +182,8 @@ describe('INT-001 P1 — visitor session intelligence', () => {
     const startedAt = new Date(Date.now() - 90_000).toISOString();
     queueResponse('visitor_sessions:select', {
       data: {
-        id: 'vs-old', created_at: startedAt, first_touch: { utm_source: 'first' },
+        // WS-2 M1B: session start comes from `started_at` (the real column).
+        id: 'vs-old', started_at: startedAt, first_touch: { utm_source: 'first' },
         metadata: { k: 'v', visitor: { visit_count: 2, returning_visitor: true, first_visit_at: '2026-01-01T00:00:00Z' } },
       },
       error: null,

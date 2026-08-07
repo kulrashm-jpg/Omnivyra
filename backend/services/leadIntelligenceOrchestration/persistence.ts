@@ -12,7 +12,7 @@
  */
 
 import { ownedDbTable } from '../../db/writeOwner';
-import { recordPersistenceFailure } from '../leadIntelligenceTelemetry';
+import { recordPersistenceFailure, recordTenantMismatch } from '../leadIntelligenceTelemetry';
 import type {
   IntelligencePersistencePort,
   LeadIntelligenceRecord,
@@ -163,7 +163,18 @@ export const durableIntelligencePersistence: IntelligencePersistencePort = {
       if (!Array.isArray(data)) return perLead();
       for (const row of data as Row[]) {
         const record = rowToIntelligenceRecord(row);
-        if (record && record.companyId === companyId) out.set(record.leadId, record);
+        if (!record) continue;
+        // STABILIZE-INT-002 (D10) — TELEMETRY PARITY. The batched path used to
+        // drop a cross-tenant row silently, so a tenant-isolation breach that
+        // alarms on the detail route (via the read mapper's guard) was
+        // invisible on the bulk route — the higher-volume surface. Both paths
+        // now emit the same security signal. Behaviour is unchanged: the row
+        // is still withheld.
+        if (record.companyId !== companyId) {
+          recordTenantMismatch(companyId, record.companyId, record.leadId);
+          continue;
+        }
+        out.set(record.leadId, record);
       }
       return out;
     } catch (e) {

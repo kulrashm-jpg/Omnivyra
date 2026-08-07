@@ -26,13 +26,32 @@ export function stableStringify(value: unknown): string {
 const eventSortKey = (e: { occurredAt: string; id: string | null; eventName: string }): string =>
   `${e.occurredAt}|${e.eventName}|${e.id ?? ''}`;
 
+/**
+ * STABILIZE-INT-002 (D4) — code-unit comparison, NOT localeCompare.
+ *
+ * ICU collation is not stable across Node builds, ICU versions or LANG (a
+ * locale may order 'a' < 'B' where code units order 'B' < 'a'), and the sort
+ * keys embed free-text event names. Two runtimes with different ICU would
+ * canonicalize the same rows into different orders and therefore produce
+ * different SHA-256 fingerprints — so each runtime would see the other's
+ * records as stale and regenerate them forever, inflating generationVersion
+ * and write volume. The Vercel API tier and the Railway worker are exactly
+ * such a pair. This matches the code-unit rule already applied at
+ * pages/api/leads/intelligence.ts for the same reason.
+ *
+ * One-time effect: for any lead whose rows sort differently under the two
+ * comparators, the fingerprint changes once and that record regenerates on
+ * its next trigger. Self-healing, no migration.
+ */
+const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 /** Fingerprint the engine inputs. Excludes `now` so time alone never dirties it. */
 export function computeInputFingerprint(snapshot: LeadCaptureSnapshot): string {
   const canonical = {
     lead: snapshot.lead,
-    events: [...snapshot.events].sort((a, b) => eventSortKey(a).localeCompare(eventSortKey(b))),
-    sessions: [...snapshot.sessions].sort((a, b) => (a.id ?? '').localeCompare(b.id ?? '')),
-    touchpoints: [...snapshot.touchpoints].sort((a, b) => (a.id ?? '').localeCompare(b.id ?? '')),
+    events: [...snapshot.events].sort((a, b) => byCodeUnit(eventSortKey(a), eventSortKey(b))),
+    sessions: [...snapshot.sessions].sort((a, b) => byCodeUnit(a.id ?? '', b.id ?? '')),
+    touchpoints: [...snapshot.touchpoints].sort((a, b) => byCodeUnit(a.id ?? '', b.id ?? '')),
   };
   return createHash('sha256').update(stableStringify(canonical)).digest('hex');
 }

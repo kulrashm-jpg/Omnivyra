@@ -28,5 +28,17 @@ export { buildQualification, recomputeQualificationTotal, type QualificationInpu
 export { assignSegments, type SegmentationInputs } from './segmentationEngine';
 export { buildRecommendations, type RecommendationInputs } from './recommendationEngine';
 export { buildLeadTimeline, type TimelineMilestones } from './timelineEngine';
+// WS-2 M3 — evolution intelligence, replayed from the same captured evidence.
+export { buildEvolutionIntelligence, funnelStageOf, FUNNEL_STAGES, INTENT_BAND_ORDER } from './evolutionEngine';
 export { assembleLeadCaptureSnapshot, type RawCapturedLeadData } from './snapshotAssembler';
+// WS-2 M2 — THE single parse point for device/geo context, shared by capture
+// (which persists it) and the engines (which reason over it).
+export {
+  parseUserAgent,
+  extractGeoContext,
+  utcOffsetHours,
+  describeGeo,
+  type CapturedDeviceContext,
+  type CapturedGeoContext,
+} from './visitorContext';
 export { buildLeadIntelligenceSummary } from './summaryBuilder';
