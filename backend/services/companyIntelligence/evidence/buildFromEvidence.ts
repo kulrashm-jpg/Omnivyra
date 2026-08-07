@@ -67,8 +67,10 @@ export function companyFromEvidence(sources: EvidenceSources, asOf: string): Evi
     if (evidence.length > 0) (facets as Record<string, unknown>)[name] = facet(value, evidence, { contradictions: contrasFor(evidence) });
   };
 
-  const name = r('name'), domain = r('domain'), founded = r('founded_year');
-  set('identity', { name: undef(name.value), domain: undef(domain.value), foundedYear: undef(founded.value) }, [...name.evidence, ...domain.evidence, ...founded.evidence]);
+  // WS-4 Phase-3: `legal_name` is added here because `IdentityValue.legalName` was already declared
+  // and never populated — the field existed, the wiring did not.
+  const name = r('name'), domain = r('domain'), founded = r('founded_year'), legalName = r('legal_name');
+  set('identity', { name: undef(name.value), domain: undef(domain.value), legalName: undef(legalName.value), foundedYear: undef(founded.value) }, [...name.evidence, ...domain.evidence, ...legalName.evidence, ...founded.evidence]);
 
   const products = r('products'), services = r('services');
   set('offerings', { products: splitList(products.value), services: splitList(services.value) }, [...products.evidence, ...services.evidence]);
@@ -88,11 +90,27 @@ export function companyFromEvidence(sources: EvidenceSources, asOf: string): Evi
   const revenue = r('revenue_band');
   set('financial', { revenueBand: undef(revenue.value) }, revenue.evidence);
 
-  const funding = r('funding_stage');
-  set('funding', { stage: undef(funding.value) }, funding.evidence);
+  const funding = r('funding_stage'), totalRaised = r('total_raised'), lastRound = r('last_funding_at');
+  set('funding', { stage: undef(funding.value), totalRaised: undef(totalRaised.value), lastRound: undef(lastRound.value) },
+    [...funding.evidence, ...totalRaised.evidence, ...lastRound.evidence]);
 
-  const hq = r('hq');
-  set('geography', { hq: undef(hq.value) }, hq.evidence);
+  const hq = r('hq'), country = r('country');
+  set('geography', { hq: undef(hq.value), country: undef(country.value) }, [...hq.evidence, ...country.evidence]);
+
+  // ── WS-4 Phase-3: facets that were declared but never reachable from evidence ───────────────────
+  // Each of these facets already existed in CompanyFacets and each label already flowed through
+  // fusion; what was missing was the selection step, so the evidence terminated at fusion instead of
+  // populating a facet. `set` still abstains when no evidence exists, so a company with no provider
+  // data produces exactly the facets it did before.
+  const technologies = r('technologies');
+  set('technology', { stack: splitList(technologies.value) }, technologies.evidence);
+
+  const openRoles = r('open_roles'), hiringDepartments = r('hiring_departments');
+  set('hiring', { openRoles: splitList(openRoles.value), growthFunctions: splitList(hiringDepartments.value) },
+    [...openRoles.evidence, ...hiringDepartments.evidence]);
+
+  const linkedinHandle = r('linkedin_handle');
+  set('digitalPresence', { channels: splitList(linkedinHandle.value) }, linkedinHandle.evidence);
 
   const solDomains = splitList(sol.value);
   const worldView: CompanyWorldView = {
@@ -127,6 +145,16 @@ const FIELD_TO_LABEL: Record<string, { facet: string; label: string; list?: bool
   founded_year: { facet: 'identity', label: 'founded_year' },
   revenue_band: { facet: 'financial', label: 'revenue_band' },
   headcount: { facet: 'organization', label: 'headcount' },
+  // WS-4 Phase-3 — explainability must cover the newly reachable fields, or a value could be shown
+  // in a facet with no way to ask which evidence produced it.
+  legal_name: { facet: 'identity', label: 'legal_name' },
+  total_raised: { facet: 'funding', label: 'total_raised' },
+  last_funding_at: { facet: 'funding', label: 'last_funding_at' },
+  country: { facet: 'geography', label: 'country' },
+  technologies: { facet: 'technology', label: 'technologies', list: true },
+  open_roles: { facet: 'hiring', label: 'open_roles', list: true },
+  hiring_departments: { facet: 'hiring', label: 'hiring_departments', list: true },
+  linkedin_handle: { facet: 'digitalPresence', label: 'linkedin_handle', list: true },
 };
 
 export interface FieldExplanation {

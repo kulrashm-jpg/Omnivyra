@@ -23,7 +23,20 @@ export interface WebsiteCrawlInput { companyId: string; observedAt: string; name
 export interface AiExtractionInput { companyId: string; observedAt: string; category?: string; industry?: string; businessModel?: string; providerType?: string; solutionDomains?: string[]; operatingModel?: string; domainRole?: string; products?: string[]; segments?: string[]; differentiators?: string[]; }
 /** FACTS only — never the derived classification. */
 export interface CompanyProfileFactsInput { companyId: string; observedAt: string; name?: string; domain?: string; products?: string[]; services?: string[]; industry?: string; competitors?: string[]; }
-export interface FirmographicInput { companyId: string; observedAt: string; system: string; sourceRef?: string; foundedYear?: string; headcount?: string; size?: string; revenueBand?: string; fundingStage?: string; hq?: string; }
+/**
+ * One external system's firmographic claim. WS-4 Phase-2 adds the fields below the original six;
+ * every addition is OPTIONAL, so existing producers and tests are unaffected.
+ */
+export interface FirmographicInput {
+  companyId: string; observedAt: string; system: string; sourceRef?: string;
+  foundedYear?: string; headcount?: string; size?: string; revenueBand?: string; fundingStage?: string; hq?: string;
+  // WS-4 Phase-2 — the capabilities that previously had nowhere to land.
+  country?: string; industry?: string;
+  technologies?: string;
+  totalRaised?: string; lastFundingAt?: string;
+  openRoles?: string; hiringDepartments?: string;
+  legalName?: string; linkedinHandle?: string;
+}
 
 export interface EvidenceSources { website?: WebsiteCrawlInput; ai?: AiExtractionInput; profile?: CompanyProfileFactsInput; firmographics?: FirmographicInput[]; }
 
@@ -75,16 +88,40 @@ export function companyProfileFactsEvidence(input?: CompanyProfileFactsInput): E
   return out;
 }
 
-/** Firmographics (LinkedIn API / Crunchbase / registries / trusted / Wikidata) → external evidence. */
+/**
+ * Firmographics (LinkedIn API / Crunchbase / registries / trusted / Wikidata) → external evidence.
+ *
+ * WS-4 Phase-2 extends this ADDITIVELY. The original six fields are emitted exactly as before —
+ * same labels, same weight, same order — so any consumer comparing evidence lists sees no change
+ * unless a provider actually supplied one of the new fields. The extension exists because the
+ * enrichment providers answer five capabilities and only firmographics had a home; technology,
+ * funding, hiring and identity had nowhere to land, which is why the CI-C3xx engines that read
+ * them were starved.
+ *
+ * `weight` differs by field for an evidenced reason: an OBSERVED technology stack (BuiltWith reads
+ * the live site) is a stronger claim than a SELF-REPORTED headcount, and flattening both to 0.7
+ * would tell the fusion layer they are equally trustworthy when they are not.
+ */
 export function firmographicEvidence(inputs?: FirmographicInput[]): EvidenceRef[] {
   const out: EvidenceRef[] = [];
   for (const f of inputs ?? []) {
+    // ── original six, unchanged ──────────────────────────────────────────────────────────────
     push(out, f.system, 'external', 0.7, f.observedAt, 'founded_year', f.foundedYear);
     push(out, f.system, 'external', 0.7, f.observedAt, 'headcount', f.headcount);
     push(out, f.system, 'external', 0.7, f.observedAt, 'size', f.size);
     push(out, f.system, 'external', 0.7, f.observedAt, 'revenue_band', f.revenueBand);
     push(out, f.system, 'external', 0.7, f.observedAt, 'funding_stage', f.fundingStage);
     push(out, f.system, 'external', 0.7, f.observedAt, 'hq', f.hq);
+    // ── WS-4 Phase-2 additions ───────────────────────────────────────────────────────────────
+    push(out, f.system, 'external', 0.75, f.observedAt, 'country', f.country);
+    push(out, f.system, 'external', 0.75, f.observedAt, 'industry', f.industry);
+    push(out, f.system, 'observed', 0.8, f.observedAt, 'technologies', f.technologies);
+    push(out, f.system, 'external', 0.75, f.observedAt, 'total_raised', f.totalRaised);
+    push(out, f.system, 'external', 0.75, f.observedAt, 'last_funding_at', f.lastFundingAt);
+    push(out, f.system, 'external', 0.65, f.observedAt, 'open_roles', f.openRoles);
+    push(out, f.system, 'external', 0.6, f.observedAt, 'hiring_departments', f.hiringDepartments);
+    push(out, f.system, 'external', 0.8, f.observedAt, 'legal_name', f.legalName);
+    push(out, f.system, 'external', 0.8, f.observedAt, 'linkedin_handle', f.linkedinHandle);
   }
   return out;
 }

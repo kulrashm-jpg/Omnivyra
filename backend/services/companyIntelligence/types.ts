@@ -47,7 +47,9 @@ export interface FinancialValue { revenueBand?: string; profitability?: string; 
 export interface FundingValue { stage?: string; totalRaised?: string; lastRound?: string; }
 export interface HiringValue { openRoles?: string[]; growthFunctions?: string[]; }
 export interface GrowthValue { trajectory?: string; expansion?: string[]; }
-export interface GeographyValue { hq?: string; markets?: string[]; }
+// `country` is additive (WS-4 Phase-3). A country is not a market — folding it into `markets`
+// would assert the company SELLS somewhere on the evidence that it is REGISTERED there.
+export interface GeographyValue { hq?: string; country?: string; markets?: string[]; }
 export interface BrandValue { voice?: string; themes?: string[]; }
 export interface DigitalPresenceValue { channels?: string[]; }
 export interface CompetitiveValue { competitors?: string[]; pressures?: string[]; }
