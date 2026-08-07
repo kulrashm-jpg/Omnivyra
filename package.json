@@ -225,6 +225,9 @@
   "overrides": {
     "next": {
       "postcss": "8.5.14"
+    },
+    "isomorphic-dompurify": {
+      "jsdom": "^26.1.0"
     }
   }
 }
