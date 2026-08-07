@@ -39,8 +39,28 @@ const buildQuery = (table: string) => {
       return query;
     }),
     or: jest.fn().mockReturnThis(),
+    // WRITE entry points — the profile write-back at
+    // companyProfileServiceRest1Rest2Pulse:381 (`.upsert(payload, { onConflict })`),
+    // plus best-effort audit/anomaly inserts which log and swallow their own errors.
+    insert: jest.fn().mockReturnThis(),
+    upsert: jest.fn().mockReturnThis(),
+    update: jest.fn().mockReturnThis(),
+    delete: jest.fn().mockReturnThis(),
+    // LAYER 1 — chainable filters reached by pricingService.fetchModelPricingRow:136,
+    // which builds `.eq()x4.lte().order().limit().maybeSingle()`. `lte` records like
+    // `eq` so resolveQuery can see it; the rest are pure chain links.
+    lte: jest.fn((field: string, value: any) => {
+      state.filters[field] = value;
+      return query;
+    }),
+    gte: jest.fn().mockReturnThis(),
+    in: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
+    // Terminators. `mockReturnThis` is correct HERE — this builder is thenable and
+    // resolveQuery already returns `{ data, error }`, so awaiting resolves via `then`.
     single: jest.fn().mockReturnThis(),
+    maybeSingle: jest.fn().mockReturnThis(),
     then: (resolve: any, reject: any) => {
       const result = resolveQuery(table, state);
       return Promise.resolve(result).then(resolve, reject);
@@ -182,6 +202,25 @@ describe('External API alignment', () => {
           }),
           getPlatformStrategies: jest.fn().mockResolvedValue([]),
           recordSignalConfidenceSummary: jest.fn(),
+        }));
+        // LAYER 2 — the AI runtime. This suite stubs six collaborators to stay
+        // hermetic; the gateway was the seventh it never listed, only because the
+        // broken query double threw at the pricing gate before execution could
+        // reach `aiGatewayCore:814`. With Layer 1 restored it does reach it, and
+        // constructs a real OpenAI client (`TypeError … reading 'entries'` at
+        // `chat.completions.create`).
+        //
+        // Mocked at the CALLER boundary, suite-locally, inside the existing
+        // isolateModules() block: `getOpenAiClient` is module-private in
+        // aiGatewayCore, so there is no injection seam, and a global `openai` mock
+        // would neutralise the 42 suites that legitimately exercise the gateway.
+        // The LLM is not this suite's subject — it asserts the
+        // `no_external_signals` placeholder fallback.
+        jest.doMock('../../services/aiGatewayProvidersOps', () => ({
+          runCompletionWithOperation: jest.fn().mockResolvedValue({
+            output: '{}',
+            metadata: { provider: 'mock', model: 'mock' },
+          }),
         }));
         jest.doMock('../../services/companyProfileService', () => ({
           getProfile: jest.fn().mockResolvedValue({ geography: 'US', industry_list: [], goals_list: [], content_themes_list: [] }),
