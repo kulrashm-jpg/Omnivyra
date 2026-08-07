@@ -133,3 +133,5 @@ scripts/governance-baseline/reports/
 docs/governance-consumers/consumer-validation.json
 # OMNI-GOV-002 hygiene: archived obsolete architecture-migration reports (kept on disk + in history; untracked from the authoritative tree)
 architecture-migration/reports/
+
+.vercel
