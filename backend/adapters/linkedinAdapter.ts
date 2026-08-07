@@ -16,6 +16,7 @@
 import type { PublishResult } from './platformAdapterTypes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
+import { outboundBreakerFor } from '../../lib/security/safeFetch';
 import {
   getOrUploadLinkedInAsset,
   inferLinkedInMediaKind,
@@ -182,7 +183,7 @@ export async function publishToLinkedIn(
   console.log('[linkedin] publishing as author:', authorUrn, '| content length:', formatted.text.length);
 
   try {
-    const response = await fetch('https://api.linkedin.com/rest/posts', {
+    const response = await outboundBreakerFor('api.linkedin.com').call(() => fetch('https://api.linkedin.com/rest/posts', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token.access_token}`,
@@ -191,7 +192,7 @@ export async function publishToLinkedIn(
         'X-Restli-Protocol-Version': '2.0.0',
       },
       body: JSON.stringify(payload),
-    });
+    }));
 
     const responseText = await response.text();
     console.log('[linkedin] API response:', response.status, responseText.slice(0, 300));

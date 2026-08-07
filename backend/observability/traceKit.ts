@@ -8,9 +8,8 @@
  *
  * Two halves:
  *   - Enqueue side: `withTraceMeta(data)` returns the job payload with an
- *     additive `_trace` field carrying the caller's context. PROVIDED but not
- *     yet adopted anywhere (payload shape changes are Wave 0-3 rollout work,
- *     enqueue-site by enqueue-site).
+ *     additive `_trace` field carrying the caller's context. Adopted centrally
+ *     via `safeEnqueue`, so every non-exempt enqueue is stamped.
  *   - Worker side: `runWithJobTraceContext(job, fn)` seeds the RequestContext
  *     ALS from `job.data._trace` when present, or from the job identity when
  *     absent, then runs the processor. Wired into the generic getWorker()
@@ -63,8 +62,12 @@ export function traceMetaForEnqueue(): JobTraceMeta | undefined {
 
 /**
  * Return `data` with the `_trace` field attached when an active context
- * exists; otherwise return `data` unchanged. NOT yet called anywhere in
- * production paths — adoption happens per-enqueue-site in Wave 0/2.
+ * exists; otherwise return `data` unchanged.
+ *
+ * Called from ONE place — `safeEnqueue` in backend/middleware/queueBackpressure.ts
+ * — which is now the only sanctioned enqueue path (enforced by
+ * queueBackpressureAdoption.test.ts). Every non-exempt job is therefore stamped
+ * without any per-call-site adoption.
  */
 export function withTraceMeta<T extends Record<string, unknown>>(
   data: T,

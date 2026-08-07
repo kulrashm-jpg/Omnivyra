@@ -9,17 +9,18 @@
  *   - Retry-safe idempotency-key helper for BullMQ jobId
  *   - Lightweight queue-health snapshot
  *
- * To activate end-to-end (deferred until ops opt-in):
- *   1. Replace the `defaultJobOptions` block in leadQueue.ts with
- *      `import { leadQueueHardenedDefaults } from './leadQueueHardening'`
- *      and use `defaultJobOptions: leadQueueHardenedDefaults`.
- *   2. In the lead-job worker's `failed` handler, call
- *      `buildLeadJobFailureMetadata(...)` and either log or republish to
- *      `leadDeadLetterQueue` once attempts are exhausted.
- *   3. Enqueue callers pass `jobId: buildLeadJobIdempotencyKey(...)` to
- *      guarantee dedup across retries.
+ * ACTIVATION STATUS — all three steps are live. The original Phase 0 plan named
+ * leadQueue.ts, which W1-4 later deleted (see the note at the foot of this
+ * file); live lead jobs run on `engine-jobs`, so activation landed there:
+ *   1. Hardened defaults — applied at the enqueue site,
+ *      pages/api/leads/job/create.ts (`...leadQueueHardenedDefaults`).
+ *   2. Failure metadata + DLQ producer — the `engine-jobs` worker's `failed`
+ *      handler in startWorkers.ts builds the metadata, logs it every attempt,
+ *      and republishes to `lead-jobs-dlq` once attempts are exhausted.
+ *   3. Retry-safe dedup — the same enqueue site passes
+ *      `jobId: buildLeadJobIdempotencyKey(...)`.
  *
- * Phase 0 ships the foundation only — no worker change, no DLQ producer.
+ * DLQ depth is reported by getLeadQueueObservabilitySnapshot().dead_letter.
  */
 
 import { Queue, type JobsOptions } from 'bullmq';
@@ -70,6 +71,80 @@ export function getLeadDeadLetterQueue(): Queue {
     },
   });
   return _leadDeadLetterQueue;
+}
+
+/**
+ * Attach the LEAD failure handler to an `engine-jobs` worker.
+ *
+ * Exported so BOTH bootstraps — startWorkers.ts (dev) and workers/main.ts
+ * (production) — attach IDENTICAL behaviour. Previously only the dev bootstrap
+ * had any LEAD failure handling, so the production worker emitted nothing on a
+ * LEAD failure: no metadata, no dead letter. That prod↔dev divergence is the
+ * exact incident class workerTopologyParity.test.ts exists to prevent.
+ *
+ * Behaviour (unchanged from the original dev-only handler):
+ *   - ignores non-LEAD jobs (MARKET_PULSE keeps its own logging),
+ *   - logs structured metadata on EVERY attempt,
+ *   - republishes to `lead-jobs-dlq` ONLY once attempts are exhausted, with a
+ *     deterministic jobId so republication is idempotent.
+ *
+ * Never throws: it runs inside an event-emitter callback, and observability
+ * imports are lazy to avoid a module cycle (leadQueueObservability imports
+ * this module).
+ */
+export function attachLeadJobFailureHandler(worker: {
+  on: (event: 'failed', cb: (job: any, err: any) => void) => unknown;
+}): void {
+  worker.on('failed', (job: any, err: any) => {
+    try {
+      if (!job) return;
+      const data = job.data as { type?: string } | undefined;
+      if (data?.type !== 'LEAD') return;
+
+      const meta = buildLeadJobFailureMetadata({
+        jobId: String(job.id ?? 'unknown'),
+        jobName: job.name,
+        attemptsMade: job.attemptsMade,
+        attemptsAllowed: job.opts?.attempts ?? 1,
+        failedReason: err?.message ?? 'unknown',
+        stack: err?.stack ?? null,
+        data: job.data,
+      });
+
+      void import('./leadQueueObservability')
+        .then(({ recordLeadJobFailure }) => {
+          const { category } = recordLeadJobFailure({
+            jobId: meta.job_id,
+            reason: err?.message ?? null,
+          });
+          console.warn('[lead-job-failed]', JSON.stringify({ category, ...meta }));
+
+          // Republish ONLY once BullMQ has spent every attempt — an
+          // intermediate failure is still going to be retried, and
+          // dead-lettering it would report a live job as dead.
+          if (meta.attempts_made < meta.attempts_allowed) return;
+
+          return getLeadDeadLetterQueue().add(
+            'lead-job-failed',
+            { category, ...meta },
+            { jobId: `dlq:${meta.job_id}` },
+          );
+        })
+        .catch(onLeadFailureHandlerError(meta.job_id));
+    } catch (e) {
+      // Synchronous throw arm — `.catch()` above cannot intercept this.
+      onLeadFailureHandlerError(String(job?.id ?? 'unknown'))(e);
+    }
+  });
+}
+
+function onLeadFailureHandlerError(jobId: string) {
+  return (e: unknown) => {
+    console.error(
+      '[lead-job-dlq-publish-failed]',
+      JSON.stringify({ job_id: jobId, error: e instanceof Error ? e.message : String(e) }),
+    );
+  };
 }
 
 export type LeadJobFailureMetadata = {

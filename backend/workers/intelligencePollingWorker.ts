@@ -10,6 +10,8 @@ import type { IntelligencePollingJobPayload } from '../queue/intelligencePolling
 // ioredis client (TLS/rediss/connectTimeout/maxRetriesPerRequest:null all
 // applied there). BullMQ duplicates it internally for the blocking client.
 import { getSharedRedisClient } from '../queue/bullmqClient';
+import { runWithJobTraceContext } from '../observability/traceKit';
+import { deadLetterOnExhaustion } from '../queue/deadLetterOnExhaustion';
 
 const QUEUE_NAME = 'intelligence-polling';
 
@@ -71,9 +73,9 @@ async function processIntelligencePollingJob(job: Job<IntelligencePollingJobPayl
 export function getIntelligencePollingWorker(): Worker {
   const worker = new Worker<IntelligencePollingJobPayload>(
     QUEUE_NAME,
-    async (job) => {
+    async (job) => runWithJobTraceContext(job, async () => {
       await processIntelligencePollingJob(job);
-    },
+    }),
     {
       connection: getSharedRedisClient(),
       concurrency: 2,
@@ -92,6 +94,7 @@ export function getIntelligencePollingWorker(): Worker {
 
   worker.on('failed', (job, err) => {
     console.error(`[intelligence-polling] job ${job?.id} failed`, err?.message ?? err);
+    deadLetterOnExhaustion(QUEUE_NAME, job, err);
   });
 
   worker.on('error', (err) => {

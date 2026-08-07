@@ -30,6 +30,7 @@
  * `backend/queue/jobProcessors/asyncRefinementProcessor.ts`.
  */
 
+import { safeEnqueue } from '../../middleware/queueBackpressure';
 import { logger } from '../logger';
 import { getRequestContext } from '../requestContext';
 import { plannerEventBus } from '../plannerEventBus';
@@ -81,7 +82,7 @@ export async function enqueueAsyncRefinement(
       const { propagateContextToEnvelope } = require('../plannerTracing') as typeof import('../plannerTracing');
       propagated = propagateContextToEnvelope(payload as unknown as Record<string, unknown>);
     } catch { /* tracing-safe */ }
-    await queue.add('refinement', propagated as never, {
+    await safeEnqueue(queue, 'planner-refinement', 'refinement', propagated as never, {
       jobId,
       attempts: 1,
       removeOnComplete: { age: 86400, count: 500 },

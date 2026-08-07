@@ -8,6 +8,7 @@ import {
   buildLeadJobIdempotencyKey,
 } from '../../../../backend/queue/leadQueueHardening';
 import { recordLeadQueueEnqueue } from '../../../../backend/queue/leadQueueObservability';
+import { safeEnqueue } from '../../../../backend/middleware/queueBackpressure';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -141,7 +142,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // idempotency key. Applied at the enqueue site (not as queue defaults) so
     // Market Pulse jobs on the same engine-jobs queue are unaffected.
     const enqueueStartedAt = Date.now();
-    await jobQueue.add(
+    const enqueued = await safeEnqueue(
+      jobQueue,
+      'engine-jobs',
       'lead-job',
       { type: 'LEAD', jobId: job.id },
       {
@@ -154,6 +157,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
     );
     recordLeadQueueEnqueue(Date.now() - enqueueStartedAt);
+    if (!enqueued) {
+      // Backpressure shed the job. The lead_jobs row already exists and stays
+      // PENDING, so the caller can retry; nothing is silently lost.
+      return res.status(429).json({
+        error: 'Queue is at capacity. Retry shortly.',
+        jobId: job.id,
+        status: 'PENDING',
+      });
+    }
 
     return res.status(201).json({
       jobId: job.id,

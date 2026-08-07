@@ -20,6 +20,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import { safeEnqueue } from '../middleware/queueBackpressure';
 import {
   SEMANTIC_PARTITION_DEFAULT_SIZE,
   SEMANTIC_PARTITION_MAX_ATTEMPTS,
@@ -118,11 +119,16 @@ export async function partitionAndEnqueueSemanticJob(
   for (const p of partitions) {
     if (p.status !== 'queued') continue;
     try {
-      await semanticIndexingQueue.add(
+      const queued = await safeEnqueue(
+        semanticIndexingQueue,
+        'semantic-indexing',
         'process-partition',
         { partitionId: p.id, organizationId, semanticIndexingJobId: job.id },
         { jobId: buildSemanticPartitionJobId(p.id) },
       );
+      // Shed by backpressure — the partition stays `queued`, so the next
+      // coordination pass re-enqueues it. Do not count it.
+      if (!queued) continue;
       enqueued += 1;
     } catch (err: any) {
       console.warn('[asyncSemanticRuntime] enqueue failed:', { partitionId: p.id, error: err?.message });

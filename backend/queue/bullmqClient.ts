@@ -20,6 +20,7 @@ import {
   startQueueReportFlush,
 } from './queueInstrumentation';
 import { runWithJobTraceContext } from '../observability/traceKit';
+import { deadLetterOnExhaustion } from './deadLetterOnExhaustion';
 import { defineRolloutFlag, resolveRolloutSync } from '../../lib/platform/rollout';
 import { getMetricsReport } from '../../lib/redis/instrumentation';
 import IORedis from 'ioredis';
@@ -778,6 +779,7 @@ export function getWorker(
 
   worker.on('failed', (job, err) => {
     console.error(`❌ Job ${job?.id} failed:`, err.message);
+    deadLetterOnExhaustion(queueName, job, err);
   });
 
   worker.on('error', (err) => {
@@ -795,10 +797,10 @@ export function getWorker(
 export function getEngagementPollingWorker(): Worker {
   const worker = new Worker(
     'engagement-polling',
-    async () => {
+    async (job) => runWithJobTraceContext(job, async () => {
       const { processEngagementPollingJob } = await import('./jobProcessors/engagementPollingProcessor');
       await processEngagementPollingJob();
-    },
+    }),
     {
       connection: getRedisConnection(),
       prefix: getQueuePrefix(),
@@ -812,6 +814,7 @@ export function getEngagementPollingWorker(): Worker {
 
   worker.on('failed', (job, err) => {
     console.error(`❌ Engagement polling job ${job?.id} failed:`, err.message);
+    deadLetterOnExhaustion('engagement-polling', job, err);
   });
 
   worker.on('error', (err) => {
@@ -895,8 +898,11 @@ export function createWorker(
     );
   }
   const processor = processorPathOrFn;
-  
-  const worker = new Worker(name, processor as any, {
+
+  // Same trace restoration getWorker() applies — without it, jobs enqueued
+  // through safeEnqueue carry `_trace` that this factory would discard.
+  const tracedProcessor = (job: any) => runWithJobTraceContext(job, () => processor(job));
+  const worker = new Worker(name, tracedProcessor as any, {
     connection: getRedisConnection(),
     prefix: getQueuePrefix(),
     concurrency,
@@ -913,6 +919,7 @@ export function createWorker(
       name: job?.name,
       err: err?.message,
     }));
+    deadLetterOnExhaustion(name, job, err);
   });
 
   worker.on('completed', (job) => {

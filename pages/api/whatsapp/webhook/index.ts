@@ -15,6 +15,7 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
 import { getContentQueue } from '../../../../backend/queue/contentGenerationQueues';
+import { safeEnqueue } from '../../../../backend/middleware/queueBackpressure';
 
 const VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? '';
 const APP_SECRET   = process.env.WHATSAPP_APP_SECRET ?? '';
@@ -78,12 +79,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     try {
       const queue = getContentQueue('whatsapp-webhook');
-      await queue.add('wa-webhook-event', { payload }, {
+      const enqueued = await safeEnqueue(queue, 'whatsapp-webhook', 'wa-webhook-event', { payload }, {
         jobId,
         priority: 8,
         attempts: 5,
         backoff: { type: 'exponential', delay: 2000 },
       });
+      if (!enqueued) {
+        console.error('[whatsapp-webhook] enqueue shed by backpressure', { jobId });
+      }
     } catch (err) {
       // Log but still ack — prevents Meta from retrying a payload we may have partially queued
       console.error('[whatsapp-webhook] enqueue failed', err);

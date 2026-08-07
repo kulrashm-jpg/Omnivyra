@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { safeEnqueue } from '../middleware/queueBackpressure';
 /**
  * Engagement Normalization Service
  *
@@ -466,7 +467,7 @@ export async function insertMessage(input: NormalizedMessageInput): Promise<stri
       // Fire a BullMQ drain job immediately (200 ms debounce via fixed jobId).
       // If a drain is already queued/active, this is a no-op.
       try {
-        await getConversationMemoryRebuildQueue().add('rebuild', {}, {
+        await safeEnqueue(getConversationMemoryRebuildQueue(), 'conversation-memory-rebuild', 'rebuild', {}, {
           jobId: 'drain',
           delay: 200,
         });

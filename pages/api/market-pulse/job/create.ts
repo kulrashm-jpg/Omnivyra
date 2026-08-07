@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { jobQueue } from '../../../../backend/queue/jobQueue';
+import { safeEnqueue } from '../../../../backend/middleware/queueBackpressure';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -93,10 +94,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(500).json({ error: 'Failed to create market pulse job' });
     }
 
-    await jobQueue.add('market-pulse-job', {
+    const enqueued = await safeEnqueue(jobQueue, 'engine-jobs', 'market-pulse-job', {
       type: 'MARKET_PULSE',
       jobId: job.id,
     });
+    if (!enqueued) {
+      // Shed by backpressure. The job row exists and stays PENDING for retry.
+      return res.status(429).json({ error: 'Queue is at capacity. Retry shortly.', jobId: job.id, status: job.status });
+    }
 
     return res.status(201).json({
       jobId: job.id,

@@ -20,6 +20,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import { safeEnqueue } from '../middleware/queueBackpressure';
 import {
   REPLAY_PARTITION_DEFAULT_SIZE,
   REPLAY_PARTITION_MAX_ATTEMPTS,
@@ -127,11 +128,15 @@ export async function partitionAndEnqueueReplay(
   for (const p of partitions) {
     if (p.status !== 'queued') continue;
     try {
-      await replayPartitionQueue.add(
+      const queued = await safeEnqueue(
+        replayPartitionQueue,
+        'replay-partition',
         'process-partition',
         { partitionId: p.id, organizationId, replayOperationId: op.id },
         { jobId: buildReplayPartitionJobId(p.id) },
       );
+      // Shed by backpressure — the partition stays `queued` for the next pass.
+      if (!queued) continue;
       enqueued += 1;
     } catch (err: any) {
       console.warn('[replayCoordination] enqueue failed:', { partitionId: p.id, error: err?.message });

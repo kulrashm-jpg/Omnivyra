@@ -14,6 +14,7 @@
  */
 
 import { makeStableJobId } from '../../queue/bullmqClient';
+import { enqueueOrThrow } from '../../middleware/queueBackpressure';
 
 export type CreatorContentType =
   | 'video_script'
@@ -124,7 +125,7 @@ export async function generateVideoScript(
     };
   }
 
-  const job = await creatorContentQueue.add('creator-video', {
+  const job = await enqueueOrThrow(creatorContentQueue, creatorContentQueue.name, 'creator-video', {
     company_id,
     content_type: 'video_script',
     topic: input.topic,
@@ -183,7 +184,7 @@ export async function generateCarousel(
     };
   }
 
-  const job = await creatorContentQueue.add('creator-carousel', {
+  const job = await enqueueOrThrow(creatorContentQueue, creatorContentQueue.name, 'creator-carousel', {
     company_id,
     content_type: 'carousel',
     topic: input.topic,
@@ -241,7 +242,7 @@ export async function generateVisualStory(
     };
   }
 
-  const job = await creatorContentQueue.add('creator-story', {
+  const job = await enqueueOrThrow(creatorContentQueue, creatorContentQueue.name, 'creator-story', {
     company_id,
     content_type: 'story',
     topic: input.topic,

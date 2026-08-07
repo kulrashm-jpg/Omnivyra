@@ -107,6 +107,23 @@ export type LinkedInUploadOutcome =
 
 const LINKEDIN_BASE = 'https://api.linkedin.com/rest';
 
+/**
+ * WS1-E6-T004 — brokered outbound for the LinkedIn media pipeline.
+ *
+ * These calls cannot use safeFetch (they stream binaries and follow LinkedIn's
+ * own upload URLs), but they are still publish-path provider calls. This is a
+ * thin adapter over the SAME per-host breaker registry safeFetch uses — same
+ * key format, no second breaker implementation.
+ */
+const brokeredFetch = async (url: string, init: RequestInit) => {
+  const { outboundBreakerFor } = await import('../../../lib/security/safeFetch');
+  // Every caller in this module passes either the LINKEDIN_BASE constant or an
+  // uploadUrl returned by the LinkedIn API — the same justification already
+  // reviewed at the uploadUrl call site below, which this helper centralizes.
+  // ssrf-ok: LINKEDIN_BASE constant or LinkedIn-API-issued uploadUrl, never user input
+  return outboundBreakerFor(new URL(url).hostname).call(() => fetch(url, init));
+};
+
 /** Single-part video size ceiling. LinkedIn's documented threshold for
  *  switching to multi-part upload is roughly 200 MB; we cap lower to stay
  *  safely on the single-part path until chunked upload is implemented. */
@@ -254,7 +271,7 @@ async function registerImageUpload(
   auth: LinkedInUploadAuth,
 ): Promise<{ ok: true; value: { assetUrn: string; uploadUrl: string } } | { ok: false; error: LinkedInUploadFailure }> {
   try {
-    const r = await fetch(`${LINKEDIN_BASE}/images?action=initializeUpload`, {
+    const r = await brokeredFetch(`${LINKEDIN_BASE}/images?action=initializeUpload`, {
       method: 'POST',
       headers: linkedInHeaders(auth.accessToken),
       body: JSON.stringify({ initializeUploadRequest: { owner: auth.authorUrn } }),
@@ -302,7 +319,7 @@ async function registerVideoUpload(
   fileSizeBytes: number,
 ): Promise<{ ok: true; value: { assetUrn: string; uploadUrl: string } } | { ok: false; error: LinkedInUploadFailure }> {
   try {
-    const r = await fetch(`${LINKEDIN_BASE}/videos?action=initializeUpload`, {
+    const r = await brokeredFetch(`${LINKEDIN_BASE}/videos?action=initializeUpload`, {
       method: 'POST',
       headers: linkedInHeaders(auth.accessToken),
       body: JSON.stringify({
@@ -362,7 +379,7 @@ async function putBinaryToLinkedIn(input: {
 }): Promise<{ ok: true; etag: string | null } | { ok: false; error: LinkedInUploadFailure }> {
   try {
     // ssrf-ok: uploadUrl is returned by the LinkedIn API (trusted platform response), not user input
-    const r = await fetch(input.uploadUrl, {
+    const r = await brokeredFetch(input.uploadUrl, {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${input.accessToken}`,
@@ -401,7 +418,7 @@ async function finalizeVideoUpload(input: {
   uploadedPartIds: string[];
 }): Promise<{ ok: true } | { ok: false; error: LinkedInUploadFailure }> {
   try {
-    const r = await fetch(`${LINKEDIN_BASE}/videos?action=finalizeUpload`, {
+    const r = await brokeredFetch(`${LINKEDIN_BASE}/videos?action=finalizeUpload`, {
       method: 'POST',
       headers: linkedInHeaders(input.auth.accessToken),
       body: JSON.stringify({
@@ -446,7 +463,7 @@ async function pollVideoUntilReady(input: {
   const urnPath = encodeURIComponent(input.assetUrn);
   while (Date.now() - started < VIDEO_POLL_TIMEOUT_MS) {
     try {
-      const r = await fetch(`${LINKEDIN_BASE}/videos/${urnPath}`, {
+      const r = await brokeredFetch(`${LINKEDIN_BASE}/videos/${urnPath}`, {
         method: 'GET',
         headers: linkedInHeaders(input.auth.accessToken),
       });

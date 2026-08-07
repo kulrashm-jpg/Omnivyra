@@ -1,3 +1,4 @@
+import { enqueueOrThrow } from '../middleware/queueBackpressure';
 import { ownedDbTable } from '../db/writeOwner';
 /**
  * Scheduled-post queue control.
@@ -73,7 +74,9 @@ export async function enqueueScheduledPostAt(
   });
 
   const queue = getQueue();
-  await queue.add(
+  await enqueueOrThrow(
+    queue,
+    'publish',
     'publish',
     {
       scheduled_post_id: scheduledPostId,

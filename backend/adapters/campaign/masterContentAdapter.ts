@@ -14,6 +14,7 @@
  */
 
 import { Queue } from 'bullmq';
+import { enqueueOrThrow } from '../../middleware/queueBackpressure';
 import { makeStableJobId } from '../../queue/bullmqClient';
 
 async function getTenantPriority(_company_id: string): Promise<number> {
@@ -117,7 +118,7 @@ export async function generateCampaignMasterContent(
       }
 
       // Queue new job
-      const job = await contentGenerationQueue.add(`content-${contentType}`, {
+      const job = await enqueueOrThrow(contentGenerationQueue, contentGenerationQueue.name, `content-${contentType}`, {
         company_id,
         content_type: contentType,
         topic,
@@ -315,7 +316,7 @@ async function generateCampaignBatchJob(
   }
 
   // Queue as single batch job
-  const job = await contentGenerationQueue.add('content-article', {
+  const job = await enqueueOrThrow(contentGenerationQueue, contentGenerationQueue.name, 'content-article', {
     company_id,
     campaign_id: input.campaign_id,
     bulk_mode: true,

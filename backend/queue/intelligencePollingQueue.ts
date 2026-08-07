@@ -8,6 +8,7 @@
 import { Queue } from 'bullmq';
 import { applyQueueProtection, getQueuePrefix } from './bullmqClient';
 import { instrumentQueue } from './queueInstrumentation';
+import { enqueueOrThrow } from '../middleware/queueBackpressure';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
@@ -84,7 +85,9 @@ export async function addIntelligencePollingJob(
   const queue = getIntelligencePollingQueue();
   const priority = opts?.priority ?? 5;
   const jobId = opts?.jobId ?? `intel-poll-${payload.apiSourceId}-${Date.now()}`;
-  await queue.add('poll', payload, {
+  // enqueueOrThrow: this function's contract is to RETURN the queued jobId, so
+  // a silent shed would hand the caller an id for a job that does not exist.
+  await enqueueOrThrow(queue, 'intelligence-polling', 'poll', payload, {
     jobId,
     priority,
     ...DEFAULT_JOB_OPTIONS,

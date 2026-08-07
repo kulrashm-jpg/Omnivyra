@@ -24,6 +24,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import { enqueueOrThrow } from '../middleware/queueBackpressure';
 import {
   listeningExecutionQueue,
   buildListeningExecutionJobId,
@@ -286,7 +287,12 @@ export async function createOnDemandExecution(
 
   // Enqueue.
   const jobId = buildListeningExecutionJobId(execution.id);
-  await listeningExecutionQueue.add(
+  // enqueueOrThrow: the row is immediately marked `queued` with this jobId
+  // below, so a silent shed would leave a row claiming to be queued for a job
+  // that was never created.
+  await enqueueOrThrow(
+    listeningExecutionQueue,
+    'listening-executions',
     'listening-execution',
     {
       executionId: execution.id,

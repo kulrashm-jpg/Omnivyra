@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { safeEnqueue } from '../middleware/queueBackpressure';
 /**
  * Scheduler Service
  *
@@ -241,7 +242,9 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
             priority: (post as any).priority || 0,
           });
 
-          await queue.add(
+          await safeEnqueue(
+            queue,
+            'publish',
             'publish',
             {
               scheduled_post_id: post.id,
@@ -274,6 +277,6 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
  */
 export async function enqueueEngagementPolling(): Promise<void> {
   const queue = getEngagementPollingQueue();
-  await queue.add('poll', {}, { jobId: `engagement-poll-${Date.now()}` });
+  await safeEnqueue(queue, 'engagement-polling', 'poll', {}, { jobId: `engagement-poll-${Date.now()}` });
   console.log('✅ Engagement polling job enqueued');
 }

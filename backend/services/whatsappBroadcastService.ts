@@ -1,3 +1,4 @@
+import { safeEnqueue } from '../middleware/queueBackpressure';
 import { ownedDbTable } from '../db/writeOwner';
 /**
  * WhatsApp Broadcast Service
@@ -215,7 +216,9 @@ export async function enqueueBroadcast(
 
     const recipientIds = recipients.map((r) => r.id);
 
-    await queue.add(
+    await safeEnqueue(
+      queue,
+      'whatsapp-broadcast',
       'wa-broadcast-batch',
       { broadcast_id: broadcastId, recipient_ids: recipientIds },
       {
@@ -356,7 +359,7 @@ export async function retryFailed(broadcastId: string): Promise<void> {
   // Re-enqueue as a single batch
   const { getContentQueue } = await import('../queue/contentGenerationQueues');
   const queue = getContentQueue('whatsapp-broadcast');
-  await queue.add('wa-broadcast-batch', {
+  await safeEnqueue(queue, 'whatsapp-broadcast', 'wa-broadcast-batch', {
     broadcast_id:  broadcastId,
     recipient_ids: failed.map((r) => r.id),
   }, {

@@ -3,6 +3,7 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
 import { config as appConfig } from '@/config';
+import { getOrCreateCircuitBreaker } from '../../lib/resilience/circuitBreaker';
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 import { getRequestContext } from './requestContext';
@@ -118,6 +119,28 @@ async function getFallbackConfig(
  * attempt can emit its own usage_events row. The final attempt (success or
  * terminal error) is logged by the outer runCompletion with final_attempt=true.
  */
+/**
+ * WS1-E6-T004 — per-provider AI circuit breaker.
+ *
+ * Reuses the platform breaker registry (lib/resilience/circuitBreaker) — the
+ * same one safeFetch uses for outbound HTTP — rather than introducing a second
+ * breaker for AI. NOTE: this is deliberately NOT
+ * backend/services/intelligence/circuitBreaker.ts, which is keyed by
+ * intelligence-data `provider_id` and read by the provider-health dashboard;
+ * writing AI model providers into it would corrupt that view (see RF-07).
+ *
+ * `minimumRequestsBeforeTrigger` keeps low-volume operations from ever opening
+ * the circuit, so behaviour is unchanged until a provider is genuinely failing
+ * at volume.
+ */
+function aiProviderBreakerFor(provider: 'openai' | 'anthropic') {
+  return getOrCreateCircuitBreaker(`ai-provider:${provider}`, {
+    failureThreshold: 5,
+    timeout: 30_000,
+    minimumRequestsBeforeTrigger: 20,
+  });
+}
+
 export type RetryTrackingContext = {
   companyId:   string | null;
   campaignId:  string | null;
@@ -173,8 +196,15 @@ export async function callProviderWithRetry(
   allowFallback = false,
   tracking?: RetryTrackingContext,
 ): Promise<NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string; retry_attempt: number; queueWaitMs: number; executionMs: number; totalMs: number; concurrencySlot: number }> {
+  // WS1-E6-T004: per-PROVIDER circuit breaker. Wrapped here, at the single
+  // dispatch arrow, so it covers every attempt path — primary, retry, and
+  // cross-provider fallback — without touching the retry/fallback logic
+  // itself. An open breaker on one provider still lets the existing fallback
+  // reach the other, which is precisely the behaviour the breaker is for.
   const dispatch = (p: 'openai' | 'anthropic', ps: typeof params) =>
-    p === 'anthropic' ? callAnthropic(ps) : callOpenAi(ps);
+    aiProviderBreakerFor(p).call(() =>
+      p === 'anthropic' ? callAnthropic(ps) : callOpenAi(ps),
+    );
 
   // ── Concurrency gate ───────────────────────────────────────────────────────
   // Three layers, in order:
@@ -343,6 +373,25 @@ export async function callProviderWithRetry(
   // is enabled (default OFF → behavior unchanged). NEVER retries auth/validation/
   // abort/permanent errors. Backoff is exponential + equal jitter (was fixed 2s).
   const __cls = classifyProviderError(primaryErr);
+  // WS1-E6-T005: per-provider outcome metrics.
+  //
+  // `ai.gateway.retry` below only fires when the error is actually RETRIED
+  // (rate-limit, or transient with AI_GATEWAY_RETRY_TRANSIENT=1 — off by
+  // default). classifyProviderError marks timeouts `retryable: true,
+  // rateLimit: false`, so a provider TIMEOUT never incremented any counter:
+  // the timeout was enforced (resolveProviderTimeoutMs / transport abort) but
+  // invisible to operators.
+  //
+  // Emitted at the single classification point — once per provider attempt,
+  // reusing the existing classifier rather than adding a second one. The
+  // dedicated timeout counter is kept alongside the general one so a timeout
+  // can be alerted on without needing a label filter.
+  try {
+    recordRawCounter('ai.gateway.provider_error', 1, { provider, class: __cls.class });
+    if (__cls.class === 'timeout') {
+      recordRawCounter('ai.gateway.timeout', 1, { provider });
+    }
+  } catch { /* fail-safe: metrics must never break a provider call */ }
   const __transientEnabled = /^(1|true|yes|on)$/i.test(String(process.env.AI_GATEWAY_RETRY_TRANSIENT ?? ''));
   const __shouldRetrySameProvider = __cls.rateLimit || (__transientEnabled && __cls.retryable);
   if (__shouldRetrySameProvider) {

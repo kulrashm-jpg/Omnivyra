@@ -8,6 +8,7 @@
  */
 
 import { Queue } from 'bullmq';
+import { enqueueOrThrow } from '../../middleware/queueBackpressure';
 import { makeStableJobId } from '../../queue/bullmqClient';
 
 export interface BlogGenerationInput {
@@ -47,7 +48,7 @@ export async function generateBlogContent(
   }
 
   // Queue the job
-  const job = await contentGenerationQueue.add('content-blog', {
+  const job = await enqueueOrThrow(contentGenerationQueue, contentGenerationQueue.name, 'content-blog', {
     company_id,
     content_type: 'blog',
     topic: input.topic,
@@ -92,7 +93,7 @@ export async function generatePostContent(
 ): Promise<GenerationJobResponse> {
   const jobId = makeStableJobId('post', { company_id, topic: input.topic, platforms: input.platforms });
 
-  const job = await contentGenerationQueue.add('content-post', {
+  const job = await enqueueOrThrow(contentGenerationQueue, contentGenerationQueue.name, 'content-post', {
     company_id,
     content_type: 'post',
     topic: input.topic,
@@ -134,7 +135,7 @@ export async function generateWhitepaperContent(
 ): Promise<GenerationJobResponse> {
   const jobId = makeStableJobId('whitepaper', { company_id, topic: input.topic });
 
-  const job = await contentGenerationQueue.add('content-whitepaper', {
+  const job = await enqueueOrThrow(contentGenerationQueue, contentGenerationQueue.name, 'content-whitepaper', {
     company_id,
     content_type: 'whitepaper',
     topic: input.topic,
@@ -178,7 +179,7 @@ export async function generateStoryContent(
 ): Promise<GenerationJobResponse> {
   const jobId = makeStableJobId('story', { company_id, topic: input.topic });
 
-  const job = await contentGenerationQueue.add('content-story', {
+  const job = await enqueueOrThrow(contentGenerationQueue, contentGenerationQueue.name, 'content-story', {
     company_id,
     content_type: 'story',
     topic: input.topic,
@@ -221,7 +222,7 @@ export async function generateNewsletterContent(
 ): Promise<GenerationJobResponse> {
   const jobId = makeStableJobId('newsletter', { company_id, topic: input.topic });
 
-  const job = await contentGenerationQueue.add('content-newsletter', {
+  const job = await enqueueOrThrow(contentGenerationQueue, contentGenerationQueue.name, 'content-newsletter', {
     company_id,
     content_type: 'newsletter',
     topic: input.topic,

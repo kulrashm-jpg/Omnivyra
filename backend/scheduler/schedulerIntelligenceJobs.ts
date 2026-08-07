@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { safeEnqueue } from '../middleware/queueBackpressure';
 /**
  * Intelligence & engine scheduling jobs.
  *
@@ -556,8 +557,11 @@ export async function enqueueScheduledLeadDetection(): Promise<{ enqueued: numbe
           continue;
         }
         const enqueueStartedAt = Date.now();
-        await jobQueue.add('lead-job', { type: 'LEAD', jobId: job.id }, { jobId: `lead-detection:${job.id}` });
+        const queued = await safeEnqueue(jobQueue, 'engine-jobs', 'lead-job', { type: 'LEAD', jobId: job.id }, { jobId: `lead-detection:${job.id}` });
         recordLeadQueueEnqueue(Date.now() - enqueueStartedAt);
+        // Shed by backpressure — do NOT count it as enqueued. The lead job row
+        // is untouched, so the next scheduler tick retries it.
+        if (!queued) continue;
         enqueued++;
       } catch (e: any) {
         errors.push(`${companyId}: ${e?.message ?? String(e)}`);

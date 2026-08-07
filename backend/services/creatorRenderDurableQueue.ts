@@ -1,6 +1,7 @@
 import { Queue, Worker, QueueEvents, type JobsOptions, type Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { getSharedRedisClient, getQueuePrefix } from '../queue/bullmqClient';
+import { runWithJobTraceContext } from '../observability/traceKit';
 import { createRenderJobId, type RenderJobStatus } from './creatorRenderQueue';
 import { recordCreatorRenderMetric } from './creatorRenderObservability';
 import { persistCreatorRenderJobState } from './creatorRenderPersistence';
@@ -220,7 +221,7 @@ async function runCreatorRenderSoak(job: Job<unknown>): Promise<{ soak: true; ch
 }
 
 export function createCreatorRenderWorker(processor: (job: Job<CreatorDurableRenderJobData>) => Promise<unknown>): Worker<CreatorDurableRenderJobData> {
-  return new Worker<CreatorDurableRenderJobData>(QUEUE_NAME, async (job) => {
+  return new Worker<CreatorDurableRenderJobData>(QUEUE_NAME, async (job) => runWithJobTraceContext(job, async () => {
     // Soak-only opt-in branch — double-gated (env flag + per-job marker) so
     // production is dead code when WORKER_SOAK_MODE is unset.
     if (config.WORKER_SOAK_MODE === '1' && (job.data as { __soak?: boolean } | null)?.__soak === true) {
@@ -286,7 +287,7 @@ export function createCreatorRenderWorker(processor: (job: Job<CreatorDurableRen
       }
       throw error;
     }
-  }, {
+  }), {
     connection: connection(),
     // CRITICAL: Worker must use the same prefix as the Queue +
     // QueueEvents in this file (lines 70 + 80). Without this, BullMQ

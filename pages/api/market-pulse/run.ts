@@ -4,6 +4,7 @@ import { config } from '@/config';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { jobQueue } from '../../../backend/queue/jobQueue';
+import { safeEnqueue } from '../../../backend/middleware/queueBackpressure';
 import {
   buildMarketPulseExecutorContext,
   createMarketPulseRun,
@@ -113,10 +114,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    await jobQueue.add('market-pulse-job', {
+    const enqueued = await safeEnqueue(jobQueue, 'engine-jobs', 'market-pulse-job', {
       type: 'MARKET_PULSE',
       jobId: legacyJob.id,
     });
+    if (!enqueued) {
+      // Shed by backpressure. The run + legacy job rows exist for retry.
+      return res.status(429).json({ error: 'Queue is at capacity. Retry shortly.', runId: run.id, legacyJobId: legacyJob.id });
+    }
 
     return res.status(201).json({ runId: run.id, status: run.status, legacyJobId: legacyJob.id });
   } catch (error) {

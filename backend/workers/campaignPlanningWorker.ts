@@ -13,6 +13,8 @@
 
 import { Worker } from 'bullmq';
 import { getRedisConfig } from '../queue/bullmqClient';
+import { deadLetterOnExhaustion } from '../queue/deadLetterOnExhaustion';
+import { runWithJobTraceContext } from '../observability/traceKit';
 import { processCampaignPlanningJob } from '../queue/jobProcessors/campaignPlanningProcessor';
 import { runCacheWarmup } from '../services/cacheWarmup';
 import { startAutoScalingMonitor } from '../services/autoScalingSignal';
@@ -25,14 +27,14 @@ const redisConfig = getRedisConfig();
 
 const worker = new Worker<CampaignPlanningJobPayload>(
   'ai-heavy',
-  async (job) => {
+  async (job) => runWithJobTraceContext(job, async () => {
     // Only process campaign-planning jobs from the shared ai-heavy queue
     if (job.name !== 'campaign-planning') {
       console.info('[campaign-worker] skipping non-campaign job', job.name);
       return;
     }
     await processCampaignPlanningJob(job);
-  },
+  }),
   {
     connection:  redisConfig,
     concurrency: 3,    // 3 parallel campaign plans max
@@ -49,6 +51,7 @@ worker.on('completed', (job) => {
 
 worker.on('failed', (job, err) => {
   console.error('[campaign-worker] failed', { jobId: job?.id, error: err.message });
+  deadLetterOnExhaustion('ai-heavy', job, err);
 });
 
 worker.on('error', (err) => {

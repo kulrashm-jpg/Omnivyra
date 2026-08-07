@@ -16,6 +16,7 @@
  * mutation that BOLT used to do inline.
  */
 
+import { enqueueOrThrow } from '../../middleware/queueBackpressure';
 import { QueueEvents } from 'bullmq';
 import type { Queue } from 'bullmq';
 import {
@@ -112,7 +113,7 @@ export async function enqueueBoltCreatorRowExecution(
   // collapse to the same job (BullMQ rejects duplicate jobIds), making the
   // pipeline's enqueue step safely re-runnable.
   const jobId = `bolt-creator-row-${payload.daily_plan_id}`;
-  const job = await queue.add(jobName, {
+  const job = await enqueueOrThrow(queue, 'bolt-content-jobs', jobName, {
     bolt_payload: payload,
     // legacy creatorContentProcessor fields kept null so the
     // discriminator branch is unambiguous

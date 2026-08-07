@@ -1,3 +1,4 @@
+import { safeEnqueue } from '../../../backend/middleware/queueBackpressure';
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 /**
  * GET|POST /api/cron/market-pulse-automation
@@ -233,7 +234,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             return { mode: 'inline', runId: run.id, legacyJobId: legacyJob.id };
           }
 
-          await jobQueue.add('market-pulse-job', {
+          await safeEnqueue(jobQueue, 'engine-jobs', 'market-pulse-job', {
             type: 'MARKET_PULSE',
             jobId: legacyJob.id,
           });

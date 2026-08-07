@@ -21,6 +21,7 @@
  */
 
 import { validateCronEnv } from '../utils/validateEnv';
+import { safeEnqueue } from '../middleware/queueBackpressure';
 import { config } from '@/config';
 import { CronGuard } from '../utils/cronGuard';
 import { cronInstr } from '../utils/cronInstrumentation';
@@ -550,7 +551,7 @@ async function startCron() {
   if (redisReadyForQueues) {
     scheduleWorker(
       async () => {
-        await getLeadThreadRecomputeQueue().add('recompute', {}, { jobId: 'drain', delay: 200 });
+        await safeEnqueue(getLeadThreadRecomputeQueue(), 'lead-thread-recompute', 'recompute', {}, { jobId: 'drain', delay: 200 });
         return {};
       },
       LEAD_THREAD_RECOMPUTE_SAFETYNET_MS, 'leadThreadRecompute-safetynet',
@@ -558,7 +559,7 @@ async function startCron() {
     );
     scheduleWorker(
       async () => {
-        await getConversationMemoryRebuildQueue().add('rebuild', {}, { jobId: 'drain', delay: 200 });
+        await safeEnqueue(getConversationMemoryRebuildQueue(), 'conversation-memory-rebuild', 'rebuild', {}, { jobId: 'drain', delay: 200 });
         return {};
       },
       CONVERSATION_MEMORY_SAFETYNET_MS, 'conversationMemory-safetynet',

@@ -1,6 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getContentQueue } from '../../../backend/queue/contentGenerationQueues';
+import { safeEnqueue } from '../../../backend/middleware/queueBackpressure';
 
 /**
  * Vercel Cron entrypoint — runs daily at 02:00 UTC (configured in vercel.json).
@@ -48,21 +49,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const queue = getContentQueue('analytics-ingestion');
 
-    await queue.add(
+    await safeEnqueue(queue, 'analytics-ingestion',
       'daily-growth',
       { type: 'daily-growth' },
       { jobId: `daily-growth-${today}`, priority: 2 },
     );
     enqueued.push('daily-growth');
 
-    await queue.add(
+    await safeEnqueue(queue, 'analytics-ingestion',
       'post-polls',
       { type: 'post-polls', batchSize: 100 },
       { jobId: `post-polls-${Date.now()}`, priority: 3 },
     );
     enqueued.push('post-polls');
 
-    await queue.add(
+    await safeEnqueue(queue, 'analytics-ingestion',
       'ga4-all-companies',
       { type: 'ga4-all-companies', startDate: sevenDaysAgo, endDate: today },
       { jobId: `ga4-all-companies-${today}`, priority: 4 },
@@ -74,7 +75,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // /api/cron/integrations-health is a follow-up after plan upgrade).
     // Refreshes expiring social tokens, GA4 access tokens, and writes
     // canonical connection_state across the integration tables.
-    await queue.add(
+    await safeEnqueue(queue, 'analytics-ingestion',
       'oauth-refresh',
       { type: 'oauth-refresh' },
       { jobId: `oauth-refresh-${today}`, priority: 5 },

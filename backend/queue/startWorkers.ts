@@ -342,35 +342,13 @@ export async function startWorkers(): Promise<void> {
     }
   }, { concurrency: 2 });
 
-  // Phase 0 — structured failure metadata for LEAD jobs. Emits one log line
-  // per attempt; on final attempt the metadata can be picked up by a future
-  // DLQ producer. No DLQ producer yet (Phase 0 ships the foundation only),
-  // and MARKET_PULSE failures retain their existing logging.
+  // LEAD failure handling + dead-lettering, attached from the SHARED helper so
+  // this dev bootstrap and workers/main.ts (production) behave identically.
+  // Previously only this bootstrap had ANY LEAD failure handling.
+  // MARKET_PULSE failures retain their existing logging.
   try {
-    const { buildLeadJobFailureMetadata } = await import('./leadQueueHardening');
-    const { recordLeadJobFailure } = await import('./leadQueueObservability');
-    engineWorker.on('failed', (job, err) => {
-      if (!job) return;
-      const data = job.data as { type?: string } | undefined;
-      if (data?.type !== 'LEAD') return;
-      const meta = buildLeadJobFailureMetadata({
-        jobId: String(job.id ?? 'unknown'),
-        jobName: job.name,
-        attemptsMade: job.attemptsMade,
-        attemptsAllowed: job.opts?.attempts ?? 1,
-        failedReason: err?.message ?? 'unknown',
-        stack: err?.stack ?? null,
-        data: job.data,
-      });
-      const { category } = recordLeadJobFailure({
-        jobId: String(job.id ?? 'unknown'),
-        reason: err?.message ?? null,
-      });
-      console.warn(
-        '[lead-job-failed]',
-        JSON.stringify({ category, ...meta }),
-      );
-    });
+    const { attachLeadJobFailureHandler } = await import('./leadQueueHardening');
+    attachLeadJobFailureHandler(engineWorker);
   } catch (e) {
     _diag('startWorkers:lead-failed-handler-attach-failed', {
       error: e instanceof Error ? e.message : String(e),

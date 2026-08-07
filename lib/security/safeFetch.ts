@@ -28,6 +28,7 @@ import { Agent, fetch as undiciFetch } from 'undici';
 import { validateOutboundUrl, isBlockedIp, type SsrfPolicy } from './ssrfGuard';
 import { recordExternal, recordRawCounter } from '../../backend/observability';
 import { defineRolloutFlag, resolveRolloutSync } from '../platform/rollout';
+import { getOrCreateCircuitBreaker } from '../resilience/circuitBreaker';
 
 export interface SafeFetchOptions extends SsrfPolicy {
   /** Max redirects to follow (default 3, 0 = none). */
@@ -61,6 +62,23 @@ function countBlocked(reason: string, host: string): void {
 function countAllowed(host: string): void {
   try { recordRawCounter('ssrf.request.allowed', 1, { host }); } catch { /* fail-safe */ }
 }
+/**
+ * WS1-E6-T004 — per-host outbound circuit breaker.
+ *
+ * Reuses the platform breaker (lib/resilience/circuitBreaker) rather than
+ * adding another implementation; the named registry there is exactly the
+ * per-key model this needs. Thresholds are deliberately conservative:
+ * `minimumRequestsBeforeTrigger` keeps a host with a handful of calls from
+ * ever opening, so low-traffic upstreams behave exactly as before.
+ */
+export function outboundBreakerFor(host: string) {
+  return getOrCreateCircuitBreaker(`outbound:${host}`, {
+    failureThreshold: 5,
+    timeout: 30_000,
+    minimumRequestsBeforeTrigger: 20,
+  });
+}
+
 function countEvent(name: string, host: string): void {
   try { recordRawCounter(`ssrf.request.${name}`, 1, { host }); } catch { /* fail-safe */ }
 }
@@ -230,11 +248,20 @@ export async function safeFetch(rawUrl: string, init: RequestInit = {}, options:
 
     let res: Response;
     try {
-      res = (await undiciFetch(url, {
-        ...(init as Record<string, unknown>),
-        redirect: 'manual',
-        dispatcher: agent,
-      } as never)) as unknown as Response;
+      // WS1-E6-T004: per-HOST circuit breaker on the single outbound seam.
+      // Keyed by hostname so one failing upstream cannot cascade into every
+      // other outbound call, and a healthy host is never affected by a sick
+      // one. The breaker wraps ONLY the network call — SSRF validation and
+      // DNS pinning above always run, so an open circuit can never relax a
+      // security check. Wrapping here (rather than at 66 call sites) keeps
+      // safeFetch the single outbound seam that HARDEN-005 established.
+      res = (await outboundBreakerFor(host).call(async () =>
+        (await undiciFetch(url, {
+          ...(init as Record<string, unknown>),
+          redirect: 'manual',
+          dispatcher: agent,
+        } as never)) as unknown as Response,
+      )) as Response;
     } catch (err) {
       const timedOut = /timeout|UND_ERR_(CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT)/i.test((err as Error)?.message ?? '');
       if (timedOut) countEvent('timeout', host);

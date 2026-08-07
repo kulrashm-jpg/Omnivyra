@@ -1,6 +1,7 @@
 /** Structured plan scheduler — daily-plan scheduling core — split from structuredPlanSchedulerExecWeekly.ts (barrel preserved; importers unchanged). */
 /** Structured plan scheduler — weekly structure execution — split from structuredPlanSchedulerExec.ts (barrel preserved; importers unchanged). */
 /** Structured plan scheduler — execution — split from structuredPlanScheduler.ts (barrel preserved; importers unchanged). */
+import { safeEnqueue } from '../middleware/queueBackpressure';
 import { supabase } from '../db/supabaseClient';
 import { BoltError, BOLT_ERROR_CODES } from '../../lib/shared/bolt/boltErrorCodes';
 import { recordRowFailureBatch, type RowFailureRecord } from './boltRowFailureDiagnostics';
@@ -243,7 +244,7 @@ export async function queueBoltContentJobs(
       type_map_by_platform: typeMapByPlatform,
     };
 
-    await queue.add(`bolt-topic-${boltJobId}`, jobData, {
+    await safeEnqueue(queue, 'bolt-content-jobs', `bolt-topic-${boltJobId}`, jobData, {
       priority: jd.priority,
       attempts: 3,
       backoff:  { type: 'exponential', delay: 3000 },

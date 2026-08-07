@@ -9,11 +9,24 @@
  *   HARD_LIMIT (2000 jobs) — reject outright
  *
  * Usage:
- *   await assertQueueHasCapacity(queue, 'publish');
- *   await queue.add('publish', payload, { jobId });
+ *   await safeEnqueue(queue, 'publish', 'publish', payload, { jobId });
+ *
+ * ── Exempt paths (MUST keep calling queue.add directly) ──────────────────────
+ * Backpressure exists to shed NEW tenant-driven work. Three classes of enqueue
+ * are recovery paths, where shedding would destroy the thing being recovered:
+ *
+ *   1. Dead-letter republication (leadQueueHardening, creatorRenderDurableQueue)
+ *      — a full queue would silently DROP the dead letter, which is the only
+ *      durable record that the job failed.
+ *   2. Operator requeue from the DLQ (services/jobInspection) — an operator
+ *      draining a backlog would be blocked by the backlog itself.
+ *   3. Soak/diagnostic harnesses (scripts/) — not production enqueues.
+ *
+ * These are enumerated in backend/tests/unit/queueBackpressureAdoption.test.ts,
+ * which fails on any NEW direct queue.add outside that list.
  */
 
-import type { Queue } from 'bullmq';
+import type { JobsOptions, Queue } from 'bullmq';
 
 const SOFT_LIMIT = 500;
 const HARD_LIMIT = 2_000;
@@ -77,18 +90,36 @@ export async function assertQueueHasCapacity(
  * @param payload   - Job data
  * @param opts      - BullMQ job options (jobId, delay, etc.)
  */
+/**
+ * safeEnqueue for callers that CANNOT degrade — they must return a job id to
+ * their caller (the content/creator adapters return `{ jobId, pollUrl }`), so
+ * there is no meaningful "shed" response they can produce.
+ *
+ * Throws QueueFullError instead of returning null. That is the honest shed
+ * path for these sites: the caller already propagates enqueue failures, and a
+ * silent null would surface later as a broken poll URL rather than an error at
+ * the point of failure.
+ */
+export async function enqueueOrThrow<T extends Record<string, unknown>>(
+  queue: Queue,
+  queueName: string,
+  jobName: string,
+  payload: T,
+  opts?: JobsOptions & { softLimit?: number; hardLimit?: number },
+): Promise<{ id?: string | null }> {
+  const job = await safeEnqueue(queue, queueName, jobName, payload, opts);
+  if (!job) {
+    throw new QueueFullError(queueName, await getQueueDepth(queue).catch(() => -1), opts?.hardLimit ?? HARD_LIMIT);
+  }
+  return job;
+}
+
 export async function safeEnqueue<T extends Record<string, unknown>>(
   queue: Queue,
   queueName: string,
   jobName: string,
   payload: T,
-  opts?: {
-    jobId?: string;
-    delay?: number;
-    priority?: number;
-    softLimit?: number;
-    hardLimit?: number;
-  },
+  opts?: JobsOptions & { softLimit?: number; hardLimit?: number },
 ): Promise<{ id?: string | null } | null> {
   try {
     await assertQueueHasCapacity(queue, queueName, opts);
@@ -97,11 +128,15 @@ export async function safeEnqueue<T extends Record<string, unknown>>(
     // The worker-side getWorker() factory restores it into the RequestContext
     // ALS, linking api → queue → worker series.
     const { withTraceMeta } = await import('../observability/traceKit');
-    const job = await queue.add(jobName, withTraceMeta(payload), {
-      jobId: opts?.jobId,
-      delay: opts?.delay,
-      priority: opts?.priority,
-    });
+    // The FULL JobsOptions is forwarded. This helper previously whitelisted
+    // only jobId/delay/priority, which silently dropped attempts, backoff and
+    // removeOnComplete/removeOnFail — so adopting it at a call site that set
+    // those would have quietly disabled that job's retry policy (the lead
+    // enqueue in pages/api/leads/job/create.ts being the clearest case).
+    // softLimit/hardLimit are backpressure-only knobs and must not reach BullMQ.
+    const { softLimit: _s, hardLimit: _h, ...jobOptions } = opts ?? {};
+    void _s; void _h;
+    const job = await queue.add(jobName, withTraceMeta(payload), jobOptions);
     return { id: job.id };
   } catch (err) {
     if (err instanceof QueueFullError) {

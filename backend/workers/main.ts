@@ -32,6 +32,8 @@ import os from 'os';
 import { Worker }                    from 'bullmq';
 import { getWorker, closeConnections, getSharedRedisClient, withHeavyJobSlot, getQueuePrefix } from '../queue/bullmqClient';
 import { instrumentWorker }          from '../queue/queueInstrumentation';
+import { deadLetterOnExhaustion }    from '../queue/deadLetterOnExhaustion';
+import { attachLeadJobFailureHandler } from '../queue/leadQueueHardening';
 import { processPublishJob }         from '../queue/jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from '../queue/jobProcessors/engagementPollingProcessor';
 import { processBoltJob }            from '../queue/jobProcessors/boltProcessor';
@@ -91,22 +93,26 @@ creatorRenderWorker.on('error', (err) =>
 // from getWorker()'s catch-all completed handler.
 const leadThreadRecomputeWorker = new Worker(
   'lead-thread-recompute',
-  async () => { await runLeadThreadRecomputeWorker(); },
+  async (job) => runWithJobTraceContext(job, async () => { await runLeadThreadRecomputeWorker(); }),
   { connection: getSharedRedisClient(), prefix: getQueuePrefix(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
 );
-leadThreadRecomputeWorker.on('failed', (job, err) =>
-  console.error('[lead-thread-recompute] job failed', { jobId: job?.id, error: err.message }));
+leadThreadRecomputeWorker.on('failed', (job, err) => {
+  console.error('[lead-thread-recompute] job failed', { jobId: job?.id, error: err.message });
+  deadLetterOnExhaustion('lead-thread-recompute', job, err);
+});
 leadThreadRecomputeWorker.on('error', (err) =>
   console.error('[lead-thread-recompute] worker error:', err));
 instrumentWorker(leadThreadRecomputeWorker);
 
 const conversationMemoryRebuildWorker = new Worker(
   'conversation-memory-rebuild',
-  async () => { await runConversationMemoryWorker(); },
+  async (job) => runWithJobTraceContext(job, async () => { await runConversationMemoryWorker(); }),
   { connection: getSharedRedisClient(), prefix: getQueuePrefix(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
 );
-conversationMemoryRebuildWorker.on('failed', (job, err) =>
-  console.error('[conversation-memory-rebuild] job failed', { jobId: job?.id, error: err.message }));
+conversationMemoryRebuildWorker.on('failed', (job, err) => {
+  console.error('[conversation-memory-rebuild] job failed', { jobId: job?.id, error: err.message });
+  deadLetterOnExhaustion('conversation-memory-rebuild', job, err);
+});
 conversationMemoryRebuildWorker.on('error', (err) =>
   console.error('[conversation-memory-rebuild] worker error:', err));
 instrumentWorker(conversationMemoryRebuildWorker);
@@ -142,6 +148,12 @@ const engineWorker = new Worker(
   },
 );
 engineWorker.on('error', (err) => console.error('[engine-worker] error:', err));
+// LEAD failure handling + lead-jobs-dlq republication. Same shared helper the
+// dev bootstrap uses — production previously had NO 'failed' handler here, so a
+// failed LEAD job produced neither metadata nor a dead letter.
+attachLeadJobFailureHandler(engineWorker);
+// Durable record for ANY exhausted engine job (LEAD or MARKET_PULSE).
+engineWorker.on('failed', (job, err) => deadLetterOnExhaustion('engine-jobs', job, err));
 
 // Campaign planning worker (ai-heavy queue)
 const campaignWorker = new Worker<CampaignPlanningJobPayload>(
@@ -228,8 +240,10 @@ const campaignWorker = new Worker<CampaignPlanningJobPayload>(
 );
 campaignWorker.on('completed', (job) =>
   console.info('[campaign-worker] completed', { jobId: job.id }));
-campaignWorker.on('failed', (job, err) =>
-  console.error('[campaign-worker] failed', { jobId: job?.id, error: err.message }));
+campaignWorker.on('failed', (job, err) => {
+  console.error('[campaign-worker] failed', { jobId: job?.id, error: err.message });
+  deadLetterOnExhaustion('ai-heavy', job, err);
+});
 campaignWorker.on('error', (err) => console.error('[campaign-worker] error:', err));
 
 // ── Startup ───────────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@
  */
 
 import { Queue } from 'bullmq';
+import { enqueueOrThrow } from '../../middleware/queueBackpressure';
 import { makeStableJobId } from '../../queue/bullmqClient';
 import { generateDeterministicEngagementResponse } from '../../services/deterministicContentPath';
 
@@ -67,7 +68,7 @@ export async function generateEngagementResponse(
     message_hash: generateMessageHash(input.original_message),
   });
 
-  const job = await contentGenerationQueue.add('content-engagement', {
+  const job = await enqueueOrThrow(contentGenerationQueue, contentGenerationQueue.name, 'content-engagement', {
     company_id,
     content_type: 'engagement_response',
     engagement_type: input.engagement_type,
@@ -136,7 +137,7 @@ export async function generateBulkEngagementResponses(
       timestamp: Date.now(),
     });
 
-    const job = await contentGenerationQueue.add('content-engagement', {
+    const job = await enqueueOrThrow(contentGenerationQueue, contentGenerationQueue.name, 'content-engagement', {
       company_id,
       content_type: 'engagement_response',
       bulk_mode: true,

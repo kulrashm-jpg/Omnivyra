@@ -12,6 +12,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { ownedDbTable } from '../../../backend/db/writeOwner';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getBoltQueue } from '../../../backend/queue/boltQueue';
+import { safeEnqueue } from '../../../backend/middleware/queueBackpressure';
 import { getUserFriendlyMessage } from '../../../backend/utils/userFriendlyErrors';
 import { executeBoltPipeline } from '../../../backend/services/boltPipelineService';
 import { deriveAbandonmentAttribution } from '../../../lib/shared/bolt/abandonmentAttribution';
@@ -355,8 +356,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (workersEnabled) {
       try {
         const queue = getBoltQueue();
-        await queue.add('bolt-execution', { run_id: runId }, { jobId: runId });
-        queuedViaBullMQ = true;
+        const enqueued = await safeEnqueue(queue, 'bolt-execution', 'bolt-execution', { run_id: runId }, { jobId: runId });
+        // A shed job leaves queuedViaBullMQ false, so the existing direct
+        // in-process fallback below runs — same path as a Redis failure.
+        queuedViaBullMQ = enqueued !== null;
       } catch (queueErr) {
         console.warn('[bolt/execute] BullMQ enqueue failed, falling back to direct execution:', (queueErr as Error)?.message);
       }

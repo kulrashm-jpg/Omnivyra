@@ -15,6 +15,8 @@
 import { Queue, Worker } from 'bullmq';
 import { getConnectionConfig, getQueuePrefix } from './bullmqClient';
 import { observeQueueEvents } from '../observability/queueObservability';
+import { runWithJobTraceContext } from '../observability/traceKit';
+import { deadLetterOnExhaustion } from './deadLetterOnExhaustion';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QUEUE CONFIGURATION
@@ -281,7 +283,7 @@ export async function startContentWorkers(processor: (job: any) => Promise<any>)
   console.info('[contentGenerationQueues][workers] Starting workers');
 
   for (const [queueName, config] of Object.entries(CONTENT_QUEUE_CONFIG)) {
-    const worker = new Worker(queueName, processor, {
+    const worker = new Worker(queueName, (job) => runWithJobTraceContext(job, () => processor(job)), {
       connection: getConnectionConfig(),
       prefix: getQueuePrefix(),
       concurrency: config.concurrency,
@@ -308,6 +310,7 @@ export async function startContentWorkers(processor: (job: any) => Promise<any>)
         jobId: job?.id,
         error: String(error),
       });
+      deadLetterOnExhaustion(queueName, job, error);
     });
 
     console.info('[contentGenerationQueues][worker-started]', {
@@ -333,7 +336,7 @@ export async function startCreatorContentWorkers(processor: (job: any) => Promis
       continue;
     }
 
-    const worker = new Worker(queueName, processor, {
+    const worker = new Worker(queueName, (job) => runWithJobTraceContext(job, () => processor(job)), {
       connection: getConnectionConfig(),
       prefix: getQueuePrefix(),
       concurrency: config.concurrency,
@@ -360,6 +363,7 @@ export async function startCreatorContentWorkers(processor: (job: any) => Promis
         jobId: job?.id,
         error: String(error),
       });
+      deadLetterOnExhaustion(queueName, job, error);
     });
 
     console.info('[contentGenerationQueues][creator-worker-started]', {
@@ -376,7 +380,7 @@ export async function startCreatorContentWorkers(processor: (job: any) => Promis
  */
 export async function startBoltContentWorkers(processor: (job: any) => Promise<any>): Promise<void> {
   const config = CONTENT_QUEUE_CONFIG['bolt-content-jobs']!;
-  const worker = new Worker('bolt-content-jobs', processor, {
+  const worker = new Worker('bolt-content-jobs', (job) => runWithJobTraceContext(job, () => processor(job)), {
     connection: getConnectionConfig(),
     prefix: getQueuePrefix(),
     concurrency: config.concurrency,
@@ -398,6 +402,7 @@ export async function startBoltContentWorkers(processor: (job: any) => Promise<a
 
   worker.on('failed', (job, error) => {
     console.error('[bolt-content-worker][failed]', { jobId: job?.id, error: String(error) });
+    deadLetterOnExhaustion('bolt-content-jobs', job, error);
   });
 
   console.info('[bolt-content-worker] started, concurrency=', config.concurrency);
@@ -409,7 +414,7 @@ export async function startBoltContentWorkers(processor: (job: any) => Promise<a
  */
 export async function startWhatsAppBroadcastWorker(processor: (job: any) => Promise<any>): Promise<void> {
   const config = CONTENT_QUEUE_CONFIG['whatsapp-broadcast']!;
-  const worker = new Worker('whatsapp-broadcast', processor, {
+  const worker = new Worker('whatsapp-broadcast', (job) => runWithJobTraceContext(job, () => processor(job)), {
     connection: getConnectionConfig(),
     prefix: getQueuePrefix(),
     concurrency: config.concurrency,
@@ -431,6 +436,7 @@ export async function startWhatsAppBroadcastWorker(processor: (job: any) => Prom
 
   worker.on('failed', (job, error) => {
     console.error('[wa-broadcast-worker][failed]', { jobId: job?.id, error: String(error) });
+    deadLetterOnExhaustion('whatsapp-broadcast', job, error);
   });
 
   console.info('[wa-broadcast-worker] started, concurrency=', config.concurrency);
@@ -438,7 +444,7 @@ export async function startWhatsAppBroadcastWorker(processor: (job: any) => Prom
 
 export async function startWhatsAppWebhookWorker(processor: (job: any) => Promise<any>): Promise<void> {
   const config = CONTENT_QUEUE_CONFIG['whatsapp-webhook']!;
-  const worker = new Worker('whatsapp-webhook', processor, {
+  const worker = new Worker('whatsapp-webhook', (job) => runWithJobTraceContext(job, () => processor(job)), {
     connection: getConnectionConfig(),
     prefix: getQueuePrefix(),
     concurrency: config.concurrency,
@@ -454,6 +460,7 @@ export async function startWhatsAppWebhookWorker(processor: (job: any) => Promis
   });
   worker.on('failed', (job, error) => {
     console.error('[wa-webhook-worker][failed]', { jobId: job?.id, error: String(error) });
+    deadLetterOnExhaustion('whatsapp-webhook', job, error);
   });
   console.info('[wa-webhook-worker] started, concurrency=', config.concurrency);
 }
@@ -472,7 +479,7 @@ export async function startAnalyticsIngestionWorker(processor: (job: any) => Pro
   const config = CONTENT_QUEUE_CONFIG['analytics-ingestion']!;
   let worker: Worker;
   try {
-    worker = new Worker('analytics-ingestion', processor, {
+    worker = new Worker('analytics-ingestion', (job) => runWithJobTraceContext(job, () => processor(job)), {
       connection: getConnectionConfig(),
       prefix: getQueuePrefix(),
       concurrency: config.concurrency,
@@ -502,6 +509,7 @@ export async function startAnalyticsIngestionWorker(processor: (job: any) => Pro
   worker.on('failed', (job, error) => {
     _diag('analytics-ingestion-worker:failed', { jobId: job?.id, error: String(error).slice(0, 200) });
     console.error('[analytics-ingestion-worker][failed]', { jobId: job?.id, error: String(error) });
+    deadLetterOnExhaustion('analytics-ingestion', job, error);
   });
   console.info('[analytics-ingestion-worker] started, concurrency=', config.concurrency);
   _diag('startAnalyticsIngestionWorker:event-handlers-registered');
