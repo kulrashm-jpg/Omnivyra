@@ -4,6 +4,17 @@ import { getRulesForPlatform } from '../../services/platformRulesService';
 jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn().mockResolvedValue({ company_id: 'comp-1', category: 'marketing' }),
 }));
+// LAYER 2 — the AI runtime. Mocked at the CALLER boundary, which stops execution
+// before the gateway consults pricing at all. Suite-local, not global:
+// `getOpenAiClient` is module-private in aiGatewayCore so there is no injection
+// seam, and a global `openai` mock would neutralise the suites that legitimately
+// exercise the gateway.
+jest.mock('../../services/aiGatewayProvidersOps', () => ({
+  runCompletionWithOperation: jest.fn().mockResolvedValue({
+    output: '{}',
+    metadata: { provider: 'mock', model: 'mock' },
+  }),
+}));
 jest.mock('../../services/externalApiService', () => ({
   fetchTrendsFromApis: jest.fn().mockResolvedValue([
     { topic: 'AI marketing', source: 'YouTube Trends', signal_confidence: 0.9 },
@@ -59,6 +70,16 @@ jest.mock('../../db/supabaseClient', () => {
     select: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
     gte: jest.fn().mockReturnThis(),
+    // LAYER 1 — reached by pricingService.fetchModelPricingRow:136, which builds
+    // `.eq()x4.lte().order().limit().maybeSingle()`.
+    lte: jest.fn().mockReturnThis(),
+    in: jest.fn().mockReturnThis(),
+    contains: jest.fn().mockReturnThis(),
+    // Write entry points — profile write-back via upsertCompanyProfilePayload.
+    insert: jest.fn().mockReturnThis(),
+    upsert: jest.fn().mockReturnThis(),
+    update: jest.fn().mockReturnThis(),
+    delete: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     single: jest.fn().mockResolvedValue({
@@ -75,6 +96,19 @@ jest.mock('../../db/supabaseClient', () => {
   const from = jest.fn((table: string) => {
     if (table === 'campaign_versions') return chain([{ id: 'v1', company_id: 'comp-1', campaign_id: 'camp-1' }]);
     if (table === 'platform_rules') return chain(null); // getPlatformRule returns null when no rule
+    // LAYER 3 — the profile write-back. `upsertCompanyProfilePayload` performs
+    // `.upsert(...).select('*').single()`, and
+    // companyProfileServiceRest1Rest2Competitors.ts:474 throws
+    // "no profile returned after save" on a null result. Without a row for this
+    // table the write-back cannot succeed.
+    //
+    // Minimal shape proven by the caller: a NON-NULL object. Line 488 reads
+    // `data.report_settings?.competitor_intelligence` (optional-chained, so absent
+    // is fine) and passes `data` to buildChangedFields / after_profile. Mirrors
+    // the getProfile mock above rather than inventing columns.
+    if (table === 'company_profiles') {
+      return chain([{ company_id: 'comp-1', category: 'marketing' }]);
+    }
     return chain([]);
   });
   return { supabase: { from, rpc: jest.fn().mockResolvedValue({ data: null, error: null }) } };
