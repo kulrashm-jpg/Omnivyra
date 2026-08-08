@@ -180,11 +180,16 @@ const resolveSelect = (table: string, state: any) => {
       const scheduled = scheduledPostStore.find((post) => post.id === row.scheduled_post_id);
       return {
         ...row,
-        scheduled_posts: scheduled ? { engagement_goals: scheduled.engagement_goals, users: { company_id: scheduled.company_id } } : null,
+        // G2R: the column is `active_company_id`. Both content-kpis.ts:54 and trends.ts:44 select
+        // `users(active_company_id)` and filter on `scheduled_posts.users.active_company_id`; this
+        // double supplied and filtered `company_id`, so the recorded key never matched and the
+        // tenant filter silently never fired — surfacing as tenant-2 rows in a cross-tenant test
+        // and looking exactly like a data leak. Production filters correctly; the double did not.
+        scheduled_posts: scheduled ? { engagement_goals: scheduled.engagement_goals, users: { active_company_id: scheduled.company_id } } : null,
       };
     });
-    const companyId = state.filters['scheduled_posts.users.company_id'];
-    if (companyId) rows = rows.filter((row) => row.scheduled_posts?.users?.company_id === companyId);
+    const companyId = state.filters['scheduled_posts.users.active_company_id'];
+    if (companyId) rows = rows.filter((row) => row.scheduled_posts?.users?.active_company_id === companyId);
     if (state.filters.platform) rows = rows.filter((row) => row.platform === state.filters.platform);
     if (state.gteFilter?.field === 'date') rows = rows.filter((row) => row.date >= state.gteFilter.value);
     return { data: rows, error: null };

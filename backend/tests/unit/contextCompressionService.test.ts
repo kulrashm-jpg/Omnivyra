@@ -35,7 +35,7 @@ describe('contextCompressionService', () => {
         topic: 'Brand awareness',
         tone: 'conversational',
         strategyMemory: {
-          preferred_platforms: ['linkedin', 'x'],
+          preferred_platforms: ['linkedin', 'twitter'],
           preferred_content_types: ['post', 'video'],
         },
       };
@@ -45,7 +45,7 @@ describe('contextCompressionService', () => {
       expect(result.tone).toBe('conversational');
       expect(result.themes).toEqual([]);
       expect(result.top_platforms).toContain('linkedin');
-      expect(result.top_platforms).toContain('x');
+      expect(result.top_platforms).toContain('twitter');
       expect(result.top_content_types).toContain('post');
       expect(result.top_content_types).toContain('video');
     });
@@ -57,7 +57,7 @@ describe('contextCompressionService', () => {
           high_performing_platforms: [
             { value: 'linkedin' },
             { value: 'instagram' },
-            { value: 'x' },
+            { value: 'twitter' },
             { value: 'tiktok' },
           ],
           high_performing_content_types: [
@@ -74,7 +74,7 @@ describe('contextCompressionService', () => {
       expect(result.top_content_types.length).toBeLessThanOrEqual(3);
       expect(result.top_platforms).toContain('linkedin');
       expect(result.top_platforms).toContain('instagram');
-      expect(result.top_platforms).toContain('x');
+      expect(result.top_platforms).toContain('twitter');
       expect(result.top_content_types).toContain('post');
       expect(result.top_content_types).toContain('video');
       expect(result.top_content_types).toContain('carousel');
@@ -127,7 +127,7 @@ describe('contextCompressionService', () => {
     it('produces deterministic output for same input', () => {
       const input: CampaignContextInput = {
         topic: 'Deterministic test',
-        strategyMemory: { preferred_platforms: ['x', 'linkedin'], preferred_content_types: ['video'] },
+        strategyMemory: { preferred_platforms: ['twitter', 'linkedin'], preferred_content_types: ['video'] },
       };
 
       const result1 = buildCampaignContext(input);
@@ -137,15 +137,21 @@ describe('contextCompressionService', () => {
       expect(JSON.stringify(result1)).toBe(JSON.stringify(result2));
     });
 
-    it('normalizes twitter to x', () => {
+    /**
+     * G2R — the canonical direction is `x → twitter`, not the reverse.
+     * `backend/constants/platforms.ts` lists `'twitter'` in CANONICAL_PLATFORMS ("Aligned with
+     * platform_registry table") and aliases `x: 'twitter'`. This suite asserted the inverse
+     * convention. Production is unchanged; the expectation is corrected to the shipped canon.
+     */
+    it('normalizes x to the canonical twitter', () => {
       const input: CampaignContextInput = {
         topic: 'X',
-        strategyMemory: { preferred_platforms: ['twitter', 'linkedin'] },
+        strategyMemory: { preferred_platforms: ['x', 'linkedin'] },
       };
       const result = buildCampaignContext(input);
 
-      expect(result.top_platforms).toContain('x');
-      expect(result.top_platforms).not.toContain('twitter');
+      expect(result.top_platforms).toContain('twitter');
+      expect(result.top_platforms).not.toContain('x');
     });
 
     it('deduplicates sources — strategy memory and performance insights merged', () => {

@@ -68,10 +68,15 @@ describe('Community-AI Notifications', () => {
       status: 'approved',
       requires_human_approval: false,
     });
+    // G2R: `headers` is required. `readIdempotencyKey` (execute.ts:30) reads
+    // `req.headers['idempotency-key']`, and a real Next.js request always carries a headers object,
+    // so omitting it threw before the handler could run. Empty is the honest default: this test
+    // sends no idempotency key, and the handler already falls back to `body.idempotency_key`.
     const req = {
       method: 'POST',
+      headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'notify-1', approved: true },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executeHandler(req, res);
     expect(notificationStore.some((note) => note.event_type === 'executed')).toBe(true);

@@ -20,6 +20,19 @@ jest.mock('../../services/companyProfileService', () => ({
     brand_type: null,
   })),
 }));
+/**
+ * G2R — engine.ts:1 reads the profile through `context/canonicalProfileAdapter` (Wave 2E, fd0d31e4),
+ * so the mock above stopped intercepting. Bridged to this suite's own `getProfile` mock, mirroring
+ * WS-2C (b4c8258a) and WS-G9 (63e71337).
+ */
+jest.mock('../../services/context/canonicalProfileAdapter', () => ({
+  getCanonicalProfile: jest.fn(async (companyId: string) => {
+    const { getProfile } = jest.requireMock('../../services/companyProfileService') as {
+      getProfile: (id: string) => Promise<unknown>;
+    };
+    return getProfile(companyId);
+  }),
+}));
 jest.mock('../../services/externalApiService', () => ({
   fetchTrendsFromApis: jest.fn(),
   getPlatformStrategies: jest.fn().mockResolvedValue([]),

@@ -89,16 +89,17 @@ describe('P2-1 — VariantExperienceShell mounts the provider', () => {
 
 /* ── P2-2 — Navigation entry ─────────────────────────────────── */
 
-describe('P2-2 — Variant Experience surfaces in navigation', () => {
-  test('Campaigns primary nav item declares a "Variant Experience" child', () => {
-    const campaigns = PRIMARY_NAV_ITEMS.find((item) => item.label === 'Campaigns');
-    expect(campaigns).toBeDefined();
-    const child = (campaigns?.children ?? []).find((c) => c.label === 'Variant Experience');
-    expect(child).toBeDefined();
-    expect(child?.href).toBe('/command-center/variant-experience');
-    expect(child?.icon).toBeDefined();
-  });
-
+/**
+ * G2R — BETA-008 (RULE 8) REMOVED the "Variant Experience" navigation entry:
+ * `components/layout/navigationConfig.tsx:114` records it as "hidden for Beta — operator/dev-only
+ * tooling". The three assertions that required it to be present in the Campaigns child list, the
+ * command palette, and the secondary nav are therefore obsolete and are retired here.
+ *
+ * The route itself still exists and is still reachable by direct link, so the matcher and
+ * matcher-resolution assertions below are UNCHANGED — they test routing, not discoverability.
+ * Nothing in the UI is restored: this suite now asserts what BETA-008 actually shipped.
+ */
+describe('P2-2 — Variant Experience route resolution (nav entry retired by BETA-008)', () => {
   test('Campaigns matchers include the variant-experience route', () => {
     const campaigns = PRIMARY_NAV_ITEMS.find((item) => item.label === 'Campaigns');
     expect(campaigns?.matchers).toEqual(expect.arrayContaining(['/command-center/variant-experience']));
@@ -114,20 +115,14 @@ describe('P2-2 — Variant Experience surfaces in navigation', () => {
     // which is what discoverability requires.
   });
 
-  test('COMMAND_ITEMS exposes Variant Experience via the command palette (auto-derived from Campaigns child)', () => {
-    const labels = COMMAND_ITEMS.map((a) => a.label);
-    expect(labels).toContain('Variant Experience');
-    const entry = COMMAND_ITEMS.find((a) => a.label === 'Variant Experience');
-    expect(entry?.href).toBe('/command-center/variant-experience');
-    expect(entry?.group).toBe('Navigate');
-  });
-
-  test('getSecondaryNavForPath on the Campaigns route shows Variant Experience in the child list', () => {
-    // Navigation from /campaigns (Campaigns primary) surfaces the child
-    // list — which is where operators discover Variant Experience.
-    const subs = getSecondaryNavForPath('/campaigns');
-    const labels = subs.map((s) => s.label);
-    expect(labels).toContain('Variant Experience');
+  test('the nav entry stays retired — BETA-008 (RULE 8) hid it as operator/dev-only tooling', () => {
+    // Asserted positively rather than deleted, so a silent re-introduction is caught: if the entry
+    // returns, that must be a deliberate BETA-008 reversal, not an accident.
+    const campaigns = PRIMARY_NAV_ITEMS.find((item) => item.label === 'Campaigns');
+    expect(campaigns).toBeDefined();
+    expect((campaigns?.children ?? []).map((c) => c.label)).not.toContain('Variant Experience');
+    expect(COMMAND_ITEMS.map((a) => a.label)).not.toContain('Variant Experience');
+    expect(getSecondaryNavForPath('/campaigns').map((s) => s.label)).not.toContain('Variant Experience');
   });
 });
 

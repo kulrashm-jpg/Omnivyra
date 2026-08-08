@@ -24,6 +24,24 @@ jest.mock('../../services/companyProfileService', () => ({
   // platformIntelligenceService imports the CompanyProfile type only; provide a
   // no-op so the module loads.
 }));
+/**
+ * G2R — `generateTrackingLink` (trackingLinkService.ts:44) reads the profile through
+ * `context/canonicalProfileAdapter` (Wave 2F, 107c21d1). The profile read itself is not new — it
+ * predates the migration (760a3d24) — only the module it comes from changed, so the mock above
+ * stopped intercepting and the call fell through to the real adapter, hitting `ownedDbTable` and
+ * tripping this suite's "DB access in pure plan build" guard.
+ *
+ * Bridged to this suite's own `getProfile` mock so the guard measures what it was written to
+ * measure: that the PLAN BUILD performs no DB access of its own.
+ */
+jest.mock('../../services/context/canonicalProfileAdapter', () => ({
+  getCanonicalProfile: jest.fn(async (companyId: string) => {
+    const { getProfile } = jest.requireMock('../../services/companyProfileService') as {
+      getProfile: (id: string) => Promise<unknown>;
+    };
+    return getProfile(companyId);
+  }),
+}));
 
 import { buildPlatformExecutionPlan } from '../../services/platformIntelligenceService';
 import { generateTrackingLink } from '../../services/trackingLinkService';

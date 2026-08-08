@@ -17,6 +17,23 @@ jest.mock('../../services/recommendationEngine', () => ({
 jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn(),
 }));
+/**
+ * G2R — recommendationScheduler.ts:4 reads the profile through
+ * `context/canonicalProfileAdapter` (Wave 2F, 107c21d1), so the mock above stopped intercepting and
+ * the profile resolved to null — the scheduler then returned before ever calling
+ * `generateRecommendations`, which is why the spy recorded 0 calls.
+ *
+ * Bridged to this suite's own `getProfile` mock rather than a fixed row, so each test's configured
+ * profile reaches the migrated path. Same pattern certified in WS-2C (b4c8258a) and WS-G9 (63e71337).
+ */
+jest.mock('../../services/context/canonicalProfileAdapter', () => ({
+  getCanonicalProfile: jest.fn(async (companyId: string) => {
+    const { getProfile } = jest.requireMock('../../services/companyProfileService') as {
+      getProfile: (id: string) => Promise<unknown>;
+    };
+    return getProfile(companyId);
+  }),
+}));
 
 const buildQuery = (result: { data: any; error: any }) => {
   const query: any = {
