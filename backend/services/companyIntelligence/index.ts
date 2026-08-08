@@ -15,3 +15,23 @@ export * from './persistence';
 export * from './shadowRuntime';
 export * from './metrics';
 export { isCompanyUnderstandingEnabled, isCompanyProjectionAuthoritative } from './flags';
+// Phase 2 — runtime activation readiness. Frozen contract, three-tier readiness, provider validation,
+// and THE production facade. Nothing here activates anything or registers a provider.
+export {
+  COMPANY_CANONICAL_CONTRACT, COMPANY_CONTRACT_VERSION, COMPANY_PUBLISHED_EDGE_TYPES,
+  COMPANY_GOVERNANCE_RULES, COMPANY_MIGRATION_PROHIBITIONS,
+  validateCompanyContract, type CompanyContractConformance,
+} from './contract';
+export {
+  assessCompanyStructuralReadiness, assessCompanyActivationReadiness, assessCompanyDeploymentReadiness,
+  assessCompanyRuntimeReadiness, checkCompanyRuntimeCompatibility,
+  validateProviderCompatibility, validateProviderRegistration,
+  type CompanyStructuralReadiness, type CompanyActivationReadiness, type CompanyDeploymentReadiness,
+  type CompanyRuntimeReadinessReport, type CompanyRuntimeCompatibility,
+  type CompanyActivationBlocker, type CompanyDeploymentBlocker,
+  type ProviderCompatibilityRow, type ProviderCompatibilityReport, type ProviderRegistrationValidation,
+} from './activationReadiness';
+export {
+  createCompanyProductionFacade,
+  type CompanyProductionFacade, type CompanyProducerPort, type CompanyConsumerPort, type CompanyEnrichmentPort,
+} from './production/facade';
