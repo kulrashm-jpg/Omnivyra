@@ -34,6 +34,16 @@ export {
   computeContactUnderstandingShadow, compareToRaw,
   type ContactShadowBundle, type ContactShadowComparison, type ContactFieldDivergence,
 } from './shadowRuntime';
+// Phase 4 — production producer + store-agnostic persistence seam (dormant; bound to no store).
+export {
+  produceCanonicalContact, collectContactEvidence, writeInputsFromContactRow, CONTACT_PRODUCER,
+  type ContactWriteInputs, type ContactRowLike, type CanonicalContactRecord, type CanonicalContactResult,
+} from './production/canonicalContactProducer';
+export {
+  runContactShadowPersist, decideContactPersistence, applyCanonicalContactOnly, extractSemanticContactIdentity,
+  type ContactShadowPersistDeps, type ContactShadowPersistResult, type ContactEvolutionReason,
+  type ContactPersistenceDecision,
+} from './production/contactShadowPersistence';
 export { contactEdge, buildContactGraph, neighbours } from './graph';
 export { toShadowRecord, toLegacyFields, type LegacyContactFields } from './persistence';
 export { isContactUnderstandingEnabled, isContactProjectionAuthoritative } from './flags';
