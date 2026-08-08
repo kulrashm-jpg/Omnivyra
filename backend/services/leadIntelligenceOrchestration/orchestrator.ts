@@ -41,7 +41,9 @@ import { computeInputFingerprint } from './fingerprint';
 import { resolveIntelligenceFreshness } from './freshness';
 import { durableIntelligencePersistence } from './persistence';
 import { durableSnapshotSource } from './snapshotSource';
+import { isAutomationRuntimeEnabled } from '../automationExecution/flags';
 import type {
+  AutomationTaskQueuePort,
   IntelligenceDiagnostics,
   IntelligenceFreshness,
   IntelligenceGenerationResult,
@@ -58,6 +60,11 @@ export interface LeadIntelligenceOrchestratorOptions {
   snapshotSource?: IntelligenceSnapshotSourcePort;
   /** Optional future async-rebuild seam. No queue is implemented in Phase 4. */
   rebuildQueue?: IntelligenceRebuildQueuePort;
+  /**
+   * WS-LI: Automation Runtime dispatch seam. Injectable for tests; when omitted the production
+   * binding is resolved lazily and ONLY while the runtime flag is on.
+   */
+  automationQueue?: AutomationTaskQueuePort;
   engineConfig?: Partial<LeadIntelligenceEngineConfig>;
   /** Millisecond clock — injectable for deterministic tests. */
   clock?: () => number;
@@ -426,6 +433,14 @@ export function createLeadIntelligenceOrchestrator(
       ...(writeResult.ok ? [] : [`persistence failed: ${writeResult.error ?? 'unknown error'}`]),
     ];
 
+    // WS-LI: dispatch the ALREADY-BUILT automation summary, once, and only after the record it
+    // describes is durably stored. Enqueuing before persistence could hand the runtime a summary
+    // that never landed; enqueuing on the skip path would re-dispatch work for an unchanged lead.
+    if (writeResult.ok) {
+      const enqueueWarning = await enqueueAutomationTask(ref, record);
+      if (enqueueWarning) warnings.push(enqueueWarning);
+    }
+
     return {
       status: 'generated',
       record,
@@ -434,6 +449,68 @@ export function createLeadIntelligenceOrchestrator(
       warnings,
       error: null,
     };
+  }
+
+  /**
+   * Resolve the production queue binding. Deliberately a DYNAMIC import: `automationTaskQueue`
+   * constructs its BullMQ `Queue` at module scope, so a static import would open a Redis connection
+   * merely by importing this orchestrator — including when the runtime flag is off. Loading it only
+   * inside the enabled branch is what makes the OFF path byte-identical.
+   */
+  async function resolveAutomationQueue(): Promise<AutomationTaskQueuePort> {
+    const { automationTaskQueue, AUTOMATION_TASK_QUEUE_NAME } = await import('../../queue/automationTaskQueue');
+    // `safeEnqueue`, not `queue.add`. The platform ratchet in queueBackpressureAdoption enforces
+    // that direct-add call sites never increase: every producer must go through the helper so it
+    // gets depth-based backpressure and the `_trace` stamp that links api → queue → worker. A raw
+    // add would have silently opted this producer out of both.
+    const { safeEnqueue } = await import('../../middleware/queueBackpressure');
+    return {
+      enqueue: async (payload) => {
+        const job = await safeEnqueue(
+          automationTaskQueue,
+          AUTOMATION_TASK_QUEUE_NAME,
+          AUTOMATION_TASK_QUEUE_NAME,
+          payload as unknown as Record<string, unknown>,
+        );
+        // A full queue sheds rather than throws. That is not a silent success: the job was not
+        // accepted, so the caller is told, exactly as a connection failure would be.
+        if (!job) throw new Error(`queue at capacity: ${AUTOMATION_TASK_QUEUE_NAME}`);
+      },
+    };
+  }
+
+  /**
+   * Dispatch one Automation Runtime job for a freshly-persisted record.
+   *
+   * The summary is read from `record.automationPlanning` — the exact object built once at
+   * `buildAutomationSummary(...)` above and persisted verbatim. It is never rebuilt here, and the
+   * builder is not referenced by this function.
+   *
+   * Failure NEVER propagates. Lead Intelligence generation has already succeeded and been persisted
+   * by the time this runs; letting a Redis outage throw would turn a completed generation into a
+   * failed one. The error surfaces as a warning on the result instead — the same degradation shape
+   * `requestRebuild` uses when its queue rejects. Returns the warning, or null when nothing happened.
+   */
+  async function enqueueAutomationTask(ref: LeadRef, record: LeadIntelligenceRecord): Promise<string | null> {
+    // Flag first: OFF must do no work at all — no summary read, no module load, no connection.
+    if (!isAutomationRuntimeEnabled()) return null;
+
+    const summary = record.automationPlanning;
+    // Planning degraded to null (see the try/catch above). There is nothing to dispatch, and
+    // fabricating an empty summary would hand the runtime a plan nobody produced.
+    if (!summary) return null;
+
+    try {
+      const queue = options.automationQueue ?? (await resolveAutomationQueue());
+      await queue.enqueue({
+        companyId: ref.companyId,
+        summary,
+        correlationId: `${ref.companyId}::${ref.leadId}`,
+      });
+      return null;
+    } catch (e) {
+      return `automation enqueue failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
   }
 
   async function requestRebuild(ref: LeadRef, reason = 'manual'): Promise<RebuildRequestResult> {

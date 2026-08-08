@@ -103,6 +103,20 @@ export interface IntelligenceRebuildQueuePort {
   enqueue(request: { companyId: string; leadId: string; requestedAt: string; reason: string }): Promise<void>;
 }
 
+/**
+ * WS-LI — Automation Runtime dispatch seam, mirroring `IntelligenceRebuildQueuePort`.
+ *
+ * The payload carries the summary the orchestrator ALREADY built and persisted. It is passed
+ * verbatim: the consumer never rebuilds it (`automationTaskProcessor` does not even import
+ * `automationExecution`, so the builder is unreachable from the consuming side), and neither does
+ * this seam. Injectable so tests need no Redis; the production binding is resolved lazily, because
+ * `automationTaskQueue` constructs its BullMQ `Queue` at module scope and a static import would
+ * open a Redis connection even with the runtime flag off.
+ */
+export interface AutomationTaskQueuePort {
+  enqueue(payload: { companyId: string; summary: AutomationSummary; correlationId?: string | null }): Promise<void>;
+}
+
 export type GenerationStatus = 'generated' | 'skipped_unchanged' | 'failed';
 
 /** Result of one orchestrated generation attempt. */
