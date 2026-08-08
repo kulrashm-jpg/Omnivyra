@@ -5,7 +5,7 @@ import { buildCompanyContext } from './companyContextService';
 import { getCompanyContextIntelligence } from './companyContextIntelligenceService';
 import { ownedDbTable } from '../db/writeOwner';
 import { buildExecutorContext, type MarketPulseExecutorContext } from './marketPulse/executorContext';
-import { adoptMarketPulseIdentity } from '@/backend/services/companyIntelligence/adoption/consumers/marketPulseConsumer';
+import { adoptMarketPulseIdentity } from '@/backend/services/companyIntelligence';
 import { scoreFinding } from './marketPulse/scoringService';
 import { sendIntelligenceAlert } from './intelligenceAlertService';
 import { computeTrust } from './marketPulse/trustScoringService';

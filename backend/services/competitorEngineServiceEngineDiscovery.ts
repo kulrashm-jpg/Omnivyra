@@ -11,8 +11,7 @@ import type {
   DebugCompetitorScoring,
 } from '../../types/competitor';
 import { isAudienceLedArchetype, isArchetypeInfluential, isBusinessFirstOnlyArchetype } from './companyProfile/entityArchetype';
-import { adoptCompetitorCompanyIdentity } from './companyIntelligence/adoption/consumers/competitorIntelligenceConsumer';
-import { isCompanyProjectionAuthoritative } from './companyIntelligence/flags';
+import { adoptCompetitorCompanyIdentity, isCompanyProjectionAuthoritative } from './companyIntelligence';
 import { mayFabricateSparseIdentity } from './competitorIdentityHardening';
 import type { EntityArchetypeIntelligence } from './companyProfile/types';
 import type { ResolvedReportInput } from './reportInputResolver';

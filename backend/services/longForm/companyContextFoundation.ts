@@ -13,7 +13,7 @@
 import type { CompanyProfile } from '../companyProfileService';
 import type { CompanyContext } from '../companyContextService';
 import { buildCompanyContext } from '../companyContextService';
-import { adoptContentArchitectIdentity } from '../companyIntelligence/adoption/consumers/contentArchitectConsumer';
+import { adoptContentArchitectIdentity } from '../companyIntelligence';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Types

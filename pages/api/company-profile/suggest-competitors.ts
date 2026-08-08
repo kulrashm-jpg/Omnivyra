@@ -3,8 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletion } from '../../../backend/services/aiGateway';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
-import { adoptCompetitorCompanyIdentity } from '@/backend/services/companyIntelligence/adoption/consumers/competitorIntelligenceConsumer';
-import { isCompanyProjectionAuthoritative } from '@/backend/services/companyIntelligence/flags';
+import { adoptCompetitorCompanyIdentity, isCompanyProjectionAuthoritative } from '@/backend/services/companyIntelligence';
 import { buildCompetitorUnderstandingSystemPrompt } from '@/backend/services/competitorIdentityHardening';
 import { buildCompetitorGroundingContext } from '../../../backend/services/context/companyUnderstandingService';
 

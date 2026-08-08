@@ -31,7 +31,7 @@ import { buildStrategicContextString } from '../../lib/shared/campaign/campaignO
 // governance from the campaign's company profile and threads it onto
 // the pipeline `item` so system prompts pick up the preamble.
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
-import { adoptExecutionCompanyIdentity } from '@/backend/services/companyIntelligence/adoption/consumers/executionIntelligenceConsumer';
+import { adoptExecutionCompanyIdentity } from '@/backend/services/companyIntelligence';
 import { buildGovernancePromptContext } from './creator/strategyGovernancePromptContext';
 // R3-P2 — Content Workspace adoption. Same single resolver as
 // processBlockSchedule: APPROVED workspace copy is canonical; generation is

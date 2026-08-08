@@ -31,7 +31,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
-import { adoptLeadCompanyIdentity } from './companyIntelligence/adoption/consumers/leadIntelligenceConsumer';
+import { adoptLeadCompanyIdentity } from './companyIntelligence';
 
 export type CompanyContextField = {
   /** Lower-cased + trimmed values for matching. Deduped. */

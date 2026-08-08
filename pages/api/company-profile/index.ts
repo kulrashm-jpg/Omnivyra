@@ -32,7 +32,7 @@ import {
   profileKnowledgeReadiness,
 } from '../../../backend/services/companyProfile/companyKnowledgeGraph';
 import { defineRolloutFlag, resolveRolloutSync } from '../../../lib/platform/rollout';
-import { adoptCompanyProfileIdentity } from '../../../backend/services/companyIntelligence/adoption/consumers/companyProfileConsumer';
+import { adoptCompanyProfileIdentity } from '../../../backend/services/companyIntelligence';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 import { sendAuthError } from '../../../backend/services/sendAuthError';
 

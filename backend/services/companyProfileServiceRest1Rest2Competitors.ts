@@ -12,8 +12,11 @@ import { isSelfOrPlatformDomain } from './companyProfile/competitorDomainFilter'
  */
 
 import { randomUUID } from 'crypto';
-import { isCompanyUnderstandingEnabled } from './companyIntelligence/flags';
-import { produceCanonicalIdentity, writeInputsFromProfileAndExtraction } from './companyIntelligence/production/canonicalIdentityProducer';
+import {
+  isCompanyUnderstandingEnabled,
+  produceCanonicalIdentity,
+  writeInputsFromProfileAndExtraction,
+} from './companyIntelligence';
 import { runCompletionWithOperation } from './aiGateway';
 import { refineLanguageOutput } from './languageRefinementService';
 import { supabase } from '../db/supabaseClient';
