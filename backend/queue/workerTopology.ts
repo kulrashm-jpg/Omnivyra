@@ -146,6 +146,25 @@ export async function registerSharedConsumers(
     handles.workers.push(worker);
   });
 
+  // WS-6E — Automation tasks. The consumer attaches even though NO producer
+  // exists yet (WS-6F wires the orchestrator enqueue), mirroring the documented
+  // planner-refinement precedent: attaching first means enabling the producer can
+  // never strand queued work.
+  await family('automation-task-worker', 'automation tasks will NOT process', async () => {
+    const { runAutomationTaskJob, automationTaskConcurrency } = await import('../workers/automationTaskWorker');
+    // Queue name as a LITERAL, matching planner-refinement: workerTopologyParity
+    // resolves shared-registrar coverage by finding the literal here, so an
+    // imported constant would read as "declared shared but never registered".
+    const worker = getWorker('automation-tasks', async (job) => {
+      await runAutomationTaskJob(job as never);
+    }, { concurrency: automationTaskConcurrency() });
+    worker.on('error', (err) => console.error('[automation-tasks] worker error:', err?.message ?? err));
+    worker.on('failed', (job, err) => console.warn('[automation-tasks] job failed:', {
+      job_id: job?.id, attempts: job?.attemptsMade, error: err?.message,
+    }));
+    handles.workers.push(worker);
+  });
+
   console.info('[worker-topology] shared consumer registration complete', {
     bootstrap: opts.bootstrap,
     workers: handles.workers.length,
