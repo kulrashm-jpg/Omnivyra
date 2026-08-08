@@ -36,6 +36,30 @@ jest.mock('../../repositories/recommendationEngineReadRepository', () => ({
 jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn(async () => null),
 }));
+/**
+ * G9 — the engine's profile read MOVED. `fd0d31e4` ("Wave 2E — migrate Recommendation & Strategy to
+ * canonical grounding", 2026-07-14) changed engine.ts:1 to read through
+ * `context/canonicalProfileAdapter`, so this suite's `companyProfileService` mock stopped
+ * intercepting it. `recommendation_engine.test.ts` was repaired for exactly this in WS-2C; this
+ * suite was not.
+ *
+ * The consequence was silent and looked like a behaviour change: with the mock bypassed the profile
+ * resolved to null, `buildCoreProblemTokens` produced an EMPTY set, and `hasOverlapWithTokens`
+ * returns true for an empty set BY DESIGN ("a company with an incomplete profile should still get
+ * results, not a blank page"). So the keyword pre-filter passed everything through — including
+ * `celebrity gossip roundup` — and three expectations began failing against correct production code.
+ *
+ * Bridged to this suite's own `getProfile` mock rather than a fixed row, so every test's configured
+ * profile reaches the migrated path and each case keeps its own setup unchanged.
+ */
+jest.mock('../../services/context/canonicalProfileAdapter', () => ({
+  getCanonicalProfile: jest.fn(async (companyId: string) => {
+    const { getProfile } = jest.requireMock('../../services/companyProfileService') as {
+      getProfile: (id: string) => Promise<unknown>;
+    };
+    return getProfile(companyId);
+  }),
+}));
 jest.mock('../../services/campaignMemoryService', () => ({
   getCampaignMemory: jest.fn(async () => ({})),
   validateUniqueness: jest.fn(async () => ({ similarityScore: 0.2 })),
