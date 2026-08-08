@@ -20,6 +20,14 @@
  */
 export * from './types';
 export { buildContactUnderstanding, CONTACT_MODEL_VERSION, type BuildContactInput } from './builder';
+// Phase 2 — evidence assembly (pure; no I/O, no producer, no writer, no runtime consumer).
+export {
+  contactFromEvidence, resolveContactId,
+  type ContactEvidenceInput, type AdoptedContact,
+  type ContactIdentityInput, type ContactProfileInput, type ContactAffiliationInput,
+  type ContactChannelObservation, type ContactInteractionObservation,
+} from './fromEvidence';
+export { assembleContactUnderstanding, type AssembledContact } from './assembly';
 export { projectContact } from './projection';
 export { contactEdge, buildContactGraph, neighbours } from './graph';
 export { toShadowRecord, toLegacyFields, type LegacyContactFields } from './persistence';
