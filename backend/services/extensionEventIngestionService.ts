@@ -61,13 +61,30 @@ function normalizeEventType(eventType: string): 'comment' | 'reply' | 'mention' 
   return 'comment';
 }
 
-function buildAuthorId(input: ExtensionEventInput['data'], fallbackMessageId: string) {
+/**
+ * WS-2A — the PERSON-level identity carried by the event: the first three tiers of the existing
+ * author chain, WITHOUT the per-message fallback. `undefined` when the event carries no author
+ * identity at all.
+ *
+ * Extracted rather than duplicated so there is exactly one author-identity algorithm:
+ * `buildAuthorId` now composes this with its fallback and is behaviourally unchanged (the `||`
+ * chain yielded `undefined` for an all-blank payload, which `??` then replaces identically).
+ *
+ * The per-message tier is deliberately excluded here. `extension_author_${platform_message_id}` is
+ * unique per MESSAGE, so using it as a visitor identity would mint a fresh visitor for every event
+ * — trading tenant-wide collapse for unbounded fragmentation. Neither is a real population.
+ */
+function buildAuthorIdentity(input: ExtensionEventInput['data']): string | undefined {
   return (
     input.author_username?.trim() ||
     input.author_profile_url?.trim() ||
     input.author_name?.trim() ||
-    `extension_author_${fallbackMessageId}`
+    undefined
   );
+}
+
+function buildAuthorId(input: ExtensionEventInput['data'], fallbackMessageId: string) {
+  return buildAuthorIdentity(input) ?? `extension_author_${fallbackMessageId}`;
 }
 
 function buildThreadId(input: ExtensionEventInput) {
@@ -116,11 +133,25 @@ export async function ingestExtensionEvent(input: ExtensionEventInput) {
   // flag is off means behaviour is byte-identical by construction, not by
   // convention. `isVisitorProjectionAuthoritative` is never consulted — nothing
   // here can become a read path.
+  //
+  // WS-2A — IDENTITY. Without an identity every event resolved to the literal `'visitor'`
+  // (`resolveVisitorId` falls back to it when both `visitorId` and `anonymousId` are absent), so a
+  // whole tenant's capture collapsed onto one synthetic visitor. `buildAuthorIdentity` supplies the
+  // person-level identity the payload already carries — the same chain `resolveAuthor` keys on, so
+  // no new identity algorithm is introduced and nothing is invented, hashed or generated.
+  //
+  // `anonymousId`, not `visitorId`: the subject is an engagement author observed on a third-party
+  // platform, never an identified visitor on our own site. Claiming the stronger field would assert
+  // an identification that did not happen. `resolveVisitorId` accepts either.
+  //
+  // `undefined` when the event carries no author identity — passing it is equivalent to omitting
+  // it, so the documented fallback still applies rather than being bypassed.
   try {
     computeVisitorUnderstandingShadow({
       companyId: organizationId,
       asOf: platformCreatedAt,
       source: platform,
+      anonymousId: buildAuthorIdentity(input.data),
     });
   } catch {
     // Shadow parity is diagnostic; capture continues regardless.
