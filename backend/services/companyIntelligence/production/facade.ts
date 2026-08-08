@@ -41,6 +41,10 @@ import {
   assessCompanyRuntimeReadiness, checkCompanyRuntimeCompatibility,
   validateProviderCompatibility, validateProviderRegistration,
 } from '../activationReadiness';
+import { validateRuntimeDependencies, checkCompanyDeploymentCompatibility } from '../runtimeContracts';
+import type {
+  CompanyRuntimeDependencies, CompanyRuntimeDependencyValidation, CompanyDeploymentCompatibility,
+} from '../runtimeContracts';
 
 // ── Ports Platform codes against ───────────────────────────────────────────────────────────────────
 export interface CompanyProducerPort {
@@ -86,6 +90,11 @@ export interface CompanyProductionFacade {
 
   compatibility(expectedContractVersion: number, expectedModelVersion?: number): CompanyRuntimeCompatibility;
   parity(cases: ProductionParityCase[]): ProductionParityReport;
+
+  /** Structural validation of an injected dependency set. Invokes no member of it. */
+  validateDependencies(deps?: CompanyRuntimeDependencies): CompanyRuntimeDependencyValidation;
+  /** Whether this environment could HOST the subsystem — never whether it should be deployed. */
+  deploymentCompatibility(): CompanyDeploymentCompatibility;
 }
 
 const producerPort: CompanyProducerPort = {
@@ -125,6 +134,9 @@ export function createCompanyProductionFacade(): CompanyProductionFacade {
 
     compatibility: checkCompanyRuntimeCompatibility,
     parity: runProductionParity,
+
+    validateDependencies: (d = {}) => validateRuntimeDependencies(d),
+    deploymentCompatibility: checkCompanyDeploymentCompatibility,
   };
 }
 

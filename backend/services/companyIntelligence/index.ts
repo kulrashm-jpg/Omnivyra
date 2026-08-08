@@ -35,3 +35,66 @@ export {
   createCompanyProductionFacade,
   type CompanyProductionFacade, type CompanyProducerPort, type CompanyConsumerPort, type CompanyEnrichmentPort,
 } from './production/facade';
+
+// ── Phase 3 — runtime dependency contracts + deployment compatibility ─────────────────────────────
+export {
+  validateRuntimeDependencies, checkCompanyDeploymentCompatibility,
+  ACQUISITION_DEPENDENCY_MEMBERS, PERSISTENCE_DEPENDENCY_MEMBERS,
+  type CompanyRuntimeDependencies, type CompanyRuntimeDependencyValidation, type DependencySeamValidation,
+  type CompanyDeploymentCompatibility, type DeploymentIncompatibility,
+  type AcquisitionDeps, type ShadowPersistDeps,
+} from './runtimeContracts';
+
+/**
+ * ── Phase 3 — CANONICAL RUNTIME EXPORTS ───────────────────────────────────────────────────────────
+ * Until now `engines`, `evidence`, `providers` and `adoption` were reachable only by deep import, so
+ * a consumer pinned an internal FILE PATH and any reorganisation inside this subsystem became a
+ * breaking change for it. These curated re-exports are the contract surface: named rather than
+ * `export *`, so what Platform may depend on is a deliberate list and internals stay internal.
+ *
+ * `registerProvider` and `registerDefaultProviders` ARE exported. That is not a contradiction of the
+ * caller-driven invariant — it is the invariant: registration must be an explicit act the caller
+ * writes and a reviewer can see. What is prohibited is registration happening on import, which no
+ * re-export can cause.
+ */
+export {
+  // Enrichment provider surface
+  registerProvider, registerDefaultProviders, registeredProviders, providersFor,
+  supportedCapabilities, capabilityReadiness, __clearProvidersForTests,
+  enrichCompany, fieldValue, toFirmographicInputs, VENDOR_PROVIDERS,
+  measured, unavailable, ENRICHMENT_CAPABILITIES,
+  cacheKey, cachedFetch, costSummary, createMemoryStore, readLedger,
+  type CompanyEnrichmentProvider, type EnrichmentCapability, type EnrichmentRequest,
+  type EnrichmentField, type ProviderResult, type ProviderState, type UnavailableReason,
+  type EnrichmentAggregate, type OrchestrationOptions, type ResolvedField, type FieldContribution,
+  type CapabilityOutcome,
+} from './providers';
+export {
+  // Evidence surface
+  ingestCompanyEvidence, companyFromEvidence, buildCompanyUnderstandingFromEvidence, explainCompanyField,
+  classifyLegacySurfaceDelta, runSemanticDelta, COMPANY_SOURCE_WEIGHTS,
+  APPROVED_DIVERGENCE, PARITY_LOCKED,
+  type EvidenceSources, type FirmographicInput, type EvidenceBuild,
+  type FieldDelta, type SurfaceDelta, type SemanticDeltaReport, type DeltaClass,
+} from './evidence';
+export {
+  // Engine + assembly surface
+  assembleCompanyUnderstanding, assessCompanyAuthoritativeReadiness, explainCompany, explainCompanyAll,
+  validateCompanyShadowBatch,
+  type CompanyIntelligenceContext, type CompanyAssemblyResult, type CompanyAuthoritativeReadiness,
+  type CompanyShadowReport, type CompanyShadowValidation,
+} from './engines';
+export {
+  // Adoption / consumer read seam
+  resolveCompanyProjection, validateConsumerParity,
+  type ResolvedCompanyProjection, type ProjectionPath, type ProjectionObservation, type ConsumerParity,
+} from './adoption/consumerAdapter';
+export {
+  // Production producer + parity
+  produceCanonicalIdentity, writeInputsFromProfileAndExtraction, collectWriteEvidence,
+  type WriteEvidenceInputs, type CanonicalIdentityRecord, type CanonicalIdentityResult, type ProfileFactsLike,
+} from './production/canonicalIdentityProducer';
+export {
+  runProductionParity,
+  type ProductionParityCase, type ProductionParityRow, type ProductionParityReport,
+} from './production/productionParity';
