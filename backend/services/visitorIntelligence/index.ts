@@ -33,6 +33,12 @@ export {
   assessVisitorConsumerReadiness, VISITOR_DOWNSTREAM_CONSUMERS, type VisitorConsumerReadiness,
 } from './engines';
 export { summarizeVisitorRun, type VisitorRunSummary } from './metrics';
+// WS-2B — in-memory shadow observation. Bounded ring; no persistence, queue, API or schema.
+export {
+  observeVisitorShadow, recentVisitorShadowObservations, latestVisitorShadowObservation,
+  __resetVisitorShadowObservationsForTests, VISITOR_SHADOW_OBSERVATION_LIMIT,
+  type VisitorShadowObservation,
+} from './observation';
 // Phase D — frozen canonical contract + governance + migration prohibitions.
 export {
   VISITOR_CANONICAL_CONTRACT, VISITOR_CONTRACT_VERSION, VISITOR_PUBLISHED_EDGE_TYPES,

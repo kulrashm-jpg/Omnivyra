@@ -1,6 +1,6 @@
 import { resolveAuthor, resolveSource, resolveThread, insertMessage } from './engagementNormalizationService';
 import { ownedDbTable } from '../db/writeOwner';
-import { computeVisitorUnderstandingShadow } from './visitorIntelligence';
+import { computeVisitorUnderstandingShadow, observeVisitorShadow } from './visitorIntelligence';
 
 type ExtensionEventInput = {
   platform: string;
@@ -146,13 +146,23 @@ export async function ingestExtensionEvent(input: ExtensionEventInput) {
   //
   // `undefined` when the event carries no author identity — passing it is equivalent to omitting
   // it, so the documented fallback still applies rather than being bypassed.
+  //
+  // WS-2B — OBSERVATION. The bundle was previously computed and discarded, so parity, projection,
+  // confidence and provenance existed for one expression and then did not. `observeVisitorShadow`
+  // records it into a bounded in-memory ring — no database, queue, API or schema. It is handed the
+  // bundle rather than recomputing anything, so the understanding is still built exactly once.
+  //
+  // Flag-off stays byte-identical: `computeVisitorUnderstandingShadow` returns null, and
+  // `observeVisitorShadow(null)` records nothing and returns null.
   try {
-    computeVisitorUnderstandingShadow({
-      companyId: organizationId,
-      asOf: platformCreatedAt,
-      source: platform,
-      anonymousId: buildAuthorIdentity(input.data),
-    });
+    observeVisitorShadow(
+      computeVisitorUnderstandingShadow({
+        companyId: organizationId,
+        asOf: platformCreatedAt,
+        source: platform,
+        anonymousId: buildAuthorIdentity(input.data),
+      }),
+    );
   } catch {
     // Shadow parity is diagnostic; capture continues regardless.
   }
