@@ -1,5 +1,6 @@
 import { resolveAuthor, resolveSource, resolveThread, insertMessage } from './engagementNormalizationService';
 import { ownedDbTable } from '../db/writeOwner';
+import { computeVisitorUnderstandingShadow } from './visitorIntelligence';
 
 type ExtensionEventInput = {
   platform: string;
@@ -103,6 +104,28 @@ export async function ingestExtensionEvent(input: ExtensionEventInput) {
   const messageType = normalizeEventType(input.event_type);
   const isDmEvent = messageType === 'dm';
   const platformCreatedAt = normalizeCreatedAt(input.data.created_at as string | number | null | undefined);
+  // WS-2G — Browser Capture -> Visitor Intelligence, SHADOW ONLY.
+  //
+  // ONE call: `computeVisitorUnderstandingShadow` already performs the whole
+  // chain internally (shadowRuntime.ts:40-46) — it checks the flag itself at
+  // line 41 and returns null when off, then runs visitorFromRaw ->
+  // buildVisitorUnderstanding -> projectVisitor -> compareToRaw. Calling those
+  // individually here would execute them twice.
+  //
+  // FAIL-OPEN: shadow computation must never interrupt capture. `null` when the
+  // flag is off means behaviour is byte-identical by construction, not by
+  // convention. `isVisitorProjectionAuthoritative` is never consulted — nothing
+  // here can become a read path.
+  try {
+    computeVisitorUnderstandingShadow({
+      companyId: organizationId,
+      asOf: platformCreatedAt,
+      source: platform,
+    });
+  } catch {
+    // Shadow parity is diagnostic; capture continues regardless.
+  }
+
   const sourceId = await resolveSource(platform, 'rpa');
   const threadId = await resolveThread({
     platform,
