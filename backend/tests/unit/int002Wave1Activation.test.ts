@@ -267,7 +267,9 @@ describe('INT-002 W1 — activation core (real orchestrator)', () => {
     queueResponse('leads:select', { data: [{ id: 'L1' }, { id: 'L2' }], error: null });
     const ran = await runVisitorSessionRegeneration('co-1', 'vs-1', 'tracking_events');
     expect(ran).toBe(2);
-    expect(generate.mock.calls.map((c) => c[0])).toEqual([
+    // `generate` is a bare jest.fn(), so `mock.calls` infers as an empty tuple;
+    // widen to read the first argument of each call.
+    expect((generate.mock.calls as unknown[][]).map((c) => c[0])).toEqual([
       { companyId: 'co-1', leadId: 'L1' },
       { companyId: 'co-1', leadId: 'L2' },
     ]);

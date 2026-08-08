@@ -33,6 +33,11 @@ const leadProfile = (overrides: Partial<CapturedLeadProfile> = {}): CapturedLead
   message: null,
   source: 'website',
   createdAt: '2026-08-03T11:00:00.000Z',
+  // WS-2 M2 capture context. Required keys, null-valued: these fixtures model a
+  // lead captured without device/geo resolution, which the type documents as the
+  // "unknown" case every consumer must already handle.
+  device: null,
+  geo: null,
   ...overrides,
 });
 
@@ -262,7 +267,13 @@ describe('INT-001 Phase 2 — consolidated intelligence summary', () => {
         ev('page_view', '/book-a-demo', '2026-08-03T10:05:00.000Z', 's3', { scroll_depth: 90 }),
       ],
       sessions: [
-        { id: 's1', startedAt: '2026-08-01T09:00:00.000Z', lastSeenAt: null, firstLandingPage: '/', utmSource: null, utmMedium: null, utmCampaign: null },
+        // WS-2 M1/M2 dimensions: required keys, null-valued (pre-mapping row).
+        {
+          id: 's1', startedAt: '2026-08-01T09:00:00.000Z', lastSeenAt: null, firstLandingPage: '/',
+          utmSource: null, utmMedium: null, utmCampaign: null,
+          lastCurrentPage: null, returning: null, visitCount: null, firstVisitAt: null,
+          sessionDurationMs: null, device: null, geo: null,
+        },
       ],
     });
   };

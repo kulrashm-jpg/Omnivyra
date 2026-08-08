@@ -267,6 +267,11 @@ describe('INT-001 Phase 4 — freshness', () => {
       inputFingerprint: 'fp1', engineVersion: ENGINE_VERSION,
       generationVersion: 1, schemaVersion: 1,
       generatedAt: NOW_ISO, rebuildRequestedAt: null,
+      // INT-001 Phase 3 added these planning sections to the record. This test
+      // exercises freshness resolution only, which reads none of them — stubbed
+      // like `intelligence`/`diagnostics` above rather than fabricating content.
+      qualificationPlanning: {} as LeadIntelligenceRecord['qualificationPlanning'],
+      automationPlanning: {} as LeadIntelligenceRecord['automationPlanning'],
     };
     expect(resolveIntelligenceFreshness(null)).toBe('never_generated');
     expect(resolveIntelligenceFreshness({ ...record, rebuildRequestedAt: NOW_ISO })).toBe('pending_regeneration');

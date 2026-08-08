@@ -145,12 +145,18 @@ describe('INT-001A F3 — snapshot ordering', () => {
       { id: 'e2', eventName: 'cta_click', pageUrl: '/b', sessionId: 's1', occurredAt: '2026-08-03T10:00:00.000Z', metadata: {} }, // same timestamp
       { id: 'e3', eventName: 'page_view', pageUrl: '/c', sessionId: 's1', occurredAt: '2026-08-03T11:00:00.000Z', metadata: {} },
     ];
+    // WS-2 M1/M2 session/lead dimensions are REQUIRED keys with nullable values;
+    // these fixtures supply null, modelling a row written before that mapping.
+    const nullDimensions = {
+      lastCurrentPage: null, returning: null, visitCount: null, firstVisitAt: null,
+      sessionDurationMs: null, device: null, geo: null,
+    };
     const sessions = [
-      { id: 's1', startedAt: NOW, lastSeenAt: NOW, firstLandingPage: '/a', utmSource: null, utmMedium: null, utmCampaign: null },
-      { id: 's2', startedAt: NOW, lastSeenAt: NOW, firstLandingPage: '/b', utmSource: null, utmMedium: null, utmCampaign: null },
+      { id: 's1', startedAt: NOW, lastSeenAt: NOW, firstLandingPage: '/a', utmSource: null, utmMedium: null, utmCampaign: null, ...nullDimensions },
+      { id: 's2', startedAt: NOW, lastSeenAt: NOW, firstLandingPage: '/b', utmSource: null, utmMedium: null, utmCampaign: null, ...nullDimensions },
     ];
     const base: LeadCaptureSnapshot = {
-      lead: { id: 'L1', email: 'a@b.co', name: 'A', jobTitle: null, companyName: null, companySize: null, industry: null, country: null, primaryInterest: null, message: null, source: 'website', createdAt: NOW },
+      lead: { id: 'L1', email: 'a@b.co', name: 'A', jobTitle: null, companyName: null, companySize: null, industry: null, country: null, primaryInterest: null, message: null, source: 'website', createdAt: NOW, device: null, geo: null },
       events, sessions, touchpoints: [], now: NOW,
     };
     const shuffled: LeadCaptureSnapshot = {

@@ -61,8 +61,11 @@ beforeEach(() => {
 afterEach(() => {
   nowSpy?.mockRestore();
   for (const k of ENV_KEYS) {
-    if (saved[k] === undefined) delete process.env[k];
-    else process.env[k] = saved[k] as string;
+    // `process.env.NODE_ENV` is typed readonly, but ENV_KEYS restores it by name;
+    // go through the index signature so the assignment stays legal.
+    const env = process.env as Record<string, string | undefined>;
+    if (saved[k] === undefined) delete env[k];
+    else env[k] = saved[k] as string;
   }
 });
 

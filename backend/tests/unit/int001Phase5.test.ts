@@ -33,6 +33,7 @@ function snapshot(over: Partial<LeadCaptureSnapshot> = {}): LeadCaptureSnapshot 
       id: 'L1', email: 'jane@acme.com', name: 'Jane Doe', jobTitle: null,
       companyName: 'Acme', companySize: null, industry: null, country: null,
       primaryInterest: null, message: null, source: 'website', createdAt: '2026-08-03T11:00:00.000Z',
+      device: null, geo: null,
       ...(over.lead ?? {}),
     },
     events: over.events ?? [],
@@ -44,9 +45,15 @@ function snapshot(over: Partial<LeadCaptureSnapshot> = {}): LeadCaptureSnapshot 
 const event = (name: string, pageUrl: string | null, occurredAt = '2026-08-03T11:30:00.000Z') => ({
   id: null, eventName: name, pageUrl, sessionId: 's1', occurredAt, metadata: {},
 });
+// WS-2 M1/M2 added ADDITIVE session dimensions as REQUIRED keys whose values are
+// nullable. These fixtures predate that mapping, so they supply null — the exact
+// "row written before this mapping" case the type documents, which every consumer
+// must treat as unknown rather than zero.
 const session = (id: string, startedAt: string) => ({
   id, startedAt, lastSeenAt: startedAt, firstLandingPage: null,
   utmSource: null, utmMedium: null, utmCampaign: null,
+  lastCurrentPage: null, returning: null, visitCount: null, firstVisitAt: null,
+  sessionDurationMs: null, device: null, geo: null,
 });
 const intent = (score: number, band: IntentIntelligence['band'], signals = 3): IntentIntelligence => ({
   score, band,

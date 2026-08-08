@@ -203,11 +203,28 @@ interface BlogListingProps {
  * plus limit=4, deduped). Regenerates at most every 5 minutes.
  */
 export const getStaticProps: GetStaticProps<BlogListingProps> = async () => {
-  const { listPublishedBlogPosts } = await import('../../backend/services/blog/publicBlogRead');
-  const [featuredArr, all] = await Promise.all([
-    listPublishedBlogPosts({ featuredOnly: true, limit: 1 }),
-    listPublishedBlogPosts({ limit: 4 }),
-  ]);
+  // The read is fail-soft BY DESIGN. This is the only build-time data fetch in
+  // the app, so an unreachable database here would otherwise abort `next build`
+  // for the entire deploy — `Export encountered an error on /blog`. That is a
+  // real deploy fragility (a transient DB blip fails an unrelated release) and
+  // it also breaks the CI `Production build` job, which compiles with schema-
+  // valid PLACEHOLDER credentials that intentionally connect to nothing.
+  //
+  // Falling back to empty props is safe because `revalidate` still applies: the
+  // first request after deploy regenerates the page against the live database,
+  // so a build-time miss costs at most one stale render, never a failed deploy.
+  let featuredArr: unknown[] = [];
+  let all: unknown[] = [];
+  try {
+    const { listPublishedBlogPosts } = await import('../../backend/services/blog/publicBlogRead');
+    [featuredArr, all] = await Promise.all([
+      listPublishedBlogPosts({ featuredOnly: true, limit: 1 }),
+      listPublishedBlogPosts({ limit: 4 }),
+    ]);
+  } catch (err) {
+    console.warn('[blog/getStaticProps] published-post read failed; ISR will backfill on first request:',
+      err instanceof Error ? err.message : err);
+  }
   const featuredPost = (featuredArr[0] as BlogPost | undefined) ?? null;
   const supporting = featuredPost
     ? (all as unknown as BlogPost[]).filter((p) => p.id !== featuredPost.id).slice(0, 3)

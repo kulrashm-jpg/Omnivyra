@@ -66,7 +66,9 @@ describe('swrJsonFetcher', () => {
 
   test.each([[401], [403], [404], [500]])('non-OK %d throws ApiFetchError with status', async (status) => {
     mockApiFetch.mockResolvedValue(jsonResponse({ error: 'nope' }, status));
-    const err = await swrJsonFetcher('/api/x').catch((e) => e);
+    // `.catch` widens to `unknown`; the instanceof assertion below is what
+    // actually proves the type, so narrow here to read `.status`/`.message`.
+    const err = (await swrJsonFetcher('/api/x').catch((e: unknown) => e)) as ApiFetchError;
     expect(err).toBeInstanceOf(ApiFetchError);
     expect(err.status).toBe(status);
     expect(err.message).toBe('nope');
@@ -77,7 +79,9 @@ describe('swrJsonFetcher', () => {
     mockApiFetch.mockResolvedValue(
       jsonResponse({ error: 'Network unreachable', detail: 'Failed to fetch' }, 503)
     );
-    const err = await swrJsonFetcher('/api/x').catch((e) => e);
+    // `.catch` widens to `unknown`; the instanceof assertion below is what
+    // actually proves the type, so narrow here to read `.status`/`.message`.
+    const err = (await swrJsonFetcher('/api/x').catch((e: unknown) => e)) as ApiFetchError;
     expect(err).toBeInstanceOf(ApiFetchError);
     expect(err.status).toBe(503);
   });

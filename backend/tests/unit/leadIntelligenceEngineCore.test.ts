@@ -33,6 +33,11 @@ const leadProfile = (overrides: Partial<CapturedLeadProfile> = {}): CapturedLead
   message: null,
   source: 'website',
   createdAt: '2026-08-03T11:00:00.000Z',
+  // WS-2 M2 capture context. Required keys, null-valued: these fixtures model a
+  // lead captured without device/geo resolution, which the type documents as the
+  // "unknown" case every consumer must already handle.
+  device: null,
+  geo: null,
   ...overrides,
 });
 

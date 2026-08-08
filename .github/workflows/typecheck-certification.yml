@@ -241,10 +241,15 @@ jobs:
     timeout-minutes: 30
     # This job validates COMPILATION + prerender (client/server boundary + webpack), NOT a real deploy.
     # The webpack compile runs before static generation and needs no live services; the app's env schema,
-    # however, hard-fails page collection when required vars are absent. There are ZERO getStaticProps/
-    # getStaticPaths pages (no build-time data fetch), so schema-valid PLACEHOLDER values let the build
-    # complete without production credentials and are never connected. Runtime validation for real deploys
-    # is unchanged — Railway/Vercel provide their own real secrets.
+    # however, hard-fails page collection when required vars are absent. The PLACEHOLDER values below are
+    # schema-valid and intentionally connect to nothing, so the build completes without production
+    # credentials. Runtime validation for real deploys is unchanged — Railway/Vercel provide real secrets.
+    #
+    # The blog routes under pages/blog/ DO fetch at build time (OPT-006 Phase B ISR). Both are fail-soft:
+    # on an unreachable database they log and fall back to empty/no-prebuilt-paths, and `revalidate`
+    # backfills on the first live request. That is what keeps this job green with placeholder credentials —
+    # if you add a NEW build-time data fetch, it must be fail-soft the same way or this job will fail with
+    # `Export encountered an error on /<page>`.
     env:
       CI: 'true'
       SUPABASE_URL: 'https://placeholder.supabase.co'
