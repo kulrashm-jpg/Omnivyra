@@ -44,6 +44,26 @@ export {
   type ContactShadowPersistDeps, type ContactShadowPersistResult, type ContactEvolutionReason,
   type ContactPersistenceDecision,
 } from './production/contactShadowPersistence';
+// Phase 5 — adoption readiness. Frozen contract, readiness assessment, and THE production facade
+// Platform consumes. Nothing here activates anything; every function is a pure assessment.
+export {
+  CONTACT_CANONICAL_CONTRACT, CONTACT_CONTRACT_VERSION, CONTACT_PUBLISHED_EDGE_TYPES,
+  CONTACT_GOVERNANCE_RULES, CONTACT_MIGRATION_PROHIBITIONS,
+  validateContactContract, type ContactContractConformance,
+} from './contract';
+export {
+  assessContactConsumerReadiness, assessContactCapabilityReadiness,
+  validateContactActivation, checkContactRuntimeCompatibility,
+  CONTACT_DOWNSTREAM_CONSUMERS, CONTACT_CAPABILITIES,
+  type ContactConsumerReadiness, type ContactCapabilityReadiness, type ContactCapabilityRow,
+  type ContactActivationValidation, type ContactActivationBlocker, type ContactActivationProbe,
+  type ContactRuntimeCompatibility, type ContactDownstreamConsumer, type ContactCapability,
+} from './readiness';
+export {
+  createContactProductionFacade, runContactProductionParity,
+  type ContactProductionFacade, type ContactProducerPort, type ContactConsumerPort,
+  type ContactRuntimeDeps, type ContactParityCase, type ContactParityRow, type ContactParityReport,
+} from './production/facade';
 export { contactEdge, buildContactGraph, neighbours } from './graph';
 export { toShadowRecord, toLegacyFields, type LegacyContactFields } from './persistence';
 export { isContactUnderstandingEnabled, isContactProjectionAuthoritative } from './flags';
