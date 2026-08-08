@@ -29,6 +29,11 @@ export {
 } from './fromEvidence';
 export { assembleContactUnderstanding, type AssembledContact } from './assembly';
 export { projectContact } from './projection';
+// Phase 3 — internal shadow runtime (flag-dark; returns null when OFF; writes nothing).
+export {
+  computeContactUnderstandingShadow, compareToRaw,
+  type ContactShadowBundle, type ContactShadowComparison, type ContactFieldDivergence,
+} from './shadowRuntime';
 export { contactEdge, buildContactGraph, neighbours } from './graph';
 export { toShadowRecord, toLegacyFields, type LegacyContactFields } from './persistence';
 export { isContactUnderstandingEnabled, isContactProjectionAuthoritative } from './flags';
