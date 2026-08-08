@@ -46,14 +46,20 @@ export function extractCompanyNarrativeContext(params: {
   const primaryOffering = firstNonEmpty(profile?.products_services, profile?.products_services_list);
   const businessType = firstNonEmpty(params.resolvedInput?.resolved.businessType, profile?.category, profile?.industry);
   const geography = firstNonEmpty(params.resolvedInput?.resolved.geography, profile?.geography);
+  // G4A: `resolved.companyContext` is typed non-optional but is absent at runtime on some resolver
+  // paths, so the plain chain threw before any external dependency was reached. Guarded with the
+  // same `?.` style the sibling consumer already uses
+  // (competitorEngineServiceEngineDiscovery.ts:555 reads `context?.productServices?.[0]`).
+  // Behaviour is unchanged whenever `companyContext` exists: an absent field already fell through
+  // to the next `firstNonEmpty` candidate, and an absent array already fell through to the profile.
   const marketFocus = firstNonEmpty(
-    params.resolvedInput?.resolved.companyContext.marketFocus,
+    params.resolvedInput?.resolved.companyContext?.marketFocus,
     businessType,
     geography,
   );
   const productServices = splitCandidates(
-    params.resolvedInput?.resolved.companyContext.productServices.length
-      ? params.resolvedInput?.resolved.companyContext.productServices
+    params.resolvedInput?.resolved.companyContext?.productServices?.length
+      ? params.resolvedInput?.resolved.companyContext?.productServices
       : [profile?.products_services, profile?.products_services_list],
   );
   const marketContext = businessType && geography
