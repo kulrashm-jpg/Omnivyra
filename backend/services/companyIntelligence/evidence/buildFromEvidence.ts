@@ -27,6 +27,25 @@ export const COMPANY_SOURCE_WEIGHTS: Record<string, number> = {
   public_registry: 0.6,
   trusted_public: 0.5,
   wikidata: 0.4,
+
+  // ── WS-4F: the enrichment vendors, which emit evidence under their PROVIDER ID ────────────────
+  // `toFirmographicInputs` sets `system: field.provider`, so a vendor's evidence arrives as
+  // `clearbit` / `builtwith` / … — names this policy did not contain. `fuseEvidence` resolves an
+  // unlisted system to its 0.5 fallback, so five of the six vendors were fused identically and the
+  // per-vendor calibration the adapters document was discarded at fusion: Clearbit ("a stronger
+  // claim than Apollo's") and Apollo ("self-reported: a materially weaker claim") both landed on
+  // 0.35 for headcount, leaving a genuine disagreement to be settled by the id tie-break rather
+  // than by trust. These entries restore the adapters' stated judgement as POLICY DATA — no
+  // branching, no new logic, and `crunchbase` keeps the value it already had.
+  //
+  // Every value sits strictly below `company_profile`, so a user-provided fact still outranks any
+  // vendor claim about the same label. `industry` is the only label where they compete:
+  // company_profile 0.7×0.9 = 0.63 beats clearbit 0.75×0.80 = 0.60, which is the intended ordering.
+  builtwith: 0.85,       // OBSERVED off the live site — the strongest vendor claim here
+  clearbit: 0.8,         // strong, well-normalised company records
+  peopledatalabs: 0.75,  // strong headcount and size bands
+  apollo: 0.65,          // broad coverage, but headcount is self-reported
+  hunter: 0.55,          // email-pattern discovery; identity corroboration only
 };
 
 export interface LabelResolution { value: string | null; evidence: EvidenceRef[]; winner: EvidenceRef | null; }
