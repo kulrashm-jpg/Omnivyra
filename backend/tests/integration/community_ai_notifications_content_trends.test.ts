@@ -4,7 +4,6 @@ import notificationsHandler from '../../../pages/api/community-ai/notifications'
 import contentKpisHandler from '../../../pages/api/community-ai/content-kpis';
 import trendsHandler from '../../../pages/api/community-ai/trends';
 import { executeAction as executeCommunityAction } from '../../services/communityAiActionExecutor';
-import { executeAction as executeLinkedinAction } from '../../services/platformConnectors/linkedinConnector';
 import {
   actionStore,
   analyticsStore,
@@ -13,6 +12,7 @@ import {
   notificationStore,
   resetCommunityAiStores,
   scheduledPostStore,
+  seedPlaybook,
   setRole,
   tokenStore,
 } from './communityAiTestHarness';
@@ -40,12 +40,33 @@ jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
   executeAction: jest.fn().mockResolvedValue({ ok: true, platform: 'linkedin' }),
 }));
 
+/**
+ * G2R2 — required by the failure test below, which now drives a TERMINAL failure through the RPA
+ * mode. `communityAiActionExecutorContracts.ts:11` imports `executeRpaTask` from here.
+ */
+jest.mock('../../services/rpaWorker/rpaWorkerService', () => ({
+  executeRpaTask: jest.fn().mockResolvedValue({ success: false, error: 'boom' }),
+}));
+
 const { supabase } = jest.requireMock('../../db/supabaseClient');
 
 describe('Community-AI Notifications', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
     resetCommunityAiStores();
+    /**
+     * G2R2 — both actions below carry `playbook_id: 'playbook-1'`, but this suite never seeded a
+     * playbook. `getPlaybookById` therefore threw and
+     * communityAiActionExecutorRuntime.ts:505-511 returned `PLAYBOOK_NOT_FOUND` — an EARLY return at
+     * line 510, before the notify blocks at ~600-620. No notification was emitted because the action
+     * never executed, which is correct production behaviour, not a notification defect.
+     *
+     * `resetCommunityAiStores()` clears `playbookStore`, so the seed must follow it. `seedPlaybook()`
+     * is the harness's own helper, already used by community_ai_action_connectors,
+     * community_ai_history_metrics, community_ai_insights_forecast and community_ai_rbac — this
+     * suite was simply the one that omitted it.
+     */
+    seedPlaybook();
   });
 
   it('creates notification on execution success', async () => {
@@ -82,6 +103,22 @@ describe('Community-AI Notifications', () => {
     expect(notificationStore.some((note) => note.event_type === 'executed')).toBe(true);
   });
 
+  /**
+   * G2R2 — this test previously used `execution_mode: 'api'` with a failing LinkedIn connector and
+   * expected a `failed` notification. That expectation is OBSOLETE: the executor now performs a
+   * single API → Browser fallback (communityAiActionExecutorRuntime.ts:572-590), so an API failure
+   * resolves to `{ ok: true, status: 'dispatched', execution_mode: 'browser', fallback_from: 'api' }`
+   * — verified by direct execution. `dispatched` is deliberately NOT notified:
+   * runtime.ts:598 states "Notify + webhook only on terminal outcomes. 'dispatched' is in-flight;
+   * /api/extension/action-result will emit the terminal events."
+   *
+   * The notify-on-failure branch is still live production behaviour, so the test is re-pointed at a
+   * genuinely TERMINAL failure instead of being weakened or deleted. RPA has no fallback: a failing
+   * `executeRpaTask` returns `{ ok: false, status: 'failed' }` (contracts.ts:580-587), which reaches
+   * the notify block. `defaultPlaybook` sets `rpa_allowed: false`, so a dedicated RPA-permitting
+   * playbook is seeded — otherwise the playbook gate rejects the action before execution and, again,
+   * nothing is notified.
+   */
   it('creates notification on execution failure', async () => {
     setRole('CONTENT_PUBLISHER');
     tokenStore.push({
@@ -90,7 +127,7 @@ describe('Community-AI Notifications', () => {
       platform: 'linkedin',
       access_token: 'token-1',
     });
-    (executeLinkedinAction as jest.Mock).mockResolvedValueOnce({ success: false, error: 'boom' });
+    seedPlaybook({ id: 'playbook-rpa', execution_modes: { rpa_allowed: true } });
     actionStore.set('notify-2', {
       id: 'notify-2',
       tenant_id: 'tenant-1',
@@ -99,8 +136,8 @@ describe('Community-AI Notifications', () => {
       action_type: 'reply',
       target_id: 'post-2',
       suggested_text: 'Thanks!',
-      playbook_id: 'playbook-1',
-      execution_mode: 'api',
+      playbook_id: 'playbook-rpa',
+      execution_mode: 'rpa',
       status: 'approved',
       requires_human_approval: false,
     });
