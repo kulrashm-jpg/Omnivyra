@@ -149,7 +149,9 @@ export type GraphNodeType = 'lead' | 'company' | 'offering' | 'competitor' | 'ca
   // Program 7 (Intent Intelligence) additive extension — non-breaking (intent is the only intent-owned node; everything else referenced).
   | 'intent'
   // Program 8 (Qualification Intelligence) additive extension — non-breaking (qualification is the only qualification-owned node; everything else referenced).
-  | 'qualification';
+  | 'qualification'
+  // Program 9 (Contact Intelligence) additive extension — non-breaking (contact is the only contact-owned node; person/company/lead are referenced).
+  | 'contact' | 'person';
 export type GraphEdgeType = 'belongs_to' | 'engaged_with' | 'influences' | 'reports_to' | 'competes_with' | 'targets' | 'converted_from' | 'references' | 'member_of'
   // Program 3 additive offering relations — non-breaking.
   | 'has_feature' | 'priced_as' | 'serves_persona'
@@ -160,7 +162,10 @@ export type GraphEdgeType = 'belongs_to' | 'engaged_with' | 'influences' | 'repo
   // Program 7 additive intent relations — non-breaking (references only; no reasoning edges — interpretation lives in facets).
   | 'intent_of' | 'intent_toward'
   // Program 8 additive qualification relations — non-breaking (references only; no reasoning/policy edges — evaluation lives in facets).
-  | 'qualifies' | 'qualified_for';
+  | 'qualifies' | 'qualified_for'
+  // Program 9 additive contact relations — non-breaking (references only). `contact_of` points UP to the
+  // Canonical Person; `works_at` points to the employing company. No reasoning edges.
+  | 'contact_of' | 'works_at';
 export interface GraphNodeRef { type: GraphNodeType; id: string; }   // reference ONLY — no duplicate entity ownership
 export interface GraphEdge {
   id: string;
