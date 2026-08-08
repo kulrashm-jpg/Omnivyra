@@ -18,8 +18,10 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import { acquireGroundedEvidence, makeProductionAcquisitionDeps } from '../../../backend/services/companyIntelligence/production/canonicalEvidenceAcquisition';
-import { runCanonicalShadowJob, makeSupabaseShadowDeps } from '../../../backend/services/companyIntelligence/production/canonicalShadowJob';
+import {
+  acquireGroundedEvidence, makeProductionAcquisitionDeps,
+  runCanonicalShadowJob, makeSupabaseShadowDeps,
+} from '../../../backend/services/companyIntelligence';
 
 /**
  * Operator-only. Two arms, identical to every other super-admin surface:

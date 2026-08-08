@@ -84,6 +84,35 @@ describe('Company canonical runtime exports', () => {
     }
   });
 
+  it('exposes every symbol production actually consumes — no consumer needs a deep import', () => {
+    // WS-4H. This list is not aspirational: it is exactly the set of symbols imported from this
+    // module by non-test code. A missing entry means some production file is pinning an internal
+    // path, and any reorganisation inside this subsystem breaks it.
+    for (const name of [
+      'adoptCompanyProfileIdentity', 'adoptCompetitorCompanyIdentity', 'adoptMarketPulseIdentity',
+      'adoptExecutionCompanyIdentity', 'adoptContentArchitectIdentity', 'adoptLeadCompanyIdentity',
+      'acquireGroundedEvidence', 'makeProductionAcquisitionDeps',
+      'runCanonicalShadowJob', 'makeSupabaseShadowDeps',
+      'isCompanyProjectionAuthoritative',
+    ]) {
+      expect(typeof (CompanyIntelligence as unknown as Record<string, unknown>)[name]).toBe('function');
+    }
+  });
+
+  it('the barrel re-export is the SAME reference as the implementation — no wrapper, no behaviour change', async () => {
+    // An export that wrapped or re-implemented would change runtime behaviour. Identity comparison
+    // is the only check that rules that out.
+    const acquisition = await import('../../services/companyIntelligence/production/canonicalEvidenceAcquisition');
+    const shadowJob = await import('../../services/companyIntelligence/production/canonicalShadowJob');
+    const profileConsumer = await import('../../services/companyIntelligence/adoption/consumers/companyProfileConsumer');
+
+    expect(CompanyIntelligence.acquireGroundedEvidence).toBe(acquisition.acquireGroundedEvidence);
+    expect(CompanyIntelligence.makeProductionAcquisitionDeps).toBe(acquisition.makeProductionAcquisitionDeps);
+    expect(CompanyIntelligence.runCanonicalShadowJob).toBe(shadowJob.runCanonicalShadowJob);
+    expect(CompanyIntelligence.makeSupabaseShadowDeps).toBe(shadowJob.makeSupabaseShadowDeps);
+    expect(CompanyIntelligence.adoptCompanyProfileIdentity).toBe(profileConsumer.adoptCompanyProfileIdentity);
+  });
+
   it('exports registration explicitly — the caller-driven invariant, not a contradiction of it', () => {
     // Registration must be an act a caller WRITES and a reviewer can SEE. What is prohibited is
     // registration happening on import — asserted next.

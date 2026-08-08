@@ -98,3 +98,35 @@ export {
   runProductionParity,
   type ProductionParityCase, type ProductionParityRow, type ProductionParityReport,
 } from './production/productionParity';
+
+/**
+ * ── PUBLIC API COMPLETION (WS-4H) ─────────────────────────────────────────────────────────────────
+ * The symbols below were already being consumed by production, but only by DEEP IMPORT — eight files
+ * reached into `adoption/consumers/*` and `production/*` directly, so any reorganisation inside this
+ * subsystem was a breaking change for them. The Phase 3 export surface was assembled from what a
+ * future Platform consumer was predicted to need; this closes the gap between that prediction and
+ * what production actually calls today.
+ *
+ * The consumers themselves are the source of truth for this list — it is exactly the set of symbols
+ * imported from this module by non-test code, and nothing more. No internal helper is exported
+ * merely because it exists.
+ *
+ * Export-only: no implementation, signature, name or behaviour changes.
+ */
+export {
+  // Identity adopters — each already called by exactly one production surface.
+  adoptCompanyProfileIdentity,
+} from './adoption/consumers/companyProfileConsumer';
+export { adoptCompetitorCompanyIdentity } from './adoption/consumers/competitorIntelligenceConsumer';
+export { adoptMarketPulseIdentity } from './adoption/consumers/marketPulseConsumer';
+export { adoptExecutionCompanyIdentity } from './adoption/consumers/executionIntelligenceConsumer';
+export { adoptContentArchitectIdentity } from './adoption/consumers/contentArchitectConsumer';
+export { adoptLeadCompanyIdentity } from './adoption/consumers/leadIntelligenceConsumer';
+export {
+  // Isolated production path — grounded evidence acquisition (reads only; no mutation).
+  acquireGroundedEvidence, makeProductionAcquisitionDeps,
+} from './production/canonicalEvidenceAcquisition';
+export {
+  // Isolated production path — canonical shadow job + its store binding.
+  runCanonicalShadowJob, makeSupabaseShadowDeps,
+} from './production/canonicalShadowJob';
