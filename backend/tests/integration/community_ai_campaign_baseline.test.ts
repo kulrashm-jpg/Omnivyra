@@ -47,7 +47,7 @@ describe('Community-AI Campaign Baseline', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', playbook_id: 'playbook-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await campaignBaselineHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -140,7 +140,7 @@ describe('Community-AI Campaign Baseline', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', playbook_id: 'playbook-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await campaignBaselineHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -165,7 +165,7 @@ describe('Community-AI Campaign Baseline', () => {
     const req = {
       method: 'POST',
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await campaignBaselineHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(405);

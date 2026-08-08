@@ -117,7 +117,7 @@ describe('Community-AI RBAC', () => {
         scheduled_at: new Date().toISOString(),
         approved: true,
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const approveRes = createMockRes();
     await actionsHandler(approveReq, approveRes);
     expect(approveRes.status).toHaveBeenCalledWith(403);
@@ -126,7 +126,7 @@ describe('Community-AI RBAC', () => {
       method: 'POST',
       headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'rbac-1', approved: true },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const execRes = createMockRes();
     await executeHandler(execReq, execRes);
     expect(execRes.status).toHaveBeenCalledWith(403);
@@ -151,7 +151,7 @@ describe('Community-AI RBAC', () => {
       method: 'POST',
       headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'rbac-2', approved: true },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const execRes = createMockRes();
     await executeHandler(execReq, execRes);
     expect(execRes.status).toHaveBeenCalledWith(403);
@@ -176,7 +176,7 @@ describe('Community-AI RBAC', () => {
       method: 'POST',
       headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'rbac-3', approved: true },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const execRes = createMockRes();
     await executeHandler(execReq, execRes);
     expect(execRes.status).toHaveBeenCalledWith(200);
@@ -214,7 +214,7 @@ describe('Community-AI RBAC', () => {
         scheduled_at: new Date().toISOString(),
         approved: true,
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const approveRes = createMockRes();
     await actionsHandler(approveReq, approveRes);
     expect(approveRes.status).toHaveBeenCalledWith(200);
@@ -223,7 +223,7 @@ describe('Community-AI RBAC', () => {
       method: 'POST',
       headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'rbac-4', approved: true },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const execRes = createMockRes();
     await executeHandler(execReq, execRes);
     expect(execRes.status).toHaveBeenCalledWith(200);
@@ -253,7 +253,7 @@ describe('Community-AI RBAC', () => {
         requires_human_approval: true,
         risk_level: 'low',
       });
-      const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' } } as NextApiRequest;
+      const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' } } as unknown as NextApiRequest;
       const res = createMockRes();
       await actionsHandler(req, res);
       expect(res.status).toHaveBeenCalledWith(200);
@@ -287,7 +287,7 @@ describe('Community-AI RBAC', () => {
         scheduled_at: new Date().toISOString(),
         approved: true,
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await actionsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);

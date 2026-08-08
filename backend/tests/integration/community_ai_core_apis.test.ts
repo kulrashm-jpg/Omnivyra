@@ -78,7 +78,7 @@ describe('Community-AI APIs', () => {
   });
 
   it('rejects requests without tenant_id', async () => {
-    const req = { method: 'GET', query: { organization_id: 'tenant-1' } } as NextApiRequest;
+    const req = { method: 'GET', query: { organization_id: 'tenant-1' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await dashboardHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -88,7 +88,7 @@ describe('Community-AI APIs', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-2' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await dashboardHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -99,7 +99,7 @@ describe('Community-AI APIs', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await dashboardHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -120,7 +120,7 @@ describe('Community-AI APIs', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await dashboardHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -134,7 +134,7 @@ describe('Community-AI APIs', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'LinkedIn' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await platformHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -154,7 +154,7 @@ describe('Community-AI APIs', () => {
         platform: 'LinkedIn',
         postId: 'post-1',
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await postHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -179,7 +179,7 @@ describe('Community-AI APIs', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await dashboardHandler(req, res);
     expect(res.json.mock.calls[0][0].suggested_actions[0].tone).toBe('professional');

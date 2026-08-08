@@ -160,7 +160,7 @@ describe('Community-AI Notifications', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await notificationsHandler(req, res);
     const payload = res.json.mock.calls[0][0];
@@ -194,7 +194,7 @@ describe('Community-AI Notifications', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await notificationsHandler(req, res);
     const payload = res.json.mock.calls[0][0];
@@ -211,7 +211,7 @@ describe('Community-AI Content KPIs', () => {
 
   it('rejects content-kpis request without tenant/org', async () => {
     setRole('VIEW_ONLY');
-    const req = { method: 'GET' } as NextApiRequest;
+    const req = { method: 'GET' } as unknown as NextApiRequest;
     const res = createMockRes();
     await contentKpisHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -236,7 +236,7 @@ describe('Community-AI Content KPIs', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await contentKpisHandler(req, res);
     const payload = res.json.mock.calls[0][0];
@@ -264,7 +264,7 @@ describe('Community-AI Content KPIs', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await contentKpisHandler(req, res);
     const payload = res.json.mock.calls[0][0];
@@ -280,7 +280,7 @@ describe('Community-AI Trends', () => {
 
   it('requires tenant/org', async () => {
     setRole('VIEW_ONLY');
-    const req = { method: 'GET' } as NextApiRequest;
+    const req = { method: 'GET' } as unknown as NextApiRequest;
     const res = createMockRes();
     await trendsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -346,7 +346,7 @@ describe('Community-AI Trends', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await trendsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -378,7 +378,7 @@ describe('Community-AI Trends', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await trendsHandler(req, res);
     const payload = res.json.mock.calls[0][0];

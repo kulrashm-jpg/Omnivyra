@@ -61,7 +61,7 @@ describe('Community-AI Insights', () => {
 
   it('requires tenant/org', async () => {
     setRole('VIEW_ONLY');
-    const req = { method: 'GET' } as NextApiRequest;
+    const req = { method: 'GET' } as unknown as NextApiRequest;
     const res = createMockRes();
     await insightsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -89,7 +89,7 @@ describe('Community-AI Insights', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await insightsHandler(req, res);
     expect(evaluateCommunityAiInsights).toHaveBeenCalledWith(
@@ -106,7 +106,7 @@ describe('Community-AI Insights', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await insightsHandler(req, res);
     const payload = res.json.mock.calls[0][0];
@@ -136,7 +136,7 @@ describe('Community-AI Insights', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await insightsHandler(req, res);
     expect(evaluateCommunityAiInsights).toHaveBeenCalledWith(
@@ -156,7 +156,7 @@ describe('Community-AI Forecast', () => {
 
   it('requires tenant/org', async () => {
     setRole('VIEW_ONLY');
-    const req = { method: 'GET' } as NextApiRequest;
+    const req = { method: 'GET' } as unknown as NextApiRequest;
     const res = createMockRes();
     await forecastHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -190,7 +190,7 @@ describe('Community-AI Forecast', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await forecastHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -240,7 +240,7 @@ describe('Community-AI Forecast', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', content_type: 'text' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await forecastHandler(req, res);
     const payload = (res.json as jest.Mock).mock.calls[0][0];
@@ -276,7 +276,7 @@ describe('Community-AI Forecast', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await forecastHandler(req, res);
     const payload = (res.json as jest.Mock).mock.calls[0][0];
@@ -290,7 +290,7 @@ describe('Community-AI Forecast', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-2' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await forecastHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);

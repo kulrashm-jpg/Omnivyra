@@ -443,7 +443,22 @@ export const buildQuery = (table: string) => {
   return query;
 };
 
-export const createMockRes = () => {
+/**
+ * A NextApiResponse whose recorder methods stay visible as jest mocks, so tests
+ * can assert on `res.json.mock.calls` without re-casting at every call site.
+ */
+export type MockApiResponse = NextApiResponse & {
+  json: jest.Mock;
+  setHeader: jest.Mock;
+  send: jest.Mock;
+  write: jest.Mock;
+  end: jest.Mock;
+  on: jest.Mock;
+  once: jest.Mock;
+  emit: jest.Mock;
+};
+
+export const createMockRes = (): MockApiResponse => {
   const headers: Record<string, string> = {};
   const res: Partial<NextApiResponse> & {
     json: jest.Mock;
@@ -465,7 +480,12 @@ export const createMockRes = () => {
     once: jest.fn(),
     emit: jest.fn(),
   };
-  return res as NextApiResponse;
+  // Return the INTERSECTION, not a bare NextApiResponse. Widening to
+  // NextApiResponse here erased the jest.Mock typing built above, so every
+  // caller reading `res.json.mock.calls[...]` saw `Send<any>` and failed with
+  // TS2339 "Property 'mock' does not exist". Handlers still accept this value
+  // because the intersection is assignable to NextApiResponse.
+  return res as MockApiResponse;
 };
 
 export const setRole = (role: string, companyId = 'tenant-1') => {

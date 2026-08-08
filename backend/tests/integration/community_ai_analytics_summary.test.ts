@@ -42,7 +42,7 @@ describe('Community-AI Network Intelligence', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await networkIntelligenceHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -107,7 +107,7 @@ describe('Community-AI Network Intelligence', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await networkIntelligenceHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -128,7 +128,7 @@ describe('Community-AI Network Intelligence', () => {
     const req = {
       method: 'POST',
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await networkIntelligenceHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(405);
@@ -146,7 +146,7 @@ describe('Community-AI Playbook Effectiveness', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await playbookEffectivenessHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -214,7 +214,7 @@ describe('Community-AI Playbook Effectiveness', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await playbookEffectivenessHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -280,7 +280,7 @@ describe('Community-AI Playbook Effectiveness', () => {
         start_date: '2024-01-05T00:00:00.000Z',
         end_date: '2024-01-12T00:00:00.000Z',
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await playbookEffectivenessHandler(req, res);
     const payload = res.json.mock.calls[0][0];
@@ -293,7 +293,7 @@ describe('Community-AI Playbook Effectiveness', () => {
     const req = {
       method: 'POST',
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await playbookEffectivenessHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(405);
@@ -311,7 +311,7 @@ describe('Community-AI Executive Summary', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executiveSummaryHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -379,7 +379,7 @@ describe('Community-AI Executive Summary', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executiveSummaryHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -444,7 +444,7 @@ describe('Community-AI Executive Summary', () => {
         start_date: '2024-01-05T00:00:00.000Z',
         end_date: '2024-01-12T00:00:00.000Z',
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executiveSummaryHandler(req, res);
     const summary = res.json.mock.calls[0][0].summary;
@@ -457,7 +457,7 @@ describe('Community-AI Executive Summary', () => {
     const req = {
       method: 'POST',
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executiveSummaryHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(405);

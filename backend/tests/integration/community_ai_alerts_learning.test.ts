@@ -48,7 +48,7 @@ describe('Community-AI Executive Alerts', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executiveAlertsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -159,7 +159,7 @@ describe('Community-AI Executive Alerts', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executiveAlertsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -183,7 +183,7 @@ describe('Community-AI Executive Alerts', () => {
     const req = {
       method: 'POST',
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executiveAlertsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(405);
@@ -206,7 +206,7 @@ describe('Community-AI Playbook Learning', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await playbookLearningHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -344,7 +344,7 @@ describe('Community-AI Playbook Learning', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await playbookLearningHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -370,7 +370,7 @@ describe('Community-AI Playbook Learning', () => {
     const req = {
       method: 'POST',
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await playbookLearningHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(405);

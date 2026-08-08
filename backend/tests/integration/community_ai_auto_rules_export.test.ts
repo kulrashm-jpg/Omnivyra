@@ -245,7 +245,7 @@ describe('Community-AI Auto Rules', () => {
         execution_links: null,
       },
     });
-    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' } } as NextApiRequest;
+    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await platformHandler(req, res);
     const rows = Array.from(actionStore.values());
@@ -287,7 +287,7 @@ describe('Community-AI Auto Rules', () => {
         execution_links: null,
       },
     });
-    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' } } as NextApiRequest;
+    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await platformHandler(req, res);
     expect(Array.from(actionStore.values())[0].status).toBe('pending');
@@ -326,7 +326,7 @@ describe('Community-AI Auto Rules', () => {
         execution_links: null,
       },
     });
-    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' } } as NextApiRequest;
+    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await platformHandler(req, res);
     expect(Array.from(actionStore.values())).toHaveLength(0);
@@ -366,7 +366,7 @@ describe('Community-AI Auto Rules', () => {
         execution_links: null,
       },
     });
-    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' } } as NextApiRequest;
+    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await platformHandler(req, res);
     expect(Array.from(actionStore.values())[0].status).toBe('pending');
@@ -374,7 +374,7 @@ describe('Community-AI Auto Rules', () => {
 
   it('enforces RBAC for auto-rules API', async () => {
     setRole('VIEW_ONLY');
-    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' } } as NextApiRequest;
+    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' } } as unknown as NextApiRequest;
     const res = createMockRes();
     const autoRulesHandler = require('../../../pages/api/community-ai/auto-rules').default;
     await autoRulesHandler(req, res);
@@ -399,7 +399,7 @@ describe('Community-AI Export', () => {
 
   it('requires tenant/org', async () => {
     setRole('VIEW_ONLY');
-    const req = { method: 'GET', headers: {} } as NextApiRequest;
+    const req = { method: 'GET', headers: {} } as unknown as NextApiRequest;
     const res = createMockRes();
     await exportHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -407,7 +407,7 @@ describe('Community-AI Export', () => {
 
   it('enforces RBAC', async () => {
     setRole('VIEW_ONLY', 'tenant-2');
-    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', type: 'kpis', format: 'csv' } } as NextApiRequest;
+    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', type: 'kpis', format: 'csv' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await exportHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -415,7 +415,7 @@ describe('Community-AI Export', () => {
 
   it('blocks cross-tenant export', async () => {
     setRole('VIEW_ONLY');
-    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-2', type: 'kpis', format: 'csv' } } as NextApiRequest;
+    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-2', type: 'kpis', format: 'csv' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await exportHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -435,7 +435,7 @@ describe('Community-AI Export', () => {
       engagement_rate: 0.5,
       date: new Date().toISOString().slice(0, 10),
     });
-    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', type: 'kpis', format: 'csv' } } as NextApiRequest;
+    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', type: 'kpis', format: 'csv' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await exportHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -444,7 +444,7 @@ describe('Community-AI Export', () => {
   it('returns PDF with correct headers', async () => {
     setRole('VIEW_ONLY');
     (getProfile as jest.Mock).mockResolvedValueOnce({ name: 'Acme Co' });
-    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', type: 'full-report', format: 'pdf' } } as NextApiRequest;
+    const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', type: 'full-report', format: 'pdf' } } as unknown as NextApiRequest;
     const res = createMockRes();
     await exportHandler(req, res);
     const dateStamp = new Date().toISOString().slice(0, 10);

@@ -77,7 +77,7 @@ describe('Community-AI Scheduling', () => {
         scheduled_at: scheduledAt,
         approved: true,
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await actionsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -298,7 +298,7 @@ describe('Community-AI Scheduling', () => {
         scheduled_at: new Date().toISOString(),
         approved: true,
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await actionsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);

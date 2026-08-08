@@ -122,7 +122,7 @@ describe('Community-AI Action Execution', () => {
       method: 'POST',
       headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'action-1', approved: false },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executeHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -146,7 +146,7 @@ describe('Community-AI Action Execution', () => {
       method: 'POST',
       headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'action-2', approved: true },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executeHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -172,7 +172,7 @@ describe('Community-AI Action Execution', () => {
       method: 'POST',
       headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'action-3', approved: true },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executeHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);

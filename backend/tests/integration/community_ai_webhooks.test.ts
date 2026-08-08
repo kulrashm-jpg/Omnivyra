@@ -59,7 +59,7 @@ describe('Community-AI Webhooks', () => {
         event_type: 'failed',
         webhook_url: 'https://example.com/webhook',
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await webhooksHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(201);
@@ -75,7 +75,7 @@ describe('Community-AI Webhooks', () => {
         event_type: 'failed',
         webhook_url: 'https://example.com/webhook',
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await webhooksHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -95,7 +95,7 @@ describe('Community-AI Webhooks', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await webhooksHandler(req, res);
     const payload = res.json.mock.calls[0][0];
@@ -171,7 +171,7 @@ describe('Community-AI Webhooks', () => {
         action_id: 'webhook-2',
         approved: true,
       },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executeHandler(req, res);
     await new Promise((resolve) => setTimeout(resolve, 0));

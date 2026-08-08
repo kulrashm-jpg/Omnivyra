@@ -46,7 +46,7 @@ describe('Community-AI Month-over-Month Comparison', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await momComparisonHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -168,7 +168,7 @@ describe('Community-AI Month-over-Month Comparison', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await momComparisonHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -189,7 +189,7 @@ describe('Community-AI Month-over-Month Comparison', () => {
     const req = {
       method: 'POST',
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await momComparisonHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(405);

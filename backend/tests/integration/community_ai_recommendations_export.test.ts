@@ -53,7 +53,7 @@ describe('Community-AI Recommendations', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await recommendationsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -128,7 +128,7 @@ describe('Community-AI Recommendations', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await recommendationsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(200);
@@ -149,7 +149,7 @@ describe('Community-AI Recommendations', () => {
     const req = {
       method: 'POST',
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await recommendationsHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(405);
@@ -168,7 +168,7 @@ describe('Community-AI Executive Export', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', format: 'pdf' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executiveExportHandler(req, res);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -218,7 +218,7 @@ describe('Community-AI Executive Export', () => {
     const req = {
       method: 'GET',
       query: { tenant_id: 'tenant-1', organization_id: 'tenant-1', format: 'pdf' },
-    } as NextApiRequest;
+    } as unknown as NextApiRequest;
     const res = createMockRes();
     await executiveExportHandler(req, res);
     expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/pdf');
