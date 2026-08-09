@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Users,
 } from 'lucide-react';
+import { apiFetch } from '../../lib/apiFetch';
 import {
   Bar,
   BarChart,
@@ -263,14 +264,23 @@ function fetchSystemStateShared(companyId: string, refreshTick: number): Promise
   const key = `${companyId}:${refreshTick}`;
   if (sharedStateKey !== key || !sharedStatePromise) {
     sharedStateKey = key;
-    sharedStatePromise = fetch(`${API_ENDPOINT}?companyId=${encodeURIComponent(companyId)}`, {
-      credentials: 'include',
-    }).then(async (response) => {
-      if (!response.ok) {
-        throw new Error('Failed to load analytics system state');
-      }
-      return (await response.json()) as DashboardPayload;
-    });
+    // Must go through apiFetch, not bare fetch. This route accepts a bearer
+    // token OR the Supabase auth cookie, but the cookie only carries whatever
+    // access token was last persisted — Supabase access tokens expire hourly,
+    // so a cookie-only request on an open tab authenticates with a stale JWT
+    // and the route falls back to an anonymous principal → 403 "Access denied
+    // to company". Every other client call in the app uses apiFetch, which
+    // force-refreshes the session and attaches a live Authorization header;
+    // this was the one caller that didn't, which is why the analytics tab
+    // failed while the rest of the dashboard loaded.
+    sharedStatePromise = apiFetch(`${API_ENDPOINT}?companyId=${encodeURIComponent(companyId)}`).then(
+      async (response) => {
+        if (!response.ok) {
+          throw new Error(`Failed to load analytics system state (HTTP ${response.status})`);
+        }
+        return (await response.json()) as DashboardPayload;
+      },
+    );
     // On failure, drop the cache so a later retry re-fetches instead of every
     // section replaying the same rejected promise.
     sharedStatePromise.catch(() => {
