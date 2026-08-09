@@ -17,6 +17,43 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
+    // TS7-MIGRATION D0 — PERMANENT.
+    //
+    // TypeScript 6.0 stopped INFERRING `rootDir` from the common source
+    // directory; it must now be explicit or TS5011 is raised. `tsc -p` never
+    // hits this (the include globs span the repo root, so the common source
+    // directory is already "."), but ts-jest builds a program per test file,
+    // whose common source directory is that file's own folder — so EVERY jest
+    // suite failed with TS5011 under TS6 until this was set.
+    //
+    // "." is the repo root, which is what the `@/*` -> `./*` path map already
+    // treats as the source root, and it is what TS6 uses as the new default.
+    // Emit layout is unaffected: this project is `noEmit`, and the only
+    // emitting project (tsconfig.worker.json) already sets `rootDir: "."`
+    // itself, so its output is byte-for-byte unchanged.
+    "rootDir": ".",
+    // TS7-MIGRATION D0 — TEMPORARY, REMOVE IN D1.
+    //
+    // TypeScript 6.0 turns `moduleResolution: node10` into a hard error
+    // (TS5107), and TWO consumers still request node10:
+    //   1. tsconfig.worker.json sets `"moduleResolution": "node"` explicitly.
+    //      D1 replaces it with `bundler` (Phase C proved emit-identical).
+    //   2. ts-jest forces `moduleResolution: Node10` internally, ignoring this
+    //      file entirely (ts-jest 29.4.9 fixupCompilerOptionsForModuleKind).
+    //      Without this, EVERY jest suite fails to run under TS6. Fixed
+    //      upstream in ts-jest 29.4.12 — not bumped here to keep D0 to a
+    //      single-variable change.
+    //
+    // This ONLY silences the deprecation notice; it changes no resolution,
+    // module, or emit semantics. It is inherited by every project that
+    // extends this file, so tsconfig.worker.json needs no edit in D0.
+    //
+    // It buys time, it does not buy a TS7 upgrade. Verified against 7.0.2:
+    // the option itself is still ACCEPTED (it becomes a no-op), but node10 is
+    // REMOVED outright there — `moduleResolution: node` then fails TS5108 with
+    // this option present. So D1 must actually replace node10 with bundler;
+    // once it does, delete this line (and prefer ts-jest >= 29.4.12).
+    "ignoreDeprecations": "6.0",
     "paths": {
       "@/*": ["./*"]
     }
