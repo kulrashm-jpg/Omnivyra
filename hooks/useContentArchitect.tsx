@@ -492,8 +492,8 @@ export function useContentArchitect() {
             week_number: selectedWeek,
             day,
             title,
-            platform: String((item?.platform ?? 'linkedin') ?? '').toLowerCase(),
-            content_type: String((item?.content_type ?? 'post') ?? '').toLowerCase(),
+            platform: String(item?.platform ?? 'linkedin').toLowerCase(),
+            content_type: String(item?.content_type ?? 'post').toLowerCase(),
           };
         });
         setDailyActivities(mapped);

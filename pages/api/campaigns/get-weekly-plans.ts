@@ -129,9 +129,7 @@ async function handlerImpl(req: NextApiRequest, res: NextApiResponse) {
         ? (blueprint as { executionIntelligence?: { executionPressure?: unknown; executionMomentum?: unknown } }).executionIntelligence
         : null;
     const executionPressure =
-      executionIntelligence?.executionPressure ??
-      (blueprint && typeof blueprint === 'object' ? ((blueprint as { executionIntelligence?: { executionPressure?: unknown } }).executionIntelligence?.executionPressure ?? null) : null) ??
-      null;
+      executionIntelligence?.executionPressure ?? null;
     const executionMomentum =
       executionIntelligence?.executionMomentum ?? null;
     const executionMomentumRecovery =
