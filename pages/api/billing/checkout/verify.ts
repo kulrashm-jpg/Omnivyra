@@ -14,8 +14,11 @@ import { logger } from '../../../../backend/services/logger';
 import { supabase } from '@/backend/db/supabaseClient';
 import { verifyPayment } from '@/backend/services/payments/orchestrator';
 import type { PaymentProviderId } from '@/backend/services/payments/orchestrator';
-import { completePurchase, failPurchase } from '@/backend/services/purchaseService';
 import { generateTopupInvoice } from '@/backend/services/billing/topupInvoiceService';
+import {
+  closePurchaseFromClient,
+  fulfillProviderConfirmedPurchase,
+} from '@/backend/services/billing/purchaseClosureService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -46,23 +49,43 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 
   if (!result.verified) {
-    await failPurchase(purchaseId, paymentId || undefined);
-    logger.warn('checkout_verify_failed', { organizationId, purchaseId, provider });
-    return res.status(400).json({ ok: false, purchase_id: purchaseId, status: 'failed', provider });
+    // P1: a failed verification is a CLIENT-side signal (bad/absent signature),
+    // so it goes through the provider-authoritative closure rather than a blind
+    // failPurchase. If the provider actually captured the payment, this
+    // fulfills instead of failing — provider truth beats client claim.
+    logger.warn('payment_failed', {
+      organizationId, purchaseId, provider, source: 'verify_signature_rejected',
+    });
+    const closure = await closePurchaseFromClient({
+      purchaseId, organizationId, reason: 'client_reported_failure',
+    });
+    if (closure.action === 'fulfilled') {
+      return res.status(200).json({
+        ok: true, purchase_id: purchaseId, status: 'paid',
+        fulfillment_status: 'fulfilled', provider, recovered: true,
+      });
+    }
+    return res.status(400).json({
+      ok: false, purchase_id: purchaseId, status: 'failed', provider, action: closure.action,
+    });
   }
 
   // Payment verified (paid) → allocate into the top-up (paid) pool via the
   // existing idempotent fulfillment. Duplicate verify/webhook/retry → one grant.
-  const fulfillment = await completePurchase(purchaseId, paymentId || undefined);
-  if (!fulfillment.success) {
-    const reason = (fulfillment as any).reason ?? (fulfillment as any).detail ?? 'fulfillment_failed';
+  // Reopen-safe: if an expiry sweep closed this row moments earlier, a genuine
+  // provider-verified success still fulfills.
+  const fulfillment = await fulfillProviderConfirmedPurchase(purchaseId, paymentId || undefined);
+  if (!fulfillment.ok) {
+    const reason = fulfillment.detail ?? 'fulfillment_failed';
     logger.error('checkout_fulfillment_failed', { organizationId, purchaseId, reason });
     return res.status(500).json({
       ok: false, purchase_id: purchaseId, status: 'paid', fulfillment_status: 'failed', error: reason,
     });
   }
 
-  // Generate the invoice (idempotent; best-effort — never blocks fulfillment).
+  // Read back the invoice number for the response. Fulfillment already
+  // generated it; generateTopupInvoice is idempotent (deterministic number +
+  // UNIQUE), so this call returns the existing one rather than a second invoice.
   let invoiceNumber: string | null = null;
   try { invoiceNumber = (await generateTopupInvoice(purchaseId))?.invoiceNumber ?? null; }
   catch (e: any) { logger.warn('checkout_invoice_failed', { purchaseId, message: e?.message }); }

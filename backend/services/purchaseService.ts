@@ -215,6 +215,73 @@ export async function completePurchase(
 }
 
 /**
+ * Reopen a purchase that OMNIVYRA closed itself, so a later provider-confirmed
+ * success can still be fulfilled.
+ *
+ * The hazard this closes: `completePurchase` refuses a purchase in `failed`
+ * (`already_failed`). Without this, a stale-pending expiry or a client-reported
+ * failure would permanently swallow a payment the provider later confirms —
+ * "expired → late webhook → lost payment".
+ *
+ * Narrow by construction. It reopens ONLY rows carrying a system closure marker
+ * with `reopenable: true` (written by purchaseClosureService). A purchase the
+ * PROVIDER declined has no such marker and is never reopened, so this cannot be
+ * used to resurrect a genuinely failed payment. It grants nothing on its own —
+ * it only restores `pending` so the normal idempotent fulfillment path can run.
+ *
+ * @returns true when the row is now fulfillable (reopened, or already pending).
+ */
+export async function reopenSystemClosedPurchase(purchaseId: string): Promise<boolean> {
+  const { data: row } = await ownedDbTable('credit_purchases')
+    .select('id, status, fulfillment_status, provider_payload')
+    .eq('id', purchaseId)
+    .maybeSingle();
+
+  if (!row) return false;
+
+  const status = (row as { status?: string }).status;
+  // Already fulfillable / already fulfilled — nothing to reopen.
+  if (status === 'pending') return true;
+  if (status === 'completed') return true;
+  if (status !== 'failed') return false;
+
+  const payload = ((row as { provider_payload?: Record<string, unknown> }).provider_payload ?? {}) as Record<string, unknown>;
+  const closure = (payload.closure ?? null) as { reopenable?: boolean; reason?: string } | null;
+  if (!closure || closure.reopenable !== true) {
+    // Provider-declined (or externally failed) — must stay failed.
+    return false;
+  }
+
+  const { data: updated } = await ownedDbTable('credit_purchases')
+    .update({
+      status: 'pending',
+      fulfillment_status: 'pending',
+      provider_payload: {
+        ...payload,
+        closure: { ...closure, reopened_at: new Date().toISOString(), reopened_reason: 'provider_confirmed_payment' },
+      },
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', purchaseId)
+    .eq('status', 'failed')          // CAS — a concurrent completion wins instead
+    .select('id')
+    .maybeSingle();
+
+  if (!updated) {
+    // Lost the race; re-read to see whether the winner left it fulfillable.
+    const { data: after } = await ownedDbTable('credit_purchases')
+      .select('status').eq('id', purchaseId).maybeSingle();
+    const s = (after as { status?: string } | null)?.status;
+    return s === 'pending' || s === 'completed';
+  }
+
+  console.warn('[purchaseService] reopened system-closed purchase for provider-confirmed payment', {
+    purchaseId, previousClosureReason: closure.reason ?? null,
+  });
+  return true;
+}
+
+/**
  * Mark a purchase as failed (called if payment gateway reports failure).
  */
 export async function failPurchase(

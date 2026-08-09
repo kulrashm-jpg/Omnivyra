@@ -8,5 +8,6 @@ export { getProviderCredentials, isProviderConfigured, validateConfiguredProvide
 export { getAdapter, getAllAdapters } from './adapters';
 export { getWebhookHandler, getRegisteredWebhookProviders, RazorpayWebhookHandler, CashfreeWebhookHandler } from './webhookHandlers';
 export {
-  initPaymentOrchestrator, resolveProviderForCurrency, createOrder, verifyPayment, handleWebhook, orchestratorHealth,
+  initPaymentOrchestrator, resolveProviderForCurrency, createOrder, verifyPayment, handleWebhook,
+  resolveProviderOrderOutcome, orchestratorHealth,
 } from './paymentOrchestrator';
