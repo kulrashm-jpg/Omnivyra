@@ -43,6 +43,21 @@ const buildQuery = (result: SupabaseResult) => {
     lte: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
+    // `dlqHasKey` (jobRunner.ts:277-282) closes its chain with
+    // `.contains('job_payload', …).limit(1).maybeSingle()`. Both links were absent
+    // from this double, so the publish path died on
+    // `…eq(...).contains is not a function` BEFORE reaching the readiness gate —
+    // masking the PUBLISH_BLOCKED_CAMPAIGN_NOT_READY rejection this test asserts.
+    // `contains` is a real PostgREST filter; the sibling doubles repaired in
+    // WS-2L/WS-4A (publish_flow, omnivyra_fallback_reasons, omnivyra_learning_bridge)
+    // all provide it. Added chainable, matching this file's existing style.
+    contains: jest.fn().mockReturnThis(),
+    // Resolves to NO ROW deliberately. `maybeSingle` is reached only by the
+    // dead-letter lookup on this path, and these scenarios have no DLQ entry for
+    // the idempotency key — returning the generic table fixture instead made
+    // `dlqHasKey` truthy and short-circuited publish with
+    // PUBLISH_DEAD_LETTER_SKIP, still masking the readiness gate.
+    maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
     single: jest.fn().mockResolvedValue(result),
     upsert: jest.fn().mockResolvedValue(result),
     then: (resolve: any, reject: any) => Promise.resolve(result).then(resolve, reject),

@@ -70,12 +70,29 @@ describe('getLegacySuperAdminSession — bridge-cookie guardrails', () => {
     expect(m.granted).toBe(0);
   });
 
-  it('returns synthetic session when cookie present (default state)', () => {
+  // Time is PINNED, not assumed. This assertion covers the grant path, which
+  // production permits only before LEGACY_BRIDGE_HARD_EXPIRY_AT
+  // (legacyCookieSuperAdminBridge.ts:94 returns `hard_expired` from `Date.now()`
+  // onward). The constant is 2026-08-05T00:00:00Z, so on real time this test
+  // silently became a wall-clock failure the moment that date passed — it was
+  // asserting a live contract against an unpinned clock.
+  //
+  // The instant is derived FROM the production constant rather than hard-coded, so
+  // the expiry is neither moved nor disabled and the test cannot rot again. The
+  // post-expiry contract is deliberately NOT re-asserted here: the sibling
+  // "increments hard-expired counter" test below already owns it, and duplicating
+  // it here would delete the only coverage of the grant path and the `granted`
+  // counter. Clock is restored by the existing afterEach `useRealTimers`.
+  it('returns synthetic session when cookie present (pinned before hard expiry)', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(LEGACY_BRIDGE_HARD_EXPIRY_AT.getTime() - 1));
+    // Minted AFTER pinning so the signed cookie and the read share one clock.
     const out = getLegacySuperAdminSession(fakeReq({ cookie: true, url: '/api/super-admin/foo' }));
     expect(out).toEqual({ userId: LEGACY_SUPER_ADMIN_USER_ID, role: 'SUPER_ADMIN' });
     const m = getBridgeBypassMetrics();
     expect(m.totalReads).toBe(1);
     expect(m.granted).toBe(1);
+    expect(m.rejectedHardExpired).toBe(0);
     expect(m.byRoute['/api/super-admin/foo']).toBe(1);
   });
 

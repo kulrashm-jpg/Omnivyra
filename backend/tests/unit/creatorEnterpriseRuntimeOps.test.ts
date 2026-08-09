@@ -8,12 +8,58 @@ import { validateCreatorPublishSemantics } from '../../services/creatorPublishVa
 import { compareVisualRegressionSnapshots, createVisualRegressionSnapshot } from '../../services/creatorVisualRegression';
 import { validateVisualGovernance, scoreCreatorQuality, resolveAssetGovernanceProfile, resolvePlatformVisualProfile } from '../../services/creatorAssetGovernance';
 
+/** Read one file relative to the repo root. */
+function readEntry(rel: string): string {
+  return fs.readFileSync(path.join(process.cwd(), rel), 'utf8');
+}
+
+/**
+ * Read an entry file PLUS the local modules it reaches, following relative
+ * `from '...'` and `import('...')` specifiers up to `maxDepth` hops.
+ *
+ * These assertions verify that a BEHAVIOUR is wired behind a documented entry
+ * point. Both entry points have since become barrels — `generate.ts` re-exports
+ * `backend/services/creator/generateRoute/*`, and `creatorAssetRenderer.ts`
+ * re-exports 10 `creatorAssetRenderer*` parts — so the implementations moved out of
+ * the file being read while remaining reachable from it. Following the graph keeps
+ * the assertion about wiring rather than about which file happens to hold a line,
+ * so a further split cannot break it again.
+ */
+function readReachable(rel: string, maxDepth = 3): string {
+  const seen = new Set<string>();
+  const chunks: string[] = [];
+  const walk = (relPath: string, depth: number) => {
+    const abs = path.join(process.cwd(), relPath);
+    if (seen.has(abs) || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) return;
+    seen.add(abs);
+    const text = fs.readFileSync(abs, 'utf8');
+    chunks.push(text);
+    if (depth >= maxDepth) return;
+    const dir = path.dirname(relPath);
+    const specifiers = [...text.matchAll(/(?:from\s*|import\(\s*)['"](\.[^'"]+)['"]/g)].map((m) => m[1]);
+    for (const spec of specifiers) {
+      const base = path.join(dir, spec);
+      for (const candidate of [`${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts')]) {
+        if (fs.existsSync(path.join(process.cwd(), candidate))) { walk(candidate, depth + 1); break; }
+      }
+    }
+  };
+  walk(rel, 0);
+  return chunks.join('\n');
+}
+
 describe('creator enterprise runtime operations', () => {
   it('uses durable queue in live heavy render API path', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'pages/api/command-center/creator-content/generate.ts'), 'utf8');
-    expect(source).toContain('enqueueDurableCreatorRenderJob');
-    expect(source).not.toContain("from '../../../../backend/services/creatorRenderQueue'");
-    expect(source).toContain('render_async');
+    const ENTRY = 'pages/api/command-center/creator-content/generate.ts';
+    // Positive assertions follow the barrel: the durable-queue enqueue and the
+    // async render policy now live in creator/creatorOrchestrator.ts, which
+    // generateRoute/generateHandler.ts dynamic-imports and invokes (:606-610).
+    const reachable = readReachable(ENTRY);
+    expect(reachable).toContain('enqueueDurableCreatorRenderJob');
+    expect(reachable).toContain('render_async');
+    // The negative assertion stays scoped to the ENTRY file — the point is that the
+    // route itself must not reach for the retired queue module directly.
+    expect(readEntry(ENTRY)).not.toContain("from '../../../../backend/services/creatorRenderQueue'");
   });
 
   it('wires creator render worker into production worker bootstrap', () => {
@@ -24,7 +70,9 @@ describe('creator enterprise runtime operations', () => {
   });
 
   it('fails closed for governed renderer failures', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'backend/services/creatorAssetRenderer.ts'), 'utf8');
+    // creatorAssetRenderer.ts is now a barrel over 10 parts; the fail-closed throw
+    // lives in the re-exported creatorAssetRendererRuntime part (:422, :429).
+    const source = readReachable('backend/services/creatorAssetRenderer.ts');
     expect(source).toContain('governed_render_failed_closed');
     expect(source).toContain('throw new Error(`governed_render_failed_closed');
   });

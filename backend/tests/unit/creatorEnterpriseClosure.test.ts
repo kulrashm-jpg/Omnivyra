@@ -1,5 +1,24 @@
+// HARDEN-005A moved the OCR transport onto `lib/security/safeFetch`
+// (creatorOcrProvider.ts:213), which issues its request through undici — NOT
+// `global.fetch`. Stubbing `global.fetch` therefore intercepted nothing: the real
+// safeFetch ran, resolved DNS for the fixture host, and threw
+// `SsrfBlockedError (dns_resolution_failed)`.
+//
+// The transport boundary is mocked here instead, at the seam production actually
+// uses. safeFetch itself is NOT modified and its SSRF policy is NOT relaxed — no
+// host is whitelisted and no guard is disabled; safeFetch's own suite owns that
+// behaviour. Everything on both sides of the boundary inside runCreatorOcr is the
+// real implementation, which is what this test exists to exercise.
+// `requireActual` spread keeps every other export (readCapped, assertUrlSafe, the
+// SSRF policy helpers) REAL — only the transport function itself is replaced.
+jest.mock('../../../lib/security/safeFetch', () => ({
+  ...jest.requireActual('../../../lib/security/safeFetch'),
+  safeFetch: jest.fn(),
+}));
+
 import fs from 'fs';
 import path from 'path';
+import { safeFetch } from '../../../lib/security/safeFetch';
 import { runCreatorOcr, resolveCreatorOcrThresholds, validateCreatorOcrResult } from '../../services/creatorOcrProvider';
 import { buildCreatorRenderJobOptions, isDurableCreatorRenderQueueConfigured } from '../../services/creatorRenderDurableQueue';
 import { createCreatorAuditId, listCreatorRenderMetrics, recordCreatorRenderMetric } from '../../services/creatorRenderObservability';
@@ -7,9 +26,50 @@ import { validateCreatorPublishSemantics } from '../../services/creatorPublishVa
 import { createVisualRegressionSnapshot, compareVisualRegressionSnapshots } from '../../services/creatorVisualRegression';
 import { validateCreatorAccessibility } from '../../services/creatorAccessibilityValidation';
 
+const mockSafeFetch = safeFetch as jest.MockedFunction<typeof safeFetch>;
+
+/** Minimal stand-in for the HTTP response shape runCreatorOcr consumes: it reads
+ *  `ok`, `status` and `json()` (creatorOcrProvider.ts:228-241). */
+function ocrHttpResponse(body: unknown, init: { ok?: boolean; status?: number } = {}) {
+  return {
+    ok: init.ok ?? true,
+    status: init.status ?? 200,
+    json: async () => body,
+  } as unknown as Response;
+}
+
+beforeEach(() => {
+  mockSafeFetch.mockReset();
+});
+
 describe('creator enterprise closure', () => {
+  // The retired contract is the PERSISTED key `image_mode`, superseded by
+  // `attachment_mode` in supabase/migrations/20260667_creator_enterprise_closure.sql,
+  // carrying the values 'embedded_copy' | 'supporting_visual'.
+  //
+  // The previous guard tested `text.includes(...)` on the whole file, which cannot
+  // distinguish that contract from two unrelated LIVE identifiers, and so reported
+  // both as offenders:
+  //
+  //   • `image_models` — an OpenAI/DALL·E billing row field
+  //     (backend/services/billing/reconciliation/{openaiAdapter,imageAdapter}.ts).
+  //     It contains `image_mode` as a substring: "image_models".includes("image_mode").
+  //
+  //   • `branding.imageMode` — creator branding DENSITY, declared at
+  //     lib/creator-templates/imageStyle.ts:98 as 'compact' | 'standard'. A different
+  //     contract that merely shares the token, with a disjoint value domain.
+  //
+  // Narrowed on two axes, so a genuine reintroduction is still caught:
+  //   1. word-boundary anchoring, which excludes `image_models`;
+  //   2. a camelCase hit counts only when its line does not also reference
+  //      `branding` — the density contract's sole owner. A reintroduced attachment
+  //      /visual mode field carries no `branding` qualifier and still fails.
   const retiredSnakeKey = ['image', 'mode'].join('_');
   const retiredCamelKey = ['image', 'Mode'].join('');
+  const retiredSnakeRe = new RegExp(`\\b${retiredSnakeKey}\\b`);
+  const retiredCamelRe = new RegExp(`\\b${retiredCamelKey}\\b`);
+  /** Owner of the unrelated, still-live branding-density contract. */
+  const DENSITY_CONTRACT_OWNER = 'branding';
 
   it('keeps the retired visual-mode contract out of source files', () => {
     const roots = ['backend/services', 'lib/content', 'pages/api', 'pages/command-center', 'supabase/migrations'];
@@ -25,8 +85,12 @@ describe('creator enterprise closure', () => {
           continue;
         }
         if (!/\.(ts|tsx|sql)$/.test(current)) continue;
-        const text = fs.readFileSync(current, 'utf8');
-        if (text.includes(retiredSnakeKey) || text.includes(retiredCamelKey)) offenders.push(path.relative(process.cwd(), current));
+        const rel = path.relative(process.cwd(), current);
+        fs.readFileSync(current, 'utf8').split(/\r?\n/).forEach((line, idx) => {
+          const snakeHit = retiredSnakeRe.test(line);
+          const camelHit = retiredCamelRe.test(line) && !line.includes(DENSITY_CONTRACT_OWNER);
+          if (snakeHit || camelHit) offenders.push(`${rel}:${idx + 1}`);
+        });
       }
     }
     expect(offenders).toEqual([]);
@@ -59,25 +123,39 @@ describe('creator enterprise closure', () => {
   it('integrates with the configured OCR provider endpoint', async () => {
     const originalEndpoint = process.env.CREATOR_OCR_ENDPOINT;
     process.env.CREATOR_OCR_ENDPOINT = 'https://ocr.test/extract';
-    const originalFetch = global.fetch;
-    global.fetch = jest.fn(async () => ({
-      ok: true,
-      json: async () => ({
-        text: 'Visible text',
-        confidence: 0.91,
-        regions: [{ text: 'Visible text', confidence: 0.91, language: 'en' }],
-      }),
-    })) as unknown as typeof fetch;
+    mockSafeFetch.mockResolvedValueOnce(ocrHttpResponse({
+      text: 'Visible text',
+      confidence: 0.91,
+      regions: [{ text: 'Visible text', confidence: 0.91, language: 'en' }],
+    }));
+
     const result = await runCreatorOcr({
       image: Buffer.from('fake-png'),
       assetType: 'banner',
       platform: 'linkedin',
       attachmentMode: 'embedded_copy',
     });
+
+    // Response-side production logic really ran: provider tagging, confidence
+    // clamping, text compaction and region normalization are all downstream of
+    // the mocked transport.
     expect(result.provider).toBe('external-http-ocr-v1');
     expect(result.confidence).toBe(0.91);
     expect(result.text).toBe('Visible text');
-    global.fetch = originalFetch;
+
+    // Request-side production logic really ran, and ran THROUGH safeFetch — this
+    // is what the retired `global.fetch` stub could no longer observe.
+    expect(mockSafeFetch).toHaveBeenCalledTimes(1);
+    const [calledUrl, calledInit] = mockSafeFetch.mock.calls[0] as [string, RequestInit];
+    expect(calledUrl).toBe('https://ocr.test/extract');
+    expect(calledInit.method).toBe('POST');
+    expect(JSON.parse(String(calledInit.body))).toEqual(expect.objectContaining({
+      image_base64: Buffer.from('fake-png').toString('base64'),
+      asset_type: 'banner',
+      platform: 'linkedin',
+      attachment_mode: 'embedded_copy',
+    }));
+
     if (originalEndpoint === undefined) delete process.env.CREATOR_OCR_ENDPOINT;
     else process.env.CREATOR_OCR_ENDPOINT = originalEndpoint;
   });

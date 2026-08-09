@@ -1,6 +1,25 @@
+// Publish-time revalidation reaches the OCR provider, whose transport moved onto
+// `lib/security/safeFetch` (creatorOcrProvider.ts:213) and issues its request via
+// undici — so the previous `global.fetch` stub intercepted nothing. The real
+// safeFetch ran and threw `SsrfBlockedError (dns_resolution_failed)` for the
+// fixture host, which surfaced as the single error
+// `attachment_0_SSRF blocked (dns_resolution_failed) for ocr.test` instead of the
+// three drift errors this test asserts.
+//
+// Mocked at the seam production actually uses. safeFetch is NOT modified, no host
+// is whitelisted, and the `requireActual` spread keeps every other export real —
+// including `readCapped`, which the non-data-URL media path still needs.
+// `fetchMediaBuffer` decodes the `data:` fixture locally
+// (creatorPublishValidation.ts:104-112), so OCR is the only transport in play.
+jest.mock('../../../lib/security/safeFetch', () => ({
+  ...jest.requireActual('../../../lib/security/safeFetch'),
+  safeFetch: jest.fn(),
+}));
+
 import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
+import { safeFetch } from '../../../lib/security/safeFetch';
 import { validateCreatorPublishSemanticsLive } from '../../services/creatorPublishValidation';
 import {
   compareVisualRegressionSnapshots,
@@ -14,21 +33,25 @@ import {
   summarizeDurableCreatorRenderMetrics,
 } from '../../services/creatorRenderObservability';
 
+const mockSafeFetch = safeFetch as jest.MockedFunction<typeof safeFetch>;
+
 describe('creator rollout closure', () => {
   it('revalidates live media OCR at publish time and rejects drift', async () => {
     const originalEndpoint = process.env.CREATOR_OCR_ENDPOINT;
     process.env.CREATOR_OCR_ENDPOINT = 'https://ocr.test/extract';
-    const originalFetch = global.fetch;
-    global.fetch = jest.fn(async () => ({
+    mockSafeFetch.mockReset();
+    // Live OCR contradicts the persisted manifest (0.95, no CTA): low confidence,
+    // a CTA phrase, and visible text in a supporting visual. The three expected
+    // errors are produced by the REAL validator from this payload.
+    mockSafeFetch.mockResolvedValue({
       ok: true,
+      status: 200,
       json: async () => ({
         text: 'Book a demo now',
         confidence: 0.41,
         regions: [{ text: 'Book a demo now', confidence: 0.41, language: 'en' }],
       }),
-      headers: { get: () => 'application/json' },
-      arrayBuffer: async () => Buffer.from('{}').buffer,
-    })) as unknown as typeof fetch;
+    } as unknown as Response);
 
     const result = await validateCreatorPublishSemanticsLive({
       platform: 'instagram',
@@ -59,7 +82,11 @@ describe('creator rollout closure', () => {
       ]));
     }
 
-    global.fetch = originalFetch;
+    // Proves the failure came from live OCR drift, not from an unreached transport:
+    // production really called safeFetch at the configured endpoint.
+    expect(mockSafeFetch).toHaveBeenCalledTimes(1);
+    expect(mockSafeFetch.mock.calls[0][0]).toBe('https://ocr.test/extract');
+
     if (originalEndpoint === undefined) delete process.env.CREATOR_OCR_ENDPOINT;
     else process.env.CREATOR_OCR_ENDPOINT = originalEndpoint;
   });

@@ -30,9 +30,30 @@ describe('CREATOR-056 — Blueprint preview model', () => {
     expect(getBlueprintPreview('watercolor')!.subjectExamples.join(' ').toLowerCase()).toMatch(/watercolor|painted|wash/);
   });
 
-  it('cover/gallery come from the repository (empty baseline) and never throw', () => {
-    expect(getShowcasesByVisualStyle('corporate')).toEqual([]);   // empty until curated
-    expect(blueprintHasRealCover('corporate')).toBe(false);
+  it('cover/gallery come from the curated showcase repository and never throw', () => {
+    // Curation shipped in 2911c608: content/creator-showcases/showcases.json now
+    // carries exactly one `corporate` showcase, so the previous "empty until
+    // curated" baseline is obsolete. Asserted exactly — the identity of the
+    // curated entry — rather than a `length > 0` weakening.
+    const corporate = getShowcasesByVisualStyle('corporate');
+    expect(corporate.map((s) => s.id)).toEqual(['corporate-1']);
+    expect(corporate[0]).toEqual(expect.objectContaining({
+      id: 'corporate-1',
+      templateId: 'corporate',
+      visualStyle: 'corporate',
+      family: 'image',
+      thumbnailUrl: '/creator-showcases/corporate/preview.webp',
+    }));
+
+    // `coverImage` is `shows[0].thumbnailUrl` and `gallery` maps
+    // `previewUrl || thumbnailUrl` (blueprintPreview.ts:86-87), so a curated
+    // showcase makes the cover real — the exact inverse of the empty baseline.
+    const preview = getBlueprintPreview('corporate');
+    expect(preview?.coverImage).toBe('/creator-showcases/corporate/preview.webp');
+    expect(preview?.gallery).toEqual(['/creator-showcases/corporate/preview.webp']);
+    expect(blueprintHasRealCover('corporate')).toBe(true);
+
+    // Unknown blueprint still resolves to null rather than throwing.
     expect(getBlueprintPreview('does-not-exist')).toBeNull();
   });
 });

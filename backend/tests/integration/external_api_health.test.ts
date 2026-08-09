@@ -137,8 +137,20 @@ describe('External API health + cache + rate limit', () => {
     (global as any).fetch = fetchMock;
 
     sources[0].rate_limit_per_min = 1;
-    await fetchTrendsFromApis('company-1');
-    await fetchTrendsFromApis('company-1');
+    // The two calls MUST differ in geo/category. `buildCacheKey` is keyed on
+    // { apiId, geo, category, userId } (redisExternalApiCache.ts:88, used at
+    // trendFetching.ts:84), whereas the rate-limit key is
+    // `src:${source.id}:${usageUserId}` (execution.ts:501-502) — no geo/category.
+    // So distinct geo/category means both calls really attempt a fetch while
+    // sharing one quota, which is exactly what "limit of 1, called twice" needs.
+    //
+    // Previously both calls were identical, so the SECOND was served from cache
+    // (the behaviour the sibling "records cache hit and miss" test asserts) and
+    // never reached `isRateLimited`. Nothing marked the source, so
+    // `rate_limited_sources` was legitimately empty — the setup contradicted the
+    // assertion rather than production being wrong.
+    await fetchTrendsFromApis('company-1', 'US', 'marketing');
+    await fetchTrendsFromApis('company-1', 'GB', 'technology');
     sources[0].rate_limit_per_min = 60;
 
     const snapshot = await getExternalApiRuntimeSnapshot(['api-1']);

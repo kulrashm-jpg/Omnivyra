@@ -20,6 +20,23 @@ jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn(),
 }));
 
+// CANONICAL PROFILE SEAM. `buildCompanyMissionContext` no longer reads
+// `companyProfileService.getProfile`; it reads
+// `context/canonicalProfileAdapter.getCanonicalProfile`
+// (companyMissionContext.ts:6, called at :154, returning null at :155 when the
+// profile is falsy). Mocking only the retired module left the real adapter in
+// place, which has no database under unit test — so every
+// `buildCompanyMissionContext` call resolved to null.
+//
+// Bridged to this suite's OWN `getProfile` mock rather than given a second
+// independent double, so each test's configured profile still drives the
+// assertion. Mirrors the repair applied to sibling suites in WS-2C (b4c8258a),
+// WS-G9 (63e71337) and WS-G2R (534d0813).
+jest.mock('@/backend/services/context/canonicalProfileAdapter', () => ({
+  getCanonicalProfile: (...args: unknown[]) =>
+    require('../../services/companyProfileService').getProfile(...args),
+}));
+
 const { getProfile } = require('../../services/companyProfileService');
 
 const mkProfile = (overrides: Partial<CompanyProfile> & { company_id?: string }): CompanyProfile => ({

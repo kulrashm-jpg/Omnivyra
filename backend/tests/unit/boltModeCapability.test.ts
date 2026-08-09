@@ -49,11 +49,29 @@ describe('BOLT mode → capability resolution (Round 5)', () => {
     expect(result.supported).not.toContain('tiktok');
     expect(result.supported).not.toContain('youtube');
     expect(result.supported).not.toContain('pinterest');
-    // Instagram is registered but text-incompatible → disabled chip.
-    expect(result.hidden.map((h) => h.platform)).toEqual(expect.arrayContaining(['instagram', 'tiktok', 'youtube', 'pinterest']));
-    // mystery-net is unknown → must NEVER appear as supported or hidden.
+    // `hidden` and `videoOnlyHidden` are DISTINCT return fields
+    // (platformContentFilter.ts:69) and the distinction is the contract:
+    //
+    //   hidden          — registered, text-incompatible → render a DISABLED chip.
+    //   videoOnlyHidden — video-only destinations dropped from the displayable list
+    //                     ENTIRELY, because a text/image Writer flow can never
+    //                     publish to them (see the module doc at :19-22, and the
+    //                     `continue` at :108-114 that skips `hidden` altogether).
+    //
+    // The previous expectation predates that split and required all four in
+    // `hidden`. Asserted exactly here, and NOT collapsed: youtube/tiktok must be
+    // absent from `hidden` and present in `videoOnlyHidden`.
+    const hiddenPlatforms = result.hidden.map((h) => h.platform);
+    expect(hiddenPlatforms).toEqual(['instagram', 'pinterest']);
+    expect(hiddenPlatforms).not.toContain('tiktok');
+    expect(hiddenPlatforms).not.toContain('youtube');
+    expect(result.videoOnlyHidden).toEqual(['tiktok', 'youtube']);
+
+    // mystery-net is unknown → must NEVER appear as supported, hidden, or
+    // video-only-hidden; it belongs to `unregistered` alone.
     expect(result.supported).not.toContain('mystery-net');
-    expect(result.hidden.map((h) => h.platform)).not.toContain('mystery-net');
+    expect(hiddenPlatforms).not.toContain('mystery-net');
+    expect(result.videoOnlyHidden).not.toContain('mystery-net');
     expect(result.unregistered.map((u) => u.platform)).toContain('mystery-net');
   });
 
