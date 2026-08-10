@@ -16,7 +16,7 @@ import { resolvePrincipal } from '@/backend/security/IdentityResolver';
 import { getFxConfig } from '@/backend/services/pricingConfigService';
 import { resolvePrice, CURRENCIES, type Currency } from '@/lib/billing/currency';
 import { createOrder as orchestratorCreateOrder } from '@/backend/services/payments/orchestrator';
-import { getProviderCredentials } from '@/backend/services/payments/orchestrator';
+import { getProviderCredentials, getActiveMode } from '@/backend/services/payments/orchestrator';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -58,6 +58,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'package_invalid' });
   }
 
+  // M2: the purchase row must record the mode the order is ACTUALLY created in.
+  // `getActiveMode()` is the same authority the adapters use to pick credentials
+  // and API base URLs, so the row and the provider request cannot disagree.
+  // A hardcoded literal here would stamp real live charges as test data.
+  const providerMode = getActiveMode();
+
   // Purchase record — PENDING. No allocation, no wallet change.
   const { data: purchase, error: insErr } = await supabase
     .from('credit_purchases')
@@ -68,7 +74,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       amount_paid: amount,
       currency,
       status: 'pending',
-      provider_mode: 'test',
+      provider_mode: providerMode,
       fulfillment_status: 'pending',
       provider_payload: { checkout_flow: 'orchestrator_phase1', created_by: userId },
     })
@@ -87,6 +93,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!outcome.order || !outcome.provider) {
     await supabase.from('credit_purchases').update({ status: 'failed' }).eq('id', purchaseId);
+    logger.warn('payment_order_creation_failed', {
+      organizationId, purchaseId, providerMode,
+      attempts: outcome.attempts.map((a) => ({ provider: a.provider, ok: a.ok })),
+    });
     return res.status(502).json({ ok: false, error: 'order_creation_failed', attempts: outcome.attempts });
   }
 
@@ -95,6 +105,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .eq('id', purchaseId);
 
   const keyId = outcome.provider === 'razorpay' ? getProviderCredentials('razorpay').keyId ?? null : null;
+
+  logger.info('payment_order_created', {
+    organizationId, purchaseId, provider: outcome.provider, providerMode, currency,
+    providerOrderId: outcome.order.providerOrderId,
+  });
 
   return res.status(201).json({
     ok: true,
@@ -106,6 +121,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     currency,
     key_id: keyId,
     client_token: outcome.order.clientToken ?? null,
+    // M3: the browser must NOT infer sandbox vs production from its own
+    // environment. The server states the mode and provider SDKs are configured
+    // from this value alone.
+    provider_mode: providerMode,
     attempts: outcome.attempts,
   });
 }

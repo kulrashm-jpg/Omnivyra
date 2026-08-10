@@ -3,7 +3,9 @@
  * Secondary/fallback provider for INR.
  */
 import crypto from 'crypto';
-import type { PaymentAdapter, OrderRequest, CanonicalOrder, VerifyRequest, VerifyResult } from './types';
+import type {
+  PaymentAdapter, OrderRequest, CanonicalOrder, VerifyRequest, VerifyResult, ProviderOrderOutcome,
+} from './types';
 import { getProviderCredentials, isProviderConfigured, getActiveMode } from './providerConfig';
 
 const SANDBOX_BASE = 'https://sandbox.cashfree.com/pg';
@@ -77,6 +79,39 @@ export class CashfreeAdapter implements PaymentAdapter {
     if (!res.ok) return { verified: false, status: 'failed', raw: body };
     const paid = String(body?.order_status).toUpperCase() === 'PAID';
     return { verified: paid, status: paid ? 'paid' : 'pending', raw: body };
+  }
+
+  /**
+   * Authoritative order outcome from Cashfree. `order_status` is already the
+   * server-side truth (the same source `verifyPayment` trusts), so this reuses
+   * that call shape. Transport/credential problems resolve to `unknown`.
+   */
+  async fetchOrderOutcome(providerOrderId: string): Promise<ProviderOrderOutcome> {
+    const { keyId, keySecret } = getProviderCredentials('cashfree');
+    if (!keyId || !keySecret) return { outcome: 'unknown', reason: 'cashfree_not_configured' };
+    if (!providerOrderId) return { outcome: 'unknown', reason: 'missing_provider_order_id' };
+
+    let body: any;
+    try {
+      const res = await fetch(`${baseUrl()}/orders/${encodeURIComponent(providerOrderId)}`, {
+        method: 'GET',
+        headers: headers(keyId, keySecret),
+      });
+      body = await res.json();
+      if (!res.ok) {
+        return { outcome: 'unknown', reason: `cashfree_order_fetch_failed:${body?.message ?? res.status}` };
+      }
+    } catch (err) {
+      return { outcome: 'unknown', reason: `cashfree_order_fetch_error:${err instanceof Error ? err.message : String(err)}` };
+    }
+
+    const rawStatus = String(body?.order_status ?? '').toUpperCase();
+    if (rawStatus !== 'PAID') return { outcome: 'unpaid', providerRawStatus: rawStatus };
+    return {
+      outcome: 'paid',
+      providerPaymentId: body?.cf_order_id ? String(body.cf_order_id) : undefined,
+      providerRawStatus: rawStatus,
+    };
   }
 
   verifyWebhookSignature(rawBody: string, signature: string, extra?: Record<string, string>): boolean {

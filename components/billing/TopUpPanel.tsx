@@ -33,10 +33,19 @@ function loadScript(src: string, ready: () => boolean): Promise<boolean> {
   });
 }
 const loadRazorpay = () => loadScript(RAZORPAY_JS, () => Boolean((window as any).Razorpay));
-async function loadCashfree(): Promise<any | null> {
+
+/**
+ * M3: the Cashfree SDK mode comes from the SERVER's order response, never from
+ * a literal or a frontend environment guess. `provider_mode` is resolved by
+ * getActiveMode() on the backend — the same authority that chose the API base
+ * URL and credentials for the order — so the SDK cannot disagree with the order
+ * it is rendering. Anything other than an explicit 'live' stays sandbox.
+ */
+async function loadCashfree(providerMode: string | null | undefined): Promise<any | null> {
   const ok = await loadScript(CASHFREE_JS, () => Boolean((window as any).Cashfree));
   if (!ok || !(window as any).Cashfree) return null;
-  try { return (window as any).Cashfree({ mode: 'sandbox' }); } catch { return null; }
+  const mode = providerMode === 'live' ? 'production' : 'sandbox';
+  try { return (window as any).Cashfree({ mode }); } catch { return null; }
 }
 
 async function postJson(url: string, body: unknown, extraHeaders?: Record<string, string>): Promise<any> {
@@ -111,6 +120,29 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
     } catch { /* SSR / no window */ }
   }, [refreshHistory, refreshBreakdown]);
 
+  /**
+   * M5: tell the server the checkout failed or was cancelled, so the pending
+   * purchase row does not linger indefinitely.
+   *
+   * This is a REPORT, not a verdict. The server re-checks the provider before
+   * closing anything, so if the payment actually succeeded the purchase is
+   * fulfilled instead — the client can never talk a real payment into failure.
+   * Best-effort by design: the expiry sweep is the backstop if this call is
+   * lost, so a failure here must not disturb the UI.
+   */
+  const reportClosure = useCallback(async (
+    order: any,
+    reason: 'client_reported_failure' | 'client_cancelled',
+  ) => {
+    if (!orgId || !order?.purchase_id) return;
+    try {
+      await postJson('/api/billing/checkout/close', {
+        org_id: orgId, purchase_id: order.purchase_id, reason,
+      });
+      refreshHistory();
+    } catch { /* the server-side expiry sweep will close it */ }
+  }, [orgId, refreshHistory]);
+
   const runVerify = useCallback(async (order: any, orderId: string, paymentId: string, signature: string) => {
     setStatus({ kind: 'verifying' });
     // OR-07 Action 1: verification is naturally idempotent on the provider's
@@ -155,17 +187,26 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
           name: 'Omnivyra',
           description: `${pack.credits} credits`,
           handler: (resp: any) => runVerify(order, resp.razorpay_order_id, resp.razorpay_payment_id, resp.razorpay_signature),
-          modal: { ondismiss: () => setStatus({ kind: 'cancelled', msg: 'Payment cancelled' }) },
+          modal: {
+            ondismiss: () => {
+              setStatus({ kind: 'cancelled', msg: 'Payment cancelled' });
+              void reportClosure(order, 'client_cancelled');
+            },
+          },
         });
-        rzp.on('payment.failed', (e: any) => setStatus({ kind: 'failed', msg: e?.error?.description ?? 'Payment failed' }));
+        rzp.on('payment.failed', (e: any) => {
+          setStatus({ kind: 'failed', msg: e?.error?.description ?? 'Payment failed' });
+          void reportClosure(order, 'client_reported_failure');
+        });
         rzp.open();
       } else if (order.provider === 'cashfree') {
-        const cf = await loadCashfree();
+        const cf = await loadCashfree(order.provider_mode);
         if (!cf) { setStatus({ kind: 'failed', msg: 'Could not load Cashfree Checkout' }); return; }
         const result = await cf.checkout({ paymentSessionId: order.client_token, redirectTarget: '_modal' });
         if (result?.error) {
           const cancelled = String(result.error?.message ?? '').toLowerCase().includes('cancel');
           setStatus({ kind: cancelled ? 'cancelled' : 'failed', msg: result.error?.message ?? 'Payment failed' });
+          void reportClosure(order, cancelled ? 'client_cancelled' : 'client_reported_failure');
           return;
         }
         await runVerify(order, order.provider_order_id, result?.paymentDetails?.paymentId ?? '', '');
@@ -175,7 +216,7 @@ export default function TopUpPanel({ orgId }: { orgId: string | null | undefined
     } catch (err: any) {
       setStatus({ kind: 'failed', msg: err?.message ?? 'Something went wrong' });
     }
-  }, [orgId, runVerify, currency]);
+  }, [orgId, runVerify, currency, reportClosure]);
 
   const busy = status.kind === 'creating' || status.kind === 'paying' || status.kind === 'verifying';
 

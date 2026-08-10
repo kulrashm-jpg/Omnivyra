@@ -3,7 +3,9 @@
  * billing-coupled. Returns the canonical adapter shapes.
  */
 import crypto from 'crypto';
-import type { PaymentAdapter, OrderRequest, CanonicalOrder, VerifyRequest, VerifyResult } from './types';
+import type {
+  PaymentAdapter, OrderRequest, CanonicalOrder, VerifyRequest, VerifyResult, ProviderOrderOutcome,
+} from './types';
 import { getProviderCredentials, isProviderConfigured, getActiveMode } from './providerConfig';
 
 const API_BASE = 'https://api.razorpay.com/v1';
@@ -69,6 +71,58 @@ export class RazorpayAdapter implements PaymentAdapter {
     if (!webhookSecret) return false;
     const expected = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
     return safeEqual(expected, signature);
+  }
+
+  /**
+   * Authoritative order outcome, straight from Razorpay — no client input.
+   *
+   * Razorpay's order object carries `status` ('created' | 'attempted' | 'paid')
+   * and `amount_paid`. `paid` is the only state that means funds were captured;
+   * `attempted` means a payment was tried and did NOT succeed. Any transport or
+   * credential problem resolves to `unknown` so callers never treat an outage
+   * as "customer did not pay".
+   */
+  async fetchOrderOutcome(providerOrderId: string): Promise<ProviderOrderOutcome> {
+    const { keyId, keySecret } = getProviderCredentials('razorpay');
+    if (!keyId || !keySecret) return { outcome: 'unknown', reason: 'razorpay_not_configured' };
+    if (!providerOrderId) return { outcome: 'unknown', reason: 'missing_provider_order_id' };
+
+    const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+    let body: any;
+    try {
+      const res = await fetch(`${API_BASE}/orders/${encodeURIComponent(providerOrderId)}`, {
+        method: 'GET',
+        headers: { Authorization: `Basic ${auth}` },
+      });
+      body = await res.json();
+      if (!res.ok) {
+        return { outcome: 'unknown', reason: `razorpay_order_fetch_failed:${body?.error?.description ?? res.status}` };
+      }
+    } catch (err) {
+      return { outcome: 'unknown', reason: `razorpay_order_fetch_error:${err instanceof Error ? err.message : String(err)}` };
+    }
+
+    const rawStatus = String(body?.status ?? '');
+    if (rawStatus !== 'paid') {
+      return { outcome: 'unpaid', providerRawStatus: rawStatus };
+    }
+
+    // Paid — resolve the captured payment id so fulfillment carries a real
+    // provider reference. A failure here does not change the paid verdict.
+    let providerPaymentId: string | undefined;
+    try {
+      const pres = await fetch(`${API_BASE}/orders/${encodeURIComponent(providerOrderId)}/payments`, {
+        method: 'GET',
+        headers: { Authorization: `Basic ${auth}` },
+      });
+      if (pres.ok) {
+        const plist = (await pres.json()) as any;
+        const captured = (plist?.items ?? []).find((p: any) => p?.status === 'captured');
+        if (captured?.id) providerPaymentId = String(captured.id);
+      }
+    } catch { /* paid verdict stands without the payment id */ }
+
+    return { outcome: 'paid', providerPaymentId, providerRawStatus: rawStatus };
   }
 }
 

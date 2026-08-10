@@ -5,7 +5,7 @@
  *
  * Test/sandbox only. Charges nothing by itself; delegates to test-gated adapters.
  */
-import type { CanonicalOrder, OrderRequest, VerifyRequest, VerifyResult, WebhookVerifyResult, PaymentProvider, PaymentProviderId } from './types';
+import type { CanonicalOrder, OrderRequest, VerifyRequest, VerifyResult, WebhookVerifyResult, PaymentProvider, PaymentProviderId, ProviderOrderOutcome } from './types';
 import { resolveProviders, resolvePrimaryProvider, PROVIDER_REGISTRY } from './providerRegistry';
 import { getAdapter } from './adapters';
 import { getWebhookHandler } from './webhookHandlers';
@@ -66,6 +66,31 @@ export async function verifyPayment(provider: PaymentProviderId, req: VerifyRequ
   return adapter.verifyPayment(req);
 }
 
+/**
+ * Ask the PROVIDER whether an order was actually paid. The single entry point
+ * used before any state closure (client-reported failure, stale-pending expiry)
+ * so provider-confirmed success always beats a client claim.
+ *
+ * Fail-safe by construction: a missing adapter, an adapter without the
+ * capability, or any transport/credential problem resolves to `unknown`, and
+ * every caller treats `unknown` as "do not close".
+ */
+export async function resolveProviderOrderOutcome(
+  provider: PaymentProviderId,
+  providerOrderId: string,
+): Promise<ProviderOrderOutcome> {
+  const adapter = getAdapter(provider);
+  if (!adapter) return { outcome: 'unknown', reason: `adapter_not_registered:${provider}` };
+  if (typeof adapter.fetchOrderOutcome !== 'function') {
+    return { outcome: 'unknown', reason: `outcome_lookup_unsupported:${provider}` };
+  }
+  try {
+    return await adapter.fetchOrderOutcome(providerOrderId);
+  } catch (err) {
+    return { outcome: 'unknown', reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function handleWebhook(provider: PaymentProviderId, rawBody: string, headers: Record<string, string>): Promise<WebhookVerifyResult> {
   const handler = getWebhookHandler(provider);
   if (!handler) return { verified: false, eventId: null, eventType: null, recorded: false };
@@ -82,7 +107,12 @@ export function orchestratorHealth() {
       provider_id: p.provider_id,
       enabled: p.enabled,
       priority: p.priority,
-      mode: p.mode,
+      // The ACTIVE mode, not the registry's static field. Credentials and API
+      // base URLs are all resolved from getActiveMode(), so reporting the
+      // static literal here would tell an operator 'test' while the adapter is
+      // transacting live. Health must not lie about mode.
+      mode,
+      registryMode: p.mode,
       currencies: p.supported_currencies,
       adapter: Boolean(getAdapter(p.provider_id)),
       webhook: Boolean(getWebhookHandler(p.provider_id)),

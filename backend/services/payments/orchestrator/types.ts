@@ -56,6 +56,31 @@ export interface VerifyResult {
   raw?: unknown;
 }
 
+/**
+ * Authoritative, provider-side outcome for an order — asked of the PROVIDER,
+ * never inferred from the client.
+ *
+ *   paid    — the provider confirms funds were captured for this order
+ *   unpaid  — the provider confirms this order has NOT been paid
+ *   unknown — we could not obtain an authoritative answer (network error,
+ *             missing credentials, unsupported provider). MUST be treated as
+ *             "do not close" — never as "unpaid".
+ *
+ * P1 uses this before any state closure (client-reported failure, stale-pending
+ * expiry) so a provider-confirmed success always beats a client claim.
+ */
+export type ProviderOrderOutcomeKind = 'paid' | 'unpaid' | 'unknown';
+
+export interface ProviderOrderOutcome {
+  outcome: ProviderOrderOutcomeKind;
+  /** Provider payment/transaction id when the outcome is `paid`. */
+  providerPaymentId?: string;
+  /** Provider's own status string, for logs/forensics. Never surfaced to users. */
+  providerRawStatus?: string;
+  /** Populated when outcome is `unknown` — why we could not decide. */
+  reason?: string;
+}
+
 /** Common adapter shape — every provider returns the same shapes. */
 export interface PaymentAdapter {
   readonly providerId: PaymentProviderId;
@@ -65,6 +90,12 @@ export interface PaymentAdapter {
   verifyPayment(req: VerifyRequest): Promise<VerifyResult>;
   /** Verify a webhook payload signature (no side effects). */
   verifyWebhookSignature(rawBody: string, signature: string, extra?: Record<string, string>): boolean;
+  /**
+   * Ask the provider for the authoritative outcome of an order, with no client
+   * input. Optional: an adapter that cannot answer simply omits it and the
+   * orchestrator resolves `unknown` (fail-safe: nothing gets closed).
+   */
+  fetchOrderOutcome?(providerOrderId: string): Promise<ProviderOrderOutcome>;
 }
 
 /** Section F — webhook handler shape. Verifies + records only; no billing. */

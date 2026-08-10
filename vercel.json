@@ -50,6 +50,14 @@
     {
       "path": "/api/cron/subscription-monthly-allocation",
       "schedule": "0 6 1 * *"
+    },
+    {
+      "path": "/api/cron/billing-commercial-reconcile",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/billing-checkout-expiry",
+      "schedule": "7,22,37,52 * * * *"
     }
   ],
   "experimentalServices": {

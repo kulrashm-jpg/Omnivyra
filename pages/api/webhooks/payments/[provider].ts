@@ -12,8 +12,7 @@ import { handleWebhook } from '@/backend/services/payments/orchestrator';
 import type { PaymentProviderId } from '@/backend/services/payments/orchestrator';
 import { logger } from '@/backend/services/logger';
 import { supabase } from '@/backend/db/supabaseClient';
-import { completePurchase } from '@/backend/services/purchaseService';
-import { generateTopupInvoice } from '@/backend/services/billing/topupInvoiceService';
+import { fulfillProviderConfirmedPurchase } from '@/backend/services/billing/purchaseClosureService';
 
 function safeParse(s: string): any {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
@@ -55,7 +54,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     for (const [k, v] of Object.entries(req.headers)) headers[k.toLowerCase()] = Array.isArray(v) ? v.join(',') : String(v ?? '');
 
     const result = await handleWebhook(provider, raw, headers);
-    if (!result.verified) return res.status(401).json({ ok: false, error: 'signature_invalid' });
+    if (!result.verified) {
+      logger.warn('payment_webhook_rejected', { provider, reason: 'signature_invalid' });
+      return res.status(401).json({ ok: false, error: 'signature_invalid' });
+    }
+
+    logger.info('payment_webhook_received', {
+      provider, eventId: result.eventId, eventType: result.eventType, recorded: result.recorded,
+    });
 
     // On a verified SUCCESS event → allocate via the idempotent fulfillment
     // (top-up paid pool). Duplicate webhooks / verify races resolve to one grant.
@@ -64,15 +70,37 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (success) {
       const { data: purchase } = await supabase
         .from('credit_purchases')
-        .select('id')
+        .select('id, status, fulfillment_status')
         .eq('provider_order_id', success.orderId)
         .maybeSingle();
       if (purchase) {
-        const fulfillment = await completePurchase((purchase as any).id, success.paymentId || undefined);
-        allocated = fulfillment.success;
-        if (fulfillment.success) {
-          try { await generateTopupInvoice((purchase as any).id); } catch { /* best-effort */ }
+        const alreadyFulfilled = (purchase as any).status === 'completed'
+          && (purchase as any).fulfillment_status === 'completed';
+        if (alreadyFulfilled) {
+          // Verify (or an earlier delivery) already granted — this redelivery
+          // is a no-op, not a second grant.
+          logger.info('payment_webhook_duplicate', {
+            provider, eventId: result.eventId, purchaseId: (purchase as any).id,
+          });
+          allocated = true;
+        } else {
+          // P1: routed through fulfillProviderConfirmedPurchase rather than
+          // completePurchase directly, so a purchase Omnivyra closed itself
+          // (stale-pending expiry, client-reported failure) is REOPENED before
+          // fulfillment. This is what stops "expired → late webhook → lost
+          // payment". A provider-declined purchase carries no reopenable
+          // marker and is still refused.
+          const fulfillment = await fulfillProviderConfirmedPurchase(
+            (purchase as any).id, success.paymentId || undefined,
+          );
+          allocated = fulfillment.ok;
         }
+      } else {
+        // A verified success we cannot match to a local purchase is money we
+        // may have taken without a record — never silent.
+        logger.error('payment_webhook_unmatched_order', {
+          provider, eventId: result.eventId, providerOrderId: success.orderId,
+        });
       }
     }
 
