@@ -2,10 +2,32 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 /**
  * POST /api/webhooks/payments/:provider   (razorpay | cashfree)
  *
- * Checkout Phase 1 — provider webhooks via the Payment Orchestrator.
- * Verifies signature + records the event ONLY (payment success / failure /
- * provider reference / amount / currency / organization land in the recorded
- * payload). NO credit allocation, NO wallet change, NO billing action.
+ * Provider webhooks via the Payment Orchestrator.
+ *
+ * THIS ROUTE ALLOCATES CREDITS. (The original Phase-1 header said it recorded
+ * the event only; that stopped being true when P1 added fulfilment here, and
+ * the stale text is corrected rather than left to mislead a reviewer into
+ * believing no money moves on this path.)
+ *
+ * The signature is verified FIRST and an unverified event is rejected 401
+ * before anything else happens — an unauthenticated payload can never reach
+ * allocation. Only a verified SUCCESS that matches a local purchase by
+ * `provider_order_id` proceeds to `fulfillProviderConfirmedPurchase`.
+ *
+ * Duplicate deliveries and replays are harmless. Three layers:
+ *   1. An already-settled purchase (status + fulfillment_status both
+ *      'completed') short-circuits as `payment_webhook_duplicate` — no second
+ *      grant.
+ *   2. CAS — the pending → completed flip is `.eq('status','pending')`.
+ *   3. `credit_transactions` carries UNIQUE INDEX
+ *      `credit_transactions_idempotency_key_lockdown_unique`, and the key is
+ *      derived deterministically from the purchase, so a concurrent second
+ *      insert is rejected by Postgres rather than by application code.
+ *
+ * A verified success with NO local purchase is never silently absorbed and
+ * never creates a purchase: it is logged at ERROR as
+ * `payment_webhook_unmatched_order`, because it may be money taken without a
+ * record.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { handleWebhook } from '@/backend/services/payments/orchestrator';

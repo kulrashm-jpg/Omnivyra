@@ -3,10 +3,31 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
  * POST /api/billing/checkout/verify
  *   { org_id, purchase_id, provider, order_id, payment_id, signature }
  *
- * Checkout Phase 1 — verify a payment via the Payment Orchestrator and update
- * the purchase record (pending → paid | failed). INR / test.
+ * Verify a payment via the Payment Orchestrator and settle the purchase.
  *
- * Does NOT allocate credits and does NOT touch the wallet. Record update only.
+ * THIS ROUTE ALLOCATES CREDITS. (The original Phase-1 header said it did not;
+ * that stopped being true when P1 routed settlement through
+ * `fulfillProviderConfirmedPurchase`, and the stale text is corrected here
+ * rather than left to mislead a reviewer into thinking no money moves.)
+ *
+ * On a provider-verified success it calls `fulfillProviderConfirmedPurchase`
+ * (which grants via the idempotent `completePurchase` → `createCredit` path)
+ * and then `generateTopupInvoice`.
+ *
+ * Provider-authoritative: the client's claim is never the deciding evidence. A
+ * FAILED verification is treated as a client-side signal and routed through
+ * `closePurchaseFromClient`, which asks the provider first — so if the gateway
+ * actually captured the payment this FULFILLS instead of failing.
+ *
+ * Duplicate/concurrent settlement cannot double-credit. Two guards, the outer
+ * one enforced by Postgres:
+ *   1. CAS — the pending → completed flip is `.eq('status','pending')`, so only
+ *      one caller can perform it; a loser gets `already_completed`.
+ *   2. `createCredit` uses a deterministic idempotency key
+ *      (org + 'credit_purchase' + purchaseId) and `credit_transactions` carries
+ *      UNIQUE INDEX `credit_transactions_idempotency_key_lockdown_unique`, so a
+ *      second insert is rejected by the database, not merely by application code.
+ * `generateTopupInvoice` is likewise idempotent (deterministic number + UNIQUE).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { withOrgAccess } from '../../../../backend/middleware/withOrgAccess';

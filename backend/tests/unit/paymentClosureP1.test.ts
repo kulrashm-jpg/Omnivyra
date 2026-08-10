@@ -43,15 +43,27 @@ function applyFilters(rows: Row[], filters: Filter[]): Row[] {
   }));
 }
 
+/**
+ * P2-A2: opt-in single-shot UPDATE failure. The real client surfaces transport /
+ * permission errors as `{ data: null, error }`; without a way to express that,
+ * the DB-error branch in closeOnePurchase is untestable. Off by default and
+ * reset in beforeEach, so no existing test changes behaviour.
+ */
+const failNextUpdate = { on: false, message: 'simulated db failure' };
+
 function makeBuilder(mode: 'select' | 'update', values?: Record<string, unknown>) {
   const filters: Filter[] = [];
   let limitN: number | null = null;
 
-  const run = () => {
+  const run = (): { data: Row[]; error: { message: string } | null } => {
     const matched = applyFilters(db.rows, filters);
     if (mode === 'select') {
       const sliced = limitN == null ? matched : matched.slice(0, limitN);
       return { data: sliced, error: null };
+    }
+    if (failNextUpdate.on) {
+      failNextUpdate.on = false;
+      return { data: [], error: { message: failNextUpdate.message } };   // no mutation
     }
     // update — mutate every matched row
     for (const r of matched) Object.assign(r, values);
@@ -66,7 +78,10 @@ function makeBuilder(mode: 'select' | 'update', values?: Record<string, unknown>
     limit(n: number) { limitN = n; return api; },
     select() { return api; },
     single() { const { data } = run(); return Promise.resolve({ data: data[0] ?? null, error: data.length ? null : { message: 'not found' } }); },
-    maybeSingle() { const { data } = run(); return Promise.resolve({ data: data[0] ?? null, error: null }); },
+    // Propagates run()'s error the way the real client does — previously this
+    // hardcoded `error: null`, which made a DB failure indistinguishable from
+    // "no row matched" (i.e. from a lost CAS race).
+    maybeSingle() { const { data, error } = run(); return Promise.resolve({ data: error ? null : (data[0] ?? null), error }); },
     then(resolve: (v: unknown) => unknown) { return Promise.resolve(run()).then(resolve); },
   };
   return api;
@@ -149,6 +164,7 @@ beforeEach(() => {
   db.rows = [];
   grants.length = 0;
   invoices.length = 0;
+  failNextUpdate.on = false;
   providerOutcome.mockReset();
   providerOutcome.mockResolvedValue({ outcome: 'unpaid', providerRawStatus: 'created' });
 });
@@ -363,5 +379,97 @@ describe('TESTS 3/4/5/9 — duplicate delivery and replay cannot duplicate money
 
     expect(grantsFor(p.id)).toHaveLength(1);
     expect(get(p.id).fulfillment_status).toBe('completed');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('P2-A — the expiry sweep survives a bad row and never lies about a DB failure', () => {
+  it('A1 — a row that throws is isolated: the sweep completes and later rows still run', async () => {
+    // Ordered created_at ASC, so the throwing row is scanned FIRST. Before
+    // per-row isolation this aborted the whole sweep — and because the same row
+    // sorts first every time, it would stall expiry for everything behind it on
+    // every subsequent run (head-of-line blocking), not just once.
+    const stale = (n: number) => new Date(Date.now() - (100 - n) * 60 * 60_000).toISOString();
+    const poison = seed({ id: 'pur_poison', created_at: stale(0) });
+    const ok1 = seed({ id: 'pur_ok1', created_at: stale(1) });
+    const ok2 = seed({ id: 'pur_ok2', created_at: stale(2) });
+
+    providerOutcome.mockImplementation(async (_p: unknown, orderId: string) => {
+      if (orderId === poison.provider_order_id) throw new Error('provider adapter exploded');
+      return { outcome: 'unpaid', providerRawStatus: 'created' };
+    });
+
+    const res = await expireStalePendingPurchases({ ttlMinutes: 1 });
+
+    expect(res.scanned).toBe(3);
+    expect(res.errored).toBe(1);
+    // The two healthy rows behind the poison row were still processed.
+    expect(res.closed).toBe(2);
+    expect(get(ok1.id).status).toBe('failed');
+    expect(get(ok2.id).status).toBe('failed');
+    // The failure is surfaced, not swallowed, and the row stays pending for retry.
+    expect(res.details).toContainEqual(
+      expect.objectContaining({ purchaseId: 'pur_poison', action: 'errored' }),
+    );
+    expect(get(poison.id).status).toBe('pending');
+    // Nothing was granted anywhere in this sweep.
+    expect(grants).toHaveLength(0);
+  });
+
+  it('A2 — a failed DB update is deferred_unknown/db_error, never already_completed', async () => {
+    const p = seed();
+    providerOutcome.mockResolvedValue({ outcome: 'unpaid', providerRawStatus: 'created' });
+    failNextUpdate.on = true;
+
+    const out = await closePurchaseFromClient({
+      purchaseId: p.id, organizationId: ORG, reason: 'client_reported_failure',
+    });
+
+    expect(out.action).toBe('deferred_unknown');
+    expect(out.detail).toBe('db_error');
+    // The dangerous misreport: a transport failure looking like someone else
+    // already settled it, which would retire the row from the sweep's attention.
+    expect(out.action).not.toBe('already_completed');
+    // The write did not land, so the row is untouched and will be retried.
+    expect(get(p.id).status).toBe('pending');
+    expect(grantsFor(p.id)).toHaveLength(0);
+  });
+
+  it('A3 — existing successful behaviour is unchanged (closes, fulfils, counts)', async () => {
+    const old = new Date(Date.now() - 5 * 60 * 60_000).toISOString();
+    const unpaid = seed({ id: 'pur_unpaid', created_at: old });
+    const paid = seed({ id: 'pur_paid', created_at: old });
+
+    providerOutcome.mockImplementation(async (_p: unknown, orderId: string) =>
+      orderId === paid.provider_order_id
+        ? { outcome: 'paid', providerPaymentId: 'pay_a3', providerRawStatus: 'paid' }
+        : { outcome: 'unpaid', providerRawStatus: 'created' });
+
+    const res = await expireStalePendingPurchases({ ttlMinutes: 1 });
+
+    expect(res.scanned).toBe(2);
+    expect(res.closed).toBe(1);
+    expect(res.fulfilled).toBe(1);
+    expect(res.errored).toBe(0);
+    expect(get(unpaid.id).status).toBe('failed');
+    expect(get(paid.id).status).toBe('completed');
+    // The provider-confirmed row granted exactly once; the unpaid one not at all.
+    expect(grantsFor(paid.id)).toHaveLength(1);
+    expect(grantsFor(unpaid.id)).toHaveLength(0);
+    expect(invoices).toEqual([paid.id]);
+  });
+
+  it('A4 — an unknown provider state still defers; unknown is never coerced to unpaid', async () => {
+    const p = seed({ created_at: new Date(Date.now() - 5 * 60 * 60_000).toISOString() });
+    providerOutcome.mockResolvedValue({ outcome: 'unknown', reason: 'provider_unreachable' });
+
+    const res = await expireStalePendingPurchases({ ttlMinutes: 1 });
+
+    expect(res.deferred).toBe(1);
+    expect(res.closed).toBe(0);
+    expect(res.errored).toBe(0);
+    // A gateway outage must never look like a customer who did not pay.
+    expect(get(p.id).status).toBe('pending');
+    expect(grantsFor(p.id)).toHaveLength(0);
   });
 });

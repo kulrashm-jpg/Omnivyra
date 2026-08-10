@@ -51,6 +51,7 @@ export type ClosureAction =
   | 'deferred_unknown'    // provider could not be reached → left pending
   | 'already_completed'   // terminal success, untouched
   | 'already_closed'      // terminal failure, untouched (idempotent)
+  | 'errored'             // this row threw; isolated so the sweep continues
   | 'not_found';
 
 export interface ClosureOutcome {
@@ -155,7 +156,7 @@ async function closeOnePurchase(row: PurchaseRow, reason: ClosureReason): Promis
 
   // Provider-confirmed unpaid → safe to close.
   const payload = (row.provider_payload ?? {}) as Record<string, unknown>;
-  const { data: updated } = await ownedDbTable('credit_purchases')
+  const { data: updated, error: updateErr } = await ownedDbTable('credit_purchases')
     .update({
       status: 'failed',
       fulfillment_status: 'failed',
@@ -177,6 +178,19 @@ async function closeOnePurchase(row: PurchaseRow, reason: ClosureReason): Promis
     .eq('status', 'pending')   // CAS — a concurrent completion wins
     .select('id')
     .maybeSingle();
+
+  // P2-A2: a DB failure is NOT a race. Without this branch the `!updated` test
+  // below reports a transport/permission error as `already_completed`, which
+  // reads as "someone already fulfilled it" — the opposite of the truth, and it
+  // would silently retire a purchase from the sweep's attention. A failed write
+  // leaves the row pending, so the honest outcome is the same one we use for an
+  // unreachable provider: defer and retry next sweep.
+  if (updateErr) {
+    logger.error('payment_close_db_error', {
+      purchaseId, reason, message: updateErr.message,
+    });
+    return { purchaseId, action: 'deferred_unknown', detail: 'db_error' };
+  }
 
   if (!updated) {
     // Someone completed it between our read and our write. Correct outcome.
@@ -227,6 +241,8 @@ export interface ExpirySweepResult {
   fulfilled: number;
   deferred: number;
   untouched: number;
+  /** Rows that threw and were isolated so the sweep could continue. */
+  errored: number;
   ttlMinutes: number;
   details: ClosureOutcome[];
 }
@@ -264,20 +280,37 @@ export async function expireStalePendingPurchases(opts?: {
 
   const rows = (data ?? []) as PurchaseRow[];
   const details: ClosureOutcome[] = [];
-  let closed = 0, fulfilled = 0, deferred = 0, untouched = 0;
+  let closed = 0, fulfilled = 0, deferred = 0, untouched = 0, errored = 0;
 
   for (const row of rows) {
-    const outcome = await closeOnePurchase(row, 'stale_pending_expiry');
-    details.push(outcome);
-    if (outcome.action === 'closed') closed++;
-    else if (outcome.action === 'fulfilled') fulfilled++;
-    else if (outcome.action === 'deferred_unknown') deferred++;
-    else untouched++;
+    // P2-A1: per-row isolation, mirroring commercialReconciliationService.
+    //
+    // Without it a single throwing row aborts the whole sweep — and because the
+    // scan is ordered `created_at ASC`, that same row is re-read first on every
+    // subsequent run. One poison purchase would therefore stall expiry for every
+    // row behind it, permanently. Isolating per row makes the sweep make
+    // progress past it while still surfacing the failure.
+    try {
+      const outcome = await closeOnePurchase(row, 'stale_pending_expiry');
+      details.push(outcome);
+      if (outcome.action === 'closed') closed++;
+      else if (outcome.action === 'fulfilled') fulfilled++;
+      else if (outcome.action === 'deferred_unknown') deferred++;
+      else untouched++;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      errored++;
+      details.push({ purchaseId: row.id, action: 'errored', detail: message });
+      logger.error('payment_pending_expiry_row_failed', {
+        purchaseId: row.id, organizationId: row.organization_id, message,
+      });
+      // Deliberately continue: this row is left pending and retried next sweep.
+    }
   }
 
   logger.info('payment_pending_expiry_sweep', {
-    scanned: rows.length, closed, fulfilled, deferred, untouched, ttlMinutes: ttl,
+    scanned: rows.length, closed, fulfilled, deferred, untouched, errored, ttlMinutes: ttl,
   });
 
-  return { scanned: rows.length, closed, fulfilled, deferred, untouched, ttlMinutes: ttl, details };
+  return { scanned: rows.length, closed, fulfilled, deferred, untouched, errored, ttlMinutes: ttl, details };
 }
