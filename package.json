@@ -107,6 +107,7 @@
     "typecheck:certification": "node scripts/typecheck-certification.js",
     "typecheck:certification:inventory": "node scripts/typecheck-certification.js --inventory",
     "typecheck:certification:baseline": "node scripts/typecheck-certification.js --update-baseline",
+    "typecheck:ts7": "node scripts/typecheck-ts7.js",
     "check:ssrf": "node scripts/check-outbound-ssrf.js",
     "check:authz": "node scripts/check-tenant-authz.js",
     "check:route-policy": "node scripts/check-route-policy.js",

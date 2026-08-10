@@ -1,0 +1,9 @@
+{
+  "name": "omnivyra-ts7-gate",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Isolated TypeScript 7 compiler for the advisory readiness gate. Deliberately a SEPARATE package tree: installing typescript@7 into the root would claim node_modules/.bin/tsc and silently swap the compiler used by typecheck:backend-tests, the pre-commit worker typecheck and CI. Root stays TypeScript 6.0.3. See scripts/typecheck-ts7.js.",
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

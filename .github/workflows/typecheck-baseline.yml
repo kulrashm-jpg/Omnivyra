@@ -57,3 +57,22 @@ jobs:
       # findings to failures in Phase 2.
       - name: Route-policy inventory (warn)
         run: npm run check:route-policy
+
+      # TS7-READINESS (advisory, never blocking). TypeScript 6.0.3 remains the
+      # authoritative compiler for every gate above; this step only answers
+      # "would our source still check under TypeScript 7?" so the answer is
+      # tracked continuously rather than rediscovered during a future migration.
+      #
+      # tools/ts7 is a SEPARATE package tree with its own lockfile, installed by
+      # its own `npm ci`. It is deliberately not part of the root install:
+      # `typescript@7` claims node_modules/.bin/tsc, which would silently swap
+      # the compiler behind the worker typecheck step above.
+      #
+      # continue-on-error because full TS7 migration is blocked on ts-jest and
+      # @typescript-eslint publishing TS7-capable releases — an external
+      # dependency that must never fail an Omnivyra PR.
+      - name: TypeScript 7 readiness (advisory)
+        continue-on-error: true
+        run: |
+          npm --prefix tools/ts7 ci
+          npm run typecheck:ts7
