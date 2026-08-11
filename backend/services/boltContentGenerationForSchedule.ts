@@ -37,6 +37,14 @@ import { buildGovernancePromptContext } from './creator/strategyGovernancePrompt
 // processBlockSchedule: APPROVED workspace copy is canonical; generation is
 // fallback only (review/draft are planning-only states, R3-P2.1).
 import { resolveWorkspaceContent } from '../../lib/campaign/workspaceContentResolution';
+// EC-R2 — campaign content uniqueness (see campaignUniquenessGuard for the full
+// rationale). This path is reachable via /api/campaigns/[id]/repurpose-and-schedule;
+// the live scheduler path is boltScheduleBlockProcessor, which is guarded too.
+import {
+  assertBriefNotDegenerate,
+  buildCampaignNegativeContext,
+  generateUniqueCampaignMaster,
+} from './content/campaignUniquenessGuard';
 
 /** Accepts DB shape where title/topic/scheduled_time may be null */
 type DailyPlanRow = {
@@ -420,9 +428,43 @@ export async function generateContentForDailyPlans(
         generation_source: 'ai',
       };
     } else {
-      // WS-1c-2b — flag-gated convergence: master flows through the ONE runtime
-      // when BOLT_RUNTIME_DELEGATION_ENABLED, else the inline primitive (unchanged).
-      master = await generateBoltMaster(item);
+      // EC-R2 (a) — refuse a brief with no campaign-specific signal; it would
+      // produce an identical prompt (and, via the exact-key cache, identical
+      // content) for every week.
+      assertBriefNotDegenerate(item as unknown as Record<string, unknown>, {
+        campaignId,
+        weekNumber: first.week_number,
+      });
+      // EC-R2 (b) — append already-used campaign material to the EXISTING
+      // additional_guidance slot so the model differentiates deliberately.
+      const negativeContext = campaignCompanyId
+        ? await buildCampaignNegativeContext({
+            companyId: campaignCompanyId,
+            campaignId,
+            contentType: 'post',
+          })
+        : null;
+      if (negativeContext) {
+        const existingGuidance = String((item as any).extra_instruction ?? '').trim();
+        (item as any).extra_instruction = existingGuidance
+          ? `${existingGuidance}\n\n${negativeContext}`
+          : negativeContext;
+      }
+      // EC-R2 (c) — WS-1c-2b convergence still decides HOW the master is made
+      // (runtime vs inline primitive); this wraps that choice in the campaign-
+      // scoped originality gate and indexes the accepted output.
+      const uniqueOutcome = await generateUniqueCampaignMaster({
+        companyId: campaignCompanyId,
+        campaignId,
+        contentType: 'post',
+        platform: null,
+        weekNumber: first.week_number,
+        generate: async () => {
+          const generated = await generateBoltMaster(item);
+          return { text: generated.content ?? '', result: generated };
+        },
+      });
+      master = uniqueOutcome.result;
     }
 
     // WAVE-1B-002 — moderate generated master content ONCE before any campaign

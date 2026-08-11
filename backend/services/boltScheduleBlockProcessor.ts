@@ -49,6 +49,17 @@ import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation
 import { regenerateBeforeDrop } from '../../lib/shared/campaign/campaignLifecycle';
 import { recordRawCounter, recordRawHistogram } from '../observability';
 import { emitMetrics, buildGenerationDurationMetric } from './campaign/campaignObservability';
+// EC-R2 — campaign content uniqueness. THE live campaign text path had no
+// originality check and never indexed its output, so every week was generated
+// blind to every other week. This routes the fresh-master generation through the
+// existing originality gate, scoped to (company, campaign). See
+// backend/services/content/campaignUniquenessGuard.ts for why both halves
+// (check AND index) are required.
+import {
+  assertBriefNotDegenerate,
+  buildCampaignNegativeContext,
+  generateUniqueCampaignMaster,
+} from './content/campaignUniquenessGuard';
 // R3-P2 — Content Workspace adoption. ONE pure resolver decides when a row's
 // planner-approved copy is the canonical publishing source (approved →
 // generation fallback; review/draft are planning-only, R3-P2.1). Mirrors the
@@ -585,11 +596,52 @@ async function executeBlockScheduleRuntime(
           // Closure Pass — Phase 4. Enrich item with governance.
           const { enrichItemWithGovernance } = await import('./creator/governanceItemEnricher');
           const item = await enrichItemWithGovernance(baseItem as any) as typeof baseItem;
+          // EC-R2 (a) — refuse a brief that carries no campaign-specific signal.
+          // Such a brief produces a byte-identical prompt every week, which the
+          // exact-key AI cache then answers with byte-identical content. Failing
+          // here is loud and actionable; generating would be silently wrong.
+          assertBriefNotDegenerate(item as unknown as Record<string, unknown>, {
+            campaignId,
+            weekNumber: firstRow.week_number,
+          });
+          // EC-R2 (b) — tell the model what this campaign has already said, via
+          // the EXISTING additional_guidance slot. Appended, never replacing the
+          // strategic context already threaded onto extra_instruction.
+          const negativeContext = companyId
+            ? await buildCampaignNegativeContext({ companyId, campaignId, contentType: 'post' })
+            : null;
+          if (negativeContext) {
+            const existingGuidance = String((item as any).extra_instruction ?? '').trim();
+            (item as any).extra_instruction = existingGuidance
+              ? `${existingGuidance}\n\n${negativeContext}`
+              : negativeContext;
+          }
           console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] Generating master for:`, {
             contentType, topic,
           });
           const genStartedAt = Date.now();
-          master = await generateMasterContentFromIntent(item);
+          // EC-R2 (c) — generate through the originality gate, campaign-scoped.
+          // Throws CampaignDuplicateContentError when a confirmed duplicate
+          // survives the engine's own bounded regeneration policy; the catch
+          // below records it as a master failure so nothing is persisted.
+          const uniqueOutcome = await generateUniqueCampaignMaster({
+            companyId,
+            campaignId,
+            contentType: 'post',
+            platform: null,
+            weekNumber: firstRow.week_number,
+            generate: async () => {
+              const generated = await generateMasterContentFromIntent(item);
+              return { text: generated.content ?? '', result: generated };
+            },
+          });
+          master = uniqueOutcome.result;
+          if (uniqueOutcome.regenerated) {
+            console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] regenerated for uniqueness`, {
+              attempts: uniqueOutcome.attempts,
+              originality: uniqueOutcome.originality.score,
+            });
+          }
           // CAMPAIGN-OPS-001: text generation duration per content type + platform.
           try { emitMetrics([buildGenerationDurationMetric(Date.now() - genStartedAt, { content_type: contentType, platform: platformTargets[0]?.platform })]); } catch { /* fail-safe */ }
         }
