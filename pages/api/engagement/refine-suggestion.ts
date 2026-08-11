@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getThreadMessages } from '../../../backend/services/engagementMessageService';
+import { isThreadActionable } from '../../../backend/services/engagementThreadService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
 import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
@@ -62,6 +63,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .maybeSingle();
     if (!ownerThread || ownerThread.organization_id !== organizationId) {
       return res.status(403).json({ error: 'Thread not found or access denied' });
+    }
+
+    // F5: refinement is AI generation too — it returns text the operator can
+    // paste into the composer and send. Gating it on the same canonical
+    // actionability the rest of the Engagement Center consumes keeps every AI
+    // path aligned; leaving it open would make "refine" the way around the
+    // guard on "suggest".
+    if (!(await isThreadActionable(organizationId, threadId))) {
+      return res.status(409).json({
+        error:
+          'This conversation has already been answered. Refinement is only offered ' +
+          'while the other person is waiting on you.',
+        code: 'THREAD_NOT_ACTIONABLE',
+      });
     }
 
     const messages = await getThreadMessages(threadId);

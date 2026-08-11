@@ -30,6 +30,26 @@ export type GetThreadsFilters = {
   end_date?: string | null;
   limit?: number;
   exclude_ignored?: boolean;
+  /**
+   * F1/F2: restrict the page to threads whose latest authoritative turn is
+   * external — i.e. work that still needs a response.
+   *
+   * Defaults to false so every existing caller keeps its current result set;
+   * only surfaces that page actionable work opt in. When true the exclusion
+   * runs BEFORE sorting and before the page cut, so an answered thread can
+   * never consume a slot that belongs to a real engagement.
+   */
+  actionable_only?: boolean;
+  /**
+   * F5: restrict the query to an explicit set of thread ids.
+   *
+   * Added so AI callers can resolve canonical actionability for the exact
+   * threads they are about to act on WITHOUT re-deriving ownership and without
+   * depending on the thread happening to fall inside the default page window.
+   * It only narrows the SQL predicate — every downstream derivation (latest
+   * turn, `isAuthorSelf`, unread gating, `actionable`) is untouched.
+   */
+  thread_ids?: string[] | null;
 };
 
 export type ThreadSummary = {
@@ -42,6 +62,17 @@ export type ThreadSummary = {
   latest_message_id?: string | null;
   priority_score: number;
   unread_count: number;
+  /**
+   * F2: the canonical, materialised answer to "does this still need a reply?".
+   *
+   * Derived from the SAME latest-turn ownership result the rest of this service
+   * already computes (`isAuthorSelf` → author_id ↔ connected-account map →
+   * unresolved ⇒ external). It is deliberately a separate field from
+   * `unread_count`: a thread can be unread yet already answered, and cached
+   * unread must never be read as "needs action". Consumers must read this
+   * rather than inferring actionability from a count.
+   */
+  actionable: boolean;
   dominant_intent?: string | null;
   lead_detected?: boolean;
   lead_score?: number;
@@ -95,7 +126,16 @@ function coerceOptionalCount(value: unknown): number | null {
   return null;
 }
 
-async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
+/**
+ * The set of engagement_authors ids that ARE the connected company.
+ *
+ * Exported (F6) so the AI context assembler can label conversation turns as
+ * "the company" with exactly the accuracy actionability already has. It is the
+ * same resolution, not a copy: without this, prompt-side self-detection would
+ * have to re-implement the identity join and would drift from the canonical
+ * predicate — which is the failure mode D2/F5 were built to remove.
+ */
+export async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
   const { data: roleUsers } = await supabase
     .from('user_company_roles')
     .select('user_id')
@@ -113,11 +153,27 @@ async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
 
   if (!accounts?.length) return new Set();
 
+  // D4: the identity key is `platform:platform_user_id`. A blank
+  // platform_user_id collapses every such row onto the same key ("linkedin:"),
+  // so a connected account missing its provider id would match ANY engagement
+  // author that is also missing one — silently classifying a stranger as the
+  // company and hiding their engagement from the work queue. An identity we
+  // cannot state is not an identity: rows without a provider id are dropped
+  // from the self set on both sides, leaving the actor external, which is the
+  // safe direction (an extra item shown, never a real person hidden).
+  const identityKey = (platform: unknown, platformUserId: unknown): string | null => {
+    const p = (platform ?? '').toString().trim().toLowerCase();
+    const id = (platformUserId ?? '').toString().trim();
+    if (!p || !id) return null;
+    return `${p}:${id}`;
+  };
+
   const platformUserPairs = new Set(
-    (accounts as Array<{ platform: string; platform_user_id: string }>).map(
-      (account) => `${(account.platform || '').toLowerCase()}:${account.platform_user_id || ''}`
-    )
+    (accounts as Array<{ platform: string; platform_user_id: string }>)
+      .map((account) => identityKey(account.platform, account.platform_user_id))
+      .filter((key): key is string => key !== null)
   );
+  if (platformUserPairs.size === 0) return new Set();
 
   const { data: authors } = await supabase
     .from('engagement_authors')
@@ -135,8 +191,10 @@ async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
 
   const orgAuthorIds = new Set<string>();
   (authors ?? []).forEach((author: { id: string; platform: string; platform_user_id: string }) => {
-    const key = `${(author.platform || '').toLowerCase()}:${author.platform_user_id || ''}`;
-    if (platformUserPairs.has(key)) {
+    const key = identityKey(author.platform, author.platform_user_id);
+    // A null key means this author carries no usable provider identity — it can
+    // never be matched to a connected account, so it stays external.
+    if (key && platformUserPairs.has(key)) {
       orgAuthorIds.add(author.id);
     }
   });
@@ -280,6 +338,12 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
     }
     if (dateScopedThreadIds) {
       query = query.in('id', dateScopedThreadIds);
+    }
+    // F5: exact-id narrowing. Combined with the org filter above, a thread id
+    // belonging to another company simply yields no row — the caller's
+    // fail-closed default then treats it as non-actionable.
+    if (filters.thread_ids && filters.thread_ids.length > 0) {
+      query = query.in('id', filters.thread_ids);
     }
     return query;
   };
@@ -490,14 +554,25 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       : latest?.author_id
         ? !orgAuthorIds.has(latest.author_id)
         : true;
-    const inferredUnreadCount =
-      Number(t.unread_count) > 0
+    // D2: the latest turn is authoritative over the stored cache.
+    //
+    // `engagement_threads.unread_count` is a cache written at ingestion and it
+    // goes stale the moment the connected account replies — nothing rewrites it
+    // on an outbound turn. Preferring it whenever it was > 0 meant an answered
+    // thread kept reporting unread forever, which is what made the platform
+    // badge disagree with the work queue. When the latest message is ours the
+    // engagement is addressed, so unread is zero regardless of what the cache
+    // still says. The cache survives only where it is still the best signal:
+    // a thread whose latest turn is external (or whose messages have not been
+    // ingested at all, where latestAuthorIsExternal defaults to true).
+    const inferredUnreadCount = !latestAuthorIsExternal
+      ? 0
+      : Number(t.unread_count) > 0
         ? Number(t.unread_count)
-        : latestAuthorIsExternal
-          ? 1
-          : 0;
-    const dmFallbackUnread =
-      inferredUnreadCount > 0
+        : 1;
+    const dmFallbackUnread = !latestAuthorIsExternal
+      ? 0
+      : inferredUnreadCount > 0
         ? inferredUnreadCount
         : inferInboundDmFallback({
             platform: latest?.platform ?? null,
@@ -554,10 +629,26 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       people_reaction_eligible: isPostEngagementThread || postReactionCount !== null || postCommentCount !== null,
       post_reaction_count: postReactionCount,
       post_comment_count: postCommentCount,
+      // F2: materialise the decision rather than leaving consumers to infer it
+      // from unread_count. Same source as the unread derivation above, so the
+      // two can never disagree about a thread.
+      actionable: latestAuthorIsExternal,
     });
-    if (results.length >= limit) break;
+    // F1: the old `if (results.length >= limit) break;` lived here. Truncating
+    // during the build meant the page was cut from the raw `updated_at DESC`
+    // window BEFORE actionability was known and BEFORE the priority sort ran.
+    // Because a company reply bumps `updated_at`, answered threads ranked first
+    // and filled the page, pushing genuinely actionable work off it entirely.
+    // The candidate window is already bounded by the query (`max(limit*2,300)`),
+    // so building it out fully here is safe — the cut now happens after
+    // filtering and sorting, below.
   }
-  results.sort((a, b) => {
+
+  // F1: exclude non-actionable threads BEFORE sorting and before the page cut,
+  // so the limit applies to work that still needs a response.
+  const ranked = filters.actionable_only ? results.filter((r) => r.actionable) : results;
+
+  ranked.sort((a, b) => {
     const triageA = a.triage_priority ?? 0;
     const triageB = b.triage_priority ?? 0;
     if (triageB !== triageA) return triageB - triageA;
@@ -568,5 +659,66 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
     const atB = b.latest_message_time ?? '';
     return atB.localeCompare(atA);
   });
-  return results;
+
+  // The page cut is now the LAST step, applied to the sorted actionable
+  // population. Sort semantics (triage → priority → recency) are unchanged.
+  return ranked.slice(0, limit);
+}
+
+/**
+ * F5: canonical actionability lookup for an explicit set of threads.
+ *
+ * This is the ONLY entry point the AI layer may use to answer "does this thread
+ * still need a response?". It deliberately delegates to `getThreads` rather than
+ * re-querying, so the answer is produced by the same latest-turn ownership
+ * derivation the Work Queue, Inbox and badge counts already consume. There is
+ * no AI-specific ownership predicate anywhere in the codebase, by construction.
+ *
+ * Fail-closed: a thread id that resolves to no row — wrong company, deleted, or
+ * never ingested — is reported as NOT actionable. For a read-only suggestion
+ * that costs the user a refusal; for a send it prevents acting on a thread whose
+ * state we cannot establish. Both are the safe direction.
+ */
+export async function getThreadActionability(
+  organizationId: string,
+  threadIds: string[],
+): Promise<Map<string, boolean>> {
+  const result = new Map<string, boolean>();
+  const ids = Array.from(
+    new Set(
+      (threadIds ?? [])
+        .map((id) => (id ?? '').toString().trim())
+        .filter((id) => id.length > 0),
+    ),
+  );
+  if (!organizationId || ids.length === 0) return result;
+
+  for (const id of ids) result.set(id, false);
+
+  // `exclude_ignored` is deliberately NOT set: an ignored thread is a triage
+  // decision, not an ownership fact, and filtering it here would silently
+  // change the answer to a different question than the one being asked.
+  const threads = await getThreads({
+    organization_id: organizationId,
+    platform: null,
+    thread_ids: ids,
+    limit: Math.max(1, ids.length),
+  });
+
+  for (const t of threads) {
+    if (result.has(t.thread_id)) result.set(t.thread_id, t.actionable === true);
+  }
+  return result;
+}
+
+/**
+ * Single-thread convenience over {@link getThreadActionability}. Same
+ * fail-closed contract.
+ */
+export async function isThreadActionable(
+  organizationId: string,
+  threadId: string,
+): Promise<boolean> {
+  const map = await getThreadActionability(organizationId, [threadId]);
+  return map.get((threadId ?? '').toString().trim()) === true;
 }

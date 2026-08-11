@@ -29,6 +29,7 @@ import { logAuditEvent } from '../../../backend/services/auditLoggingService';
 import { recordSuggestionAccepted } from '../../../backend/services/aiSuggestionTrackingService';
 import { isDmMessageType } from '../../../lib/engagement/messageRoles';
 import { recordThreadEvent } from '../../../backend/services/engagementThreadEventService';
+import { isThreadActionable } from '../../../backend/services/engagementThreadService';
 
 type ReplyBody = {
   organization_id?: string;
@@ -494,6 +495,54 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           code: 'AI_DRAFT_PLATFORM_MISMATCH',
         });
       }
+      // ── F5: send-time actionability revalidation ───────────────────────
+      //    The draft was generated against the thread state observed at click
+      //    time. Between generation and send, the company may have replied
+      //    (from another operator, another connected account, or the extension),
+      //    which makes the thread non-actionable and this draft stale.
+      //
+      //    This is the AUTHORITATIVE guard: generation-time checks are advisory
+      //    because they are separated from the write by an unbounded think-time
+      //    window. It runs BEFORE the draft is promoted to 'approved' so a
+      //    rejected send leaves no state behind and the draft stays reusable if
+      //    the counterparty replies again.
+      //
+      //    Scope: gated on ai_generated only. A human typing a deliberate
+      //    follow-up is a legitimate action on an answered thread; silently
+      //    blocking that would be a behaviour regression, not a safety win.
+      const actionabilityThreadId = resolvedThreadId ?? draft.thread_id ?? null;
+      if (!actionabilityThreadId) {
+        return res.status(409).json({
+          error: 'ai_draft has no resolvable thread; cannot verify the thread still awaits a reply',
+          code: 'AI_DRAFT_THREAD_UNRESOLVED',
+        });
+      }
+      // Org-scoped and fail-closed: a draft pointing at another company's
+      // thread resolves to no row and is rejected here.
+      if (!(await isThreadActionable(organizationId, String(actionabilityThreadId)))) {
+        void logAuditEvent({
+          operation: 'INSERT',
+          table: 'engagement_reply_rejected',
+          companyId: organizationId,
+          userId: roleGate.userId ?? 'unknown',
+          success: false,
+          errorMessage: 'AI draft rejected: thread no longer awaiting a reply',
+          metadata: {
+            platform,
+            thread_id: actionabilityThreadId,
+            ai_draft_id: body.ai_draft_id,
+            code: 'THREAD_NOT_ACTIONABLE',
+          },
+        }).catch(() => {});
+        return res.status(409).json({
+          error:
+            'This conversation has already been answered — the AI draft is out of date. ' +
+            'Reload the thread; if the other person replies again you can generate a fresh reply.',
+          code: 'THREAD_NOT_ACTIONABLE',
+          thread_id: actionabilityThreadId,
+        });
+      }
+
       if (draft.status === 'draft') {
         // User's Send click is the approval. The trigger validates this
         // transition and auto-stamps approved_at when missing.

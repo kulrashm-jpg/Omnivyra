@@ -15,10 +15,28 @@ type HealthData = {
   queueSize: number;
 };
 
+/**
+ * A browser dispatch an extension claimed and may have executed, whose result
+ * never arrived. The platform action may or may not have happened — nothing in
+ * the system can tell which, so `delivery` is always 'unknown'.
+ */
+type ClaimedUnknown = {
+  action_id: string;
+  organization_id: string | null;
+  platform: string | null;
+  action_type: string | null;
+  target_id: string | null;
+  claimed_at: string | null;
+  lease_expires_at: string | null;
+  acknowledged: boolean;
+  delivery: 'unknown';
+};
+
 export default function EngagementHealthPage() {
   const [data, setData] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [claimedUnknown, setClaimedUnknown] = useState<ClaimedUnknown[]>([]);
 
   const fetchHealth = async () => {
     setLoading(true);
@@ -35,8 +53,23 @@ export default function EngagementHealthPage() {
     }
   };
 
+  // Read-only. There is deliberately no retry and no mark-sent control: retrying
+  // could send the same message twice, and marking it sent would assert a
+  // delivery nobody has observed. Resolution requires checking the platform.
+  const fetchClaimedUnknown = async () => {
+    try {
+      const res = await fetch('/api/admin/engagement-claimed-unknown', { credentials: 'include' });
+      if (!res.ok) return;
+      const json = await res.json();
+      setClaimedUnknown(Array.isArray(json?.dispatches) ? json.dispatches : []);
+    } catch {
+      /* non-fatal: the primary health view must still render */
+    }
+  };
+
   useEffect(() => {
     fetchHealth();
+    fetchClaimedUnknown();
   }, []);
 
   return (
@@ -119,6 +152,69 @@ export default function EngagementHealthPage() {
                     <span className="text-gray-500 text-sm">No signals</span>
                   )}
                 </div>
+              </div>
+
+              <div className="bg-white rounded-lg border border-amber-200 p-4">
+                <div className="flex items-baseline justify-between mb-1">
+                  <h2 className="text-sm font-semibold text-amber-900">
+                    Browser dispatches — delivery unknown
+                  </h2>
+                  <span className="text-sm text-amber-800">{claimedUnknown.length}</span>
+                </div>
+                <p className="text-xs text-amber-800 mb-3">
+                  An extension claimed these and may have executed them, but no result was ever
+                  reported. <strong>Delivery is UNKNOWN.</strong> They are never retried and never
+                  marked failed automatically — retrying could send the same message twice. Confirm
+                  on the platform whether the message was actually sent before acting.
+                </p>
+                {claimedUnknown.length === 0 ? (
+                  <span className="text-gray-500 text-sm">None</span>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-gray-500">
+                          <th className="py-1 pr-4">Command</th>
+                          <th className="py-1 pr-4">Org</th>
+                          <th className="py-1 pr-4">Platform</th>
+                          <th className="py-1 pr-4">Action</th>
+                          <th className="py-1 pr-4">Target</th>
+                          <th className="py-1 pr-4">Claimed</th>
+                          <th className="py-1 pr-4">Lease expired</th>
+                          <th className="py-1 pr-4">Ack</th>
+                          <th className="py-1">Delivery</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-gray-800">
+                        {claimedUnknown.map((d) => (
+                          <tr key={d.action_id} className="border-t border-gray-100">
+                            <td className="py-1 pr-4 font-mono text-xs">{d.action_id.slice(0, 8)}…</td>
+                            <td className="py-1 pr-4 font-mono text-xs">
+                              {(d.organization_id ?? '—').slice(0, 8)}
+                            </td>
+                            <td className="py-1 pr-4">{d.platform ?? '—'}</td>
+                            <td className="py-1 pr-4">{d.action_type ?? '—'}</td>
+                            <td className="py-1 pr-4 font-mono text-xs max-w-[16rem] truncate">
+                              {d.target_id ?? '—'}
+                            </td>
+                            <td className="py-1 pr-4">
+                              {d.claimed_at ? new Date(d.claimed_at).toLocaleString() : '—'}
+                            </td>
+                            <td className="py-1 pr-4">
+                              {d.lease_expires_at ? new Date(d.lease_expires_at).toLocaleString() : '—'}
+                            </td>
+                            <td className="py-1 pr-4">{d.acknowledged ? 'yes' : 'no'}</td>
+                            <td className="py-1">
+                              <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 text-xs">
+                                unknown
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
               {data.collectorErrors && data.collectorErrors.length > 0 && (
