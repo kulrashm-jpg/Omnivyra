@@ -22,6 +22,11 @@ import { supabase } from '../../db/supabaseClient';
 // (shared primitive; shadow by default → never blocks; enforce blocks unsafe output).
 import { moderateBeforePersist, AiError } from '../ai/safety';
 import { canTransition } from '../../../lib/content/contentLifecycle';
+// PHASE A — the canonical persistence activation boundary. Default DENY, so the
+// Phase A foundation schema can be introduced while every canonical write stays
+// inert BY POLICY rather than merely because the tables are absent. Independent
+// of ORIGINALITY_GATE_ENABLED by design.
+import { assertCanonicalPersistenceAllowed } from './canonicalPersistencePolicy';
 import type {
   CanonicalContent,
   CanonicalContentType,
@@ -223,6 +228,9 @@ export interface ExternalContentRow {
  * revision 1). Returns the persisted DTO.
  */
 export async function createContent(input: CreateContentInput): Promise<CanonicalContent> {
+  // PHASE A — canonical persistence boundary. Checked BEFORE moderation so a
+  // denied write costs nothing (moderation can call out to a provider).
+  assertCanonicalPersistenceAllowed('createContent');
   // WAVE-1B-001 — outbound moderation at THE canonical persistence boundary for
   // post/thread. Invoked exactly once before insert. Shadow (default) classifies +
   // audits without blocking; enforce blocks unsafe output (fail-closed) via AiError.
@@ -298,6 +306,8 @@ export async function updateContent(
   patch: UpdateContentPatch,
   opts: { revisionType: ContentRevisionType },
 ): Promise<CanonicalContent> {
+  // PHASE A — writes `content` + a `content_revision` snapshot.
+  assertCanonicalPersistenceAllowed('updateContent');
   const existing = await getContent(id, companyId);
   if (!existing) fail('updateContent', { message: 'content not found for company' });
 
@@ -366,6 +376,8 @@ export async function setLifecycleStatus(
   companyId: string,
   status: ContentLifecycleStatus,
 ): Promise<CanonicalContent> {
+  // PHASE A — mutates `content.lifecycle_status`.
+  assertCanonicalPersistenceAllowed('setLifecycleStatus');
   const existing = await getContent(id, companyId);
   if (!existing) fail('setLifecycleStatus', { message: 'content not found for company' });
 
@@ -402,6 +414,8 @@ export async function upsertVariant(
   platform: string,
   data: UpsertVariantData,
 ): Promise<ContentVariant> {
+  // PHASE A — writes `content_variant`.
+  assertCanonicalPersistenceAllowed('upsertVariant');
   const row = {
     content_id: contentId,
     company_id: companyId,
@@ -450,6 +464,9 @@ export async function associateAsset(
   companyId: string,
   input: AssociateAssetInput,
 ): Promise<ContentAssetLink> {
+  // PHASE A — writes `content_asset` (SINGULAR; the legacy plural
+  // `content_assets` campaign table is NOT gated by this policy).
+  assertCanonicalPersistenceAllowed('associateAsset');
   const variantId = input.variantId ?? null;
   const version = input.version ?? 1;
 

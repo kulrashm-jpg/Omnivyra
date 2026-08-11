@@ -78,8 +78,22 @@ import {
 const COMPANY = 'company-1';
 const OTHER_COMPANY = 'company-2';
 
+// PHASE A — `publication_lineage` is a canonical-foundation table, so
+// recordEvent now sits behind the canonical persistence policy (default DENY).
+// This suite exercises the PERSISTENCE behaviour against a mocked store, so it
+// must declare that precondition explicitly. No assertion is relaxed: with the
+// policy enabled every original expectation holds unchanged. The denial path is
+// covered separately in canonicalPersistencePolicy.test.ts.
+const PRIOR_PERSISTENCE_ENV = process.env.CANONICAL_PERSISTENCE_ENABLED;
+
 beforeEach(() => {
+  process.env.CANONICAL_PERSISTENCE_ENABLED = 'true';
   (supabase as any).__reset();
+});
+
+afterAll(() => {
+  if (PRIOR_PERSISTENCE_ENV === undefined) delete process.env.CANONICAL_PERSISTENCE_ENABLED;
+  else process.env.CANONICAL_PERSISTENCE_ENABLED = PRIOR_PERSISTENCE_ENV;
 });
 
 describe('publicationLineageService.recordEvent', () => {
