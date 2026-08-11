@@ -107,9 +107,20 @@ export class CashfreeAdapter implements PaymentAdapter {
 
     const rawStatus = String(body?.order_status ?? '').toUpperCase();
     if (rawStatus !== 'PAID') return { outcome: 'unpaid', providerRawStatus: rawStatus };
+
+    // Cashfree states `order_amount` in MAJOR units (the same unit createOrder
+    // sends), so it is converted to minor units here to match the contract.
+    // Anything non-numeric or a missing currency stays undefined, which the
+    // validator treats as UNKNOWN — we never guess a settled amount.
+    const rawAmount = Number(body?.order_amount);
+    const providerAmountSubunits = Number.isFinite(rawAmount) ? Math.round(rawAmount * 100) : undefined;
+    const rawCurrency = typeof body?.order_currency === 'string' ? body.order_currency : '';
+
     return {
       outcome: 'paid',
       providerPaymentId: body?.cf_order_id ? String(body.cf_order_id) : undefined,
+      providerAmountSubunits,
+      providerCurrency: rawCurrency ? rawCurrency.toUpperCase() : undefined,
       providerRawStatus: rawStatus,
     };
   }

@@ -36,7 +36,8 @@ import { logger } from '../logger';
 import { completePurchase, reopenSystemClosedPurchase } from '../purchaseService';
 import { generateTopupInvoice } from './topupInvoiceService';
 import { resolveProviderOrderOutcome } from '../payments/orchestrator';
-import type { PaymentProviderId } from '../payments/orchestrator';
+import type { PaymentProviderId, ProviderFinancials } from '../payments/orchestrator';
+import { validateProviderFinancials } from './paymentFinancialValidator';
 
 /** How long an unresolved checkout may stay pending before the sweeper acts. */
 const DEFAULT_CHECKOUT_TTL_MINUTES = 30;
@@ -87,7 +88,77 @@ function ttlMinutes(): number {
 export async function fulfillProviderConfirmedPurchase(
   purchaseId: string,
   providerPaymentId?: string,
-): Promise<{ ok: boolean; creditsGranted?: number; detail?: string }> {
+  providerFinancials?: ProviderFinancials | null,
+): Promise<{ ok: boolean; creditsGranted?: number; detail?: string; code?: string }> {
+  // ── FINANCIAL GATE — runs BEFORE any reopen, completion, grant or invoice ──
+  //
+  // THE chokepoint. Every provider-authoritative settlement path (verify,
+  // webhook, stale-pending expiry, reconciliation, late-success reopen) funnels
+  // through this function, so validating here protects all of them without
+  // duplicating the comparison in each.
+  //
+  // `provider says PAID` is not sufficient on its own: we also require that the
+  // amount and currency the provider reports match what the purchase was for.
+  const { data: purchaseRow } = await supabase
+    .from('credit_purchases')
+    .select('id, amount_paid, currency, provider, provider_order_id')
+    .eq('id', purchaseId)
+    .maybeSingle();
+
+  if (!purchaseRow) {
+    logger.warn('payment_fulfillment_blocked', { purchaseId, reason: 'purchase_not_found' });
+    return { ok: false, detail: 'purchase_not_found', code: 'UNKNOWN' };
+  }
+  const row = purchaseRow as {
+    amount_paid: number; currency: string; provider: string | null; provider_order_id: string | null;
+  };
+
+  // A caller that already resolved the provider (expiry sweep) or holds a
+  // signature-verified payload (webhook) passes financials in. Anyone else —
+  // notably browser verify — gets an authoritative provider lookup here, so the
+  // client can never supply the numbers it is validated against.
+  let financials: ProviderFinancials | null | undefined = providerFinancials;
+  if (!financials) {
+    if (!row.provider || !row.provider_order_id) {
+      logger.warn('payment_fulfillment_blocked', { purchaseId, reason: 'no_provider_reference' });
+      return { ok: false, detail: 'no_provider_reference', code: 'UNKNOWN' };
+    }
+    const outcome = await resolveProviderOrderOutcome(row.provider as PaymentProviderId, row.provider_order_id);
+    if (outcome.outcome !== 'paid') {
+      logger.warn('payment_fulfillment_blocked', {
+        purchaseId, reason: 'provider_not_paid', providerOutcome: outcome.outcome,
+        providerRawStatus: outcome.providerRawStatus ?? null,
+      });
+      return { ok: false, detail: `provider_${outcome.outcome}`, code: 'UNKNOWN' };
+    }
+    financials = { amountSubunits: outcome.providerAmountSubunits, currency: outcome.providerCurrency };
+    if (!providerPaymentId && outcome.providerPaymentId) providerPaymentId = outcome.providerPaymentId;
+  }
+
+  const check = validateProviderFinancials({
+    expectedAmountMajor: row.amount_paid,
+    expectedCurrency: row.currency,
+    provider: financials,
+  });
+
+  if (!check.ok) {
+    logger.error('payment_financial_validation_failed', {
+      purchaseId,
+      provider: row.provider ?? null,
+      providerOrderId: row.provider_order_id ?? null,
+      code: check.code,
+      detail: check.detail ?? null,
+      expectedCurrency: check.expectedCurrency ?? null,
+      providerCurrency: check.providerCurrency ?? null,
+      expectedAmountSubunits: check.expectedAmountSubunits ?? null,
+      providerAmountSubunits: check.providerAmountSubunits ?? null,
+    });
+    // No completion, no grant, no invoice. The purchase is left exactly as it
+    // was so the existing recovery machinery can settle it later if the
+    // provider subsequently reports authoritative, matching financials.
+    return { ok: false, detail: check.detail ?? check.code, code: check.code };
+  }
+
   const fulfillable = await reopenSystemClosedPurchase(purchaseId);
   if (!fulfillable) {
     logger.warn('payment_fulfillment_blocked', { purchaseId, reason: 'not_reopenable' });
@@ -142,7 +213,12 @@ async function closeOnePurchase(row: PurchaseRow, reason: ClosureReason): Promis
     logger.warn('payment_close_overridden_by_provider', {
       purchaseId, reason, providerRawStatus: outcome.providerRawStatus ?? null,
     });
-    const f = await fulfillProviderConfirmedPurchase(purchaseId, outcome.providerPaymentId);
+    // The provider was just resolved authoritatively — hand the financials
+    // straight to the gate rather than making it fetch them a second time.
+    const f = await fulfillProviderConfirmedPurchase(purchaseId, outcome.providerPaymentId, {
+      amountSubunits: outcome.providerAmountSubunits,
+      currency: outcome.providerCurrency,
+    });
     return f.ok
       ? { purchaseId, action: 'fulfilled', detail: 'provider_confirmed_paid' }
       : { purchaseId, action: 'deferred_unknown', detail: f.detail };

@@ -41,16 +41,50 @@ function safeParse(s: string): any {
 }
 
 /** Extract (order_id, payment_id) from a SUCCESS webhook, else null. */
-function extractSuccess(provider: PaymentProviderId, evt: any): { orderId: string; paymentId: string } | null {
+interface WebhookSuccess {
+  orderId: string;
+  paymentId: string;
+  /** Minor units, as stated by the provider in the signature-verified payload. */
+  amountSubunits?: number;
+  currency?: string;
+}
+
+/**
+ * Extract the settlement facts from a SUCCESS payload.
+ *
+ * Amount and currency are carried through deliberately: they previously were
+ * not, so nothing downstream could tell a ₹1 capture from a ₹2,520 one. The
+ * payload is safe to read for this because the HMAC over the raw body has
+ * already been verified — these are the provider's own figures, not a client's.
+ * Anything absent stays `undefined`, and the financial validator then blocks
+ * fulfillment as UNKNOWN rather than guessing.
+ */
+function extractSuccess(provider: PaymentProviderId, evt: any): WebhookSuccess | null {
   if (provider === 'razorpay') {
     if (evt?.event !== 'payment.captured') return null;
     const e = evt?.payload?.payment?.entity ?? {};
-    return e.order_id ? { orderId: String(e.order_id), paymentId: String(e.id ?? '') } : null;
+    if (!e.order_id) return null;
+    return {
+      orderId: String(e.order_id),
+      paymentId: String(e.id ?? ''),
+      // Razorpay states payment amounts in minor units already.
+      amountSubunits: Number.isFinite(Number(e.amount)) ? Number(e.amount) : undefined,
+      currency: typeof e.currency === 'string' && e.currency ? String(e.currency).toUpperCase() : undefined,
+    };
   }
   // cashfree
   if (!String(evt?.type ?? '').toUpperCase().includes('SUCCESS')) return null;
   const orderId = evt?.data?.order?.order_id;
-  return orderId ? { orderId: String(orderId), paymentId: String(evt?.data?.payment?.cf_payment_id ?? '') } : null;
+  if (!orderId) return null;
+  // Cashfree states order amounts in MAJOR units → convert to minor.
+  const cfAmount = Number(evt?.data?.order?.order_amount);
+  const cfCurrency = evt?.data?.order?.order_currency;
+  return {
+    orderId: String(orderId),
+    paymentId: String(evt?.data?.payment?.cf_payment_id ?? ''),
+    amountSubunits: Number.isFinite(cfAmount) ? Math.round(cfAmount * 100) : undefined,
+    currency: typeof cfCurrency === 'string' && cfCurrency ? String(cfCurrency).toUpperCase() : undefined,
+  };
 }
 
 // Raw body required for signature verification.
@@ -112,10 +146,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           // fulfillment. This is what stops "expired → late webhook → lost
           // payment". A provider-declined purchase carries no reopenable
           // marker and is still refused.
+          // The provider's own amount/currency travel with the call so the
+          // financial gate can compare them against the purchase before any
+          // credit moves. A payload missing them resolves to UNKNOWN and is
+          // blocked, not granted.
           const fulfillment = await fulfillProviderConfirmedPurchase(
             (purchase as any).id, success.paymentId || undefined,
+            { amountSubunits: success.amountSubunits, currency: success.currency },
           );
           allocated = fulfillment.ok;
+          if (!fulfillment.ok) {
+            logger.error('payment_webhook_fulfillment_blocked', {
+              provider, eventId: result.eventId, purchaseId: (purchase as any).id,
+              code: fulfillment.code ?? null, detail: fulfillment.detail ?? null,
+            });
+          }
         }
       } else {
         // A verified success we cannot match to a local purchase is money we
