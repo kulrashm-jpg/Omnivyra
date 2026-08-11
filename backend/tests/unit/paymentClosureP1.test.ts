@@ -187,7 +187,7 @@ describe('M5 — client-reported closure is a request, not a verdict', () => {
 
   it('TEST 7 — provider-confirmed success BEATS a client failure report', async () => {
     const p = seed();
-    providerOutcome.mockResolvedValue({ outcome: 'paid', providerPaymentId: 'pay_win', providerRawStatus: 'paid' });
+    providerOutcome.mockResolvedValue({ outcome: 'paid', providerPaymentId: 'pay_win', providerRawStatus: 'paid', providerAmountSubunits: 252000, providerCurrency: 'INR' });
 
     const out = await closePurchaseFromClient({ purchaseId: p.id, organizationId: ORG, reason: 'client_reported_failure' });
 
@@ -268,7 +268,7 @@ describe('B3 — stale-pending expiry is provider-checked, never clock-only', ()
 
   it('FULFILLS rather than expires when the provider says paid — the "browser disappeared" recovery', async () => {
     const p = seed({ created_at: old() });
-    providerOutcome.mockResolvedValue({ outcome: 'paid', providerPaymentId: 'pay_recovered' });
+    providerOutcome.mockResolvedValue({ outcome: 'paid', providerPaymentId: 'pay_recovered', providerAmountSubunits: 252000, providerCurrency: 'INR' });
 
     const r = await expireStalePendingPurchases({ ttlMinutes: 30 });
 
@@ -307,6 +307,10 @@ describe('expired → late webhook must NOT lose the payment', () => {
     await expireStalePendingPurchases({ ttlMinutes: 30 });
     expect(get(p.id).status).toBe('failed');
 
+    // Post-hardening the gate resolves the provider when no financials are
+    // passed in, so a provider-confirmed success must be stated here.
+    providerOutcome.mockResolvedValue({ outcome: 'paid', providerPaymentId: 'pay_ok', providerAmountSubunits: 252000, providerCurrency: 'INR' });
+
     // Razorpay finally delivers payment.captured.
     const f = await fulfillProviderConfirmedPurchase(p.id, 'pay_late');
 
@@ -342,6 +346,9 @@ describe('expired → late webhook must NOT lose the payment', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 describe('TESTS 3/4/5/9 — duplicate delivery and replay cannot duplicate money', () => {
   it('TEST 3 — the same provider success applied twice grants once', async () => {
+    // Post-hardening the gate resolves the provider when no financials are
+    // passed in, so a provider-confirmed success must be stated here.
+    providerOutcome.mockResolvedValue({ outcome: 'paid', providerPaymentId: 'pay_ok', providerAmountSubunits: 252000, providerCurrency: 'INR' });
     const p = seed();
     await fulfillProviderConfirmedPurchase(p.id, 'pay_dup');
     await fulfillProviderConfirmedPurchase(p.id, 'pay_dup');
@@ -352,6 +359,9 @@ describe('TESTS 3/4/5/9 — duplicate delivery and replay cannot duplicate money
   });
 
   it('TEST 4 — verify fulfills, a later webhook is a no-op', async () => {
+    // Post-hardening the gate resolves the provider when no financials are
+    // passed in, so a provider-confirmed success must be stated here.
+    providerOutcome.mockResolvedValue({ outcome: 'paid', providerPaymentId: 'pay_ok', providerAmountSubunits: 252000, providerCurrency: 'INR' });
     const p = seed();
     await fulfillProviderConfirmedPurchase(p.id, 'pay_verify');   // verify path
     const webhook = await fulfillProviderConfirmedPurchase(p.id, 'pay_verify'); // webhook path
@@ -442,7 +452,7 @@ describe('P2-A — the expiry sweep survives a bad row and never lies about a DB
 
     providerOutcome.mockImplementation(async (_p: unknown, orderId: string) =>
       orderId === paid.provider_order_id
-        ? { outcome: 'paid', providerPaymentId: 'pay_a3', providerRawStatus: 'paid' }
+        ? { outcome: 'paid', providerPaymentId: 'pay_a3', providerRawStatus: 'paid', providerAmountSubunits: 252000, providerCurrency: 'INR' }
         : { outcome: 'unpaid', providerRawStatus: 'created' });
 
     const res = await expireStalePendingPurchases({ ttlMinutes: 1 });

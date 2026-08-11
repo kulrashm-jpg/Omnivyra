@@ -3,14 +3,22 @@
  * purchases (status='completed' AND fulfillment_status != 'completed'), which
  * can occur if credit allocation failed AFTER the status flip in completePurchase.
  *
- * Repair re-runs the EXISTING idempotent fulfillment (`completePurchase` →
- * `createCredit` with the deterministic key) + idempotent invoice generation.
- * → never double-grants, never duplicate invoices, safe to run repeatedly.
+ * Repair goes through `fulfillProviderConfirmedPurchase` — the one settlement
+ * gate — rather than calling `completePurchase` directly. That matters for more
+ * than tidiness: the gate re-resolves the provider and re-validates amount and
+ * currency, so reconciliation cannot become a side door that settles a purchase
+ * the verify/webhook paths would refuse. Beyond the gate it is the same
+ * idempotent fulfillment (`createCredit` with the deterministic key + idempotent
+ * invoice generation) → never double-grants, never duplicate invoices, safe to
+ * run repeatedly.
+ *
+ * Consequence worth knowing: if the provider is unreachable, a repair defers
+ * rather than completing, and the next sweep retries. Delay, not loss.
+ *
  * Read-only in dry-run.
  */
 import { supabase } from '../../db/supabaseClient';
-import { completePurchase } from '../purchaseService';
-import { generateTopupInvoice } from './topupInvoiceService';
+import { fulfillProviderConfirmedPurchase } from './purchaseClosureService';
 
 export type ReconScopeKind = 'single' | 'org' | 'global';
 
@@ -79,14 +87,18 @@ export async function reconcile(scope: ReconScope, dryRun = true): Promise<Recon
       continue;
     }
     try {
-      const r = await completePurchase(row.id, row.reference_id ?? undefined); // idempotent
-      if (r.success) {
-        try { await generateTopupInvoice(row.id); } catch { /* invoice best-effort */ }
+      // Routed through the provider-authoritative fulfillment gate rather than
+      // calling completePurchase directly. Repair re-resolves the provider and
+      // re-validates amount + currency, so reconciliation cannot become a way
+      // to settle a purchase that the financial validator would refuse on the
+      // verify/webhook paths. Still idempotent: a healthy row re-grants nothing.
+      const r = await fulfillProviderConfirmedPurchase(row.id, row.reference_id ?? undefined);
+      if (r.ok) {
         repaired++;
         details.push({ purchaseId: row.id, organizationId: row.organization_id, action: 'repaired' });
       } else {
         skipped++;
-        details.push({ purchaseId: row.id, organizationId: row.organization_id, action: 'skipped', detail: (r as any).reason });
+        details.push({ purchaseId: row.id, organizationId: row.organization_id, action: 'skipped', detail: r.detail ?? r.code });
       }
     } catch (e: any) {
       skipped++;

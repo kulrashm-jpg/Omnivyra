@@ -77,8 +77,26 @@ export interface ProviderOrderOutcome {
   providerPaymentId?: string;
   /** Provider's own status string, for logs/forensics. Never surfaced to users. */
   providerRawStatus?: string;
+  /**
+   * Amount the PROVIDER reports as captured, in minor units (paise/cents).
+   * Minor units so the comparison is integer-exact — no float rounding.
+   *
+   * Present only when `outcome === 'paid'` AND the provider stated it
+   * authoritatively. `undefined` means "not established", which the financial
+   * validator treats as UNKNOWN and therefore blocks fulfillment — a provider
+   * saying "paid" without a trustworthy amount is not sufficient to grant.
+   */
+  providerAmountSubunits?: number;
+  /** ISO-4217 the provider reports for the capture. Same presence rule as above. */
+  providerCurrency?: string;
   /** Populated when outcome is `unknown` — why we could not decide. */
   reason?: string;
+}
+
+/** Provider-stated financials handed to the validator by a settlement path. */
+export interface ProviderFinancials {
+  amountSubunits?: number | null;
+  currency?: string | null;
 }
 
 /** Common adapter shape — every provider returns the same shapes. */

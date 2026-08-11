@@ -107,9 +107,14 @@ export class RazorpayAdapter implements PaymentAdapter {
       return { outcome: 'unpaid', providerRawStatus: rawStatus };
     }
 
-    // Paid — resolve the captured payment id so fulfillment carries a real
-    // provider reference. A failure here does not change the paid verdict.
+    // Paid — resolve the CAPTURED payment so fulfillment carries a real provider
+    // reference AND the authoritative amount/currency the financial validator
+    // needs. `status === 'paid'` on the order alone is deliberately not enough:
+    // without the captured entity we cannot state what was actually taken, and
+    // the validator must then treat it as UNKNOWN rather than grant.
     let providerPaymentId: string | undefined;
+    let providerAmountSubunits: number | undefined;
+    let providerCurrency: string | undefined;
     try {
       const pres = await fetch(`${API_BASE}/orders/${encodeURIComponent(providerOrderId)}/payments`, {
         method: 'GET',
@@ -119,10 +124,21 @@ export class RazorpayAdapter implements PaymentAdapter {
         const plist = (await pres.json()) as any;
         const captured = (plist?.items ?? []).find((p: any) => p?.status === 'captured');
         if (captured?.id) providerPaymentId = String(captured.id);
+        // Razorpay reports payment amounts in minor units already.
+        if (Number.isFinite(Number(captured?.amount))) providerAmountSubunits = Number(captured.amount);
+        if (typeof captured?.currency === 'string' && captured.currency) {
+          providerCurrency = String(captured.currency).toUpperCase();
+        }
       }
-    } catch { /* paid verdict stands without the payment id */ }
+    } catch { /* financials stay undefined → validator resolves UNKNOWN */ }
 
-    return { outcome: 'paid', providerPaymentId, providerRawStatus: rawStatus };
+    return {
+      outcome: 'paid',
+      providerPaymentId,
+      providerAmountSubunits,
+      providerCurrency,
+      providerRawStatus: rawStatus,
+    };
   }
 }
 
