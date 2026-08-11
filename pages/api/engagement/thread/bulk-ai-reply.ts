@@ -13,6 +13,7 @@ import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/com
 import { getControls } from '../../../../backend/services/engagementGovernanceService';
 import { bulkReplyThreads } from '../../../../backend/services/bulkEngagementService';
 import { generateReplySuggestions } from '../../../../backend/services/engagementAiAssistantService';
+import { getThreadActionability } from '../../../../backend/services/engagementThreadService';
 
 const MAX_BATCH = 20;
 
@@ -56,12 +57,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(403).json({ error: 'Bulk reply is disabled for this organization' });
     }
 
+    const batch = rawThreadIds.slice(0, MAX_BATCH);
+
+    // ── F5: actionability pre-filter ────────────────────────────────────────
+    //    A bulk operation multiplies a correctness error by the batch size, so
+    //    non-actionable threads are removed BEFORE any AI call rather than
+    //    being caught downstream. Two things follow from this:
+    //      1. we never spend tokens drafting a reply to our own last message;
+    //      2. `skipped` stays deterministic — a thread the client selected from
+    //         a stale list is reported, not silently dropped.
+    //
+    //    The client's selection is advisory. This resolves ownership server-side
+    //    from the canonical thread service, so a stale or hand-crafted
+    //    thread_ids array cannot widen what the batch is allowed to touch.
+    //    Cross-company ids resolve to no row and land in the same skip bucket.
+    const actionabilityByThread = await getThreadActionability(organizationId, batch);
+    const actionableIds = batch.filter((id) => actionabilityByThread.get(id) === true);
+    const nonActionableIds = batch.filter((id) => actionabilityByThread.get(id) !== true);
+
     const getReplyText = async (
       _threadId: string,
       messageId: string,
       _platform: string
     ): Promise<string | null> => {
       try {
+        // Second line of defence. The pre-filter above closes the window as far
+        // as it can, but generation and dispatch are not atomic: a company reply
+        // can land in between. generateReplySuggestions re-checks canonical
+        // actionability and throws ThreadNotActionableError, which surfaces here
+        // as a null reply and is counted as a skip by bulkReplyThreads.
         const result = await generateReplySuggestions(messageId, organizationId);
         const replies = result.suggested_replies ?? [];
         const top = replies[0]?.text?.trim();
@@ -71,9 +95,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       }
     };
 
-    const { sent, skipped, errors } = await bulkReplyThreads(
+    const { sent, skipped, errors, outcomes } = await bulkReplyThreads(
       organizationId,
-      rawThreadIds.slice(0, MAX_BATCH),
+      actionableIds,
       getReplyText,
       roleGate?.userId
     );
@@ -81,7 +105,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(200).json({
       success: true,
       sent,
-      skipped,
+      // Existing shape preserved: `skipped` remains the single total the UI
+      // already renders. Threads rejected for actionability are additive to it.
+      skipped: skipped + nonActionableIds.length,
+      // Pre-filter rejections PLUS any thread that turned non-actionable between
+      // selection and dispatch — the send-time gate inside bulkReplyThreads.
+      skipped_not_actionable: nonActionableIds.length + (outcomes?.skipped_not_actionable ?? 0),
+      // §11: every attempted dispatch has an explainable terminal outcome.
+      outcomes,
       errors: errors.slice(0, 5),
     });
   } catch (err) {

@@ -4,6 +4,28 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * GET /api/engagement/threads
  * Returns engagement threads from the unified model.
  * Supports filters: platform, organization_id, date_range.
+ *
+ * CONTRACT (F7): this is a RAW thread listing, NOT the Engagement Center's
+ * actionable work queue. It returns the thread envelope only — ids, platform,
+ * timestamps, messaging-window metadata — and deliberately exposes no
+ * ownership, unread, latest-message or `actionable` state.
+ *
+ * That is the whole point: actionability is decided in exactly one place
+ * (engagementThreadService.getThreads → ThreadSummary.actionable), and the
+ * actionable surfaces consume it there:
+ *   /api/engagement/inbox           → getThreads
+ *   /api/engagement/work-queue      → getDailyWorkQueue
+ *   /api/engagement/platform-counts → getPlatformCounts
+ * This route makes no actionability claim, so it cannot contradict them.
+ *
+ * Do NOT add `actionable`/`unread_count` filtering or fields here. Its
+ * consumers are not actionable surfaces:
+ *   - components/thread/ThreadContinuationView correlates a just-published post
+ *     to its thread by platform_thread_id/recency;
+ *   - pages/whatsapp/inbox lists WhatsApp conversations, and WhatsApp is not in
+ *     the canonical ownership platform set at all — a canonical verdict there
+ *     would come from a model that does not govern it.
+ * Locked by backend/tests/unit/engagementRawThreadRouteF7.test.ts.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';

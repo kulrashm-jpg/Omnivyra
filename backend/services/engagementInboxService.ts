@@ -13,19 +13,23 @@ export type PlatformCounts = Record<
   { thread_count: number; unread_count: number; max_priority_tier: 'high' | 'medium' | 'low' }
 >;
 
+/**
+ * D2: badge counts are derived, never summed from the cache.
+ *
+ * This previously read `engagement_threads.unread_count` straight off the table
+ * and summed it. That column is an ingestion-time cache with no outbound
+ * rewrite, so after the connected account replied the badge still showed unread
+ * while the work queue correctly showed zero — two surfaces disagreeing about
+ * the same thread.
+ *
+ * Counts now come from `getThreads`, which resolves ownership through the one
+ * authoritative predicate (`isAuthorSelf` → author_id ↔ connected-account map →
+ * unresolved ⇒ external) and returns an unread value already zeroed when the
+ * latest turn is ours. No second ownership predicate, no schema change, no
+ * client-side correction.
+ */
 export async function getPlatformCounts(organizationId: string): Promise<PlatformCounts> {
   if (!organizationId) return {} as PlatformCounts;
-
-  const { data, error } = await supabase
-    .from('engagement_threads')
-    .select('platform, priority_score, unread_count')
-    .eq('organization_id', organizationId)
-    .eq('ignored', false);
-
-  if (error) {
-    console.warn('[engagementInboxService] getPlatformCounts error', error.message);
-    return {} as PlatformCounts;
-  }
 
   const result: PlatformCounts = {};
   for (const p of PLATFORMS) {
@@ -36,12 +40,36 @@ export async function getPlatformCounts(organizationId: string): Promise<Platfor
     };
   }
 
-  for (const r of data ?? []) {
-    const platform = (r as { platform: string }).platform?.toLowerCase() ?? '';
+  let threads: Awaited<ReturnType<typeof getThreads>>;
+  try {
+    // Platform-agnostic: one pass, then bucket. `exclude_ignored` mirrors the
+    // previous `.eq('ignored', false)` scope so the thread_count denominator is
+    // unchanged by this fix.
+    threads = await getThreads({
+      organization_id: organizationId,
+      platform: null,
+      limit: 500,
+      exclude_ignored: true,
+    });
+  } catch (error) {
+    console.warn(
+      '[engagementInboxService] getPlatformCounts error',
+      error instanceof Error ? error.message : String(error),
+    );
+    return {} as PlatformCounts;
+  }
+
+  for (const t of threads) {
+    const platform = (t.platform ?? '').toLowerCase();
     if (!result[platform]) result[platform] = { thread_count: 0, unread_count: 0, max_priority_tier: 'low' };
+    // thread_count remains every non-ignored thread (unchanged denominator).
     result[platform].thread_count += 1;
-    result[platform].unread_count += Number((r as { unread_count?: number }).unread_count ?? 0) || 0;
-    const score = Number((r as { priority_score?: number }).priority_score) ?? 0;
+    // F2: unread is contributed only by threads that are actually actionable.
+    // `getThreads` already zeroes unread on an answered thread, so this is
+    // belt-and-braces against the two ever drifting apart — the badge reads the
+    // canonical `actionable` flag rather than trusting a number.
+    result[platform].unread_count += t.actionable ? Number(t.unread_count ?? 0) || 0 : 0;
+    const score = Number(t.priority_score ?? 0) || 0;
     const tier = score >= 50 ? 'high' : score >= 25 ? 'medium' : 'low';
     const cur = result[platform].max_priority_tier;
     if (tier === 'high') result[platform].max_priority_tier = 'high';

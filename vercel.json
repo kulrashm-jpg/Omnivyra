@@ -58,6 +58,10 @@
     {
       "path": "/api/cron/billing-checkout-expiry",
       "schedule": "7,22,37,52 * * * *"
+    },
+    {
+      "path": "/api/cron/engagement-dispatch-recovery",
+      "schedule": "*/15 * * * *"
     }
   ],
   "experimentalServices": {

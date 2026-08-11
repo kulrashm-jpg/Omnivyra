@@ -115,6 +115,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         resolvedThreadId = await resolveThreadIdFromSignal(signal_id);
       }
 
+      // ── F5-P1.1: tenant authorization for the draft's thread ────────────
+      //    `thread_id` arrives from the client, and the signal path resolves a
+      //    thread through campaign tables that carry no tenant check of their
+      //    own. Neither established that the thread belongs to the caller's
+      //    company, so a draft row could be created pointing at a foreign
+      //    thread. Downstream protections in /api/engagement/reply meant that
+      //    draft could never be SENT cross-tenant, but a draft whose thread
+      //    relationship was never authorized should not exist at all.
+      //
+      //    This is TENANT AUTHORIZATION, deliberately distinct from Engagement
+      //    actionability and from connected-account ownership. It uses the same
+      //    engagement_threads.organization_id check every other engagement
+      //    route performs; no new ownership predicate is introduced.
+      if (resolvedThreadId) {
+        const { data: ownerThread } = await supabase
+          .from('engagement_threads')
+          .select('organization_id')
+          .eq('id', resolvedThreadId)
+          .maybeSingle();
+        if (
+          !ownerThread ||
+          (ownerThread as { organization_id?: string | null }).organization_id !== company_id
+        ) {
+          // Fail closed on unknown/deleted threads too: a thread we cannot
+          // resolve is a thread we cannot prove the caller owns.
+          return res.status(403).json({
+            error: 'Thread not found or access denied',
+            code: 'THREAD_ACCESS_DENIED',
+          });
+        }
+      }
+
       if (resolvedThreadId) {
         const { data: draftRow, error: draftErr } = await supabase
           .from('ai_message_drafts')

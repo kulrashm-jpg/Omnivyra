@@ -7,16 +7,45 @@
 
 import { evaluateCommunityAiEngagement, isOmnivyraEnabled } from './omnivyraClientV1';
 import { getThreadMessages } from './engagementMessageService';
+import { isThreadActionable, getOrgAuthorIds } from './engagementThreadService';
 import { supabase } from '../db/supabaseClient';
 import { getCanonicalProfile as getProfile } from '@/backend/services/context/canonicalProfileAdapter';
 import { resolveCompanyGroundingGuard } from '@/backend/services/context/canonicalContentContextResolver';
 import { runCompletionWithOperation } from './aiGateway';
-import { isDmMessageType, stripSenderColonPrefix } from '../../lib/engagement/messageRoles';
+import { isAuthorSelf, isDmMessageType, stripSenderColonPrefix } from '../../lib/engagement/messageRoles';
 // WAVE-1A-002/1B-002 §C6: canonical prompt-safety + outbound-moderation primitives (shared).
 import { hardenText, hardenBlock, moderateBeforePersist } from './ai/safety';
 // WS-2A: Coordination Platform shadow adoption (dark by default; never alters replies).
 import { observeEngagementSemanticShadow } from './intelligence/coordination/adoption/engagementSemanticShadow';
 import { config } from '@/config';
+
+/**
+ * F5: raised when AI generation is requested for a thread whose latest
+ * authoritative turn is NOT external — i.e. the company has already responded,
+ * or the thread's ownership state could not be established at all.
+ *
+ * Typed (rather than a bare Error) so callers can distinguish "this thread does
+ * not need a reply" — a deterministic, expected outcome that must surface as a
+ * skip or a 409 — from a genuine generation failure.
+ */
+export class ThreadNotActionableError extends Error {
+  readonly code = 'THREAD_NOT_ACTIONABLE' as const;
+  readonly threadId: string;
+
+  constructor(threadId: string) {
+    super(
+      'Thread is not awaiting a response: its latest turn belongs to the connected company, ' +
+        'or its ownership state could not be resolved.',
+    );
+    this.name = 'ThreadNotActionableError';
+    this.threadId = threadId;
+  }
+}
+
+export function isThreadNotActionableError(err: unknown): err is ThreadNotActionableError {
+  return err instanceof ThreadNotActionableError
+    || (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'THREAD_NOT_ACTIONABLE');
+}
 
 export type ToneVariant =
   | 'accept'
@@ -217,6 +246,7 @@ async function generateReplySuggestionsViaOpenAi(
     '- Read the conversation history first. If you have already greeted them earlier in the thread, do NOT greet again — pick up where the conversation left off.',
     '- Reply DIRECTLY to what they just said. If they asked a question, answer it (or ask the precise clarifying question that actually unblocks an answer). If they shared news, react to it like a human would.',
     '- Never repeat what they said back at them in quotation marks. Never start with "Sure!" or "Absolutely!" boilerplate.',
+    '- Do not reuse the opening line, sentence shape, or closing ask of your own earlier turns in this conversation — they are marked "YOU (the creator)". Advance the thread rather than restating it. A repeated phrase is fine when the context genuinely calls for it; do not force an unnatural wording just to differ.',
     '- Give three materially different response paths, not three paraphrases. Use accept/help, decline/boundary, and clarify/defer when the latest message is a request, availability ask, opportunity, or invitation.',
     '- For job, referral, recruitment, resume, hiring, candidate, or opportunity messages, answer that specific career context. The three paths should usually be: help/check network, polite boundary/no current opening, and ask for resume/role/location/timeline details.',
     '- If accept/decline/clarify does not fit, still make each option a different useful action: answer directly, ask for context, defer politely, close the loop, or move to the next step.',
@@ -234,6 +264,7 @@ async function generateReplySuggestionsViaOpenAi(
     '- The reply MUST clearly engage with what THIS specific commenter said. If the comment is vague (e.g. "test", "nice"), respond like a real person would to a vague comment — short, warm, and human, not a generic AI acknowledgement.',
     '- The reply should feel grounded in the original post — but only weave in the post topic when the comment actually invites that, not as a forced tie-in.',
     '- Do NOT quote the comment back verbatim in quotation marks. Do NOT use phrases like "Glad this resonated" or "Thanks for reaching out". Sound like a human writing on their phone.',
+    '- If "ALREADY SAID IN THIS THREAD" shows a reply of your own, do not reuse its opening line, its sentence shape, or its closing ask. Move the conversation forward instead of restating it. Repeating a phrase is fine when the context genuinely calls for it — do not reach for an odd wording just to be different.',
     '- Give three materially different response paths, not three paraphrases. For requests, use accept/help, decline/boundary, and clarify/defer. For normal comments, use different useful actions such as acknowledge, ask a follow-up, add context, or invite the next step.',
     '- For job, referral, recruitment, resume, hiring, candidate, or opportunity comments, address that career context directly. Do not return generic "happy to help with this" replies.',
     '- Each reply must be self-contained, ready to paste, no placeholders, no surrounding quotes.',
@@ -272,6 +303,23 @@ async function generateReplySuggestionsViaOpenAi(
     if (parentComment) {
       userParts.push(
         `PARENT COMMENT (${parentComment.author ?? 'someone'}):\n${hardenBlock('user_input', parentComment.content.trim())}`
+      );
+    }
+    // F6: surface what has already been said in this comment thread — above all
+    // the company's OWN earlier replies. Without this the model could not know
+    // it had already answered here, so a follow-up comment reliably drew the
+    // same opener and the same closing ask. Capped at the last 8 turns: comment
+    // threads are shallow and the recent turns carry the repetition risk.
+    const priorTurns = conversation.slice(-8);
+    if (priorTurns.length > 0) {
+      const lines = priorTurns.map((turn) => {
+        const who = turn.self ? 'YOU (the creator)' : (turn.author || 'Someone else');
+        // WAVE-1A-002 §C6: prior turns are untrusted DATA, same as DM history.
+        const cleanedTurn = hardenText('conversation_history', stripSenderColonPrefix(turn.content)) ?? '';
+        return `${who}: ${cleanedTurn}`;
+      });
+      userParts.push(
+        `ALREADY SAID IN THIS THREAD (context only — do NOT reply to these):\n${lines.join('\n')}`
       );
     }
     userParts.push(
@@ -396,6 +444,20 @@ export async function generateReplySuggestions(
     throw new Error('Thread does not belong to the authorized organization');
   }
 
+  // ── F5: canonical actionability gate ────────────────────────────────────
+  //    This is the single chokepoint every AI reply-generation path funnels
+  //    through (/api/engagement/suggestions and thread/bulk-ai-reply both land
+  //    here), so the guard is applied once rather than re-implemented per route.
+  //
+  //    The answer comes from engagementThreadService — the same derivation the
+  //    Work Queue, Inbox and badge counts consume. Nothing about ownership is
+  //    inferred locally: no unread_count read, no author comparison, no text
+  //    heuristic. If the company already replied, drafting another reply would
+  //    be drafting a reply to ourselves.
+  if (!(await isThreadActionable(organization_id, String(message.thread_id)))) {
+    throw new ThreadNotActionableError(String(message.thread_id));
+  }
+
   // Original post text — for People-Reaction threads, the comment itself is
   // a response to a post whose body lives on engagement_threads.raw_payload.
   // Without this, the model has no idea what the conversation is *about* and
@@ -434,32 +496,67 @@ export async function generateReplySuggestions(
     messages.find((entry) => (entry.content ?? '').trim() === (message.content ?? '').trim()) ??
     null;
 
-  // For DMs we need to know which side each message came from so the model
-  // can read the back-and-forth correctly. ThreadMessage doesn't expose
-  // direction, so we pull it in a single side query keyed by id.
+  // We need to know which side each message came from so the model can read the
+  // back-and-forth correctly. ThreadMessage exposes neither direction nor
+  // raw_payload, so we pull the ownership signals in a single side query.
+  //
+  // F6: this previously read `direction` alone, and only for DMs. Both limits
+  // were defects:
+  //   - `direction` is one of FIVE signals the canonical predicate accepts. A
+  //     company turn carrying `raw_payload.author_self` or a "You:" prefix but
+  //     no direction was labelled "Them", so the model attributed the company's
+  //     own words to the other person.
+  //   - comments skipped this entirely, so a comment thread reached the model
+  //     with no record of what the company had already said.
+  // Ownership is resolved here by the SAME `isAuthorSelf` + connected-account
+  // join the Work Queue and F5 use. No local heuristic, no second predicate.
   const isDmContext = isDmMessageType(message.message_type);
-  const directionByMessageId = new Map<string, 'incoming' | 'outgoing'>();
-  if (isDmContext && messages.length > 0) {
+  const selfByMessageId = new Map<string, boolean>();
+  if (messages.length > 0) {
     const ids = messages.map((m) => m.message_id);
-    const { data: dirRows } = await supabase
-      .from('engagement_messages')
-      .select('id, direction')
-      .in('id', ids);
-    for (const row of dirRows ?? []) {
-      const dir = (row as any).direction;
-      if (dir === 'incoming' || dir === 'outgoing') {
-        directionByMessageId.set((row as any).id, dir);
-      }
+    const [{ data: signalRows }, orgAuthorIds] = await Promise.all([
+      supabase
+        .from('engagement_messages')
+        .select('id, direction, raw_payload, author_id')
+        .in('id', ids),
+      getOrgAuthorIds(organization_id).catch(() => new Set<string>()),
+    ]);
+    for (const row of signalRows ?? []) {
+      const r = row as {
+        id: string;
+        direction?: string | null;
+        raw_payload?: Record<string, unknown> | null;
+        author_id?: string | null;
+      };
+      const raw = (r.raw_payload && typeof r.raw_payload === 'object' ? r.raw_payload : {}) as Record<string, unknown>;
+      const selfByAuthor = Boolean(r.author_id && orgAuthorIds.has(r.author_id));
+      selfByMessageId.set(
+        r.id,
+        selfByAuthor
+          || isAuthorSelf({
+            direction: r.direction ?? null,
+            author_self: raw.author_self === true,
+            sender_self: raw.sender_self === true,
+            content: messages.find((m) => m.message_id === r.id)?.content ?? null,
+          }),
+      );
     }
   }
+  const isSelfTurnId = (messageId: string): boolean => selfByMessageId.get(messageId) === true;
 
-  const conversationTurns: ConversationTurn[] = isDmContext
-    ? messages.map((entry) => ({
-        author: entry.author?.display_name ?? entry.author?.username ?? null,
-        content: entry.content ?? '',
-        self: directionByMessageId.get(entry.message_id) === 'outgoing',
-      }))
-    : [];
+  // F6: history is now assembled for comments as well as DMs. A comment thread
+  // routinely contains the company's own earlier replies — /api/engagement/reply
+  // mirrors every sent comment back into engagement_messages — and withholding
+  // them is what let the model re-issue the same opener on the next turn.
+  // The target message is excluded: it is surfaced separately as the thing
+  // being replied to, and listing it twice invites the model to echo it.
+  const conversationTurns: ConversationTurn[] = messages
+    .filter((entry) => isDmContext || entry.message_id !== message_id)
+    .map((entry) => ({
+      author: entry.author?.display_name ?? entry.author?.username ?? null,
+      content: entry.content ?? '',
+      self: isSelfTurnId(entry.message_id),
+    }));
 
   const targetAuthorName =
     matchedMessage?.author?.display_name ?? matchedMessage?.author?.username ?? null;
@@ -475,8 +572,7 @@ export async function generateReplySuggestions(
     );
     threadContextLines.push('CONVERSATION HISTORY (oldest → newest):');
     for (const entry of messages) {
-      const isSelfTurn = directionByMessageId.get(entry.message_id) === 'outgoing';
-      const who = isSelfTurn
+      const who = isSelfTurnId(entry.message_id)
         ? 'YOU (the creator)'
         : (entry.author?.display_name ?? entry.author?.username ?? 'Them');
       threadContextLines.push(`- ${who}: ${entry.content ?? ''}`);
@@ -503,7 +599,12 @@ export async function generateReplySuggestions(
       threadContextLines.push('OTHER COMMENTS IN THREAD (for context only — do NOT reply to these):');
       for (const entry of messages) {
         if (entry.message_id === message_id) continue;
-        const who = entry.author?.display_name ?? entry.author?.username ?? 'User';
+        // F6: the company's own earlier replies were previously indistinguishable
+        // from other commenters here — they carry no author row, so they rendered
+        // as a bare "User".
+        const who = isSelfTurnId(entry.message_id)
+          ? 'YOU (the creator) — already replied this'
+          : (entry.author?.display_name ?? entry.author?.username ?? 'User');
         threadContextLines.push(`- ${who}: ${entry.content ?? ''}`);
       }
     }
@@ -604,8 +705,12 @@ export async function generateReplySuggestions(
         thread_messages: messages.map((entry) => ({
           author: entry.author?.display_name ?? entry.author?.username,
           content: entry.content,
-          // For DMs, expose direction so the model can read the back-and-forth.
-          self: isDmContext ? directionByMessageId.get(entry.message_id) === 'outgoing' : undefined,
+          // F6: `self` is now supplied on every surface, not just DMs, and comes
+          // from the canonical ownership resolution rather than `direction`
+          // alone. A comment thread's own earlier replies were previously sent
+          // over with `self: undefined`, so this path could not distinguish them
+          // from other commenters either.
+          self: isSelfTurnId(entry.message_id),
         })),
         // Pass the target commenter's identity alongside the message so the
         // model can address them by name and produce a reply that is clearly
