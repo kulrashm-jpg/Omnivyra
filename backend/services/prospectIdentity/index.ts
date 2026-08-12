@@ -45,6 +45,25 @@ export {
   type ResolutionOutcome,
 } from './shadowResolver';
 
+/**
+ * W3 — legacy → canonical transcription. Turns identity evidence that is
+ * already explicit in legacy columns into durable claims. It resolves nothing
+ * and merges nothing; the shadow resolver above still answers "who is this",
+ * and identityResolutionService remains the only resolve-or-create path.
+ */
+export {
+  analyseCanonicalisation,
+  persistClaims,
+  runCanonicalisation,
+  deriveFromPerson,
+  deriveFromContact,
+  CANONICALISATION_VERSION,
+  CANONICALISATION_SOURCE,
+  type DerivedClaim,
+  type DerivationSummary,
+  type BackfillResult,
+} from './canonicalisation';
+
 /** Table names, so callers do not hand-write string literals. */
 export const PROSPECT_ACCOUNTS_TABLE = 'prospect_accounts';
 export const IDENTITY_CLAIMS_TABLE = 'identity_claims';
