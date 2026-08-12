@@ -64,6 +64,24 @@ export {
   type BackfillResult,
 } from './canonicalisation';
 
+/**
+ * W4 — deterministic prospect-account resolution and the canonical
+ * person → account edge. Resolves the EXTERNAL company only; people are still
+ * resolved exclusively by `identityResolutionService.resolveUnifiedPerson`.
+ * Company name is never an identity key, and disagreement returns `ambiguous`
+ * rather than a merge.
+ */
+export {
+  resolveAccountShadow,
+  resolveOrCreateAccount,
+  attachPersonToAccount,
+  ACCOUNT_RESOLUTION_VERSION,
+  W4_SOURCE,
+  type AccountCandidate,
+  type AccountResolution,
+  type AccountOutcome,
+} from './accountResolution';
+
 /** Table names, so callers do not hand-write string literals. */
 export const PROSPECT_ACCOUNTS_TABLE = 'prospect_accounts';
 export const IDENTITY_CLAIMS_TABLE = 'identity_claims';
