@@ -134,5 +134,16 @@ async function handleInboundMessage(phoneNumberId: string, message: any): Promis
       raw_payload:         message,
       status:              'received',
       created_at:          new Date(parseInt(message.timestamp, 10) * 1000).toISOString(),
-    }, { onConflict: 'platform,platform_message_id' });
+      // Message identity is THREAD-scoped, matching every other caller
+      // (engagement/reply.ts, bulkEngagementService.ts). Two reasons it cannot
+      // be (platform, platform_message_id):
+      //   1. that unique index is PARTIAL, and PostgREST emits a column-only
+      //      inference clause, so Postgres refuses it as an arbiter (42P10) —
+      //      which is why no inbound message has ever persisted;
+      //   2. it is platform-GLOBAL. A DO UPDATE keyed on it would let one
+      //      tenant's webhook rewrite another tenant's message row — including
+      //      its thread_id — because thread_id is in the payload. Thread scope
+      //      makes that structurally impossible: a different tenant's copy
+      //      lives in a different thread, so it never matches.
+    }, { onConflict: 'thread_id,platform_message_id' });
 }
