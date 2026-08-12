@@ -25,12 +25,20 @@ type UnifiedPersonRow = {
   external_keys: IdentityExternalKeys | null;
 };
 
-function normalizeEmail(email?: string | null): string | null {
+/**
+ * Exported for reuse by the W1 prospect-identity foundation
+ * (backend/services/prospectIdentity/normalization.ts), so identity_claims are
+ * normalized by the SAME rule this resolver already matches on. A second
+ * implementation would drift, and a claim normalized differently from the spine
+ * it points at is worse than no claim at all. Behaviour is unchanged.
+ */
+export function normalizeEmail(email?: string | null): string | null {
   const normalized = String(email ?? '').trim().toLowerCase();
   return normalized || null;
 }
 
-function normalizePhone(phone?: string | null): string | null {
+/** Exported for reuse by prospectIdentity/normalization.ts — see normalizeEmail. */
+export function normalizePhone(phone?: string | null): string | null {
   const raw = String(phone ?? '').trim();
   if (!raw) return null;
 
