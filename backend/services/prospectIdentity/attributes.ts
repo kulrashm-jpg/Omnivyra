@@ -85,8 +85,15 @@ export interface PersonAttributes {
  */
 export interface AccountAttributes {
   industry?: string | null;
-  /** Exact headcount when asserted. Distinct claim from the band. */
-  employeeCount?: number | null;
+  /**
+   * Exact headcount when asserted. A distinct claim from the band.
+   *
+   * The STRING form is accepted because providers routinely send one ("240"),
+   * and `normalizeEmployeeCount` is deliberately written to take it. LI-1
+   * originally typed this `number | null`, which made the normaliser's string
+   * branch unreachable through this entry point — the two contracts disagreed.
+   */
+  employeeCount?: number | string | null;
   employeeBand?: EmployeeBand | null;
   countryCode?: string | null;
   region?: string | null;
@@ -167,7 +174,20 @@ export function toPersonAttributes(input: PersonAttributes): PersonAttributes {
   };
 }
 
-export function toAccountAttributes(input: AccountAttributes): AccountAttributes {
+/**
+ * What `toAccountAttributes` produces: the same shape as the input, except the
+ * headcount is always an integer because normalisation has already run.
+ *
+ * This exists so widening the INPUT to accept a provider's string does not also
+ * make the OUTPUT claim a normalised headcount might still be a string. It is
+ * assignable to `AccountAttributes`, so consumers that accept the input shape
+ * keep working unchanged.
+ */
+export type NormalizedAccountAttributes = Omit<AccountAttributes, 'employeeCount'> & {
+  employeeCount: number | null;
+};
+
+export function toAccountAttributes(input: AccountAttributes): NormalizedAccountAttributes {
   return {
     industry: normalizeDisplayText(input.industry),
     employeeCount: normalizeEmployeeCount(input.employeeCount),

@@ -69,6 +69,7 @@ export {
   type EmployeeBand,
   type PersonAttributes,
   type AccountAttributes,
+  type NormalizedAccountAttributes,
   type AttributeProvenance,
 } from './attributes';
 
