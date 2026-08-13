@@ -51,8 +51,12 @@ describe('W5 migration declares every spine edge', () => {
     expect(migration).toContain('uq_unified_persons_id_company');
   });
 
-  it('asserts 13 composite person keys: 2 inherited plus 11 from W5', () => {
-    expect(migration).toContain('v_count <> 13');
+  it('asserts a FLOOR of 13 composite person keys: 2 inherited plus 11 from W5', () => {
+    // A floor, not an equality. LI-2 added source_records and source_assertions
+    // as further tenant-safe person references; an exact-count assertion would
+    // have made that correct addition fail W5's own replay.
+    expect(migration).toContain('v_count < 13');
+    expect(migration).not.toContain('v_count <> 13');
   });
 });
 

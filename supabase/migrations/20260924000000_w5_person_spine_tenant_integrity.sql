@@ -176,11 +176,18 @@ BEGIN
     AND t.relname = 'unified_persons'
     AND array_length(con.conkey, 1) = 2;
 
-  -- 2 pre-existing (W2 lead_intelligence, W4 identity_claims) + 11 from W5.
-  IF v_count <> 13 THEN
-    RAISE EXCEPTION 'W5 postcondition: expected 13 composite person FKs, found %', v_count;
+  -- 2 pre-existing (W2 lead_intelligence, W4 identity_claims) + 11 from W5 = 13.
+  --
+  -- This is a FLOOR, not an equality. It was originally written as `<> 13`,
+  -- which asserted that the spine may never gain another tenant-safe reference
+  -- — the opposite of the intent. LI-2 legitimately added two more
+  -- (source_records, source_assertions) and the exact-count check then failed
+  -- this migration's own idempotent replay in CI. A later phase adding a
+  -- composite person FK is the desired behaviour and must not break W5.
+  IF v_count < 13 THEN
+    RAISE EXCEPTION 'W5 postcondition: expected at least 13 composite person FKs, found %', v_count;
   END IF;
-  RAISE NOTICE 'W5: 13 tenant-safe composite person foreign keys verified.';
+  RAISE NOTICE 'W5: % tenant-safe composite person foreign keys verified (floor 13).', v_count;
 END
 $verify$;
 

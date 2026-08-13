@@ -62,6 +62,8 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  await db.query(`DELETE FROM public.source_assertions WHERE provider = 'li2-conc'`);
+  await db.query(`DELETE FROM public.source_records    WHERE provider = 'li2-conc'`);
   await db.query(`DELETE FROM public.prospect_accounts WHERE source = 'w6-conc'`);
   await db.query(`DELETE FROM public.identity_claims  WHERE source = 'w6-conc'`);
   await db.query(`DELETE FROM public.unified_touchpoints WHERE source = 'w6-conc'`);
@@ -132,6 +134,59 @@ describe('a person cannot be re-tenanted out from under a reference', () => {
     expect(r.bBlocked).toBe(true);
     expect(r.bCode).toBe('23503');
     await db.query(`DELETE FROM public.unified_touchpoints WHERE source='w6-conc'`);
+  });
+});
+
+/**
+ * LI-2 — two ingestion workers presented with the same provider record must
+ * produce ONE source record. This is the property that makes repeated and
+ * parallel ingestion safe, and it is guaranteed by the unique index rather than
+ * by any application check.
+ */
+describe('LI-2 — concurrent ingestion of the same source record', () => {
+  const HASH = 'a'.repeat(64);
+  const record = (org: string, recId: string, hash = HASH) => ({
+    sql: `INSERT INTO public.source_records
+            (organization_id, provider, source_entity_type, source_record_id, raw_payload, payload_hash)
+          VALUES ($1,'li2-conc','person',$2,'{}'::jsonb,$3)`,
+    params: [org, recId, hash],
+  });
+
+  it('same tenant + same provider record: the loser gets 23505, one row survives', async () => {
+    const r = await race(record(ORG_A, 'CONC-1'), record(ORG_A, 'CONC-1', 'b'.repeat(64)));
+    expect(r.bCode).toBe('23505');
+    expect(r.bBlocked).toBe(true);
+    const { rows } = await db.query(
+      `SELECT count(*)::int n FROM public.source_records WHERE provider='li2-conc' AND source_record_id='CONC-1'`);
+    expect(rows[0].n).toBe(1);
+  });
+
+  it('different tenants + the same provider record: the second is NOT blocked', async () => {
+    // race() rolls the second transaction back, so only one row can persist —
+    // the provable claim here is that tenant B's insert was accepted rather
+    // than conflicting. Durable independence is asserted non-concurrently in
+    // li2_source_records.test.ts.
+    const r = await race(record(ORG_A, 'CONC-2'), record(ORG_B, 'CONC-2'));
+    expect(r.bCode).toBe('ok');
+    expect(r.bBlocked).toBe(false);
+  });
+
+  it('concurrent identical assertions collapse to one', async () => {
+    const { rows: rec } = await db.query(
+      `INSERT INTO public.source_records
+         (organization_id, provider, source_entity_type, source_record_id, raw_payload, payload_hash)
+       VALUES ($1,'li2-conc','person','CONC-3','{}'::jsonb,$2) RETURNING id`, [ORG_A, HASH]);
+    const assertion = {
+      sql: `INSERT INTO public.source_assertions
+              (organization_id, source_record_id, entity_type, attribute, normalized_value, value_hash, provider)
+            VALUES ($1,$2,'person','job_title','VP Sales',$3,'li2-conc')`,
+      params: [ORG_A, rec[0].id, 'c'.repeat(64)],
+    };
+    const r = await race(assertion, assertion);
+    expect(r.bCode).toBe('23505');
+    const { rows } = await db.query(
+      `SELECT count(*)::int n FROM public.source_assertions WHERE source_record_id=$1`, [rec[0].id]);
+    expect(rows[0].n).toBe(1);
   });
 });
 

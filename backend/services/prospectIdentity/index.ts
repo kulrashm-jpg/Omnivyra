@@ -46,6 +46,33 @@ export {
 } from './shadowResolver';
 
 /**
+ * LI-1 — canonical attribute contracts. Storage shape and the two closed
+ * vocabularies the database enforces, published so ingestion and enrichment
+ * conform to one definition instead of each inventing their own. These are
+ * attributes, never identity: LinkedIn and other profiles remain evidence in
+ * `identity_claims` / `external_keys`, and no attribute carries a unique
+ * constraint.
+ */
+export {
+  SENIORITY_VALUES,
+  EMPLOYEE_BANDS,
+  PERSON_ATTRIBUTE_COLUMNS,
+  ACCOUNT_ATTRIBUTE_COLUMNS,
+  normalizeDisplayText,
+  normalizeCountryCode,
+  normalizeEmployeeCount,
+  isSeniority,
+  isEmployeeBand,
+  toPersonAttributes,
+  toAccountAttributes,
+  type Seniority,
+  type EmployeeBand,
+  type PersonAttributes,
+  type AccountAttributes,
+  type AttributeProvenance,
+} from './attributes';
+
+/**
  * W3 — legacy → canonical transcription. Turns identity evidence that is
  * already explicit in legacy columns into durable claims. It resolves nothing
  * and merges nothing; the shadow resolver above still answers "who is this",

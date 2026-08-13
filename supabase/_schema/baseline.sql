@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict FO14y33STHKhjF81xtwF5qgXHcwpE9QY8ynJPLGwyJdrQhLg9euohNp6aVmVUb0
+\restrict p1TLQZydfi9aJBOIdqxQFGaOewyGpb46bMguhDnGv7pbALOeGklXX9mxRChqQ72
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.10 (Debian 17.10-1.pgdg12+1)
@@ -15809,9 +15809,28 @@ CREATE TABLE public.unified_persons (
     source_of_truth text,
     source_priority jsonb DEFAULT '{"crm": 1, "auth": 2, "manual": 4, "inbound": 3}'::jsonb,
     account_id uuid,
+    full_name text,
+    first_name text,
+    last_name text,
+    job_title text,
+    department text,
+    seniority text,
+    country_code text,
+    region text,
+    city text,
+    timezone text,
+    attributes_source text,
+    attributes_updated_at timestamp with time zone,
+    CONSTRAINT unified_persons_attributes_provenance_coherent CHECK (((attributes_source IS NULL) = (attributes_updated_at IS NULL))),
+    CONSTRAINT unified_persons_attributes_source_not_blank CHECK (((attributes_source IS NULL) OR (length(btrim(attributes_source)) > 0))),
+    CONSTRAINT unified_persons_country_code_shape CHECK (((country_code IS NULL) OR (country_code ~ '^[A-Z]{2}$'::text))),
     CONSTRAINT unified_persons_email_not_blank CHECK (((primary_email IS NULL) OR (length(btrim(primary_email)) > 0))),
     CONSTRAINT unified_persons_external_keys_object CHECK ((jsonb_typeof(external_keys) = 'object'::text)),
-    CONSTRAINT unified_persons_phone_not_blank CHECK (((primary_phone IS NULL) OR (length(btrim(primary_phone)) > 0)))
+    CONSTRAINT unified_persons_geo_not_blank CHECK ((((region IS NULL) OR (length(btrim(region)) > 0)) AND ((city IS NULL) OR (length(btrim(city)) > 0)) AND ((timezone IS NULL) OR (length(btrim(timezone)) > 0)))),
+    CONSTRAINT unified_persons_job_fields_not_blank CHECK ((((job_title IS NULL) OR (length(btrim(job_title)) > 0)) AND ((department IS NULL) OR (length(btrim(department)) > 0)))),
+    CONSTRAINT unified_persons_names_not_blank CHECK ((((full_name IS NULL) OR (length(btrim(full_name)) > 0)) AND ((first_name IS NULL) OR (length(btrim(first_name)) > 0)) AND ((last_name IS NULL) OR (length(btrim(last_name)) > 0)))),
+    CONSTRAINT unified_persons_phone_not_blank CHECK (((primary_phone IS NULL) OR (length(btrim(primary_phone)) > 0))),
+    CONSTRAINT unified_persons_seniority_valid CHECK (((seniority IS NULL) OR (seniority = ANY (ARRAY['intern'::text, 'entry'::text, 'senior'::text, 'manager'::text, 'head'::text, 'director'::text, 'vp'::text, 'partner'::text, 'c_suite'::text, 'founder'::text, 'owner'::text, 'other'::text]))))
 );
 
 
@@ -21124,8 +21143,23 @@ CREATE TABLE public.prospect_accounts (
     last_verified_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    industry text,
+    employee_count integer,
+    employee_band text,
+    country_code text,
+    region text,
+    city text,
+    description text,
+    attributes_source text,
+    attributes_updated_at timestamp with time zone,
+    CONSTRAINT prospect_accounts_attributes_provenance_coherent CHECK (((attributes_source IS NULL) = (attributes_updated_at IS NULL))),
+    CONSTRAINT prospect_accounts_attributes_source_not_blank CHECK (((attributes_source IS NULL) OR (length(btrim(attributes_source)) > 0))),
     CONSTRAINT prospect_accounts_confidence_range CHECK (((confidence IS NULL) OR ((confidence >= (0)::numeric) AND (confidence <= (1)::numeric)))),
+    CONSTRAINT prospect_accounts_country_code_shape CHECK (((country_code IS NULL) OR (country_code ~ '^[A-Z]{2}$'::text))),
     CONSTRAINT prospect_accounts_domain_normalized_shape CHECK (((domain_normalized IS NULL) OR ((length(btrim(domain_normalized)) > 0) AND (domain_normalized = lower(domain_normalized)) AND (domain_normalized !~~ '%/%'::text) AND (domain_normalized !~~ '%@%'::text)))),
+    CONSTRAINT prospect_accounts_employee_band_valid CHECK (((employee_band IS NULL) OR (employee_band = ANY (ARRAY['1-10'::text, '11-50'::text, '51-200'::text, '201-500'::text, '501-1000'::text, '1001-5000'::text, '5001-10000'::text, '10001+'::text])))),
+    CONSTRAINT prospect_accounts_employee_count_valid CHECK (((employee_count IS NULL) OR (employee_count >= 0))),
+    CONSTRAINT prospect_accounts_firmographics_not_blank CHECK ((((industry IS NULL) OR (length(btrim(industry)) > 0)) AND ((region IS NULL) OR (length(btrim(region)) > 0)) AND ((city IS NULL) OR (length(btrim(city)) > 0)) AND ((description IS NULL) OR (length(btrim(description)) > 0)))),
     CONSTRAINT prospect_accounts_merge_coherent CHECK (((status = 'merged'::text) = (merged_into_id IS NOT NULL))),
     CONSTRAINT prospect_accounts_metadata_object CHECK ((jsonb_typeof(metadata) = 'object'::text)),
     CONSTRAINT prospect_accounts_no_self_merge CHECK (((merged_into_id IS NULL) OR (merged_into_id <> id))),
@@ -23122,6 +23156,40 @@ COMMENT ON COLUMN public.social_accounts.company_id IS 'Company context for mult
 
 
 --
+-- Name: source_assertions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_assertions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    source_record_id uuid NOT NULL,
+    entity_type text NOT NULL,
+    person_id uuid,
+    account_id uuid,
+    attribute text NOT NULL,
+    raw_value text,
+    normalized_value text,
+    value_hash text NOT NULL,
+    provider text NOT NULL,
+    confidence numeric,
+    observed_at timestamp with time zone,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    applied_to_canonical_at timestamp with time zone,
+    applied_reason text,
+    superseded_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT source_assertions_applied_coherent CHECK (((applied_to_canonical_at IS NULL) = (applied_reason IS NULL))),
+    CONSTRAINT source_assertions_attribute_not_blank CHECK ((length(btrim(attribute)) > 0)),
+    CONSTRAINT source_assertions_confidence_range CHECK (((confidence IS NULL) OR ((confidence >= (0)::numeric) AND (confidence <= (1)::numeric)))),
+    CONSTRAINT source_assertions_entity_coherent CHECK (((entity_type <> 'account'::text) OR (person_id IS NULL))),
+    CONSTRAINT source_assertions_entity_type_valid CHECK ((entity_type = ANY (ARRAY['person'::text, 'account'::text]))),
+    CONSTRAINT source_assertions_has_a_value CHECK (((raw_value IS NOT NULL) OR (normalized_value IS NOT NULL))),
+    CONSTRAINT source_assertions_provider_not_blank CHECK ((length(btrim(provider)) > 0)),
+    CONSTRAINT source_assertions_value_hash_shape CHECK ((value_hash ~ '^[a-f0-9]{64}$'::text))
+);
+
+
+--
 -- Name: source_health_states; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -23134,6 +23202,40 @@ CREATE TABLE public.source_health_states (
     inputs jsonb DEFAULT '{}'::jsonb NOT NULL,
     computed_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT source_health_state_check CHECK ((health_state = ANY (ARRAY['healthy'::text, 'degraded'::text, 'unstable'::text, 'silenced'::text])))
+);
+
+
+--
+-- Name: source_records; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.source_records (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    provider text NOT NULL,
+    source_entity_type text NOT NULL,
+    source_record_id text NOT NULL,
+    person_id uuid,
+    account_id uuid,
+    raw_payload jsonb DEFAULT '{}'::jsonb NOT NULL,
+    payload_hash text NOT NULL,
+    status text DEFAULT 'active'::text NOT NULL,
+    observed_at timestamp with time zone,
+    first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    ingested_at timestamp with time zone DEFAULT now() NOT NULL,
+    observation_count integer DEFAULT 1 NOT NULL,
+    ingestion_run_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT source_records_entity_coherent CHECK (((source_entity_type <> 'account'::text) OR (person_id IS NULL))),
+    CONSTRAINT source_records_entity_type_valid CHECK ((source_entity_type = ANY (ARRAY['person'::text, 'account'::text]))),
+    CONSTRAINT source_records_observation_count_positive CHECK ((observation_count >= 1)),
+    CONSTRAINT source_records_payload_hash_shape CHECK ((payload_hash ~ '^[a-f0-9]{64}$'::text)),
+    CONSTRAINT source_records_payload_object CHECK ((jsonb_typeof(raw_payload) = 'object'::text)),
+    CONSTRAINT source_records_provider_not_blank CHECK ((length(btrim(provider)) > 0)),
+    CONSTRAINT source_records_source_id_not_blank CHECK ((length(btrim(source_record_id)) > 0)),
+    CONSTRAINT source_records_status_valid CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'rejected'::text])))
 );
 
 
@@ -33007,11 +33109,27 @@ ALTER TABLE ONLY public.social_accounts
 
 
 --
+-- Name: source_assertions source_assertions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_assertions
+    ADD CONSTRAINT source_assertions_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: source_health_states source_health_states_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.source_health_states
     ADD CONSTRAINT source_health_states_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: source_records source_records_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_records
+    ADD CONSTRAINT source_records_pkey PRIMARY KEY (id);
 
 
 --
@@ -43363,6 +43481,27 @@ CREATE INDEX idx_social_accounts_user_id ON public.social_accounts USING btree (
 
 
 --
+-- Name: idx_source_assertions_live; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_source_assertions_live ON public.source_assertions USING btree (organization_id, attribute) WHERE (superseded_at IS NULL);
+
+
+--
+-- Name: idx_source_assertions_org_account_attr; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_source_assertions_org_account_attr ON public.source_assertions USING btree (organization_id, account_id, attribute) WHERE (account_id IS NOT NULL);
+
+
+--
+-- Name: idx_source_assertions_org_person_attr; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_source_assertions_org_person_attr ON public.source_assertions USING btree (organization_id, person_id, attribute) WHERE (person_id IS NOT NULL);
+
+
+--
 -- Name: idx_source_health_org_source_recent; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -43374,6 +43513,27 @@ CREATE INDEX idx_source_health_org_source_recent ON public.source_health_states 
 --
 
 CREATE INDEX idx_source_health_org_state_recent ON public.source_health_states USING btree (organization_id, health_state, computed_at DESC);
+
+
+--
+-- Name: idx_source_records_org_account; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_source_records_org_account ON public.source_records USING btree (organization_id, account_id) WHERE (account_id IS NOT NULL);
+
+
+--
+-- Name: idx_source_records_org_person; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_source_records_org_person ON public.source_records USING btree (organization_id, person_id) WHERE (person_id IS NOT NULL);
+
+
+--
+-- Name: idx_source_records_org_provider_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_source_records_org_provider_status ON public.source_records USING btree (organization_id, provider, status);
 
 
 --
@@ -45887,6 +46047,27 @@ CREATE UNIQUE INDEX uq_rpa_retry_queue_action ON public.rpa_retry_queue USING bt
 --
 
 CREATE UNIQUE INDEX uq_rpa_sessions_org_platform ON public.rpa_sessions USING btree (organization_id, platform);
+
+
+--
+-- Name: uq_source_assertions_dedupe; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_source_assertions_dedupe ON public.source_assertions USING btree (organization_id, source_record_id, attribute, value_hash);
+
+
+--
+-- Name: uq_source_records_id_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_source_records_id_org ON public.source_records USING btree (id, organization_id);
+
+
+--
+-- Name: uq_source_records_tenant_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_source_records_tenant_identity ON public.source_records USING btree (organization_id, provider, source_entity_type, source_record_id);
 
 
 --
@@ -53242,6 +53423,38 @@ ALTER TABLE ONLY public.social_accounts
 
 
 --
+-- Name: source_assertions source_assertions_account_tenant_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_assertions
+    ADD CONSTRAINT source_assertions_account_tenant_fk FOREIGN KEY (account_id, organization_id) REFERENCES public.prospect_accounts(id, organization_id) ON DELETE SET NULL (account_id);
+
+
+--
+-- Name: source_assertions source_assertions_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_assertions
+    ADD CONSTRAINT source_assertions_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.companies(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_assertions source_assertions_person_tenant_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_assertions
+    ADD CONSTRAINT source_assertions_person_tenant_fk FOREIGN KEY (person_id, organization_id) REFERENCES public.unified_persons(id, company_id) ON DELETE SET NULL (person_id);
+
+
+--
+-- Name: source_assertions source_assertions_record_tenant_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_assertions
+    ADD CONSTRAINT source_assertions_record_tenant_fk FOREIGN KEY (source_record_id, organization_id) REFERENCES public.source_records(id, organization_id) ON DELETE CASCADE;
+
+
+--
 -- Name: source_health_states source_health_states_listening_source_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -53255,6 +53468,30 @@ ALTER TABLE ONLY public.source_health_states
 
 ALTER TABLE ONLY public.source_health_states
     ADD CONSTRAINT source_health_states_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.companies(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_records source_records_account_tenant_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_records
+    ADD CONSTRAINT source_records_account_tenant_fk FOREIGN KEY (account_id, organization_id) REFERENCES public.prospect_accounts(id, organization_id) ON DELETE SET NULL (account_id);
+
+
+--
+-- Name: source_records source_records_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_records
+    ADD CONSTRAINT source_records_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.companies(id) ON DELETE CASCADE;
+
+
+--
+-- Name: source_records source_records_person_tenant_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.source_records
+    ADD CONSTRAINT source_records_person_tenant_fk FOREIGN KEY (person_id, organization_id) REFERENCES public.unified_persons(id, company_id) ON DELETE SET NULL (person_id);
 
 
 --
@@ -61492,6 +61729,32 @@ ALTER TABLE public.signup_referrals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.social_accounts ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: source_assertions; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.source_assertions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: source_assertions source_assertions_service_role; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY source_assertions_service_role ON public.source_assertions USING ((auth.role() = 'service_role'::text)) WITH CHECK ((auth.role() = 'service_role'::text));
+
+
+--
+-- Name: source_records; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.source_records ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: source_records source_records_service_role; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY source_records_service_role ON public.source_records USING ((auth.role() = 'service_role'::text)) WITH CHECK ((auth.role() = 'service_role'::text));
+
+
+--
 -- Name: stepup_sessions; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -61978,5 +62241,5 @@ ALTER TABLE public.worker_snapshot_shadow_telemetry ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict FO14y33STHKhjF81xtwF5qgXHcwpE9QY8ynJPLGwyJdrQhLg9euohNp6aVmVUb0
+\unrestrict p1TLQZydfi9aJBOIdqxQFGaOewyGpb46bMguhDnGv7pbALOeGklXX9mxRChqQ72
 

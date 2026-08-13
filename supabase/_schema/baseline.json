@@ -1,8 +1,8 @@
 {
   "generatedFrom": "aws-1-ap-southeast-1.pooler.supabase.com/postgres",
   "pgDumpImage": "pgvector/pgvector:pg17",
-  "tables": 821,
-  "lines": 61983,
+  "tables": 823,
+  "lines": 62246,
   "ledgerCount": 35,
   "ledgerMax": "20260916000000",
   "note": "Schema-only. No data, no PII. Regenerate with scripts/ci/generate-schema-baseline.js"
