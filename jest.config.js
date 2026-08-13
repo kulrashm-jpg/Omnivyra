@@ -68,6 +68,10 @@ module.exports = {
   testPathIgnorePatterns: [
     '/node_modules/',
     '/.next/',
+    // The real-schema suite requires a live PostgreSQL database (W6_DB_URL) and
+    // is meaningless without one. It has its own project — jest.realschema.config.js
+    // — driven by scripts/ci/real-schema-ci.sh, which provisions the database first.
+    '/backend/tests/realschema/',
   ],
 };
 
