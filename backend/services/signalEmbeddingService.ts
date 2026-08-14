@@ -257,3 +257,109 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   const denom = Math.sqrt(normA) * Math.sqrt(normB);
   return denom === 0 ? 0 : dot / denom;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * B7.8-C.2 — PLATFORM EMBEDDING PATH (no customer attribution)
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+import { recordPlatformUsage } from './billing/platformUsageLedgerService';
+
+export interface PlatformEmbeddingOptions {
+  /** What the spend is for — reconciliation (platform_usage_events.resource_*). */
+  resourceType: string;
+  resourceId: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type PlatformEmbeddingResult =
+  | { ok: true; embedding: number[]; totalCost: number | null }
+  | { ok: false; reason: string };
+
+/**
+ * Generate an embedding for a PLATFORM resource that has no owning company.
+ *
+ * Sibling of generateTopicEmbedding above, which is UNCHANGED. That function
+ * requires opts.companyId for cost attribution and is correct to: customer
+ * spend must be attributable. Platform resources (platform_topic_node) are
+ * tenant-less by construction, so there is no organization to supply — hence
+ * this separate path writing to platform_usage_events instead of usage_events.
+ *
+ * REUSES the same infrastructure: the same getClient() connection-pool
+ * singleton, the same EMBEDDING_MODEL, the same EMBEDDING_DIM, and the same
+ * pre-flight pricing assertion. Only the ACCOUNTING destination differs.
+ *
+ * ── ORDERING (mirrors the customer path above) ─────────────────────────────
+ *   1. pre-flight pricing assert — never pay for a cost we cannot price
+ *   2. provider call
+ *   3. dimension validation
+ *   4. LEDGER
+ *   5. return the vector for the caller to persist
+ *
+ * The ledger is written BEFORE the caller persists, and a ledger failure
+ * returns ok:false. So an embedding can never be persisted while its spend
+ * record is silently lost — the caller simply gets no vector, the topic keeps
+ * `embedding IS NULL`, and the operation is retriggerable. Spend without a
+ * stored vector is the acceptable direction; a stored vector without a spend
+ * record is not.
+ *
+ * NEVER THROWS. Never writes canonical_topic_id, parent_topic_id, angle_label
+ * or any coverage row — it does not write platform_topic_node at all.
+ */
+export async function generatePlatformEmbedding(
+  text: string,
+  opts: PlatformEmbeddingOptions,
+): Promise<PlatformEmbeddingResult> {
+  const input = (text ?? '').trim();
+  if (!input) return { ok: false, reason: 'empty_text' };
+  if (!opts?.resourceType || !opts?.resourceId) return { ok: false, reason: 'missing_resource' };
+
+  // 1. Pre-flight: same assertion the customer path makes, for the same reason.
+  try {
+    await assertModelPricingExists('openai', EMBEDDING_MODEL, 'embedding');
+  } catch (err: any) {
+    // No recordCostAnomaly here — that helper requires an organizationId, and
+    // inventing one is the exact failure this whole design avoids.
+    return { ok: false, reason: `pricing_missing:${err?.message ?? 'unknown'}` };
+  }
+
+  // 2. Provider call — ONLY the caller-supplied label is sent.
+  let response: Awaited<ReturnType<OpenAI['embeddings']['create']>>;
+  try {
+    response = await getClient().embeddings.create({
+      model: EMBEDDING_MODEL,
+      input: input.slice(0, 8191),
+      dimensions: EMBEDDING_DIM,
+    });
+  } catch (err: any) {
+    return { ok: false, reason: `provider_failed:${err?.message?.slice(0, 120) ?? 'unknown'}` };
+  }
+
+  // 3. Dimension validation before anything is recorded or returned.
+  const vector = response?.data?.[0]?.embedding;
+  if (!Array.isArray(vector) || vector.length !== EMBEDDING_DIM || !vector.every((n) => Number.isFinite(n))) {
+    return { ok: false, reason: 'invalid_embedding_shape' };
+  }
+
+  // 4. Ledger BEFORE the caller persists (see ordering note above).
+  const usage = await recordPlatformUsage({
+    providerName: 'openai',
+    modelName: EMBEDDING_MODEL,
+    sourceType: 'system',
+    sourceName: 'openai',
+    processType: PROCESS_TYPE,
+    resourceType: opts.resourceType,
+    resourceId: opts.resourceId,
+    totalTokens: Number(response?.usage?.total_tokens ?? 0),
+    metadata: { ...opts.metadata, input_length: input.length },
+  });
+
+  if (!('action' in usage)) {
+    // Accounting failed. Refuse the vector so it cannot be persisted without a
+    // spend record. The provider was already paid — that cost is now visible
+    // only in the returned reason and the provider invoice, which is why this
+    // path returns a specific, greppable failure.
+    return { ok: false, reason: `ledger_failed:${(usage as { reason: string }).reason}` };
+  }
+
+  return { ok: true, embedding: vector as number[], totalCost: usage.totalCost };
+}
