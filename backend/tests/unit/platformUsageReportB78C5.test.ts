@@ -130,7 +130,7 @@ describe('B7.8-C.5 · aggregation', () => {
 
   it('9/12. totals spend, tokens and event count', async () => {
     const out = await getPlatformUsageReport();
-    const s = (out as { report: { summary: Record<string, number> } }).report.summary;
+    const s = (out as unknown as { report: { summary: Record<string, number> } }).report.summary;
     expect(s.totalCostUsd).toBeCloseTo(0.35, 10);
     expect(s.totalTokens).toBe(35);
     expect(s.eventCount).toBe(3);
@@ -154,7 +154,7 @@ describe('B7.8-C.5 · aggregation', () => {
     rows = [];
     const out = await getPlatformUsageReport();
     expect((out as { ok: boolean }).ok).toBe(true);
-    const r = (out as { report: { items: unknown[]; summary: Record<string, unknown> } }).report;
+    const r = (out as unknown as { report: { items: unknown[]; summary: Record<string, unknown> } }).report;
     expect(r.items).toEqual([]);
     expect(r.summary).toMatchObject({ totalCostUsd: 0, eventCount: 0, totalTokens: 0 });
   });
