@@ -92,12 +92,60 @@ describe('B7.6 · review service', () => {
     expect(sel).toContain('normalized_label');
   });
 
-  it('5. never selects tenant columns or the embedding', async () => {
+  it('5. never selects tenant columns', async () => {
     await listTopicsForReview();
     const sel = ops.find((o) => o.startsWith('select:')) ?? '';
-    for (const forbidden of ['company_id', 'campaign_id', 'content_id', 'user_id', 'embedding']) {
+    for (const forbidden of ['company_id', 'campaign_id', 'content_id', 'user_id']) {
       expect(sel).not.toContain(forbidden);
     }
+  });
+
+  /**
+   * B7.9.2 — this assertion REPLACES "never selects the embedding".
+   *
+   * B7.9 gated the Rename control on a client-side session map, so after a
+   * reload an already-embedded topic still offered Rename. Fixing that requires
+   * the persisted fact, so `embedding` is now SELECTED — but the invariant the
+   * original test protected is unchanged and now asserted where it actually
+   * matters: the vector must never reach the client. That is strictly stronger
+   * than checking the SELECT string, because it constrains the output rather
+   * than the query.
+   */
+  it('5b. selects embedding but NEVER returns the vector to the client', async () => {
+    rows = [{ ...row('t1', 'AI lead qualification'), embedding: '[0.11,0.22,0.33]' }];
+    install();
+    const page = await listTopicsForReview();
+
+    const sel = ops.find((o) => o.startsWith('select:')) ?? '';
+    expect(sel).toContain('embedding');            // needed to derive the fact
+
+    const item = page.items[0] as unknown as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(item, 'embedding')).toBe(false);
+    expect(JSON.stringify(page)).not.toContain('0.11');
+    expect(JSON.stringify(page)).not.toContain('[0.11,0.22,0.33]');
+    expect(item.hasEmbedding).toBe(true);          // only the boolean crosses
+  });
+
+  it('5c. hasEmbedding is derived from NULL / non-NULL', async () => {
+    rows = [
+      { ...row('t1', 'Embedded topic'), embedding: '[0.1,0.2]' },
+      { ...row('t2', 'Inert topic'), embedding: null },
+      { ...row('t3', 'Empty vector'), embedding: '' },
+      { ...row('t4', 'Array form'), embedding: [0.1, 0.2] },
+      { ...row('t5', 'Column absent') },
+    ];
+    install();
+    const page = await listTopicsForReview();
+    expect(page.items.map((i) => i.hasEmbedding)).toEqual([true, false, false, true, false]);
+  });
+
+  it('5d. getTopicsByIds also derives hasEmbedding without leaking the vector', async () => {
+    rows = [{ ...row('t1', 'Embedded topic'), embedding: '[0.9]' }];
+    install();
+    const items = await getTopicsByIds(['t1']);
+    expect(items[0].hasEmbedding).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(items[0] as unknown as Record<string, unknown>, 'embedding')).toBe(false);
+    expect(JSON.stringify(items)).not.toContain('0.9');
   });
 
   it('filters identities with IS NULL and aliases with NOT IS NULL (never = null)', async () => {
@@ -139,8 +187,11 @@ describe('B7.6 · review service', () => {
 
   it('maps rows to camelCase without leaking snake_case keys', async () => {
     const p = await listTopicsForReview();
+    // B7.9.2 adds `hasEmbedding` — a derived boolean. This exact-set assertion
+    // is what forces any new field to be declared deliberately, and it doubles
+    // as the no-leak proof: `embedding` is absent from the mapped output.
     expect(Object.keys(p.items[0]).sort()).toEqual([
-      'canonicalLabel', 'canonicalTopicId', 'confidence', 'firstSeenAt', 'id',
+      'canonicalLabel', 'canonicalTopicId', 'confidence', 'firstSeenAt', 'hasEmbedding', 'id',
       'lastSeenAt', 'normalizedLabel', 'occurrenceCount', 'parentTopicId', 'source', 'state',
     ]);
   });

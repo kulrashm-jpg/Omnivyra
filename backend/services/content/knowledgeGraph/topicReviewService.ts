@@ -31,9 +31,19 @@ import { supabase } from '../../../db/supabaseClient';
 const TABLE = 'platform_topic_node';
 
 /** Explicit allow-list. Never `select('*')` — a new column must be added here
- *  deliberately before it can reach an operator's screen. */
+ *  deliberately before it can reach an operator's screen.
+ *
+ *  B7.9.2: `embedding` is SELECTED but never mapped. B7.9 gated the Rename
+ *  control on a client-side session map, which only knows whether embedding was
+ *  initiated in the current browser tab — so after a reload an already-embedded
+ *  topic offered Rename, contradicting the rule that a stored vector must not be
+ *  orphaned from the label it was computed from. The UI needs the persisted
+ *  fact, and the only honest source is the column itself.
+ *
+ *  It is read here and collapsed to a boolean in mapRow; the vector itself never
+ *  leaves this module. See the payload note on deriveHasEmbedding. */
 const REVIEW_COLUMNS =
-  'id, canonical_label, normalized_label, canonical_topic_id, parent_topic_id, state, confidence, source, occurrence_count, first_seen_at, last_seen_at';
+  'id, canonical_label, normalized_label, canonical_topic_id, parent_topic_id, state, confidence, source, occurrence_count, first_seen_at, last_seen_at, embedding';
 
 export const DEFAULT_PAGE_SIZE = 25;
 export const MAX_PAGE_SIZE = 100;
@@ -50,6 +60,14 @@ export interface ReviewTopic {
   occurrenceCount: number;
   firstSeenAt: string | null;
   lastSeenAt: string | null;
+  /**
+   * Whether a stored vector exists — NOT the vector.
+   *
+   * A boolean is the entire fact the reviewer needs ("can this still be
+   * renamed?"). Shipping 1536 floats per row would bloat the page, be useless
+   * to a human, and carry residual reconstructive signal about the label.
+   */
+  hasEmbedding: boolean;
 }
 
 export type ReviewFilter = 'identities' | 'aliases' | 'all';
@@ -62,7 +80,28 @@ export interface ReviewPage {
   filter: ReviewFilter;
 }
 
+/**
+ * Collapse the embedding column to the single bit the reviewer needs.
+ *
+ * pgvector arrives over PostgREST as a JSON string (`"[0.1,0.2,…]"`) rather
+ * than an array, so a truthiness check alone would also count the empty string;
+ * an explicit null/empty test is the reliable form.
+ *
+ * PAYLOAD NOTE (accepted, recorded in the report): the vector still crosses the
+ * DB→server hop before being discarded here. Avoiding that needs a generated
+ * column or an RPC — i.e. a migration, which this phase must not add. Nothing
+ * reaches the client either way.
+ */
+function deriveHasEmbedding(raw: unknown): boolean {
+  if (raw === null || raw === undefined) return false;
+  if (typeof raw === 'string') return raw.trim() !== '';
+  if (Array.isArray(raw)) return raw.length > 0;
+  return true;
+}
+
 function mapRow(row: Record<string, unknown>): ReviewTopic {
+  // `embedding` is deliberately absent from the returned object — only the
+  // derived boolean below crosses the boundary.
   return {
     id: String(row.id),
     canonicalLabel: String(row.canonical_label ?? ''),
@@ -75,6 +114,7 @@ function mapRow(row: Record<string, unknown>): ReviewTopic {
     occurrenceCount: Number(row.occurrence_count ?? 0),
     firstSeenAt: row.first_seen_at == null ? null : String(row.first_seen_at),
     lastSeenAt: row.last_seen_at == null ? null : String(row.last_seen_at),
+    hasEmbedding: deriveHasEmbedding(row.embedding),
   };
 }
 
