@@ -1,0 +1,68 @@
+/**
+ * LI-4D/LI-4E — the lead ingestion surface.
+ *
+ * Registration is EXPLICIT, never a side effect of importing a module. A module
+ * that registers itself when loaded makes the set of available sources depend on
+ * import order, which is how a source ends up present in one process and absent
+ * in another.
+ */
+
+export {
+  INGESTION_CONTRACT_VERSION,
+  SOURCE_CAPABILITIES,
+  validateNormalizedRecord,
+  type AdapterResult,
+  type IngestionBatchResult,
+  type IngestionEntityType,
+  type IngestionRecordOutcome,
+  type IngestionRejection,
+  type LeadSourceAdapter,
+  type NormalizedAccount,
+  type NormalizedIngestionRecord,
+  type NormalizedPerson,
+  type SourceCapability,
+} from './contracts';
+
+export {
+  registerLeadSourceAdapter,
+  getLeadSourceAdapter,
+  hasLeadSourceAdapter,
+  listLeadSources,
+  sourceSupports,
+  AdapterRegistrationError,
+  UnsupportedSourceError,
+} from './registry';
+
+export {
+  ingestLeadBatch,
+  ingestNormalizedRecord,
+  MAX_BATCH_SIZE,
+  type IngestBatchInput,
+} from './orchestrator';
+
+export {
+  MANUAL_SOURCE,
+  ManualInputError,
+  manualAdapter,
+  manualExternalId,
+  toNormalizedManualRecord,
+  validateManualInput,
+  type ManualLeadInput,
+} from './adapters/manualAdapter';
+
+import { hasLeadSourceAdapter, registerLeadSourceAdapter } from './registry';
+import { manualAdapter } from './adapters/manualAdapter';
+
+/**
+ * Register the adapters that ship with the platform.
+ *
+ * Idempotent: registering twice is a no-op rather than the registry's
+ * duplicate-registration error, so a second call from a different entry point
+ * cannot crash a process. Only `manual` is built — no provider adapter exists,
+ * and none is registered optimistically.
+ */
+export function registerBuiltInLeadSources(): void {
+  if (!hasLeadSourceAdapter(manualAdapter.source)) {
+    registerLeadSourceAdapter(manualAdapter);
+  }
+}
