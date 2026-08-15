@@ -27,6 +27,12 @@ import { canTransition } from '../../../lib/content/contentLifecycle';
 // inert BY POLICY rather than merely because the tables are absent. Independent
 // of ORIGINALITY_GATE_ENABLED by design.
 import { assertCanonicalPersistenceAllowed } from './canonicalPersistencePolicy';
+import {
+  isPlatformKnowledgeGraphEnabled,
+  resolveTopicIdentity,
+} from './knowledgeGraph/topicResolutionService';
+import { recordTopicCoverage } from './knowledgeGraph/coverageService';
+import { recordRawCounter } from '../../observability';
 import type {
   CanonicalContent,
   CanonicalContentType,
@@ -278,7 +284,97 @@ export async function createContent(input: CreateContentInput): Promise<Canonica
   });
   if (revError) fail('createContent(revision)', revError);
 
+  // B7.10 — knowledge-graph enrichment. Runs ONLY after the content row and its
+  // revision have both committed, so a graph write can never precede the fact
+  // it describes.
+  await recordKnowledgeGraphCoverage(input, String(data.id));
+
   return mapContentRow(data);
+}
+
+/**
+ * B7.10 — the automatic topic producer.
+ *
+ * Until now `platform_topic_node` had no production writer except the B7.9
+ * operator surface, so the graph only contained topics a human typed in. This
+ * closes that gap: accepted content becomes topic evidence.
+ *
+ * ── WHY THE FLAG LIVES HERE, NOT IN THE RESOLVER ───────────────────────────
+ * `PLATFORM_KNOWLEDGE_GRAPH_ENABLED` gates ONLY this automatic path. Putting
+ * the check inside resolveTopicIdentity would also disable B7.9 operator
+ * authoring, which must stay independently usable while the automatic producer
+ * is dark — they are different risks: one is operator-initiated and one fires
+ * on every content creation.
+ *
+ * ── WHY THIS CANNOT FAIL CONTENT ACCEPTANCE ────────────────────────────────
+ * Both services are documented NEVER-THROWS and return typed outcomes, but this
+ * function is belt-and-braces: the whole body is wrapped, because a graph write
+ * is enrichment and content acceptance is the user's actual request. A caller
+ * who successfully created content must never see it fail because a secondary
+ * index write did.
+ *
+ * The accepted cost, stated rather than hidden: a failed resolution or coverage
+ * write is LOST — no retry, no queue, no reconciliation. That is deliberate for
+ * this stage; the flag is the mitigation, since it makes the whole path
+ * reversible without a deploy.
+ *
+ * Because the loss is silent to the caller, every failure emits a counter via
+ * the existing observability helper. Contained must not mean invisible — that
+ * is the difference between an accepted limitation and an undiagnosable one.
+ * These are counters only: no retry, queue, or reconciliation is introduced.
+ */
+async function recordKnowledgeGraphCoverage(
+  input: CreateContentInput,
+  contentId: string,
+): Promise<void> {
+  // Default DENY. When disabled the content path behaves exactly as before —
+  // no query, no write, nothing observable.
+  if (!isPlatformKnowledgeGraphEnabled()) return;
+
+  try {
+    // An absent topic is passed through rather than short-circuited here.
+    // resolveTopicIdentity already returns `ambiguous` for empty input WITHOUT
+    // issuing a query, so there is no cost saving in guarding — and returning
+    // early would skip the counter below, making "content arrived with no topic
+    // signal" invisible. One resolver owns the empty case.
+    const resolution = await resolveTopicIdentity(input.topic, { source: 'content_acceptance' });
+
+    // Only a resolved identity earns coverage. `ambiguous` and `error` both
+    // yield a null topicId and are dropped — nothing is invented from them.
+    if (!resolution.topicId) {
+      recordRawCounter(
+        resolution.kind === 'error' ? 'content.knowledge_graph.error' : 'content.knowledge_graph.unresolved',
+        1,
+      );
+      return;
+    }
+
+    const coverage = await recordTopicCoverage({
+      companyId: input.companyId,
+      topicId: resolution.topicId,
+      contentId,
+      // campaignId is deliberately NOT passed: CreateContentInput carries no
+      // campaign, and the content row has no campaign_id column. Inventing one
+      // here would attribute coverage to a campaign nothing established.
+      //
+      // angle_label is passed EXPLICITLY as null rather than omitted, so the
+      // call site states the intent: B7.3 owns extraction and this producer
+      // never synthesises one.
+      angleLabel: null,
+      source: 'content_acceptance',
+    });
+
+    // recordTopicCoverage never throws; it reports a typed failure instead.
+    // `'reason' in coverage` — NOT `!coverage.ok`. The repo compiles with
+    // `strict: false`, under which boolean-literal unions do not narrow.
+    if (coverage && typeof coverage === 'object' && 'reason' in coverage) {
+      recordRawCounter('content.knowledge_graph.coverage_failed', 1);
+    }
+  } catch {
+    // Contained by design: enrichment must never fail an accepted write. The
+    // counter is what keeps "contained" from becoming "invisible".
+    recordRawCounter('content.knowledge_graph.error', 1);
+  }
 }
 
 /** Fetch one company-scoped content row, or null if absent. */
