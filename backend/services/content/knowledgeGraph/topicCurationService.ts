@@ -35,6 +35,7 @@
  */
 
 import { supabase } from '../../../db/supabaseClient';
+import { normalizeTopicLabel, resolveTopicIdentity } from './topicResolutionService';
 
 const TABLE = 'platform_topic_node';
 
@@ -195,5 +196,150 @@ export async function reverseCanonicalTopic(topicId: string): Promise<CurationRe
     return { ok: true, action: 'reversed', topicId, canonicalTopicId: null };
   } catch (e) {
     return { ok: false, reason: 'exception', detail: (e as Error)?.message ?? 'unknown' };
+  }
+}
+
+/* ── B7.9 — OPERATOR TOPIC AUTHORING ────────────────────────────────────────
+ *
+ * B7.8-C.29 exposed the gap this closes: the only production topic had to be
+ * inserted with raw SQL, because nothing in the product could create one. The
+ * embedding, ledger and reporting chain was complete and unusable.
+ *
+ * These two writers live here, beside confirm/reverse, because they are the
+ * same thing — deterministic mutations an authorized human states explicitly.
+ * Nothing below infers, scores, embeds, merges, or calls a provider.
+ *
+ * Creation REUSES resolveTopicIdentity rather than issuing its own INSERT, so
+ * operator-authored and content-observed topics cannot diverge in
+ * normalization, defaults, or race behaviour. UNIQUE(normalized_label) remains
+ * the single serialization boundary.
+ */
+
+export type AuthoringFailure =
+  | 'missing_label'
+  | 'label_too_long'
+  | 'already_exists'
+  | 'topic_not_found'
+  | 'topic_is_alias'
+  | 'topic_is_embedded'
+  | 'write_failed'
+  | 'exception';
+
+export type AuthoringResult =
+  | { ok: true; action: 'created'; topicId: string; canonicalLabel: string; normalizedLabel: string }
+  | { ok: true; action: 'renamed' | 'unchanged'; topicId: string; canonicalLabel: string; normalizedLabel: string }
+  | { ok: false; reason: AuthoringFailure; detail?: string; topicId?: string };
+
+/**
+ * Longest label we accept. platform_topic_node.canonical_label is unbounded
+ * `text`, so this is a product bound, not a schema one: a label is an identity,
+ * not prose, and an unbounded operator string would also become an unbounded
+ * provider input later.
+ */
+export const MAX_LABEL_LENGTH = 200;
+
+const AUTH_FAIL = (reason: AuthoringFailure, detail?: string, topicId?: string): AuthoringResult =>
+  ({ ok: false, reason, ...(detail ? { detail } : {}), ...(topicId ? { topicId } : {}) });
+
+/**
+ * Create ONE operator-authored platform topic.
+ *
+ * The defaults are resolveTopicIdentity's, unchanged: state='observed',
+ * confidence='low', embedding/canonical_topic_id/parent_topic_id all NULL.
+ * `source='operator'` is the only thing that distinguishes it from a topic
+ * observed in content — deliberately, because an operator asserting a label
+ * exists is an OBSERVATION, not a confirmation. Confirmation still requires
+ * confirmCanonicalTopic above.
+ *
+ * An existing normalized identity is a CONFLICT, never a silent success:
+ * resolveTopicIdentity would happily adopt the existing row (correct for
+ * content acceptance, wrong for an operator who believes they are creating
+ * something new). Reporting `already_exists` with the existing topicId lets
+ * the operator act on the real row instead of assuming a second one now exists.
+ */
+export async function createOperatorTopic(rawLabel: unknown): Promise<AuthoringResult> {
+  const label = typeof rawLabel === 'string' ? rawLabel.trim() : '';
+  const normalized = normalizeTopicLabel(label);
+  if (!normalized) return AUTH_FAIL('missing_label');
+  if (label.length > MAX_LABEL_LENGTH) return AUTH_FAIL('label_too_long');
+
+  try {
+    const res = await resolveTopicIdentity(label, { source: 'operator' });
+
+    if (res.kind === 'new_topic') {
+      return { ok: true, action: 'created', topicId: res.topicId as string, canonicalLabel: label, normalizedLabel: normalized };
+    }
+    // existing_canonical | existing_alias | existing_child — all mean "this
+    // identity already exists", including the concurrent-race adoption path.
+    if (res.topicId) return AUTH_FAIL('already_exists', res.reason, res.topicId);
+    if (res.kind === 'error') return AUTH_FAIL('write_failed', res.reason);
+    return AUTH_FAIL('missing_label', res.reason);
+  } catch (e) {
+    return AUTH_FAIL('exception', (e as Error)?.message ?? 'unknown');
+  }
+}
+
+/**
+ * Rename an operator-authored topic that nothing depends on yet.
+ *
+ * Permitted ONLY while the topic is inert: no canonical relationship and no
+ * embedding. Both refusals are about not silently invalidating derived state —
+ * a stored vector was computed FROM the old label, so renaming an embedded
+ * topic would leave a vector that no longer represents its row, and candidate
+ * recall would quietly rank against text that is no longer there. Re-embedding
+ * is not this phase's job (and would spend money), so the safe answer is to
+ * refuse rather than to repair.
+ *
+ * parent_topic_id, coverage, embedding and canonical_topic_id are never
+ * touched; the unique index remains the collision authority.
+ */
+export async function renameOperatorTopic(topicId: unknown, rawLabel: unknown): Promise<AuthoringResult> {
+  const id = typeof topicId === 'string' ? topicId.trim() : '';
+  const label = typeof rawLabel === 'string' ? rawLabel.trim() : '';
+  const normalized = normalizeTopicLabel(label);
+  if (!id) return AUTH_FAIL('topic_not_found');
+  if (!normalized) return AUTH_FAIL('missing_label');
+  if (label.length > MAX_LABEL_LENGTH) return AUTH_FAIL('label_too_long');
+
+  try {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select('id, canonical_topic_id, normalized_label, embedding')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !data) return AUTH_FAIL('topic_not_found');
+
+    const row = data as { id: string; canonical_topic_id: string | null; normalized_label: string; embedding: unknown };
+    if (row.canonical_topic_id) return AUTH_FAIL('topic_is_alias', 'renaming an alias would desync it from its canonical identity', id);
+    if (row.embedding !== null && row.embedding !== undefined) {
+      return AUTH_FAIL('topic_is_embedded', 'the stored vector was computed from the current label', id);
+    }
+
+    // Same identity key ⇒ nothing to write. Reported distinctly so the caller
+    // is not told a rename happened when only the display casing was resent.
+    if (row.normalized_label === normalized) {
+      const { error: e2 } = await supabase.from(TABLE).update({ canonical_label: label }).eq('id', id);
+      if (e2) return AUTH_FAIL('write_failed', e2.message, id);
+      return { ok: true, action: 'unchanged', topicId: id, canonicalLabel: label, normalizedLabel: normalized };
+    }
+
+    const { error: updateError } = await supabase
+      .from(TABLE)
+      .update({ canonical_label: label, normalized_label: normalized })
+      .eq('id', id)
+      // Re-assert the preconditions in the WHERE clause so a concurrent
+      // embedding or confirmation between the read and the write cannot be
+      // overwritten by a stale decision.
+      .is('canonical_topic_id', null)
+      .is('embedding', null);
+
+    if (updateError) {
+      // 23505 = the unique index caught a collision with another identity.
+      const collision = String(updateError.code) === '23505' || /duplicate key|unique/i.test(String(updateError.message));
+      return AUTH_FAIL(collision ? 'already_exists' : 'write_failed', updateError.message, id);
+    }
+    return { ok: true, action: 'renamed', topicId: id, canonicalLabel: label, normalizedLabel: normalized };
+  } catch (e) {
+    return AUTH_FAIL('exception', (e as Error)?.message ?? 'unknown', id);
   }
 }

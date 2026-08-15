@@ -38,6 +38,7 @@ type Filter = 'identities' | 'aliases' | 'all';
 const TOPICS_API = '/api/admin/knowledge-graph/topics';
 const CURATION_API = '/api/admin/knowledge-graph/canonical-topic';
 const EMBED_API = '/api/admin/knowledge-graph/embed-topic';
+const AUTHORING_API = '/api/admin/knowledge-graph/topic';
 
 type EmbedState =
   | 'pending' | 'accepted' | 'in_flight' | 'already_embedded'
@@ -78,6 +79,9 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
   const [sourceId, setSourceId] = useState('');
   const [canonicalId, setCanonicalId] = useState('');
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [newLabel, setNewLabel] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createMsg, setCreateMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [embed, setEmbed] = useState<Record<string, EmbedState>>({});
   const [embedDetail, setEmbedDetail] = useState<Record<string, string>>({});
   /** Synchronous duplicate-click guard — see generateEmbedding. */
@@ -183,6 +187,64 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
     // and the list carries no embedding column to refresh.
   }, []);
 
+  /**
+   * B7.9 — create a topic, then refresh so the new row appears in the list.
+   *
+   * `already_exists` (409) is surfaced as an error rather than silently
+   * treated as success: an operator who believes they created something new
+   * must not be told they did. The response carries the existing topicId so
+   * they can act on the real row.
+   */
+  const createTopic = useCallback(async () => {
+    if (creating) return;
+    setCreating(true);
+    setCreateMsg(null);
+    try {
+      const res = await fetch(AUTHORING_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: newLabel }),   // the ONLY field sent
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCreateMsg({ type: 'err', text: String(json.error || json.code || 'Failed (' + res.status + ')') });
+        return;
+      }
+      setCreateMsg({ type: 'ok', text: 'Created: ' + String(json.canonicalLabel ?? newLabel) });
+      setNewLabel('');
+      await load(filter, page, search);
+    } catch (e) {
+      setCreateMsg({ type: 'err', text: (e as Error)?.message || 'Request failed' });
+    } finally {
+      setCreating(false);
+    }
+  }, [creating, newLabel, filter, page, search, load]);
+
+  /**
+   * B7.9 — rename an INERT topic. Offered only when the row has no canonical
+   * parent and no embedding; the service re-checks both, so the UI condition
+   * is a courtesy, not the guard.
+   */
+  const renameTopic = useCallback(async (topicId: string, label: string) => {
+    setCreateMsg(null);
+    try {
+      const res = await fetch(AUTHORING_API, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topicId, label }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCreateMsg({ type: 'err', text: String(json.error || json.code || 'Failed (' + res.status + ')') });
+        return;
+      }
+      setCreateMsg({ type: 'ok', text: String(json.action) + ': ' + String(json.canonicalLabel) });
+      await load(filter, page, search);
+    } catch (e) {
+      setCreateMsg({ type: 'err', text: (e as Error)?.message || 'Request failed' });
+    }
+  }, [filter, page, search, load]);
+
   const visible = items.filter((t) => !dismissed.has(t.id));
 
   return (
@@ -211,6 +273,35 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
           onChange={(e) => { setSearch(e.target.value); setPage(0); }}
         />
       </div>
+
+      {/* B7.9 — the only way to author a topic in-product. Creation is an
+          OBSERVATION (state=observed, confidence=low); confirming identity
+          still requires the curation action below. */}
+      <fieldset style={{ margin: '16px 0', padding: 12 }}>
+        <legend>Create topic</legend>
+        <input
+          aria-label="New topic label"
+          placeholder="new topic label"
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+          style={{ minWidth: 320 }}
+        />
+        <button
+          data-testid="create-topic-btn"
+          disabled={creating || !newLabel.trim()}
+          onClick={() => void createTopic()}
+        >
+          {creating ? 'Creating…' : 'Create topic'}
+        </button>
+        {createMsg && (
+          <span
+            data-testid="create-message"
+            style={{ marginLeft: 8, fontSize: 12, color: createMsg.type === 'ok' ? 'green' : 'crimson' }}
+          >
+            {createMsg.text}
+          </span>
+        )}
+      </fieldset>
 
       <fieldset style={{ margin: '16px 0', padding: 12 }}>
         <legend>Confirm canonical relationship</legend>
@@ -293,6 +384,28 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
                       onClick={() => void generateEmbedding(t.id)}
                     >
                       {embed[t.id] === 'pending' ? 'Requesting…' : 'Generate embedding'}
+                    </button>
+                  )}
+                  {/*
+                    Rename is offered ONLY while the topic is inert: no
+                    canonical parent and no embedding. A stored vector was
+                    computed from the current label, so renaming an embedded
+                    topic would leave the vector describing text that is no
+                    longer there. The service re-checks both conditions.
+                  */}
+                  {!t.canonicalTopicId && !embed[t.id] && (
+                    <button
+                      data-testid={'rename-' + t.id}
+                      onClick={() => {
+                        const next = typeof window !== 'undefined'
+                          ? window.prompt('New label for this topic', t.canonicalLabel)
+                          : null;
+                        if (next && next.trim() && next.trim() !== t.canonicalLabel) {
+                          void renameTopic(t.id, next.trim());
+                        }
+                      }}
+                    >
+                      Rename
                     </button>
                   )}
                   {embed[t.id] && (
