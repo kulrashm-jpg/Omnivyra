@@ -1,4 +1,6 @@
 import { supabase } from '../db/supabaseClient';
+import { compareExternalIdentityShadow } from './prospectIdentity/externalIdentityShadow';
+import { writeExternalIdentityClaims } from './prospectIdentity/externalIdentityDualWrite';
 import { logger } from './logger';
 import { ownedDbTable } from '../db/writeOwner';
 
@@ -142,6 +144,150 @@ async function findPersonByExternalKeys(companyId: string, externalKeys: Identit
   return (data as UnifiedPersonRow | null) ?? null;
 }
 
+/**
+ * The deterministic match sequence: email, then phone, then provider keys.
+ *
+ * Extracted so the create path's conflict recovery re-runs THE SAME order rather
+ * than a second copy of it. Two spellings of this sequence would eventually
+ * disagree, and a resolver that matches differently depending on whether it lost
+ * a race is worse than one that simply fails.
+ */
+async function findExistingPerson(
+  companyId: string,
+  email: string | null,
+  phone: string | null,
+  externalKeys: IdentityExternalKeys,
+): Promise<{ person: UnifiedPersonRow | null; matchedBy: IdentityResolutionResult['matchedBy'] }> {
+  if (email) {
+    const person = await findPersonByEmail(companyId, email);
+    if (person) return { person, matchedBy: 'email' };
+  }
+  if (phone) {
+    const person = await findPersonByPhone(companyId, phone);
+    if (person) return { person, matchedBy: 'phone' };
+  }
+
+  // ── EXTERNAL STAGE ──────────────────────────────────────────────────────
+  // The live answer still comes from `external_keys`. LI-5B Phase 1 computes
+  // what `identity_claims` WOULD answer and records the comparison; it does not
+  // participate in the decision.
+  const person = await findPersonByExternalKeys(companyId, externalKeys);
+  await observeExternalIdentityShadow(companyId, externalKeys, person?.id ?? null);
+  return person ? { person, matchedBy: 'external_keys' } : { person: null, matchedBy: 'created' };
+}
+
+/**
+ * LI-5D Phase 2 — write the canonical claim alongside `external_keys`.
+ *
+ * ADDITIVE. `external_keys` has already been written by the caller and remains
+ * the sole read authority; nothing reads what this writes. A defect here cannot
+ * change an identity decision, which is what makes it safe to ship before any
+ * agreement evidence exists.
+ *
+ * FAIL-OPEN, and deliberately so: the person is already durable by the time this
+ * runs, so failing the resolution because a secondary unread store rejected a
+ * row would turn an additive migration step into an outage. Failures are
+ * CLASSIFIED and logged rather than swallowed — a `23503` is a tenant-FK bug and
+ * must never be reported as a transient database problem.
+ */
+async function dualWriteExternalIdentity(
+  companyId: string,
+  personId: string,
+  externalKeys: IdentityExternalKeys,
+): Promise<void> {
+  try {
+    if (!externalKeys || Object.keys(externalKeys).length === 0) return;
+
+    const result = await writeExternalIdentityClaims({
+      organizationId: companyId,
+      personId,
+      externalKeys,
+    });
+    if (result.attempted === 0) return;   // nothing in the claims shape to write
+
+    // IDs, counts and SQLSTATEs only — never an identifier, email, phone or name.
+    logger.info('external_identity_dual_write', {
+      companyId,
+      unifiedPersonId: personId,
+      attempted: result.attempted,
+      created: result.created,
+      alreadyExists: result.alreadyExists,
+      failed: result.failed,
+      outcomes: result.outcomes,
+      failureCodes: result.failureCodes,
+    });
+  } catch {
+    // writeExternalIdentityClaims already absorbs its own failures; this second
+    // guard exists so a resolution can never fail for a secondary write.
+  }
+}
+
+/**
+ * LI-5B Phase 1 — observe the claims-based answer beside the live one.
+ *
+ * Runs ONLY when the external stage actually executed and the caller supplied
+ * external keys, so it adds at most one query and never adds one to a
+ * resolution that email or phone already settled. That is also the only scope
+ * where the comparison means anything: "current vs shadow" is a statement about
+ * the external lookup, not about the whole resolver.
+ *
+ * Cannot throw and cannot change the verdict. `compareExternalIdentityShadow`
+ * already swallows its own failures into an ERROR category; this second guard
+ * exists because a resolution must not fail for a diagnostic.
+ */
+async function observeExternalIdentityShadow(
+  companyId: string,
+  externalKeys: IdentityExternalKeys,
+  currentPersonId: string | null,
+): Promise<void> {
+  try {
+    if (!externalKeys || Object.keys(externalKeys).length === 0) return;
+
+    const comparison = await compareExternalIdentityShadow({
+      organizationId: companyId,
+      externalKeys,
+      currentPersonId,
+    });
+    if (comparison.pairsProbed === 0) return;   // nothing in the claims shape to compare
+
+    // IDs and counts only — never an email, phone, name or identifier value.
+    logger.info('external_identity_shadow', {
+      companyId,
+      category: comparison.category,
+      currentPersonId: comparison.currentPersonId,
+      shadowMatchCount: comparison.shadowPersonIds.length,
+      pairsProbed: comparison.pairsProbed,
+      matchedClaimTypes: comparison.matchedClaimTypes,
+      hasError: Boolean(comparison.error),
+    });
+  } catch {
+    // A diagnostic must never break a resolution.
+  }
+}
+
+/**
+ * The indexes that make a person's IDENTITY unique within a tenant.
+ *
+ * `unified_persons` has FOUR unique arbiters — these two, plus `unified_persons_pkey`
+ * and `uq_unified_persons_id_company`, both keyed on `id`. A bare
+ * `code === '23505'` check would therefore treat a primary-key collision as
+ * "another writer created this person", which is false: a uuid collision means
+ * something is badly wrong and must stay an error. Only a conflict on one of
+ * these two may be recovered by re-resolving.
+ */
+const IDENTITY_UNIQUE_INDEXES = [
+  'idx_unified_persons_company_email_unique',
+  'idx_unified_persons_company_phone_unique',
+] as const;
+
+/** True only for a unique violation on a person's tenant-scoped identity. */
+function isIdentityUniquenessConflict(error: unknown): boolean {
+  const e = error as { code?: string; message?: string; details?: string } | null;
+  if (!e || e.code !== '23505') return false;
+  const text = `${e.message ?? ''} ${e.details ?? ''}`;
+  return IDENTITY_UNIQUE_INDEXES.some((index) => text.includes(index));
+}
+
 async function updatePersonIfNeeded(
   person: UnifiedPersonRow,
   params: {
@@ -187,23 +333,9 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
   const phone = normalizePhone(input.phone);
   const externalKeys = cleanExternalKeys(input.externalKeys);
 
-  let person: UnifiedPersonRow | null = null;
-  let matchedBy: IdentityResolutionResult['matchedBy'] = 'created';
-
-  if (email) {
-    person = await findPersonByEmail(input.companyId, email);
-    matchedBy = person ? 'email' : matchedBy;
-  }
-
-  if (!person && phone) {
-    person = await findPersonByPhone(input.companyId, phone);
-    matchedBy = person ? 'phone' : matchedBy;
-  }
-
-  if (!person) {
-    person = await findPersonByExternalKeys(input.companyId, externalKeys);
-    matchedBy = person ? 'external_keys' : matchedBy;
-  }
+  const found = await findExistingPerson(input.companyId, email, phone, externalKeys);
+  let person: UnifiedPersonRow | null = found.person;
+  const matchedBy: IdentityResolutionResult['matchedBy'] = found.matchedBy;
 
   if (person) {
     await updatePersonIfNeeded(person, { email, phone, externalKeys });
@@ -212,6 +344,8 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
       unifiedPersonId: person.id,
       matchedBy,
     });
+
+    await dualWriteExternalIdentity(input.companyId, person.id, externalKeys);
 
     return {
       unifiedPersonId: person.id,
@@ -231,6 +365,40 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
     .single();
 
   if (error) {
+    // ── LOST THE RACE (P1-1) ────────────────────────────────────────────────
+    // Another caller created this identity between our lookup and our insert.
+    // The tenant-scoped unique index is what tells us so, and it has already
+    // done the important job: exactly one person exists, never two. Re-resolve
+    // and return the winner, so both callers agree on one canonical person.
+    //
+    // The INSERT is NOT retried and nothing sleeps: the winning row is already
+    // committed, so a single re-resolution is sufficient and terminating.
+    //
+    // Only an IDENTITY uniqueness conflict may take this path. A primary-key
+    // collision is also 23505 and must remain a failure — see
+    // isIdentityUniquenessConflict.
+    if (isIdentityUniquenessConflict(error)) {
+      const raced = await findExistingPerson(input.companyId, email, phone, externalKeys);
+      if (raced.person) {
+        // Same tenant throughout: the recovery re-resolves with the ORIGINAL
+        // companyId, so a conflict in one tenant can never resolve into another.
+        await updatePersonIfNeeded(raced.person, { email, phone, externalKeys });
+        logger.info('unified_person_race_resolved', {
+          companyId: input.companyId,
+          unifiedPersonId: raced.person.id,
+          matchedBy: raced.matchedBy,
+        });
+        await dualWriteExternalIdentity(input.companyId, raced.person.id, externalKeys);
+        return { unifiedPersonId: raced.person.id, matchedBy: raced.matchedBy, created: false };
+      }
+      // The conflicting row exists but we cannot see it — a different tenant's
+      // row could not have collided, so this means the winner was removed, or
+      // the index and the lookup disagree. Either way it is a genuine fault and
+      // is reported rather than looped on.
+      throw new Error(
+        `Failed to create unified person: identity conflict reported but no matching person is visible (${error.message})`,
+      );
+    }
     throw new Error(`Failed to create unified person: ${error.message}`);
   }
 
@@ -242,6 +410,8 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
     hasPhone: Boolean(phone),
     hasExternalKeys: Object.keys(externalKeys).length > 0,
   });
+
+  await dualWriteExternalIdentity(input.companyId, unifiedPersonId, externalKeys);
 
   return {
     unifiedPersonId,

@@ -55,6 +55,14 @@ export interface DerivedClaim {
   sourceTable: string;
   sourceId: string;
   sourceColumn: string;
+  /**
+   * Provenance override. W3's backfill leaves this unset and is recorded as
+   * `w3_backfill`; a live writer (LI-5D) sets its own, because a claim created
+   * by today's ingestion must not describe itself as a historical backfill.
+   */
+  source?: string;
+  /** Evidence override, paired with `source`. Summary only — never a payload. */
+  evidence?: Record<string, unknown>;
 }
 
 export type DerivationOutcome = 'derived' | 'unusable';
@@ -189,9 +197,9 @@ const toRow = (d: DerivedClaim, at: string) => ({
   platform: d.platform,
   normalized_value: d.normalizedValue,
   raw_value: d.rawValue,
-  source: CANONICALISATION_SOURCE,
+  source: d.source ?? CANONICALISATION_SOURCE,
   source_reference: `${d.sourceTable}:${d.sourceId}`,
-  evidence: {
+  evidence: d.evidence ?? {
     canonicalisationVersion: CANONICALISATION_VERSION,
     sourceTable: d.sourceTable,
     sourceColumn: d.sourceColumn,
