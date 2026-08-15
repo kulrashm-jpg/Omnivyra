@@ -31,6 +31,8 @@ type ReviewTopic = {
   source: string | null;
   occurrenceCount: number;
   lastSeenAt: string | null;
+  /** Derived server-side; the vector itself is never sent. */
+  hasEmbedding?: boolean;
 };
 
 type Filter = 'identities' | 'aliases' | 'all';
@@ -392,8 +394,15 @@ export default function KnowledgeGraphCuration(): React.ReactElement {
                     computed from the current label, so renaming an embedded
                     topic would leave the vector describing text that is no
                     longer there. The service re-checks both conditions.
+
+                    B7.9.2: `hasEmbedding` is the PERSISTED fact, from the row.
+                    `embed[t.id]` is only this session's activity — it was the
+                    sole embedding guard in B7.9, so after a reload an embedded
+                    topic still offered Rename. It is kept as a transient guard
+                    for a topic embedded moments ago in this same tab, before
+                    the list has been refetched.
                   */}
-                  {!t.canonicalTopicId && !embed[t.id] && (
+                  {!t.canonicalTopicId && !t.hasEmbedding && !embed[t.id] && (
                     <button
                       data-testid={'rename-' + t.id}
                       onClick={() => {

@@ -122,11 +122,28 @@ describe('B7.9 · create action on the existing surface', () => {
 });
 
 describe('B7.9 · rename visibility', () => {
-  it('offered for an inert identity', async () => {
-    mockFetch(created);
+  /**
+   * B7.9.2 — these three cases are the whole contract. B7.9 gated only on the
+   * client-side session map, so an embedded topic still offered Rename after a
+   * page reload; `hasEmbedding` is now the persisted fact from the row.
+   */
+  it('offered for an inert identity (no canonical parent, no embedding)', async () => {
+    mockFetch(created, [{ ...identity, hasEmbedding: false }]);
     render(<KnowledgeGraphCuration />);
     await screen.findByTestId('topic-table');
     expect(screen.getByTestId('rename-t1')).toBeTruthy();
+  });
+
+  it('HIDDEN for an embedded topic — even on a fresh load with no session state', async () => {
+    // The B7.9 regression: canonicalTopicId is null, so the old condition
+    // (!canonicalTopicId && !embed[id]) rendered Rename for this row.
+    mockFetch(created, [{ ...identity, canonicalTopicId: null, hasEmbedding: true }]);
+    render(<KnowledgeGraphCuration />);
+    await screen.findByTestId('topic-table');
+    expect(screen.queryByTestId('rename-t1')).toBeNull();
+    // Still an identity, so the other identity affordances remain.
+    expect(screen.getByTestId('use-t1')).toBeTruthy();
+    expect(screen.getByTestId('embed-t1')).toBeTruthy();
   });
 
   it('hidden for an alias (already canonicalised)', async () => {
@@ -134,6 +151,32 @@ describe('B7.9 · rename visibility', () => {
     render(<KnowledgeGraphCuration />);
     await screen.findByTestId('topic-table');
     expect(screen.queryByTestId('rename-t2')).toBeNull();
+  });
+
+  it('hidden for an alias that is ALSO embedded', async () => {
+    mockFetch(created, [{ ...alias, hasEmbedding: true }]);
+    render(<KnowledgeGraphCuration />);
+    await screen.findByTestId('topic-table');
+    expect(screen.queryByTestId('rename-t2')).toBeNull();
+  });
+
+  it('the session guard still hides Rename right after embedding in this tab', async () => {
+    // hasEmbedding is stale (false) until the list refetches; embed[t.id]
+    // covers that window.
+    mockFetch({ ok: true, status: 202, json: { ok: true, status: 'accepted' } }, [{ ...identity, hasEmbedding: false }]);
+    render(<KnowledgeGraphCuration />);
+    await screen.findByTestId('topic-table');
+    expect(screen.getByTestId('rename-t1')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('embed-t1'));
+    await waitFor(() => expect(screen.queryByTestId('rename-t1')).toBeNull());
+  });
+
+  it('the client never receives an embedding vector', async () => {
+    mockFetch(created, [{ ...identity, hasEmbedding: true }]);
+    render(<KnowledgeGraphCuration />);
+    await screen.findByTestId('topic-table');
+    expect(document.body.innerHTML).not.toMatch(/\[0?\.\d+,/);
+    expect(document.body.innerHTML).not.toContain('embedding_model');
   });
 
   it('PATCHes only topicId and label', async () => {
