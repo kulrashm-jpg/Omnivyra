@@ -29,6 +29,8 @@
  * provider identity. LI-5A.1 Q-1 stays open, and stays uninfluenced.
  */
 
+import { observabilityConfig } from '../../observability/config';
+import { registry } from '../../observability/registry';
 import { ownedDbTable } from '../../db/writeOwner';
 import {
   normalizeExternalIdentity,
@@ -232,4 +234,80 @@ export async function compareExternalIdentityShadow(input: {
       error: e instanceof Error ? e.message : String(e),
     };
   }
+}
+
+/**
+ * LI-5E — measuring the observation window.
+ *
+ * LI-5B computes and logs a category per resolution; LI-5C found that log
+ * search alone is not a usable way to answer "do the two stores agree", because
+ * "zero disagreements" and "zero observations" look identical in a log. This
+ * counts them so the two can never be confused.
+ *
+ * ─── IT REUSES THE PLATFORM REGISTRY ──────────────────────────────────────
+ * `backend/observability/registry` is the existing metrics store, already
+ * bounded by a `maxSeries` cardinality guard. No parallel counter, no new table,
+ * no new observability domain — adding one would mean editing shared config for
+ * a single counter.
+ *
+ * ─── NO TENANT LABEL, DELIBERATELY ────────────────────────────────────────
+ * The registry is a PLATFORM aggregate. Labelling by tenant would put per-tenant
+ * series into a shared store — unbounded as tenants grow, and cross-tenant
+ * aggregation in a place tenant-facing code can read. The category is the only
+ * label, so there are exactly seven series, forever. Per-event tenant detail
+ * already exists, tenant-scoped, in the `external_identity_shadow` log line.
+ *
+ * ─── IT COUNTS ONLY GENUINE RESOLUTIONS ───────────────────────────────────
+ * The caller invokes this only after a real resolution that actually consulted
+ * the external stage and had something to compare. Historical claims, migration
+ * replay, schema tests and empty reads never reach it, so zero observations
+ * stays zero.
+ */
+
+export const SHADOW_OBSERVATION_METRIC = 'identity.external_shadow.observations';
+
+/** Count one observation. Fail-safe: never throws, never affects a resolution. */
+export function recordShadowObservation(category: ShadowCategory): void {
+  try {
+    if (!observabilityConfig.enabled) return;
+    registry.incr(SHADOW_OBSERVATION_METRIC, 1, { category });
+  } catch {
+    // A counter must never break the path it observes.
+  }
+}
+
+export interface ShadowObservationCounts {
+  total: number;
+  byCategory: Record<ShadowCategory, number>;
+  /**
+   * True when nothing has been observed yet. The point of reporting this
+   * separately: an empty window and a window showing perfect agreement are
+   * different findings, and only this flag distinguishes them.
+   */
+  empty: boolean;
+}
+
+/**
+ * Read the window. Returns every category explicitly, including the zeroes, so
+ * a caller cannot mistake an absent key for an absent problem.
+ */
+export function getShadowObservationCounts(): ShadowObservationCounts {
+  const byCategory = Object.fromEntries(
+    SHADOW_CATEGORIES.map((c) => [c, 0]),
+  ) as Record<ShadowCategory, number>;
+
+  let total = 0;
+  try {
+    for (const entry of registry.counterEntries()) {
+      if (entry.name !== SHADOW_OBSERVATION_METRIC) continue;
+      const category = entry.labels?.category as ShadowCategory | undefined;
+      if (!category || !(category in byCategory)) continue;
+      byCategory[category] += entry.value;
+      total += entry.value;
+    }
+  } catch {
+    // An unreadable registry reports an empty window rather than a false one.
+  }
+
+  return { total, byCategory, empty: total === 0 };
 }

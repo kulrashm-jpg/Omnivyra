@@ -1,5 +1,5 @@
 import { supabase } from '../db/supabaseClient';
-import { compareExternalIdentityShadow } from './prospectIdentity/externalIdentityShadow';
+import { compareExternalIdentityShadow, recordShadowObservation } from './prospectIdentity/externalIdentityShadow';
 import { writeExternalIdentityClaims } from './prospectIdentity/externalIdentityDualWrite';
 import { logger } from './logger';
 import { ownedDbTable } from '../db/writeOwner';
@@ -249,6 +249,11 @@ async function observeExternalIdentityShadow(
       currentPersonId,
     });
     if (comparison.pairsProbed === 0) return;   // nothing in the claims shape to compare
+
+    // LI-5E — count the observation. This line is reached ONLY after a genuine
+    // resolution that consulted the external stage and had something to
+    // compare, so historical claims, replay and empty reads never inflate it.
+    recordShadowObservation(comparison.category);
 
     // IDs and counts only — never an email, phone, name or identifier value.
     logger.info('external_identity_shadow', {
