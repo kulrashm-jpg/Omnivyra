@@ -33,6 +33,35 @@ const MEMORY_TABLE = 'content_memory';
 const ORIGINALITY_TABLE = 'content_originality';
 const BRAND_TABLE = 'brand_memory';
 
+// ── F1: the Content Memory write flag ────────────────────────────────────────
+/**
+ * Content Memory is the historical corpus every later intelligence capability
+ * reads — novelty, progression, campaign continuity, suggestions.
+ *
+ * It had ONE writer, `generationRuntime`'s persistence stage, reached only when
+ * `persist:true` AND `createContent` succeeded. Every live caller passes
+ * `persist:false`, and canonical persistence is denied in production, so the
+ * corpus was structurally unfillable and `assertOriginality` returned
+ * `{isOriginal:true}` for every candidate — a gate that cannot fail.
+ *
+ * This flag makes the memory stage INDEPENDENTLY controllable. It is
+ * deliberately NOT coupled to CANONICAL_PERSISTENCE_ENABLED,
+ * PLATFORM_KNOWLEDGE_GRAPH_ENABLED or any cache flag: recreating that coupling
+ * would recreate the deadlock.
+ *
+ * House convention, default DENY.
+ */
+export const CONTENT_MEMORY_WRITE_ENV = 'CONTENT_MEMORY_WRITE_ENABLED';
+const AFFIRMATIVE = /^(1|true|on|yes)$/;
+
+export function isContentMemoryWriteEnabled(): boolean {
+  try {
+    return AFFIRMATIVE.test(String(process.env[CONTENT_MEMORY_WRITE_ENV] ?? '').trim().toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 /** Short excerpt length stored for diagnostics / nearest-match display. */
 const EXCERPT_LEN = 280;
 

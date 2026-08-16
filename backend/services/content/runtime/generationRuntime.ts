@@ -75,6 +75,7 @@ import {
   retrieveRelevant,
   indexContentUnit,
   persistOriginality,
+  isContentMemoryWriteEnabled,
 } from '../contentMemoryService';
 import { assertOriginality } from '../originalityGate';
 import { regenerateUntilOriginal } from '../originalityRegeneration';
@@ -413,17 +414,11 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
       });
       contentId = created.id;
 
-      // Both of these are fail-safe (return null on error) but are still inside the
-      // try so any unexpected throw keeps persistence fail-open as a unit.
-      await indexContentUnit({
-        companyId: req.companyId,
-        contentId,
-        campaignId: req.campaignId ?? null,
-        contentType: req.contentType,
-        platform: primaryPlatform,
-        lifecycleStatus: created.lifecycleStatus,
-        text: master.content ?? '',
-      });
+      // F1 — the content_memory write MOVED OUT of this block into its own
+      // stage below. It used to live here, which made the corpus depend on
+      // `persist:true` AND `createContent` succeeding; every live caller passes
+      // `persist:false`, so it never ran. Memory is no longer inside the
+      // canonical-persistence success condition.
       // persistOriginality only when a verdict exists. The DEFAULT path always has
       // one (byte-identical to today); `runOriginality:false` skips the gate ⇒
       // originality is null ⇒ no originality row is written.
@@ -445,6 +440,38 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
     }
     persistenceTimeMs = persistTimer();
     runtimeMetrics.persistenceTimeMs(persistenceTimeMs, metricLabels);
+  }
+
+  // ── Stage 6b — Content Memory (INDEPENDENT of persistence; FAIL-OPEN) ──────
+  // Runs whenever a generation result exists, regardless of `persist`, of
+  // whether canonical persistence is allowed, or of whether the persistence
+  // stage failed. `contentId` is passed when one exists and NULL otherwise —
+  // content_memory.content_id is a nullable soft ref precisely for this case.
+  //
+  // This is the F1 corpus foundation: novelty, progression and campaign
+  // continuity all read what this stage writes. It deliberately does NOT
+  // evaluate novelty, touch the knowledge graph, or write coverage.
+  if (isContentMemoryWriteEnabled()) {
+    stages.push('content_memory');
+    const memoryTimer = startTimer();
+    try {
+      // indexContentUnit is documented fail-safe (logs and returns null); the
+      // try is belt-and-braces so an unexpected throw cannot fail a generation
+      // the caller already received.
+      await indexContentUnit({
+        companyId: req.companyId,
+        contentId,                              // may be null — see above
+        campaignId: req.campaignId ?? null,
+        contentType: req.contentType,
+        platform: primaryPlatform,
+        lifecycleStatus: null,                  // no canonical row implies no status
+        text: master.content ?? '',
+      });
+    } catch {
+      failures.push('content_memory');
+      runtimeMetrics.failure('content_memory', metricLabels);
+    }
+    runtimeMetrics.persistenceTimeMs(memoryTimer(), { ...metricLabels, stage: 'content_memory' });
   }
 
   // ── Stage 7 — Variant Generation (FAIL-OPEN)
