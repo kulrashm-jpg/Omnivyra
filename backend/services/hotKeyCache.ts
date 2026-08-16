@@ -156,6 +156,19 @@ export function hotInvalidate(key: string): void {
 }
 
 /**
+ * Drop the entire hot tier.
+ *
+ * Required by the AI cache flush: the hot tier is a process-local memory tier
+ * consulted BEFORE Redis, so deleting a Redis key alone does not stop this
+ * process from continuing to serve the value it already holds. A flush that
+ * leaves the hot tier populated is not a flush.
+ */
+export function hotClear(): void {
+  _hot.clear();
+  _freqCounter.clear();
+}
+
+/**
  * Returns top-N hot keys sorted by frequency (for observability).
  */
 export function getHotKeyStats(topN = 10): Array<{ key: string; freq: number; expiresInMs: number }> {

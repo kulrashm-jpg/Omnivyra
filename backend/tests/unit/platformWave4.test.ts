@@ -74,8 +74,11 @@ describe('W4-3 exact-key AI cache', () => {
     expect(isExactOnlyOp('generateMasterContent')).toBe(true);
     expect(isExactOnlyOp('generateCampaignPlan')).toBe(false);
     // Near-match remains structurally skipped for exact-only ops.
+    // P0 added a durable-telemetry call inside the read-side guard; the
+    // guarantee is unchanged and still asserted — an exact-only op records a
+    // MISS and returns before any near-match lookup.
     const src = read('backend/services/aiResponseCache.ts');
-    expect(src).toMatch(/if \(isExactOnlyOp\(operation\)\) \{ recordCacheMiss\(\); return null; \}/);
+    expect(src).toMatch(/if \(isExactOnlyOp\(operation\)\) \{ recordCacheMiss\(\);[^}]*return null; \}/);
     expect(src).toMatch(/if \(isExactOnlyOp\(operation\)\) return;/);
   });
 });

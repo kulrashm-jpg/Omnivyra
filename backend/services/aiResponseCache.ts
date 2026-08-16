@@ -17,7 +17,7 @@ import { createHash } from 'crypto';
 import { gzip, gunzip } from 'zlib';
 import { promisify } from 'util';
 import { recordCacheExactHit, recordCacheNearHit, recordCacheMiss } from './metricsCollector';
-import { hotGet, hotSet, recordAccess as hotRecordAccess } from './hotKeyCache';
+import { hotGet, hotSet, recordAccess as hotRecordAccess, hotInvalidate, hotClear } from './hotKeyCache';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
 import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 import {
@@ -26,7 +26,7 @@ import {
   isCacheNamespaceEnabled,
   noteCacheIsolationViolation,
 } from '../../lib/platform/cacheCore';
-import { getTenantId } from '../../lib/platform/requestContext';
+import { getTenantId, setContextMeta } from '../../lib/platform/requestContext';
 
 const gzipAsync   = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -227,6 +227,70 @@ function jaccardSimilarity(a: string[], b: string[]): number {
   return union === 0 ? 0 : intersection / union;
 }
 
+// ── P0: structural conversational guard ───────────────────────────────────────
+/**
+ * TRUE when the payload replays prior assistant turns — i.e. it carries
+ * conversation state.
+ *
+ * This is deliberately STRUCTURAL, not a list of operation names. The
+ * production incident (one card-chat answer repeated for three different user
+ * turns) happened because `blogCardChat` was simply not in NO_CACHE_OPS, and
+ * this repository has already produced three such near-misses:
+ * `responseGeneration` is excluded while `replyGeneration` and
+ * `engagement_reply_suggestions` are not; `refineProblemTransformation` is
+ * excluded while `defineProblemTransformation` / `inferProblemTransformation`
+ * are not. A name list fails every time someone adds an operation and forgets.
+ *
+ * A first-turn request contains only system + user messages. The moment an
+ * assistant turn is replayed back to the model, the payload carries history,
+ * and successive turns are >0.94 similar BY CONSTRUCTION — precisely the
+ * condition under which near-match returns the previous answer.
+ *
+ * Such payloads therefore never near-match and are never indexed as near-match
+ * candidates. Exact matching is untouched: an identical retry of the same turn
+ * still hits, which is the correct behaviour for a retry.
+ *
+ * This invariant is independent of CACHE_KILL_OMNIVYRA_AI_SEM and must survive
+ * the later CachePolicy allowlist.
+ */
+export function carriesConversationState(
+  messages: Array<{ role: string; content: string }>,
+): boolean {
+  if (!Array.isArray(messages)) return false;
+  return messages.some((m) => m && m.role === 'assistant');
+}
+
+// ── P0: durable cache telemetry (request-scoped hand-off) ─────────────────────
+/**
+ * Keys under which this module records WHICH tier served a response. The
+ * gateway reads them when it writes the cache-hit `usage_events` row, so the
+ * tier reaches durable storage without changing either public cache signature
+ * and WITHOUT adding a single extra database write.
+ *
+ * The in-process metrics registry cannot serve this purpose: it is documented
+ * as "process-local", and on Vercel serverless each invocation gets its own
+ * registry which is discarded when the lambda ends — `/api/health/metrics`
+ * consequently reports an empty counter set even while cache hits are
+ * occurring. Request-scoped meta + the existing usage ledger is the smallest
+ * mechanism that survives lambda termination, cold starts, concurrency and
+ * redeployment.
+ */
+export const CACHE_TIER_META_KEY = 'ai_cache_tier';
+export const CACHE_SIMILARITY_META_KEY = 'ai_cache_similarity';
+
+export type CacheTier = 'exact' | 'near' | 'miss';
+
+function noteCacheTier(tier: CacheTier, similarity?: number): void {
+  try {
+    setContextMeta(CACHE_TIER_META_KEY, tier);
+    if (typeof similarity === 'number' && Number.isFinite(similarity)) {
+      setContextMeta(CACHE_SIMILARITY_META_KEY, Number(similarity.toFixed(4)));
+    }
+  } catch {
+    /* fail-safe: telemetry must never affect the critical path */
+  }
+}
+
 // ── Key construction (exported for in-flight coalescing in aiGateway) ─────────
 /** GAP 4 + GAP 5: Build a normalized, versioned cache key. */
 export function buildNormalizedKey(
@@ -327,12 +391,14 @@ export async function getCachedCompletion(
     const hotHit = hotGet(exactKey);
     if (hotHit !== null) {
       recordCacheExactHit();
+      noteCacheTier('exact');
       return hotHit; // already decompressed when stored in hot tier
     }
 
     const exactHit = await client.get(exactKey);
     if (exactHit !== null) {
       recordCacheExactHit();
+      noteCacheTier('exact');
       const decompressed = await decompressIfNeeded(exactHit);
       // Promote to hot tier on hit
       hotRecordAccess(exactKey, decompressed);
@@ -344,15 +410,20 @@ export async function getCachedCompletion(
 
     // ── Near-match fallback (GAP 2) — TENANT-SCOPED (W1-1 / B-04 fix) ─────────
     // W4-3: exact-only ops NEVER near-match — miss means a fresh generation.
-    if (isExactOnlyOp(operation)) { recordCacheMiss(); return null; }
+    if (isExactOnlyOp(operation)) { recordCacheMiss(); noteCacheTier('miss'); return null; }
+    // P0: a payload replaying prior assistant turns is a CONVERSATION. Successive
+    // turns are >0.94 similar by construction, so near-match would serve the
+    // previous turn's answer — the production incident. Structural, not a name
+    // list. Exact matching above already ran and is unaffected.
+    if (carriesConversationState(messages)) { recordCacheMiss(); noteCacheTier('miss'); return null; }
     // No resolvable tenant → no near-match. Exact matching above still ran.
     const tenant = tenantId ?? getTenantId() ?? null;
     const semKey = isCacheNamespaceEnabled(SEMANTIC_NS)
       ? buildCacheKey(SEMANTIC_NS, { tenantId: tenant, parts: [operation] })
       : null;
-    if (!semKey) { recordCacheMiss(); return null; }
+    if (!semKey) { recordCacheMiss(); noteCacheTier('miss'); return null; }
     const rawEntries = await client.lrange(semKey, 0, SEMANTIC_MAX - 1);
-    if (rawEntries.length === 0) return null;
+    if (rawEntries.length === 0) { recordCacheMiss(); noteCacheTier('miss'); return null; }
 
     const queryTerms = tokenize(normalizeMessages(messages));
     let bestKey: string | null = null;
@@ -360,7 +431,9 @@ export async function getCachedCompletion(
 
     for (const raw of rawEntries) {
       try {
-        const entry = JSON.parse(raw) as { words: string[]; key: string; t?: string };
+        const entry = JSON.parse(raw) as {
+          words: string[]; key: string; t?: string; m?: string; v?: string;
+        };
         // Defense in depth: entries record the tenant they were written for.
         // A mismatch means the index itself was corrupted/mis-keyed — count
         // it on the permanent isolation-violation assertion and never serve.
@@ -368,6 +441,11 @@ export async function getCachedCompletion(
           noteCacheIsolationViolation(SEMANTIC_NS);
           continue;
         }
+        // P0: a near-match must agree on generation identity, not just wording.
+        // Entries written before this change carry no `m`/`v` and are skipped
+        // rather than trusted — they expire on their own TTL.
+        if (entry.m !== model) continue;
+        if ((entry.v ?? '') !== (cacheVersion ?? '')) continue;
         const score = jaccardSimilarity(queryTerms, entry.words);
         if (score >= NEAR_THRESHOLD && score > bestScore) {
           bestScore = score;
@@ -380,6 +458,7 @@ export async function getCachedCompletion(
       const nearHit = await client.get(bestKey);
       if (nearHit !== null) {
         recordCacheNearHit();
+        noteCacheTier('near', bestScore);
         if (process.env.NODE_ENV !== 'test') {
           console.info('[ai-cache] near-hit', { op: operation, score: bestScore.toFixed(2) });
         }
@@ -388,6 +467,7 @@ export async function getCachedCompletion(
     }
 
     recordCacheMiss();
+    noteCacheTier('miss');
     return null;
   } catch {
     return null;
@@ -442,9 +522,22 @@ export async function setCachedCompletion(
     // Hot key tier: store uncompressed for instant access on next hit
     hotSet(exactKey, response);
 
+    // ── P0: operation → keys index ───────────────────────────────────────────
+    // Exact keys are `omnivyra:ai_resp:v2:<sha256>`; the OPERATION never appears
+    // in the key, so invalidating "everything for operation X" was structurally
+    // impossible — `invalidateCacheByPrefix('generateCampaignPlan')` scanned
+    // `omnivyra:ai_resp:v2:generateCampaignPlan*` and matched nothing, silently
+    // returning 0. This index is the missing reverse mapping. Bounded: one SADD
+    // + one EXPIRE per cache write, and the set expires with the entries.
+    await indexKeyForOperation(client, operation, exactKey, ttl);
+
     // ── Update semantic index (GAP 2) — TENANT-SCOPED (W1-1 / B-04 fix) ───────
     // W4-3: exact-only ops are never indexed for near-match.
     if (isExactOnlyOp(operation)) return;
+    // P0: never index a conversation-carrying payload as a near-match
+    // candidate. See carriesConversationState() — this is what stops turn N+1
+    // from matching turn N. Its exact entry above remains retrievable.
+    if (carriesConversationState(messages)) return;
     // No resolvable tenant → the entry is NOT indexed for near-match (it
     // remains exactly retrievable via the full-prompt hash above).
     const tenant = tenantId ?? getTenantId() ?? null;
@@ -453,7 +546,14 @@ export async function setCachedCompletion(
       : null;
     if (!semKey) return;
     const words = tokenize(normalizeMessages(messages));
-    const entry = JSON.stringify({ words, key: exactKey, t: tenant ?? '' });
+    // P0: record the model and cache version ON the candidate. tokenize() sees
+    // message CONTENT only, so without these a request differing solely by model
+    // or cacheVersion scores 1.0 against this entry and near-matches it — which
+    // defeated cacheVersion entirely (GAP 5's invalidation mechanism) and could
+    // serve output generated by a different model.
+    const entry = JSON.stringify({
+      words, key: exactKey, t: tenant ?? '', m: model, v: cacheVersion ?? '',
+    });
     const pipe = client.pipeline();
     pipe.lpush(semKey, entry);
     pipe.ltrim(semKey, 0, SEMANTIC_MAX - 1);
@@ -464,18 +564,54 @@ export async function setCachedCompletion(
   }
 }
 
+// ── P0: invalidation repair ───────────────────────────────────────────────────
 /**
- * Invalidate cache entries by key prefix.
- * Use when a company profile or campaign changes invalidate planning outputs.
+ * THE ACTUAL LIVE KEY FORMATS (verified against this module, not assumed):
+ *
+ *   exact entry      `omnivyra:ai_resp:v2:<sha256 of {model,messages,v}>`
+ *   near-match index `omnivyra:ai_sem:v3:t.<tenant>:<operation>`   (buildCacheKey)
+ *   operation index  `omnivyra:ai_opidx:v1:<operation>`            (added by P0)
+ *
+ * Two defects made invalidation a silent no-op:
+ *
+ *  1. `invalidateCacheByPrefix` ALWAYS prepended `EXACT_PREFIX`, so every caller
+ *     produced an unmatchable pattern — `invalidateCacheByPrefix('omnivyra:ai_resp:v2')`
+ *     scanned `omnivyra:ai_resp:v2:omnivyra:ai_resp:v2*`, and an operation name
+ *     scanned for a key component that does not exist. Both returned 0 while
+ *     reporting success.
+ *  2. The admin flush targeted `omnivyra:ai_sem:v2` while the live near-match
+ *     namespace is v3, so even a working scan would have missed it.
  */
-export async function invalidateCacheByPrefix(prefix: string): Promise<number> {
+const OPERATION_INDEX_PREFIX = 'omnivyra:ai_opidx:v1';
+
+function operationIndexKey(operation: string): string {
+  return `${OPERATION_INDEX_PREFIX}:${operation}`;
+}
+
+async function indexKeyForOperation(
+  client: IORedis, operation: string, exactKey: string, ttl: number,
+): Promise<void> {
+  try {
+    const idx = operationIndexKey(operation);
+    const pipe = client.pipeline();
+    pipe.sadd(idx, exactKey);
+    pipe.expire(idx, ttl * 2); // outlive the entries it points at
+    await pipe.exec();
+  } catch { /* fail-safe — indexing must never fail a cache write */ }
+}
+
+/** Delete keys matching a VERBATIM Redis pattern. No prefix is prepended. */
+export async function invalidateByPattern(pattern: string): Promise<number> {
   const client = getClient();
   if (!client || !_available) return 0;
+  // Refuse an unbounded wildcard: a bare '*' would delete every key in the
+  // database, including queues and sessions that this module does not own.
+  if (!pattern || pattern === '*' || !pattern.startsWith('omnivyra:')) return 0;
   let deleted = 0;
   try {
     let cursor = '0';
     do {
-      const [next, keys] = await client.scan(cursor, 'MATCH', `${EXACT_PREFIX}:${prefix}*`, 'COUNT', 100);
+      const [next, keys] = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
       cursor = next;
       if (keys.length > 0) {
         await client.del(...keys);
@@ -484,4 +620,52 @@ export async function invalidateCacheByPrefix(prefix: string): Promise<number> {
     } while (cursor !== '0');
   } catch { /* fail-safe */ }
   return deleted;
+}
+
+/** Delete every cached entry for one operation, via the operation index. */
+export async function invalidateOperation(operation: string): Promise<number> {
+  const client = getClient();
+  if (!client || !_available || !operation) return 0;
+  let deleted = 0;
+  try {
+    const idx = operationIndexKey(operation);
+    const keys = await client.smembers(idx);
+    if (keys.length > 0) {
+      deleted += await client.del(...keys);
+      // The hot tier is consulted before Redis, so it must drop the same keys.
+      for (const k of keys) hotInvalidate(k);
+    }
+    await client.del(idx);
+  } catch { /* fail-safe */ }
+  return deleted;
+}
+
+/**
+ * Flush BOTH AI cache namespaces at their live versions. Used by the admin
+ * flush control, which previously purged a dead v2 namespace.
+ */
+export async function invalidateAllAiCache(): Promise<number> {
+  const exact = await invalidateByPattern(`${EXACT_PREFIX}:*`);
+  const semantic = await invalidateByPattern(`${SEMANTIC_NS.prefix}:v${SEMANTIC_NS.version}:*`);
+  const opIndex = await invalidateByPattern(`${OPERATION_INDEX_PREFIX}:*`);
+  hotClear();
+  return exact + semantic + opIndex;
+}
+
+/**
+ * Invalidate cache entries.
+ *
+ * Backwards-compatible entry point retained for the two existing caller shapes:
+ * a full namespace/key pattern (admin flush) or an operation name (downstream
+ * invalidation). The dispatch is explicit rather than silent because both
+ * shapes are already in the codebase and both were previously broken.
+ */
+export async function invalidateCacheByPrefix(prefixOrOperation: string): Promise<number> {
+  if (!prefixOrOperation) return 0;
+  if (prefixOrOperation.startsWith('omnivyra:')) {
+    return invalidateByPattern(
+      prefixOrOperation.endsWith('*') ? prefixOrOperation : `${prefixOrOperation}*`,
+    );
+  }
+  return invalidateOperation(prefixOrOperation);
 }
