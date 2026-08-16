@@ -33,7 +33,14 @@ import { recordProviderUsage } from './aiUsageCollector';
 import { getCompanyLlmConfig, resolveCompanyApiKey, getActiveProviders, getModelsByProvider } from './llmProviderService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
-import { getCachedCompletion, setCachedCompletion, buildNormalizedKey } from './aiResponseCache';
+import {
+  getCachedCompletion, setCachedCompletion, buildNormalizedKey,
+  CACHE_TIER_META_KEY, CACHE_SIMILARITY_META_KEY,
+} from './aiResponseCache';
+// NOTE: this is lib/platform/requestContext (the request-scoped meta bag), which
+// is a DIFFERENT module from `./requestContext` imported above for
+// getRequestContext. Both are intentionally present.
+import { getContextMeta } from '../../lib/platform/requestContext';
 import { resolveEffectiveModel } from './aiModelRouter';
 import { recordGptCall, recordGptLatency, recordGptFailure } from './metricsCollector';
 import { evaluateJobCost } from './jobCostEstimator';
@@ -295,7 +302,23 @@ const executeGatewayCompletion = async (
       error_flag:      false,
       unit_cost:       0,
       total_cost:      0,
-      metadata:        request.parentActivityId ? { cache_hit: true, parent_activity_id: request.parentActivityId } : { cache_hit: true },
+      // P0 — durable cache telemetry. The tier ('exact' | 'near') and the
+      // near-match similarity are recorded by aiResponseCache into the
+      // request-scoped meta bag and read back here, so they land in the SAME
+      // row that was already being written. No new table, no extra write, and
+      // it survives lambda termination — unlike the in-process metrics
+      // registry, which is discarded when the invocation ends and therefore
+      // reports nothing on serverless.
+      //
+      // Prompt content is deliberately NOT recorded: only the tier, the score
+      // and the cache version.
+      metadata:        {
+        cache_hit: true,
+        cache_tier: getContextMeta<string>(CACHE_TIER_META_KEY) ?? 'unknown',
+        cache_similarity: getContextMeta<number>(CACHE_SIMILARITY_META_KEY) ?? null,
+        cache_version: effectiveCacheVersion ?? null,
+        ...(request.parentActivityId ? { parent_activity_id: request.parentActivityId } : {}),
+      },
     });
     return {
       output: cachedContent,

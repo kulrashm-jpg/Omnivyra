@@ -14,7 +14,7 @@ import IORedis from 'ioredis';
 import { requireCapability } from '../../../backend/security/requireCapability';
 import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { getCacheStats as getExtApiStats } from '../../../backend/services/redisExternalApiCache';
-import { invalidateCacheByPrefix } from '../../../backend/services/aiResponseCache';
+import { invalidateAllAiCache } from '../../../backend/services/aiResponseCache';
 
 const requireSuperAdmin = async (req: NextApiRequest, res: NextApiResponse): Promise<boolean> => {
   const guard = await requireCapability(req, res, {
@@ -57,7 +57,10 @@ function parseRedisInfo(raw: string): Partial<RedisInfo> {
 async function getRedisKeyStats(client: IORedis): Promise<{ prefix: string; count: number }[]> {
   const prefixes = [
     { prefix: 'omnivyra:ai_resp:v2', label: 'ai_cache' },
-    { prefix: 'omnivyra:ai_sem:v2',  label: 'ai_semantic' },
+    // P0: the live near-match namespace is v3 (aiResponseCache SEMANTIC_NS).
+    // This listing still pointed at the retired v2 keys, so the dashboard
+    // reported the semantic cache as permanently empty.
+    { prefix: 'omnivyra:ai_sem:v3',  label: 'ai_semantic' },
     { prefix: 'virality:ext_api',    label: 'ext_api' },
     { prefix: 'infra:metrics',       label: 'metrics' },
     { prefix: 'virality:intel',      label: 'intelligence' },
@@ -91,8 +94,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { action } = req.body as { action?: string };
 
     if (action === 'flush_ai') {
-      const deleted = await invalidateCacheByPrefix('omnivyra:ai_resp:v2').catch(() => 0);
-      await invalidateCacheByPrefix('omnivyra:ai_sem:v2').catch(() => 0);
+      // P0: previously this purged the RETIRED v2 semantic namespace while the
+      // live near-match namespace is v3, and both calls prepended EXACT_PREFIX
+      // internally, so the scan pattern could never match a real key — the
+      // control reported success while deleting nothing. invalidateAllAiCache()
+      // flushes both namespaces at their live versions plus the operation index,
+      // and clears the process-local hot tier.
+      const deleted = await invalidateAllAiCache().catch(() => 0);
       return res.status(200).json({ ok: true, deleted, message: `AI response cache flushed (${deleted} keys)` });
     }
 

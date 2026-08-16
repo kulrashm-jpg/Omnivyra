@@ -43,7 +43,10 @@ describe('W1-1 semantic cache tenant scoping', () => {
   it('near-match read/write build keys through the SDK and skip without a key', () => {
     // Read side: buildCacheKey guarded by the kill switch; null → miss return.
     expect(cacheSrc).toMatch(/const semKey = isCacheNamespaceEnabled\(SEMANTIC_NS\)\s*\n?\s*\? buildCacheKey\(SEMANTIC_NS, \{ tenantId: tenant, parts: \[operation\] \}\)/);
-    expect(cacheSrc).toMatch(/if \(!semKey\) \{ recordCacheMiss\(\); return null; \}/);
+    // P0 added a durable-telemetry call inside this guard. The guarantee is
+    // unchanged and still asserted: a null semKey records a MISS and returns
+    // without any near-match lookup.
+    expect(cacheSrc).toMatch(/if \(!semKey\) \{ recordCacheMiss\(\);[^}]*return null; \}/);
     // Write side: null key → entry not indexed (exact cache already written).
     expect(cacheSrc).toMatch(/if \(!semKey\) return;/);
     // Tenant resolution chain: explicit param → request-context orgId → null.
@@ -53,8 +56,13 @@ describe('W1-1 semantic cache tenant scoping', () => {
   it('read-side entries verify their recorded tenant (defense in depth)', () => {
     expect(cacheSrc).toContain('noteCacheIsolationViolation(SEMANTIC_NS)');
     expect(cacheSrc).toMatch(/entry\.t !== undefined && entry\.t !== \(tenant \?\? ''\)/);
-    // Write side stamps the tenant into every entry.
-    expect(cacheSrc).toMatch(/JSON\.stringify\(\{ words, key: exactKey, t: tenant \?\? '' \}\)/);
+    // Write side stamps the tenant into every entry. P0 additionally stamps the
+    // model and cacheVersion, so a near-match must now agree on generation
+    // identity as well as tenant — the tenant guarantee is unchanged.
+    expect(cacheSrc).toMatch(/words, key: exactKey, t: tenant \?\? ''/);
+    expect(cacheSrc).toMatch(/m: model, v: cacheVersion \?\? ''/);
+    expect(cacheSrc).toMatch(/if \(entry\.m !== model\) continue;/);
+    expect(cacheSrc).toMatch(/if \(\(entry\.v \?\? ''\) !== \(cacheVersion \?\? ''\)\) continue;/);
   });
 
   it('the gateway threads request.companyId into both cache calls', () => {
