@@ -279,6 +279,17 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       // action as the underlying blueprint executions, so existing
       // billing behavior is unchanged.
       'creator_content',
+      // F0 — operations that reached the AI gateway but resolved to no action
+      // key, so usageLedgerService refused BOTH the usage_events row and the
+      // unified_transactions row and emitted an `unknown_action_key` anomaly
+      // instead (490 such anomalies across 23 process types in production).
+      // Each is mapped to the SAME action key as its nearest existing sibling,
+      // so no new billable capability and no pricing change is introduced.
+      'creator.infographic.copy',   // sibling: creator_execution_blueprint_image
+      'blog_brief_suggestions',     // sibling: blogGeneration
+      // Newsletter market-map body generation (lib/newsletter). Same billable
+      // shape as blogGeneration: a long-form content body for one company.
+      'newsletterGeneration',
     ],
     pricing_keys: {
       action_key: 'content_basic',
@@ -316,6 +327,22 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       // are flagged untracked_ai_call_blocked (uncosted; blockable if enforced).
       'creatorFieldAssist',
       'creator_intake_ai_content',
+      // F0 — same family, same billable capability as the siblings above:
+      // conversational/assistive refinement of a brief or profile field.
+      // Mapped to the existing content_rewrite action key; no pricing change.
+      'blogCardChat',                  // "Create with AI" card intake, cf. creator_intake_ai_content
+      'creator_package_ai',            // sibling: creator_marketing_packaging
+      'refineVariant',                 // sibling: regenerateContent
+      'quick_platform_adapt',          // sibling: parsePlatformCustomization
+      'campaign_chat',                 // conversational campaign assist, cf. refineCampaignIdea
+      // Company-profile definition/inference — the same assistive shape as the
+      // already-mapped refineProblemTransformation.
+      'defineCampaignPurpose',
+      'defineTargetCustomer',
+      'defineContextIntelligence',
+      'defineMarketingIntelligence',
+      'defineProblemTransformation',
+      'inferProblemTransformation',
     ],
     pricing_keys: {
       action_key: 'content_rewrite',
@@ -343,6 +370,9 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       'generateContentBlueprint',
       'generatePlatformVariants',
       'generateContentVariant',
+      // F0 — long-form body generation is the same billable capability as
+      // master content (token-priced generation), just section-scoped.
+      'generateLongFormSection',
     ],
     pricing_keys: {
       action_key: 'content_generation',
@@ -381,6 +411,15 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       'generateTrendRecommendationForRegion',
       'generateMarketPulseForRegion',
       'consolidateRegionalResults',
+      // F0 — idea/recommendation surfaces that produce candidate insights,
+      // identical in billable shape to generateContentIdeas / generateRecommendation.
+      'generateContentAngles',            // sibling: generateContentIdeas
+      'generateLongFormRecommendations',  // sibling: generateRecommendation
+      'suggestCompetitors',               // competitor intelligence suggestion
+      'suggestCompetitorsUnderstanding',
+      // Platform-fit analysis of a draft (lib/content-analyzer). Produces an
+      // assessment, not an artifact — the same shape as the diagnostics above.
+      'contentAnalysis',
     ],
     pricing_keys: {
       action_key: 'insight_generation',
@@ -433,6 +472,13 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       'responseGeneration',
       'runDiagnosticPrompt',
       'sentiment_classification',
+      // F0 — reply/engagement operations that emit a different literal from the
+      // ones above. `sentimentClassification` is the camelCase spelling the
+      // gateway actually passes; the snake_case entry above never matched it,
+      // which is how a mapped-looking capability still produced refusals.
+      'sentimentClassification',
+      'replyGeneration',      // sibling: responseGeneration
+      'engagement_refine',    // engagement suggestion refinement
     ],
     pricing_keys: {
       action_key: 'ai_reply',
