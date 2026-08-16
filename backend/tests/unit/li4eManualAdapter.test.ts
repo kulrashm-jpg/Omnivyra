@@ -164,21 +164,28 @@ beforeEach(() => {
 });
 
 describe('LI-4E — 1/2. adapter contract and registry discovery', () => {
-  it('registers exactly one source, and it is manual', () => {
+  // LI-5E.4 added a SECOND built-in, `crm`. These three assertions counted the
+  // built-ins, so they move with it. What they protect has NOT been relaxed:
+  // both built-ins are operator-supplied entry adapters, and no provider adapter
+  // is registered. `crm` leaves the forbidden list below because it is a
+  // NAMESPACE, not an integration — it reaches no CRM. `manual` is unchanged.
+  it('registers exactly the two operator-supplied sources', () => {
     expect(listLeadSources()).toEqual([
       { source: 'manual', label: 'Manual entry', capabilities: ['person_discovery', 'account_discovery'] },
+      { source: 'crm', label: 'CRM record (operator-supplied)', capabilities: ['person_discovery', 'account_discovery'] },
     ]);
   });
 
   it('registers NO provider adapter', () => {
-    for (const p of ['apollo', 'linkedin', 'rapidapi', 'crm', 'csv', 'xlsx', 'hubspot']) {
+    // Every entry below would require a credential, a network call or a vendor.
+    for (const p of ['apollo', 'linkedin', 'rapidapi', 'csv', 'xlsx', 'hubspot', 'salesforce', 'zoho']) {
       expect(hasLeadSourceAdapter(p)).toBe(false);
     }
   });
 
   it('registration is idempotent', () => {
     expect(() => { registerBuiltInLeadSources(); registerBuiltInLeadSources(); }).not.toThrow();
-    expect(listLeadSources()).toHaveLength(1);
+    expect(listLeadSources()).toHaveLength(2);
   });
 
   it('claims only capabilities it implements — it fetches, searches and enriches nothing', () => {

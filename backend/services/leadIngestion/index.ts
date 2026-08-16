@@ -50,19 +50,35 @@ export {
   type ManualLeadInput,
 } from './adapters/manualAdapter';
 
+export {
+  CRM_SOURCE,
+  crmAdapter,
+  crmExternalId,
+  toNormalizedCrmRecord,
+  type CrmLeadInput,
+} from './adapters/crmAdapter';
+
 import { hasLeadSourceAdapter, registerLeadSourceAdapter } from './registry';
 import { manualAdapter } from './adapters/manualAdapter';
+import { crmAdapter } from './adapters/crmAdapter';
 
 /**
  * Register the adapters that ship with the platform.
  *
  * Idempotent: registering twice is a no-op rather than the registry's
  * duplicate-registration error, so a second call from a different entry point
- * cannot crash a process. Only `manual` is built — no provider adapter exists,
- * and none is registered optimistically.
+ * cannot crash a process.
+ *
+ * Both built-ins are operator-supplied entry adapters — `manual` and `crm`.
+ * Neither reaches a provider: `crm` is a NAMESPACE, not an integration, and is
+ * unrelated to `crmIngestionService` and its scheduler. No provider adapter
+ * exists, and none is registered optimistically.
  */
 export function registerBuiltInLeadSources(): void {
   if (!hasLeadSourceAdapter(manualAdapter.source)) {
     registerLeadSourceAdapter(manualAdapter);
+  }
+  if (!hasLeadSourceAdapter(crmAdapter.source)) {
+    registerLeadSourceAdapter(crmAdapter);
   }
 }
