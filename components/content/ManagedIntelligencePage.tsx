@@ -9,9 +9,11 @@ import { useCompanyContext } from '../CompanyContext';
 import AIBlogCardModal from '../blog/AIBlogCardModal';
 import { getDepthLabel, getFormatLabel, parseWordTarget } from './managed-intelligence/recommendations';
 import { useManagedIntelligenceData } from './managed-intelligence/useManagedIntelligenceData';
-import { PRIORITY_STYLES, type CreationModeFlavor, type ManagedIntelligenceProps as Props } from './managed-intelligence/types';
+import { PRIORITY_STYLES, type CreationModeFlavor, type ManagedIntelligenceProps as Props, type RecommendationCard } from './managed-intelligence/types';
 import { buildOutlineContentBlocks } from '../../lib/blog/blogOutlineSkeleton';
 import { buildShortformManualStub } from '../../lib/content/shortformManualStub';
+import SuggestWithAIPanel from './SuggestWithAIPanel';
+import { toGenerationInput, type ContentSuggestion } from '../../lib/content/contentSuggestionContract';
 
 type CreationModeKind = 'ai' | 'outline' | 'manual' | 'starter';
 
@@ -156,6 +158,75 @@ export default function ManagedIntelligencePage({
       pathname: '/posts/result',
       query: { prefill: prefillToken },
     });
+  };
+
+  /**
+   * P1.6 — the single accept path for an AI-produced card.
+   *
+   * Extracted verbatim from AIBlogCardModal's `onCardCreated` so that "Suggest
+   * with AI" reuses the EXISTING generation input instead of opening a parallel
+   * pipeline: posts go through `generatePostFromIdea()` → /api/posts/generate →
+   * runPostGeneration, everything else through the same template prefill route.
+   */
+  const acceptAiCard = async (card: {
+    topic: string;
+    reason?: string;
+    intent: RecommendationCard['intent'];
+    tone?: string;
+    priority?: 'high' | 'medium' | 'low';
+  }) => {
+    const token = `ai_card_${contentType.replace(/[^a-z]/g, '_')}_${Date.now()}`;
+    try {
+      sessionStorage.setItem(token, JSON.stringify(card));
+    } catch {
+      // Ignore storage issues here and continue through route prefills.
+    }
+
+    setCustomCards((previous) => [
+      {
+        topic: card.topic,
+        reason: card.reason || 'Custom recommendation created with AI chat.',
+        intent: card.intent,
+        priority: card.priority || 'medium',
+      },
+      ...previous,
+    ]);
+
+    if (contentType === 'post') {
+      await generatePostFromIdea({
+        topic: card.topic,
+        intent: card.intent,
+        tone: card.tone,
+        reason: card.reason,
+        source: 'post_ai_card',
+      });
+      return;
+    }
+
+    void router.push({
+      pathname: templatePath,
+      query: {
+        format: selectedFormat,
+        prefill_source: `${contentType.replace('-', '_')}_ai_card`,
+        prefill_topic: card.topic,
+        prefill_reason: card.reason || '',
+        prefill_priority: card.priority || 'medium',
+        prefill_intent: card.intent,
+        prefill_tone: card.tone || '',
+        prefill_card: token,
+      },
+    });
+  };
+
+  /**
+   * P1.6 — Accept & Continue. `toGenerationInput` maps the suggestion onto the
+   * existing card shape; from there the flow is byte-identical to accepting an
+   * AI chat card. Note `platform_guidance` is intentionally dropped by that
+   * mapper, so an accepted suggestion cannot make the master draft
+   * platform-specific.
+   */
+  const acceptSuggestion = async (suggestion: ContentSuggestion) => {
+    await acceptAiCard(toGenerationInput(suggestion));
   };
 
   // G18: navigate to editor with an outline prefill stub (no API call).
@@ -412,6 +483,19 @@ export default function ManagedIntelligencePage({
             </button>
           </div>
 
+          {/* P1.6 — sits directly under the two entry cards, so "Create with AI"
+              is immediately followed by a concrete recommendation rather than a
+              blank prompt. Accept feeds the existing generation flow. */}
+          {selectedCompanyId ? (
+            <SuggestWithAIPanel
+              companyId={selectedCompanyId}
+              contentType={contentType}
+              formatLabel={formatLabel}
+              accentClassName={accentClassName}
+              onAccept={acceptSuggestion}
+            />
+          ) : null}
+
           <section className="mt-10">
             <div className="mb-4 flex items-center gap-2">
               <TrendingUp className="h-4 w-4 text-violet-600" />
@@ -622,49 +706,7 @@ export default function ManagedIntelligencePage({
           contentLabel={contentType.replace('-', ' ')}
           contentType={contentType}
           contentModeLabel={formatLabel}
-          onCardCreated={async (card) => {
-            const token = `ai_card_${contentType.replace(/[^a-z]/g, '_')}_${Date.now()}`;
-            try {
-              sessionStorage.setItem(token, JSON.stringify(card));
-            } catch {
-              // Ignore storage issues here and continue through route prefills.
-            }
-
-            setCustomCards((previous) => [
-              {
-                topic: card.topic,
-                reason: card.reason || 'Custom recommendation created with AI chat.',
-                intent: card.intent,
-                priority: card.priority || 'medium',
-              },
-              ...previous,
-            ]);
-
-            if (contentType === 'post') {
-              await generatePostFromIdea({
-                topic: card.topic,
-                intent: card.intent,
-                tone: card.tone,
-                reason: card.reason,
-                source: 'post_ai_card',
-              });
-              return;
-            }
-
-            void router.push({
-              pathname: templatePath,
-              query: {
-                format: selectedFormat,
-                prefill_source: `${contentType.replace('-', '_')}_ai_card`,
-                prefill_topic: card.topic,
-                prefill_reason: card.reason || '',
-                prefill_priority: card.priority || 'medium',
-                prefill_intent: card.intent,
-                prefill_tone: card.tone || '',
-                prefill_card: token,
-              },
-            });
-          }}
+          onCardCreated={acceptAiCard}
         />
       ) : null}
     </>
