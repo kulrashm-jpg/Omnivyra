@@ -23,12 +23,15 @@ import { ownedDbTable } from '../../db/writeOwner';
 import { appendDecision, getOutreachTaskById, listDecisions } from './storage';
 import {
   evaluateGovernance,
+  type CanonicalGovernanceVerdict,
   type GovernanceEvaluation,
   type GovernanceEvaluationInput,
   type RateUsage,
   type SuppressionMatches,
   type TenantGovernanceConfig,
 } from './governance';
+import { mayContact } from '../prospectIdentity/contactGovernance';
+import { loadGovernanceRecords, normalizeGovernanceTarget } from '../prospectIdentity/contactGovernanceRepository';
 import { recordFailure, recordGovernanceEvaluation, recordGovernanceFailure, recordGovernanceGate, recordStageOutcome } from './telemetry';
 import type { OutreachTask } from './types';
 
@@ -143,6 +146,80 @@ export async function loadSuppressionMatches(
 }
 
 /**
+ * LI-3C — resolve the CANONICAL contact governance verdict for one task.
+ *
+ * This is the impure edge: it loads tenant-scoped governance records and hands
+ * them to `mayContact`, the single evaluator that owns the ADR's rules. No rule
+ * is reimplemented here, and `mayContact` stays pure because it receives
+ * records rather than a database.
+ *
+ * FAILS CLOSED, matching `loadSuppressionMatches`: an unreadable governance
+ * table yields a BLOCK, never an absent verdict. Reading it as "nobody is
+ * governed" would contact people who asked not to be.
+ *
+ * Returns `null` only when the canonical layer genuinely does not apply —
+ * no tenant, no channel, or no recipient anchor at all.
+ *
+ * KNOWN LIMIT (LI-3C finding): `OutreachTask` carries `leadId`, not a canonical
+ * `unified_persons.id`, so the person anchor is supplied only when a caller
+ * passes `options.personId`. No caller does today, which means target matching
+ * is the operative path. A governance record anchored ONLY to a person is
+ * therefore not yet reachable through Path B.
+ */
+export async function resolveCanonicalGovernance(
+  companyId: string,
+  task: OutreachTask,
+  recipient: string | null,
+  personId: string | null,
+  evaluatedAt: string,
+): Promise<CanonicalGovernanceVerdict | null> {
+  const channel = task.channel;
+  if (!companyId || !channel) return null;
+
+  // LI-3D — the person anchor. An explicit caller-supplied id wins; otherwise it
+  // is resolved from the lead's existing canonical link. Resolving here rather
+  // than in the caller's Promise.all keeps the identity read inside the single
+  // edge that already owns canonical governance.
+  let resolvedPersonId = personId;
+  if (!resolvedPersonId) {
+    const resolved = await resolveLeadPersonId(companyId, task.leadId ?? null);
+    if (!resolved.ok) {
+      // Unknown person link — fail closed, same posture as an unreadable
+      // governance table. Silently degrading to target-only matching here would
+      // reintroduce exactly the P2-1 miss this phase exists to close.
+      return failClosed('governance_person_resolution_failed_failclosed');
+    }
+    resolvedPersonId = resolved.personId;
+  }
+
+  if (!recipient && !resolvedPersonId) return null;
+
+  let loaded;
+  try {
+    loaded = await loadGovernanceRecords({ organizationId: companyId, personId: resolvedPersonId, target: recipient, channel });
+  } catch {
+    return failClosed('governance_lookup_failed_failclosed');
+  }
+
+  if (!loaded.ok) return failClosed('governance_lookup_failed_failclosed');
+
+  // Normalise explicitly with the SAME function the repository used for its
+  // query. Deriving it from a loaded record would be wrong: a record matched on
+  // person could carry a different target and would silently change what the
+  // evaluator compares against.
+  const normalizedTarget = normalizeGovernanceTarget(channel, recipient);
+
+  return mayContact({
+    organizationId: companyId,
+    personId: resolvedPersonId,
+    targetNormalized: normalizedTarget,
+    channel,
+    now: evaluatedAt,
+    records: loaded.records,
+  });
+}
+
+/**
  * Observed usage in the limiter window, from the durable record of attempts.
  *
  * READ ONLY — evaluation consumes nothing. Counting real attempts rather than a
@@ -188,6 +265,14 @@ export async function loadRateUsage(companyId: string, leadId: string, at: strin
 export interface EvaluateOptions {
   /** Recipient identifier to check against the suppression list. */
   recipient?: string | null;
+  /**
+   * LI-3C — canonical `unified_persons.id`, when the caller knows it.
+   *
+   * `OutreachTask` carries a `leadId`, not a canonical person id, so this is
+   * the only way the person anchor can reach governance. No caller supplies it
+   * today; until one does, canonical matching is target-based only.
+   */
+  personId?: string | null;
   /** Recipient region (ISO 3166-1 alpha-2), when known. */
   region?: string | null;
   /** Injected instant, for deterministic evaluation. */
@@ -202,6 +287,61 @@ export interface GovernanceServiceResult {
   /** True when the decision was appended to the immutable log. */
   recorded: boolean;
   error?: string;
+}
+
+/**
+ * LI-3D — resolve the canonical person behind an outreach task's lead.
+ *
+ * `OutreachTask` carries a `leadId`; canonical governance is anchored to
+ * `unified_persons.id`. LI-3C could therefore only match target-anchored
+ * records, and the LI-3C audit classified that gap P2-1. The relationship it
+ * needs already exists — `leads.unified_person_id` — so this resolves it rather
+ * than inventing a second identity link.
+ *
+ * TENANT-SCOPED: the lead is read with `company_id` as the first predicate, so a
+ * leadId belonging to another tenant resolves to nothing rather than to their
+ * person.
+ *
+ * FAILS CLOSED via the `ok` flag. An unreadable `leads` row means we cannot know
+ * whether a person-anchored DNC exists, and proceeding would contact someone we
+ * were told not to. The caller turns `ok:false` into a block, exactly as it does
+ * for an unreadable governance table.
+ */
+/**
+ * The one shape a canonical failure may take. Every fail-closed path returns
+ * this, so "we could not evaluate" is always a BLOCK and can never be mistaken
+ * for an absent verdict.
+ */
+const failClosed = (reason: string): CanonicalGovernanceVerdict => ({
+  decision: 'blocked',
+  gate: null,
+  governanceType: null,
+  recordId: null,
+  matchedBy: null,
+  reason,
+  deferredUntil: null,
+  version: 'li3c',
+});
+
+export async function resolveLeadPersonId(
+  companyId: string,
+  leadId: string | null,
+): Promise<{ ok: boolean; personId: string | null }> {
+  if (!companyId || !leadId) return { ok: true, personId: null };
+
+  const res = await safeDb<Row[]>(() =>
+    ownedDbTable('leads')
+      .select('id, unified_person_id')
+      .eq('company_id', companyId)          // TENANT FIRST, always
+      .eq('id', leadId)
+      .limit(1),
+  );
+  if (res.error) return { ok: false, personId: null };
+
+  const row = Array.isArray(res.data) ? res.data[0] : null;
+  // No lead, or a lead not yet canonicalised, is not a failure: it simply has no
+  // person anchor and target matching remains in force.
+  return { ok: true, personId: row ? str(row.unified_person_id) : null };
 }
 
 /**
@@ -227,15 +367,19 @@ export async function evaluateTaskGovernance(
 
   let input: GovernanceEvaluationInput;
   try {
-    const [config, suppressions, usage] = await Promise.all([
+    const [config, suppressions, usage, canonicalGovernance] = await Promise.all([
       loadTenantGovernanceConfig(companyId),
       loadSuppressionMatches(companyId, task, options.recipient ?? null),
       loadRateUsage(companyId, task.leadId, evaluatedAt),
+      // LI-3C — the canonical verdict, computed once at the edge by the single
+      // evaluator that owns the ADR rules. Fails closed inside.
+      resolveCanonicalGovernance(companyId, task, options.recipient ?? null, options.personId ?? null, evaluatedAt),
     ]);
     input = {
       task,
       config,
       suppressions,
+      canonicalGovernance,
       usage,
       globalKillSwitch: isLeadOutreachGloballyDisabled(),
       region: options.region ?? null,

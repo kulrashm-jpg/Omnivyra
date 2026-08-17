@@ -29,6 +29,9 @@ jest.mock('../../db/writeOwner', () => ({
       st.filters.every(([c, v]) => {
         if (c.startsWith('__gte__')) return String(r[c.slice(7)] ?? '') >= String(v);
         if (c.startsWith('__is__')) return (r[c.slice(6)] ?? null) === v;
+        // LI-3C: the canonical governance read uses `.in(...)`, which this
+        // double did not previously model.
+        if (c.startsWith('__in__')) return Array.isArray(v) && (v as unknown[]).includes(r[c.slice(6)]);
         return r[c] === v;
       });
 
@@ -71,6 +74,7 @@ jest.mock('../../db/writeOwner', () => ({
       eq: (c: string, v: unknown) => { st.filters.push([c, v]); return b; },
       gte: (c: string, v: unknown) => { st.filters.push([`__gte__${c}`, v]); return b; },
       is: (c: string, v: unknown) => { st.filters.push([`__is__${c}`, v]); return b; },
+      in: (c: string, v: unknown[]) => { st.filters.push([`__in__${c}`, v]); return b; },
       order: () => b,
       limit: () => exec('many'),
       maybeSingle: () => exec('maybe'),
@@ -546,9 +550,23 @@ describe('WS-3 M5B (7) — observability, isolation and guards', () => {
     const id = await approvedTask();
     db.filtersSeen = [];
     await dispatch(id);
+    // LI-3C: the dispatch path now also reads `contact_governance_records`,
+    // whose canonical tenant column is `organization_id` (ADR §8) rather than
+    // Path B's `company_id`. The invariant is unchanged — every query must be
+    // tenant-scoped — so the assertion accepts either canonical tenant column
+    // AND still requires the value to be this tenant, which is stricter than
+    // checking the column name alone.
+    const TENANT_COLUMNS = ['company_id', 'organization_id'];
     for (const q of db.filtersSeen) {
-      if (q.op === 'insert') expect(q.payload?.company_id).toBe('co-a');
-      else expect(q.filters.map(([c]) => c.replace(/^__\w+__/, ''))).toContain('company_id');
+      if (q.op === 'insert') {
+        expect(q.payload?.company_id ?? q.payload?.organization_id).toBe('co-a');
+      } else {
+        const tenantFilter = q.filters
+          .map(([c, v]) => [c.replace(/^__\w+__/, ''), v] as [string, unknown])
+          .find(([c]) => TENANT_COLUMNS.includes(c));
+        expect(tenantFilter).toBeDefined();
+        expect(tenantFilter?.[1]).toBe('co-a');
+      }
     }
   });
 

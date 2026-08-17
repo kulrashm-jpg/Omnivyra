@@ -74,6 +74,72 @@ export {
 } from './attributes';
 
 /**
+ * LI-3B — canonical contact governance. The type vocabulary, channel semantics
+ * and a PURE evaluator answering "may this tenant contact this person on this
+ * channel now?".
+ *
+ * Tenant-scoped by construction: there is no global scope and no `__global__`
+ * sentinel (ADR D-1). The evaluator performs no I/O and is called by nothing —
+ * wiring it into the outreach governance gate is LI-3C.
+ */
+export {
+  GOVERNANCE_TYPES,
+  KNOWN_CHANNELS,
+  ALL_CHANNELS,
+  CONTACT_GOVERNANCE_COLUMNS,
+  CONTACT_GOVERNANCE_VERSION,
+  isGovernanceType,
+  mayContact,
+  type GovernanceType,
+  type GovernanceChannel,
+  type KnownChannel,
+  type GovernanceRecord,
+  type GovernanceDecision,
+  type MayContactInput,
+  type MayContactResult,
+} from './contactGovernance';
+
+/**
+ * LI-3D — the governance WRITER. The only module permitted to create or revoke
+ * a contact governance record. Idempotent by database constraint (insert →
+ * catch 23505), append-only, and tenant-safe by composite foreign key rather
+ * than by a pre-check.
+ */
+export {
+  recordContactGovernance,
+  revokeContactGovernance,
+  GovernanceWriteError,
+  type RecordGovernanceInput,
+  type RecordGovernanceResult,
+  type RevokeGovernanceInput,
+} from './contactGovernanceWriter';
+
+/**
+ * LI-4C — person lifecycle and duplicate parking. Deterministic detection only
+ * (exact email / phone / provider-identifier equality), and NO merge executor:
+ * ADR D-4 requires governance to survive a merge, so merging stays disabled
+ * until the governance lookup can follow a merge chain.
+ */
+export {
+  DUPLICATE_CLASSIFICATIONS,
+  MATCH_SIGNALS,
+  CANDIDATE_STATUSES,
+  PERSON_STATUSES,
+  detectPersonDuplicates,
+  parkDuplicateCandidate,
+  detectAndParkDuplicates,
+  resolveDuplicateCandidate,
+  listOpenDuplicateCandidates,
+  type DuplicateClassification,
+  type MatchSignal,
+  type CandidateStatus,
+  type PersonStatus,
+  type DuplicateSignals,
+  type DetectedDuplicate,
+  type ParkResult,
+} from './personDuplicates';
+
+/**
  * W3 — legacy → canonical transcription. Turns identity evidence that is
  * already explicit in legacy columns into durable claims. It resolves nothing
  * and merges nothing; the shadow resolver above still answers "who is this",

@@ -119,6 +119,11 @@ const input = (over: Partial<GovernanceEvaluationInput> = {}): GovernanceEvaluat
     dailyLimitTenant: null, dailyLimitLead: null,
   },
   suppressions: { task: false, lead: false, channel: false, recipient: false },
+  // LI-3C — canonical governance verdict. `null` means the canonical layer was
+  // not consulted for this evaluation, which is the correct default for the
+  // pre-existing Milestone-4 cases: they exercise the legacy suppression
+  // booleans, and a null verdict must leave that behaviour unchanged.
+  canonicalGovernance: null,
   usage: { tenantCount: 0, leadCount: 0, windowHours: 24, layer: 'db' },
   globalKillSwitch: false,
   region: null,
