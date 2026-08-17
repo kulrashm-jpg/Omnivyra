@@ -69,6 +69,30 @@ beforeEach(() => {
   ingestLeadBatch.mockResolvedValue(OK);
 });
 
+/**
+ * P2D's twelve employer firmographics, in the PROVIDER forms a caller actually
+ * sends: numbers as strings, a lowercase country code, an offset timestamp, a
+ * real array. Every value is deliberately distinct, so a field that goes missing
+ * cannot be masked by another field happening to carry the same value.
+ */
+const FIRMOGRAPHICS = {
+  industry: 'software',
+  employeeCount: '250',
+  employeeBand: '201-500',
+  companyCountryCode: 'us',
+  companyRegion: 'ca',
+  companyCity: 'San Francisco',
+  annualRevenue: '12500000',
+  revenueBand: '10m-25m',
+  foundedYear: '2014',
+  technologies: ['postgres', 'nextjs'],
+  fundingStage: 'series-b',
+  lastFundingAt: '2026-01-15T10:30:00Z',
+};
+
+/** Typed explicitly: `it.each` over mixed-type tuples infers badly otherwise. */
+const FIRMOGRAPHIC_ENTRIES: Array<[string, unknown]> = Object.entries(FIRMOGRAPHICS);
+
 describe('LI-5E.4 — the happy path', () => {
   it('an authenticated tenant can invoke CRM-namespace ingestion', async () => {
     const res = await call();
@@ -300,5 +324,65 @@ describe('LI-5E.4 — response safety and error handling', () => {
     const res = await call();
     expect(res._status).toBe(400);
     expect(String(res._json.error)).toBe('bad envelope');
+  });
+});
+
+/**
+ * P2N — the twelve P2D firmographics actually reach the orchestrator.
+ *
+ * CRM inherits the firmographic surface through the TYPE
+ * (`CrmLeadInput = Omit<ManualLeadInput, 'referenceId'> & { externalId }`), and
+ * types are erased at runtime — so inheritance proves nothing about what this
+ * HTTP route forwards. The existing pass-through test uses a three-field record
+ * and would still pass if a `pick()` were introduced that happened to keep
+ * those three. These tests would not.
+ *
+ * The route's job ends at forwarding; normalisation is `toAccountAttributes`'
+ * job and is proven in the P2D suite.
+ */
+describe('LI-5E.4 — the twelve firmographics reach the orchestrator', () => {
+  const RECORD = {
+    externalId: 'CRM-9',
+    email: 'ops@acme.test',
+    companyName: 'Acme',
+    companyDomain: 'acme.test',
+    ...FIRMOGRAPHICS,
+  };
+
+  /** A fresh copy each time, so the assertions compare VALUES, not one object to itself. */
+  const forwarded = async (): Promise<Record<string, unknown>> => {
+    await call({ body: { records: [{ ...RECORD }] } } as Partial<NextApiRequest>);
+    return ingestLeadBatch.mock.calls[0][0].records[0] as Record<string, unknown>;
+  };
+
+  it.each(FIRMOGRAPHIC_ENTRIES)('forwards %s verbatim to ingestLeadBatch', async (field, value) => {
+    expect((await forwarded())[field]).toEqual(value);
+  });
+
+  it('forwards all twelve on ONE record, and drops nothing else either', async () => {
+    const sent = await forwarded();
+    // The assertion that catches an allowlist: a `pick()` or a fixed
+    // destructuring produces a NARROWER key set, and this fails naming the
+    // missing keys rather than silently passing on the subset that survived.
+    expect(Object.keys(sent).sort()).toEqual(Object.keys(RECORD).sort());
+    expect(sent).toEqual(RECORD);
+  });
+
+  it('forwards them UNNORMALISED — the route transports, it does not interpret', async () => {
+    const sent = await forwarded();
+    expect(sent.employeeCount).toBe('250');                       // still a string, not 250
+    expect(sent.annualRevenue).toBe('12500000');
+    expect(sent.foundedYear).toBe('2014');
+    expect(sent.companyCountryCode).toBe('us');                   // still lowercase, not 'US'
+    expect(sent.lastFundingAt).toBe('2026-01-15T10:30:00Z');      // not a UTC-normalised instant
+    expect(sent.technologies).toEqual(['postgres', 'nextjs']);    // still an array, not JSON text
+  });
+
+  it('the CRM external id still travels alongside the firmographics', async () => {
+    // The firmographics must not displace the record's provenance identity,
+    // which is what makes a re-submission idempotent rather than a duplicate.
+    const sent = await forwarded();
+    expect(sent.externalId).toBe('CRM-9');
+    expect(ingestLeadBatch.mock.calls[0][0].source).toBe('crm');
   });
 });
