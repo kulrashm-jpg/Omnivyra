@@ -87,13 +87,30 @@ export default function SuggestWithAIPanel({
     }
   };
 
+  /**
+   * P1.8 — ownership handoff on accept.
+   *
+   * `onAccept` promotes this recommendation into Recommended Cards (via
+   * `acceptAiCard` → `setCustomCards`) and then awaits generation, which for a
+   * post is a multi-second call. Previously the panel kept rendering the same
+   * recommendation for that whole window, so the user saw one idea twice — and
+   * permanently if generation failed.
+   *
+   * The panel now releases the recommendation as it hands it over: exactly one
+   * surface owns it at any moment. On failure the suggestion is restored so the
+   * user can retry, and at that point it is the panel that owns it again.
+   */
   const acceptSuggestion = async () => {
     if (!suggestion || busy) return;
+    const accepted = suggestion;
     setPhase('accepting');
     setError(null);
+    setSuggestion(null);
     try {
-      await onAccept(suggestion);
+      await onAccept(accepted);
+      setPhase('idle');
     } catch (caught) {
+      setSuggestion(accepted);
       setError(caught instanceof Error ? caught.message : 'Could not continue with this suggestion.');
       setPhase('ready');
     }
@@ -128,7 +145,7 @@ export default function SuggestWithAIPanel({
           </p>
         </div>
 
-        {!suggestion ? (
+        {!suggestion && phase !== 'accepting' ? (
           <button
             type="button"
             data-testid="suggest-with-ai-trigger"
@@ -145,6 +162,16 @@ export default function SuggestWithAIPanel({
       {error ? (
         <p data-testid="suggest-with-ai-error" className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
           {error}
+        </p>
+      ) : null}
+
+      {phase === 'accepting' ? (
+        <p
+          data-testid="suggest-with-ai-accepting"
+          className="mt-3 inline-flex items-center gap-2 rounded-xl border border-violet-100 bg-violet-50/60 px-3 py-2 text-sm text-violet-700"
+        >
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Added to your recommendations — starting generation…
         </p>
       ) : null}
 
