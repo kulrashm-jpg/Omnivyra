@@ -86,7 +86,7 @@ export async function ensureCanonicalConnectionForIntegration(integration: {
     nonSecretConfig,
     status: 'pending',
   });
-  await upsertConnectionCredentials(connection.id, credentials);
+  await upsertConnectionCredentials(integration.company_id, connection.id, credentials);
 
   await ownedDbTable('company_integrations')
     .update({

@@ -49,12 +49,79 @@ export function maskCredentials(config: Record<string, string>): Record<string, 
   return masked;
 }
 
+/**
+ * Raised when a caller asks for a credential belonging to another tenant.
+ *
+ * A distinct type, not a generic Error: a cross-tenant credential request is a
+ * security event and must be distinguishable from "the connection is missing"
+ * or "the database is unavailable" by anything that logs or alerts on it.
+ */
+export class CrossTenantCredentialError extends Error {
+  constructor(readonly companyId: string, readonly connectionId: string) {
+    super('connection does not belong to this company');
+    this.name = 'CrossTenantCredentialError';
+  }
+}
+
+/**
+ * PHASE-1A / T-1 — the tenant gate every credential operation passes through.
+ *
+ * `integration_credentials` is keyed only by `connection_id`, so the tenant is
+ * three hops away: credential → website_connection → website → company. Before
+ * this existed, every function here took a bare `connectionId` and trusted the
+ * caller to have checked ownership. That made tenant isolation a CONVENTION —
+ * correct in all current callers, but one forgetful call site away from
+ * decrypting another tenant's secret, and nothing in the type system would have
+ * objected.
+ *
+ * Resolving ownership here rather than at the caller means the guarantee holds
+ * for call sites that do not exist yet, which is the point: later phases will
+ * add data-source and outreach providers to this same store.
+ *
+ * A missing connection is NOT a cross-tenant error — it is simply absent, and
+ * callers already treat "no credentials" as a normal outcome.
+ */
+async function assertConnectionBelongsToCompany(
+  companyId: string,
+  connectionId: string,
+): Promise<'ok' | 'missing'> {
+  if (!companyId?.trim()) {
+    throw new Error('companyId is required — credential access is never tenant-less');
+  }
+  if (!connectionId?.trim()) return 'missing';
+
+  const { data, error } = await ownedDbTable('website_connections')
+    .select('id, websites!inner(company_id)')
+    .eq('id', connectionId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data) return 'missing';
+
+  const owner = (data as { websites?: { company_id?: string } | Array<{ company_id?: string }> }).websites;
+  const ownerCompanyId = Array.isArray(owner) ? owner[0]?.company_id : owner?.company_id;
+
+  // An unresolvable owner is refused rather than allowed. A connection whose
+  // website or company cannot be read is not proof of entitlement.
+  if (!ownerCompanyId || ownerCompanyId !== companyId) {
+    throw new CrossTenantCredentialError(companyId, connectionId);
+  }
+  return 'ok';
+}
+
 export async function upsertConnectionCredentials(
+  companyId: string,
   connectionId: string,
   credentials: CredentialMap,
 ): Promise<void> {
   const entries = Object.entries(credentials).filter(([, value]) => value?.trim());
   if (entries.length === 0) return;
+
+  // Ownership is proven BEFORE anything is written, so a cross-tenant write
+  // cannot leave a partially-stored secret behind.
+  if ((await assertConnectionBelongsToCompany(companyId, connectionId)) === 'missing') {
+    throw new Error(`connection ${connectionId} not found`);
+  }
 
   const rows = entries.map(([credential_key, value]) => ({
     connection_id: connectionId,
@@ -68,7 +135,14 @@ export async function upsertConnectionCredentials(
   if (error) throw new Error(error.message);
 }
 
-export async function getConnectionCredentials(connectionId: string): Promise<CredentialMap> {
+export async function getConnectionCredentials(
+  companyId: string,
+  connectionId: string,
+): Promise<CredentialMap> {
+  // Decryption happens only after ownership is proven. A connection that does
+  // not exist yields no credentials, exactly as before.
+  if ((await assertConnectionBelongsToCompany(companyId, connectionId)) === 'missing') return {};
+
   const { data, error } = await ownedDbTable('integration_credentials')
     .select('credential_key, encrypted_value')
     .eq('connection_id', connectionId);
@@ -86,6 +160,7 @@ export async function getConnectionCredentials(connectionId: string): Promise<Cr
 }
 
 export async function mergeConnectionConfig(
+  companyId: string,
   connectionId: string | null | undefined,
   nonSecretConfig: Record<string, string> | null | undefined,
   legacyConfig?: Record<string, string> | null,
@@ -97,7 +172,19 @@ export async function mergeConnectionConfig(
 
   if (!connectionId) return merged;
 
-  const credentials = await getConnectionCredentials(connectionId).catch(() => ({} as CredentialMap));
+  let credentials: CredentialMap;
+  try {
+    credentials = await getConnectionCredentials(companyId, connectionId);
+  } catch (err) {
+    // A cross-tenant request is RE-THROWN, never swallowed. This function is
+    // deliberately forgiving about transient read failures — hydrating an
+    // integration must not fail because the credential store blinked — but
+    // "you asked for another tenant's secret" is not a transient failure and
+    // must not be silently degraded into an empty config.
+    if (err instanceof CrossTenantCredentialError) throw err;
+    credentials = {};
+  }
+
   return {
     ...merged,
     ...credentials,

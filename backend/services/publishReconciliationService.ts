@@ -220,6 +220,7 @@ async function loadPublishingContext(job: ReconciliationClaim) {
     ? await ownedDbTable('website_connections').select('*').eq('id', connectionId).maybeSingle()
     : { data: null };
   const config = await mergeConnectionConfig(
+    job.company_id,
     connectionId,
     ((connection as any)?.non_secret_config ?? {}) as Record<string, string>,
     {},

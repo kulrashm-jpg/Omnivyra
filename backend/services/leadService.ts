@@ -232,6 +232,7 @@ export async function validateWebhookAuth(
   if (error || !data) return null;
   if (data.type !== 'lead_webhook') return null;
   const cfg = await mergeConnectionConfig(
+    String((data as any).company_id),
     (data as any).website_connection_id,
     ((data as any).non_secret_config ?? data.config) as Record<string, string>,
     data.config as Record<string, string>,

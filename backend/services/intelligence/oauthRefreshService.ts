@@ -75,9 +75,18 @@ async function audit(
 }
 
 /** Refresh one connection's OAuth token (real HTTP when possible). */
+/**
+ * PHASE-1A / T-1: `companyId` is REQUIRED, not optional.
+ *
+ * It was optional, and this function decrypts a refresh token — so an omitted
+ * tenant meant an unverifiable credential read. All three callers (the
+ * lifecycle route, the rotation service and the refresh worker) already had a
+ * tenant to hand, so requiring it costs nothing and closes the hole rather than
+ * documenting it.
+ */
 export async function refreshConnectionToken(
   connectionId: string,
-  companyId?: string | null,
+  companyId: string,
 ): Promise<RefreshResult> {
   const conn = await getWebsiteConnection(connectionId).catch(() => null);
   if (!conn) {
@@ -102,7 +111,7 @@ export async function refreshConnectionToken(
     return { connectionId, provider, state: 'app_not_configured', detail: `set ${spec.clientIdEnv} & ${spec.clientSecretEnv} to enable automatic refresh` };
   }
 
-  const creds = await getConnectionCredentials(connectionId).catch(() => ({} as Record<string, string>));
+  const creds = await getConnectionCredentials(companyId, connectionId).catch(() => ({} as Record<string, string>));
   const refreshToken = creds.refresh_token;
   if (!refreshToken) {
     await audit(companyId ?? null, connectionId, provider, 'no_refresh_token', 'no stored refresh_token');
@@ -132,7 +141,7 @@ export async function refreshConnectionToken(
     // Persist rotated tokens encrypted (existing credential service).
     const next: Record<string, string> = { access_token: String((data as any).access_token) };
     if ((data as any).refresh_token) next.refresh_token = String((data as any).refresh_token);
-    await upsertConnectionCredentials(connectionId, next);
+    await upsertConnectionCredentials(companyId, connectionId, next);
     await updateWebsiteConnection(connectionId, { health_status: 'healthy', last_error: null }).catch(() => undefined);
     await audit(companyId ?? null, connectionId, provider, 'refreshed', 'token rotated');
     return { connectionId, provider, state: 'refreshed', detail: 'access token refreshed & re-encrypted' };
