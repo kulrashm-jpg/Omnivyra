@@ -51,11 +51,20 @@ jest.mock('../../services/engagementThreadService', () => ({
 // The REAL capability map — this audit is about what actually dispatches.
 jest.mock('../../services/auditLoggingService', () => ({ logAuditEvent: async () => undefined }));
 
-const executeActionMock = jest.fn(async () => ({
+/**
+ * Derived from the production signature itself, so the double cannot drift from
+ * what `executeAction` actually receives. Declaring no parameters left the
+ * recorded jest call tuple as `[]`, so `mock.calls[0][0]` resolved to
+ * `undefined` and every assertion reading the dispatched action was a type
+ * error — while jest, which never type-checks, stayed green.
+ */
+type ExecuteActionArgs = Parameters<typeof import('../../services/communityAiActionExecutor')['executeAction']>;
+
+const executeActionMock = jest.fn(async (..._args: ExecuteActionArgs) => ({
   ok: true, status: 'executed', platform_id: 'urn:li:comment:sent', response: {},
 }));
 jest.mock('../../services/communityAiActionExecutor', () => ({
-  executeAction: (...a: unknown[]) => executeActionMock(...(a as [])),
+  executeAction: (...a: ExecuteActionArgs) => executeActionMock(...a),
 }));
 jest.mock('../../services/playbooks/playbookService', () => ({
   listPlaybooks: async () => [{ id: 'pb1', status: 'active' }],
