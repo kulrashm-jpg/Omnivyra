@@ -30,7 +30,7 @@
 import { createHash } from 'node:crypto';
 import { normalizeEmail, normalizePhone } from '../../identityResolutionService';
 import { normalizeCountryCode, normalizeDisplayText } from '../../prospectIdentity/attributes';
-import type { AdapterResult, LeadSourceAdapter, NormalizedIngestionRecord } from '../contracts';
+import type { AdapterResult, LeadSourceAdapter, NormalizedAccount, NormalizedIngestionRecord } from '../contracts';
 
 export const MANUAL_SOURCE = 'manual';
 
@@ -71,6 +71,34 @@ export interface ManualLeadInput {
   observedAt?: string | null;
   /** Short operator notes only — never a transcript or a payload. */
   metadata?: Record<string, unknown> | null;
+
+  // ── P2D employer firmographics ────────────────────────────────────────────
+  // All optional. A record without any of them behaves exactly as before, and
+  // none of them can create an employer on its own — the account is still
+  // identified by name/domain/externalId, because a revenue figure attached to
+  // no identifiable company is a fact about nobody.
+  //
+  // NAMING: these are the canonical attribute names, unprefixed, so a provider
+  // maps into the same vocabulary the rest of the platform uses. The three
+  // exceptions carry a `company` prefix — `countryCode`, `region` and `city`
+  // already exist above and describe the PERSON. Reusing those names for the
+  // employer would silently overwrite one with the other, so the employer's
+  // geography follows the prefix convention `companyName`/`companyDomain`
+  // already established in this contract.
+  industry?: string | null;
+  employeeCount?: number | string | null;
+  employeeBand?: string | null;
+  annualRevenue?: number | string | null;
+  revenueBand?: string | null;
+  foundedYear?: number | string | null;
+  /** Technology names. A JSON array string is accepted too — LI-2 normalises. */
+  technologies?: string[] | string | null;
+  fundingStage?: string | null;
+  lastFundingAt?: string | null;
+  /** The EMPLOYER's geography — distinct from the person's above. */
+  companyCountryCode?: string | null;
+  companyRegion?: string | null;
+  companyCity?: string | null;
 }
 
 export class ManualInputError extends Error {
@@ -229,6 +257,26 @@ export function toNormalizedManualRecord(input: ManualLeadInput): NormalizedInge
         externalId: trimmed(input.companyExternalId),
         name: normalizeDisplayText(input.companyName),
         domain: trimmed(input.companyDomain),
+        // ── Firmographics, PASSED THROUGH UNNORMALISED ──────────────────────
+        // Deliberate. `toAccountAttributes` owns every one of these rules —
+        // the numeric coercions, the founded-year bounds, the JSON-array
+        // serialisation for jsonb, the UTC instant. Normalising here would be
+        // a second spelling of rules LI-2 already applies, and the two would
+        // eventually disagree. `NormalizedAccount` accepts the provider forms
+        // (`'250'`, a JSON string) for exactly this reason — the same posture
+        // `domain` already takes, where W4 owns normalisation.
+        industry: input.industry ?? null,
+        employeeCount: input.employeeCount ?? null,
+        employeeBand: (input.employeeBand ?? null) as NormalizedAccount['employeeBand'],
+        countryCode: input.companyCountryCode ?? null,
+        region: input.companyRegion ?? null,
+        city: input.companyCity ?? null,
+        annualRevenue: input.annualRevenue ?? null,
+        revenueBand: input.revenueBand ?? null,
+        foundedYear: input.foundedYear ?? null,
+        technologies: input.technologies ?? null,
+        fundingStage: input.fundingStage ?? null,
+        lastFundingAt: input.lastFundingAt ?? null,
       }
       : null,
     observedAt: trimmed(input.observedAt),

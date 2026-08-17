@@ -127,7 +127,7 @@ export interface NormalizedAccount {
   revenueBand?: string | null;
   foundedYear?: number | string | null;
   /** Technology names as a LIST. The column rejects any other jsonb shape. */
-  technologies?: string[] | null;
+  technologies?: string[] | string | null;
   /** The provider's own funding-stage label, verbatim — see `revenueBand`. */
   fundingStage?: string | null;
   /** When the most recent funding event occurred, if the source says so. */
