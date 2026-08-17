@@ -105,6 +105,33 @@ export interface NormalizedAccount {
   region?: string | null;
   city?: string | null;
   description?: string | null;
+
+  // ── P2A firmographics ─────────────────────────────────────────────────────
+  // The six attributes `prospect_accounts` gained in P2A. Industry, headcount,
+  // band and geography are NOT repeated here — they already exist above, added
+  // by LI-1, and a second declaration would be a competing definition.
+  //
+  // All optional, and they stay optional: no provider supplies every attribute,
+  // and a required field would force an adapter to invent one.
+
+  /** Annual revenue as a NUMBER, in the provider's stated currency. */
+  annualRevenue?: number | string | null;
+  /**
+   * The provider's own revenue bucket, verbatim.
+   *
+   * Free text on purpose: there is no canonical revenue vocabulary in this
+   * repository, and inventing one here would force every provider to translate
+   * into terms none of them use. The bucket a provider states is evidence;
+   * mapping it to a platform vocabulary is a later, explicit decision.
+   */
+  revenueBand?: string | null;
+  foundedYear?: number | string | null;
+  /** Technology names as a LIST. The column rejects any other jsonb shape. */
+  technologies?: string[] | null;
+  /** The provider's own funding-stage label, verbatim — see `revenueBand`. */
+  fundingStage?: string | null;
+  /** When the most recent funding event occurred, if the source says so. */
+  lastFundingAt?: string | null;
 }
 
 /**
