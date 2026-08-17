@@ -1,3 +1,4 @@
+import { getPlatformConfig } from '../../../lib/platforms';
 export const MEDIA_DEPENDENT_TYPES = new Set(['video', 'reel', 'short', 'carousel', 'slides', 'song']);
 export const VIDEO_TYPES = new Set(['video', 'reel', 'short', 'podcast']);
 export const CAROUSEL_TYPES = new Set(['carousel', 'slides']);
@@ -121,7 +122,20 @@ export function getContentTypeMaxWords(category: 'video' | 'carousel' | 'article
 
 export const MAX_WORDS_MASTER = 180;
 export const MAX_WORDS_VARIANT = 120;
-export const X_CHAR_LIMIT = 280;
+/**
+ * X/Twitter hard character budget.
+ *
+ * DERIVED, not declared: the canonical value lives in `lib/platforms.ts`
+ * (`PLATFORM_CONFIGS`), which is also what platformVariantGenerator now reads
+ * for the AI-prompt length budget. Keeping a second literal here would mean two
+ * independent numeric sources of truth for the same limit, which is how the
+ * prompt path and the deterministic path could silently drift apart.
+ *
+ * `lib/platforms.ts` imports nothing, so this dependency cannot cycle.
+ * The `?? 280` tail is a defensive floor only — it is unreachable while the
+ * canonical `x` entry exists, and the platform-config test asserts that it does.
+ */
+export const X_CHAR_LIMIT = getPlatformConfig('x')?.constraints?.textLimit ?? 280;
 export const DISCOVERABILITY_STOPWORDS = new Set([
   'about',
   'after',

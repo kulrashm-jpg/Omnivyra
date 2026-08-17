@@ -16,6 +16,7 @@ import { extractCompanyIdentity, buildCompanyContextBlockShort, buildIdentityLoc
 // platform (threads, youtube_community, tiktok, pinterest, reddit, …) gets its
 // OWN distinct directive and can no longer collide on byte-identical output.
 import { getPlatformProfile, listPlatformProfiles, listPlatformKeys } from '../../../lib/content/platformAdaptationProfiles';
+import { getPlatformConfig } from '../../../lib/platforms';
 import { resolveBrandVoice } from '../brand/resolveBrandVoice';
 import { registerBrandCacheInvalidator } from '../brand/brandCacheRegistry';
 // Creator System-Prompt Governance Integration. Final Closure Pass —
@@ -465,7 +466,19 @@ export async function generatePlatformVariantFromMaster(
   const styleProfile = getPlatformProfile(normalizedPlatform);
   const styleInstruction = styleProfile.styleDirective;
   const isListedPlatform = listPlatformKeys().includes(styleProfile.platform);
-  const maxLength = toPositiveNumber(constraints.max_length);
+  // Canonical platform length budget. getPlatformProfile above supplies STYLE
+  // only; the numeric limit lives in lib/platforms.ts and was never wired in, so
+  // `constraints.max_length` was null for every caller that did not set one —
+  // and `targetLength` then dropped every length instruction from the prompt.
+  // That is how an X variant reached ~1,086 characters against a 280 budget.
+  //
+  // Precedence: an explicit caller limit always wins; the canonical platform
+  // limit is only a fallback; platforms with no configured textLimit keep the
+  // previous `null` behaviour exactly.
+  const callerMaxLength = toPositiveNumber(constraints.max_length);
+  const platformTextLimit =
+    getPlatformConfig(normalizedPlatform)?.constraints?.textLimit ?? null;
+  const maxLength = callerMaxLength ?? platformTextLimit;
   const targetLength = maxLength ? Math.floor(maxLength * 0.9) : null;
   const formatFamily =
     nonEmpty((constraints.writer_content_brief as any)?.format_requirements?.format_family) ||
