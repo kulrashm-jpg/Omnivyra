@@ -251,6 +251,7 @@ export function CreditPill({
   if (effective === 'loading') {
     return (
       <div
+        data-testid="credit-pill" data-credit-status="loading"
         aria-busy="true"
         aria-label="Loading credit balance"
         className="hidden items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 sm:flex"
@@ -267,6 +268,7 @@ export function CreditPill({
       <Link
         href="/pricing#addons"
         title="Credit balance unavailable — couldn't reach the billing service. Retrying automatically."
+        data-testid="credit-pill" data-credit-status="error"
         aria-label="Credit balance unavailable"
         className="hidden items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-1.5 transition-colors hover:bg-amber-100 sm:flex"
       >
@@ -282,6 +284,7 @@ export function CreditPill({
       <Link
         href="/pricing#addons"
         title="No credit account yet for this workspace."
+        data-testid="credit-pill" data-credit-status="unavailable"
         aria-label="No credit account yet"
         className="hidden items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 transition-colors hover:bg-slate-50 sm:flex"
       >
@@ -299,6 +302,8 @@ export function CreditPill({
   return (
     <Link
       href="/pricing#addons"
+      data-testid="credit-pill"
+      data-credit-status="ready"
       title={`${remaining.toLocaleString()} of ${total.toLocaleString()} credits remaining`}
       className="hidden items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 transition-colors hover:bg-slate-50 sm:flex"
     >

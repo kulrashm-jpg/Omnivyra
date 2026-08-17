@@ -149,7 +149,8 @@
     "update:browserslist": "npm install caniuse-lite@latest --legacy-peer-deps",
     "fresh": "node scripts/safe-fresh.js",
     "rpa:install": "npx playwright install chromium",
-    "rpa:check": "node -e \"(async()=>{try{const p=await import('playwright');const b=await p.chromium.launch({headless:true});await b.close();console.log('RPA_ENV_READY');}catch(e){console.error('RPA_ENV_NOT_READY',e?.message);process.exit(1);}})()\""
+    "rpa:check": "node -e \"(async()=>{try{const p=await import('playwright');const b=await p.chromium.launch({headless:true});await b.close();console.log('RPA_ENV_READY');}catch(e){console.error('RPA_ENV_NOT_READY',e?.message);process.exit(1);}})()\"",
+    "perf:journey": "tsx scripts/perf/journey.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
