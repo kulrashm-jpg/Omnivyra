@@ -7,7 +7,7 @@ import { Dropdown } from "../components/ui/dropdown";
 import { Calendar, Clock, Send, AlertCircle, CheckCircle, Plus, Settings, Sparkles, Eye, EyeOff, Zap, TrendingUp, Users, BarChart3, Image, Video, FileText, Hash, Globe, Smartphone, Monitor, Wand2 } from "lucide-react";
 import PreviewCard from "../components/PreviewCard";
 import ContentRenderer from "../components/ContentRenderer";
-import { PLATFORM_CONFIGS, getPlatformConfig } from "../lib/platforms";
+import { SELECTABLE_PLATFORM_CONFIGS, getPlatformConfig } from "../lib/platforms";
 import { apiFetch } from "../lib/apiFetch";
 
 interface ScheduledPost {
@@ -77,7 +77,7 @@ export default function SchedulerPage() {
     { value: "video", label: "Video", icon: <Video className="h-4 w-4" />, color: "text-purple-500" },
   ];
 
-  const platformOptions = PLATFORM_CONFIGS.map(platform => {
+  const platformOptions = SELECTABLE_PLATFORM_CONFIGS.map(platform => {
     const account = connectedAccounts.find(a => a.platform === platform.key && a.is_active);
     return {
       value: platform.key,
@@ -465,7 +465,7 @@ export default function SchedulerPage() {
                       </div>
                     </label>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {PLATFORM_CONFIGS.map(platform => {
+                      {SELECTABLE_PLATFORM_CONFIGS.map(platform => {
                         const account = connectedAccounts.find(a => a.platform === platform.key && a.is_active);
                         const isSelected = formData.platforms.includes(platform.key);
                         const platformColors = {
