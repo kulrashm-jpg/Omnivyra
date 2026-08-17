@@ -144,6 +144,10 @@ describe('toAccountAttributes', () => {
     })).toEqual({
       industry: 'Software', employeeCount: 240, employeeBand: '201-500',
       countryCode: 'GB', region: 'England', city: 'London', description: 'A company',
+      // P2A widened the shape. Absent input still yields null for every new
+      // attribute — the normaliser invents nothing.
+      annualRevenue: null, revenueBand: null, foundedYear: null,
+      technologies: null, fundingStage: null, lastFundingAt: null,
     });
   });
 
@@ -174,10 +178,14 @@ describe('column lists match the migration', () => {
       'country_code', 'region', 'city', 'timezone', 'attributes_source', 'attributes_updated_at']);
   });
 
-  it('account has the 9 LI-1 columns and no identity column', () => {
+  it('account has the LI-1 columns plus the P2A firmographics, and no identity column', () => {
+    // P2A added six. The property this test protects is unchanged: the account
+    // attribute surface carries FIRMOGRAPHICS only — never an identity column.
     expect([...ACCOUNT_ATTRIBUTE_COLUMNS]).toEqual([
       'industry', 'employee_count', 'employee_band', 'country_code', 'region', 'city',
-      'description', 'attributes_source', 'attributes_updated_at']);
+      'description',
+      'annual_revenue', 'revenue_band', 'founded_year', 'technologies', 'funding_stage', 'last_funding_at',
+      'attributes_source', 'attributes_updated_at']);
     for (const c of ACCOUNT_ATTRIBUTE_COLUMNS) {
       expect(['name', 'legal_name', 'domain_normalized', 'website_url', 'source', 'source_reference'])
         .not.toContain(c);

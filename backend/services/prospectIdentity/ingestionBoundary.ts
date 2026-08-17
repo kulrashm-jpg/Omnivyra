@@ -267,6 +267,12 @@ function pendingFromAccount(attrs: AccountAttributes, raw: AccountAttributes): P
   const map: Array<[keyof AccountAttributes, string]> = [
     ['industry', 'industry'], ['employeeCount', 'employee_count'], ['employeeBand', 'employee_band'],
     ['countryCode', 'country_code'], ['region', 'region'], ['city', 'city'], ['description', 'description'],
+    // P2A firmographics. `technologies` arrives already JSON-serialised from
+    // `toAccountAttributes`, so `String(...)` below leaves valid jsonb text
+    // rather than the `'a,b'` a raw array would have produced.
+    ['annualRevenue', 'annual_revenue'], ['revenueBand', 'revenue_band'],
+    ['foundedYear', 'founded_year'], ['technologies', 'technologies'],
+    ['fundingStage', 'funding_stage'], ['lastFundingAt', 'last_funding_at'],
   ];
   return map
     .map(([key, column]) => ({

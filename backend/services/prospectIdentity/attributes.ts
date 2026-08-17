@@ -99,6 +99,19 @@ export interface AccountAttributes {
   region?: string | null;
   city?: string | null;
   description?: string | null;
+
+  // ── P2A firmographics ─────────────────────────────────────────────────────
+  // The six attributes P2A added to `prospect_accounts`. Like `employeeCount`,
+  // the numeric ones accept a provider's STRING form, because providers
+  // routinely send one and the normalisers are written to take it.
+  annualRevenue?: number | string | null;
+  revenueBand?: string | null;
+  foundedYear?: number | string | null;
+  /** A list of technology names. Normalised to a JSON array string for jsonb. */
+  technologies?: string[] | string | null;
+  fundingStage?: string | null;
+  /** ISO-8601 instant of the most recent funding event. */
+  lastFundingAt?: string | null;
 }
 
 /**
@@ -155,6 +168,90 @@ export function normalizeEmployeeCount(value?: number | string | null): number |
 }
 
 /**
+ * Annual revenue as a finite, non-negative number.
+ *
+ * Unlike headcount this is NOT required to be an integer — revenue is routinely
+ * fractional. A negative figure is refused rather than clamped: it is a parsing
+ * error, and storing 0 would assert a fact the provider never stated. The
+ * database CHECK refuses it too, so this normaliser is the polite half of a
+ * rule the schema enforces regardless.
+ */
+export function normalizeAnnualRevenue(value?: number | string | null): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
+/**
+ * A four-digit founding year inside the bounds the column accepts.
+ *
+ * The same 1800–2200 window as `prospect_accounts_founded_year_valid`. A value
+ * outside it is a parsing artefact — a timestamp, a row number, a truncated
+ * string — and is dropped rather than written and rejected by the database.
+ */
+export function normalizeFoundedYear(value?: number | string | null): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(n) || n < 1800 || n > 2200) return null;
+  return n;
+}
+
+/**
+ * A technology list, normalised to the JSON ARRAY TEXT that jsonb accepts.
+ *
+ * Returning a string rather than an array is deliberate: every canonical value
+ * travels through `source_assertions.normalized_value`, which is text, so an
+ * array would be stringified by whatever wrote it — `String(['a','b'])` yields
+ * `'a,b'`, which is not JSON and would fail the column's is-array CHECK. JSON
+ * is produced here, once, so the boundary never has to know the difference.
+ *
+ * Entries are trimmed and de-duplicated; blanks are dropped. An input that is
+ * genuinely an empty list is preserved as `[]` — "we looked and found none" is
+ * a fact, and is not the same as never having looked.
+ */
+export function normalizeTechnologies(value?: string[] | string | null): string | null {
+  if (value === null || value === undefined) return null;
+
+  let list: unknown[];
+  if (Array.isArray(value)) {
+    list = value;
+  } else {
+    const text = value.trim();
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) return null;   // an object or scalar is not a technology list
+      list = parsed;
+    } catch {
+      return null;                                // unparseable is absent, never a guess
+    }
+  }
+
+  const cleaned = [...new Set(
+    list.map((v) => (typeof v === 'string' ? v.trim() : '')).filter((v) => v.length > 0),
+  )];
+  return JSON.stringify(cleaned);
+}
+
+/**
+ * An ISO-8601 instant, or nothing.
+ *
+ * Normalised to UTC ISO so two providers stating the same moment in different
+ * offsets produce ONE value rather than a false disagreement — LI-2 withholds
+ * an attribute whose sources disagree, so a formatting difference would
+ * silently suppress a fact both providers actually agree on.
+ */
+export function normalizeInstant(value?: string | null): string | null {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const ms = Date.parse(text);
+  if (Number.isNaN(ms)) return null;
+  return new Date(ms).toISOString();
+}
+
+/**
  * Shape a person attribute payload for storage. Unknown seniority becomes null
  * rather than 'other': 'other' is a claim that a source made about a person,
  * and inventing it here would fabricate evidence.
@@ -183,9 +280,14 @@ export function toPersonAttributes(input: PersonAttributes): PersonAttributes {
  * assignable to `AccountAttributes`, so consumers that accept the input shape
  * keep working unchanged.
  */
-export type NormalizedAccountAttributes = Omit<AccountAttributes, 'employeeCount'> & {
-  employeeCount: number | null;
-};
+export type NormalizedAccountAttributes =
+  Omit<AccountAttributes, 'employeeCount' | 'annualRevenue' | 'foundedYear' | 'technologies'> & {
+    employeeCount: number | null;
+    annualRevenue: number | null;
+    foundedYear: number | null;
+    /** JSON array TEXT, ready for a jsonb column — never a JS array. */
+    technologies: string | null;
+  };
 
 export function toAccountAttributes(input: AccountAttributes): NormalizedAccountAttributes {
   return {
@@ -196,6 +298,16 @@ export function toAccountAttributes(input: AccountAttributes): NormalizedAccount
     region: normalizeDisplayText(input.region),
     city: normalizeDisplayText(input.city),
     description: normalizeDisplayText(input.description),
+    // P2A firmographics. `revenueBand` and `fundingStage` go through the same
+    // display-text rule as `industry` — trimmed, blank-to-null — because the
+    // repository has no vocabulary for either and a provider's own label is the
+    // fact being recorded.
+    annualRevenue: normalizeAnnualRevenue(input.annualRevenue),
+    revenueBand: normalizeDisplayText(input.revenueBand),
+    foundedYear: normalizeFoundedYear(input.foundedYear),
+    technologies: normalizeTechnologies(input.technologies),
+    fundingStage: normalizeDisplayText(input.fundingStage),
+    lastFundingAt: normalizeInstant(input.lastFundingAt),
   };
 }
 
@@ -207,5 +319,10 @@ export const PERSON_ATTRIBUTE_COLUMNS = [
 
 export const ACCOUNT_ATTRIBUTE_COLUMNS = [
   'industry', 'employee_count', 'employee_band', 'country_code', 'region', 'city',
-  'description', 'attributes_source', 'attributes_updated_at',
+  'description',
+  // P2A. Adding them here does more than name them: the boundary refuses to
+  // write any column outside this list, and the enforcement test derives its
+  // scan from it — so these become both writable and protected in one step.
+  'annual_revenue', 'revenue_band', 'founded_year', 'technologies', 'funding_stage', 'last_funding_at',
+  'attributes_source', 'attributes_updated_at',
 ] as const;

@@ -33,11 +33,13 @@ import { ingestSourceRecord } from '../prospectIdentity/ingestionBoundary';
 import { resolveUnifiedPerson } from '../identityResolutionService';
 import { resolveOrCreateAccount, attachPersonToAccount } from '../prospectIdentity/accountResolution';
 import { detectAndParkDuplicates } from '../prospectIdentity/personDuplicates';
+import type { AccountAttributes } from '../prospectIdentity/attributes';
 import {
   validateNormalizedRecord,
   type AdapterResult,
   type IngestionBatchResult,
   type IngestionRecordOutcome,
+  type NormalizedAccount,
   type NormalizedIngestionRecord,
 } from './contracts';
 import { getLeadSourceAdapter, UnsupportedSourceError } from './registry';
@@ -67,6 +69,44 @@ const fail = (
   rejection,
   error: error instanceof Error ? error.message : String(error),
 });
+
+/**
+ * The employer attributes a normalized record carries, in LI-1's vocabulary.
+ *
+ * ONE mapping, used by both the account-entity path and the person-entity
+ * employer pass. Two copies would drift, and a firmographic silently dropped on
+ * one path but not the other is the kind of divergence nothing would catch.
+ */
+function toAccountAttributeInput(account: NormalizedAccount | null | undefined): AccountAttributes {
+  return {
+    industry: account?.industry ?? null,
+    employeeCount: account?.employeeCount ?? null,
+    employeeBand: account?.employeeBand ?? null,
+    countryCode: account?.countryCode ?? null,
+    region: account?.region ?? null,
+    city: account?.city ?? null,
+    description: account?.description ?? null,
+    annualRevenue: account?.annualRevenue ?? null,
+    revenueBand: account?.revenueBand ?? null,
+    foundedYear: account?.foundedYear ?? null,
+    technologies: account?.technologies ?? null,
+    fundingStage: account?.fundingStage ?? null,
+    lastFundingAt: account?.lastFundingAt ?? null,
+  };
+}
+
+/**
+ * Whether the source said anything about the employer worth recording.
+ *
+ * Identity fields (`externalId`, `name`, `domain`, `websiteUrl`) are deliberately
+ * NOT counted: they are what resolved the account, not claims about it. Without
+ * this check every person record with an employer would write an empty source
+ * record asserting nothing.
+ */
+function hasAccountAttributes(account: NormalizedAccount | null | undefined): boolean {
+  if (!account) return false;
+  return Object.values(toAccountAttributeInput(account)).some((v) => v !== null && v !== undefined);
+}
 
 /**
  * Resolve the prospect's EMPLOYER, when the source said anything about one.
@@ -169,19 +209,52 @@ export async function ingestNormalizedRecord(
         city: record.person?.city ?? null,
         timezone: record.person?.timezone ?? null,
       } : undefined,
-      accountAttributes: record.entityType === 'account' ? {
-        industry: record.account?.industry ?? null,
-        employeeCount: record.account?.employeeCount ?? null,
-        employeeBand: record.account?.employeeBand ?? null,
-        countryCode: record.account?.countryCode ?? null,
-        region: record.account?.region ?? null,
-        city: record.account?.city ?? null,
-        description: record.account?.description ?? null,
-      } : undefined,
+      accountAttributes: record.entityType === 'account' ? toAccountAttributeInput(record.account) : undefined,
       confidence: record.confidence ?? null,
     }, at);
   } catch (e) {
     return fail(externalId, 'provenance_failed', e);
+  }
+
+  // ── EMPLOYER FIRMOGRAPHICS (P2C) ────────────────────────────────────────
+  // A person record carries what the source said about the EMPLOYER too, and
+  // the call above cannot store it: `ingestSourceRecord` is single-entity by
+  // design — one entityType, one target table, one allowed column set. So the
+  // employer's attributes get their own pass through the SAME boundary.
+  //
+  // This is not a second writer. It is the sanctioned writer, invoked a second
+  // time for the second entity, and the schema was built for it: the source
+  // record key is (organization_id, provider, source_entity_type,
+  // source_record_id), so a person-entity row and an account-entity row coexist
+  // by design rather than by collision.
+  //
+  // Two person records naming the same employer therefore produce two account
+  // assertions. That is correct, not duplication: if they agree LI-2's RULE A
+  // applies the value once, and if they disagree RULE B withholds it — which is
+  // exactly the arbitration this evidence model exists to perform.
+  if (accountId && record.entityType === 'person' && hasAccountAttributes(record.account)) {
+    try {
+      await ingestSourceRecord({
+        organizationId: record.organizationId,
+        provider: record.source,
+        entityType: 'account',
+        // The employer's OWN provider id when the source gave one; otherwise the
+        // person record that asserted it, so the claim stays traceable to the
+        // evidence that made it rather than being attributed to nothing.
+        sourceRecordId: record.account?.externalId?.trim() || record.externalId,
+        rawPayload: result.raw ?? {},
+        personId: null,
+        accountId,
+        observedAt: record.observedAt ?? null,
+        ingestionRunId: options.ingestionRunId ?? null,
+        accountAttributes: toAccountAttributeInput(record.account),
+        confidence: record.confidence ?? null,
+      }, at);
+    } catch (e) {
+      // Consistent with the employer resolution above, which already fails a
+      // record rather than proceeding with a half-known employer.
+      return fail(externalId, 'provenance_failed', e);
+    }
   }
 
   // ── DUPLICATE PARKING ───────────────────────────────────────────────────
