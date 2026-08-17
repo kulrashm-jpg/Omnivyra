@@ -195,3 +195,4 @@ describe('idempotency', () => {
     expect(issuedFilters.filter(q => q.table === 'identity_claims')).toHaveLength(0);
   });
 });
+export {};  // module marker: without it this file is a global script and its top-level names collide with the sibling prospectIdentity suites
