@@ -231,7 +231,9 @@ describe('hardening — exclusions + universe resolution', () => {
 
 describe('hardening — merge behavior (never overwrite; only add missing)', () => {
   it('planner has LinkedIn; "Also create Instagram posts." adds Instagram only', () => {
-    const configured = { linkedin: { post: 5 } }; // explicit user choice
+    // Typed from buildBootstrapMatrix's own return: spreading a Record<> into an
+    // inline literal drops the index signature, hiding the merged platform.
+    const configured: ReturnType<typeof buildBootstrapMatrix> = { linkedin: { post: 5 } }; // explicit user choice
     const extraction = extractSkeletonRequest('Also create Instagram posts.');
     const additions = resolvePlatformSelection(extraction, []).filter((p) => !(p in configured));
     expect(additions).toEqual(['instagram']);
