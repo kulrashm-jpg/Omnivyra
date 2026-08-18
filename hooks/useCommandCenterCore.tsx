@@ -198,7 +198,7 @@ type EnhancedCardProps = Omit<CommandCenterCard, 'state' | 'requirements' | 'bad
 
 export function useCommandCenter() {
   const router = useRouter();
-  const { user, userName, userRole, selectedCompanyName, selectedCompanyId, isLoading, authChecked } = useCompanyContext();
+  const { user, userName, userRole, selectedCompanyName, selectedCompanyId, isLoading, authChecked, authUserId } = useCompanyContext();
   const [showAgain, setShowAgain] = useState<boolean | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [visibleCards, setVisibleCards] = useState<CommandCenterCard[]>([]);
@@ -455,7 +455,7 @@ export function useCommandCenter() {
   }, [authChecked, selectedCompanyId, user?.userId]);
 
   useEffect(() => {
-    if (!authChecked || !user?.userId) return;
+    if (!authChecked || !authUserId) return;
 
     const loadPreferences = async () => {
       try {
@@ -478,7 +478,7 @@ export function useCommandCenter() {
     };
 
     void loadPreferences();
-  }, [authChecked, user?.userId]);
+  }, [authChecked, authUserId]);
 
   useEffect(() => {
     void loadReadiness();
@@ -715,9 +715,14 @@ export function useCommandCenter() {
     router.push(helpLink);
   }, [router]);
 
-  const _ef1 = !authChecked || isLoading;
+  // P1.9 - first render needs AUTHENTICATION, not company resolution.
+  // authUserId comes from the session JWT sub already held by the browser, so
+  // the shell paints while /api/company-profile?mode=list is still in flight.
+  // It is an identity signal only: company-scoped work below still requires
+  // selectedCompanyId, and the server re-verifies every request.
+  const _ef1 = !authChecked || !authUserId;
 
-  if (!user?.userId) {
+  if (!authUserId) {
     return { _ef1: true } as ReturnType<typeof useCommandCenter>;
   }
 
