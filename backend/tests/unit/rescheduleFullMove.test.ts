@@ -115,10 +115,18 @@ const guardCalls: Array<{ campaignId: string; options: unknown }> = [];
 let guardThrows: Error | null = null;
 jest.mock('../../services/campaignBlueprintService', () => {
   class BlueprintImmutableError extends Error { code = 'BLUEPRINT_IMMUTABLE'; }
+  // Constructor mirrors the real class: the handler reads both fields off the
+  // error, so a double that hardcoded them was asserting its own constants
+  // rather than whatever the thrower actually supplied.
   class BlueprintExecutionFreezeError extends Error {
     code = 'EXECUTION_WINDOW_FROZEN';
-    hoursUntilExecution = 2;
-    freezeWindowHours = 24;
+    hoursUntilExecution: number;
+    freezeWindowHours: number;
+    constructor(message: string, hoursUntilExecution: number, freezeWindowHours: number) {
+      super(message);
+      this.hoursUntilExecution = hoursUntilExecution;
+      this.freezeWindowHours = freezeWindowHours;
+    }
   }
   return {
     BlueprintImmutableError,
@@ -216,7 +224,7 @@ describe('move validation — deterministic failures', () => {
   });
 
   it('movement eligibility delegates to the blueprint guard with the row\'s slot', async () => {
-    guardThrows = new BlueprintExecutionFreezeError('frozen');
+    guardThrows = new BlueprintExecutionFreezeError('frozen', 2, 24);
     let res = await post({ week_number: 3, scheduled_at: future(48) });
     expect(res.statusCode).toBe(409);
     expect(res.body.code).toBe('MOVE_FREEZE_WINDOW');

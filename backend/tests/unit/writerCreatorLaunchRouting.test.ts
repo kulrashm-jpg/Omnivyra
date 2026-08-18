@@ -5,11 +5,14 @@ import {
   buildWriterCreatorPrefill,
   launchCreatorFromWriter,
   POST_CREATOR_ASSET_TYPES_VISIBLE,
+  type WriterCreatorLaunchDestination,
 } from '../../../lib/content/writerCreatorAssetLaunch';
 import { loadAttachmentSession } from '../../../lib/content/creatorAttachmentSession';
 
 describe('Writer Add Asset → canonical Creator workflow routing', () => {
-  const mkRouter = () => ({ push: jest.fn(() => Promise.resolve(true)) });
+  // The double records what production publishes, so a change to the launch
+  // destination fails here instead of being absorbed by NextRouter's wider Url.
+  const mkRouter = () => ({ push: jest.fn((_dest: WriterCreatorLaunchDestination) => Promise.resolve(true)) });
   const source = buildWriterCreatorPrefill({
     sourceType: 'post', sourceId: 'post:draft', assetType: 'supporting_image',
     title: 'My title', body: 'Some post body text here.', platform: 'linkedin',
