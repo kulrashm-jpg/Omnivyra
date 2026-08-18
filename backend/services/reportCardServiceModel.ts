@@ -1,5 +1,6 @@
 /** Report card — types, scoring model, band helpers — split from reportCardService.ts (barrel preserved; importers unchanged). */
 import { ownedDbTable } from '../db/writeOwner';
+import { timeInto, type TimingSink } from '../../lib/platform/serverTiming';
 /**
  * Report Card Service
  *
@@ -427,12 +428,17 @@ export async function getCompanyReportsForCard(
   userId: string,
   companyId: string,
   domain?: string,
+  timing?: TimingSink,
 ): Promise<CompanyReportsResult> {
-  const resolvedDomain = domain ? normalizeReportDomain(domain) : await getCompanyDomain(companyId);
+  const resolvedDomain = domain
+    ? normalizeReportDomain(domain)
+    : await timeInto(timing, 'domain', () => getCompanyDomain(companyId));
+  // Parallelism preserved: each leaf is wrapped individually, so the group
+  // still starts together and the recorded durations are per-leaf, not summed.
   const [reports, roleResult, domainState] = await Promise.all([
-    getCompanyReports(companyId),
-    getUserRole(userId, companyId),
-    getDomainReportState(resolvedDomain, companyId),
+    timeInto(timing, 'reports', () => getCompanyReports(companyId)),
+    timeInto(timing, 'role', () => getUserRole(userId, companyId)),
+    timeInto(timing, 'state', () => getDomainReportState(resolvedDomain, companyId)),
   ]);
 
   return {

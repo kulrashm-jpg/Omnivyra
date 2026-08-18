@@ -84,3 +84,55 @@ describe('reports handler wiring', () => {
     expect(totals).toBeGreaterThanOrEqual(exits - 1); // 405 pre-dates the timer
   });
 });
+
+describe('TimingSink (transport-free)', () => {
+  const { createTimingSink, timeInto, flushTimingSink } = require('../../../lib/platform/serverTiming');
+
+  it('records each leaf independently', async () => {
+    const sink = createTimingSink();
+    await Promise.all([
+      timeInto(sink, 'reports', async () => 'r'),
+      timeInto(sink, 'role', async () => 'x'),
+      timeInto(sink, 'state', async () => 's'),
+    ]);
+    expect(sink.entries().map((e: [string, number]) => e[0]).sort()).toEqual(['reports', 'role', 'state']);
+  });
+
+  it('is a no-op with no sink — zero overhead for existing callers', async () => {
+    await expect(timeInto(undefined, 'reports', async () => 42)).resolves.toBe(42);
+  });
+
+  it('preserves values and rethrows errors unchanged', async () => {
+    const sink = createTimingSink();
+    await expect(timeInto(sink, 'reports', async () => ({ a: 1 }))).resolves.toEqual({ a: 1 });
+    const boom = new Error('leaf failed');
+    await expect(timeInto(sink, 'role', async () => { throw boom; })).rejects.toBe(boom);
+    expect(sink.entries().map((e: [string, number]) => e[0])).toEqual(['reports', 'role']);
+  });
+
+  it('preserves parallelism — group takes the slowest leaf, not the sum', async () => {
+    const sink = createTimingSink();
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+    const t0 = Date.now();
+    await Promise.all([
+      timeInto(sink, 'reports', async () => sleep(120)),
+      timeInto(sink, 'role', async () => sleep(120)),
+      timeInto(sink, 'state', async () => sleep(120)),
+    ]);
+    expect(Date.now() - t0).toBeLessThan(300); // serial would be >=360
+  });
+
+  it('flushes into Server-Timing', () => {
+    const headers: Record<string, unknown> = {};
+    const res = { headersSent: false, setHeader: (k: string, v: unknown) => { headers[k] = v; }, getHeader: (k: string) => headers[k] } as never;
+    const sink = createTimingSink(); sink.record('reports', 10); sink.record('role', 20);
+    flushTimingSink(res, sink);
+    expect(String(headers['Server-Timing'])).toBe('reports;dur=10, role;dur=20');
+  });
+
+  it('service signature accepts the sink without changing existing callers', () => {
+    const src = require('fs').readFileSync(require('path').resolve(__dirname, '../../services/reportCardServiceModel.ts'), 'utf8');
+    expect(src).toContain('timing?: TimingSink');
+    expect((src.match(/timeInto\(timing/g) || []).length).toBe(4);
+  });
+});

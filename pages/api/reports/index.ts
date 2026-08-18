@@ -1,5 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
-import { appendServerTiming, timeStage } from '../../../lib/platform/serverTiming';
+import { appendServerTiming, createTimingSink, flushTimingSink, timeStage } from '../../../lib/platform/serverTiming';
 import { setPrivateCache, CACHE_TTL } from '../../../lib/platform/httpCache';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -68,11 +68,14 @@ async function handler(
       return res.status(403).json({ error: 'Access denied', code: 'ACCESS_DENIED' });
     }
 
+    const leafTiming = createTimingSink();
     const result = await timeStage(res, 'service', () => getCompanyReportsForCard(
       user.id,
       companyId,
       req.query.domain as string | undefined,
+      leafTiming,
     ));
+    flushTimingSink(res, leafTiming);
 
     // OPT-002: P3 private, NEAR_LIVE (30 s) — response carries the
     // progress-adjacent hasGeneratingReport flag; duplicate generation is

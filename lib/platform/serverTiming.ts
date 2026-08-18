@@ -49,3 +49,46 @@ export async function timeStage<T>(
     appendServerTiming(res, name, now() - start);
   }
 }
+
+/**
+ * Timing sink for code below the HTTP layer.
+ *
+ * Services should not receive `res` just to be measured — that couples them to
+ * the transport. They take a `TimingSink` instead: an optional collector the
+ * caller drains into `Server-Timing` afterwards. Absent sink = zero overhead
+ * and no behaviour change, so every existing caller is unaffected.
+ */
+export type TimingSink = { record(name: string, durationMs: number): void };
+
+export function createTimingSink(): TimingSink & { entries(): Array<[string, number]> } {
+  const rows: Array<[string, number]> = [];
+  return {
+    record(name: string, durationMs: number) {
+      if (Number.isFinite(durationMs) && durationMs >= 0) rows.push([name, durationMs]);
+    },
+    entries: () => rows,
+  };
+}
+
+/** Times `fn` into an optional sink. Result and errors pass through untouched. */
+export async function timeInto<T>(
+  sink: TimingSink | undefined,
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!sink) return fn();
+  const start = now();
+  try {
+    return await fn();
+  } finally {
+    sink.record(name, now() - start);
+  }
+}
+
+/** Drains a sink onto the response as Server-Timing entries. */
+export function flushTimingSink(
+  res: NextApiResponse,
+  sink: { entries(): Array<[string, number]> },
+): void {
+  for (const [name, dur] of sink.entries()) appendServerTiming(res, name, dur);
+}
