@@ -82,7 +82,15 @@ const firstSentence = (text: string): string => {
 
 /** Accumulates what has already been accepted this campaign, for dup detection. */
 export class ValidationContext {
-  readonly headlines = new Set<string>();
+  /**
+   * platform::content_type -> normalized headlines already accepted in that scope.
+   *
+   * Scoped, not campaign-global: `headline` is the CARD's title, and one card
+   * legitimately fans out to several platform variants (see masterContentDocument:
+   * one master_title, many platforms). A global set made every sibling after the
+   * first look like a duplicate of its own card.
+   */
+  readonly headlines = new Map<string, Set<string>>();
   readonly openings = new Set<string>();
   readonly ctas = new Set<string>();
   readonly ideaFingerprints = new Set<string>();
@@ -95,14 +103,19 @@ export class ValidationContext {
   readonly variantToMaster = new Map<string, string>();
   constructor(readonly ledger?: HistoricalLedger) {}
 
-  private key(platform: string, type: string): string {
+  /** The one scheduling-identity key: same platform + same content type. */
+  scopeKey(platform: string, type: string): string {
     return `${String(platform).toLowerCase()}::${String(type).toLowerCase()}`;
   }
 
   /** Record an accepted asset so later assets are compared against it. */
   commit(asset: GeneratedAsset): void {
+    const scope = this.scopeKey(asset.platform, asset.content_type);
     const hl = normalizeForFingerprint(asset.headline ?? '');
-    if (hl) this.headlines.add(hl);
+    if (hl) {
+      if (!this.headlines.has(scope)) this.headlines.set(scope, new Set());
+      this.headlines.get(scope)!.add(hl);
+    }
     const op = normalizeForFingerprint(asset.opening ?? firstSentence(asset.text));
     if (op) this.openings.add(op);
     const cta = normalizeForFingerprint(asset.cta ?? '');
@@ -110,7 +123,7 @@ export class ValidationContext {
     if (asset.idea_fingerprint) this.ideaFingerprints.add(asset.idea_fingerprint);
     if (asset.narrative_fingerprint) this.narrativeFingerprints.add(asset.narrative_fingerprint);
     const textHash = fingerprint(asset.text);
-    const k = this.key(asset.platform, asset.content_type);
+    const k = this.scopeKey(asset.platform, asset.content_type);
     if (!this.assetHashes.has(k)) this.assetHashes.set(k, new Set());
     this.assetHashes.get(k)!.add(textHash);
     if (!asset.shared) this.textToPlatform.set(textHash, String(asset.platform).toLowerCase());
@@ -164,8 +177,9 @@ export function validateAsset(
   }
 
   // 1/2/3. Duplicate headline / opening / CTA (against prior accepted assets).
+  const scope = ctx.scopeKey(asset.platform, asset.content_type);
   const hl = normalizeForFingerprint(asset.headline ?? '');
-  if (hl && ctx.headlines.has(hl)) findings.push({ dimension: 'duplicate_headline', detail: 'headline already used' });
+  if (hl && ctx.headlines.get(scope)?.has(hl)) findings.push({ dimension: 'duplicate_headline', detail: 'headline already used on this platform+type' });
   const op = normalizeForFingerprint(asset.opening ?? firstSentence(asset.text));
   if (op && ctx.openings.has(op)) findings.push({ dimension: 'duplicate_opening', detail: 'opening sentence already used' });
   const cta = normalizeForFingerprint(asset.cta ?? '');
@@ -177,8 +191,7 @@ export function validateAsset(
 
   // 7. Duplicate asset within campaign (same platform + type, same text).
   const textHash = fingerprint(asset.text);
-  const k = `${String(asset.platform).toLowerCase()}::${String(asset.content_type).toLowerCase()}`;
-  if (ctx.assetHashes.get(k)?.has(textHash)) findings.push({ dimension: 'duplicate_asset', detail: 'identical asset already scheduled on this platform+type' });
+  if (ctx.assetHashes.get(scope)?.has(textHash)) findings.push({ dimension: 'duplicate_asset', detail: 'identical asset already scheduled on this platform+type' });
 
   // 8. Cross-platform duplication (shared assets excluded).
   if (!asset.shared && flagCrossPlatform) {
