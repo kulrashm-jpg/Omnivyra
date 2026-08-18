@@ -18,6 +18,7 @@
  */
 import { recordRawCounter, recordRawHistogram } from '../../observability';
 import { computePlannerMetrics, canTransition, type ContentLifecycleState } from '../../../lib/shared/campaign/campaignLifecycle';
+import type { DropReasonCode } from '../../../lib/shared/campaign/plannerDiagnostics';
 import type { PlannerReconciliation } from '../../../lib/shared/campaign/plannerDiagnostics';
 
 export type PlannerMode = 'writer' | 'creator' | 'mix' | 'ai_decide' | 'partial_regen' | 'weekly' | 'unknown';
@@ -51,7 +52,7 @@ export function emitPlannerMetrics(
  * outside a full reconciliation (e.g. plan-request trims, orchestrator aborts) so
  * every dropped item still lands in planner.item.dropped{reason}.
  */
-export function emitPlannerDrop(reason: string, count = 1, mode: PlannerMode = 'unknown'): void {
+export function emitPlannerDrop(reason: DropReasonCode, count = 1, mode: PlannerMode = 'unknown'): void {
   try {
     recordRawCounter('planner.item.dropped', Math.max(0, Math.round(count)), { mode, reason });
   } catch { /* fail-safe */ }

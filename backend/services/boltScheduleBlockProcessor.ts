@@ -830,7 +830,10 @@ async function executeBlockScheduleRuntime(
 
         if (verdict.decision === 'DROP' || verdict.decision === 'REGENERATE') {
           console.warn('[block-processor] semantic-validation drop', { platform, contentType: rowContentType, topic: topic.slice(0, 60), reason: verdict.reason });
-          emitPlannerDrop(verdict.findings[0]?.dimension ?? 'duplicate_content', 1, 'weekly');
+          // The planner metric takes a DropReasonCode, not a ValidationDimension --
+          // two vocabularies that do not overlap. The semantic detail is already on
+          // the warn above via verdict.reason, so nothing diagnostic is lost here.
+          emitPlannerDrop('duplicate_content', 1, 'weekly');
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
           continue;
