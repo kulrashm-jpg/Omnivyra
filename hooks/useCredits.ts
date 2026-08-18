@@ -217,7 +217,7 @@ export function useCredits(companyId: string | null | undefined): CreditsState &
   }
 
   let status: CreditsStatus;
-  if (!companyId || isValidating || (!data && !error)) {
+  if (!companyId || (!data && !error)) {
     status = 'loading';
   } else if (error) {
     status = 'error';
