@@ -254,6 +254,36 @@ describe('processBlockSchedule — pre-R3-P2 contract', () => {
     expect(mockedVariants).toHaveBeenCalledTimes(2);
   });
 
+  test('a semantic-idea collision spends NO regeneration attempt (idea fingerprint is row metadata)', async () => {
+    // Two cards, different titles and different bodies, no CTA — the ONLY thing
+    // they share is fingerprint.idea, which buildAsset reads off the row.
+    mockedVariants
+      .mockResolvedValueOnce([{ platform: 'linkedin', content_type: 'post', generated_content: 'Idea-card one body.', generation_status: 'generated' }])
+      .mockResolvedValueOnce([{ platform: 'linkedin', content_type: 'post', generated_content: 'Idea-card two, wholly different.', generation_status: 'generated' }]);
+    const mk = (id: string, ex: string, title: string, date: string, day: string) => row({
+      id, title, topic: title, day_of_week: day, date,
+      content: JSON.stringify({ execution_id: ex, topic: title, fingerprint: { idea: 'idea-shared', narrative: `narr-${ex}` } }),
+    });
+    const result = await run([mk('row-ri1', 'ex-i1', 'Idea card one', '2099-01-04', 'Monday'), mk('row-ri2', 'ex-i2', 'Idea card two', '2099-01-06', 'Wednesday')]);
+    expect(result.skipped_count).toBe(1);
+    expect(drops).toContainEqual({ reason: 'duplicate_content', count: 1 });
+    expect(mockedVariants).toHaveBeenCalledTimes(2); // two cards, no retry
+  });
+
+  test('a narrative collision spends NO regeneration attempt (narrative fingerprint is row metadata)', async () => {
+    mockedVariants
+      .mockResolvedValueOnce([{ platform: 'linkedin', content_type: 'post', generated_content: 'Narrative-card one body.', generation_status: 'generated' }])
+      .mockResolvedValueOnce([{ platform: 'linkedin', content_type: 'post', generated_content: 'Narrative-card two, wholly different.', generation_status: 'generated' }]);
+    const mk = (id: string, ex: string, title: string, date: string, day: string) => row({
+      id, title, topic: title, day_of_week: day, date,
+      content: JSON.stringify({ execution_id: ex, topic: title, fingerprint: { idea: `idea-${ex}`, narrative: 'narr-shared' } }),
+    });
+    const result = await run([mk('row-rn1', 'ex-n1', 'Narr card one', '2099-01-04', 'Monday'), mk('row-rn2', 'ex-n2', 'Narr card two', '2099-01-06', 'Wednesday')]);
+    expect(result.skipped_count).toBe(1);
+    expect(drops).toContainEqual({ reason: 'duplicate_content', count: 1 });
+    expect(mockedVariants).toHaveBeenCalledTimes(2); // two cards, no retry
+  });
+
   test('placeholder master with no variants never schedules', async () => {
     mockedMaster.mockResolvedValueOnce({
       id: 'master-bad', generated_at: 'x', content: '[MASTER GENERATION FAILED]',
