@@ -101,6 +101,36 @@ describe('cross-platform duplication → ADAPT (shared excluded)', () => {
   });
 });
 
+describe('card metadata is scoped, not campaign-global', () => {
+  // A card carries ONE cta_strategy and ONE title across target_platforms
+  // (creatorCardTypes: platform_strategy is per-platform, cta_strategy is not),
+  // so platform siblings of one card legitimately share both. Comparing them
+  // campaign-wide flagged every sibling as a duplicate of its own card.
+  it('a platform sibling sharing the card CTA is NOT a duplicate', () => {
+    const ctx = new ValidationContext();
+    ctx.commit(asset({ platform: 'linkedin', cta: 'Book a demo', text: 'LinkedIn body about onboarding.', headline: 'h-li', opening: 'o-li', idea_fingerprint: 'i1', narrative_fingerprint: 'n1', variant_id: 'v1' }));
+    const r = validateAsset(asset({ platform: 'x', cta: 'Book a demo', text: 'A different X body entirely.', headline: 'h-x', opening: 'o-x', idea_fingerprint: 'i2', narrative_fingerprint: 'n2', variant_id: 'v2' }), ctx);
+    expect(r.findings.some((f) => f.dimension === 'duplicate_cta')).toBe(false);
+    expect(r.decision).toBe('ACCEPT');
+  });
+
+  it('the same CTA on the SAME platform+type is still a duplicate', () => {
+    const ctx = new ValidationContext();
+    ctx.commit(asset({ platform: 'linkedin', cta: 'Book a demo', text: 'First body.', headline: 'h1', opening: 'o1', idea_fingerprint: 'i1', narrative_fingerprint: 'n1', variant_id: 'v1' }));
+    const r = validateAsset(asset({ platform: 'linkedin', cta: 'Book a demo', text: 'Second body.', headline: 'h2', opening: 'o2', idea_fingerprint: 'i2', narrative_fingerprint: 'n2', variant_id: 'v2' }), ctx);
+    expect(r.findings.some((f) => f.dimension === 'duplicate_cta')).toBe(true);
+    expect(r.decision).toBe('REGENERATE');
+  });
+
+  it('a different content type on the same platform does not collide', () => {
+    const ctx = new ValidationContext();
+    ctx.commit(asset({ platform: 'linkedin', content_type: 'post', cta: 'Book a demo', text: 'Post body.', headline: 'h1', opening: 'o1', idea_fingerprint: 'i1', narrative_fingerprint: 'n1', variant_id: 'v1' }));
+    const r = validateAsset(asset({ platform: 'linkedin', content_type: 'carousel', cta: 'Book a demo', text: 'Carousel body.', headline: 'h2', opening: 'o2', idea_fingerprint: 'i2', narrative_fingerprint: 'n2', variant_id: 'v2' }), ctx);
+    expect(r.findings.some((f) => f.dimension === 'duplicate_cta')).toBe(false);
+    expect(r.decision).toBe('ACCEPT');
+  });
+});
+
 describe('historical duplication (ledger, dimension 9)', () => {
   it('REGENERATEs when the idea was published before', () => {
     const ledger = new InMemoryLedger();

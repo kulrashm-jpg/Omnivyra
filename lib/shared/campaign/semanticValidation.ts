@@ -92,7 +92,16 @@ export class ValidationContext {
    */
   readonly headlines = new Map<string, Set<string>>();
   readonly openings = new Set<string>();
-  readonly ctas = new Set<string>();
+  /**
+   * platform::content_type -> normalized CTAs already accepted in that scope.
+   *
+   * Scoped for the same reason as headlines: the CTA comes from the CARD
+   * (`master_idea.cta_strategy`), and creatorCardTypes declares exactly one
+   * cta_strategy per card while platform_strategy is a per-platform record. So
+   * every platform sibling of a card carries the same CTA by construction, and a
+   * campaign-global set flagged each sibling as a duplicate of its own card.
+   */
+  readonly ctas = new Map<string, Set<string>>();
   readonly ideaFingerprints = new Set<string>();
   readonly narrativeFingerprints = new Set<string>();
   /** platform::content_type → set of normalized text hashes (same-platform exact/near dup). */
@@ -119,7 +128,10 @@ export class ValidationContext {
     const op = normalizeForFingerprint(asset.opening ?? firstSentence(asset.text));
     if (op) this.openings.add(op);
     const cta = normalizeForFingerprint(asset.cta ?? '');
-    if (cta) this.ctas.add(cta);
+    if (cta) {
+      if (!this.ctas.has(scope)) this.ctas.set(scope, new Set());
+      this.ctas.get(scope)!.add(cta);
+    }
     if (asset.idea_fingerprint) this.ideaFingerprints.add(asset.idea_fingerprint);
     if (asset.narrative_fingerprint) this.narrativeFingerprints.add(asset.narrative_fingerprint);
     const textHash = fingerprint(asset.text);
@@ -183,7 +195,7 @@ export function validateAsset(
   const op = normalizeForFingerprint(asset.opening ?? firstSentence(asset.text));
   if (op && ctx.openings.has(op)) findings.push({ dimension: 'duplicate_opening', detail: 'opening sentence already used' });
   const cta = normalizeForFingerprint(asset.cta ?? '');
-  if (cta && ctx.ctas.has(cta)) findings.push({ dimension: 'duplicate_cta', detail: 'CTA already used' });
+  if (cta && ctx.ctas.get(scope)?.has(cta)) findings.push({ dimension: 'duplicate_cta', detail: 'CTA already used on this platform+type' });
 
   // 4/5. Duplicate semantic idea / narrative (via fingerprints).
   if (asset.idea_fingerprint && ctx.ideaFingerprints.has(asset.idea_fingerprint)) findings.push({ dimension: 'duplicate_semantic_idea', detail: 'semantic idea already covered' });
