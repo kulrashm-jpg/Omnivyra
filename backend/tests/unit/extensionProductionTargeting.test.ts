@@ -231,7 +231,10 @@ describe('source shape — the guard is present at every activation site', () =>
     const guarded = swSrc.match(/isDevelopmentBuild\(\)\s*\?\s*await resolveDevLocalhostBase\(\)\s*:\s*null/g) ?? [];
     expect(guarded).toHaveLength(2);
     // And no unguarded call survives.
-    const bare = swSrc.match(/(?<!\?\s)await resolveDevLocalhostBase\(\)/g) ?? [];
+    // Annotated because `match() ?? []` unions RegExpMatchArray with the empty
+    // array literal, and the element type collapses to `never` — so `m` below
+    // would have no string methods.
+    const bare: string[] = swSrc.match(/(?<!\?\s)await resolveDevLocalhostBase\(\)/g) ?? [];
     expect(bare.every((m) => m.includes('?') === false)).toBe(true);
     expect(swSrc).not.toMatch(/const devBase = await resolveDevLocalhostBase\(\);/);
   });
