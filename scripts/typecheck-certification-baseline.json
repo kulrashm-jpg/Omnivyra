@@ -1,9 +1,9 @@
 {
   "projects": {
-    "tsconfig.backend.json": 1,
-    "tsconfig.backend-tests.json": 443
+    "tsconfig.backend.json": 0,
+    "tsconfig.backend-tests.json": 340
   },
-  "measured": "2026-07-21, branch feat/intel-egress-coordination-foundation, typescript 5.9.2 (re-measured by PB-010)",
+  "measured": "2026-08-18, branch main @ a2e049ff, typescript 6.0.3 (re-measured by PHASE-2S)",
   "note": [
     "PB-009 non-regression baselines for the BACKEND CERTIFICATION surface.",
     "tsconfig.backend.json = backend production modules (incl. standalone/unconsumed ones). Baseline 1: pages/api/company-profile/index.ts(267,38) TS2322.",
@@ -15,6 +15,8 @@
     "PB-011: this scalar total is NO LONGER the whole gate. A count-only ratchet is defeated by fixing one error and introducing a different one - the total holds and the build stays green while new debt lands (exactly how PB-005/PB-008 put 4 errors into this baseline unattributed). scripts/typecheck-certification-fingerprints.json now carries a PER-ERROR IDENTITY baseline - (file, TS code, normalized message) with a count per bucket - and scripts/typecheck-certification.js FAILS on any net-new identity even when this total is unchanged. The two artifacts must be regenerated together; the guard fails if their totals disagree.",
     "PB-011: the 4 PB-005/PB-008 errors are already absorbed inside the 470 and CANNOT be retroactively attributed - the count-only baseline recorded no identity for them, so there is nothing to diff them against. They are grandfathered as pre-existing debt. Attribution begins from this baseline forward.",
     "PB-011: regenerate baselines ONLY via `npm run typecheck:certification:baseline`. It refuses to run under CI, refuses to RAISE a total, and refuses to absorb a net-new fingerprint unless --accept-new-debt is passed explicitly (which prints every absorbed fingerprint so it lands in the review record). Re-baselining is a governance act, never a build side effect.",
-    "Gaming this with blanket any / @ts-ignore / @ts-nocheck / excluding failing files is out of contract. The coverage assertion in scripts/typecheck-certification.js exists specifically so that dropping files from a project fails the check instead of lowering the count."
+    "Gaming this with blanket any / @ts-ignore / @ts-nocheck / excluding failing files is out of contract. The coverage assertion in scripts/typecheck-certification.js exists specifically so that dropping files from a project fails the check instead of lowering the count.",
+    "PHASE-2S lowered backend.json 1 -> 0 and backend-tests.json 443 -> 340 (113 files/213 identity buckets -> 101/173), regenerated via `npm run typecheck:certification:baseline` with net-new 0, so no fingerprint was absorbed and --accept-new-debt was NOT needed. ATTRIBUTION, measured not assumed: the 103-error reduction is NOT from the 2P-2R remediation. `resolved` was 103 both BEFORE 2P (at 9540954b, when net-new was 28) and after 2R - the tool reports it identically, so the two sets are disjoint. The 103 are pre-existing baselined debt cleared earlier on main, dominated by 664ff436 (2026-08-09, 'clear 132 type errors in the community-AI harness surface'), which fixed exactly the TS2352 `as NextApiRequest` -> `as unknown as NextApiRequest` and TS2339 Send<any> harness identities listed as RESOLVED; the backend.json TS2322 came from work on pages/api/company-profile/index.ts. What 2P-2R contributed is different and is the precondition for this commit: they took net-new 28 -> 0 (20 module markers, 1 mock typing, 1 string[] annotation), so this regeneration locks a clean state instead of laundering 28 net-new errors into the baseline as grandfathered debt.",
+    "PHASE-2S CAVEAT: typescript was upgraded 5.9.2 -> 6.0.3 on 2026-08-09 (a5488511), the same day as 664ff436. The prior baseline was captured under 5.9.2 while the gate has been RUNNING under 6.0.3 since, so some unquantified portion of the 103 may be compiler-behaviour rather than code change; separating them would require downgrading the toolchain to re-measure, which is not worth doing and is not attempted here. This does not weaken the gate: the check already executes under 6.0.3, so any error 6.0.3 does not report was already undetected - regenerating only drops stale entries that could never match again. It does mean the baseline now describes 6.0.3, which is the compiler CI actually uses, rather than a version no longer installed."
   ]
 }
