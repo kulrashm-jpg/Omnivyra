@@ -51,6 +51,12 @@ import CreatorContentPanel, {
   type AttachmentRowState,
 } from '../../../components/activity-workspace/CreatorContentPanel';
 
+/** Derived from the panel's own prop type, so a prop signature change fails here. */
+type PanelProps = import('../../../components/activity-workspace/CreatorContentPanel').CreatorContentPanelProps;
+type UploadMediaArgs = Parameters<NonNullable<PanelProps['onUploadMedia']>>;
+type UploadFileArgs = Parameters<NonNullable<PanelProps['onUploadFile']>>;
+type UnscheduleArgs = Parameters<NonNullable<PanelProps['onUnschedule']>>;
+
 function baseRowState(overrides: Partial<AttachmentRowState> = {}): AttachmentRowState {
   return {
     dailyPlanId: 'plan-1',
@@ -65,10 +71,10 @@ function baseRowState(overrides: Partial<AttachmentRowState> = {}): AttachmentRo
 }
 
 function renderPanel(overrides: Partial<React.ComponentProps<typeof CreatorContentPanel>> = {}) {
-  const onUploadMedia = jest.fn(async () => ({ ok: true, lifecycle: 'ready_for_schedule' as const, uploadedMediaUrl: 'https://x.test/y.mp4' }));
-  const onUploadFile = jest.fn(async () => ({ ok: true, lifecycle: 'ready_for_schedule' as const, uploadedMediaUrl: 'https://x.test/y.mp4' }));
+  const onUploadMedia = jest.fn(async (..._a: UploadMediaArgs) => ({ ok: true, lifecycle: 'ready_for_schedule' as const, uploadedMediaUrl: 'https://x.test/y.mp4' }));
+  const onUploadFile = jest.fn(async (..._a: UploadFileArgs) => ({ ok: true, lifecycle: 'ready_for_schedule' as const, uploadedMediaUrl: 'https://x.test/y.mp4' }));
   const onReschedule = jest.fn(async () => ({ ok: true, lifecycle: 'scheduled' as const }));
-  const onUnschedule = jest.fn(async () => ({ ok: true, lifecycle: 'upload_failed' as const }));
+  const onUnschedule = jest.fn(async (..._a: UnscheduleArgs) => ({ ok: true, lifecycle: 'upload_failed' as const }));
   const onNotice = jest.fn();
 
   render(

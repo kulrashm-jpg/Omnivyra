@@ -16,7 +16,8 @@ jest.mock('@/backend/services/creator/creatorRowScheduler', () => ({
 
 // Capture DB writes through a chainable mock matching `.update(...).eq(...)`.
 const updateEq = jest.fn(() => Promise.resolve({ error: null }));
-const updateMock = jest.fn(() => ({ eq: updateEq }));
+type UpdateArgs = Parameters<ReturnType<typeof import('@/backend/db/writeOwner')['ownedDbTable']>['update']>;
+const updateMock = jest.fn((..._a: UpdateArgs) => ({ eq: updateEq }));
 jest.mock('@/backend/db/writeOwner', () => ({
   ownedDbTable: jest.fn(() => ({ update: updateMock })),
 }));

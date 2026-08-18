@@ -8,7 +8,8 @@
  */
 
 jest.mock('../../db/supabaseClient', () => ({ supabase: { from: jest.fn() } }));
-const usageLedger = { logUsageEvent: jest.fn(async () => undefined) };
+type LogUsageEventArgs = Parameters<typeof import('../../services/usageLedgerService')['logUsageEvent']>;
+const usageLedger = { logUsageEvent: jest.fn(async (..._a: LogUsageEventArgs) => undefined) };
 jest.mock('../../services/usageLedgerService', () => usageLedger);
 jest.mock('../../services/billing/billingMetrics', () => ({ incrCounter: jest.fn() }));
 

@@ -89,7 +89,7 @@ describe('CREATOR-040 STEP 2 — editor stock-upgrade (realizeEmptyImageSlots)',
 describe('CREATOR-040 STEP 1 — AI adapter matches the render-inline contract', () => {
   it('posts asset_kind:image + writer_asset_type:supporting_image and maps the hosted URL', async () => {
     process.env.NEXT_PUBLIC_ASSET_AI_IMAGES = '1';
-    const fetchMock = jest.fn(async () => ({ ok: true, json: async () => ({ rendered: { url: 'https://r/ai.png', metadata: { model: 'gpt-image-1' } } }) }));
+    const fetchMock = jest.fn(async (..._a: Parameters<typeof fetch>) => ({ ok: true, json: async () => ({ rendered: { url: 'https://r/ai.png', metadata: { model: 'gpt-image-1' } } }) }));
     (global as unknown as { fetch: unknown }).fetch = fetchMock;
 
     const slot = { slotId: 'sc-1', blockId: 'b1', assetType: 'image' as const, purpose: 'hero' as const, prompt: 'A hero about AI marketing', aspectRatio: '16:9', layout: { indexPath: [0], aspectRatio: '16:9' }, history: [], status: 'empty' as const, source: 'generated' as const };

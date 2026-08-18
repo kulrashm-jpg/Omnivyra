@@ -190,6 +190,9 @@ import {
   generateRecommendations,
   getRecommendedTopicsForCompany,
 } from '../../services/recommendationEngine/engine';
+
+/** The listener's tuple, taken from generateRecommendations' own option type. */
+type OnContextArgs = Parameters<NonNullable<NonNullable<Parameters<typeof generateRecommendations>[1]>['onContext']>>;
 import {
   loadRecommendedTopicSnapshotRows,
 } from '../../repositories/recommendationEngineReadRepository';
@@ -572,7 +575,7 @@ describe('generateRecommendations — Omnivyra enabled (relevance + ranking + le
 describe('generateRecommendations — context callback contract', () => {
   it('invokes onContext once with the accreted recommendation context, and callback errors never block', async () => {
     (normalizeTrends as jest.Mock).mockReturnValue(SIX_TRENDS);
-    const onContext = jest.fn(() => { throw new Error('listener exploded'); });
+    const onContext = jest.fn((..._a: OnContextArgs) => { throw new Error('listener exploded'); });
     const result = await generateRecommendations({ ...baseInput, durationWeeks: 6 }, { onContext });
     expect(onContext).toHaveBeenCalledTimes(1);
     const ctx = onContext.mock.calls[0][0] as Record<string, unknown>;

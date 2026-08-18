@@ -36,8 +36,9 @@ jest.mock('../../services/integrationService', () => ({
 jest.mock('../../services/domainRecordService', () => ({
   getCompanyDomainVerification: jest.fn(async () => ({ final_domain: 'acme.com', verification_status: 'verified', verified: true, verified_at: '2026-05-01T00:00:00Z' })),
 }));
-const getWebsites = jest.fn(async () => ([{ id: 'w1', name: 'Acme', canonical_url: 'https://acme.com', status: 'active' }]));
-jest.mock('../../services/websiteService', () => ({ getWebsites: (...a: unknown[]) => getWebsites(...a) }));
+type GetWebsitesArgs = Parameters<typeof import('../../services/websiteService')['getWebsites']>;
+const getWebsites = jest.fn(async (..._a: GetWebsitesArgs) => ([{ id: 'w1', name: 'Acme', canonical_url: 'https://acme.com', status: 'active' }]));
+jest.mock('../../services/websiteService', () => ({ getWebsites: (...a: GetWebsitesArgs) => getWebsites(...a) }));
 // Phase 18 engines — mocked so the façade test stays DB-free + deterministic.
 const freshness = { lastEvaluatedAt: '2026-06-01T00:00:00Z', dataAgeHours: 1, stale: false };
 const prov = { sources: [], checksEvaluated: 5, checksTotal: 8, deterministic: true };
