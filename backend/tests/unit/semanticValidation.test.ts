@@ -59,17 +59,6 @@ describe('duplicate dimensions → REGENERATE', () => {
     expect(r.decision).toBe('REGENERATE');
   });
 
-  it('duplicate semantic idea (fingerprint)', () => {
-    const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', variant_id: 'cv_b', idea_fingerprint: 'idea_a' }), setup());
-    expect(r.findings.some((f) => f.dimension === 'duplicate_semantic_idea')).toBe(true);
-    expect(r.decision).toBe('REGENERATE');
-  });
-
-  it('duplicate narrative (fingerprint)', () => {
-    const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', idea_fingerprint: 'x', variant_id: 'cv_b', narrative_fingerprint: 'narr_a' }), setup());
-    expect(r.findings.some((f) => f.dimension === 'duplicate_narrative')).toBe(true);
-  });
-
   it('duplicate carousel slide (within the asset)', () => {
     const r = validateAsset(asset({ content_type: 'carousel', headline: 'h', opening: 'o', cta: 'c', text: 'x', idea_fingerprint: 'x', narrative_fingerprint: 'y', variant_id: 'cv_b', slides: ['Slide one', 'Slide two', 'Slide one'] }), new ValidationContext());
     expect(r.findings.some((f) => f.dimension === 'duplicate_slide')).toBe(true);
@@ -81,6 +70,30 @@ describe('duplicate dimensions → REGENERATE', () => {
     const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', idea_fingerprint: 'x', narrative_fingerprint: 'y', variant_id: 'cv_b', text: 'A completely original body about onboarding value.' }), ctx);
     expect(r.findings.some((f) => f.dimension === 'duplicate_asset')).toBe(true);
     expect(r.decision).toBe('REGENERATE');
+  });
+});
+
+describe('structurally invariant dimensions → DROP (terminal)', () => {
+  // No caller can produce a candidate that changes these: the fingerprints come
+  // from fixed campaign/content metadata in all three callers, and the variant
+  // binding is card identity. REGENERATE would promise a remedy none of them
+  // can deliver, so the honest decision is terminal.
+  const setup = () => {
+    const ctx = new ValidationContext();
+    ctx.commit(asset());
+    return ctx;
+  };
+
+  it('duplicate semantic idea (fingerprint)', () => {
+    const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', variant_id: 'cv_b', idea_fingerprint: 'idea_a' }), setup());
+    expect(r.findings.some((f) => f.dimension === 'duplicate_semantic_idea')).toBe(true);
+    expect(r.decision).toBe('DROP');
+  });
+
+  it('duplicate narrative (fingerprint)', () => {
+    const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', idea_fingerprint: 'x', variant_id: 'cv_b', narrative_fingerprint: 'narr_a' }), setup());
+    expect(r.findings.some((f) => f.dimension === 'duplicate_narrative')).toBe(true);
+    expect(r.decision).toBe('DROP');
   });
 });
 

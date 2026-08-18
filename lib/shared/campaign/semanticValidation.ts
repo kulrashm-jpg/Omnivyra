@@ -225,14 +225,32 @@ export function validateAsset(
   return { decision, findings, reason };
 }
 
+/**
+ * Terminal findings: the validator can detect the collision, but no caller can
+ * produce a candidate that changes the offending field, so REGENERATE would be
+ * a remedy none of them can deliver.
+ *
+ * master_idea_consistency was always here. The two fingerprints join it on the
+ * same evidence: every caller sources them from fixed campaign/content metadata
+ * -- bolt closes over `rowContentJson.fingerprint`, creator reads
+ * `content.fingerprint` off `input.existingContent` while regenerating only
+ * `asset_payload`, and the weekly-structure preview never regenerates at all.
+ *
+ * Contrast duplicate_headline / duplicate_cta, which stay REGENERATE precisely
+ * because creatorOrchestrator CAN rewrite them via a new asset payload.
+ */
+const TERMINAL_DIMENSIONS = new Set<ValidationDimension>([
+  'master_idea_consistency', 'duplicate_semantic_idea', 'duplicate_narrative',
+]);
+
 const REGENERATE_DIMENSIONS = new Set<ValidationDimension>([
   'duplicate_slide', 'duplicate_headline', 'duplicate_opening', 'duplicate_cta',
-  'duplicate_semantic_idea', 'duplicate_narrative', 'duplicate_asset', 'historical_duplication',
+  'duplicate_asset', 'historical_duplication',
 ]);
 
 function decide(findings: ValidationFinding[]): ValidationDecision {
   if (findings.length === 0) return 'ACCEPT';
-  if (findings.some((f) => f.dimension === 'master_idea_consistency')) return 'DROP';
+  if (findings.some((f) => TERMINAL_DIMENSIONS.has(f.dimension))) return 'DROP';
   if (findings.some((f) => REGENERATE_DIMENSIONS.has(f.dimension))) return 'REGENERATE';
   if (findings.some((f) => f.dimension === 'cross_platform_duplication')) return 'ADAPT';
   return 'ACCEPT';
@@ -240,7 +258,7 @@ function decide(findings: ValidationFinding[]): ValidationDecision {
 
 function primaryReason(findings: ValidationFinding[], decision: ValidationDecision): string {
   const pick =
-    decision === 'DROP' ? findings.find((f) => f.dimension === 'master_idea_consistency')
+    decision === 'DROP' ? findings.find((f) => TERMINAL_DIMENSIONS.has(f.dimension))
     : decision === 'REGENERATE' ? findings.find((f) => REGENERATE_DIMENSIONS.has(f.dimension))
     : decision === 'ADAPT' ? findings.find((f) => f.dimension === 'cross_platform_duplication')
     : findings[0];

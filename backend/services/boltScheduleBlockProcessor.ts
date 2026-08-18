@@ -137,9 +137,8 @@ const BLOG_CONTENT_TYPES = new Set(['blog', 'article', 'newsletter', 'white_pape
  * Findings THIS caller can never clear by regenerating.
  *
  * `buildAsset` below takes exactly one parameter -- `text`. Everything else is
- * closed over from the row: headline is `rowContentJson.title ?? topic`, cta is
- * `rowMi.cta_strategy ?? rowContentJson.desiredAction`, and both fingerprints
- * come from `rowContentJson.fingerprint`. A regenerated
+ * closed over from the row: headline is `rowContentJson.title ?? topic` and cta
+ * is `rowMi.cta_strategy ?? rowContentJson.desiredAction`. A regenerated
  * candidate therefore carries the identical headline and CTA, so validateAsset
  * returns the same finding on every attempt and the acceptance predicate
  * (ACCEPT/ADAPT) can never pass -- the generation call is spent for nothing.
@@ -151,9 +150,10 @@ const BLOG_CONTENT_TYPES = new Set(['blog', 'article', 'newsletter', 'white_pape
 const REGENERATION_INVARIANT_DIMENSIONS = new Set<string>([
   'duplicate_headline',        // rowContentJson.title ?? topic
   'duplicate_cta',             // rowMi.cta_strategy ?? rowContentJson.desiredAction
-  'duplicate_semantic_idea',   // rowFp.idea
-  'duplicate_narrative',       // rowFp.narrative
 ]);
+// The two fingerprint dimensions used to be listed here too. They are now
+// TERMINAL in the shared validator, so decide() returns DROP and this branch is
+// never reached for them -- listing them again would be dead weight.
 
 /** Platform → DB content_type fallback map (mirrors structuredPlanScheduler).
  * Keys include both the strategy-level formats (post/article/short_story/…) AND
