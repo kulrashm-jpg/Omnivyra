@@ -110,8 +110,26 @@ export interface DomainReportState {
   reportState: ReportCardAvailabilityState;
 }
 
+/**
+ * What the LIST query projects — a strict subset of ReportRecord. The list
+ * deliberately omits the JSONB payload columns; full report bodies come from
+ * /api/reports/[reportId]. Deriving it with Pick keeps it in lockstep with
+ * ReportRecord rather than restating field types.
+ */
+export type ReportListItem = Pick<
+  ReportRecord,
+  'id' | 'report_type' | 'status' | 'domain' | 'created_at' | 'completed_at'
+> & {
+  /**
+   * Real column (added by 20260330_reports_delivery_layer) that ReportRecord
+   * has never declared. The Reports Hub list reads it, so the list type states
+   * it here rather than widening ReportRecord for every other caller.
+   */
+  report_id?: string | null;
+};
+
 export interface CompanyReportsResult extends DomainReportState {
-  reports: ReportRecord[];
+  reports: ReportListItem[];
   canGenerateFreeReport: boolean;
   userRole: Role | null;
 }
@@ -411,9 +429,15 @@ export async function getDomainReportState(
   };
 }
 
-export async function getCompanyReports(companyId: string): Promise<ReportRecord[]> {
+export async function getCompanyReports(companyId: string): Promise<ReportListItem[]> {
+  // Explicit projection, not SELECT *: the JSONB payload columns (`data`,
+  // `metadata`) were 99.4% of a measured 9.43MB / 74-row response and no
+  // consumer of the LIST reads them — full report bodies are served by
+  // /api/reports/[reportId], which queries the single row it needs. These are
+  // exactly the fields the verified consumers use (the Reports Hub list) plus
+  // the identifiers Command Center counts.
   const { data, error } = await ownedDbTable('reports')
-    .select('*')
+    .select('id, report_id, report_type, status, domain, created_at, completed_at')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
 
@@ -421,7 +445,7 @@ export async function getCompanyReports(companyId: string): Promise<ReportRecord
     throw new ReportRequestError('Failed to load reports', 'REPORT_LIST_FAILED', 500);
   }
 
-  return (data || []) as ReportRecord[];
+  return (data || []) as ReportListItem[];
 }
 
 export async function getCompanyReportsForCard(
