@@ -106,11 +106,18 @@ describe('providerTokenBucket', () => {
   }, 3000);
 
   test('signal abort throws PROVIDER_BUCKET_ABORTED', async () => {
+    // Deterministic drain: a single-token burst refilling so slowly the bucket
+    // cannot reach one token again while this test runs. The previous version
+    // drained a 4-token burst with five no-wait acquires and relied on that
+    // finishing faster than the bucket refilled — a race the first-call module
+    // load inside the exhaustion path lost by 200ms+ on a cold worker, leaving
+    // 1-2 tokens behind and letting the guarded acquire take the fast path.
+    process.env.PROVIDER_BUCKET_BURST = '1';
+    process.env.OPENAI_QPS_LIMIT = '0.001';
+    reloadBucketSizes();
+    resetBucket();
     const controller = new AbortController();
-    // Drain so the next acquire must wait.
-    for (let i = 0; i < 5; i++) {
-      try { await bucketAcquire('openai', { maxWaitMs: 0 }); } catch { /* expected */ }
-    }
+    await bucketAcquire('openai', { maxWaitMs: 0 });
     // The drain is this test's precondition — assert it, so a regression fails
     // here instead of as a confusing "resolved instead of rejected" below.
     expect(bucketSnapshot('openai').tokens).toBeLessThan(1);
