@@ -250,7 +250,21 @@ export function useCommandCenter() {
   const masteryPct = masteryEvaluation.overallPercent;
   const masterySummary = masteryEvaluation.summary;
   const loadReadiness = useCallback(async () => {
-    if (!authChecked || !user?.userId || !selectedCompanyId) return;
+    // Identity gate accepts EITHER principal shape. Every request in this wave
+    // is keyed solely on selectedCompanyId — none consumes a user id — so the
+    // gate only needs to know that an authenticated principal exists.
+    //
+    // `authUserId` is the JWT sub, decoded from the token already in hand, and
+    // is ready at shell-ready time; `user.userId` is DB-backed and only lands
+    // once /api/company-profile?mode resolves. Requiring the latter held this
+    // wave for a measured ~7.3s after the shell was usable and the company was
+    // known.
+    //
+    // Both are required, not just authUserId: cookie-authenticated principals
+    // (legacy super-admin, content architect) have no bearer token, so their
+    // authUserId is permanently null while user.userId carries a synthetic id.
+    // Gating on authUserId alone would never release this wave for them.
+    if (!authChecked || (!authUserId && !user?.userId) || !selectedCompanyId) return;
 
     try {
       const getJson = (path: string) =>
@@ -452,7 +466,7 @@ export function useCommandCenter() {
     } catch (err) {
       console.warn('[command-center] Could not load readiness data:', err);
     }
-  }, [authChecked, selectedCompanyId, user?.userId]);
+  }, [authChecked, authUserId, selectedCompanyId, user?.userId]);
 
   useEffect(() => {
     if (!authChecked || !authUserId) return;
