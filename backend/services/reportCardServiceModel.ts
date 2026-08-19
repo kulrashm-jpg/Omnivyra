@@ -454,16 +454,33 @@ export async function getCompanyReportsForCard(
   domain?: string,
   timing?: TimingSink,
 ): Promise<CompanyReportsResult> {
-  const resolvedDomain = domain
-    ? normalizeReportDomain(domain)
-    : await timeInto(timing, 'domain', () => getCompanyDomain(companyId));
+  // Only `state` consumes the domain — `reports` and `role` need just the
+  // companyId. The domain lookup used to be awaited BEFORE this group started,
+  // so both were serialized behind a round trip they never used, adding a full
+  // sequential hop (~280ms measured against ap-southeast-1) to every request.
+  // Chaining state behind the domain INSIDE the group keeps that one real
+  // dependency explicit while taking the hop off the critical path.
+  //
+  // Failure behaviour is unchanged: a domain lookup that throws still rejects
+  // the group with the same error, and Promise.all owns every promise here, so
+  // an in-flight reports/role query cannot surface as an unhandled rejection.
+  const resolveDomain = (): Promise<string> =>
+    domain
+      ? Promise.resolve(normalizeReportDomain(domain))
+      : timeInto(timing, 'domain', () => getCompanyDomain(companyId));
+
   // Parallelism preserved: each leaf is wrapped individually, so the group
   // still starts together and the recorded durations are per-leaf, not summed.
-  const [reports, roleResult, domainState] = await Promise.all([
+  const [reports, roleResult, domainResult] = await Promise.all([
     timeInto(timing, 'reports', () => getCompanyReports(companyId)),
     timeInto(timing, 'role', () => getUserRole(userId, companyId)),
-    timeInto(timing, 'state', () => getDomainReportState(resolvedDomain, companyId)),
+    resolveDomain().then(async (resolved) => ({
+      resolved,
+      state: await timeInto(timing, 'state', () => getDomainReportState(resolved, companyId)),
+    })),
   ]);
+  const resolvedDomain = domainResult.resolved;
+  const domainState = domainResult.state;
 
   return {
     ...domainState,
