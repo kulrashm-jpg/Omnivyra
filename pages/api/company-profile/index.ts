@@ -233,19 +233,39 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // field set (target_audience, brand_voice, unique_value, etc.). Calling
         // languageRefine here forces N LLM calls per company per page-load and was
         // the source of the multi-second buffering spinner on /command-center.
-        const profiles = await Promise.all(
-          companyIds.map(async (id) => {
-            const profile = await getProfile(id, { autoRefine: false, languageRefine: false });
-            return profile || { company_id: id, name: id };
-          })
-        );
+        // The profile read exists ONLY to supply a display name when the
+        // companies row cannot. companies.name is NOT NULL and every write path
+        // rejects a blank name, so in the normal case this loop issued one DB
+        // round trip per company purely to compute a fallback that was then
+        // discarded — a full sequential hop on the request that gates the whole
+        // Command Center shell.
+        //
+        // It is not removable outright: user_company_roles.company_id has no FK
+        // to companies.id, so a role row can reference an id with no companies
+        // row, and today that orphan's name comes from company_profiles. So the
+        // fallback is now fetched ONLY for ids the companies rows cannot name —
+        // normally an empty set, which issues no query at all, and in the orphan
+        // case produces exactly the same output as before.
+        const idsNeedingFallbackName = companyIds.filter((id) => !companyById.get(id)?.name);
+        const fallbackNameById = new Map<string, string>();
+        if (idsNeedingFallbackName.length) {
+          const fallbacks = await Promise.all(
+            idsNeedingFallbackName.map(async (id) => {
+              const profile = await getProfile(id, { autoRefine: false, languageRefine: false });
+              return [id, String(profile?.name || '')] as const;
+            }),
+          );
+          fallbacks.forEach(([id, name]) => {
+            if (name) fallbackNameById.set(id, name);
+          });
+        }
         return res.status(200).json({
           userId: user.id,
           userName: resolvedUserName,
           activeCompanyId: resolvedActiveCompanyId,
-          companies: profiles.map((profile) => ({
-            company_id: profile.company_id,
-            name: companyById.get(profile.company_id)?.name || profile.name || profile.company_id,
+          companies: companyIds.map((id) => ({
+            company_id: id,
+            name: companyById.get(id)?.name || fallbackNameById.get(id) || id,
           })),
           rolesByCompany,
         });
