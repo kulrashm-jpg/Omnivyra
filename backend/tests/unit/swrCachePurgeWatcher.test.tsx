@@ -18,7 +18,11 @@ jest.mock('@/lib/swr/swrClient', () => ({ clearSwrCache: (...a: unknown[]) => cl
 let ctxUser: { userId: string } | null = null;
 jest.mock('../../../components/CompanyContext', () => ({ useCompanyContext: () => ({ user: ctxUser }) }));
 
-const onAuthStateChange = jest.fn(() => ({ data: { subscription: { unsubscribe: jest.fn() } } }));
+/** Derived from the real client so a Supabase signature change fails the test. */
+type OnAuthStateChangeArgs = Parameters<
+  ReturnType<typeof import('../../../lib/supabaseBrowser').getSupabaseBrowser>['auth']['onAuthStateChange']
+>;
+const onAuthStateChange = jest.fn((..._a: OnAuthStateChangeArgs) => ({ data: { subscription: { unsubscribe: jest.fn() } } }));
 jest.mock('../../../lib/supabaseBrowser', () => ({ getSupabaseBrowser: () => ({ auth: { onAuthStateChange } }) }));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
