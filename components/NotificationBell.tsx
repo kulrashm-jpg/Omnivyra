@@ -39,7 +39,12 @@ function NotifIcon({ type }: { type: string }) {
   return <Bell className="h-4 w-4 text-gray-400" />;
 }
 
-const NOTIFICATIONS_KEY = '/api/notifications';
+/**
+ * The one SWR key for notifications. Exported so read-only subscribers share
+ * this exact cache entry instead of issuing their own request — this component
+ * remains the key's single revalidation owner (see the poll below).
+ */
+export const NOTIFICATIONS_KEY = '/api/notifications';
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
