@@ -175,9 +175,45 @@ export async function acquire(
         code: 'PROVIDER_BUCKET_ABORTED',
       });
     }
+    // Deadline BEFORE the sleep. Checked afterwards, `maxWaitMs: 0` blocked for a
+    // full poll interval (>= 20ms, 50ms by default) and then credited that
+    // elapsed time as refill — so a caller asking not to wait both waited and
+    // handed tokens back to the bucket. "Blocks up to maxWaitMs" now means
+    // exactly that, and 0 means do not block at all.
+    const waitedMs = Date.now() - startAt;
+    if (waitedMs >= maxWaitMs) {
+      bucket.totalExhausted += 1;
+      logger.warn('provider_bucket_exhausted', {
+        request_id: getRequestContext().requestId,
+        provider,
+        wait_ms: waitedMs,
+        max_wait_ms: maxWaitMs,
+        tokens: Math.round(bucket.tokens * 100) / 100,
+        qps: bucket.qps,
+        burst: bucket.burst,
+      });
+      // Distributed-metric counter — survives Redis outage via local fallback.
+      try {
+        const { recordPlannerAlertCounter } = require('./plannerAlerting') as typeof import('./plannerAlerting');
+        recordPlannerAlertCounter('provider_bucket_exhausted', { provider });
+      } catch { /* alerting is best-effort */ }
+      throw Object.assign(
+        new Error(`provider ${provider} token bucket exhausted (qps=${bucket.qps}, waited ${waitedMs}ms)`),
+        { code: 'PROVIDER_BUCKET_EXHAUSTED', status: 429 },
+      );
+    }
     await new Promise((r) => setTimeout(r, pollIntervalMs));
     const now = Date.now();
     refill(bucket, now);
+    // Abort outranks a token that refilled during this same poll interval. The
+    // abort check at the top of the loop cannot see a signal raised while we
+    // were sleeping, so without this a caller that aborted mid-wait could still
+    // be charged a token and handed a receipt.
+    if (opts.signal?.aborted) {
+      throw Object.assign(new Error('provider bucket acquire aborted'), {
+        code: 'PROVIDER_BUCKET_ABORTED',
+      });
+    }
     if (bucket.tokens >= 1) {
       bucket.tokens -= 1;
       const waitMs = now - startAt;
@@ -193,27 +229,6 @@ export async function acquire(
         });
       }
       return { provider, waitMs, decremented: true };
-    }
-    if (now - startAt >= maxWaitMs) {
-      bucket.totalExhausted += 1;
-      logger.warn('provider_bucket_exhausted', {
-        request_id: getRequestContext().requestId,
-        provider,
-        wait_ms: now - startAt,
-        max_wait_ms: maxWaitMs,
-        tokens: Math.round(bucket.tokens * 100) / 100,
-        qps: bucket.qps,
-        burst: bucket.burst,
-      });
-      // Distributed-metric counter — survives Redis outage via local fallback.
-      try {
-        const { recordPlannerAlertCounter } = require('./plannerAlerting') as typeof import('./plannerAlerting');
-        recordPlannerAlertCounter('provider_bucket_exhausted', { provider });
-      } catch { /* alerting is best-effort */ }
-      throw Object.assign(
-        new Error(`provider ${provider} token bucket exhausted (qps=${bucket.qps}, waited ${now - startAt}ms)`),
-        { code: 'PROVIDER_BUCKET_EXHAUSTED', status: 429 },
-      );
     }
   }
 }

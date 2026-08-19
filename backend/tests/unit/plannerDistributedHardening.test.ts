@@ -111,10 +111,22 @@ describe('providerTokenBucket', () => {
     for (let i = 0; i < 5; i++) {
       try { await bucketAcquire('openai', { maxWaitMs: 0 }); } catch { /* expected */ }
     }
-    setTimeout(() => controller.abort(), 20);
-    await expect(
-      bucketAcquire('openai', { signal: controller.signal, maxWaitMs: 1000, pollIntervalMs: 10 }),
-    ).rejects.toMatchObject({ code: 'PROVIDER_BUCKET_ABORTED' });
+    // The drain is this test's precondition — assert it, so a regression fails
+    // here instead of as a confusing "resolved instead of rejected" below.
+    expect(bucketSnapshot('openai').tokens).toBeLessThan(1);
+    // Abort synchronously rather than on a timer: the acquire's fast path has
+    // already run by the time this line executes, so the wait loop observes the
+    // signal on its next iteration. A 20ms timer raced the bucket's refill and
+    // could fire hundreds of ms late on a cold worker.
+    const acquiring = bucketAcquire('openai', {
+      signal: controller.signal,
+      maxWaitMs: 1000,
+      pollIntervalMs: 10,
+    });
+    controller.abort();
+    await expect(acquiring).rejects.toMatchObject({
+      code: 'PROVIDER_BUCKET_ABORTED',
+    });
   });
 
   test('PROVIDER_BUCKET_ENABLED=false bypasses gating', async () => {
