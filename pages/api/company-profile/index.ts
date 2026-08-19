@@ -1,5 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
-import { appendServerTiming, timeStage } from '../../../lib/platform/serverTiming';
+import { appendServerTiming, createTimingSink, flushTimingSink, timeStage } from '../../../lib/platform/serverTiming';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { scrubCompetitorDetails } from '../../../backend/services/companyProfile/competitorDomainFilter';
 import {
@@ -144,7 +144,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           }));
           return res.status(200).json({ companies, rolesByCompany });
         }
-        const { user, error } = await timeStage(res, 'auth', () => getSupabaseUserFromRequest(req));
+        // auth_validate / auth_user come from inside the resolver via the sink;
+        // `auth` remains the outer boundary so the two are comparable.
+        const authTiming = createTimingSink();
+        const { user, error } = await timeStage(res, 'auth', () => getSupabaseUserFromRequest(req, authTiming));
+        flushTimingSink(res, authTiming);
         if (error || !user) {
           // Translate the resolver's failure mode into a typed code so the
           // client can decide between "sign me out" and "show a visible

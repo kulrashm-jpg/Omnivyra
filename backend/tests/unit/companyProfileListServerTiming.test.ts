@@ -59,7 +59,9 @@ describe('B — instrumentation labels', () => {
   });
 
   it('imports the shared helper rather than a new mechanism', () => {
-    expect(CODE).toContain("import { appendServerTiming, timeStage } from '../../../lib/platform/serverTiming';");
+    expect(CODE).toContain("from '../../../lib/platform/serverTiming';");
+    expect(CODE).toContain('timeStage');
+    expect(CODE).toContain('appendServerTiming');
   });
 
   it('each stage is wrapped exactly once', () => {

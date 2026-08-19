@@ -9,6 +9,7 @@
  */
 
 import type { NextApiRequest } from 'next';
+import type { TimingSink } from '../../lib/platform/serverTiming';
 import {
   extractAccessToken as canonicalExtractAccessToken,
   resolveAuthenticatedUser,
@@ -29,8 +30,10 @@ export const extractAccessToken = canonicalExtractAccessToken;
  */
 export const getSupabaseUserFromRequest = async (
   req: NextApiRequest,
+  /** Optional timing collector, passed straight through to the resolver. */
+  timing?: TimingSink,
 ): Promise<{ user: { id: string; email?: string | null; emailVerified: boolean } | null; error: string | null }> => {
-  const result = await resolveAuthenticatedUser(req);
+  const result = await resolveAuthenticatedUser(req, timing);
   if (result.error === null) {
     // Phase 2.B — invited users surface to legacy callers as INVALID_AUTH so
     // the existing 401 → re-auth UX kicks in. Routes that want to allow
