@@ -1,5 +1,3 @@
-import { normalizePlatform } from '../constants/platforms';
-
 /**
  * BOLT Optimization Service
  * Connects Campaign Learning Layer to BOLT execution decisions.
@@ -38,6 +36,25 @@ const CONTENT_TYPE_ALTERNATIVE_PLATFORMS: Record<string, string[]> = {
 };
 
 
+
+/**
+ * Content-canonical platform normalization: `twitter` → `x`.
+ *
+ * This module scores PLANNER slots, so it speaks the content pipeline's
+ * vocabulary — the one the capability registry keys on, the one
+ * `daily_content_plans.platform` stores, and the one the creator CHECK
+ * constraint (`is_valid_creator_platform_asset_combo`) normalizes to.
+ *
+ * It deliberately does NOT use `constants/platforms.normalizePlatform`, which
+ * canonicalizes the other way (`x` → `twitter`) for the connector /
+ * community-AI / analytics domain. Importing that one here (6b8c5a8a) is what
+ * made `CONTENT_TYPE_ALTERNATIVE_PLATFORMS` — spelled with `x` — impossible to
+ * intersect, silently killing the platform swap. `twitter` stays an accepted
+ * INPUT alias; it is never an output.
+ */
+function normalizePlatform(platform: string | null | undefined): string {
+  return String(platform ?? '').trim().toLowerCase().replace(/^twitter$/, 'x');
+}
 
 function normalizeContentType(ct: string): string {
   return String(ct ?? 'post').trim().toLowerCase();
