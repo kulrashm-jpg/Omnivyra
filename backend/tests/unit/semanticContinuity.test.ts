@@ -24,6 +24,7 @@ jest.mock('../../services/content/contentMemoryService', () => ({
   retrieveRelevant: jest.fn(),
   indexContentUnit: jest.fn(),
   persistOriginality: jest.fn(),
+  isContentMemoryWriteEnabled: jest.fn(() => false),
 }));
 jest.mock('../../services/content/originalityGate', () => ({
   assertOriginality: jest.fn(),
