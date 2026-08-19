@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { appendServerTiming, timeStage } from '../../../lib/platform/serverTiming';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { scrubCompetitorDetails } from '../../../backend/services/companyProfile/competitorDomainFilter';
 import {
@@ -75,6 +76,10 @@ const PROFILE_KNOWLEDGE_READINESS_FLAG = defineRolloutFlag({
 });
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Server-Timing for the mode=list path only — same helper and pattern as
+  // /api/reports. Stages are sequential, so total minus their sum is the
+  // uninstrumented remainder (sync work + response serialization).
+  const listStart = Date.now();
   const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
   const companyId =
     (req.query.companyId as string | undefined) ||
@@ -139,7 +144,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           }));
           return res.status(200).json({ companies, rolesByCompany });
         }
-        const { user, error } = await getSupabaseUserFromRequest(req);
+        const { user, error } = await timeStage(res, 'auth', () => getSupabaseUserFromRequest(req));
         if (error || !user) {
           // Translate the resolver's failure mode into a typed code so the
           // client can decide between "sign me out" and "show a visible
@@ -168,32 +173,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         // Resolve the canonical display name from the users table so the
         // frontend doesn't have to fall back to Supabase auth metadata
         // (which produced "you"/"there" placeholders when missing).
-        const { data: userRow } = await supabase
+        const { data: userRow } = await timeStage(res, 'user', async () => supabase
           .from('users')
           .select('name, email, active_company_id')
           .eq('id', user.id)
-          .maybeSingle();
+          .maybeSingle());
         const resolvedUserName =
           (userRow?.name as string | null | undefined) ||
           (typeof user.email === 'string' ? user.email.split('@')[0] : '') ||
           'User';
         // Only companies this user has an active role for — Company Admin never sees other companies
-        const { data: roleRows, error: roleError } = await supabase
+        const { data: roleRows, error: roleError } = await timeStage(res, 'roles', async () => supabase
           .from('user_company_roles')
           .select('company_id, role, status, join_source, created_at')
           .eq('user_id', user.id)
           .eq('status', 'active')
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false }));
         if (roleError) {
+          appendServerTiming(res, 'total', Date.now() - listStart);
           return res.status(500).json({ error: 'FAILED_TO_LOAD_COMPANIES' });
         }
         const rawRows = roleRows || [];
         const rawCompanyIds = Array.from(new Set(rawRows.map((r: { company_id?: string }) => r.company_id).filter(Boolean) as string[]));
         const { data: companyRows } = rawCompanyIds.length
-          ? await supabase
+          ? await timeStage(res, 'companies', async () => supabase
               .from('companies')
               .select('id, name, website_domain, admin_email_domain')
-              .in('id', rawCompanyIds)
+              .in('id', rawCompanyIds))
           : { data: [] as any[] };
         const companyById = new Map(
           (companyRows || []).map((row: any) => [String(row.id), row])
@@ -249,16 +255,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         const idsNeedingFallbackName = companyIds.filter((id) => !companyById.get(id)?.name);
         const fallbackNameById = new Map<string, string>();
         if (idsNeedingFallbackName.length) {
-          const fallbacks = await Promise.all(
+          const fallbacks = await timeStage(res, 'fallback', () => Promise.all(
             idsNeedingFallbackName.map(async (id) => {
               const profile = await getProfile(id, { autoRefine: false, languageRefine: false });
               return [id, String(profile?.name || '')] as const;
             }),
-          );
+          ));
           fallbacks.forEach(([id, name]) => {
             if (name) fallbackNameById.set(id, name);
           });
         }
+        appendServerTiming(res, 'total', Date.now() - listStart);
         return res.status(200).json({
           userId: user.id,
           userName: resolvedUserName,
