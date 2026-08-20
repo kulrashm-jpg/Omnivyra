@@ -1,5 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { appendServerTiming, createTimingSink, flushTimingSink, timeStage } from '../../../lib/platform/serverTiming';
+import { beginTransportCapture, flushTransportTiming } from '../../../lib/platform/supabaseTransportProbe';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { scrubCompetitorDetails } from '../../../backend/services/companyProfile/competitorDomainFilter';
 import {
@@ -91,6 +92,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     try {
       if (mode === 'list') {
+        // Transport diagnostic: passive undici observer, scoped to this branch.
+        // Records nothing but phase timings for Supabase-bound calls; never
+        // alters a request. See lib/platform/supabaseTransportProbe.ts.
+        const transport = beginTransportCapture();
         // Legacy super admin takes precedence: when both super_admin_session and content_architect_session
         // exist (e.g. stale content architect cookie), treat as super admin so external-apis etc. work.
         const legacySuperAdmin = getLegacySuperAdminSession(req);
@@ -194,6 +199,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           .eq('status', 'active')
           .order('created_at', { ascending: false }));
         if (roleError) {
+          flushTransportTiming(res, transport);
           appendServerTiming(res, 'total', Date.now() - listStart);
           return res.status(500).json({ error: 'FAILED_TO_LOAD_COMPANIES' });
         }
@@ -269,6 +275,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             if (name) fallbackNameById.set(id, name);
           });
         }
+        flushTransportTiming(res, transport);
         appendServerTiming(res, 'total', Date.now() - listStart);
         return res.status(200).json({
           userId: user.id,
