@@ -8,6 +8,7 @@ import {
   splitRankedCompetitorsForOutput,
 } from '../../services/competitorEngineService';
 import { enrichCompetitorCandidates } from '../../services/competitorEnrichmentService';
+import type { EnrichmentCandidateLike } from '../../services/competitorEnrichmentKnowledge';
 import { buildCompetitorFeedbackMemory } from '../../services/competitorFeedbackService';
 import { isAudienceLedArchetype } from '../../services/companyProfile/entityArchetype';
 import {
@@ -421,14 +422,17 @@ describe('competitorEngineService', () => {
   });
 
   it('enriches raw competitor names into structured intelligence profiles before scoring', async () => {
+    // Typed from the enrichment contract, which already declares the optional
+    // `enrichment` these assertions read; an inline literal infers only { name }.
+    const candidates: EnrichmentCandidateLike[] = [
+      { name: 'Wysa' },
+      { name: 'Woebot Health' },
+      { name: 'Calm' },
+      { name: 'Headspace' },
+      { name: 'BetterHelp' },
+    ];
     const enriched = await enrichCompetitorCandidates({
-      candidates: [
-        { name: 'Wysa' },
-        { name: 'Woebot Health' },
-        { name: 'Calm' },
-        { name: 'Headspace' },
-        { name: 'BetterHelp' },
-      ],
+      candidates,
       useNetwork: false,
       useStoredCache: false,
     });

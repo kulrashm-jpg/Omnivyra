@@ -19,6 +19,9 @@ import {
 } from '../../../lib/content/longFormRuntimeDelegation';
 import { longFormRuntimeAdapter } from '../../services/content/runtime/longFormRuntimeAdapter';
 
+/** The legacy fn's tuple, taken from the dispatcher's own parameter. */
+type LegacyArgs = Parameters<Parameters<typeof dispatchLongFormCompatibilityCore>[1]>;
+
 const mockAdapterRunBlog = longFormRuntimeAdapter.runBlog as jest.Mock;
 
 const SENTINEL: any = { needs_clarification: false, mode: 'full', result: { content_html: '<p>x</p>' } };
@@ -75,7 +78,7 @@ describe('dispatchLongFormCompatibilityCore', () => {
 
   test('byte-identity: OFF and ON return the identical value for the same request', async () => {
     // OFF
-    const legacy = jest.fn(async () => SENTINEL);
+    const legacy = jest.fn(async (..._a: LegacyArgs) => SENTINEL);
     const off = await dispatchLongFormCompatibilityCore(REQ, legacy);
     // ON — adapter is a transparent envelope over the same legacy fn
     process.env.LONGFORM_RUNTIME_DELEGATION_ENABLED = 'true';

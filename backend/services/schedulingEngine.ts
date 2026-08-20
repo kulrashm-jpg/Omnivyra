@@ -1,5 +1,3 @@
-import { normalizePlatform } from '../constants/platforms';
-
 /**
  * Scheduling Intelligence Engine
  * BOLT: assigns optimal posting times by platform and prevents same-day collisions.
@@ -56,6 +54,22 @@ function addMinutesToTime(timeStr: string, minutes: number): string {
   const nh = Math.floor(totalMinutes / 60) % 24;
   const nm = totalMinutes % 60;
   return `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;
+}
+
+/**
+ * Content-canonical platform normalization: `twitter` → `x`.
+ *
+ * `PLATFORM_TIMES` above is keyed on the content vocabulary (`x: '13:00'`), and
+ * so are the overrides its caller builds. Using
+ * `constants/platforms.normalizePlatform` — which canonicalizes `x` → `twitter`
+ * for the connector / analytics domain — turned every lookup into a miss, so
+ * X slots silently fell through to DEFAULT_TIME instead of their 13:00 slot.
+ *
+ * Conversion to the DB representation happens only at the persistence seam,
+ * `canonicalizePlatformForDb`.
+ */
+function normalizePlatform(platform: string | null | undefined): string {
+  return String(platform ?? '').trim().toLowerCase().replace(/^twitter$/, 'x');
 }
 
 /**

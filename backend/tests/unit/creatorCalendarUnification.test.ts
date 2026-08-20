@@ -76,9 +76,10 @@ jest.mock('../../db/writeOwner', () => ({
   }),
 }));
 
-const enqueueMock = jest.fn(async () => 'enqueued');
+type EnqueueArgs = Parameters<typeof import('../../scheduler/schedulerService')['enqueueScheduledPostAt']>;
+const enqueueMock = jest.fn(async (..._a: EnqueueArgs) => 'enqueued');
 jest.mock('../../scheduler/schedulerService', () => ({
-  enqueueScheduledPostAt: (...args: any[]) => enqueueMock(...args),
+  enqueueScheduledPostAt: (...args: EnqueueArgs) => enqueueMock(...args),
 }));
 
 jest.mock('../../services/platformIntelligenceService', () => ({

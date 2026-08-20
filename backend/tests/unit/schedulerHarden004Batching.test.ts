@@ -48,16 +48,18 @@ jest.mock('../../db/writeOwner', () => ({
 }));
 
 // ── Mock BullMQ queue ──
-const queueAdd = jest.fn(async () => ({}));
+type QueueAddArgs = Parameters<import('bullmq').Queue['add']>;
+const queueAdd = jest.fn(async (..._a: QueueAddArgs) => ({}));
 const queueAddBulk = jest.fn(async (jobs: unknown[]) => jobs);
 jest.mock('../../queue/bullmqClient', () => ({
   getQueue: () => ({ add: queueAdd, addBulk: queueAddBulk }),
   getEngagementPollingQueue: () => ({ add: queueAdd }),
 }));
 
-const createQueueJob = jest.fn(async () => 'fallback-job-id');
+type CreateQueueJobArgs = Parameters<typeof import('../../db/queries')['createQueueJob']>;
+const createQueueJob = jest.fn(async (..._a: CreateQueueJobArgs) => 'fallback-job-id');
 jest.mock('../../db/queries', () => ({
-  createQueueJob: (...args: unknown[]) => createQueueJob(...args),
+  createQueueJob: (...args: CreateQueueJobArgs) => createQueueJob(...args),
 }));
 
 import { findDuePostsAndEnqueue } from '../../scheduler/schedulerService';

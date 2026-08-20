@@ -241,6 +241,35 @@ export function buildWriterCreatorPrefill(input: {
   };
 }
 
+/**
+ * Where the writer launch sends the operator, and with what query.
+ *
+ * Named because this IS the boundary rather than an internal detail: the
+ * creator templates page reads exactly these keys back off `router.query`
+ * (see templatesPage/templatesSupport.tsx). Giving it a name means production
+ * is checked against the contract it publishes instead of pushing an anonymous
+ * literal into NextRouter's much wider `string | UrlObject`.
+ *
+ * The three consolidated-away keys are declared `undefined` deliberately: the
+ * CreatorAttachmentSession carries that context now, so re-adding one here
+ * fails to compile rather than quietly reviving the scattered-parameter launch
+ * this replaced.
+ */
+export type WriterCreatorLaunchDestination = {
+  pathname: string;
+  query: {
+    source: 'writer';
+    session: string;
+    skip_blueprint: '1';
+    skip_ingestion: '1';
+    layout?: string;
+    platform?: string;
+    prefill?: undefined;
+    return_to?: undefined;
+    asset_type?: undefined;
+  };
+};
+
 export function launchCreatorFromWriter(input: {
   router: NextRouter;
   assetType: CreatorAssetLaunchType;
@@ -269,7 +298,7 @@ export function launchCreatorFromWriter(input: {
   });
   // Enter the canonical Creator workflow at the TEMPLATE GALLERY (one pipeline),
   // requesting the optional helper stages be skipped (post content already exists).
-  void input.router.push({
+  const destination: WriterCreatorLaunchDestination = {
     pathname: `/command-center/creator-content/${routeType}/templates`,
     query: {
       source: 'writer',
@@ -279,7 +308,8 @@ export function launchCreatorFromWriter(input: {
       ...(layoutPreset ? { layout: layoutPreset } : {}),
       ...(input.source.platform ? { platform: input.source.platform } : {}),
     },
-  });
+  };
+  void input.router.push(destination);
 }
 
 export { assetLabel };

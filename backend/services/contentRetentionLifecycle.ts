@@ -16,6 +16,24 @@ export type RetentionLifecycleFields = {
   metadata?: Record<string, unknown>;
 };
 
+/**
+ * What normalisation GUARANTEES on top of whatever the caller passed in.
+ *
+ * Every branch of applyDefaultRetention assigns these four before returning, so
+ * declaring them optional understated the contract: a caller could not see that
+ * the retention state it just asked for had actually been populated.
+ *
+ * `archived_at` is deliberately NOT promoted. It is set only on the archived
+ * branch, so promising it unconditionally would trade one untruth for another.
+ * It stays optional, inherited from RetentionLifecycleFields.
+ */
+export type NormalizedRetentionFields = RetentionLifecycleFields & {
+  retention_state: RetentionState;
+  expires_at: string | null;
+  retention_reminders: RetentionReminder[];
+  content_visibility: boolean;
+};
+
 const RETENTION_MIN_MONTHS = 9;
 const RETENTION_MAX_MONTHS = 12;
 const DEFAULT_RETENTION_MONTHS = RETENTION_MAX_MONTHS;
@@ -63,7 +81,9 @@ export function buildRetentionReminderSchedule(expires_at: string | Date | null 
   });
 }
 
-export function applyDefaultRetention<T extends RetentionLifecycleFields>(activity: T): T {
+export function applyDefaultRetention<T extends RetentionLifecycleFields>(
+  activity: T,
+): T & NormalizedRetentionFields {
   const next: T = { ...activity };
   const state: RetentionState = (next.retention_state as RetentionState) || 'temporary';
   next.retention_state = state;
@@ -93,7 +113,10 @@ export function applyDefaultRetention<T extends RetentionLifecycleFields>(activi
   }
 
   warnRetentionValidation(next, 'applyDefaultRetention');
-  return next;
+  // Narrowed at the return, where the invariant actually holds: every branch
+  // above has assigned all four guaranteed fields. TypeScript cannot follow
+  // that through imperative mutation, so the assertion states it once, here.
+  return next as T & NormalizedRetentionFields;
 }
 
 export function isRetentionExpired(activity: RetentionLifecycleFields): boolean {
@@ -104,12 +127,14 @@ export function isRetentionExpired(activity: RetentionLifecycleFields): boolean 
   return Date.now() >= new Date(expiresAt).getTime();
 }
 
-export function archiveExpiredContent<T extends RetentionLifecycleFields>(activity: T): T {
+export function archiveExpiredContent<T extends RetentionLifecycleFields>(
+  activity: T,
+): T & NormalizedRetentionFields {
   const normalized = applyDefaultRetention(activity);
   if (!isRetentionExpired(normalized) && normalized.retention_state !== 'archived') {
-    return normalized as T;
+    return normalized;
   }
-  const archived: T = {
+  const archived: T & NormalizedRetentionFields = {
     ...normalized,
     retention_state: 'archived',
     archived_at: toIsoOrNull(normalized.archived_at) || new Date().toISOString(),

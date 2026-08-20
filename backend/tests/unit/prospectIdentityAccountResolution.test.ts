@@ -242,3 +242,4 @@ describe('person → account attachment', () => {
     expect((await attachPersonToAccount(ORG_A, '', 'acc-1')).attached).toBe(false);
   });
 });
+export {};  // module marker: without it this file is a global script and its top-level names collide with the sibling prospectIdentity suites

@@ -82,9 +82,26 @@ const firstSentence = (text: string): string => {
 
 /** Accumulates what has already been accepted this campaign, for dup detection. */
 export class ValidationContext {
-  readonly headlines = new Set<string>();
+  /**
+   * platform::content_type -> normalized headlines already accepted in that scope.
+   *
+   * Scoped, not campaign-global: `headline` is the CARD's title, and one card
+   * legitimately fans out to several platform variants (see masterContentDocument:
+   * one master_title, many platforms). A global set made every sibling after the
+   * first look like a duplicate of its own card.
+   */
+  readonly headlines = new Map<string, Set<string>>();
   readonly openings = new Set<string>();
-  readonly ctas = new Set<string>();
+  /**
+   * platform::content_type -> normalized CTAs already accepted in that scope.
+   *
+   * Scoped for the same reason as headlines: the CTA comes from the CARD
+   * (`master_idea.cta_strategy`), and creatorCardTypes declares exactly one
+   * cta_strategy per card while platform_strategy is a per-platform record. So
+   * every platform sibling of a card carries the same CTA by construction, and a
+   * campaign-global set flagged each sibling as a duplicate of its own card.
+   */
+  readonly ctas = new Map<string, Set<string>>();
   readonly ideaFingerprints = new Set<string>();
   readonly narrativeFingerprints = new Set<string>();
   /** platform::content_type → set of normalized text hashes (same-platform exact/near dup). */
@@ -95,22 +112,30 @@ export class ValidationContext {
   readonly variantToMaster = new Map<string, string>();
   constructor(readonly ledger?: HistoricalLedger) {}
 
-  private key(platform: string, type: string): string {
+  /** The one scheduling-identity key: same platform + same content type. */
+  scopeKey(platform: string, type: string): string {
     return `${String(platform).toLowerCase()}::${String(type).toLowerCase()}`;
   }
 
   /** Record an accepted asset so later assets are compared against it. */
   commit(asset: GeneratedAsset): void {
+    const scope = this.scopeKey(asset.platform, asset.content_type);
     const hl = normalizeForFingerprint(asset.headline ?? '');
-    if (hl) this.headlines.add(hl);
+    if (hl) {
+      if (!this.headlines.has(scope)) this.headlines.set(scope, new Set());
+      this.headlines.get(scope)!.add(hl);
+    }
     const op = normalizeForFingerprint(asset.opening ?? firstSentence(asset.text));
     if (op) this.openings.add(op);
     const cta = normalizeForFingerprint(asset.cta ?? '');
-    if (cta) this.ctas.add(cta);
+    if (cta) {
+      if (!this.ctas.has(scope)) this.ctas.set(scope, new Set());
+      this.ctas.get(scope)!.add(cta);
+    }
     if (asset.idea_fingerprint) this.ideaFingerprints.add(asset.idea_fingerprint);
     if (asset.narrative_fingerprint) this.narrativeFingerprints.add(asset.narrative_fingerprint);
     const textHash = fingerprint(asset.text);
-    const k = this.key(asset.platform, asset.content_type);
+    const k = this.scopeKey(asset.platform, asset.content_type);
     if (!this.assetHashes.has(k)) this.assetHashes.set(k, new Set());
     this.assetHashes.get(k)!.add(textHash);
     if (!asset.shared) this.textToPlatform.set(textHash, String(asset.platform).toLowerCase());
@@ -164,12 +189,13 @@ export function validateAsset(
   }
 
   // 1/2/3. Duplicate headline / opening / CTA (against prior accepted assets).
+  const scope = ctx.scopeKey(asset.platform, asset.content_type);
   const hl = normalizeForFingerprint(asset.headline ?? '');
-  if (hl && ctx.headlines.has(hl)) findings.push({ dimension: 'duplicate_headline', detail: 'headline already used' });
+  if (hl && ctx.headlines.get(scope)?.has(hl)) findings.push({ dimension: 'duplicate_headline', detail: 'headline already used on this platform+type' });
   const op = normalizeForFingerprint(asset.opening ?? firstSentence(asset.text));
   if (op && ctx.openings.has(op)) findings.push({ dimension: 'duplicate_opening', detail: 'opening sentence already used' });
   const cta = normalizeForFingerprint(asset.cta ?? '');
-  if (cta && ctx.ctas.has(cta)) findings.push({ dimension: 'duplicate_cta', detail: 'CTA already used' });
+  if (cta && ctx.ctas.get(scope)?.has(cta)) findings.push({ dimension: 'duplicate_cta', detail: 'CTA already used on this platform+type' });
 
   // 4/5. Duplicate semantic idea / narrative (via fingerprints).
   if (asset.idea_fingerprint && ctx.ideaFingerprints.has(asset.idea_fingerprint)) findings.push({ dimension: 'duplicate_semantic_idea', detail: 'semantic idea already covered' });
@@ -177,8 +203,7 @@ export function validateAsset(
 
   // 7. Duplicate asset within campaign (same platform + type, same text).
   const textHash = fingerprint(asset.text);
-  const k = `${String(asset.platform).toLowerCase()}::${String(asset.content_type).toLowerCase()}`;
-  if (ctx.assetHashes.get(k)?.has(textHash)) findings.push({ dimension: 'duplicate_asset', detail: 'identical asset already scheduled on this platform+type' });
+  if (ctx.assetHashes.get(scope)?.has(textHash)) findings.push({ dimension: 'duplicate_asset', detail: 'identical asset already scheduled on this platform+type' });
 
   // 8. Cross-platform duplication (shared assets excluded).
   if (!asset.shared && flagCrossPlatform) {
@@ -200,14 +225,32 @@ export function validateAsset(
   return { decision, findings, reason };
 }
 
+/**
+ * Terminal findings: the validator can detect the collision, but no caller can
+ * produce a candidate that changes the offending field, so REGENERATE would be
+ * a remedy none of them can deliver.
+ *
+ * master_idea_consistency was always here. The two fingerprints join it on the
+ * same evidence: every caller sources them from fixed campaign/content metadata
+ * -- bolt closes over `rowContentJson.fingerprint`, creator reads
+ * `content.fingerprint` off `input.existingContent` while regenerating only
+ * `asset_payload`, and the weekly-structure preview never regenerates at all.
+ *
+ * Contrast duplicate_headline / duplicate_cta, which stay REGENERATE precisely
+ * because creatorOrchestrator CAN rewrite them via a new asset payload.
+ */
+const TERMINAL_DIMENSIONS = new Set<ValidationDimension>([
+  'master_idea_consistency', 'duplicate_semantic_idea', 'duplicate_narrative',
+]);
+
 const REGENERATE_DIMENSIONS = new Set<ValidationDimension>([
   'duplicate_slide', 'duplicate_headline', 'duplicate_opening', 'duplicate_cta',
-  'duplicate_semantic_idea', 'duplicate_narrative', 'duplicate_asset', 'historical_duplication',
+  'duplicate_asset', 'historical_duplication',
 ]);
 
 function decide(findings: ValidationFinding[]): ValidationDecision {
   if (findings.length === 0) return 'ACCEPT';
-  if (findings.some((f) => f.dimension === 'master_idea_consistency')) return 'DROP';
+  if (findings.some((f) => TERMINAL_DIMENSIONS.has(f.dimension))) return 'DROP';
   if (findings.some((f) => REGENERATE_DIMENSIONS.has(f.dimension))) return 'REGENERATE';
   if (findings.some((f) => f.dimension === 'cross_platform_duplication')) return 'ADAPT';
   return 'ACCEPT';
@@ -215,7 +258,7 @@ function decide(findings: ValidationFinding[]): ValidationDecision {
 
 function primaryReason(findings: ValidationFinding[], decision: ValidationDecision): string {
   const pick =
-    decision === 'DROP' ? findings.find((f) => f.dimension === 'master_idea_consistency')
+    decision === 'DROP' ? findings.find((f) => TERMINAL_DIMENSIONS.has(f.dimension))
     : decision === 'REGENERATE' ? findings.find((f) => REGENERATE_DIMENSIONS.has(f.dimension))
     : decision === 'ADAPT' ? findings.find((f) => f.dimension === 'cross_platform_duplication')
     : findings[0];

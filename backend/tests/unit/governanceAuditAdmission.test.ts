@@ -20,12 +20,13 @@ import {
 } from '../../services/governance';
 
 // Mock the audit job's data + work dependencies so the test needs no DB.
-const runGovernanceAudit = jest.fn(async () => ({ auditStatus: 'OK' }));
+type AuditArgs = Parameters<typeof import('../../services/GovernanceAuditService')['runGovernanceAudit']>;
+const runGovernanceAudit = jest.fn(async (..._a: AuditArgs) => ({ auditStatus: 'OK' }));
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: () => ({ select: async () => ({ data: [{ company_id: 'co-1' }], error: null }) }) },
 }));
 jest.mock('../../services/GovernanceAuditService', () => ({
-  runGovernanceAudit: (...a: unknown[]) => runGovernanceAudit(...a),
+  runGovernanceAudit: (...a: AuditArgs) => runGovernanceAudit(...a),
 }));
 jest.mock('../../scheduler/schedulerBatching', () => ({
   getSchedulerConcurrency: () => 2,

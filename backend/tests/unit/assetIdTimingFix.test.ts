@@ -8,6 +8,9 @@
  * wiring proof, not a DB test.
  */
 
+/** Argument tuples derived from the real store, so a signature change fails here. */
+type AssetStore = typeof import('../../db/contentAssetStore');
+
 const createAsset = jest.fn(async (input: any) => ({
   asset_id: input.assetId ?? 'db-generated-uuid',
   ...input,
@@ -18,15 +21,15 @@ const updateContentAssetStatus = jest.fn(async (input: any) => ({ asset_id: inpu
 
 jest.mock('../../db/contentAssetStore', () => ({
   __esModule: true,
-  createContentAsset: (...args: any[]) => createAsset(...args),
+  createContentAsset: (...args: Parameters<AssetStore['createContentAsset']>) => createAsset(...args),
   getContentAssetByKey: (...args: any[]) => getContentAssetByKey(...args),
-  createContentVersion: (...args: any[]) => createContentVersion(...args),
+  createContentVersion: (...args: Parameters<AssetStore['createContentVersion']>) => createContentVersion(...args),
   createContentReview: jest.fn(),
   getContentAssetById: jest.fn(),
   getContentAssetByKey2: jest.fn(),
   listContentAssets: jest.fn(),
   listContentVersions: jest.fn(async () => []),
-  updateContentAssetStatus: (...args: any[]) => updateContentAssetStatus(...args),
+  updateContentAssetStatus: (...args: Parameters<AssetStore['updateContentAssetStatus']>) => updateContentAssetStatus(...args),
 }));
 
 // contentAssetService imports regenerateContent from contentGenerationService at

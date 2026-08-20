@@ -70,6 +70,30 @@ beforeEach(() => {
   ingestLeadBatch.mockResolvedValue(OK_RESULT);
 });
 
+/**
+ * P2D's twelve employer firmographics, in the PROVIDER forms a caller actually
+ * sends: numbers as strings, a lowercase country code, an offset timestamp, a
+ * real array. Every value is deliberately distinct, so a field that goes missing
+ * cannot be masked by another field happening to carry the same value.
+ */
+const FIRMOGRAPHICS = {
+  industry: 'software',
+  employeeCount: '250',
+  employeeBand: '201-500',
+  companyCountryCode: 'us',
+  companyRegion: 'ca',
+  companyCity: 'San Francisco',
+  annualRevenue: '12500000',
+  revenueBand: '10m-25m',
+  foundedYear: '2014',
+  technologies: ['postgres', 'nextjs'],
+  fundingStage: 'series-b',
+  lastFundingAt: '2026-01-15T10:30:00Z',
+};
+
+/** Typed explicitly: `it.each` over mixed-type tuples infers badly otherwise. */
+const FIRMOGRAPHIC_ENTRIES: Array<[string, unknown]> = Object.entries(FIRMOGRAPHICS);
+
 describe('LI-5E.2 — authorized ingestion', () => {
   it('an authenticated tenant can invoke manual ingestion', async () => {
     const res = await call();
@@ -292,5 +316,71 @@ describe('LI-5E.2 — response safety and error handling', () => {
     await call();
     expect(ingestLeadBatch).toHaveBeenCalledTimes(2);
     expect(ingestLeadBatch.mock.calls[0][0]).toEqual(ingestLeadBatch.mock.calls[1][0]);
+  });
+});
+
+/**
+ * P2N — the twelve P2D firmographics actually reach the orchestrator.
+ *
+ * The 2M audit established by inspection that this route forwards them: it casts
+ * `body.records` rather than rebuilding it, so nothing can be dropped. But
+ * inspection is not a regression guard, and the assertion above
+ * (`toMatchObject` on a two-field record) is a SUBSET match — a `pick()`, a
+ * fixed destructuring or a schema with `stripUnknown` could be introduced here
+ * and every existing test would still pass.
+ *
+ * These tests fail if that happens. They stop at the transport boundary on
+ * purpose: the route's only job is to forward, and normalisation is
+ * `toAccountAttributes`' job, proven separately in the P2D suite.
+ */
+describe('LI-5E.2 — the twelve firmographics reach the orchestrator', () => {
+  const RECORD = {
+    referenceId: 'OP-9',
+    email: 'ops@acme.test',
+    companyName: 'Acme',
+    companyDomain: 'acme.test',
+    ...FIRMOGRAPHICS,
+  };
+
+  /** A fresh copy each time, so the assertions compare VALUES, not one object to itself. */
+  const forwarded = async (): Promise<Record<string, unknown>> => {
+    await call({ body: { records: [{ ...RECORD }] } } as Partial<NextApiRequest>);
+    return ingestLeadBatch.mock.calls[0][0].records[0] as Record<string, unknown>;
+  };
+
+  it.each(FIRMOGRAPHIC_ENTRIES)('forwards %s verbatim to ingestLeadBatch', async (field, value) => {
+    expect((await forwarded())[field]).toEqual(value);
+  });
+
+  it('forwards all twelve on ONE record, and drops nothing else either', async () => {
+    const sent = await forwarded();
+    // The assertion that catches an allowlist: a `pick()` or a fixed
+    // destructuring produces a NARROWER key set, and this fails naming the
+    // missing keys rather than silently passing on the subset that survived.
+    expect(Object.keys(sent).sort()).toEqual(Object.keys(RECORD).sort());
+    expect(sent).toEqual(RECORD);
+  });
+
+  it('forwards them UNNORMALISED — the route transports, it does not interpret', async () => {
+    // If these ever arrive canonicalised, normalisation has leaked into the
+    // transport layer and would then exist in two places.
+    const sent = await forwarded();
+    expect(sent.employeeCount).toBe('250');                       // still a string, not 250
+    expect(sent.annualRevenue).toBe('12500000');
+    expect(sent.foundedYear).toBe('2014');
+    expect(sent.companyCountryCode).toBe('us');                   // still lowercase, not 'US'
+    expect(sent.lastFundingAt).toBe('2026-01-15T10:30:00Z');      // not a UTC-normalised instant
+    expect(sent.technologies).toEqual(['postgres', 'nextjs']);    // still an array, not JSON text
+  });
+
+  it('the employer geography stays distinct from the person geography', async () => {
+    await call({
+      body: { records: [{ ...RECORD, countryCode: 'gb', region: 'london', city: 'London' }] },
+    } as Partial<NextApiRequest>);
+    const sent = ingestLeadBatch.mock.calls[0][0].records[0];
+    expect(sent.countryCode).toBe('gb');
+    expect(sent.companyCountryCode).toBe('us');
+    expect(sent.city).toBe('London');
+    expect(sent.companyCity).toBe('San Francisco');
   });
 });

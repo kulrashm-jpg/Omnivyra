@@ -215,3 +215,4 @@ describe('candidate validation', () => {
     await expect(resolveIdentityShadow('', [{ claimType: 'email', value: 'a@b.com' }])).rejects.toThrow(/organizationId/);
   });
 });
+export {};  // module marker: without it this file is a global script and its top-level names collide with the sibling prospectIdentity suites

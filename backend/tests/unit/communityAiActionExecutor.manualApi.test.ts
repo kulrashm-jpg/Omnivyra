@@ -67,14 +67,15 @@ jest.mock('../../services/rpaWorker/rpaWorkerService', () => ({
 
 // Connector mock — we want to observe that the real connector is called on
 // the api-mode path (not silently simulated).
-const mockLinkedInExecuteAction = jest.fn(async () => ({
+type LinkedInExecuteArgs = Parameters<typeof import('../../services/platformConnectors/linkedinConnector')['executeAction']>;
+const mockLinkedInExecuteAction = jest.fn(async (..._a: LinkedInExecuteArgs) => ({
   success: true,
   platform_id: 'urn:li:comment:(123,456)',
   platform_response: { data: { id: 'urn:li:comment:(123,456)' } },
 }));
 
 jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
-  executeAction: (...args: unknown[]) => mockLinkedInExecuteAction(...args as [any, any]),
+  executeAction: (...args: LinkedInExecuteArgs) => mockLinkedInExecuteAction(...args),
 }));
 
 import { executeAction } from '../../services/communityAiActionExecutor';

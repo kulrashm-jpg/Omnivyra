@@ -60,20 +60,22 @@ jest.mock('../../services/engagementCaptureService', () => ({ captureEngagementS
 jest.mock('../../services/feedbackIntelligenceEngine', () => ({ generateFeedbackInsights: jest.fn() }));
 jest.mock('../../services/intelligenceExecutionContext', () => ({ runInBackgroundJobContext: (_: string, fn: () => unknown) => fn() }));
 
-const computeThemeRelevanceForCompany = jest.fn(async (companyId: string) => ({
+type ThemeRelevanceArgs = Parameters<typeof import('../../services/companyTrendRelevanceEngine')['computeThemeRelevanceForCompany']>;
+const computeThemeRelevanceForCompany = jest.fn(async (...[companyId]: ThemeRelevanceArgs) => ({
   company_id: companyId,
   themes_scored: 7,
   errors: [] as string[],
 }));
 const loadThemesWithTopic = jest.fn(async () => [{ id: 't1', intelligence_id: 'i1', keywords: [], companies: [], topic: 'x' }]);
 jest.mock('../../services/companyTrendRelevanceEngine', () => ({
-  computeThemeRelevanceForCompany: (...a: unknown[]) => computeThemeRelevanceForCompany(...(a as [string])),
+  computeThemeRelevanceForCompany: (...a: ThemeRelevanceArgs) => computeThemeRelevanceForCompany(...a),
   loadThemesWithTopic: () => loadThemesWithTopic(),
 }));
 
-const getGlobalConfig = jest.fn(async () => ({ job_type: 'trend_relevance', enabled: true, priority: 5, daily_job_limit: 100 }));
+type GlobalCfgArgs = Parameters<typeof import('../../services/intelligenceConfigService')['getGlobalConfig']>;
+const getGlobalConfig = jest.fn(async (..._a: GlobalCfgArgs) => ({ job_type: 'trend_relevance', enabled: true, priority: 5, daily_job_limit: 100 }));
 jest.mock('../../services/intelligenceConfigService', () => ({
-  getGlobalConfig: (...a: unknown[]) => getGlobalConfig(...(a as [string])),
+  getGlobalConfig: (...a: GlobalCfgArgs) => getGlobalConfig(...a),
   getCompanyOverride: jest.fn(async () => null),
   resolveConfig: (g: Record<string, unknown>) => g,
   getDailyJobCount: jest.fn(async () => 0),
@@ -83,7 +85,8 @@ jest.mock('../../services/intelligenceConfigService', () => ({
   logSkipped: jest.fn(async () => undefined),
 }));
 
-const jobQueueAdd = jest.fn(async () => ({}));
+type QueueAddArgs = Parameters<import('bullmq').Queue['add']>;
+const jobQueueAdd = jest.fn(async (..._a: QueueAddArgs) => ({}));
 const jobQueueAddBulk = jest.fn(async (jobs: unknown[]) => jobs);
 jest.mock('../../queue/jobQueue', () => ({
   jobQueue: { add: jobQueueAdd, addBulk: jobQueueAddBulk },

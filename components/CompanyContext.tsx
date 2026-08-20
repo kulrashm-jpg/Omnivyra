@@ -128,6 +128,15 @@ type CompanyContextValue = {
    *  a flash of protected or unauthenticated content. */
   authChecked: boolean;
   /**
+   * P1.9 — AUTH-ONLY identity signal, derived from the existing session JWT sub. It answers exactly one question: does the browser already hold an
+   * authenticated identity? It exists so the shell can paint before company
+   * resolution finishes.
+   *
+   * INVARIANT — this is NOT authorization. It never implies company access,
+   * role, or tenant membership. Company-scoped work still requires selectedCompanyId user remains the fully resolved context.
+   */
+  authUserId: string | null;
+  /**
    * true once `/api/company-profile?mode=list` has actually completed a fetch
    * for the current auth session (success OR explicit empty). Distinguishes
    * "we haven't asked the server yet" from "we asked and the user has 0
@@ -166,6 +175,25 @@ const resolveStoredCompanyId = (userId?: string | null): string => {
   );
 };
 
+/**
+ * Reads ONLY the sub claim from a JWT the browser already holds. Local decode,
+ * no verification, no network. The value gates RENDERING only and is never used
+ * for authorization - the server re-verifies every request regardless. Any
+ * malformed input yields null so the caller keeps its safe loading state.
+ */
+function decodeJwtSub(token: string | null | undefined): string | null {
+  try {
+    if (!token) return null;
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = JSON.parse(atob(b64)) as { sub?: unknown };
+    return typeof payload.sub === "string" && payload.sub ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const [user, setUser] = useState<UserContext | null>(null);
@@ -177,6 +205,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
   // True once the companies fetch has actually completed for the current
   // auth session. Distinguishes "not yet queried" from "queried and empty".
   // Reset to false on signout (see auth subscription effect below).
@@ -297,11 +326,18 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // once if needed). The outer check exists purely to detect "no
       // Supabase session at all → fall through to the architect cookie
       // path" without firing a Bearer-less /api/company-profile call.
-      let hasSession = !!(await getAuthToken());
+      let sessionToken = await getAuthToken();
+      let hasSession = !!sessionToken;
       if (!hasSession) {
         await new Promise((r) => setTimeout(r, 250));
-        hasSession = !!(await getAuthToken());
+        sessionToken = await getAuthToken();
+        hasSession = !!sessionToken;
       }
+      // AUTH-ONLY signal, decoded locally from the token already in hand — no
+      // additional request. Only the sub claim is read; no role, tenant or company
+      // claim is consulted. A malformed token yields null, which preserves the
+      // existing loading behaviour rather than guessing an identity.
+      setAuthUserId(hasSession ? decodeJwtSub(sessionToken) : null);
       if (!hasSession) {
         // No bearer token — may be content-architect cookie path. Cookie-
         // based Supabase sessions are also handled by the API route via
@@ -359,7 +395,15 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
               attemptRes = await fetchWithTimeout(
                 '/api/company-profile?mode=list',
                 {},
-                8000,
+                // 8s aborted healthy-but-slow responses. mode=list is the gating
+                // request for selectedCompanyId and user.userId, and its measured
+                // spread runs 1.2s-6s with a tail past 8s; an abort there is
+                // indistinguishable from a failure, so the loop retried a request
+                // that was about to succeed and added load to the endpoint exactly
+                // when it was slowest. 15s clears the observed healthy tail while
+                // still recovering a genuinely hung request. Retry conditions,
+                // backoff, attempt count and the exhausted-retry path are unchanged.
+                15000,
               );
             } catch {
               attemptRes = null;
@@ -658,6 +702,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setIsLoading(false);
       setCompaniesResolved(false); // reset for next auth session
       setUser(null);
+      setAuthUserId(null);
       setUserName('');
       setCompanies([]);
       setSelectedCompanyIdInternal('');
@@ -717,6 +762,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       isLoading,
       isAuthenticated,
       authChecked,
+      authUserId,
       companiesResolved,
       isAdmin: userRole === 'SUPER_ADMIN' || userRole === 'COMPANY_ADMIN',
       authError,
@@ -727,7 +773,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       refreshCompanies,
       hasPermission: (action: PermissionAction) => hasPermissionForRole(userRole, action),
     }),
-    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, isLoading, isAuthenticated, authChecked, companiesResolved, authError, authFsm]
+    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, isLoading, isAuthenticated, authChecked, authUserId, companiesResolved, authError, authFsm]
   );
 
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;

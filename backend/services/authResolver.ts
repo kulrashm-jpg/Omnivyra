@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { timeInto, type TimingSink } from '../../lib/platform/serverTiming';
 import {
   tolerantUserSelect,
   type LifecycleUserRow,
@@ -480,6 +481,12 @@ async function resolveUserRow(
  */
 export async function resolveAuthenticatedUser(
   req: NextApiRequest,
+  /**
+   * Optional collector so a caller can attribute the two IO boundaries in this
+   * function without coupling the resolver to the transport. Absent sink =
+   * zero overhead and no behaviour change (see lib/platform/serverTiming).
+   */
+  timing?: TimingSink,
 ): Promise<ResolveAuthenticatedUserResult> {
   // Run the auth subsystem boot on the first authenticated request and let
   // the result cache for the process lifetime. The probe is fire-and-forget
@@ -492,12 +499,12 @@ export async function resolveAuthenticatedUser(
   const token = extractAccessToken(req);
   if (!token) return { user: null, error: 'NO_TOKEN' };
 
-  const identity = await validateTokenWithSupabase(token);
+  const identity = await timeInto(timing, 'auth_validate', () => validateTokenWithSupabase(token));
   if (!identity) return { user: null, error: 'INVALID_TOKEN' };
 
   if (!identity.email) return { user: null, error: 'NO_EMAIL' };
 
-  const row = await resolveUserRow(identity.supabaseUid, identity.email);
+  const row = await timeInto(timing, 'auth_user', () => resolveUserRow(identity.supabaseUid, identity.email));
   if (!row) return { user: null, error: 'USER_NOT_FOUND' };
 
   // ── Phase 2.B lifecycle enforcement ─────────────────────────────────────

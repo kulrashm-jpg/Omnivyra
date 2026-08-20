@@ -12,7 +12,8 @@
 
 const selectMock = jest.fn();
 const limitMock = jest.fn();
-const fromMock = jest.fn(() => ({ select: (...args: unknown[]) => {
+type SupabaseFromArgs = Parameters<typeof import('../../db/supabaseClient')['supabase']['from']>;
+const fromMock = jest.fn((..._t: SupabaseFromArgs) => ({ select: (...args: unknown[]) => {
   selectMock(...args);
   return { limit: limitMock };
 } }));

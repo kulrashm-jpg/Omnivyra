@@ -28,11 +28,12 @@ jest.mock('../../services/leadAttributionService', () => ({
   }),
   recordLeadAttribution: (...a: unknown[]) => recordLeadAttribution(...a),
 }));
-const resolveVisitorSession = jest.fn(async () => ({ sessionId: 'sess-1', firstTouch: { f: 1 }, lastTouch: { l: 1 } }));
+type ResolveVisitorSessionArgs = Parameters<typeof import('../../services/attributionResolverService')['resolveVisitorSession']>;
+const resolveVisitorSession = jest.fn(async (..._a: ResolveVisitorSessionArgs) => ({ sessionId: 'sess-1', firstTouch: { f: 1 }, lastTouch: { l: 1 } }));
 const stitchSessionToLead = jest.fn();
 const persistCampaignTouchpoint = jest.fn();
 jest.mock('../../services/attributionResolverService', () => ({
-  resolveVisitorSession: (...a: unknown[]) => resolveVisitorSession(...a),
+  resolveVisitorSession: (...a: ResolveVisitorSessionArgs) => resolveVisitorSession(...a),
   stitchSessionToLead: (...a: unknown[]) => stitchSessionToLead(...a),
   persistCampaignTouchpoint: (...a: unknown[]) => persistCampaignTouchpoint(...a),
 }));

@@ -133,6 +133,28 @@ const PLATFORM_ORDER = ['linkedin', 'facebook', 'instagram', 'x', 'twitter', 'yo
 
 const BLOG_CONTENT_TYPES = new Set(['blog', 'article', 'newsletter', 'white_paper', 'short_story']);
 
+/**
+ * Findings THIS caller can never clear by regenerating.
+ *
+ * `buildAsset` below takes exactly one parameter -- `text`. Everything else is
+ * closed over from the row: headline is `rowContentJson.title ?? topic` and cta
+ * is `rowMi.cta_strategy ?? rowContentJson.desiredAction`. A regenerated
+ * candidate therefore carries the identical headline and CTA, so validateAsset
+ * returns the same finding on every attempt and the acceptance predicate
+ * (ACCEPT/ADAPT) can never pass -- the generation call is spent for nothing.
+ *
+ * This is deliberately CALLER-LOCAL, not a change to the shared taxonomy:
+ * creatorOrchestrator regenerates a whole CanonicalCreatorOutput and reads
+ * headline/cta back off the new asset_payload, so REGENERATE is correct there.
+ */
+const REGENERATION_INVARIANT_DIMENSIONS = new Set<string>([
+  'duplicate_headline',        // rowContentJson.title ?? topic
+  'duplicate_cta',             // rowMi.cta_strategy ?? rowContentJson.desiredAction
+]);
+// The two fingerprint dimensions used to be listed here too. They are now
+// TERMINAL in the shared validator, so decide() returns DROP and this branch is
+// never reached for them -- listing them again would be dead weight.
+
 /** Platform → DB content_type fallback map (mirrors structuredPlanScheduler).
  * Keys include both the strategy-level formats (post/article/short_story/…) AND
  * platform-native types (tweet/feed_post) so that a request like
@@ -799,7 +821,11 @@ async function executeBlockScheduleRuntime(
 
         let verdict = validateAsset(buildAsset(finalContent), validationCtx);
         let wasRegenerated = false;
-        if (verdict.decision === 'REGENERATE' && SEMANTIC_REGEN_ATTEMPTS > 0 && !allRowsAdopted && masterValid) {
+        // A single invariant finding is enough to make regeneration futile: the
+        // offending field is identical in every candidate, so no candidate can
+        // reach ACCEPT/ADAPT however many attempts are budgeted.
+        const regenerationCanHelp = !verdict.findings.some((f) => REGENERATION_INVARIANT_DIMENSIONS.has(f.dimension));
+        if (verdict.decision === 'REGENERATE' && regenerationCanHelp && SEMANTIC_REGEN_ATTEMPTS > 0 && !allRowsAdopted && masterValid) {
           // Reuse the shared regenerate-before-drop primitive: rebuild this card's
           // variants and re-validate, up to the configured budget.
           const outcome = await regenerateBeforeDrop<string>(
@@ -830,7 +856,10 @@ async function executeBlockScheduleRuntime(
 
         if (verdict.decision === 'DROP' || verdict.decision === 'REGENERATE') {
           console.warn('[block-processor] semantic-validation drop', { platform, contentType: rowContentType, topic: topic.slice(0, 60), reason: verdict.reason });
-          emitPlannerDrop(verdict.findings[0]?.dimension ?? 'duplicate_content', 1, 'weekly');
+          // The planner metric takes a DropReasonCode, not a ValidationDimension --
+          // two vocabularies that do not overlap. The semantic detail is already on
+          // the warn above via verdict.reason, so nothing diagnostic is lost here.
+          emitPlannerDrop('duplicate_content', 1, 'weekly');
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
           continue;

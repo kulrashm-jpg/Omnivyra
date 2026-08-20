@@ -400,10 +400,15 @@ describe('synth path (no AI execution_items) — golden master', () => {
     (getUnifiedCampaignBlueprint as jest.Mock).mockResolvedValue({
       weeks: [{ ...SYNTH_BLUEPRINT.weeks[0], platform_allocation: { instagram: 2 } }],
     });
+    // The allocated platform must NOT be `linkedin`: that is also the hardcoded
+    // last-resort default, so a linkedin allocation would still pass even if the
+    // platform_allocation fallback were deleted. instagram proves the fallback
+    // ran — and therefore the format must be one instagram can actually publish
+    // (supportedContent: image|video|carousel|creator; media required).
     await generateWeeklyStructure({
       campaignId: 'camp-1',
       week: 1,
-      format_frequency: { post: 2 },
+      format_frequency: { image: 2 },
     } as any);
     const rows = capturedRows();
     expect(rows.length).toBeGreaterThan(0);

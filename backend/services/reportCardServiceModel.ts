@@ -1,5 +1,6 @@
 /** Report card — types, scoring model, band helpers — split from reportCardService.ts (barrel preserved; importers unchanged). */
 import { ownedDbTable } from '../db/writeOwner';
+import { timeInto, type TimingSink } from '../../lib/platform/serverTiming';
 /**
  * Report Card Service
  *
@@ -109,8 +110,26 @@ export interface DomainReportState {
   reportState: ReportCardAvailabilityState;
 }
 
+/**
+ * What the LIST query projects — a strict subset of ReportRecord. The list
+ * deliberately omits the JSONB payload columns; full report bodies come from
+ * /api/reports/[reportId]. Deriving it with Pick keeps it in lockstep with
+ * ReportRecord rather than restating field types.
+ */
+export type ReportListItem = Pick<
+  ReportRecord,
+  'id' | 'report_type' | 'status' | 'domain' | 'created_at' | 'completed_at'
+> & {
+  /**
+   * Real column (added by 20260330_reports_delivery_layer) that ReportRecord
+   * has never declared. The Reports Hub list reads it, so the list type states
+   * it here rather than widening ReportRecord for every other caller.
+   */
+  report_id?: string | null;
+};
+
 export interface CompanyReportsResult extends DomainReportState {
-  reports: ReportRecord[];
+  reports: ReportListItem[];
   canGenerateFreeReport: boolean;
   userRole: Role | null;
 }
@@ -410,9 +429,15 @@ export async function getDomainReportState(
   };
 }
 
-export async function getCompanyReports(companyId: string): Promise<ReportRecord[]> {
+export async function getCompanyReports(companyId: string): Promise<ReportListItem[]> {
+  // Explicit projection, not SELECT *: the JSONB payload columns (`data`,
+  // `metadata`) were 99.4% of a measured 9.43MB / 74-row response and no
+  // consumer of the LIST reads them — full report bodies are served by
+  // /api/reports/[reportId], which queries the single row it needs. These are
+  // exactly the fields the verified consumers use (the Reports Hub list) plus
+  // the identifiers Command Center counts.
   const { data, error } = await ownedDbTable('reports')
-    .select('*')
+    .select('id, report_id, report_type, status, domain, created_at, completed_at')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
 
@@ -420,20 +445,42 @@ export async function getCompanyReports(companyId: string): Promise<ReportRecord
     throw new ReportRequestError('Failed to load reports', 'REPORT_LIST_FAILED', 500);
   }
 
-  return (data || []) as ReportRecord[];
+  return (data || []) as ReportListItem[];
 }
 
 export async function getCompanyReportsForCard(
   userId: string,
   companyId: string,
   domain?: string,
+  timing?: TimingSink,
 ): Promise<CompanyReportsResult> {
-  const resolvedDomain = domain ? normalizeReportDomain(domain) : await getCompanyDomain(companyId);
-  const [reports, roleResult, domainState] = await Promise.all([
-    getCompanyReports(companyId),
-    getUserRole(userId, companyId),
-    getDomainReportState(resolvedDomain, companyId),
+  // Only `state` consumes the domain — `reports` and `role` need just the
+  // companyId. The domain lookup used to be awaited BEFORE this group started,
+  // so both were serialized behind a round trip they never used, adding a full
+  // sequential hop (~280ms measured against ap-southeast-1) to every request.
+  // Chaining state behind the domain INSIDE the group keeps that one real
+  // dependency explicit while taking the hop off the critical path.
+  //
+  // Failure behaviour is unchanged: a domain lookup that throws still rejects
+  // the group with the same error, and Promise.all owns every promise here, so
+  // an in-flight reports/role query cannot surface as an unhandled rejection.
+  const resolveDomain = (): Promise<string> =>
+    domain
+      ? Promise.resolve(normalizeReportDomain(domain))
+      : timeInto(timing, 'domain', () => getCompanyDomain(companyId));
+
+  // Parallelism preserved: each leaf is wrapped individually, so the group
+  // still starts together and the recorded durations are per-leaf, not summed.
+  const [reports, roleResult, domainResult] = await Promise.all([
+    timeInto(timing, 'reports', () => getCompanyReports(companyId)),
+    timeInto(timing, 'role', () => getUserRole(userId, companyId)),
+    resolveDomain().then(async (resolved) => ({
+      resolved,
+      state: await timeInto(timing, 'state', () => getDomainReportState(resolved, companyId)),
+    })),
   ]);
+  const resolvedDomain = domainResult.resolved;
+  const domainState = domainResult.state;
 
   return {
     ...domainState,

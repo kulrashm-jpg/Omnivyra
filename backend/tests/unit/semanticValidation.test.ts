@@ -59,17 +59,6 @@ describe('duplicate dimensions → REGENERATE', () => {
     expect(r.decision).toBe('REGENERATE');
   });
 
-  it('duplicate semantic idea (fingerprint)', () => {
-    const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', variant_id: 'cv_b', idea_fingerprint: 'idea_a' }), setup());
-    expect(r.findings.some((f) => f.dimension === 'duplicate_semantic_idea')).toBe(true);
-    expect(r.decision).toBe('REGENERATE');
-  });
-
-  it('duplicate narrative (fingerprint)', () => {
-    const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', idea_fingerprint: 'x', variant_id: 'cv_b', narrative_fingerprint: 'narr_a' }), setup());
-    expect(r.findings.some((f) => f.dimension === 'duplicate_narrative')).toBe(true);
-  });
-
   it('duplicate carousel slide (within the asset)', () => {
     const r = validateAsset(asset({ content_type: 'carousel', headline: 'h', opening: 'o', cta: 'c', text: 'x', idea_fingerprint: 'x', narrative_fingerprint: 'y', variant_id: 'cv_b', slides: ['Slide one', 'Slide two', 'Slide one'] }), new ValidationContext());
     expect(r.findings.some((f) => f.dimension === 'duplicate_slide')).toBe(true);
@@ -81,6 +70,30 @@ describe('duplicate dimensions → REGENERATE', () => {
     const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', idea_fingerprint: 'x', narrative_fingerprint: 'y', variant_id: 'cv_b', text: 'A completely original body about onboarding value.' }), ctx);
     expect(r.findings.some((f) => f.dimension === 'duplicate_asset')).toBe(true);
     expect(r.decision).toBe('REGENERATE');
+  });
+});
+
+describe('structurally invariant dimensions → DROP (terminal)', () => {
+  // No caller can produce a candidate that changes these: the fingerprints come
+  // from fixed campaign/content metadata in all three callers, and the variant
+  // binding is card identity. REGENERATE would promise a remedy none of them
+  // can deliver, so the honest decision is terminal.
+  const setup = () => {
+    const ctx = new ValidationContext();
+    ctx.commit(asset());
+    return ctx;
+  };
+
+  it('duplicate semantic idea (fingerprint)', () => {
+    const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', variant_id: 'cv_b', idea_fingerprint: 'idea_a' }), setup());
+    expect(r.findings.some((f) => f.dimension === 'duplicate_semantic_idea')).toBe(true);
+    expect(r.decision).toBe('DROP');
+  });
+
+  it('duplicate narrative (fingerprint)', () => {
+    const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', idea_fingerprint: 'x', variant_id: 'cv_b', narrative_fingerprint: 'narr_a' }), setup());
+    expect(r.findings.some((f) => f.dimension === 'duplicate_narrative')).toBe(true);
+    expect(r.decision).toBe('DROP');
   });
 });
 
@@ -97,6 +110,36 @@ describe('cross-platform duplication → ADAPT (shared excluded)', () => {
     const ctx = new ValidationContext();
     ctx.commit(asset({ platform: 'linkedin', text: 'Same body shared.', shared: true, headline: 'h1', opening: 'o1', cta: 'c1', idea_fingerprint: 'i1', narrative_fingerprint: 'n1', variant_id: 'v1' }));
     const r = validateAsset(asset({ platform: 'facebook', text: 'Same body shared.', shared: true, headline: 'h2', opening: 'o2', cta: 'c2', idea_fingerprint: 'i2', narrative_fingerprint: 'n2', variant_id: 'v2' }), ctx);
+    expect(r.decision).toBe('ACCEPT');
+  });
+});
+
+describe('card metadata is scoped, not campaign-global', () => {
+  // A card carries ONE cta_strategy and ONE title across target_platforms
+  // (creatorCardTypes: platform_strategy is per-platform, cta_strategy is not),
+  // so platform siblings of one card legitimately share both. Comparing them
+  // campaign-wide flagged every sibling as a duplicate of its own card.
+  it('a platform sibling sharing the card CTA is NOT a duplicate', () => {
+    const ctx = new ValidationContext();
+    ctx.commit(asset({ platform: 'linkedin', cta: 'Book a demo', text: 'LinkedIn body about onboarding.', headline: 'h-li', opening: 'o-li', idea_fingerprint: 'i1', narrative_fingerprint: 'n1', variant_id: 'v1' }));
+    const r = validateAsset(asset({ platform: 'x', cta: 'Book a demo', text: 'A different X body entirely.', headline: 'h-x', opening: 'o-x', idea_fingerprint: 'i2', narrative_fingerprint: 'n2', variant_id: 'v2' }), ctx);
+    expect(r.findings.some((f) => f.dimension === 'duplicate_cta')).toBe(false);
+    expect(r.decision).toBe('ACCEPT');
+  });
+
+  it('the same CTA on the SAME platform+type is still a duplicate', () => {
+    const ctx = new ValidationContext();
+    ctx.commit(asset({ platform: 'linkedin', cta: 'Book a demo', text: 'First body.', headline: 'h1', opening: 'o1', idea_fingerprint: 'i1', narrative_fingerprint: 'n1', variant_id: 'v1' }));
+    const r = validateAsset(asset({ platform: 'linkedin', cta: 'Book a demo', text: 'Second body.', headline: 'h2', opening: 'o2', idea_fingerprint: 'i2', narrative_fingerprint: 'n2', variant_id: 'v2' }), ctx);
+    expect(r.findings.some((f) => f.dimension === 'duplicate_cta')).toBe(true);
+    expect(r.decision).toBe('REGENERATE');
+  });
+
+  it('a different content type on the same platform does not collide', () => {
+    const ctx = new ValidationContext();
+    ctx.commit(asset({ platform: 'linkedin', content_type: 'post', cta: 'Book a demo', text: 'Post body.', headline: 'h1', opening: 'o1', idea_fingerprint: 'i1', narrative_fingerprint: 'n1', variant_id: 'v1' }));
+    const r = validateAsset(asset({ platform: 'linkedin', content_type: 'carousel', cta: 'Book a demo', text: 'Carousel body.', headline: 'h2', opening: 'o2', idea_fingerprint: 'i2', narrative_fingerprint: 'n2', variant_id: 'v2' }), ctx);
+    expect(r.findings.some((f) => f.dimension === 'duplicate_cta')).toBe(false);
     expect(r.decision).toBe('ACCEPT');
   });
 });

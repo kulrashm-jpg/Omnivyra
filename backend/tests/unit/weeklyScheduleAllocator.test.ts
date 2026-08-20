@@ -2,12 +2,17 @@
  * Unit tests for weeklyScheduleAllocator — single source of truth for scheduling.
  */
 
-import { assignWeeklySchedule, applyScheduleDefaults, SCHEDULE_DEFAULTS } from '../../services/weeklyScheduleAllocator';
+import {
+  assignWeeklySchedule,
+  applyScheduleDefaults,
+  SCHEDULE_DEFAULTS,
+  type WeeklyActivityInput,
+} from '../../services/weeklyScheduleAllocator';
 
 describe('weeklyScheduleAllocator', () => {
   describe('assignWeeklySchedule', () => {
     it('assigns topic_code, content_code, scheduled_day, scheduled_time to slots', () => {
-      const week = {
+      const week: WeeklyActivityInput = {
         week_number: 1,
         execution_items: [
           {
@@ -38,7 +43,7 @@ describe('weeklyScheduleAllocator', () => {
     });
 
     it('avoids same topic on same day', () => {
-      const week = {
+      const week: WeeklyActivityInput = {
         week_number: 1,
         execution_items: [
           {
@@ -59,7 +64,7 @@ describe('weeklyScheduleAllocator', () => {
     });
 
     it('applies target_regions from input', () => {
-      const week = {
+      const week: WeeklyActivityInput = {
         week_number: 1,
         execution_items: [
           {

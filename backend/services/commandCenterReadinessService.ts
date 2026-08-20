@@ -273,13 +273,33 @@ export async function fetchReadinessData(
     const profileSignalsPromise = fetchCompanyProfileSignals(companyId);
 
     // Fetch features — sync=true recomputes from live DB data on every visit
-    const featuresRes = await fetch(
+    const featuresPromise = fetch(
       `/api/feature-completion?sync=true&company_id=${encodeURIComponent(companyId)}`,
       {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       },
     );
+
+    // readiness-score consumes ONLY companyId — it reads nothing from the
+    // features result on its success path (see the canonical-consumption note
+    // below). It used to be issued after features had resolved, which put its
+    // whole round trip behind feature-completion: measured as a 1,318ms serial
+    // tail after an 11,288ms features call. Starting it here removes that
+    // ordering without changing what either request sends or returns.
+    //
+    // Park a rejection handler so a score failure cannot surface as an
+    // unhandled rejection during the window before it is awaited below. The
+    // promise still rejects at the await, so the catch branch that derives
+    // readiness from features is reached exactly as before.
+    const scorePromise = fetch(
+      `/api/readiness-score?no_cache=true&company_id=${encodeURIComponent(companyId)}`,
+      // keep readiness tied to the selected company, not whichever company happens to be latest
+      { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+    );
+    scorePromise.catch(() => { /* awaited below; see note above */ });
+
+    const featuresRes = await featuresPromise;
 
     const profileSignals = await profileSignalsPromise;
     let features: FeatureStatus[] = [];
@@ -303,11 +323,7 @@ export async function fetchReadinessData(
     // Fetch readiness score — no_cache=true bypasses the 5-min in-memory cache
     let readiness: ReadinessData;
     try {
-      const scoreRes = await fetch(
-        `/api/readiness-score?no_cache=true&company_id=${encodeURIComponent(companyId)}`,
-        // keep readiness tied to the selected company, not whichever company happens to be latest
-        { method: 'GET', headers: { 'Content-Type': 'application/json' } },
-      );
+      const scoreRes = await scorePromise;
       if (scoreRes.ok) {
         const scoreData = await scoreRes.json() as any;
         // Consume the CANONICAL weighted readiness directly (readinessScoreService

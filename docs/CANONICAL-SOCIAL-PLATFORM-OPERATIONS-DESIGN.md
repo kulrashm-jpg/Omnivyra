@@ -27,7 +27,7 @@ No additional operations (e.g. delete, hide) are part of the canonical contract 
 
 Every operation that targets a **post** or **comment** must be resolvable to:
 
-- **platform** (string): Canonical platform key (e.g. `linkedin`, `twitter`, `instagram`, `facebook`, `youtube`; `x` normalized to `twitter` where applicable).
+- **platform** (string): Platform key in the **storage/provider** vocabulary (e.g. `linkedin`, `twitter`, `instagram`, `facebook`, `youtube`). X is `twitter` here — see §1.4, which is the authority on which vocabulary applies where.
 - **account reference**: Identifies which credentials to use (see §2). One of:
   - **social_account_id** (UUID): For publish and fetch (and optional user-initiated reply).
   - **tenant_id + organization_id**: For Community AI actions (reply, like, share, follow).
@@ -44,6 +44,48 @@ For **publish**, the system must also have: **content** (and optional title, has
 - **reply / like / share / follow**: Success with optional `platform_response`; or failure with `error` string. Persisted outcome in **community_ai_actions** (status, execution_result) for Community AI flows.
 
 All operations must be idempotent or safely retryable where the platform allows (e.g. publish: one platform_post_id per scheduled_post; fetch: upsert by platform_comment_id).
+
+### 1.4 Platform vocabulary contract (X / Twitter)
+
+There are two platform vocabularies, and the split is deliberate. The operations
+in this document are provider-facing and therefore use the storage/provider
+spelling; the content pipeline does not.
+
+| Layer | X is spelled | Examples |
+|-------|--------------|----------|
+| Content / planning / capability | `x` | `PLATFORM_CAPABILITY_REGISTRY`, `contentPlatformAssignment`, planner allocation and scheduling, `daily_content_plans.platform` |
+| Storage / provider | `twitter` | `scheduled_posts.platform` (`chk_platform` **rejects** `x`), `social_accounts.platform`, `platform_registry.platform_key`, community-AI and engagement-signal tables, the operations above |
+
+Rules:
+
+1. **Internal/content code uses `x` as the canonical identifier.** `twitter` is
+   accepted as an input alias; it is never an output of a content module.
+2. **Content code must not normalize `x` to `twitter`.** In particular, do not
+   reach for `normalizePlatform` from `backend/constants/platforms.ts` (or its
+   duplicate `lib/shared/platforms.ts`) inside a content module — that helper
+   canonicalizes `x` → `twitter` for the connector/analytics domain.
+3. **Conversion to the persistence representation happens only at
+   `canonicalizePlatformForDb`** (`backend/scheduler/schedulingNormalization.ts`),
+   on the write path to `scheduled_posts`.
+4. **Reads that bring stored rows back into the content layer normalize
+   `twitter` → `x`** at the read site (e.g. `plannerActivityCardService`,
+   `plannerIntegrityService`, `performanceIngestionJob`).
+5. **Provider/connector integrations continue to use `twitter`** throughout —
+   OAuth, tokens, ingestion, and every operation defined above.
+
+Note that `database/platform_registry.sql` describes `platform_key` as "the
+canonical identifier used across the system", and `CANONICAL_PLATFORMS` in both
+`platforms.ts` modules lists `twitter`. Both are accurate for the
+storage/provider layer only; neither governs content code.
+
+**Why this is written down:** commit `6b8c5a8a` replaced a content module's local
+`twitter` → `x` normalization with the connector-layer helper, which
+canonicalizes the other way. That module's own lookup tables were keyed on `x`,
+so it silently stopped matching them — the X platform-swap optimization died, and
+in a second module X posts were timed from the default instead of their
+configured slot. A third module was inverted the same way. Nothing in the
+codebase stated which vocabulary belonged to which layer, so each change looked
+reasonable at the time.
 
 ---
 

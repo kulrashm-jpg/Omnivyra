@@ -31,6 +31,7 @@ jest.mock('../../services/content/contentMemoryService', () => ({
   retrieveRelevant: jest.fn(),
   indexContentUnit: jest.fn(),
   persistOriginality: jest.fn(),
+  isContentMemoryWriteEnabled: jest.fn(() => false),
 }));
 
 jest.mock('../../services/content/originalityGate', () => ({
@@ -184,9 +185,10 @@ describe('generationRuntime.generate', () => {
     expect(mAssertOriginality).toHaveBeenCalledWith(
       expect.objectContaining({ companyId: 'co-1', contentType: 'post', candidateText: MASTER.content }),
     );
-    // Stage 6 — persistence trio
+    // Stage 6 — canonical persistence. Content-memory is no longer part of it:
+    // 4f1158a3 made the memory write its own gated stage, default-OFF.
     expect(mCreateContent).toHaveBeenCalledTimes(1);
-    expect(mIndexContentUnit).toHaveBeenCalledTimes(1);
+    expect(mIndexContentUnit).not.toHaveBeenCalled();
     expect(mPersistOriginality).toHaveBeenCalledTimes(1);
     // Stage 7 — variant generation
     expect(mBuildVariants).toHaveBeenCalledTimes(1);
@@ -259,9 +261,9 @@ describe('generationRuntime.generate — WS-1c-2 no-persist mode', () => {
   it('DEFAULT (no flags) still persists AND runs originality — byte-identical', async () => {
     const out = await generate(REQUEST);
 
-    // Persistence trio all fired.
+    // Canonical persistence fired; the content-memory stage stays gated OFF.
     expect(mCreateContent).toHaveBeenCalledTimes(1);
-    expect(mIndexContentUnit).toHaveBeenCalledTimes(1);
+    expect(mIndexContentUnit).not.toHaveBeenCalled();
     expect(mPersistOriginality).toHaveBeenCalledTimes(1);
     // Originality gate ran.
     expect(mAssertOriginality).toHaveBeenCalledTimes(1);
@@ -303,7 +305,7 @@ describe('generationRuntime.generate — WS-1c-2 no-persist mode', () => {
     // Persistence still ran (only originality disabled) — but persistOriginality
     // is skipped because there is no verdict to persist.
     expect(mCreateContent).toHaveBeenCalledTimes(1);
-    expect(mIndexContentUnit).toHaveBeenCalledTimes(1);
+    expect(mIndexContentUnit).not.toHaveBeenCalled();
     expect(mPersistOriginality).not.toHaveBeenCalled();
     // No `originality_validation` stage recorded.
     const metrics = out.metrics as Record<string, unknown>;

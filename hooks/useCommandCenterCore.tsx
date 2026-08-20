@@ -198,7 +198,7 @@ type EnhancedCardProps = Omit<CommandCenterCard, 'state' | 'requirements' | 'bad
 
 export function useCommandCenter() {
   const router = useRouter();
-  const { user, userName, userRole, selectedCompanyName, selectedCompanyId, isLoading, authChecked } = useCompanyContext();
+  const { user, userName, userRole, selectedCompanyName, selectedCompanyId, isLoading, authChecked, authUserId } = useCompanyContext();
   const [showAgain, setShowAgain] = useState<boolean | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [visibleCards, setVisibleCards] = useState<CommandCenterCard[]>([]);
@@ -250,7 +250,21 @@ export function useCommandCenter() {
   const masteryPct = masteryEvaluation.overallPercent;
   const masterySummary = masteryEvaluation.summary;
   const loadReadiness = useCallback(async () => {
-    if (!authChecked || !user?.userId || !selectedCompanyId) return;
+    // Identity gate accepts EITHER principal shape. Every request in this wave
+    // is keyed solely on selectedCompanyId — none consumes a user id — so the
+    // gate only needs to know that an authenticated principal exists.
+    //
+    // `authUserId` is the JWT sub, decoded from the token already in hand, and
+    // is ready at shell-ready time; `user.userId` is DB-backed and only lands
+    // once /api/company-profile?mode resolves. Requiring the latter held this
+    // wave for a measured ~7.3s after the shell was usable and the company was
+    // known.
+    //
+    // Both are required, not just authUserId: cookie-authenticated principals
+    // (legacy super-admin, content architect) have no bearer token, so their
+    // authUserId is permanently null while user.userId carries a synthetic id.
+    // Gating on authUserId alone would never release this wave for them.
+    if (!authChecked || (!authUserId && !user?.userId) || !selectedCompanyId) return;
 
     try {
       const getJson = (path: string) =>
@@ -452,10 +466,10 @@ export function useCommandCenter() {
     } catch (err) {
       console.warn('[command-center] Could not load readiness data:', err);
     }
-  }, [authChecked, selectedCompanyId, user?.userId]);
+  }, [authChecked, authUserId, selectedCompanyId, user?.userId]);
 
   useEffect(() => {
-    if (!authChecked || !user?.userId) return;
+    if (!authChecked || !authUserId) return;
 
     const loadPreferences = async () => {
       try {
@@ -478,7 +492,7 @@ export function useCommandCenter() {
     };
 
     void loadPreferences();
-  }, [authChecked, user?.userId]);
+  }, [authChecked, authUserId]);
 
   useEffect(() => {
     void loadReadiness();
@@ -715,9 +729,14 @@ export function useCommandCenter() {
     router.push(helpLink);
   }, [router]);
 
-  const _ef1 = !authChecked || isLoading;
+  // P1.9 - first render needs AUTHENTICATION, not company resolution.
+  // authUserId comes from the session JWT sub already held by the browser, so
+  // the shell paints while /api/company-profile?mode=list is still in flight.
+  // It is an identity signal only: company-scoped work below still requires
+  // selectedCompanyId, and the server re-verifies every request.
+  const _ef1 = !authChecked || !authUserId;
 
-  if (!user?.userId) {
+  if (!authUserId) {
     return { _ef1: true } as ReturnType<typeof useCommandCenter>;
   }
 

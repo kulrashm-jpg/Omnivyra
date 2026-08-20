@@ -1,5 +1,3 @@
-import { normalizePlatform } from '../constants/platforms';
-
 /**
  * Platform Allocation Engine
  * BOLT: assigns platform to each content slot based on content type and campaign signals.
@@ -48,6 +46,29 @@ const CONTENT_TYPE_TO_PLATFORM: Record<string, string> = {
 };
 
 
+
+/**
+ * Content-canonical platform normalization: `twitter` → `x`.
+ *
+ * This engine allocates platforms to CONTENT slots, so it speaks the content
+ * pipeline's vocabulary — the same one `CONTENT_TYPE_TO_PLATFORM` above already
+ * emits (`tweet`/`thread`/`short_insight` → `'x'`) and every downstream
+ * consumer is keyed on.
+ *
+ * It deliberately does NOT use `constants/platforms.normalizePlatform`, which
+ * canonicalizes the other way (`x` → `twitter`) for the connector /
+ * community-AI / analytics domain. With that one, `highPerforming` held
+ * `'twitter'` while the mapping table held `'x'`, so the X preference could
+ * never match, and an existing `x` slot was rewritten to `twitter` — leaking a
+ * storage-vocabulary value into a content slot.
+ *
+ * Conversion to the DB representation happens only at the persistence seam,
+ * `canonicalizePlatformForDb`. `twitter` is an accepted INPUT alias here; it is
+ * never an output.
+ */
+function normalizePlatform(platform: string | null | undefined): string {
+  return String(platform ?? '').trim().toLowerCase().replace(/^twitter$/, 'x');
+}
 
 /**
  * Determine platform for a slot using content_type mapping, then preferences.
