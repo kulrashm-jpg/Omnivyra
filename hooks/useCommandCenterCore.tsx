@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { fetchSubscriptionOnce } from './subscriptionFetcher';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import { ApiFetchError } from '../lib/swr/swrClient';
@@ -270,6 +271,9 @@ export function useCommandCenter() {
       const getJson = (path: string) =>
         fetch(path, { method: 'GET', headers: { 'Content-Type': 'application/json' } }).catch(() => null);
       const cid = encodeURIComponent(selectedCompanyId);
+      // Shared with loadUserTier via singleFlight — started here so it is still
+      // in flight alongside the wave, not serialized behind it.
+      const subscriptionPromise = fetchSubscriptionOnce(selectedCompanyId);
       const [
         data,
         profileResponse,
@@ -277,7 +281,6 @@ export function useCommandCenter() {
         externalApisResponse,
         socialStatusResponse,
         teamSummaryResponse,
-        subscriptionResponse,
         websiteSnapshotResponse,
         blogsResponse,
         creatorAssetsResponse,
@@ -295,7 +298,6 @@ export function useCommandCenter() {
         getJson(`/api/external-apis?companyId=${cid}`),
         getJson(`/api/social-accounts/status?companyId=${cid}`),
         getJson(`/api/company/team-summary?companyId=${cid}`),
-        getJson(`/api/user/subscription?company_id=${cid}`),
         getJson(`/api/website-intelligence/canonical?company_id=${cid}`),
         getJson(`/api/blogs?company_id=${cid}`),
         getJson(`/api/creator-assets?company_id=${cid}`),
@@ -319,12 +321,11 @@ export function useCommandCenter() {
       setReadinessScore(data.readiness.score);
       if (profileResponse?.ok) {
         const profileData = await profileResponse.json();
-        const [companyApiConfigData, externalApisData, socialStatusData, teamSummaryData, subscriptionData, websiteSnapshotData, blogsData, creatorAssetsData, templateCollectionsData, userTemplatesData, blockTemplatesData, automationConfigData, campaignsData, reportsData, telemetryProvidersData] = await Promise.all([
+        const [companyApiConfigData, externalApisData, socialStatusData, teamSummaryData, websiteSnapshotData, blogsData, creatorAssetsData, templateCollectionsData, userTemplatesData, blockTemplatesData, automationConfigData, campaignsData, reportsData, telemetryProvidersData] = await Promise.all([
           companyApiConfigResponse?.ok ? companyApiConfigResponse.json() : Promise.resolve(null),
           externalApisResponse?.ok ? externalApisResponse.json() : Promise.resolve(null),
           socialStatusResponse?.ok ? socialStatusResponse.json() : Promise.resolve(null),
           teamSummaryResponse?.ok ? teamSummaryResponse.json() : Promise.resolve(null),
-          subscriptionResponse?.ok ? subscriptionResponse.json() : Promise.resolve(null),
           websiteSnapshotResponse?.ok ? websiteSnapshotResponse.json() : Promise.resolve(null),
           blogsResponse?.ok ? blogsResponse.json() : Promise.resolve(null),
           creatorAssetsResponse?.ok ? creatorAssetsResponse.json() : Promise.resolve(null),
@@ -413,6 +414,9 @@ export function useCommandCenter() {
         // Assemble canonical, capability-aware Setup signals (no scoring here —
         // that lives in the engine). Channels come from social_accounts; Team
         // from the membership-summary endpoint readable by every member.
+        const subscriptionResult = await subscriptionPromise;
+        const subscriptionData: any =
+          subscriptionResult.outcome === 'ok' ? (subscriptionResult.json as any) : null;
         setSetupSignals(
           buildSetupSignals({
             profile: profileData?.profile ?? null,
@@ -555,24 +559,23 @@ export function useCommandCenter() {
     if (!authChecked || !user?.userId || !selectedCompanyId) return;
 
     const loadUserTier = async () => {
-      try {
-        const response = await fetch(`/api/user/subscription?company_id=${selectedCompanyId}`, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-        });
+      // Same request the readiness wave needs. Shared through singleFlight, so
+      // whichever effect asks first starts it and both settle together — this
+      // one still resolves on its own timing rather than waiting for the wave.
+      const result = await fetchSubscriptionOnce(selectedCompanyId);
 
-        if (response.ok) {
-          const data = await response.json();
-          setUserTier(data.data?.tier || 'free');
-          return;
-        }
-
-        console.warn('[command-center] Failed to load subscription tier');
-        setUserTier('free');
-      } catch (err) {
-        console.error('[command-center] Failed to load subscription tier:', err);
-        setUserTier('free');
+      if (result.outcome === 'ok') {
+        const data = result.json as { data?: { tier?: 'free' | 'starter' | 'pro' } } | null;
+        setUserTier(data?.data?.tier || 'free');
+        return;
       }
+
+      if (result.outcome === 'non_ok') {
+        console.warn('[command-center] Failed to load subscription tier');
+      } else {
+        console.error('[command-center] Failed to load subscription tier:', result.error);
+      }
+      setUserTier('free');
     };
 
     void loadUserTier();
