@@ -36,6 +36,7 @@ export {
 export {
   ingestLeadBatch,
   ingestNormalizedRecord,
+  isLeadIngestionEnabled,
   MAX_BATCH_SIZE,
   type IngestBatchInput,
 } from './orchestrator';

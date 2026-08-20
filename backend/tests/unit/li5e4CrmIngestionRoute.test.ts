@@ -11,16 +11,33 @@
  */
 
 const enforceCompanyAccess = jest.fn();
+const requireCapability = jest.fn();
+const trackEvent = jest.fn();
 const ingestLeadBatch = jest.fn();
 const registerBuiltInLeadSources = jest.fn();
 let registeredAtImport = 0;
+/** The capability gate. Enabled for every existing case; the gate's own tests
+ *  flip it, so the disabled path is exercised through the SAME handler. */
+let ingestionEnabled = true;
 
 jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: (...a: unknown[]) => enforceCompanyAccess(...a),
 }));
 
+// The real helper reads correlation headers and resolves a principal against the
+// DB; it has its own tests. Here it is a double, so this suite tests the ROUTE's
+// use of it — that it is called, with what, and in what order.
+jest.mock('../../security/requireCapability', () => ({
+  requireCapability: (...a: unknown[]) => requireCapability(...a),
+}));
+
+jest.mock('../../services/telemetry/telemetryDispatcher', () => ({
+  trackEvent: (...a: unknown[]) => trackEvent(...a),
+}));
+
 jest.mock('../../services/leadIngestion/orchestrator', () => ({
   ingestLeadBatch: (...a: unknown[]) => ingestLeadBatch(...a),
+  isLeadIngestionEnabled: () => ingestionEnabled,
   MAX_BATCH_SIZE: 1000,
 }));
 
@@ -33,6 +50,7 @@ jest.mock('../../../lib/platform/routeFactory', () => ({
 }));
 
 import handler from '../../../pages/api/lead-ingestion/crm';
+import { PROSPECT_INGEST } from '../../../shared/contracts/security';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 const ORG_A = '00000000-0000-4000-8000-0000000000aa';
@@ -65,8 +83,146 @@ const OK = { source: 'crm', total: 1, succeeded: 1, failed: 0, outcomes: [{ exte
 
 beforeEach(() => {
   jest.clearAllMocks();
+  ingestionEnabled = true;
   enforceCompanyAccess.mockResolvedValue({ userId: 'u-1' });
+  requireCapability.mockResolvedValue({ ok: true, principal: { userId: 'u-1' } });
   ingestLeadBatch.mockResolvedValue(OK);
+});
+
+describe('LI-5E.4 — the capability gate', () => {
+  it('disabled: 404 with exactly the two-field disabled contract', async () => {
+    ingestionEnabled = false;
+    const res = await call();
+    expect(res._status).toBe(404);
+    expect(res._json).toEqual({
+      error: 'Lead ingestion is not enabled.',
+      code: 'LEAD_INGESTION_DISABLED',
+    });
+    expect(Object.keys(res._json).sort()).toEqual(['code', 'error']);
+  });
+
+  it('disabled: authentication is never reached, so no membership lookup is spent', async () => {
+    ingestionEnabled = false;
+    await call();
+    expect(enforceCompanyAccess).not.toHaveBeenCalled();
+    expect(ingestLeadBatch).not.toHaveBeenCalled();
+  });
+
+  it('disabled: the method check still comes FIRST — a GET is 405, not 404', async () => {
+    ingestionEnabled = false;
+    const res = await call({ method: 'GET' });
+    expect(res._status).toBe(405);
+  });
+
+  it('both entry points answer with the SAME code — one capability, not two', async () => {
+    ingestionEnabled = false;
+    const res = await call();
+    expect((res._json as { code?: string }).code).toBe('LEAD_INGESTION_DISABLED');
+  });
+
+  it('enabled: the gate is a passthrough — the route behaves exactly as before', async () => {
+    const res = await call();
+    expect(res._status).toBe(200);
+    expect(enforceCompanyAccess).toHaveBeenCalled();
+    expect(ingestLeadBatch).toHaveBeenCalled();
+  });
+});
+
+describe('LI-5E.4 — capability authorization', () => {
+  it('requires the SAME prospect.ingest capability as the manual route', async () => {
+    await call();
+    expect(requireCapability).toHaveBeenCalledTimes(1);
+    const opts = requireCapability.mock.calls[0][2] as Record<string, unknown>;
+    expect(opts.capability).toBe(PROSPECT_INGEST);
+    expect(opts.organizationId).toBe(ORG_A);
+    expect(typeof opts.reason).toBe('string');
+  });
+
+  it('a member WITHOUT the capability is refused, and never reaches ingestion', async () => {
+    requireCapability.mockImplementation(async (_req: unknown, res: Res) => {
+      res.status(403).json({ error: 'Forbidden', code: 'CAPABILITY_DENIED' });
+      return { ok: false, sent: true };
+    });
+    const res = await call();
+    expect(res._status).toBe(403);
+    expect(ingestLeadBatch).not.toHaveBeenCalled();
+    expect(trackEvent).not.toHaveBeenCalled();
+  });
+
+  it('authorization is bound to the verified tenant, never a body-supplied one', async () => {
+    await call({ query: { company_id: ORG_A } });
+    const opts = requireCapability.mock.calls[0][2] as Record<string, unknown>;
+    expect(opts.organizationId).toBe(ORG_A);
+    expect(opts.organizationId).not.toBe(ORG_B);
+  });
+});
+
+describe('LI-5E.4 — gate ordering', () => {
+  it('a wrong method still wins over everything', async () => {
+    ingestionEnabled = false;
+    const res = await call({ method: 'GET' });
+    expect(res._status).toBe(405);
+    expect(enforceCompanyAccess).not.toHaveBeenCalled();
+    expect(requireCapability).not.toHaveBeenCalled();
+  });
+
+  it('the disabled flag returns BEFORE authorization — 404, and no capability check', async () => {
+    ingestionEnabled = false;
+    const res = await call();
+    expect(res._status).toBe(404);
+    expect(requireCapability).not.toHaveBeenCalled();
+  });
+
+  it('a membership failure stays a membership failure — capability is never consulted', async () => {
+    enforceCompanyAccess.mockResolvedValue(null);
+    await call();
+    expect(requireCapability).not.toHaveBeenCalled();
+    expect(ingestLeadBatch).not.toHaveBeenCalled();
+  });
+
+  it('capability is checked only AFTER membership succeeds', async () => {
+    await call();
+    expect(enforceCompanyAccess.mock.invocationCallOrder[0])
+      .toBeLessThan(requireCapability.mock.invocationCallOrder[0]);
+  });
+});
+
+describe('LI-5E.4 — durable batch telemetry', () => {
+  it('one admitted batch emits exactly ONE lead.ingestion_batch event', async () => {
+    await call();
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+    expect((trackEvent.mock.calls[0][0] as { type: string }).type).toBe('lead.ingestion_batch');
+  });
+
+  it('carries the verified tenant, the actor, the crm source and the counts', async () => {
+    await call();
+    const e = trackEvent.mock.calls[0][0] as Record<string, unknown>;
+    expect(e.organizationId).toBe(ORG_A);
+    expect(e.actorId).toBe('u-1');
+    expect(e.metadata).toEqual({ source: 'crm', total: 1, succeeded: 1, failed: 0 });
+  });
+
+  it('dedupes on the ingestionRunId when the caller supplied one', async () => {
+    await call({ body: { records: [{ externalId: 'CRM-1' }], ingestionRunId: 'run-9' } } as Partial<NextApiRequest>);
+    const e = trackEvent.mock.calls[0][0] as Record<string, unknown>;
+    expect(e.entityId).toBe('run-9');
+    expect(e.dedupKey).toBe('lead.ingestion_batch:run-9');
+  });
+
+  it('emits NO PII — counts, a source constant and identifiers only', async () => {
+    await call({ body: { records: [{ externalId: 'CRM-1', email: 'a@x.test', firstName: 'Ada' }] } } as Partial<NextApiRequest>);
+    const blob = JSON.stringify(trackEvent.mock.calls[0][0]);
+    expect(blob).not.toContain('a@x.test');
+    expect(blob).not.toContain('Ada');
+    const e = trackEvent.mock.calls[0][0] as { metadata: Record<string, unknown> };
+    expect(Object.keys(e.metadata).sort()).toEqual(['failed', 'source', 'succeeded', 'total']);
+  });
+
+  it('emits nothing when the global gate refused the request', async () => {
+    ingestionEnabled = false;
+    await call();
+    expect(trackEvent).not.toHaveBeenCalled();
+  });
 });
 
 /**

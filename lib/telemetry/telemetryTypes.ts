@@ -81,6 +81,7 @@ export type TelemetryEventType =
   | 'lead.qualified'
   | 'lead.assigned'
   | 'lead.workflow_triggered'
+  | 'lead.ingestion_batch'
   // integrations
   | 'integration.connected'
   | 'integration.disconnected'

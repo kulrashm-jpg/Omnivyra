@@ -54,6 +54,7 @@ import {
   CRON_CONFIG_MANAGE,
   CONTENT_ARCHITECT_READ,
   CONTENT_ARCHITECT_WRITE,
+  PROSPECT_INGEST,
   // Phase: Platform Authority Isolation — platform-tier billing
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,
@@ -121,6 +122,8 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     BILLING_PLATFORM_MANAGE,
     BILLING_PLAN_MANAGE,
     BILLING_GRANT_FREE_CREDITS,
+    // Prospect identity spine. No hierarchy entry — it implies nothing.
+    PROSPECT_INGEST,
   ],
   COMPANY_ADMIN: [
     ORGANIZATION_MANAGE,        // org settings, member management (NOT delete)
@@ -134,6 +137,10 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     CAMPAIGN_DELETE,
     CONTENT_PUBLISH,            // expansion: review + create
     CONTENT_DELETE,
+    // Prospect identity spine. A tenant admin may import their own prospects;
+    // no content-tier or VIEW_ONLY role may, because an ingested assertion is a
+    // durable claim about a real person and cannot be unpublished.
+    PROSPECT_INGEST,
   ],
   CONTENT_ARCHITECT: [
     // Platform-level role: read+author across all companies.

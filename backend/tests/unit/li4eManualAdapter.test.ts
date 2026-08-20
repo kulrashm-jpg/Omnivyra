@@ -101,7 +101,12 @@ jest.mock('../../db/writeOwner', () => ({
         const defaults: Row = table === 'unified_persons'
           ? { status: 'active', merged_into_id: null }
           : table === 'person_duplicate_candidates' ? { status: 'open' }
-            : {};
+            // `source_records.observation_count integer NOT NULL DEFAULT 1`
+            // (20261002000000). The boundary never sets it on insert, so without
+            // the default here a first observation reads as undefined and the
+            // count contract below could not be asserted at all.
+            : table === 'source_records' ? { observation_count: 1 }
+              : {};
         const created: Row = { id: nextId(table), created_at: '2026-01-01T00:00:00.000Z', ...defaults, ...row };
         (db[table] ??= []).push(created);
         return { data: { id: created.id }, error: null };
@@ -155,7 +160,19 @@ const person = (over: Partial<ManualLeadInput> = {}): Record<string, unknown> =>
 const ingest = (org: string, records: Array<Record<string, unknown>>) =>
   ingestLeadBatch({ organizationId: org, source: MANUAL_SOURCE, records, now: '2026-08-15T00:00:00.000Z' });
 
+// The ingestion capability gate is default-OFF. This suite drives the REAL
+// orchestrator end to end, so it states the enabled contract explicitly and
+// restores the ambient value afterwards.
+const INGESTION_FLAG = 'ENABLE_LEAD_INGESTION';
+let ingestionFlagBefore: string | undefined;
+beforeAll(() => { ingestionFlagBefore = process.env[INGESTION_FLAG]; });
+afterAll(() => {
+  if (ingestionFlagBefore === undefined) delete process.env[INGESTION_FLAG];
+  else process.env[INGESTION_FLAG] = ingestionFlagBefore;
+});
+
 beforeEach(() => {
+  process.env[INGESTION_FLAG] = 'true';
   for (const k of Object.keys(db)) db[k] = [];
   seq = 0;
   failTable = null;
@@ -354,6 +371,179 @@ describe('LI-4E — 9/11. idempotency and the duplicate path', () => {
     expect(db.person_duplicate_candidates).toHaveLength(1);
     expect(again.outcomes[0].duplicatesAlreadyOpen).toBe(1);
     expect(again.outcomes[0].duplicatesParked).toBe(0);
+  });
+});
+
+/**
+ * `observation_count` — the ONE non-idempotent effect in the ingestion path.
+ *
+ * It lives on `source_records` and nowhere else: it counts how many times a
+ * given provider record was OBSERVED, while the row itself stays unique. Row
+ * identity and observation count are deliberately different guarantees, and the
+ * boundary says so — "the ROW IDENTITY … is exact and is what the tests assert".
+ *
+ * These tests pin the sequential contract only. The documented KNOWN LIMIT is
+ * that the read-modify-write may UNDER-report under simultaneous re-ingestion,
+ * so nothing here asserts a count under concurrency — that would pin a value the
+ * implementation deliberately does not promise.
+ */
+describe('LI-4E — observation_count: the source record is counted, not duplicated', () => {
+  it('a first observation lands at the schema default of 1', async () => {
+    await ingest(ORG_A, [person({ referenceId: 'OBS-1' })]);
+    expect(db.source_records).toHaveLength(1);
+    expect(db.source_records[0].observation_count).toBe(1);
+  });
+
+  it('re-ingesting the SAME provider record increments rather than duplicating', async () => {
+    await ingest(ORG_A, [person({ referenceId: 'OBS-1' })]);
+    await ingest(ORG_A, [person({ referenceId: 'OBS-1' })]);
+
+    expect(db.source_records).toHaveLength(1);             // identity is exact
+    expect(db.source_records[0].observation_count).toBe(2); // the count is not
+  });
+
+  it('the increment builds on the stored value — it never resets to 1', async () => {
+    for (let i = 0; i < 4; i++) await ingest(ORG_A, [person({ referenceId: 'OBS-1' })]);
+    expect(db.source_records).toHaveLength(1);
+    expect(db.source_records[0].observation_count).toBe(4);
+  });
+
+  it('a CHANGED payload for the same record still counts one observation, not a new row', async () => {
+    await ingest(ORG_A, [person({ referenceId: 'OBS-1', jobTitle: 'Head of Ops' })]);
+    await ingest(ORG_A, [person({ referenceId: 'OBS-1', jobTitle: 'VP Operations' })]);
+    expect(db.source_records).toHaveLength(1);
+    expect(db.source_records[0].observation_count).toBe(2);
+  });
+
+  it('a DIFFERENT provider record for the same person is its own row at 1', async () => {
+    // Source-record identity is (org, provider, entity_type, source_record_id).
+    // The person is reused; the count is per record, never per person.
+    await ingest(ORG_A, [person({ referenceId: 'OBS-1' })]);
+    await ingest(ORG_A, [person({ referenceId: 'OBS-2' })]);
+
+    expect(db.unified_persons).toHaveLength(1);            // one person
+    expect(db.source_records).toHaveLength(2);             // two observations of it
+    expect(db.source_records.map((r) => r.observation_count).sort()).toEqual([1, 1]);
+  });
+
+  it('the same record in another tenant starts its own count — the counter is tenant-scoped', async () => {
+    await ingest(ORG_A, [person({ referenceId: 'OBS-1' })]);
+    await ingest(ORG_A, [person({ referenceId: 'OBS-1' })]);
+    await ingest(ORG_B, [person({ referenceId: 'OBS-1' })]);
+
+    const a = db.source_records.find((r) => r.organization_id === ORG_A);
+    const b = db.source_records.find((r) => r.organization_id === ORG_B);
+    expect(a!.observation_count).toBe(2);
+    expect(b!.observation_count).toBe(1);
+  });
+
+  it('a record that never reached provenance is never counted', async () => {
+    // Identity fails ⇒ the boundary is never called ⇒ no row, no count.
+    failTable = 'unified_persons';
+    const r = await ingest(ORG_A, [person({ referenceId: 'OBS-1' })]);
+    expect(r.failed).toBe(1);
+    expect(db.source_records ?? []).toHaveLength(0);
+  });
+});
+
+/**
+ * Mid-record partial-write residue.
+ *
+ * The chain is NOT transactional — the orchestrator states it — so a failure at
+ * step N leaves steps 1..N-1 committed. That is the existing contract, and these
+ * tests exist to DOCUMENT and PROTECT it, not to argue with it: they assert the
+ * rows that survive, not merely the error that is returned.
+ */
+describe('LI-4E — partial-write residue: what survives a mid-record failure', () => {
+  it('provenance failure: the person is ALREADY durable, and the record still reports failed', async () => {
+    failTable = 'source_records';
+    const r = await ingest(ORG_A, [person({ referenceId: 'PW-1' })]);
+
+    expect(r.succeeded).toBe(0);
+    expect(r.failed).toBe(1);
+    expect(r.outcomes[0]).toMatchObject({ ok: false, rejection: 'provenance_failed' });
+
+    // STATE, not just the verdict: the identity survives the failure.
+    expect(db.unified_persons).toHaveLength(1);
+    expect(db.unified_persons[0].company_id).toBe(ORG_A);
+    expect(db.source_records ?? []).toHaveLength(0);
+    expect(db.source_assertions ?? []).toHaveLength(0);
+  });
+
+  it('identity failure: nothing downstream is written at all', async () => {
+    failTable = 'unified_persons';
+    const r = await ingest(ORG_A, [person({ referenceId: 'PW-2' })]);
+
+    expect(r.outcomes[0]).toMatchObject({ ok: false, rejection: 'identity_failed' });
+    expect(db.unified_persons ?? []).toHaveLength(0);
+    expect(db.source_records ?? []).toHaveLength(0);
+    expect(db.source_assertions ?? []).toHaveLength(0);
+    expect(db.person_duplicate_candidates ?? []).toHaveLength(0);
+  });
+
+  it('duplicate-detection failure: person AND evidence are durable, yet ok is false', async () => {
+    // The sharpest case: the record reports failed while the person and its
+    // evidence stand. The outcome carries the ids precisely so the operator can
+    // see what landed. Detection only writes when a candidate actually exists,
+    // so this reuses the disjoint-identifier shape the park case establishes.
+    await ingest(ORG_A, [{ referenceId: 'PW-P', phone: '+15550100000', firstName: 'Split' }]);
+    await ingest(ORG_A, [{ referenceId: 'PW-E', email: 'split@example.test', firstName: 'Split' }]);
+    failTable = 'person_duplicate_candidates';
+    const r = await ingest(ORG_A, [{ referenceId: 'PW-3', email: 'split@example.test', phone: '+15550100000' }]);
+
+    const o = r.outcomes[0];
+    expect(o.ok).toBe(false);
+    expect(o.rejection).toBe('duplicate_detection_failed');
+    expect(o.personId).toBeTruthy();          // reported, because it is durable
+    expect(o.sourceRecordId).toBeTruthy();    // reported, because it is durable
+
+    expect(db.unified_persons.length).toBeGreaterThan(1);
+    expect(db.source_records.some((s) => s.source_record_id === 'PW-3')).toBe(true);
+    expect(db.source_assertions.length).toBeGreaterThan(0);
+  });
+
+  it('a failed record never reports success — no false green anywhere in the batch', async () => {
+    failTable = 'source_records';
+    const r = await ingest(ORG_A, [person({ referenceId: 'PW-4' })]);
+    expect(r.outcomes.every((o) => o.ok === false)).toBe(true);
+    expect(r.succeeded).toBe(0);
+  });
+
+  it('one record failing mid-write does not stop the rest of the batch', async () => {
+    // Arm detection to fail, then send a batch whose FIRST record trips it and
+    // whose SECOND does not. Per-record independence has to hold even when the
+    // failing record has already left residue behind.
+    await ingest(ORG_A, [{ referenceId: 'PW-P', phone: '+15550100000', firstName: 'Split' }]);
+    await ingest(ORG_A, [{ referenceId: 'PW-E', email: 'split@example.test', firstName: 'Split' }]);
+    failTable = 'person_duplicate_candidates';
+
+    const r = await ingest(ORG_A, [
+      { referenceId: 'PW-5', email: 'split@example.test', phone: '+15550100000' }, // trips detection
+      person({ referenceId: 'PW-6', email: 'unrelated@example.com' }),             // clean
+    ]);
+
+    expect(r.total).toBe(2);
+    expect(r.outcomes[0]).toMatchObject({ ok: false, rejection: 'duplicate_detection_failed' });
+    expect(r.outcomes[1].ok).toBe(true);          // the failure did not stop the batch
+    expect(db.source_records.some((s) => s.source_record_id === 'PW-6')).toBe(true);
+  });
+
+  it('retrying after the fault clears CONVERGES — the residue is reused, never duplicated', async () => {
+    failTable = 'source_records';
+    const first = await ingest(ORG_A, [person({ referenceId: 'PW-7' })]);
+    expect(first.failed).toBe(1);
+    expect(db.unified_persons).toHaveLength(1);   // residue from the failed attempt
+
+    failTable = null;
+    const second = await ingest(ORG_A, [person({ referenceId: 'PW-7' })]);
+    expect(second.succeeded).toBe(1);
+
+    // The retry reused the orphaned person rather than creating a second one,
+    // and the source record is a FIRST observation — the failed attempt never
+    // reached the boundary, so it was never counted.
+    expect(db.unified_persons).toHaveLength(1);
+    expect(db.source_records).toHaveLength(1);
+    expect(db.source_records[0].observation_count).toBe(1);
   });
 });
 

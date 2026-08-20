@@ -59,7 +59,19 @@ const personRecord = (account: NormalizedAccount | null): AdapterResult => ({
 const accountPass = () => ingested.find((i) => i.entityType === 'account');
 const personPass = () => ingested.find((i) => i.entityType === 'person');
 
+// The ingestion capability gate is default-OFF. This suite drives the REAL
+// per-record path, so it states the enabled contract explicitly and restores
+// the ambient value afterwards.
+const INGESTION_FLAG = 'ENABLE_LEAD_INGESTION';
+let ingestionFlagBefore: string | undefined;
+beforeAll(() => { ingestionFlagBefore = process.env[INGESTION_FLAG]; });
+afterAll(() => {
+  if (ingestionFlagBefore === undefined) delete process.env[INGESTION_FLAG];
+  else process.env[INGESTION_FLAG] = ingestionFlagBefore;
+});
+
 beforeEach(() => {
+  process.env[INGESTION_FLAG] = 'true';
   ingested.length = 0;
   ingestThrows = null;
   accountResolution = { accountId: 'account-1', outcome: 'created' };

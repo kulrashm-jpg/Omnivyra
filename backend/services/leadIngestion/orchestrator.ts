@@ -47,6 +47,23 @@ import { getLeadSourceAdapter, UnsupportedSourceError } from './registry';
 /** A batch bounded so a single call cannot be used to exhaust the platform. */
 export const MAX_BATCH_SIZE = 1_000;
 
+/**
+ * The ingestion capability switch. Default OFF — absent, empty or unrecognised
+ * all mean disabled, so a misconfiguration cannot open the write surface.
+ *
+ * Read on every call rather than captured at module load, so flipping the
+ * variable takes effect on the next request in a warm process.
+ *
+ * Parsing is the repository's existing enablement convention
+ * (`isCreatorRenderingEnabled`, `isCreatorWorkspaceLifecycleEnabled`): trimmed,
+ * lower-cased, `'1'` or `'true'`. Not restated anywhere else — the HTTP routes
+ * and the per-record gate below both call THIS function.
+ */
+export function isLeadIngestionEnabled(): boolean {
+  const raw = String(process.env.ENABLE_LEAD_INGESTION ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true';
+}
+
 export interface IngestBatchInput {
   /** TENANT. Authoritative; a record claiming a different tenant is rejected. */
   organizationId: string;
@@ -150,6 +167,20 @@ export async function ingestNormalizedRecord(
   const record = result.normalized;
   const at = options.now ?? new Date().toISOString();
   const externalId = record?.externalId ?? null;
+
+  // ── CAPABILITY GATE ─────────────────────────────────────────────────────
+  // Defence in depth, and the reason it lives HERE rather than in
+  // `ingestLeadBatch`: this function is the single funnel every record passes
+  // through, and it is exported for callers who drive one record without a
+  // batch. Guarding the batch alone would leave that surface open.
+  //
+  // Evaluated per record and BEFORE the identity resolver — the first write of
+  // the chain — so a flag flipped mid-batch stops the next record rather than
+  // interrupting one already part-written. Nothing here is a rollback: it is
+  // simply a boundary the write path has not yet crossed.
+  if (!isLeadIngestionEnabled()) {
+    return fail(externalId, 'ingestion_disabled', new Error('lead ingestion is disabled'));
+  }
 
   const invalid = validateNormalizedRecord(record);
   if (invalid) return fail(externalId, 'validation_failed', invalid);

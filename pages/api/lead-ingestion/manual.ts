@@ -1,7 +1,10 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { ingestLeadBatch, MAX_BATCH_SIZE } from '../../../backend/services/leadIngestion/orchestrator';
+import { ingestLeadBatch, isLeadIngestionEnabled, MAX_BATCH_SIZE } from '../../../backend/services/leadIngestion/orchestrator';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { PROSPECT_INGEST } from '../../../shared/contracts/security';
+import { trackEvent } from '../../../backend/services/telemetry/telemetryDispatcher';
 import { registerBuiltInLeadSources } from '../../../backend/services/leadIngestion';
 import { MANUAL_SOURCE } from '../../../backend/services/leadIngestion/adapters/manualAdapter';
 
@@ -67,6 +70,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // Capability gate: before authentication, so a disabled route costs no
+  // membership lookup and tells an unauthorised caller nothing about tenancy.
+  if (!isLeadIngestionEnabled()) {
+    return res.status(404).json({
+      error: 'Lead ingestion is not enabled.',
+      code: 'LEAD_INGESTION_DISABLED',
+    });
+  }
+
   const companyId = typeof req.query.company_id === 'string' ? req.query.company_id : null;
   if (!companyId) return res.status(400).json({ error: 'company_id is required' });
   if (!UUID.test(companyId)) return res.status(400).json({ error: 'company_id must be a uuid' });
@@ -75,6 +87,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // so an authorization failure never reaches the adapter.
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+
+  // Membership says WHICH tenant; the capability says WHETHER this principal may
+  // write to that tenant's identity spine. Both are required, in that order:
+  // membership failure must stay a membership failure. Bound to the VERIFIED
+  // companyId — the body is never an authority here. requireCapability writes
+  // its own 401/403 and audits allow and deny alike to capability_audit_log.
+  const guard = await requireCapability(req, res, {
+    capability: PROSPECT_INGEST,
+    organizationId: companyId,
+    reason: 'manual lead ingestion into the prospect identity spine',
+  });
+  if (guard.ok !== true) return;
 
   const body = isRecord(req.body) ? req.body : null;
   if (!body) return res.status(400).json({ error: 'a JSON object body is required' });
@@ -102,12 +126,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'every record must be an object' });
   }
 
+  const ingestionRunId = typeof body.ingestionRunId === 'string' ? body.ingestionRunId : null;
+
   try {
     const result = await ingestLeadBatch({
       organizationId: companyId,          // the VERIFIED tenant, never the body's
       source: MANUAL_SOURCE,
       records: records as Array<Record<string, unknown>>,
-      ingestionRunId: typeof body.ingestionRunId === 'string' ? body.ingestionRunId : null,
+      ingestionRunId,
+    });
+
+    // ONE durable event per ADMITTED batch — never per record, and never for a
+    // request the gate or the capability refused, because neither was admitted.
+    // Emitted here rather than in the orchestrator because this is the only
+    // frame holding the actor, the verified tenant, the source AND the counts.
+    // Counts and the source constant only: no email, name, or payload.
+    trackEvent({
+      type: 'lead.ingestion_batch',
+      organizationId: companyId,          // VERIFIED, never the body's
+      actorId: guard.principal.userId,
+      entityId: ingestionRunId,
+      dedupKey: ingestionRunId ? `lead.ingestion_batch:${ingestionRunId}` : null,
+      metadata: {
+        source: result.source,
+        total: result.total,
+        succeeded: result.succeeded,
+        failed: result.failed,
+      },
     });
 
     // Identifiers, counts and outcomes only. `IngestionRecordOutcome` carries no

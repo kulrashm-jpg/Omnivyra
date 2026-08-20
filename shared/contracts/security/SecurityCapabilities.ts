@@ -116,6 +116,27 @@ export const BILLING_PLAN_MANAGE = 'billing.plan.manage' as const;
  */
 export const BILLING_GRANT_FREE_CREDITS = 'billing.grant_free_credits' as const;
 
+// ── Prospect identity spine ─────────────────────────────────────────────────
+/**
+ * Write external prospect records into the canonical identity spine —
+ * `unified_persons`, `identity_claims`, `prospect_accounts`, `source_records`,
+ * `source_assertions`, `person_duplicate_candidates`.
+ *
+ * PER-TENANT, and deliberately its own capability rather than a reuse:
+ *   - `IDENTITY_ADMIN` governs PRINCIPAL identity (platform users and their
+ *     roles). A prospect is not a principal, and identity.admin is a
+ *     platform-tier grant no tenant should need to ingest its own data.
+ *   - `INTEGRATION_MANAGE` implies `INTEGRATION_SECRETS_READ` by hierarchy, and
+ *     ingestion touches no provider, credential or network call — gating
+ *     credential-free operator entry on the credential capability inverts it.
+ *   - `CONTENT_CREATE` is a different subject entirely.
+ *
+ * Holds NO hierarchy relationship in either direction: it neither implies nor
+ * is implied by anything, which keeps it out of the capability-inflation
+ * surface. Unlike content, an ingested assertion cannot be unpublished.
+ */
+export const PROSPECT_INGEST = 'prospect.ingest' as const;
+
 // ── Content Architect (Wave Phase 1 — replaces synthetic userId='content_architect') ──
 /** Read campaign/company-profile data across companies. Content Architect role. */
 export const CONTENT_ARCHITECT_READ = 'content_architect.read' as const;
@@ -170,6 +191,8 @@ export const ALL_CAPABILITIES = [
   BILLING_AUDIT_VIEW,
   CONTENT_ARCHITECT_READ,
   CONTENT_ARCHITECT_WRITE,
+  // Prospect identity spine — per-tenant ingestion authority
+  PROSPECT_INGEST,
   // Phase: Platform Authority Isolation — platform-tier billing capabilities
   BILLING_PLATFORM_MANAGE,
   BILLING_PLAN_MANAGE,

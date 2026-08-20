@@ -196,7 +196,10 @@ export type IngestionRejection =
   | 'provenance_failed'
   | 'identity_failed'
   | 'duplicate_detection_failed'
-  | 'account_resolution_failed';
+  | 'account_resolution_failed'
+  /** The ingestion capability is switched off. Reported, never thrown, so a
+   *  batch stopped mid-flight still returns the outcomes it already had. */
+  | 'ingestion_disabled';
 
 /** The outcome of ONE record. A batch is a list of these — never a single verdict. */
 export interface IngestionRecordOutcome {

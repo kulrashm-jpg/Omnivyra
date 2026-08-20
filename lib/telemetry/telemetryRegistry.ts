@@ -82,6 +82,9 @@ export const TELEMETRY_EVENTS: Record<TelemetryEventType, TelemetryEventDefiniti
   'lead.qualified':         def('lead.qualified', 'lead_management', 'lead', 'count', LIFETIME, {}, 'A lead was qualified.'),
   'lead.assigned':          def('lead.assigned', 'lead_management', 'lead', 'count', DAYS(365), {}, 'A lead was assigned.'),
   'lead.workflow_triggered':def('lead.workflow_triggered', 'lead_management', 'lead_workflow', 'count', DAYS(365), { workflow: 'string' }, 'A lead workflow was triggered.'),
+  // One event per ADMITTED ingestion batch — never per record. Counts and the
+  // source constant only: the operator's payload never reaches telemetry.
+  'lead.ingestion_batch':   def('lead.ingestion_batch', 'lead_management', 'lead_ingestion_batch', 'count', LIFETIME, { source: 'string', total: 'number', succeeded: 'number', failed: 'number' }, 'A lead ingestion batch was admitted and processed.'),
   // ── integrations ─────────────────────────────────────────────────────────────
   'integration.connected':    def('integration.connected', 'integrations', 'integration', 'latest', LIFETIME, { provider: 'string', type: 'string' }, 'An integration was connected.'),
   'integration.disconnected': def('integration.disconnected', 'integrations', 'integration', 'latest', LIFETIME, { provider: 'string' }, 'An integration was disconnected.'),

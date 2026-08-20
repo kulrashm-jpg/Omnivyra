@@ -119,7 +119,20 @@ const fakeAdapter = (over: Partial<LeadSourceAdapter> = {}): LeadSourceAdapter =
 
 const row = (over: Record<string, unknown> = {}) => ({ id: 'EXT-1', email: 'a@x.test', name: 'A Person', ...over });
 
+// The ingestion capability gate is default-OFF. This suite drives the REAL
+// orchestrator, so it states the enabled contract explicitly rather than
+// inheriting whatever the ambient environment happens to hold — and restores
+// the ambient value afterwards so no other suite is contaminated.
+const INGESTION_FLAG = 'ENABLE_LEAD_INGESTION';
+let ingestionFlagBefore: string | undefined;
+beforeAll(() => { ingestionFlagBefore = process.env[INGESTION_FLAG]; });
+afterAll(() => {
+  if (ingestionFlagBefore === undefined) delete process.env[INGESTION_FLAG];
+  else process.env[INGESTION_FLAG] = ingestionFlagBefore;
+});
+
 beforeEach(() => {
+  process.env[INGESTION_FLAG] = 'true';
   __resetLeadSourceRegistry();
   calls.length = 0;
   ingested.length = 0;
