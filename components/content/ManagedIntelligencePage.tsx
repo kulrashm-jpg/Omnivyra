@@ -285,7 +285,12 @@ export default function ManagedIntelligencePage({
     void router.push({ pathname: pickerEditorPath, query: { prefill: token, format: selectedFormat } });
   };
 
-  if (authLoading || loading) {
+  // P1.8 — only AUTH blocks first render. The company-library and profile reads
+  // behind `loading` are enrichment for the Recommended Cards section, and used
+  // to hold the whole page — including the creation-mode picker, both entry
+  // cards and Suggest with AI — behind a full-screen spinner. They now resolve
+  // in place while the page is already interactive.
+  if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <Loader2 className="h-10 w-10 animate-spin text-gray-400" />
@@ -503,6 +508,13 @@ export default function ManagedIntelligencePage({
             </div>
 
             <div className="space-y-4">
+              {loading ? (
+                <div data-testid="managed-intelligence-library-loading" className="flex items-center gap-2 text-xs text-gray-500">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading your company context and existing library...
+                </div>
+              ) : null}
+
               {suggestionsLoading ? (
                 <div className="flex items-center gap-2 text-xs text-violet-600">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

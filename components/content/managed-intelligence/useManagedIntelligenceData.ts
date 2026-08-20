@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CardSelectionBundle, CardSuggestions, ExistingItem, ManagedIntelligenceProps, RecommendationCard } from './types';
 import { buildDefaultRecommendations } from './recommendations';
+import { fetchCardSuggestions } from './briefSuggestionsFetcher';
 
 type UseManagedIntelligenceDataInput = {
   contentType: ManagedIntelligenceProps['contentType'];
@@ -72,6 +73,11 @@ export function useManagedIntelligenceData(input: UseManagedIntelligenceDataInpu
   useEffect(() => {
     if (!selectedCompanyId || cards.length === 0 || suggestionsLoading) return;
     if (cardSuggestions[0]) return;
+    // P1.8 — the page no longer blocks on `loading`, so wait for the profile /
+    // library reads here instead. This keeps the request body byte-identical to
+    // the previous behaviour (chips always saw resolved company context) while
+    // the rest of the page stays interactive.
+    if (loading) return;
 
     const currentContent = existingItems.length > 0
       ? `Existing ${contentType.replace('-', ' ')} library: ${existingItems.slice(0, 3).map((item) => item.title).join(' · ')}${existingItems.length > 3 ? ' · ...' : ''}`
@@ -84,40 +90,31 @@ export function useManagedIntelligenceData(input: UseManagedIntelligenceDataInpu
     ].join(' ');
 
     setSuggestionsLoading(true);
+    // P1.8 — the per-card requests are independent, so they run concurrently
+    // instead of one-at-a-time. Body shape, endpoint and count are unchanged.
     const fetchAll = async () => {
-      const results: Record<number, CardSuggestions> = {};
-      for (let index = 0; index < cards.length; index += 1) {
-        const card = cards[index];
-        try {
-          const response = await fetch('/api/company/blog/brief-suggestions', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+      const results = await fetchCardSuggestions(
+        cards.map((card, index) => ({
+          index,
+          body: {
+            company_id: selectedCompanyId,
+            topic: card.topic,
+            reason: card.reason,
+            brief: {
               company_id: selectedCompanyId,
-              topic: card.topic,
-              reason: card.reason,
-              brief: {
-                company_id: selectedCompanyId,
-                company_name: companyName,
-                company_context: companyContext || 'Company profile context available.',
-                current_content: currentContent,
-                writing_style: writingStyle,
-                related_titles: existingItems.slice(0, 3).map((item) => item.title),
-                intent: card.intent,
-                tone: 'Specific, modern, and high-signal',
-              },
-              currentValues: {},
-              count: suggestionCount,
-            }),
-          });
-          if (response.ok) {
-            results[index] = await response.json();
-          }
-        } catch {
-          // Leave this card without suggestions and keep the rest working.
-        }
-      }
+              company_name: companyName,
+              company_context: companyContext || 'Company profile context available.',
+              current_content: currentContent,
+              writing_style: writingStyle,
+              related_titles: existingItems.slice(0, 3).map((item) => item.title),
+              intent: card.intent,
+              tone: 'Specific, modern, and high-signal',
+            },
+            currentValues: {},
+            count: suggestionCount,
+          },
+        })),
+      );
       setCardSuggestions(results);
       setSuggestionsLoading(false);
     };
@@ -131,6 +128,7 @@ export function useManagedIntelligenceData(input: UseManagedIntelligenceDataInpu
     contentType,
     depthLabel,
     existingItems,
+    loading,
     selectedCompanyId,
     suggestionCount,
     suggestionsLoading,
