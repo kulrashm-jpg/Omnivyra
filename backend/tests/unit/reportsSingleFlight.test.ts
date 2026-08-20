@@ -18,6 +18,11 @@ const failResponse = (status: number) =>
 
 const BODY = { success: true, reports: [{ id: 'r1' }, { id: 'r2' }], reportState: 'free_available' };
 
+/** The transport's real argument tuple, derived rather than restated: a double
+ *  that declares fewer parameters than `apiFetch` records its calls as `[]`, and
+ *  then `calls[0][1]` — the init object these tests assert on — cannot be read. */
+type ApiFetchArgs = Parameters<typeof import('@/lib/apiFetch')['apiFetch']>;
+
 const deferred = () => {
   let resolve!: (v: any) => void;
   const promise = new Promise<any>((r) => { resolve = r; });
@@ -89,10 +94,10 @@ describe('isolation', () => {
   });
 
   it('no-store is passed to the transport only when requested', async () => {
-    const impl = jest.fn(async () => okResponse(BODY));
+    const impl = jest.fn(async (..._a: ApiFetchArgs) => okResponse(BODY));
     await fetchReportsOnce('company-4', { noStore: true }, impl as never);
     expect(impl.mock.calls[0][1]).toMatchObject({ cache: 'no-store' });
-    const impl2 = jest.fn(async () => okResponse(BODY));
+    const impl2 = jest.fn(async (..._a: ApiFetchArgs) => okResponse(BODY));
     await fetchReportsOnce('company-5', {}, impl2 as never);
     expect(impl2.mock.calls[0][1]).not.toHaveProperty('cache');
   });
