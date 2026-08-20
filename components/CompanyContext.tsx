@@ -395,7 +395,15 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
               attemptRes = await fetchWithTimeout(
                 '/api/company-profile?mode=list',
                 {},
-                8000,
+                // 8s aborted healthy-but-slow responses. mode=list is the gating
+                // request for selectedCompanyId and user.userId, and its measured
+                // spread runs 1.2s-6s with a tail past 8s; an abort there is
+                // indistinguishable from a failure, so the loop retried a request
+                // that was about to succeed and added load to the endpoint exactly
+                // when it was slowest. 15s clears the observed healthy tail while
+                // still recovering a genuinely hung request. Retry conditions,
+                // backoff, attempt count and the exhausted-retry path are unchanged.
+                15000,
               );
             } catch {
               attemptRes = null;
