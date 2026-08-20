@@ -96,13 +96,27 @@ export async function syncFeatureCompletion(
       });
     }
 
-    // Step 2: Upsert each feature
-    let changesCount = 0;
-
-    for (const feature of computedFeatures) {
+    // Step 2: Upsert every feature in ONE statement.
+    //
+    // This loop used to await a separate upsert per feature — one database
+    // round trip each, seventeen of them, sequential only by the order they
+    // were written. The rows are independent: each targets a distinct
+    // (company_id, feature_key) under that unique constraint, none reads
+    // another's result, and the latched state below is already resolved in
+    // memory before any write. Against a cross-region database whose measured
+    // per-hop floor is ~280ms, that ordering was the bulk of this endpoint's
+    // cost — sync was 10,455ms of an 11,908ms request.
+    //
+    // Failure semantics change in one respect, deliberately: a single
+    // statement is all-or-nothing, where the loop persisted every feature
+    // before the one that failed. Nothing depends on that partial state —
+    // latching means a failed sync can never revoke earned credit, the next
+    // load recomputes and re-upserts everything idempotently, and the route
+    // already treats a sync failure as non-fatal. All-or-nothing is the more
+    // consistent of the two.
+    const rows = computedFeatures.map((feature) => {
       const latched = resolveLatchedFeatureState(priorByKey.get(feature.key), feature);
-
-      const upsertData = {
+      return {
         company_id: companyId,
         user_id: userId || null,
         feature_key: feature.key,
@@ -115,25 +129,26 @@ export async function syncFeatureCompletion(
         },
         completed_at: latched.completedAt,
       };
+    });
 
+    let changesCount = 0;
+
+    if (rows.length > 0) {
       const { error, data } = await ownedDbTable('feature_completion')
-        .upsert(upsertData, {
+        .upsert(rows, {
           onConflict: 'company_id,feature_key', // Unique constraint
         })
         .select();
 
       if (error) {
-        console.error(
-          `[syncFeatureCompletion] Error upserting ${feature.key}:`,
-          error
-        );
-        throw new Error(`Failed to upsert ${feature.key}: ${error.message}`);
+        console.error('[syncFeatureCompletion] Error upserting features:', error);
+        throw new Error(`Failed to upsert feature completion: ${error.message}`);
       }
 
-      // Count changes (optional: compare old vs new)
-      if (data && data.length > 0) {
-        changesCount++;
-      }
+      // Same meaning as before: how many rows the write returned. The loop
+      // counted one per upsert that came back with a row; this counts them
+      // once, from the same source.
+      changesCount = data?.length ?? 0;
     }
 
     return {
