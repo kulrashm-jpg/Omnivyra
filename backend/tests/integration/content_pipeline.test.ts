@@ -92,16 +92,50 @@ describe('Content pipeline', () => {
     trendUsed: null,
   };
 
+  // The generated body passes through refineLanguageOutput, whose punctuation
+  // normalization step appends terminal punctuation ("Caption" -> "Caption.").
+  // That step only runs when LANGUAGE_REFINEMENT_ENABLED is on, so this test
+  // used to assert whichever behaviour the ambient environment happened to
+  // produce: it passed in CI, where no .env.local exists and the flag is unset,
+  // and failed locally, where .env.local turns it on. Pin the flag so the
+  // assertion describes one contract in every environment, and assert the
+  // refined value the deployed configuration actually produces.
   it('generates content for a day', async () => {
-    const content = await generateContentForDay({
-      companyProfile: profile,
-      campaign,
-      weekPlan,
-      dayPlan,
-      trend: null,
-      platform: 'linkedin',
-    });
-    expect(content.caption).toBe('Caption');
+    const previous = process.env.LANGUAGE_REFINEMENT_ENABLED;
+    process.env.LANGUAGE_REFINEMENT_ENABLED = 'true';
+    try {
+      const content = await generateContentForDay({
+        companyProfile: profile,
+        campaign,
+        weekPlan,
+        dayPlan,
+        trend: null,
+        platform: 'linkedin',
+      });
+      expect(content.caption).toBe('Caption.');
+    } finally {
+      if (previous === undefined) delete process.env.LANGUAGE_REFINEMENT_ENABLED;
+      else process.env.LANGUAGE_REFINEMENT_ENABLED = previous;
+    }
+  });
+
+  it('leaves the caption unpunctuated when language refinement is off', async () => {
+    const previous = process.env.LANGUAGE_REFINEMENT_ENABLED;
+    process.env.LANGUAGE_REFINEMENT_ENABLED = 'false';
+    try {
+      const content = await generateContentForDay({
+        companyProfile: profile,
+        campaign,
+        weekPlan,
+        dayPlan,
+        trend: null,
+        platform: 'linkedin',
+      });
+      expect(content.caption).toBe('Caption');
+    } finally {
+      if (previous === undefined) delete process.env.LANGUAGE_REFINEMENT_ENABLED;
+      else process.env.LANGUAGE_REFINEMENT_ENABLED = previous;
+    }
   });
 
   it('creates and regenerates content asset versions', async () => {
