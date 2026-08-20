@@ -38,6 +38,10 @@ const EMPTY_CAPABILITY_EVALUATION: CapabilityEvaluation = {
   categories: [],
   overallPercent: 0,
   summary: { completedCount: 0, inProgressCount: 0, totalCount: 0 },
+  // K4: nothing has been evaluated yet, so this 0% is not a complete score.
+  // Declaring it complete would assert "0% of everything" before any signal
+  // has arrived — precisely the claim this work exists to stop making.
+  availability: { evaluatedCount: 0, unavailableCount: 0, declaredCount: 0, complete: false },
 };
 
 export type ReportCardApiState = {
@@ -610,7 +614,12 @@ export function useCommandCenter() {
     setVisibleCards(cards);
 
     const enhanced = cards.map((card) => {
-      const cardState = features.length > 0 ? getCardStateFromFeatures(card.id, features) : 'not_started';
+      // K2: no empty-array short circuit. An empty or partial dataset now resolves
+      // to `unknown` inside getCardStateFromFeatures rather than being asserted
+      // here as `not_started` — the readiness fetch returns null on failure and
+      // leaves `features` at its initial [], which is exactly the case that used
+      // to render a configured workspace as "Setup needed".
+      const cardState = getCardStateFromFeatures(card.id, features);
       const requirements = features.length > 0 ? generateDynamicRequirements(card.id, features) : card.requirements || [];
       const ctaLabel =
         cardState === 'not_started'

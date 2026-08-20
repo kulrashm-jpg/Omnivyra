@@ -95,7 +95,11 @@ describe('D — success contract', () => {
     installFetch({});
     const out = await fetchReadinessData('company-1');
     expect(out).not.toBeNull();
-    expect(Object.keys(out!).sort()).toEqual(['features', 'readiness']);
+    // K3: the result now carries featuresDegraded so a consumer can tell an
+    // authoritative dataset from the 3-key profile fallback. On this success
+    // path it must be false — the API answered, so the features are real.
+    expect(Object.keys(out!).sort()).toEqual(['features', 'featuresDegraded', 'readiness']);
+    expect(out!.featuresDegraded).toBe(false);
     expect(out!.readiness.score).toBe(62);
     expect(out!.readiness.level).toBe('growing');
     expect(out!.readiness.completedFeatures).toBe(3);

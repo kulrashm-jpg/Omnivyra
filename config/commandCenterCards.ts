@@ -5,7 +5,15 @@
  * Each card is role-aware and shows requirements for access.
  */
 
-export type CardState = 'not_started' | 'in_progress' | 'ready';
+/**
+ * K2: `unknown` is a FOURTH state, not a degree of incompleteness.
+ *
+ * It means "we do not currently hold trustworthy feature information for this
+ * capability" — a backend read was unavailable, not that the user has done
+ * nothing. Collapsing that into `not_started` is what made a transient failure
+ * render as "Setup needed" on a workspace that was already configured.
+ */
+export type CardState = 'not_started' | 'in_progress' | 'ready' | 'unknown';
 export type RequirementStatus = 'done' | 'missing';
 
 export interface Requirement {
