@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CardSelectionBundle, CardSuggestions, ExistingItem, ManagedIntelligenceProps, RecommendationCard } from './types';
 import { buildDefaultRecommendations } from './recommendations';
 import { fetchCardSuggestions } from './briefSuggestionsFetcher';
@@ -24,6 +24,17 @@ export function useManagedIntelligenceData(input: UseManagedIntelligenceDataInpu
   const [isAIModalOpen, setIsAIModalOpen] = useState(false);
   const [cardSuggestions, setCardSuggestions] = useState<Record<number, CardSuggestions>>({});
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  /**
+   * Which card set suggestions were already REQUESTED for. The guard below used
+   * to infer that from `cardSuggestions[0]`, which conflates "attempted" with
+   * "card 0 succeeded": fetchCardSuggestions omits the key of any card whose
+   * request failed, so a failing first card left the guard permanently falsy
+   * while `setCardSuggestions` handed back a fresh object each time — the
+   * effect re-ran and re-issued EVERY card request, without bound. Recording
+   * the attempt fixes that while still allowing a genuinely new card set to
+   * fetch again.
+   */
+  const requestedSuggestionsKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (selectedCompanyName) {
@@ -72,7 +83,8 @@ export function useManagedIntelligenceData(input: UseManagedIntelligenceDataInpu
 
   useEffect(() => {
     if (!selectedCompanyId || cards.length === 0 || suggestionsLoading) return;
-    if (cardSuggestions[0]) return;
+    const suggestionsKey = `${selectedCompanyId}|${contentType}|${cards.length}|${suggestionCount}`;
+    if (requestedSuggestionsKeyRef.current === suggestionsKey) return;
     // P1.8 — the page no longer blocks on `loading`, so wait for the profile /
     // library reads here instead. This keeps the request body byte-identical to
     // the previous behaviour (chips always saw resolved company context) while
@@ -89,6 +101,9 @@ export function useManagedIntelligenceData(input: UseManagedIntelligenceDataInpu
       'Use a modern, credible structure with less filler and clearer decision-useful detail.',
     ].join(' ');
 
+    // Marked BEFORE the requests start, so a re-render while they are in flight
+    // cannot start a second round.
+    requestedSuggestionsKeyRef.current = suggestionsKey;
     setSuggestionsLoading(true);
     // P1.8 — the per-card requests are independent, so they run concurrently
     // instead of one-at-a-time. Body shape, endpoint and count are unchanged.
