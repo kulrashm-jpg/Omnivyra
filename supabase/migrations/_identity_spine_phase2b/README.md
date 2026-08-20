@@ -1,6 +1,46 @@
 # Identity Spine Phase 2B — Migration Drafts (v2 with fixes A–F)
 
-Status: **DRAFT — NOT APPLIED**.
+> ## ⛔ STATUS CORRECTED 2026-08-21 — **APPLIED. DO NOT RE-APPLY.**
+>
+> This file said **"DRAFT — NOT APPLIED"** until 2026-08-21. That was wrong, and
+> acting on it would have re-run data statements against live rows. Production
+> was probed read-only (PI-ACT-001) and proves these migrations are applied:
+>
+> | Evidence | Result |
+> |---|---|
+> | `unified_persons.source_of_truth`, `source_priority` | present (file 1) |
+> | `unified_person_id` on `users`, `leads`, `canonical_users`, `canonical_leads`, `canonical_revenue_events`, `contacts`, `engagement_threads` | present (file 1) |
+> | `unified_person_merges` | exists (file 2) |
+> | `source_of_truth = 'legacy_migration_20260506'` | **20 of 23** `unified_persons` — file 3's backfill **ran** |
+> | linkage counts | leads 18/18 · canonical_leads 18/18 · canonical_revenue_events 3/3 · canonical_users 18/47 · users 2/131 — file 4's UPDATEs **ran** |
+> | `idx_unified_persons_company_email_unique`, `…_phone_unique`, `…_external_keys` | present; the two non-unique predecessors are gone (file 5) |
+> | `engagement_identity_candidates` | exists (files 8–9) |
+>
+> **`supabase_migrations.schema_migrations` records none of them** — it holds 48
+> rows against 389 migration files and under-reports badly. The catalog is the
+> authority here, never the ledger.
+>
+> **Files 1–5 and 8–10 are applied. File 6 does not exist in this repository at
+> all** — yet `leads.unified_person_id` **is NOT NULL in production** while
+> `users.unified_person_id` is nullable (correctly: 129 of 131 users are NULL).
+> So a production constraint exists that no committed migration reproduces. The
+> real-schema harness still reproduces it, because `supabase/_schema/baseline.sql`
+> is a production-derived dump and declares the column NOT NULL inside
+> `CREATE TABLE public.leads`.
+>
+> **Known defect, proven not theorised.** `leads_person_tenant_fk` carries
+> `ON DELETE SET NULL (unified_person_id)` against a NOT NULL column. Deleting a
+> `unified_persons` row referenced by a lead fails with `23502`, so person
+> deletion silently behaves as RESTRICT. Reproduced in the disposable
+> real-schema database; `contacts` (nullable) is the control case and succeeds,
+> which is why `w5_tenant_isolation` passes without catching it. Open and
+> unowned — do not "fix" it casually; it is a schema decision.
+>
+> **The apply-order and no-op-linking sections below describe the pre-apply
+> state. They are retained as a historical record of intent. Do not execute
+> them.** Files 3 and 4 contain 4 and 14 data statements respectively.
+
+Status (historical, as written before apply): **DRAFT — NOT APPLIED**.
 
 Files 1–6 in `supabase/migrations/` are committed but have not been pushed through `supabase db push` or `mcp__supabase__apply_migration`.
 
