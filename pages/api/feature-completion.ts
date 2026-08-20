@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
+import { appendServerTiming, timeStage } from '../../lib/platform/serverTiming';
 
 /**
  * GET /api/feature-completion
@@ -34,6 +35,10 @@ async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ApiResponse>
 ) {
+  // Server-Timing for this handler — same helper and conventions as
+  // /api/reports and /api/company-profile?mode=list. Stages wrap the calls
+  // where they already sit; nothing is reordered, split or made conditional.
+  const handlerStart = Date.now();
   // Only allow GET
   if (req.method !== 'GET') {
     return res.status(405).json({
@@ -47,8 +52,9 @@ async function handler(
     // auth-cookie envelope) — the same path every other authenticated API uses. The
     // prior createServerClient + getSession(req.cookies) guard could not read this
     // app's auth cookie and returned 401 on every call (SIM-004 / EXEC-002 defect).
-    const { user } = await getSupabaseUserFromRequest(req);
+    const { user } = await timeStage(res, 'auth', () => getSupabaseUserFromRequest(req));
     if (!user) {
+      appendServerTiming(res, 'total', Date.now() - handlerStart);
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
     const userId = user.id; // public.users.id — user_company_roles.user_id references this
@@ -56,12 +62,12 @@ async function handler(
     const requestedCompanyId =
       typeof req.query.company_id === 'string' ? req.query.company_id.trim() : '';
 
-    const { data: activeRoles } = await supabase
+    const { data: activeRoles } = await timeStage(res, 'roles', async () => supabase
       .from('user_company_roles')
       .select('company_id')
       .eq('user_id', userId)
       .eq('status', 'active')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false }));
 
     const allowedCompanyIds = (activeRoles || []).map((role) => role.company_id).filter(Boolean);
     const companyId = requestedCompanyId && allowedCompanyIds.includes(requestedCompanyId)
@@ -69,6 +75,7 @@ async function handler(
       : allowedCompanyIds[0];
 
     if (!companyId) {
+      appendServerTiming(res, 'total', Date.now() - handlerStart);
       return res.status(400).json({
         success: false,
         error: 'Company not found for user',
@@ -80,7 +87,7 @@ async function handler(
 
     if (shouldSync) {
       try {
-        await syncFeatureCompletion(companyId, userId);
+        await timeStage(res, 'sync', () => syncFeatureCompletion(companyId, userId));
       } catch (err) {
         console.error('[feature-completion] Sync error:', err);
         // Don't fail the request, just log the error
@@ -88,8 +95,8 @@ async function handler(
     }
 
     // Get feature completion status
-    const features = await getFeatureCompletionStatus(companyId);
-    const summary = await getFeatureCompletionSummary(companyId);
+    const features = await timeStage(res, 'features', () => getFeatureCompletionStatus(companyId));
+    const summary = await timeStage(res, 'summary', () => getFeatureCompletionSummary(companyId));
 
     // Transform to API response format
     const response: FeatureCompletionResponse = {
@@ -106,6 +113,7 @@ async function handler(
       },
     };
 
+    appendServerTiming(res, 'total', Date.now() - handlerStart);
     return res.status(200).json({
       success: true,
       data: response,
@@ -116,6 +124,7 @@ async function handler(
     });
   } catch (err) {
     console.error('[feature-completion] Error:', err);
+    appendServerTiming(res, 'total', Date.now() - handlerStart);
     return res.status(500).json({
       success: false,
       error: `Failed to fetch feature completion: ${(err as Error).message}`,
