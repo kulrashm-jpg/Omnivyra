@@ -78,11 +78,14 @@ import {
   renderCoverageMatrixTable,
 } from '../../services/creator/governanceCoverageMatrix';
 
-// Stub the profile resolver — drives the enricher's tests.
-jest.mock('../../services/companyProfileService', () => ({
-  getProfile: jest.fn(),
+// Stub the profile resolver — drives the enricher's tests. governanceItemEnricher
+// reads the profile through the canonical adapter
+// (`getCanonicalProfile as getProfile`), not companyProfileService, so the mock
+// has to target that module or it never intercepts the call.
+jest.mock('../../services/context/canonicalProfileAdapter', () => ({
+  getCanonicalProfile: jest.fn(),
 }));
-const { getProfile } = require('../../services/companyProfileService') as { getProfile: jest.Mock };
+const { getCanonicalProfile: getProfile } = require('../../services/context/canonicalProfileAdapter') as { getCanonicalProfile: jest.Mock };
 
 // Stub the audit event service so we can assert audit firing.
 jest.mock('../../services/auditEventService', () => ({

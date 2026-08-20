@@ -14,6 +14,7 @@ jest.mock('../../services/content/contentMemoryService', () => ({
   persistOriginality: jest.fn(),
   getBrandMemory: jest.fn(),
   upsertBrandMemory: jest.fn(),
+  isContentMemoryWriteEnabled: jest.fn(() => false),
 }));
 
 import { computeFingerprint } from '../../../lib/content/originality/fingerprint';

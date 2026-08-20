@@ -7,7 +7,7 @@
  *   2. generationRuntime.generate() with a registered profile key delegates to the
  *      profile execution path: it reuses the ONE canonical context read + the ONE
  *      gateway, produces the profile's structured output on `master`, and NEVER
- *      touches the master primitive or the persistence trio (no double-persist).
+ *      touches the master primitive or canonical persistence (no double-persist).
  *   3. generationRuntime.generate() with NO profile key runs the DEFAULT master
  *      body (calls the master primitive) — the guard is inert for existing callers.
  */
@@ -25,6 +25,7 @@ jest.mock('../../services/content/contentMemoryService', () => ({
   retrieveRelevant: jest.fn(),
   indexContentUnit: jest.fn(),
   persistOriginality: jest.fn(),
+  isContentMemoryWriteEnabled: jest.fn(() => false),
 }));
 jest.mock('../../services/content/originalityGate', () => ({ assertOriginality: jest.fn() }));
 jest.mock('../../services/content/contentService', () => ({ createContent: jest.fn() }));

@@ -50,15 +50,31 @@ const ARGS = {
 };
 
 const FLAG = 'PHASE2_ENTRY_CONSUMPTION';
+// Ambient config must not decide this suite's outcome. `.env.local` is loaded
+// into every jest run by backend/tests/setupEnv.ts and sets BOTH of these to
+// 'true' for local implementation work, so the default-case test was asserting
+// the documented dark default while running with the master switch ON, and the
+// shadow emitter was reaching real Redis and outliving the test. Snapshot and
+// restore rather than delete: the developer's .env.local stays untouched.
+const AMBIENT = ['PHASE2_ENTRY_CONSUMPTION', 'PHASE2_CREDIT_ECONOMY_SHADOW'] as const;
+const ORIGINAL_AMBIENT: Record<string, string | undefined> = {};
+
+beforeAll(() => { for (const k of AMBIENT) ORIGINAL_AMBIENT[k] = process.env[k]; });
+afterAll(() => {
+  for (const k of AMBIENT) {
+    if (ORIGINAL_AMBIENT[k] === undefined) delete process.env[k];
+    else process.env[k] = ORIGINAL_AMBIENT[k];
+  }
+});
 
 beforeEach(() => {
   jest.clearAllMocks();
-  delete process.env[FLAG];
+  for (const k of AMBIENT) delete process.env[k];
   engine.executeWithCredits.mockResolvedValue({ status: 'executed', result: 'CREDITS' });
   engine.executeWithEntryConsumption.mockResolvedValue({ status: 'executed', result: 'ENTRY' });
 });
 
-afterAll(() => { delete process.env[FLAG]; });
+// (env restoration is handled by the AMBIENT afterAll above)
 
 describe('wirePhase2Route ENFORCE engine selection', () => {
   it('default (flag unset): uses executeWithCredits (HOLD-MAX), not entry consumption', async () => {

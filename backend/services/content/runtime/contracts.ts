@@ -146,9 +146,10 @@ export interface GenerationRequest {
    * default to TODAY's behavior, so a caller that passes neither runs
    * byte-identically to before this wave.
    *
-   *   persist        — `false` ⇒ SKIP the persistence trio (createContent /
-   *                    indexContentUnit / persistOriginality); `output.contentId`
-   *                    stays null. Default (`undefined`/`true`) ⇒ persist as today.
+   *   persist        — `false` ⇒ SKIP canonical persistence (createContent /
+   *                    persistOriginality); `output.contentId` stays null. Does
+   *                    NOT govern the content_memory write, which is its own
+   *                    gated stage. Default (`undefined`/`true`) ⇒ persist as today.
    *   runOriginality — `false` ⇒ SKIP the originality gate + regeneration loop
    *                    (a single generation is produced); `output.originality` is
    *                    null. Default (`undefined`/`true`) ⇒ run the gate as today.

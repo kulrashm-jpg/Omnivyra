@@ -21,6 +21,7 @@ const SECRET_ENV = [
   'SETTLEMENT_WEBHOOK_SANDBOX_SECRET_PHONEPE',
   'SETTLEMENT_WEBHOOK_SANDBOX_SALT_INDEX_PHONEPE',
   'SETTLEMENT_WEBHOOK_REPLAY_TOLERANCE_SECONDS',
+  'SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX',
 ];
 const ORIGINAL_ENV = process.env;
 beforeEach(() => {
@@ -239,13 +240,33 @@ describe('webhook verifier — replay-window / stale-signature rejection', () =>
   });
 });
 
-describe('webhook verifier — unverified-sandbox foundation posture', () => {
+describe('webhook verifier — fail-closed default when no secret is configured', () => {
+  // Accepting unverified webhooks let anyone holding a checkout session
+  // reference drive the settlement state machine pending -> authorized ->
+  // succeeded by POSTing to the endpoint. The default is now REJECT; the only
+  // way back to the old behaviour is the explicit opt-in asserted below.
   test.each(['razorpay', 'stripe', 'cashfree', 'phonepe'] as const)(
-    '%s with NO sandbox secret configured → accepted unverified_sandbox',
+    '%s with NO sandbox secret configured → rejected as secret_not_configured',
     (provider) => {
       const r = verifyProviderWebhookSignature({ provider, rawBody: '{}', headers: {}, nowMs: NOW_MS });
-      expect(r.ok).toBe(true);
-      expect(r.mode).toBe('unverified_sandbox');
+      expect(r.ok).toBe(false);
+      expect(r.reason).toBe('secret_not_configured');
     },
   );
+
+  // One provider is sufficient: the opt-in is checked in the shared entry point
+  // before any provider branch is selected, so it is not provider-specific.
+  it('explicit SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX=true → accepted as unverified_sandbox', () => {
+    process.env.SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX = 'true';
+    const r = verifyProviderWebhookSignature({ provider: 'razorpay', rawBody: '{}', headers: {}, nowMs: NOW_MS });
+    expect(r.ok).toBe(true);
+    expect(r.mode).toBe('unverified_sandbox');
+  });
+
+  it('the opt-in is honoured ONLY for the exact string "true"', () => {
+    process.env.SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX = '1';
+    const r = verifyProviderWebhookSignature({ provider: 'razorpay', rawBody: '{}', headers: {}, nowMs: NOW_MS });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('secret_not_configured');
+  });
 });

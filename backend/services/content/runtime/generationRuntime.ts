@@ -15,7 +15,8 @@
  *   3. Originality Preparation→ retrieveRelevant (light history retrieval)
  *   4. Generation             → generateMasterContentFromIntent via executeWithRetry(getTaskPolicy)
  *   5. Originality Validation → assertOriginality + regenerateUntilOriginal
- *   6. Persistence            → createContent + indexContentUnit + persistOriginality
+ *   6. Persistence            → createContent + persistOriginality
+ *      (content_memory is its own gated stage after 6 — see isContentMemoryWriteEnabled)
  *   7. Variant Generation     → buildPlatformVariantsFromMaster + deterministicFormatter
  *   8. Observability          → runtimeMetrics at each stage
  *
@@ -215,7 +216,7 @@ export async function generate(req: GenerationRequest): Promise<GenerationOutput
 
   // ── WS-1c-2 — NO-PERSIST MODE (ADDITIVE, DEFAULT-PRESERVING). Both flags default
   // to today's behavior: an existing caller that passes neither runs BYTE-IDENTICALLY
-  // to before this wave. `persist:false` skips the Stage-6 persistence trio (contentId
+  // to before this wave. `persist:false` skips the Stage-6 canonical persistence (contentId
   // stays null); `runOriginality:false` skips the Stage-5 originality gate +
   // regeneration loop (single generation; originality returned null). Combined, they
   // make the runtime a pure generation engine that persistence-free legacy generators
