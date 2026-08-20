@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { fetchSubscriptionOnce } from './subscriptionFetcher';
+import { fetchReportsOnce } from './reportsFetcher';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import { ApiFetchError } from '../lib/swr/swrClient';
@@ -63,20 +64,21 @@ export function useReportCardPoll(companyId: string | null) {
 
   const fetcher = useCallback(async (url: string) => {
     try {
-      const response = await apiFetch(url, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        ...(generatingRef.current ? { cache: 'no-store' as RequestCache } : {}),
+      // Shared with the readiness wave via singleFlight. The no-store flag is
+      // part of the flight key, so a generating poll never joins a
+      // cache-eligible flight and vice versa.
+      const result = await fetchReportsOnce(companyId ?? '', {
+        noStore: generatingRef.current,
+        url,
       });
-      if (!response.ok) {
-        throw new ApiFetchError(url, response.status);
-      }
-      return (await response.json()) as ReportCardApiState;
+      if (result.outcome === 'ok') return result.json as ReportCardApiState;
+      if (result.outcome === 'non_ok') throw new ApiFetchError(url, result.status);
+      throw result.error;
     } catch (error) {
       console.error('[command-center] Failed to load report card state:', error);
       throw error;
     }
-  }, []);
+  }, [companyId]);
 
   const { data } = useSWR<ReportCardApiState>(
     companyId ? `/api/reports?company_id=${companyId}` : null,
@@ -306,7 +308,13 @@ export function useCommandCenter() {
         getJson(`/api/block-templates?company_id=${cid}`),
         getJson(`/api/automation/config?organization_id=${cid}`),
         getJson(`/api/campaigns?companyId=${cid}`),
-        getJson(`/api/reports?company_id=${cid}`),
+        // Shared with the SWR poll above. Mapped to the { ok, json } shape the
+        // parse stage below already expects, so failure still becomes null.
+        fetchReportsOnce(selectedCompanyId).then((r) =>
+          r.outcome === 'ok'
+            ? { ok: true as const, json: async () => r.json }
+            : null,
+        ),
         // Canonical telemetry provider results — Mastery prefers these over the
         // proxy counts when telemetry is live; falls back to proxies while dark.
         getJson(`/api/telemetry/providers?companyId=${cid}&scope=mastery`),
