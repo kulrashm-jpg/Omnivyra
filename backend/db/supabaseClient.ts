@@ -1,6 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { checkEnvIsolationOnce } from '../../lib/env/namespace';
-import { installSupabaseTransportProbe } from '../../lib/platform/supabaseTransportProbe';
 
 /**
  * Supabase Admin Client — lazy singleton.
@@ -90,10 +89,6 @@ function getAdminClient(): SupabaseClient {
   // exported via getDbConnectionDiagnostics() for the scale-up runbook.
   const poolerUrl = String(process.env.SUPABASE_POOLER_URL ?? '').trim();
   _dbConnectionMode = poolerUrl ? 'pooler' : 'direct';
-  // Passive transport diagnostic. Idempotent, observer-only: it subscribes to
-  // undici diagnostics channels and cannot alter any request. Client options
-  // below are unchanged.
-  installSupabaseTransportProbe();
   _client = createClient(poolerUrl || url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });

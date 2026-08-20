@@ -22,7 +22,9 @@ type EnhancedCardLike = {
   hint?: string;
   ctaLabel: string;
   route: string;
-  state: 'not_started' | 'in_progress' | 'ready';
+  // K2: mirrors CardState in config/commandCenterCards — `unknown` means the
+  // feature data was not readable this load, NOT that setup is outstanding.
+  state: 'not_started' | 'in_progress' | 'ready' | 'unknown';
   hoverMessage?: string | null;
 };
 
@@ -127,7 +129,10 @@ function ActionCard({
 }) {
   const Icon = CARD_ICONS[card.id] ?? BarChart3;
   const actionLabel = CARD_ACTION_LABELS[card.id] ?? card.ctaLabel;
-  const setupHoverMessage = card.state === 'ready' ? null : card.hoverMessage || null;
+  // `unknown` suppresses the setup nudge too — we have no basis for telling
+  // someone what to set up when we could not read what they already have.
+  const setupHoverMessage =
+    card.state === 'ready' || card.state === 'unknown' ? null : card.hoverMessage || null;
   const outcomeCopy =
     card.id === 'reports'
       ? 'See where your site stands now, understand the real gap, and get next actions you can apply immediately.'
@@ -136,12 +141,17 @@ function ActionCard({
         : card.id === 'campaigns'
           ? 'Turn strategy into an actual launch plan across channels with clearer execution, timing, and follow-through.'
           : 'Track conversations, surface what matters first, and respond faster without chasing activity across multiple tabs.';
+  // K2: `unknown` gets its own neutral treatment — it is not a warning and not a
+  // reproach. The workspace may be fully configured; we just could not read the
+  // feature data on this load.
   const toneClass =
     card.state === 'ready'
       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
       : card.state === 'in_progress'
         ? 'bg-amber-50 text-amber-700 border-amber-200'
-        : 'bg-slate-100 text-slate-700 border-slate-200';
+        : card.state === 'unknown'
+          ? 'bg-slate-50 text-slate-500 border-slate-200'
+          : 'bg-slate-100 text-slate-700 border-slate-200';
 
   return (
     // Whole-card click mirrors the CTA — reuses the SAME onOpen handler
@@ -163,7 +173,13 @@ function ActionCard({
           <Icon className="h-5 w-5" />
         </div>
         <span className={`inline-flex min-w-[112px] justify-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${toneClass}`}>
-          {card.state === 'ready' ? 'Ready' : card.state === 'in_progress' ? 'In progress' : 'Setup needed'}
+          {card.state === 'ready'
+            ? 'Ready'
+            : card.state === 'in_progress'
+              ? 'In progress'
+              : card.state === 'unknown'
+                ? 'Checking…'
+                : 'Setup needed'}
         </span>
       </div>
 

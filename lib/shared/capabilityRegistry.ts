@@ -118,10 +118,38 @@ export interface EvaluatedCategory {
   totalCount: number;
 }
 
+/**
+ * K4 — availability of the evaluation itself, distinct from the score.
+ *
+ * `overallPercent` is a weighted mean over AVAILABLE factors only, so an
+ * unavailable factor leaves the denominator rather than counting as zero. That
+ * keeps the arithmetic honest per-factor, but it silently changes what the
+ * percentage is a percentage OF: the same underlying progress reports a
+ * different number depending on which reads happened to succeed. The monotonic
+ * ratchet cannot compensate, because it floors factor scores, not the
+ * denominator.
+ *
+ * Rather than change the scoring philosophy, the shortfall is reported. A
+ * consumer can then present "94% · 2 checks unavailable" instead of presenting a
+ * rescoped 94% as a fully evaluated result.
+ */
+export interface EvaluationAvailability {
+  /** Factors that carried weight and produced a score. */
+  evaluatedCount: number;
+  /** Factors that exist in the registry but had no readable signal this run. */
+  unavailableCount: number;
+  /** evaluatedCount + unavailableCount. */
+  declaredCount: number;
+  /** True when every declared factor was evaluated — the score is complete. */
+  complete: boolean;
+}
+
 export interface CapabilityEvaluation {
   categories: EvaluatedCategory[];
   overallPercent: number;
   summary: { completedCount: number; inProgressCount: number; totalCount: number };
+  /** K4: additive. Absent availability shortfall means `complete: true`. */
+  availability: EvaluationAvailability;
 }
 
 function statusFromScore(score: number): FactorStatus {
@@ -221,6 +249,13 @@ export function evaluateCapabilityRegistry<S>(
   const overall = weightedMean(scoredCategories.map((c) => ({ score: c.score, weight: c.weight })));
 
   const allScored = scoredCategories.flatMap((c) => c.factors.filter((f) => f.available && f.weight > 0));
+
+  // K4: count the factors that were DECLARED but could not be evaluated. Purely
+  // observational — the percentage above is computed exactly as before, so a run
+  // with everything available is numerically identical to the previous contract.
+  const allWeighted = categories.flatMap((c) => c.factors.filter((f) => f.weight > 0));
+  const unavailableCount = allWeighted.filter((f) => !f.available).length;
+
   return {
     categories,
     overallPercent: Math.round(overall * 100),
@@ -228,6 +263,12 @@ export function evaluateCapabilityRegistry<S>(
       completedCount: allScored.filter((f) => f.status === 'done').length,
       inProgressCount: allScored.filter((f) => f.status === 'in_progress').length,
       totalCount: allScored.length,
+    },
+    availability: {
+      evaluatedCount: allWeighted.length - unavailableCount,
+      unavailableCount,
+      declaredCount: allWeighted.length,
+      complete: unavailableCount === 0,
     },
   };
 }

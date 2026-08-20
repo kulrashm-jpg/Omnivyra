@@ -77,9 +77,29 @@ export async function syncFeatureCompletion(
     // reaches a score (a campaign published, content created, a tool used), deleting
     // the underlying entity later does NOT drop the score back down — the historical
     // fact that the company did it once is sufficient ("done once = scored forever").
-    const { data: existingRows } = await ownedDbTable('feature_completion')
+    //
+    // The error is captured, NOT discarded. An unreadable prior state is not the
+    // same fact as "this company has no prior state", and conflating them is what
+    // makes the latch destructible: with an empty priorByKey every feature below
+    // resolves to its freshly computed value, and the all-or-nothing upsert then
+    // writes that over earned credit. A feature whose underlying entity still
+    // exists would recompute back on the next load, but a latched-only one — a
+    // tool used once, a tier reached, credits spent — has no live entity to
+    // recompute from, so the historical fact is destroyed permanently.
+    //
+    // So: zero rows means new company and proceeds; a read failure aborts before
+    // any write. The caller already treats a sync failure as non-fatal and the
+    // next load recomputes idempotently, which makes "write nothing" strictly
+    // safer than "write a guess".
+    const { data: existingRows, error: existingReadError } = await ownedDbTable('feature_completion')
       .select('feature_key, status, completed_at, metadata')
       .eq('company_id', companyId);
+    if (existingReadError) {
+      console.error('[syncFeatureCompletion] Prior-state read failed:', existingReadError);
+      throw new Error(
+        `Failed to read prior feature completion: ${existingReadError.message}`,
+      );
+    }
     const priorByKey = new Map<string, { status: string; completedAt: Date | string | null; score: number }>();
     for (const row of (existingRows as Array<Record<string, any>> | null) ?? []) {
       const meta = row?.metadata;

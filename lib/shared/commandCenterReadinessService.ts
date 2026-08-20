@@ -81,7 +81,17 @@ export function getCardStateFromFeatures(
     return 'not_started';
   }
 
-  const relevantFeatures = features.filter((feature) => requiredFeatures.includes(feature.key));
+  // K2: absent is not the same fact as incomplete. Kept byte-identical to the
+  // backend copy in backend/services/commandCenterReadinessService.ts — the two
+  // implementations are deliberately not merged in this task.
+  const featureList = Array.isArray(features) ? features : [];
+  const presentKeys = new Set(featureList.map((feature) => feature.key));
+  const hasEveryRequiredKey = requiredFeatures.every((key) => presentKeys.has(key));
+  if (!hasEveryRequiredKey) {
+    return 'unknown';
+  }
+
+  const relevantFeatures = featureList.filter((feature) => requiredFeatures.includes(feature.key));
   const completedCount = relevantFeatures.filter((feature) => feature.status === 'completed').length;
   const inProgressCount = relevantFeatures.filter(
     (feature) => feature.status === 'in_progress' || feature.score > 0,
@@ -175,6 +185,28 @@ function deriveReadinessFromFeatures(features: FeatureStatus[]): ReadinessData {
   const total = features.length || 1;
   const score = Math.round(features.reduce((sum, f) => sum + f.score, 0) / total * 100);
   return { score, level: '', completedFeatures: completed, totalFeatures: total, features };
+}
+
+/**
+ * K3: the ONLY feature keys the profile fallback can speak for.
+ *
+ * The canonical enum has nineteen. The fallback is derived purely from profile
+ * signals, so it can never represent an achievement-derived feature (a report
+ * generated, a campaign published, a tool used). Exported so tests can pin the
+ * set and consumers can reason about what a degraded dataset actually covers.
+ */
+export const PROFILE_FALLBACK_FEATURE_KEYS = [
+  'company_profile_completed',
+  'website_connected',
+  'social_accounts_connected',
+] as const;
+
+/** Result of a readiness fetch. `featuresDegraded` marks a non-authoritative set. */
+export interface ReadinessFetchResult {
+  features: FeatureStatus[];
+  readiness: ReadinessData;
+  /** true when `features` came from the 3-key profile fallback, not the API. */
+  featuresDegraded: boolean;
 }
 
 function buildProfileFallbackFeatures(profileSignals: CompanyProfileSignal): FeatureStatus[] {
@@ -272,7 +304,8 @@ async function fetchCompanyProfileSignals(companyId: string): Promise<CompanyPro
  */
 export async function fetchReadinessData(
   companyId: string,
-): Promise<{ features: FeatureStatus[]; readiness: ReadinessData } | null> {
+): Promise<ReadinessFetchResult | null> {
+  let featuresDegraded = false;
   try {
     const profileSignalsPromise = fetchCompanyProfileSignals(companyId);
 
@@ -290,6 +323,10 @@ export async function fetchReadinessData(
 
     if (!featuresRes.ok) {
       console.warn('[readiness-service] Failed to fetch features:', featuresRes.statusText);
+      // K3: the fallback knows three of nineteen canonical keys. It is retained
+      // for those three, but the result is marked degraded so no consumer can
+      // mistake it for the complete feature dataset.
+      featuresDegraded = true;
       features = buildProfileFallbackFeatures(profileSignals);
     } else {
       const featuresData = await featuresRes.json() as any;
@@ -334,7 +371,7 @@ export async function fetchReadinessData(
       readiness = deriveReadinessFromFeatures(features);
     }
 
-    return { features, readiness };
+    return { features, readiness, featuresDegraded };
   } catch (err) {
     console.error('[readiness-service] Failed to fetch readiness data:', err);
     return null;
