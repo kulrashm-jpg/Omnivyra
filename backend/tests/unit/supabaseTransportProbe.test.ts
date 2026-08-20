@@ -78,6 +78,25 @@ describe('host filtering', () => {
     expect(__inflightSizeForTests()).toBe(0);
   });
 
+  it('1e. classifies the bare PostgREST root as the edge control, not pgrst', () => {
+    const c = collector();
+    const bare = req('/rest/v1/');
+    const bareNoSlash = req('/rest/v1');
+    __runWithCollectorForTests(c, () => { onRequestCreate({ request: bare }); onRequestCreate({ request: bareNoSlash }); });
+    [bare, bareNoSlash].forEach((r) => { onSendHeaders({ request: r, socket: sock() }); onResponseHeaders({ request: r }); });
+    expect(c.records.map((r) => r.service)).toEqual(['control', 'control']);
+    expect(c.records.map((r) => r.endpoint)).toEqual(['edge', 'edge']);
+  });
+
+  it('1f. a real table call is never mistaken for the control', () => {
+    const c = collector();
+    const real = req('/rest/v1/users');
+    __runWithCollectorForTests(c, () => onRequestCreate({ request: real }));
+    onSendHeaders({ request: real, socket: sock() });
+    onResponseHeaders({ request: real });
+    expect(c.records[0].service).toBe('pgrst');
+  });
+
   it('1d. classifies gotrue vs pgrst by path prefix only', () => {
     const c = collector();
     const a = req('/auth/v1/user');

@@ -64,8 +64,8 @@ function enabled(): boolean {
 }
 
 export type ConnectionState = 'cold' | 'warm' | 'unknown';
-export type SupabaseService = 'gotrue' | 'pgrst' | 'storage' | 'other';
-export type EndpointClass = 'auth' | 'rest' | 'storage' | 'other';
+export type SupabaseService = 'gotrue' | 'pgrst' | 'storage' | 'control' | 'other';
+export type EndpointClass = 'auth' | 'rest' | 'storage' | 'edge' | 'other';
 
 export interface TransportRecord {
   service: SupabaseService;
@@ -140,6 +140,9 @@ function classify(
   const isSupabase = hostname.endsWith('.supabase.co') || (envHost !== null && hostname === envHost);
   if (!isSupabase) return null;
 
+  // Edge control: the bare PostgREST root with no table. The application never
+  // issues this (every real call names a table), so the match is unambiguous.
+  if (pathRaw === '/rest/v1/' || pathRaw === '/rest/v1') return { service: 'control', endpoint: 'edge' };
   if (pathRaw.startsWith('/auth/v1')) return { service: 'gotrue', endpoint: 'auth' };
   if (pathRaw.startsWith('/rest/v1')) return { service: 'pgrst', endpoint: 'rest' };
   if (pathRaw.startsWith('/storage/v1')) return { service: 'storage', endpoint: 'storage' };
@@ -384,6 +387,40 @@ export function flushTransportTiming(
     });
   } catch {
     /* diagnostics must never break a response */
+  }
+}
+
+/** Bounded timeout so the edge control can never stall a handler. */
+const EDGE_CONTROL_TIMEOUT_MS = 3_000;
+
+/**
+ * TEMPORARY DIAGNOSTIC - edge-terminated control request.
+ *
+ * Issues an unauthenticated GET to the project's bare PostgREST root on the
+ * SAME host, and therefore the same Cloudflare anycast endpoint and the same
+ * undici connection pool, as the application's real Supabase calls.
+ *
+ * The Supabase gateway rejects it for a missing api key
+ * (sb-error-code: UNAUTHORIZED_MISSING_API_KEY) without routing it to the
+ * project origin, so its TTFB measures Vercel -> edge -> response only. Paired
+ * with a normal origin-bound call in the same invocation, this separates delay
+ * occurring before the edge from delay occurring beyond it.
+ *
+ * Touches no database, no application data, no auth state and no tenant state,
+ * sends no credentials, and can never throw into the caller.
+ */
+export async function probeEdgeControl(): Promise<void> {
+  if (!enabled()) return;
+  try {
+    const host = supabaseEnvHost();
+    if (!host) return;
+    const res = await fetch(`https://${host}/rest/v1/`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(EDGE_CONTROL_TIMEOUT_MS),
+    });
+    await res.arrayBuffer(); // drain so the socket returns to the pool
+  } catch {
+    /* diagnostic only - never affects the response */
   }
 }
 
