@@ -20,6 +20,15 @@ import {
 import RbacTab from './RbacTab';
 import CompaniesTable from './CompaniesTable';
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { describeAuthFailure } from '@/lib/security/superAdminAuthFailure';
+import { runStepUpFlowIfNeeded, describeStepUpOutcome } from '@/lib/security/superAdminStepUp';
+
+/** Idempotency key for one logical mutation. Mirrors the idiom already used
+ *  by the invitation-resend call below. */
+const newIdempotencyKey = (): string =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 
 interface CompanyUsersTabProps {
   authError: string | null;
@@ -341,12 +350,35 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Are you sure you want to mark this user as ${nextStatus}?`)) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/users', {
+      // ONE key for the whole logical action. runStepUpFlowIfNeeded retries the
+      // SAME request after elevation, and reusing the key is precisely what
+      // makes that retry idempotent instead of a second mutation.
+      const idempotencyKey = newIdempotencyKey();
+      const fire = () => fetchWithAuth('/api/super-admin/users', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({ userId, companyId, status: nextStatus }),
       });
-      if (!response.ok) { const r = await response.json(); alert(`Error: ${r.details || r.error || 'Failed to update user status'}`); return; }
+      // identity.admin.assign is step-up gated (phishing-resistant + trusted
+      // device, 10-min freshness). The first call 401s until the operator has
+      // elevated; the helper runs the passkey ceremony and retries once.
+      const outcome = await runStepUpFlowIfNeeded(await fire(), fire);
+      if (outcome.kind === 'step_up_user_cancelled' || outcome.kind === 'step_up_unavailable') {
+        alert(describeStepUpOutcome(outcome));
+        return;
+      }
+      if (outcome.kind === 'session_lost') {
+        alert(describeAuthFailure(outcome.failure));
+        return;
+      }
+      // 'success' and 'auth_banner' both carry the server's response; fall
+      // through so the API's own error detail is surfaced as before.
+      const response = outcome.response;
+      if (!response.ok) {
+        const r = await response.json().catch(() => ({} as Record<string, string>));
+        alert(`Error: ${r.details || r.error || 'Failed to update user status'}`);
+        return;
+      }
       await loadData();
     } catch (error) {
       console.error('Error updating user status:', error);
@@ -360,12 +392,29 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Change this user's role to ${nextRole}?`)) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/users', {
+      const idempotencyKey = newIdempotencyKey();
+      const fire = () => fetchWithAuth('/api/super-admin/users', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({ userId, companyId, role: nextRole }),
       });
-      if (!response.ok) { const r = await response.json(); alert(`Error: ${r.details || r.error || 'Failed to update user role'}`); return; }
+      const outcome = await runStepUpFlowIfNeeded(await fire(), fire);
+      if (outcome.kind === 'step_up_user_cancelled' || outcome.kind === 'step_up_unavailable') {
+        alert(describeStepUpOutcome(outcome));
+        return;
+      }
+      if (outcome.kind === 'session_lost') {
+        alert(describeAuthFailure(outcome.failure));
+        return;
+      }
+      // 'success' and 'auth_banner' both carry the server's response; fall
+      // through so the API's own error detail is surfaced as before.
+      const response = outcome.response;
+      if (!response.ok) {
+        const r = await response.json().catch(() => ({} as Record<string, string>));
+        alert(`Error: ${r.details || r.error || 'Failed to update user role'}`);
+        return;
+      }
       await loadData();
     } catch (error) {
       console.error('Error updating user role:', error);
