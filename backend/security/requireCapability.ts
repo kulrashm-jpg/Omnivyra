@@ -26,6 +26,7 @@ import {
 } from './AuthorizationService';
 import { resolvePrincipal } from './IdentityResolver';
 import { getStepUpPolicy } from './stepup/StepUpPolicyRegistry';
+import { CROSS_ORGANIZATION_IDENTITY_CAPABILITIES } from './platformCapabilities';
 import { logSecurityEvent } from './audit/SecurityAuditService';
 import { correlationIdFor } from './correlationId';
 import { authModeFor, stepUpStatusFor } from './authMode';
@@ -117,7 +118,16 @@ export async function requireCapability(
   // Decide whether step-up is required.
   const stepUpExplicitlySet = options.requireStepUp !== undefined;
   const stepUpDefault = STEP_UP_REQUIRED_CAPABILITIES.includes(options.capability);
-  const useStepUp = stepUpExplicitlySet ? options.requireStepUp! : stepUpDefault;
+  // Cross-organization identity administration waives the actor-membership
+  // precondition (see platformCapabilities). Step-up is what remains standing
+  // between a platform admin and a cross-tenant membership write, so the
+  // `requireStepUp: false` migration escape hatch must not reach these.
+  const stepUpMandatory = CROSS_ORGANIZATION_IDENTITY_CAPABILITIES.includes(options.capability);
+  const useStepUp = stepUpMandatory
+    ? true
+    : stepUpExplicitlySet
+      ? options.requireStepUp!
+      : stepUpDefault;
 
   const stepUpPolicy: StepUpRequirement | null = useStepUp
     ? (options.stepUpOverride ?? getStepUpPolicy(options.capability))

@@ -13,6 +13,7 @@
 import type { NextApiResponse } from 'next';
 import { logSecurityEvent, snapshotFromPrincipal } from './audit/SecurityAuditService';
 import { evaluateStepUp } from './StepUpAuthorizationService';
+import { allowsCrossOrganizationIdentityAdministration } from './platformCapabilities';
 import type {
   AuthenticatedPrincipal,
   AuthorizationDecision,
@@ -103,35 +104,52 @@ export async function decideCapability(
   }
 
   // Org scope check.
-  if (requirement.organizationId) {
-    const member = principal.organizations.find(
-      (m) => m.organizationId === requirement.organizationId && m.status === 'active',
-    );
-    if (!member) {
-      await logSecurityEvent({
-        capability: requirement.capability,
-        decision: 'denied',
-        reason: requirement.reason ?? 'not org member',
-        actorUserId: principal.userId,
-        actorSessionId: principal.sessionId,
-        principalUserId: principal.userId,
-        principalSupabaseUid: principal.supabaseUid,
-        organizationId: requirement.organizationId,
-        resourceId: requirement.resourceId ?? null,
-        ip: context.ip,
-        userAgent: context.userAgent,
-        viaLegacyBridge: principal.legacyCookieSuperAdmin,
-        ...snapshot,
-      });
-      return { allowed: false, reason: 'NOT_ORG_MEMBER', capability: requirement.capability };
-    }
+  //
+  // For platform identity administration the organizationId names the TARGET
+  // tenant, not one the actor must belong to — requiring membership there makes
+  // provisioning a tenant's FIRST member impossible (Phase 2Z-AF). The waiver is
+  // capability-specific and role-gated; see
+  // `allowsCrossOrganizationIdentityAdministration`. Only the actor-membership
+  // precondition is waived — the target org still bounds the write and is still
+  // recorded on the audit row below.
+  const memberOfTargetOrg = requirement.organizationId
+    ? principal.organizations.some(
+        (m) => m.organizationId === requirement.organizationId && m.status === 'active',
+      )
+    : true;
+  // Load-bearing only when the actor is genuinely outside the target org, so
+  // the audit marker below never overstates an ordinary in-org decision.
+  const orgMembershipWaived =
+    Boolean(requirement.organizationId)
+    && !memberOfTargetOrg
+    && allowsCrossOrganizationIdentityAdministration(principal, requirement.capability);
+
+  if (requirement.organizationId && !memberOfTargetOrg && !orgMembershipWaived) {
+    await logSecurityEvent({
+      capability: requirement.capability,
+      decision: 'denied',
+      reason: requirement.reason ?? 'not org member',
+      actorUserId: principal.userId,
+      actorSessionId: principal.sessionId,
+      principalUserId: principal.userId,
+      principalSupabaseUid: principal.supabaseUid,
+      organizationId: requirement.organizationId,
+      resourceId: requirement.resourceId ?? null,
+      ip: context.ip,
+      userAgent: context.userAgent,
+      viaLegacyBridge: principal.legacyCookieSuperAdmin,
+      ...snapshot,
+    });
+    return { allowed: false, reason: 'NOT_ORG_MEMBER', capability: requirement.capability };
   }
 
   // Allowed.
   await logSecurityEvent({
     capability: requirement.capability,
     decision: 'allowed',
-    reason: requirement.reason,
+    reason: orgMembershipWaived
+      ? `${requirement.reason} [cross-org platform identity administration]`
+      : requirement.reason,
     actorUserId: principal.userId,
     actorSessionId: principal.sessionId,
     principalUserId: principal.userId,

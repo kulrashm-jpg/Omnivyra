@@ -40,7 +40,9 @@ import {
   INTELLIGENCE_OVERRIDE_MANAGE,
   INTEGRATION_PLATFORM_OAUTH_MANAGE,
   ORGANIZATION_DELETE,
+  STEP_UP_REQUIRED_CAPABILITIES,
   SUPER_ADMIN_DASHBOARD_VIEW,
+  type AuthenticatedPrincipal,
   type Capability,
 } from '../../shared/contracts/security';
 import { ROLE_CAPABILITIES, type CanonicalRole, capabilitiesForRole } from './capabilityRegistry';
@@ -112,6 +114,26 @@ export function assertPlatformCapabilityIsolation(): void {
       }
     }
   }
+  // Cross-organization identity capabilities must be a subset of the
+  // platform tier: if one were ever tenant-grantable, a tenant role could
+  // administer membership in tenants it does not belong to.
+  const platformSet = new Set(PLATFORM_TIER_CAPABILITIES);
+  const stepUpSet = new Set<Capability>(STEP_UP_REQUIRED_CAPABILITIES);
+  for (const cap of CROSS_ORGANIZATION_IDENTITY_CAPABILITIES) {
+    if (!platformSet.has(cap)) {
+      violations.push(
+        `Cross-organization identity capability ${cap} is not platform-tier`,
+      );
+    }
+    // ...and must require step-up, so the org-membership waiver can never
+    // become an unelevated cross-tenant write.
+    if (!stepUpSet.has(cap)) {
+      violations.push(
+        `Cross-organization identity capability ${cap} does not require step-up`,
+      );
+    }
+  }
+
   if (violations.length > 0) {
     throw new Error(
       `[platform-isolation] ${violations.length} violation(s) detected:\n  - ${violations.join('\n  - ')}\n` +
@@ -137,6 +159,87 @@ export function describeRoleCapabilityIsolation(): Array<{
       isPlatformTier: platformSet.has(c),
     })),
   }));
+}
+
+
+// ── Cross-organization platform identity administration ──────────────────────
+//
+// Phase 2Z-AF — SUPER_ADMIN identity-admin bootstrap deadlock.
+//
+// The problem this solves:
+//   `decideCapability` requires the principal to hold an ACTIVE membership in
+//   `requirement.organizationId`. For identity administration that rule is
+//   self-defeating: the platform administrator provisioning the FIRST member of
+//   a tenant can never be a member of it yet, so the very operation that would
+//   create the membership is denied NOT_ORG_MEMBER. Production proved this —
+//   a canonical SUPER_ADMIN was denied while attaching the first operator to an
+//   empty tenant.
+//
+// The rule below is deliberately NOT "SUPER_ADMIN skips organization checks".
+// It is the narrowest statement of the actual intent:
+//
+//     platform SUPER_ADMIN + an identity-administration capability
+//       → may administer membership in the EXPLICITLY SUPPLIED tenant
+//
+// What is waived is only the ACTOR-membership precondition. Everything else is
+// untouched: the capability must still be held, the target organization must
+// still be supplied and still bounds the write, step-up is still evaluated
+// downstream, and the decision is still audited against the target org.
+
+/**
+ * Capabilities whose organization scope names the TARGET of a cross-tenant
+ * platform operation rather than an organization the actor must belong to.
+ *
+ * Keep this list minimal. A capability belongs here only when the operation is
+ * inherently cross-tenant AND cannot be performed by a tenant-resident actor.
+ * Membership in this list is constrained by `assertPlatformCapabilityIsolation`:
+ * every member must also be platform-tier (so no tenant role can ever inherit
+ * it) and step-up-required (so elevation can never be dropped).
+ */
+export const CROSS_ORGANIZATION_IDENTITY_CAPABILITIES: ReadonlyArray<Capability> = [
+  IDENTITY_ADMIN_ASSIGN,
+];
+
+/**
+ * True iff the principal holds the platform SUPER_ADMIN role itself.
+ *
+ * Deliberately stricter than holding a platform-tier capability:
+ * `capability_assignments` can grant any single capability directly to any
+ * user (see CapabilityService.resolveUserCapabilities), so capability
+ * possession alone does NOT prove platform authority. Cross-organization
+ * identity administration requires the role.
+ *
+ * Pure — reads only the resolved principal, no I/O.
+ */
+export function isPlatformSuperAdminPrincipal(principal: AuthenticatedPrincipal): boolean {
+  return principal.organizations.some(
+    (m) => m.role === 'SUPER_ADMIN' && m.status === 'active',
+  );
+}
+
+/**
+ * Decide whether the actor-membership precondition should be waived for this
+ * (principal, capability) pair.
+ *
+ * ALL of the following must hold:
+ *   - the capability is an enumerated cross-organization identity capability;
+ *   - the principal holds the platform SUPER_ADMIN role (not merely the cap);
+ *   - the principal is NOT a legacy cookie bridge principal;
+ *   - the principal has a server-issued session.
+ *
+ * Step-up is intentionally NOT checked here. It is enforced immediately
+ * afterwards by `decideCapabilityWithStepUp`, which is what lets an operator
+ * who has not yet elevated receive `STEP_UP_REQUIRED` (401 — the UI launches
+ * the passkey challenge) instead of a dead-end `NOT_ORG_MEMBER` (403).
+ */
+export function allowsCrossOrganizationIdentityAdministration(
+  principal: AuthenticatedPrincipal,
+  capability: Capability,
+): boolean {
+  if (!CROSS_ORGANIZATION_IDENTITY_CAPABILITIES.includes(capability)) return false;
+  if (principal.legacyCookieSuperAdmin) return false;
+  if (!principal.sessionId) return false;
+  return isPlatformSuperAdminPrincipal(principal);
 }
 
 // ── Boot-time invariant enforcement ──────────────────────────────────────────
