@@ -33,14 +33,40 @@ export function resolveLatchedFeatureState(
   prior: { status: string; score: number; completedAt: Date | string | null } | null | undefined,
   computed: { status: string; score: number },
 ): LatchedFeatureState {
+  // SCORE retention is unchanged: prior wins only on a STRICTLY higher score.
   const retained = prior != null && prior.score > computed.score;
   if (retained) {
     return { status: prior!.status, score: prior!.score, completedAt: prior!.completedAt, retained: true };
   }
+
+  // TIMESTAMP retention is decided separately, and this is the fix.
+  //
+  // A feature that is already completed recomputes to the SAME score on every
+  // sync, so `retained` is false and this branch runs — which used to mint a
+  // fresh `new Date()` and overwrite the moment the company actually earned the
+  // feature. Every Command Center load re-stamped it, which is why a production
+  // read showed five separately-earned features all sharing one timestamp.
+  //
+  // The completion instant is a historical fact, not a property of the last
+  // sync. Once a prior row is completed and carries a timestamp, that timestamp
+  // survives any later recomputation that leaves the feature completed —
+  // equal-score (the steady state) and higher-score alike.
+  //
+  // Deliberately NOT preserved: if the resulting status is not `completed`, the
+  // row carries no completion timestamp, because a non-completed row with a
+  // completed_at would be self-contradictory. That case is only reachable for a
+  // degenerate prior (status `completed` at a score the recompute matches or
+  // exceeds while itself resolving to not-completed); the monotonic score rule
+  // above already governs it and is untouched here.
+  const priorCompletedAt =
+    prior != null && prior.status === 'completed' && prior.completedAt != null
+      ? prior.completedAt
+      : null;
+
   return {
     status: computed.status,
     score: computed.score,
-    completedAt: computed.status === 'completed' ? new Date() : null,
+    completedAt: computed.status === 'completed' ? priorCompletedAt ?? new Date() : null,
     retained: false,
   };
 }
