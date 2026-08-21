@@ -1,5 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../lib/platform/routeFactory';
-import { appendServerTiming, timeStage } from '../../lib/platform/serverTiming';
+import { appendServerTiming, createTimingSink, flushTimingSink, timeStage } from '../../lib/platform/serverTiming';
 
 /**
  * GET /api/feature-completion
@@ -52,7 +52,18 @@ async function handler(
     // auth-cookie envelope) — the same path every other authenticated API uses. The
     // prior createServerClient + getSession(req.cookies) guard could not read this
     // app's auth cookie and returned 401 on every call (SIM-004 / EXEC-002 defect).
-    const { user } = await timeStage(res, 'auth', () => getSupabaseUserFromRequest(req));
+    // `auth` is the outer boundary; the sink decomposes it into the two IO
+    // operations inside the resolver — auth_validate (GoTrue db.auth.getUser)
+    // and auth_user (the users row keyed on the validated supabaseUid). Both
+    // are already wrapped in timeInto(); without a sink those calls are a no-op
+    // and the stage stays opaque, which is why 46.7% of this request was
+    // unattributable. Same helper and same pattern as company-profile?mode=list.
+    //
+    // Observability only: an absent sink is zero-overhead, and supplying one
+    // only appends Server-Timing entries. No auth behaviour changes.
+    const authTiming = createTimingSink();
+    const { user } = await timeStage(res, 'auth', () => getSupabaseUserFromRequest(req, authTiming));
+    flushTimingSink(res, authTiming);
     if (!user) {
       appendServerTiming(res, 'total', Date.now() - handlerStart);
       return res.status(401).json({ success: false, error: 'Unauthorized' });
