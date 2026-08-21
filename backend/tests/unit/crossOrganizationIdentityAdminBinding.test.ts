@@ -82,7 +82,8 @@ jest.mock('../../db/supabaseClient', () => ({
   },
 }));
 
-import { handleUsersPost } from '../../apiHandlers/superAdmin/usersMutations';
+import { handleUsersPost, handleUsersDelete } from '../../apiHandlers/superAdmin/usersMutations';
+import { handleUsersPatch } from '../../apiHandlers/superAdmin/usersRead';
 import { upsertUserCompanyRole } from '../../apiHandlers/superAdmin/usersShared';
 import { requireCapability } from '../../security/requireCapability';
 
@@ -246,5 +247,75 @@ describe('Test 6 — membership isolation', () => {
     await upsertUserCompanyRole(TARGET_USER, TARGET_ORG, 'COMPANY_ADMIN');
     const insert = ops.find((o) => o.table === 'user_company_roles' && o.kind === 'insert');
     expect(insert?.payload).toMatchObject({ status: 'invited' });
+  });
+});
+
+describe('2Z-AF fall-through — a denied mutation must not become 405', () => {
+  // The route shell (pages/api/super-admin/users.ts) dispatches with
+  // `if (await handleUsersX(req, res)) return;` and ends in a trailing
+  // res.status(405). A guard denial writes its own response and then returned
+  // FALSY, so the shell walked on and set 405 over the top of it. Each handler
+  // must now report HANDLED.
+  const denied = () => {
+    (requireCapability as jest.Mock).mockImplementation(async (_req, res) => {
+      res.status(403).json({ error: 'Forbidden', code: 'NOT_ORG_MEMBER' });
+      return { ok: false, sent: true };
+    });
+  };
+
+  it('CRITICAL: a denied POST reports handled, so the shell cannot reach 405', async () => {
+    denied();
+    const { res, captured } = mockRes();
+    const handled = await handleUsersPost(
+      { method: 'POST', headers: {}, body: { email: 'op@example.test', companyId: TARGET_ORG, role: 'COMPANY_ADMIN' } } as never,
+      res as never,
+    );
+    expect(handled).toBeTruthy();
+    expect(captured.status).toBe(403);
+    expect(captured.body).toMatchObject({ code: 'NOT_ORG_MEMBER' });
+  });
+
+  it('CRITICAL: a denied PATCH reports handled', async () => {
+    denied();
+    const { res, captured } = mockRes();
+    const handled = await handleUsersPatch(
+      { method: 'PATCH', headers: {}, body: { userId: TARGET_USER, companyId: TARGET_ORG, status: 'active' } } as never,
+      res as never,
+    );
+    expect(handled).toBeTruthy();
+    expect(captured.status).toBe(403);
+  });
+
+  it('CRITICAL: a denied DELETE reports handled', async () => {
+    denied();
+    const { res, captured } = mockRes();
+    const handled = await handleUsersDelete(
+      { method: 'DELETE', headers: {}, body: { userId: TARGET_USER, companyId: TARGET_ORG } } as never,
+      res as never,
+    );
+    expect(handled).toBeTruthy();
+    expect(captured.status).toBe(403);
+  });
+
+  it('the denial is the REAL authorization response, not a fabricated success', async () => {
+    denied();
+    const { res, captured } = mockRes();
+    await handleUsersPost(
+      { method: 'POST', headers: {}, body: { email: 'op@example.test', companyId: TARGET_ORG, role: 'COMPANY_ADMIN' } } as never,
+      res as never,
+    );
+    expect(captured.status).not.toBe(200);
+    expect(captured.status).not.toBe(201);
+    expect(captured.status).not.toBe(405);
+    expect(ops.filter((o) => o.table === 'user_company_roles')).toEqual([]);
+  });
+
+  it('a handler still declines a method it does not own (the shell may 405 legitimately)', async () => {
+    const { res } = mockRes();
+    // An OPTIONS request owns no handler — every one must return falsy so the
+    // shell's 405 remains reachable for genuinely unsupported methods.
+    expect(await handleUsersPost({ method: 'OPTIONS', headers: {}, body: {} } as never, res as never)).toBeFalsy();
+    expect(await handleUsersPatch({ method: 'OPTIONS', headers: {}, body: {} } as never, res as never)).toBeFalsy();
+    expect(await handleUsersDelete({ method: 'OPTIONS', headers: {}, body: {} } as never, res as never)).toBeFalsy();
   });
 });

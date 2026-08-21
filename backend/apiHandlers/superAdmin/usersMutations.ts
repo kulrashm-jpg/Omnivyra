@@ -51,7 +51,9 @@ export async function handleUsersPost(req: NextApiRequest, res: NextApiResponse)
         organizationId: companyId,
         resourceId: email,
       });
-      if (guard.ok !== true) return;
+      // Denied: requireCapability already wrote the response. Report HANDLED so
+      // the route shell does not fall through to its trailing 405 (2Z-AF).
+      if (guard.ok !== true) return true;
 
       if (!companyId) {
         return res.status(400).json({
@@ -300,7 +302,9 @@ export async function handleUsersDelete(req: NextApiRequest, res: NextApiRespons
       resourceId: userId,
       organizationId: companyId,
     });
-    if (guard.ok !== true) return;
+    // Denied: requireCapability already wrote the response. Report HANDLED so
+    // the route shell does not fall through to its trailing 405 (2Z-AF).
+    if (guard.ok !== true) return true;
 
     // Route 1: Delete user from specific company
     if (companyId) {

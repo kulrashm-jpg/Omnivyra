@@ -224,8 +224,13 @@ export function isPlatformSuperAdminPrincipal(principal: AuthenticatedPrincipal)
  * ALL of the following must hold:
  *   - the capability is an enumerated cross-organization identity capability;
  *   - the principal holds the platform SUPER_ADMIN role (not merely the cap);
- *   - the principal is NOT a legacy cookie bridge principal;
- *   - the principal has a server-issued session.
+ *   - the principal is NOT a legacy cookie bridge principal.
+ *
+ * A server-issued `sessionId` is deliberately NOT required. Production proved
+ * the canonical platform SUPER_ADMIN legitimately resolves from the Supabase
+ * identity with no `auth_sessions` row, so demanding one vetoed the waiver for
+ * the only principal it exists to serve (2Z-AF). Session freshness is not what
+ * guards this operation — step-up is, and step-up is evaluated downstream.
  *
  * Step-up is intentionally NOT checked here. It is enforced immediately
  * afterwards by `decideCapabilityWithStepUp`, which is what lets an operator
@@ -238,7 +243,6 @@ export function allowsCrossOrganizationIdentityAdministration(
 ): boolean {
   if (!CROSS_ORGANIZATION_IDENTITY_CAPABILITIES.includes(capability)) return false;
   if (principal.legacyCookieSuperAdmin) return false;
-  if (!principal.sessionId) return false;
   return isPlatformSuperAdminPrincipal(principal);
 }
 

@@ -149,7 +149,9 @@ export async function handleUsersPatch(req: NextApiRequest, res: NextApiResponse
       organizationId: companyId,
       resourceId: userId,
     });
-    if (patchGuard.ok !== true) return;
+    // Denied: requireCapability already wrote the response. Report HANDLED so
+    // the route shell does not fall through to its trailing 405 (2Z-AF).
+    if (patchGuard.ok !== true) return true;
     if (!status && !role) {
       return res.status(400).json({ 
         error: 'MISSING_UPDATE_FIELDS',

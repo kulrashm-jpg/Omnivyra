@@ -101,6 +101,23 @@ describe('Test 1 — the deadlock is broken', () => {
     expect(decision).toEqual({ allowed: true });
   });
 
+  it('CRITICAL: the PRODUCTION principal — sessionId === null — is authorized', async () => {
+    // 2Z-AF: the real platform SUPER_ADMIN resolves from the Supabase identity
+    // with no auth_sessions row, so principal.sessionId is null. An earlier
+    // version of the waiver vetoed exactly this principal and the fix was inert
+    // in production while every test passed.
+    const decision = await decideCapabilityWithStepUp(
+      principal({
+        sessionId: null,
+        organizations: [{ organizationId: HOME_ORG, status: 'active', role: 'SUPER_ADMIN' }],
+        capabilities: [IDENTITY_ADMIN_ASSIGN],
+      }),
+      { capability: IDENTITY_ADMIN_ASSIGN, organizationId: TARGET_ORG, reason: 'production case' },
+      assignPolicy(),
+    );
+    expect(decision).toEqual({ allowed: true });
+  });
+
   it('mutation check — without the waiver this exact request is NOT_ORG_MEMBER', async () => {
     // Same principal, same target, but stripped of the SUPER_ADMIN role. This
     // is the pre-fix behaviour, and it is what production actually returned.
@@ -150,13 +167,14 @@ describe('Test 2 — a capability-holder who is not SUPER_ADMIN stays org-scoped
     expect(allowsCrossOrganizationIdentityAdministration(bridge, IDENTITY_ADMIN_ASSIGN)).toBe(false);
   });
 
-  it('a principal with no server-issued session never qualifies', () => {
-    const sessionless = principal({
-      organizations: [{ organizationId: HOME_ORG, status: 'active', role: 'SUPER_ADMIN' }],
+  it('a COMPANY_ADMIN of the target tenant still cannot administer identity cross-tenant', () => {
+    // Membership in the target is not authority over it: the waiver is about
+    // WHO may administer identity, and a tenant admin never may.
+    const tenantAdmin = principal({
+      organizations: [{ organizationId: TARGET_ORG, status: 'active', role: 'COMPANY_ADMIN' }],
       capabilities: [IDENTITY_ADMIN_ASSIGN],
-      sessionId: null,
     });
-    expect(allowsCrossOrganizationIdentityAdministration(sessionless, IDENTITY_ADMIN_ASSIGN)).toBe(false);
+    expect(allowsCrossOrganizationIdentityAdministration(tenantAdmin, IDENTITY_ADMIN_ASSIGN)).toBe(false);
   });
 });
 
