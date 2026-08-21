@@ -15,7 +15,11 @@ const SRC = fs.readFileSync(
   path.resolve(__dirname, '../../../pages/api/feature-completion.ts'), 'utf8');
 const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
-const STAGES = ['auth', 'roles', 'sync', 'features', 'summary'] as const;
+// Phase 31: the 'features' stage was removed. getFeatureCompletionSummary already
+// calls getFeatureCompletionStatus internally and returns those rows on .features,
+// so the separate stage issued a byte-identical duplicate query against
+// feature_completion on the response critical path.
+const STAGES = ['auth', 'roles', 'sync', 'summary'] as const;
 
 describe('A — real stages are instrumented', () => {
   it.each(STAGES)('wraps the %s stage', (stage) => {
@@ -25,7 +29,6 @@ describe('A — real stages are instrumented', () => {
   it('wraps the calls that already existed, not new ones', () => {
     expect(CODE).toContain("timeStage(res, 'auth', () => getSupabaseUserFromRequest(req))");
     expect(CODE).toContain("timeStage(res, 'sync', () => syncFeatureCompletion(companyId, userId))");
-    expect(CODE).toContain("timeStage(res, 'features', () => getFeatureCompletionStatus(companyId))");
     expect(CODE).toContain("timeStage(res, 'summary', () => getFeatureCompletionSummary(companyId))");
   });
 
@@ -94,6 +97,20 @@ describe('E — no duplication', () => {
     expect(CODE.split(`timeStage(res, '${stage}'`).length - 1).toBe(1);
   });
 
+  it('MUTATION GUARD: feature_completion is read ONCE, not twice', () => {
+    // getFeatureCompletionSummary already returns the rows on .features.
+    // Calling getFeatureCompletionStatus from the route as well reintroduces
+    // the duplicate sequential hop this change removed (median ~427ms).
+    expect(CODE).not.toContain('getFeatureCompletionStatus(companyId)');
+    expect(CODE).toContain('const features = summary.features;');
+  });
+
+  it('the response payload still carries both features and summary', () => {
+    expect(CODE).toContain('features: features.map(');
+    expect(CODE).toContain('total: summary.total,');
+    expect(CODE).toContain('completed: summary.completed,');
+  });
+
   it('uses the shared helper rather than a new mechanism', () => {
     expect(CODE).toContain("from '../../lib/platform/serverTiming'");
     expect(CODE.split('import { appendServerTiming, timeStage }').length - 1).toBe(1);
@@ -101,7 +118,9 @@ describe('E — no duplication', () => {
 
   it('no query or external call was added', () => {
     expect(CODE.split("from('user_company_roles')").length - 1).toBe(1);
-    expect(CODE.split('getFeatureCompletionStatus(companyId)').length - 1).toBe(1);
+    // Phase 31: removed, not added. The route no longer calls this directly —
+    // getFeatureCompletionSummary performs the single read internally.
+    expect(CODE.split('getFeatureCompletionStatus(companyId)').length - 1).toBe(0);
     expect(CODE.split('getFeatureCompletionSummary(companyId)').length - 1).toBe(1);
     expect(CODE.split('syncFeatureCompletion(companyId, userId)').length - 1).toBe(1);
   });
