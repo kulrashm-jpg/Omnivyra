@@ -34,6 +34,17 @@ import { buildMasterySignals } from '../lib/mastery/buildMasterySignals';
 import { MASTERY_REGISTRY, type MasterySignals } from '../config/masteryRegistry';
 import { evaluateCapabilityRegistry, type CapabilityEvaluation } from '../lib/shared/capabilityRegistry';
 
+/**
+ * Upper bound for every request in the readiness signal batch.
+ *
+ * Chosen from measurement, not convention: legitimate responses on this wave
+ * have been observed as slow as 21,722ms (/api/feature-completion), so the 15s
+ * bound used in CompanyContext would classify real successes as failures and
+ * needlessly degrade scores. 30s sits above the observed legitimate maximum
+ * while still preventing a hung request from holding the batch indefinitely.
+ */
+const READINESS_SIGNAL_TIMEOUT_MS = 30_000;
+
 const EMPTY_CAPABILITY_EVALUATION: CapabilityEvaluation = {
   categories: [],
   overallPercent: 0,
@@ -256,6 +267,12 @@ export function useCommandCenter() {
   const readinessSummary = readinessEvaluation.summary;
   const masteryPct = masteryEvaluation.overallPercent;
   const masterySummary = masteryEvaluation.summary;
+  // Stale-run guard. loadReadiness re-fires on setup events, window focus and
+  // visibilitychange, so two waves can overlap. Now that the feature branch
+  // commits independently of the signal batch, an older wave could otherwise
+  // land after a newer one and overwrite fresher card state. Each run takes a
+  // ticket; a run that is no longer the newest commits nothing.
+  const readinessRunRef = useRef(0);
   const loadReadiness = useCallback(async () => {
     // Identity gate accepts EITHER principal shape. Every request in this wave
     // is keyed solely on selectedCompanyId — none consumes a user id — so the
@@ -273,32 +290,59 @@ export function useCommandCenter() {
     // Gating on authUserId alone would never release this wave for them.
     if (!authChecked || (!authUserId && !user?.userId) || !selectedCompanyId) return;
 
+    const runId = ++readinessRunRef.current;
+    const isStale = () => runId !== readinessRunRef.current;
+
     try {
-      const getJson = (path: string) =>
-        fetch(path, { method: 'GET', headers: { 'Content-Type': 'application/json' } }).catch(() => null);
+      // Every request in the signal batch is now bounded. Previously these were
+      // raw fetches with no signal and no timeout: `.catch(() => null)` handles
+      // rejection, not slowness, so one hung request could hold the batch for
+      // as long as the browser allowed.
+      //
+      // 30s rather than the 15s used in CompanyContext, and the difference is
+      // deliberate: legitimate responses on this wave have been measured at up
+      // to 21,722ms (/api/feature-completion), so a 15s cap would classify real
+      // successes as failures and degrade scores that were merely slow. 30s
+      // sits above the observed legitimate maximum while still bounding a hang.
+      const getJson = (path: string) => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), READINESS_SIGNAL_TIMEOUT_MS);
+        return fetch(path, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          signal: ctrl.signal,
+        })
+          .catch(() => null) // abort included — preserves the existing null fallback
+          .finally(() => clearTimeout(timer));
+      };
+      // Same bound for a batch member that cannot be aborted (it is shared via
+      // singleFlight, so cancelling it would affect other callers). Resolving to
+      // the fallback only releases THIS wave's view of it.
+      const capped = <T,>(promise: Promise<T>, fallback: T): Promise<T> =>
+        Promise.race([
+          promise,
+          new Promise<T>((resolve) => setTimeout(() => resolve(fallback), READINESS_SIGNAL_TIMEOUT_MS)),
+        ]);
       const cid = encodeURIComponent(selectedCompanyId);
       // Shared with loadUserTier via singleFlight — started here so it is still
       // in flight alongside the wave, not serialized behind it.
       const subscriptionPromise = fetchSubscriptionOnce(selectedCompanyId);
-      const [
-        data,
-        profileResponse,
-        companyApiConfigResponse,
-        externalApisResponse,
-        socialStatusResponse,
-        teamSummaryResponse,
-        websiteSnapshotResponse,
-        blogsResponse,
-        creatorAssetsResponse,
-        templateCollectionsResponse,
-        userTemplatesResponse,
-        blockTemplatesResponse,
-        automationConfigResponse,
-        campaignsResponse,
-        reportsResponse,
-        telemetryProvidersResponse,
-      ] = await Promise.all([
-        fetchReadinessData(selectedCompanyId),
+      // THE DEPENDENCY BOUNDARY.
+      //
+      // All sixteen requests still start together — concurrency, ordering and
+      // request count on the wire are unchanged. What changes is what the CARDS
+      // wait for. `fetchReadinessData` is the only member that produces
+      // `features`, and card state derives from `features` alone; the other
+      // fifteen feed Setup/Readiness/Mastery signals. Awaiting them as one
+      // Promise.all meant the cards waited for the SLOWEST of sixteen, so a page
+      // whose card data arrived in the first second could sit on "Checking…"
+      // until an unrelated request finished.
+      //
+      // The feature branch is now awaited on its own and committed immediately;
+      // the signal batch is awaited afterwards for the score pipeline, whose
+      // inputs genuinely do require all of them together.
+      const featurePromise = fetchReadinessData(selectedCompanyId);
+      const signalBatch = Promise.all([
         getJson(`/api/company-profile?companyId=${cid}&includeCompleteness=1`),
         getJson(`/api/external-apis/company-config?companyId=${cid}`),
         getJson(`/api/external-apis?companyId=${cid}`),
@@ -314,16 +358,27 @@ export function useCommandCenter() {
         getJson(`/api/campaigns?companyId=${cid}`),
         // Shared with the SWR poll above. Mapped to the { ok, json } shape the
         // parse stage below already expects, so failure still becomes null.
-        fetchReportsOnce(selectedCompanyId).then((r) =>
-          r.outcome === 'ok'
-            ? { ok: true as const, json: async () => r.json }
-            : null,
+        capped(
+          fetchReportsOnce(selectedCompanyId).then((r) =>
+            r.outcome === 'ok'
+              ? { ok: true as const, json: async () => r.json }
+              : null,
+          ),
+          null as { ok: true; json: () => Promise<unknown> } | null,
         ),
         // Canonical telemetry provider results — Mastery prefers these over the
         // proxy counts when telemetry is live; falls back to proxies while dark.
         getJson(`/api/telemetry/providers?companyId=${cid}&scope=mastery`),
       ]);
+
+      // ── Feature branch: cards are released here, independent of the batch ──
+      const data = await featurePromise;
+      if (isStale()) return;
       if (!data) {
+        // K2/K3 preserved: `features` is NOT set to [] on failure. It keeps its
+        // previous value, and on a first load that is the initial [], which
+        // getCardStateFromFeatures resolves to `unknown` → "Checking…". A failed
+        // feature request must never render a confident card state.
         console.warn('[command-center] Readiness data unavailable — defaulting to 0%');
         return;
       }
@@ -331,6 +386,26 @@ export function useCommandCenter() {
       setFeatures(data.features);
       setReadinessData(data.readiness);
       setReadinessScore(data.readiness.score);
+
+      // ── Signal batch: score pipeline only. Cards no longer wait on this. ──
+      const [
+        profileResponse,
+        companyApiConfigResponse,
+        externalApisResponse,
+        socialStatusResponse,
+        teamSummaryResponse,
+        websiteSnapshotResponse,
+        blogsResponse,
+        creatorAssetsResponse,
+        templateCollectionsResponse,
+        userTemplatesResponse,
+        blockTemplatesResponse,
+        automationConfigResponse,
+        campaignsResponse,
+        reportsResponse,
+        telemetryProvidersResponse,
+      ] = await signalBatch;
+      if (isStale()) return;
       if (profileResponse?.ok) {
         const profileData = await profileResponse.json();
         const [companyApiConfigData, externalApisData, socialStatusData, teamSummaryData, websiteSnapshotData, blogsData, creatorAssetsData, templateCollectionsData, userTemplatesData, blockTemplatesData, automationConfigData, campaignsData, reportsData, telemetryProvidersData] = await Promise.all([
