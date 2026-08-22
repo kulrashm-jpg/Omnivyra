@@ -2,35 +2,50 @@
  * Curated template gallery provider (CREATOR-125) — the Sample Gallery's data
  * source, now SYSTEM CreatorTemplates instead of marketingSample.
  *
- * It reads the fully-materialized curated templates (CREATOR-124) and applies the
- * SAME goal-affinity selection `marketingSample.listSamplesForGoal` applied —
- * filter by the goal's visual categories, fall back to the full pool when the
- * scoped set is too small — so the gallery's count/order/goal behaviour stays
- * byte-identical. No new derivation: the templates are consumed as-is.
+ * PHASE-1 (audit B4): the pool is now THE CANONICAL POOL rather than the raw
+ * curated registry, so this surface describes the same taxonomy as the template
+ * gallery, `/api/creator-templates`, recommendation and collections. The
+ * goal-affinity selection itself is unchanged (filter by the goal's visual
+ * categories, fall back to the full pool when the scoped set is too small).
+ *
+ * Card count is preserved: deduplication folds a curated card into its
+ * structural canonical AND transfers the showcase preview onto it, so every
+ * previously-previewable outcome is still previewable — just once.
  */
 
 import type { CreatorTemplate, TemplateAssetFamily } from '../creator-templates/types';
-import { CURATED_SYSTEM_TEMPLATES } from './curatedSystemTemplates';
+import { canonicalTemplatesFor } from './canonicalTemplatePool';
 import { goalCategoriesFor } from './goalAffinity';
 
+const FAMILIES: readonly TemplateAssetFamily[] = ['image', 'carousel', 'infographic'];
+
 /**
- * Per-family pool — a plain filter over the PERSISTED SYSTEM templates (CREATOR-126).
- * No runtime materialization, no marketingSample: the templates are loaded as static
- * data and only filtered by family here.
+ * Per-family pool over the CANONICAL system templates.
+ *
+ * This surface is preview-first (one dominant showcase image per outcome), so
+ * it scopes to templates that actually have a preview — which is exactly the
+ * set it showed before deduplication, and keeps preview-less structural
+ * templates out of a gallery that cannot render them.
  */
 const poolCache = new Map<string, CreatorTemplate[]>();
 function curatedPool(family?: TemplateAssetFamily): CreatorTemplate[] {
   const key = family ?? '*';
   let pool = poolCache.get(key);
   if (!pool) {
-    pool = family ? CURATED_SYSTEM_TEMPLATES.filter((t) => t.assetFamily === family) : CURATED_SYSTEM_TEMPLATES;
+    const base = family ? canonicalTemplatesFor(family) : FAMILIES.flatMap((f) => canonicalTemplatesFor(f));
+    pool = base.filter((t) => Boolean(t.preview?.thumbnailUrl));
     poolCache.set(key, pool);
   }
   return pool;
 }
 
+/** The full preview-bearing canonical pool (optionally scoped to one family). */
+export function listCuratedTemplates(family?: TemplateAssetFamily): CreatorTemplate[] {
+  return [...curatedPool(family)];
+}
+
 /**
- * Curated SYSTEM templates for a goal + family, mirroring `listSamplesForGoal`:
+ * Canonical SYSTEM templates for a goal + family, mirroring `listSamplesForGoal`:
  * scope to the goal's affined visual categories, but fall back to the full pool
  * when fewer than 4 match (or the goal has no mapping).
  */

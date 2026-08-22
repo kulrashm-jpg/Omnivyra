@@ -10,9 +10,15 @@ import {
   type CreatorTemplate,
   type TemplateAssetFamily,
   type TemplateCategory,
+  TEMPLATE_ASSET_FAMILIES,
   isTemplateAssetFamily,
 } from './types';
 import { SYSTEM_TEMPLATES, ALL_SYSTEM_TEMPLATES } from './systemTemplates';
+import {
+  canonicalizeTemplates,
+  type CanonicalGroup,
+  type CanonicalizationResult,
+} from './canonicalTaxonomy';
 import { DEFAULT_INFOGRAPHIC_STYLE, type InfographicStyleSchema } from './infographicStyle';
 import { DEFAULT_IMAGE_STYLE, type ImageStyleSchema } from './imageStyle';
 import { DEFAULT_CAROUSEL_STYLE, type CarouselStyleSchema } from './carouselStyle';
@@ -23,6 +29,7 @@ export * from './infographicStyle';
 export * from './imageStyle';
 export * from './carouselStyle';
 export { SYSTEM_TEMPLATES, ALL_SYSTEM_TEMPLATES } from './systemTemplates';
+export * from './canonicalTaxonomy';
 export * from './styleVariants';
 export * from './styleSerialization';
 export * from './templateGovernance';
@@ -118,11 +125,123 @@ export function listAllTemplatesForFamily(family: TemplateAssetFamily): CreatorT
   return [...SYSTEM_TEMPLATES[family], ...curatedTemplatesForFamily(family)];
 }
 
+/* ── THE canonical system template pool (PHASE-1 / audit B4) ─────────────
+ * `listAllTemplatesForFamily` is the raw union of the two system registries and
+ * therefore still contains the logical duplicates the audit found. Everything
+ * user-facing must read the CANONICAL pool instead: the same union with the
+ * duplicate cards folded into their elected representative.
+ *
+ * Computed once per family and frozen — the inputs are static in-code data plus
+ * a static JSON artifact, so the result cannot drift within a process.
+ */
+const canonicalPoolCache = new Map<TemplateAssetFamily, CanonicalizationResult>();
+
+function canonicalPool(family: TemplateAssetFamily): CanonicalizationResult {
+  let cached = canonicalPoolCache.get(family);
+  if (!cached) {
+    try {
+      // The ONE builder (creator-outcomes owns the static curated-JSON import;
+      // this barrel keeps it lazy to dodge the import cycle, exactly as
+      // `curatedTemplatesForFamily` and `materializeCuratedById` already do).
+      const { canonicalPoolFor } =
+        require('../creator-outcomes/canonicalTemplatePool') as typeof import('../creator-outcomes/canonicalTemplatePool');
+      cached = canonicalPoolFor(family);
+    } catch {
+      // Curated pool unavailable (e.g. gallery JSON absent in a trimmed build)
+      // → canonicalise whatever we do have, so the contract still holds.
+      cached = canonicalizeTemplates(listAllTemplatesForFamily(family));
+    }
+    canonicalPoolCache.set(family, cached);
+  }
+  return cached;
+}
+
+/**
+ * THE canonical system template pool for a family — deduplicated, preview-
+ * complete, one card per logical template. This is the ONE list every
+ * user-facing surface (gallery, API, recommendation, collections, outcome
+ * discovery) must read.
+ */
+export function listCanonicalTemplatesForFamily(family: TemplateAssetFamily): CreatorTemplate[] {
+  return [...canonicalPool(family).templates];
+}
+
+/** The canonical pool across every family, in family order. */
+export function listCanonicalTemplates(): CreatorTemplate[] {
+  return TEMPLATE_ASSET_FAMILIES.flatMap((f) => listCanonicalTemplatesForFamily(f));
+}
+
+/** The deduplication groups for a family (diagnostics + tests). */
+export function canonicalGroupsForFamily(family: TemplateAssetFamily): CanonicalGroup[] {
+  return [...canonicalPool(family).groups];
+}
+
+/**
+ * legacyId → canonicalId for every template folded away by deduplication.
+ *
+ * This map is DERIVED from the registries (never hand-written) so it cannot
+ * drift from the pool it describes. It is a *selection*-time compatibility
+ * layer: new selections should carry the canonical id. It is deliberately NOT
+ * applied inside `getTemplateById()` for ids that already resolve — see
+ * `resolveCanonicalTemplateId` for the full rationale.
+ */
+let aliasMapCache: Readonly<Record<string, string>> | null = null;
+export function templateIdAliases(): Readonly<Record<string, string>> {
+  if (!aliasMapCache) {
+    const merged: Record<string, string> = {};
+    for (const f of TEMPLATE_ASSET_FAMILIES) Object.assign(merged, canonicalPool(f).aliases);
+    aliasMapCache = Object.freeze(merged);
+  }
+  return aliasMapCache;
+}
+
+/**
+ * Map any template id onto the id of its canonical representative.
+ *
+ * Unknown ids and ids that are already canonical are returned unchanged, so
+ * this is safe to apply anywhere.
+ *
+ * WHY SELECTION-TIME AND NOT RESOLVE-TIME
+ * ---------------------------------------
+ * A deduplicated id is still a REAL template with its own rendering contract
+ * and its own form. Production rows (`daily_content_plans.template_id`,
+ * `creator_assets.metadata.templateId`, `design_attribution`, Collections)
+ * already carry some of these ids, and their persisted content was authored
+ * against that template's form. Redirecting `getTemplateById()` would re-render
+ * that content against a different contract and could orphan persisted fields.
+ *
+ * So: `getTemplateById(id)` keeps resolving every id to its own exact record
+ * (existing content renders byte-identically), while every surface that lets a
+ * user *pick* a template hands on the canonical id from here. Old rows stay
+ * correct; new rows converge on the canonical taxonomy.
+ */
+export function resolveCanonicalTemplateId(id: string | null | undefined): string {
+  const normalized = String(id ?? '').trim();
+  if (!normalized) return normalized;
+  return templateIdAliases()[normalized] ?? normalized;
+}
+
+/**
+ * Resolve a template id to its CANONICAL record — alias-aware. Use this where
+ * the canonical taxonomy is what matters (gallery selection, recommendation
+ * echo, collections membership). Use `getTemplateById` where rendering fidelity
+ * for an already-persisted id matters.
+ */
+export function getCanonicalTemplateById(id: string, family?: TemplateAssetFamily): CreatorTemplate | null {
+  const canonicalId = resolveCanonicalTemplateId(id);
+  const fam = family ?? getTemplateById(canonicalId)?.assetFamily ?? null;
+  if (fam) {
+    const hit = canonicalPool(fam).templates.find((t) => t.id === canonicalId);
+    if (hit) return family && hit.assetFamily !== family ? null : hit;
+  }
+  return getTemplateById(canonicalId, family);
+}
+
 /** Distinct categories present for a family, in first-seen order. */
 export function listCategoriesForFamily(family: TemplateAssetFamily): TemplateCategory[] {
   const seen = new Set<string>();
   const out: TemplateCategory[] = [];
-  for (const t of SYSTEM_TEMPLATES[family]) {
+  for (const t of listCanonicalTemplatesForFamily(family)) {
     if (seen.has(t.category)) continue;
     seen.add(t.category);
     out.push({ key: t.category, label: t.category, family });

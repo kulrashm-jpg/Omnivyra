@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { ArrowLeft, Trash2, ArrowUp, ArrowDown, Image as ImageIcon, Star, Plus, AlertTriangle } from 'lucide-react';
 import { useCompanyContext } from '../../../components/CompanyContext';
 import PageLoader from '../../../components/PageLoader';
-import { listTemplatesForFamily, type CreatorTemplate, type TemplateAssetFamily } from '../../../lib/creator-templates';
+import { listCanonicalTemplatesForFamily, type CreatorTemplate, type TemplateAssetFamily } from '../../../lib/creator-templates';
 import { recommendTemplateForFamily, type TemplateCollection, type CollectionValidation } from '../../../lib/creator-templates/collection';
 
 interface EvoRec { id: string; type: string; title: string; evidence: string[]; impactedMetrics: string[]; expectedBenefit: string; confidence: { level: string; value: number }; action?: { op: string; templateId: string; replacementTemplateId?: string } }
@@ -84,7 +84,10 @@ export default function CollectionEditorPage() {
   }
 
   const byId = new Map(templates.map((t) => [t.id, t]));
-  const candidates = [...FAMILIES.flatMap((f) => listTemplatesForFamily(f)), ...userTemplates]
+  // PHASE-1: pick members from the CANONICAL pool — the same taxonomy the
+  // gallery, the API and recommendation expose, so a collection can never be
+  // built out of a template the rest of the product has deduplicated away.
+  const candidates = [...FAMILIES.flatMap((f) => listCanonicalTemplatesForFamily(f)), ...userTemplates]
     .filter((t) => !collection?.templateIds.includes(t.id));
 
   function openFamily(family: TemplateAssetFamily) {
