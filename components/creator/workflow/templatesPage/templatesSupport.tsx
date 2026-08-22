@@ -6,8 +6,8 @@ import { useCompanyContext } from '../../../../components/CompanyContext';
 import PageLoader from '../../../../components/PageLoader';
 import {
   familyForCreatorType,
-  listTemplatesForFamily,
-  listAllTemplatesForFamily,
+  listCanonicalTemplatesForFamily,
+  resolveCanonicalTemplateId,
   resolveTemplate,
   registerUserTemplates,
   resolveAutoSelection,
@@ -302,7 +302,10 @@ export default function CreatorTemplateGalleryPage() {
     // Restore the active selection: a template_id carried back from the Creator
     // wins; otherwise the per-asset-type sessionStorage selection.
     const fromUrl = typeof q.template_id === 'string' && q.template_id.trim() ? q.template_id.trim() : null;
-    const restored = fromUrl ?? readSel(type);
+    // PHASE-1: a selection restored from the URL or a prior session may carry an
+    // id that deduplication folded away. Map it onto its canonical id so the
+    // gallery still highlights the right card (no-op for canonical ids).
+    const restored = resolveCanonicalTemplateId(fromUrl ?? readSel(type)) || null;
     if (restored) { setSelectedId(restored); writeSel(type, restored); markSource('user'); }
   }, [router.isReady]);
 
@@ -319,7 +322,9 @@ export default function CreatorTemplateGalleryPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d?.template?.id) return;
-        setSelectedId((prev) => { if (prev) return prev; writeSel(type, d.template.id); markSource('user'); return d.template.id; });
+        // PHASE-1: a Collection may hold a pre-dedup id — highlight its canonical card.
+        const seeded = resolveCanonicalTemplateId(d.template.id);
+        setSelectedId((prev) => { if (prev) return prev; writeSel(type, seeded); markSource('user'); return seeded; });
       })
       .catch(() => { /* best-effort — no design system attached */ });
     return () => { cancelled = true; };
@@ -342,7 +347,10 @@ export default function CreatorTemplateGalleryPage() {
   // overwrites an explicit user selection.
   React.useEffect(() => {
     if (!family) return;
-    const pool = [...listTemplatesForFamily(family), ...userTemplates];
+    // PHASE-1: recommend from the SAME canonical pool the gallery displays.
+    // (Previously the blueprint-only subset, so the engine could never
+    //  recommend a template the default gallery actually showed.)
+    const pool = [...listCanonicalTemplatesForFamily(family), ...userTemplates];
     const top = resolveAutoSelection({ templates: pool, context: recCtx }).result.recommended;
     if (!top) return;
     if (lastRecKeyRef.current === recKey) return;
@@ -368,11 +376,11 @@ export default function CreatorTemplateGalleryPage() {
 
   // System + user templates merged into ONE list (same model, same gallery),
   // then scoped by the ownership filter (All / System / My Templates / Shared).
-  // System = the goal-named BLUEPRINT set PLUS the curated STYLE pool (item 3a) so both are
-  // reachable/searchable from the library, not just the separate Sample Gallery. The blueprint-
-  // only `listTemplatesForFamily` (and its contract test + the structural auto-preselect above)
-  // is unchanged.
-  const merged = [...listAllTemplatesForFamily(family), ...userTemplates];
+  // PHASE-1: System = the CANONICAL pool — the goal-named STRUCTURAL set unioned
+  // with the curated STYLE pool and then deduplicated, so a logical template can
+  // never appear twice (the audit's B4 defect: two "Comparison" / "Corporate" /
+  // "Timeline" cards in one family). User templates are never deduplicated.
+  const merged = [...listCanonicalTemplatesForFamily(family), ...userTemplates];
   const myId = user?.userId;
   const scoped = ownerScope === 'system' ? merged.filter((t) => t.ownership === 'system')
     : ownerScope === 'mine' ? merged.filter((t) => t.ownership === 'user' && (t.metadata as Record<string, unknown> | undefined)?.ownerUserId === myId)
