@@ -23,6 +23,8 @@ jest.mock('../../security/IdentityResolver', () => ({
 }));
 
 import { requireCapability } from '../../security/requireCapability';
+import { evaluateStepUp } from '../../security/StepUpAuthorizationService';
+import { getStepUpPolicy } from '../../security/stepup/StepUpPolicyRegistry';
 import { resolvePrincipal } from '../../security/IdentityResolver';
 import { CROSS_ORGANIZATION_IDENTITY_CAPABILITIES } from '../../security/platformCapabilities';
 import {
@@ -173,5 +175,123 @@ describe('requireStepUp: false cannot disarm a waived capability', () => {
     expect(result.ok).toBe(false);
     expect(captured.status).toBe(403);
     expect(captured.body).toMatchObject({ code: 'NOT_ORG_MEMBER' });
+  });
+});
+
+// ── Expired step-up (2Z-BN) ──────────────────────────────────────────────────
+//
+// evaluateStepUp checks freshness with `expiresAt <= Date.now()`. Nothing
+// exercised that branch: every prior test either had no step-up at all or a
+// comfortably-future one. An elevation that has simply aged out looks identical
+// to a valid one on every OTHER axis — webauthn factor, trusted device, active
+// flag, SUPER_ADMIN role, cross-org waiver — so if the expiry comparison were
+// dropped, the 10-minute window would silently become unbounded and every other
+// assertion in this repository would still pass.
+
+/** Structurally perfect elevation that simply aged out. */
+const expiredElevation = () => ({
+  stepUp: {
+    active: true,
+    expiresAt: new Date(Date.now() - 1_000),   // one second past
+    factor: 'webauthn' as const,
+    sessionId: 'stepup-expired',
+  },
+});
+
+describe('an EXPIRED step-up is not a step-up', () => {
+  const policy = () => {
+    const p = getStepUpPolicy(IDENTITY_ADMIN_ASSIGN);
+    if (!p) throw new Error('IDENTITY_ADMIN_ASSIGN must have a registered policy');
+    return p;
+  };
+
+  it('CRITICAL: the evaluator rejects it specifically as STEP_UP_EXPIRED', () => {
+    // Pinning the REASON, not just "denied": a denial for the wrong cause would
+    // hide the loss of the freshness check.
+    const decision = evaluateStepUp(superAdmin(expiredElevation()), policy());
+    expect(decision).toMatchObject({ satisfied: false, reason: 'STEP_UP_EXPIRED' });
+  });
+
+  it('CRITICAL: the route denies the mutation — no waiver, role or device rescues it', async () => {
+    (resolvePrincipal as jest.Mock).mockResolvedValue({
+      ok: true, principal: superAdmin(expiredElevation()),
+    });
+    const { req, res, captured } = mockReqRes();
+
+    const result = await requireCapability(req as never, res as never, {
+      capability: IDENTITY_ADMIN_ASSIGN,
+      organizationId: TARGET_ORG,
+      reason: 'expired elevation must not authorize a cross-tenant write',
+    });
+
+    // ok:false is what makes the handler early-return, so the membership
+    // mutation is never reached.
+    expect(result.ok).toBe(false);
+    expect(captured.status).toBe(401);
+    expect(captured.body).toMatchObject({ code: 'STEP_UP_REQUIRED' });
+  });
+
+  it('the actor is otherwise flawless — expiry is the ONLY thing denying it', async () => {
+    // Mutation control. Same principal, same target, same everything, with the
+    // clock moved forward instead of back. If this passes and the case above
+    // fails, the expiry check is doing the work. If the expiry check were
+    // removed, THIS test still passes and the one above starts failing.
+    (resolvePrincipal as jest.Mock).mockResolvedValue({
+      ok: true, principal: superAdmin(elevated()),
+    });
+    const { req, res } = mockReqRes();
+
+    const result = await requireCapability(req as never, res as never, {
+      capability: IDENTITY_ADMIN_ASSIGN,
+      organizationId: TARGET_ORG,
+      reason: 'identical actor with a live elevation',
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('requireStepUp: false cannot revive an expired elevation either', async () => {
+    (resolvePrincipal as jest.Mock).mockResolvedValue({
+      ok: true, principal: superAdmin(expiredElevation()),
+    });
+    const { req, res, captured } = mockReqRes();
+
+    const result = await requireCapability(req as never, res as never, {
+      capability: IDENTITY_ADMIN_ASSIGN,
+      organizationId: TARGET_ORG,
+      reason: 'escape hatch plus expired elevation',
+      requireStepUp: false,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(captured.body).toMatchObject({ code: 'STEP_UP_REQUIRED' });
+  });
+
+  it('expiry is exclusive at the boundary: expiresAt === now is expired', () => {
+    const now = Date.now();
+    const atBoundary = superAdmin({
+      stepUp: { active: true, expiresAt: new Date(now), factor: 'webauthn', sessionId: 's' },
+    });
+    // `expiresAt <= Date.now()` — by the time the comparison runs the clock has
+    // advanced, so an elevation expiring exactly now is already dead.
+    expect(evaluateStepUp(atBoundary, policy())).toMatchObject({
+      satisfied: false, reason: 'STEP_UP_EXPIRED',
+    });
+  });
+
+  it('a still-valid elevation one minute out is accepted', () => {
+    const live = superAdmin({
+      stepUp: { active: true, expiresAt: new Date(Date.now() + 60_000), factor: 'webauthn', sessionId: 's' },
+    });
+    expect(evaluateStepUp(live, policy())).toEqual({ satisfied: true });
+  });
+
+  it('an expired elevation is rejected BEFORE the factor is even considered', () => {
+    // Expired AND non-phishing-resistant: the freshness gate runs first, so the
+    // reason must still be expiry. Pins the ordering inside evaluateStepUp.
+    const expiredTotp = superAdmin({
+      stepUp: { active: true, expiresAt: new Date(Date.now() - 1), factor: 'totp', sessionId: 's' },
+    });
+    expect(evaluateStepUp(expiredTotp, policy())).toMatchObject({ reason: 'STEP_UP_EXPIRED' });
   });
 });
