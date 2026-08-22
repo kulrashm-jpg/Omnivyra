@@ -46,6 +46,8 @@ export interface ResolvedCompositionAssets {
   routing: RoutingResult;
   /** Ready to hand to `assembleMultimodalPayload({ additionalReferences })`. */
   additionalReferences: ReferenceImage[];
+  /** The branded carrier the renderer accepts. */
+  renderer: ResolvedCompositionReferences;
   /** Refused during resolution (missing / not ready) plus every routing refusal. */
   rejected: Array<RoutingRejection | {
     referenceId: string;
@@ -54,6 +56,27 @@ export interface ResolvedCompositionAssets {
     reason: ResolutionRejectionReason;
     detail: string;
   }>;
+}
+
+/**
+ * The renderer-facing result — deliberately BRANDED.
+ *
+ * The renderer must never accept a hand-assembled `ReferenceImage[]`, because
+ * doing so would bypass the company-scoped asset lookup, the lifecycle gate and
+ * the compose/condition routing in one step, and nothing downstream would
+ * notice. Requiring this brand means the only way to obtain a value the renderer
+ * will take is to go through `resolveCompositionAssets`, which enforces all
+ * three. The literal is constructed in exactly one place (below) and a mutation
+ * guard asserts it stays that way.
+ */
+export const RESOLVED_REFERENCES_BRAND = 'phase45-resolved-composition-references' as const;
+
+export interface ResolvedCompositionReferences {
+  readonly brand: typeof RESOLVED_REFERENCES_BRAND;
+  /** Condition lane only — already provider-capped and adapter-mapped. */
+  additionalReferences: ReferenceImage[];
+  /** True when the provider cannot take image bytes and these become text. */
+  conditionDegradedToText: boolean;
 }
 
 export interface ResolveCompositionAssetsInput {
@@ -138,9 +161,19 @@ export async function resolveCompositionAssets(
 
   rejected.push(...routing.rejected);
 
+  const additionalReferences = toAdditionalReferences(routing.condition);
+
   return {
     routing,
-    additionalReferences: toAdditionalReferences(routing.condition),
+    additionalReferences,
+    // The ONLY construction of the brand. Everything the renderer accepts has
+    // therefore passed the company-scoped lookup, the lifecycle gate and
+    // compose/condition routing above.
+    renderer: {
+      brand: RESOLVED_REFERENCES_BRAND,
+      additionalReferences,
+      conditionDegradedToText: routing.conditionDegradedToText,
+    },
     rejected,
   };
 }

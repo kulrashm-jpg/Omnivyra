@@ -135,6 +135,20 @@ export type RenderOptions = {
    *  the Sample Gallery preview population so the preview is a REAL output of this
    *  production renderer — one renderer for preview + customer generation. */
   previewBufferOnly?: boolean;
+  /**
+   * User-supplied composition references, already resolved and routed.
+   *
+   * Carries the CONDITION lane only — compose references are not consumable by
+   * this renderer (see below) and are never smuggled in here. The value is
+   * BRANDED so it can only come from `resolveCompositionAssets`, which is what
+   * guarantees every reference passed the company-scoped asset lookup, the
+   * lifecycle gate and the purpose/mode routing. The renderer re-derives none of
+   * that: it forwards an already-decided result.
+   *
+   * Absent (the default, and every existing caller) → generation is byte-
+   * identical to before.
+   */
+  compositionReferences?: import('./compositionAssetResolutionService').ResolvedCompositionReferences | null;
 };
 
 /**

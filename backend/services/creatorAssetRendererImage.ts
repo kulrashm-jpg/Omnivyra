@@ -262,6 +262,11 @@ export async function composeSingleVisualAsset(
     attachmentMode: attachmentRenderPolicy,
     subtypeHint,
     companyId: options.companyId ?? null,
+    // Already resolved, tenant-checked, lifecycle-gated and routed by
+    // resolveCompositionAssets. Forwarded unchanged — the renderer does not
+    // reinterpret purpose or mode. Absent → the prompt is built exactly as
+    // before.
+    additionalReferences: options.compositionReferences?.additionalReferences,
   });
   // img2img style reference (flag-gated): point at the curated template's showcase
   // image so the provider can condition on it. Null unless the flag is on and a
