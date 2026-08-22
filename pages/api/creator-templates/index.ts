@@ -1,7 +1,7 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import {
-  listTemplatesForFamily,
+  listCanonicalTemplatesForFamily,
   listCategoriesForFamily,
   familyForCreatorType,
   type CreatorTemplate,
@@ -11,10 +11,11 @@ import {
 /**
  * GET /api/creator-templates?asset_type=image|carousel|infographic
  *
- * Read-only template gallery feed. Returns the system templates + categories
- * for one asset family. Additive route — does not touch the generation
- * pipeline. User/AI templates (DB-backed) slot in behind the same response
- * shape in the persistence phase.
+ * Read-only template gallery feed. Returns the CANONICAL system template pool
+ * + categories for one asset family — the same deduplicated taxonomy the
+ * gallery, recommendation, collections and outcome discovery read (PHASE-1).
+ * Additive route — does not touch the generation pipeline. User/AI templates
+ * (DB-backed) slot in behind the same response shape in the persistence phase.
  *
  * Optional: omit `asset_type` to receive all three families keyed by family.
  */
@@ -35,7 +36,7 @@ function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(200).json({
       asset_type: family,
       categories: listCategoriesForFamily(family),
-      templates: listTemplatesForFamily(family).map(toSummary),
+      templates: listCanonicalTemplatesForFamily(family).map(toSummary),
     });
   }
 
@@ -45,7 +46,7 @@ function handler(req: NextApiRequest, res: NextApiResponse) {
     families: families.map((f) => ({
       asset_type: f,
       categories: listCategoriesForFamily(f),
-      templates: listTemplatesForFamily(f).map(toSummary),
+      templates: listCanonicalTemplatesForFamily(f).map(toSummary),
     })),
   });
 }

@@ -7,8 +7,7 @@
  */
 
 import type { CreatorTemplate, TemplateAssetFamily } from '../creator-templates/types';
-import { listCuratedTemplatesForGoal } from './curatedTemplateGallery';
-import { CURATED_SYSTEM_TEMPLATES } from './curatedSystemTemplates';
+import { listCuratedTemplatesForGoal, listCuratedTemplates } from './curatedTemplateGallery';
 import { goalCategoriesFor } from './goalAffinity';
 
 export type DiscoveryScope =
@@ -62,9 +61,9 @@ export function applyDiscovery(items: CreatorTemplate[], q: DiscoveryQuery): Cre
   return out;
 }
 
-/** Built-in SYSTEM scope: curated templates, goal-affined + filtered. */
+/** Built-in SYSTEM scope: the CANONICAL pool, goal-affined + filtered (PHASE-1). */
 export const systemScopeSource: ScopeSource = (q) => {
-  const base = q.goalId !== undefined ? listCuratedTemplatesForGoal(q.goalId, q.family) : CURATED_SYSTEM_TEMPLATES;
+  const base = q.goalId !== undefined ? listCuratedTemplatesForGoal(q.goalId, q.family) : listCuratedTemplates();
   return applyDiscovery(base, { ...q, family: q.goalId !== undefined ? undefined : q.family });
 };
 
