@@ -18,6 +18,7 @@
 import { resolveCompositionAssets, type ResolvedCompositionReferences } from '../compositionAssetResolutionService';
 import { CREATOR_COMPOSITION_TYPE } from '../../../lib/content/creatorCompositionAsset';
 import { resolveProviderCapabilities } from './creatorMultimodalReferences';
+import { emitCreatorEvent, CREATOR_EVENTS } from '../creatorOperationalTelemetryService';
 
 /**
  * Resolve a draft's attached assets for one render.
@@ -52,12 +53,33 @@ export async function resolveCompositionReferencesForRender(input: {
     provider: resolveProviderCapabilities('openai-gpt-image-1', 'edit'),
   });
 
-  // Nothing is dropped in silence: a reference that could not be used is
-  // reported here so the attempt is visible even when generation continues.
-  if (resolved.rejected.length > 0) {
-    console.warn('[creator-composition-references][rejected]', {
-      compositionId,
-      rejected: resolved.rejected,
+  /*
+   * Nothing is dropped in silence — and "not silent" has to mean measurable.
+   *
+   * A `console.warn` made this visible only to whoever was reading logs, which
+   * is why a defect that discarded almost every attached asset went unnoticed:
+   * generation still succeeds, so the only symptom is a user's image not
+   * appearing. One event per rejected reference makes the rate and the dominant
+   * reason answerable.
+   *
+   * Structured fields ONLY. No storage path, no URL, no bytes, no filename, and
+   * not the rejection's prose `detail` — the reason code already says what
+   * happened, and free text is how identifying data leaks into telemetry.
+   */
+  for (const rejection of resolved.rejected) {
+    emitCreatorEvent({
+      event: CREATOR_EVENTS.REFERENCE_ROUTING_REJECTED,
+      severity: 'warning',
+      companyId,
+      metadata: {
+        stage: 'render_routing',
+        composition_type: CREATOR_COMPOSITION_TYPE,
+        composition_id: compositionId,
+        reference_id: rejection.referenceId,
+        purpose: rejection.purpose,
+        mode: rejection.mode,
+        reason: rejection.reason,
+      },
     });
   }
 

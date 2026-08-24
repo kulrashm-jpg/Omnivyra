@@ -71,6 +71,13 @@ export const CREATOR_EVENTS = {
   // Security
   RATE_LIMIT_BLOCKED: 'rate_limit_blocked',
   ABUSE_DETECTED: 'abuse_detected',
+  // Composition references
+  //
+  // A user attached an asset and routing could not use it. Counted rather than
+  // warned because the failure is invisible from the outside: generation still
+  // succeeds, so without this there is no way to measure how often a person's
+  // upload is discarded, or which reason dominates.
+  REFERENCE_ROUTING_REJECTED: 'reference_routing_rejected',
 } as const;
 
 export type CreatorEventType =

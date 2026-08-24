@@ -476,6 +476,12 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                   companyId={selectedCompanyId}
                   compositionId={compositionId}
                   creatorTypeLabel={String(type ?? 'design')}
+                  /* The TEMPLATE decides which usages are real. Slots come from
+                   * activeTemplate, not effectiveTemplate: the image-copy
+                   * narrowing filters form FIELDS and says nothing about which
+                   * reference assets the design accepts. */
+                  templateSlots={activeTemplate?.assetSlots ?? null}
+                  templateName={activeTemplate?.name ?? null}
                 />
               ) : null}
 

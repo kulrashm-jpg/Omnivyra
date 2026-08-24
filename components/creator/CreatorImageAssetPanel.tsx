@@ -17,18 +17,20 @@
  * of its own — it re-reads from the server, which is why the selection survives
  * navigating to the template gallery and back.
  *
- * PHASE 2B: persistence only. Nothing here reaches generation; the uploaded
- * image does not yet influence the produced design. That wiring is Phase 2C.
+ * The usages offered are the ones the ACTIVE TEMPLATE declares it accepts — not
+ * the full vocabulary. Offering all six regardless of template is what let an
+ * attach look successful while routing discarded the reference at generation.
  */
 
 import React from 'react';
 import { Upload, Trash2, RefreshCw, ImagePlus, AlertCircle, Loader2 } from 'lucide-react';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import {
-  CREATOR_ASSET_USAGE_OPTIONS,
   creatorAssetUsageLabel,
+  creatorAssetUsageOptionsForTemplate,
 } from '../../lib/content/creatorCompositionAsset';
 import type { CompositionAssetPurpose } from '../../lib/content/compositionAssetReference';
+import type { TemplateAssetSlot } from '../../lib/content/compositionAssetRouting';
 
 interface AttachedItem {
   reference: {
@@ -47,10 +49,15 @@ export default function CreatorImageAssetPanel({
   companyId,
   compositionId,
   creatorTypeLabel,
+  templateSlots,
+  templateName,
 }: {
   companyId: string | null | undefined;
   compositionId: string | null;
   creatorTypeLabel: string;
+  /** The ACTIVE template's declared slots. They decide what may be offered. */
+  templateSlots?: readonly TemplateAssetSlot[] | null;
+  templateName?: string | null;
 }) {
   const [items, setItems] = React.useState<AttachedItem[]>([]);
   const [loading, setLoading] = React.useState(false);
@@ -62,6 +69,16 @@ export default function CreatorImageAssetPanel({
   const [pendingPreview, setPendingPreview] = React.useState<string | null>(null);
 
   const ready = Boolean(companyId && compositionId);
+
+  /* Only what the active template actually accepts. Deriving this here — from
+   * the template's own slots — is what stops the panel offering a usage that
+   * routing would discard, which is what made an attach look successful while
+   * generation ignored it. */
+  const usageOptions = React.useMemo(
+    () => creatorAssetUsageOptionsForTemplate(templateSlots),
+    [templateSlots],
+  );
+  const templateAcceptsAssets = usageOptions.length > 0;
 
   /* The server is the source of truth. Re-reading on mount is what makes the
    * selection survive a trip to the template gallery — nothing is cached here. */
@@ -234,8 +251,21 @@ export default function CreatorImageAssetPanel({
         </div>
       ) : null}
 
+      {/* The template accepts nothing, so there is nothing honest to offer.
+        * Saying so beats presenting six usages that routing would discard. */}
+      {!templateAcceptsAssets ? (
+        <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-xs text-gray-600">
+          <span className="font-semibold text-gray-800">
+            {templateName ? `${templateName} ` : 'This template '}
+          </span>
+          doesn&rsquo;t use a reference image, so adding one here wouldn&rsquo;t
+          change the design. Pick a template that accepts an image — such as the
+          logo or product designs — to attach one.
+        </div>
+      ) : null}
+
       {/* Empty → the single call to action. */}
-      {!attached && !choosing ? (
+      {templateAcceptsAssets && !attached && !choosing ? (
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
@@ -262,7 +292,7 @@ export default function CreatorImageAssetPanel({
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-gray-900">How do you want to use this image?</p>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {CREATOR_ASSET_USAGE_OPTIONS.map((o) => (
+                {usageOptions.map((o) => (
                   <button
                     key={o.purpose}
                     type="button"
@@ -318,7 +348,7 @@ export default function CreatorImageAssetPanel({
                 </span>
               </p>
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {CREATOR_ASSET_USAGE_OPTIONS.map((o) => {
+                {usageOptions.map((o) => {
                   const active = o.purpose === attached.reference.purpose;
                   return (
                     <button
@@ -340,8 +370,16 @@ export default function CreatorImageAssetPanel({
               </div>
             </div>
           </div>
+          {/* What this asset actually DOES, in the user's terms.
+            * The two modes are different promises and must not read alike:
+            * `compose` returns their exact pixels, `condition` hands the image
+            * to the model as reference and may reinterpret it. Saying "it does
+            * not change the generated image" — which this said before the
+            * runtime was wired — is now simply untrue. */}
           <p className="mt-2 text-[11px] text-gray-400">
-            Saved with this design. It does not change the generated image yet.
+            {attached.reference.mode === 'compose'
+              ? 'Placed on this design as uploaded.'
+              : 'Used as a reference for this design, so the result may differ from the original.'}
           </p>
         </div>
       ) : null}

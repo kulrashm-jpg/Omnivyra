@@ -37,12 +37,16 @@ import {
 import type { CanonicalMediaAsset } from '../../../lib/content/canonicalMediaAsset';
 import { isUsableMediaAsset } from '../../../lib/content/canonicalMediaAsset';
 import type {
+  CompositionAssetMode,
   CompositionAssetPurpose,
   CompositionAssetReference,
 } from '../../../lib/content/compositionAssetReference';
 import {
+  defaultModeForPurpose,
+  isModeAllowedForPurpose,
+} from '../../../lib/content/compositionAssetRouting';
+import {
   CREATOR_COMPOSITION_TYPE,
-  CREATOR_ASSET_DEFAULT_MODE,
   isCreatorAssetUsagePurpose,
 } from '../../../lib/content/creatorCompositionAsset';
 
@@ -177,6 +181,12 @@ export interface AttachCreatorAssetInput {
   compositionId: string;
   assetId: string;
   purpose: CompositionAssetPurpose;
+  /**
+   * Optional. Omitted — which is what Content Creator does — the mode is
+   * DERIVED from the purpose by the one routing policy. Stated, it is honoured
+   * or refused, never quietly corrected.
+   */
+  mode?: CompositionAssetMode;
   ordinal?: number;
   metadata?: Record<string, unknown>;
 }
@@ -209,13 +219,32 @@ export async function attachCreatorCompositionAsset(
     throw new Error(`Asset is not ready (lifecycle: ${asset.lifecycleState})`);
   }
 
+  /*
+   * The mode is DERIVED from the purpose, never assumed.
+   *
+   * Attaching everything as `compose` was the defect: it is the wrong
+   * guarantee for a purpose the policy defines as CONDITION-only, so a
+   * `style_reference` was persisted in a mode its own purpose forbids and was
+   * dropped at render — and a `product` could never satisfy the one template
+   * slot that asks for `condition`. `defaultModeForPurpose` is the single
+   * existing policy; deriving from it is what makes the stored relationship
+   * mean what the user chose.
+   */
+  const mode = input.mode ?? defaultModeForPurpose(input.purpose);
+  if (!isModeAllowedForPurpose(input.purpose, mode)) {
+    // A stated mode is refused, not corrected — the caller asked for a
+    // guarantee this purpose cannot give, and silently substituting another
+    // would be the same lie in the opposite direction.
+    throw new Error(`Mode "${mode}" is not allowed for purpose "${input.purpose}"`);
+  }
+
   return addCompositionAssetReference({
     companyId,
     compositionType: CREATOR_COMPOSITION_TYPE,
     compositionId,
     assetId,
     purpose: input.purpose,
-    mode: CREATOR_ASSET_DEFAULT_MODE,
+    mode,
     ordinal: typeof input.ordinal === 'number' ? input.ordinal : 0,
     metadata: input.metadata,
   });
