@@ -100,6 +100,10 @@ function ref(
     purpose,
     mode,
     ordinal: seq,
+    // Required by the foundation contract: per-USE attributes, always an object
+    // so consumers never branch on null. Empty here because routing reads none
+    // of it — metadata is trace and presentation, never a routing input.
+    metadata: {},
     createdAt: `T${seq}`,
     updatedAt: `T${seq}`,
     ...over,
@@ -416,6 +420,93 @@ describe('F — resolution: tenancy, lifecycle, reuse', () => {
     expect(url).toBe('media-uploads/company-aaaa/a1.png');
     expect(url).not.toMatch(/^https?:\/\//);
     expect(url).not.toContain('/storage/v1/object/public/');
+  });
+});
+
+/**
+ * Reconciliation against the concurrent foundation change (`5251dec4`), which
+ * added the `supporting` purpose and made `metadata` required.
+ *
+ * Both are the kind of change that a downstream layer can absorb wrongly and
+ * quietly: a missing policy entry invites an `as any` or a catch-all default,
+ * and a newly-required field invites making it optional again "just for the
+ * tests". Either would look like reconciliation while actually eroding the
+ * foundation, so both are pinned here.
+ */
+describe('R — reconciliation with the foundation', () => {
+  const SUPPORTING_SLOTS: TemplateAssetSlot[] = [
+    ...SLOTS,
+    { purpose: 'supporting', max: 2 },
+  ];
+
+  it('supporting has an explicit policy — no catch-all, no default fallback', () => {
+    expect(purposesWithoutPolicy()).toEqual([]);
+    expect(modePolicyForPurpose('supporting').allowed).toEqual(['compose', 'condition']);
+  });
+
+  it('supporting defaults to COMPOSE, matching the foundation\'s own usage', () => {
+    // The contract calls it an image that "occupies its own place in the
+    // composition", and the foundation's test exercises mode:'compose'.
+    expect(defaultModeForPurpose('supporting')).toBe('compose');
+  });
+
+  it('supporting is not compose-ONLY — unlike overlay, conditioning on it is meaningful', () => {
+    expect(isModeAllowedForPurpose('supporting', 'condition')).toBe(true);
+    expect(isModeAllowedForPurpose('overlay', 'condition')).toBe(false);
+  });
+
+  it('supporting routes into both lanes according to its stated mode', () => {
+    const r = routeCompositionReferences({
+      references: [
+        item(ref('supporting', 'compose')),
+        item(ref('supporting', 'condition')),
+      ],
+      templateSlots: SUPPORTING_SLOTS,
+      provider: { acceptsReferenceImages: true, maxReferenceImages: 4 },
+    });
+    expect(r.compose).toHaveLength(1);
+    expect(r.condition).toHaveLength(1);
+    expect(r.rejected).toEqual([]);
+  });
+
+  it('a template that declares no supporting slot still rejects it', () => {
+    const r = routeCompositionReferences({
+      references: [item(ref('supporting', 'compose'))],
+      templateSlots: SLOTS, // no supporting slot
+      provider: { acceptsReferenceImages: true, maxReferenceImages: 4 },
+    });
+    expect(r.rejected[0].reason).toBe('purpose_not_accepted_by_template');
+  });
+
+  it('metadata is REQUIRED on the reference contract and carried, not consumed', () => {
+    const r = ref('subject', 'condition');
+    // Present on every reference the routing layer sees...
+    expect(r.metadata).toEqual({});
+    // ...and never read as a routing input: purpose and mode are columns
+    // precisely so the database constrains them.
+    const ROUTING_SRC = fs.readFileSync(
+      path.resolve(__dirname, '../../../lib/content/compositionAssetRouting.ts'), 'utf8');
+    const body = ROUTING_SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(body).not.toMatch(/\.metadata\b/);
+  });
+
+  it('MUTATION GUARD: the policy map stays exhaustive by TYPE, not by fallback', () => {
+    const SRC = fs.readFileSync(
+      path.resolve(__dirname, '../../../lib/content/compositionAssetRouting.ts'), 'utf8');
+    // Record<CompositionAssetPurpose, …> is what makes a new foundation purpose
+    // a compile error. A Partial<> or an `?? DEFAULT` would silently absorb it.
+    expect(SRC).toContain('Record<CompositionAssetPurpose, PurposeModePolicy>');
+    expect(SRC).not.toMatch(/Partial<Record<CompositionAssetPurpose/);
+    expect(SRC).not.toMatch(/PURPOSE_MODE_POLICY\[[^\]]+\]\s*\?\?/);
+    expect(SRC).not.toMatch(/as any/);
+  });
+
+  it('MUTATION GUARD: metadata was not made optional to appease downstream tests', () => {
+    const CONTRACT = fs.readFileSync(
+      path.resolve(__dirname, '../../../lib/content/compositionAssetReference.ts'), 'utf8');
+    // Required on the stored shape; optional only on the creation input.
+    expect(CONTRACT).toMatch(/^\s{2}metadata: Record<string, unknown>;$/m);
+    expect(CONTRACT).toMatch(/^\s{2}metadata\?: Record<string, unknown>;$/m);
   });
 });
 

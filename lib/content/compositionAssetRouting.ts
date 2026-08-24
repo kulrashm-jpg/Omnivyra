@@ -66,6 +66,21 @@ const PURPOSE_MODE_POLICY: Record<CompositionAssetPurpose, PurposeModePolicy> = 
   background: BOTH_CONDITION_FIRST,
   product: BOTH_CONDITION_FIRST,
   overlay: COMPOSE_ONLY,
+  /**
+   * `supporting` — both modes, defaulting to COMPOSE.
+   *
+   * Read from the foundation rather than chosen: the contract defines it as an
+   * image that "occupies its own PLACE in the composition alongside the
+   * subject", which is placement language, and the foundation's own test
+   * exercises it as `mode: 'compose'`. So an exact-placement default matches
+   * both the prose and the established usage.
+   *
+   * It is not compose-ONLY, because unlike `overlay` — whose meaning ("sits on
+   * top") IS deterministic placement — a secondary image can legitimately
+   * inform generation instead of being pasted in. Forbidding that would be
+   * inventing a restriction the foundation does not state.
+   */
+  supporting: BOTH_COMPOSE_FIRST,
   // provider vocabulary
   logo: BOTH_COMPOSE_FIRST,
   favicon: BOTH_COMPOSE_FIRST,
