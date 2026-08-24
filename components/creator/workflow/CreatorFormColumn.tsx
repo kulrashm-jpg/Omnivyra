@@ -23,6 +23,8 @@ import {
   normalizeBrandAssetSize,
 } from '../../../lib/creator-content/creatorTypeWorkflow';
 import type { CreatorWorkflowCtx } from './creatorWorkflowCtx';
+import CreatorImageAssetPanel from '../CreatorImageAssetPanel';
+import { useCreatorCompositionId } from '../useCreatorCompositionId';
 
 /**
  * Global AI-activity indicator. EVERY AI operation on this screen sets `aiBusyKey`
@@ -145,6 +147,9 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
     writerSource,
     writerSupportingVisual,
   } = ctx;
+  // PHASE 2B — identity of the design being composed, so an uploaded image can
+  // be attached to it and survive the trip to the template gallery.
+  const compositionId = useCreatorCompositionId(type);
   return (
           <div className="rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
             <div className="mb-6 flex items-center justify-between">
@@ -400,6 +405,20 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                   </div>
                 )}
               </div>
+
+              {/* PHASE 2B — bring your own image. Sits above "Use Existing
+                  Asset" because uploading is the more common intent, and the
+                  two are different things: this attaches a file the USER owns
+                  to the composition; that one reuses a previously GENERATED
+                  creator asset as context. Only the visual families can carry
+                  a composition image. */}
+              {isSocialCreativeType(type) ? (
+                <CreatorImageAssetPanel
+                  companyId={selectedCompanyId}
+                  compositionId={compositionId}
+                  creatorTypeLabel={String(type ?? 'design')}
+                />
+              ) : null}
 
               <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
