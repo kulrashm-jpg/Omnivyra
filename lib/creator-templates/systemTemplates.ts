@@ -199,6 +199,26 @@ const IMAGE_TEMPLATES: CreatorTemplate[] = [
       ],
     },
     renderingContract: { renderingContractVersion: CREATOR_TEMPLATE_CONTRACT_VERSION, family: 'image', purposeKey: null, subtype: null, attachmentMode: 'supporting_visual', writerAssetType: 'supporting_image' },
+    /**
+     * The FIRST and ONLY template opted into deterministic COMPOSE.
+     *
+     * The coordinates are an explicit product decision, not derived from source:
+     * the audit established that no template in this repo carries placement
+     * geometry, and the only two geometries that do exist are brand-mark
+     * specific and disagree with each other. Rather than infer, the placement
+     * below was stated deliberately — a centred box occupying the middle 30% of
+     * the canvas.
+     *
+     * `contain` because this is a brand mark: every source pixel must survive,
+     * and `cover` would crop the logo's edges to fill the box.
+     *
+     * Scoped to this template on purpose. No other template becomes
+     * COMPOSE-capable merely because the interface now permits it.
+     */
+    assetSlots: [
+      { purpose: 'logo', mode: 'compose', max: 1,
+        placement: { top: 0.35, left: 0.35, maxWidth: 0.30, maxHeight: 0.30, fit: 'contain' } },
+    ],
     version: 1,
     status: 'published',
     ownership: 'system',
