@@ -125,8 +125,13 @@ describe('A — template declaration', () => {
     expect(SRC).toContain("placement: { top: 0.35, left: 0.35, maxWidth: 0.30, maxHeight: 0.30, fit: 'contain' }");
   });
 
-  it('MUTATION GUARD: no other template was opted in', () => {
-    expect(SRC.split('assetSlots:').length - 1).toBe(1);
+  it('MUTATION GUARD: no other template was opted into COMPOSE', () => {
+    // Phase 61A added a second opt-in — a CONDITION slot on
+    // sys-image-product-highlight. Bumping this to "2 assetSlots" would make
+    // the guard blind to exactly what it exists to catch, so it now pins the
+    // COMPOSE lane specifically: one compose slot, and it is the logo.
+    expect(SRC.split("mode: 'compose'").length - 1).toBe(1);
+    expect(SRC).toContain("purpose: 'logo', mode: 'compose', max: 1");
   });
 });
 

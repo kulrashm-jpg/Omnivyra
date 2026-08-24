@@ -247,7 +247,24 @@ const IMAGE_TEMPLATES: CreatorTemplate[] = [
     visualLanguage: { densityBias: 'balanced', brandingIntensity: 'balanced', typographyWeight: 'lead', accent: '#7c3aed', surface: '#0b1220' },
     preview: { thumbnailUrl: null, sampleAssetUrl: null, sample: { headline: 'Routing that thinks for you', subheadline: 'Auto-assign every lead in seconds', cta: 'See it live' } },
     formDefinition: { fields: headlineForm({ maxHeadline: 70, cta: true }) },
-    renderingContract: imageContract('product-showcase-image'), tags: ['product', 'feature'],
+    renderingContract: imageContract('product-showcase-image'),
+    /**
+     * The FIRST and ONLY template opted into CONDITION.
+     *
+     * Purpose is "product", not "subject": every piece of evidence on this
+     * template names a product specifically — name "Product Highlight",
+     * category "Product", description "A product-forward image", purposeKey
+     * "product-showcase-image", tags product/feature. "subject" would be the
+     * looser claim; "product" is the narrowest purpose the source justifies.
+     *
+     * Condition rather than compose because the product photograph informs a
+     * generated composition here; it is not placed at exact pixels. That is the
+     * opposite guarantee to the logo proof, and deliberately so.
+     *
+     * max 1: one product per product-highlight image.
+     */
+    assetSlots: [{ purpose: 'product', mode: 'condition', max: 1 }],
+    tags: ['product', 'feature'],
   }),
   tpl({
     id: 'sys-image-testimonial', assetFamily: 'image', name: 'Customer Testimonial', category: 'Testimonial',

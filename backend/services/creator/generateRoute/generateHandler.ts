@@ -534,6 +534,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       campaignId: campaignIdForVariant ?? `creator-content-${Date.now()}`,
       companyId,
       userId: user?.userId ?? null,
+      /**
+       * The Creator draft whose attached assets this generation should use.
+       * A LOOKUP KEY ONLY — `companyId` above stays the authorization input, so
+       * a token from another tenant resolves to nothing rather than to their
+       * references. Absent → generation proceeds exactly as before.
+       */
+      compositionId: String(body.composition_id || '').trim() || null,
       topic,
       contentType,
       targetPlatforms,
