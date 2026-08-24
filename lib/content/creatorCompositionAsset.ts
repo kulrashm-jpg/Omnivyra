@@ -16,7 +16,14 @@
  * Pure — no DB, no fetch, no Node built-ins. Safe on both sides.
  */
 
-import type { CompositionAssetPurpose, CompositionAssetMode } from './compositionAssetReference';
+import type { CompositionAssetPurpose } from './compositionAssetReference';
+import type { TemplateAssetSlot } from './compositionAssetRouting';
+import {
+  defaultModeForPurpose,
+  isModeAllowedForPurpose,
+} from './compositionAssetRouting';
+
+const EMPTY_USAGE_OPTIONS: readonly CreatorAssetUsageOption[] = Object.freeze([]);
 
 /* ── Composition identity ───────────────────────────────────────────────────
  *
@@ -142,13 +149,51 @@ export function creatorAssetUsageLabel(purpose: CompositionAssetPurpose | string
 
 /* ── Mode ───────────────────────────────────────────────────────────────────
  *
- * Content Creator writes `compose`: the user supplied these pixels and expects
- * to get them, not a reinterpretation of them. `condition` is the other
- * guarantee — the asset becomes model input and may be reimagined — and it is
- * NOT exposed as a toggle, because "may my logo come back different?" is not a
- * question to put in front of someone.
+ * There is deliberately NO constant here.
  *
- * Deriving mode from purpose (a logo composes, a style reference conditions) is
- * a generation-time decision and belongs with the provider wiring, not here.
+ * This module used to export a blanket `CREATOR_ASSET_DEFAULT_MODE = 'compose'`,
+ * and the attachment service wrote it for every purpose. That was a second,
+ * competing mode policy: it claimed one guarantee for thirteen purposes, so a
+ * `style_reference` — which `PURPOSE_MODE_POLICY` defines as CONDITION-only —
+ * was stored in a mode its own purpose forbids, and dropped at render.
+ *
+ * `defaultModeForPurpose()` in `compositionAssetRouting` is the one policy, and
+ * the attachment path derives from it. The reasoning that constant carried is
+ * still true and still honoured: `condition` is not exposed as a user toggle,
+ * because "may my logo come back different?" is not a question to put in front
+ * of someone. It is derived from the purpose they DID choose — a logo composes,
+ * a style reference conditions — rather than asked.
  */
-export const CREATOR_ASSET_DEFAULT_MODE: CompositionAssetMode = 'compose';
+
+/* ── What the ACTIVE TEMPLATE accepts ───────────────────────────────────────
+ *
+ * Offering a usage the template cannot accept is how the product came to lie:
+ * the panel presented all six, the attach succeeded, and routing then dropped
+ * the reference with only a server-side warning. The usage list is therefore
+ * derived from the template's own declared slots — never from its name,
+ * category or description, and never widened to "look complete".
+ *
+ * A purpose is offered only when the template declares a slot for it AND the
+ * mode that purpose derives to is one both the policy and that slot accept. A
+ * slot demanding a mode its purpose cannot produce is simply not offered; it is
+ * never satisfied by rewriting the slot's declared mode.
+ */
+export function creatorAssetUsageOptionsForTemplate(
+  slots: readonly TemplateAssetSlot[] | null | undefined,
+): readonly CreatorAssetUsageOption[] {
+  if (!Array.isArray(slots) || slots.length === 0) return EMPTY_USAGE_OPTIONS;
+  return Object.freeze(CREATOR_ASSET_USAGE_OPTIONS.filter((option) => {
+    const slot = slots.find((s) => s && s.purpose === option.purpose);
+    if (!slot) return false;
+    const mode = defaultModeForPurpose(option.purpose);
+    if (!isModeAllowedForPurpose(option.purpose, mode)) return false;
+    return !slot.mode || slot.mode === mode;
+  }));
+}
+
+/** Does this template accept any Content Creator reference asset at all? */
+export function templateAcceptsCreatorAssets(
+  slots: readonly TemplateAssetSlot[] | null | undefined,
+): boolean {
+  return creatorAssetUsageOptionsForTemplate(slots).length > 0;
+}

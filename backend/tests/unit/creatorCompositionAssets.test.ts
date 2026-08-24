@@ -136,13 +136,14 @@ import {
 import {
   CREATOR_ASSET_USAGE_OPTIONS,
   CREATOR_ASSET_USAGE_PURPOSES,
-  CREATOR_ASSET_DEFAULT_MODE,
+
   CREATOR_COMPOSITION_TYPE,
   isCreatorAssetUsagePurpose,
   creatorAssetUsageLabel,
   creatorCompositionKey,
   mintCreatorCompositionId,
 } from '../../../lib/content/creatorCompositionAsset';
+import { defaultModeForPurpose } from '../../../lib/content/compositionAssetRouting';
 import { COMPOSITION_ASSET_PURPOSES } from '../../../lib/content/compositionAssetReference';
 
 const CO_A = 'company-a';
@@ -251,7 +252,7 @@ describe('B — usage selection', () => {
       companyId: CO_A, compositionId: COMP, assetId: asset.id, purpose,
     });
     expect(ref.purpose).toBe(purpose);
-    expect(ref.mode).toBe(CREATOR_ASSET_DEFAULT_MODE);
+    expect(ref.mode).toBe(defaultModeForPurpose(purpose));
     expect(ref.compositionType).toBe(CREATOR_COMPOSITION_TYPE);
     expect(ref.ordinal).toBe(0);
   });
@@ -546,8 +547,13 @@ describe('J — nothing reaches generation', () => {
     }
   });
 
-  it('the UI panel says plainly that the image does not change generation yet', () => {
+  it('the UI panel states what the attached asset actually does', () => {
     const src = read('components/creator/CreatorImageAssetPanel.tsx');
-    expect(src).toMatch(/does not change the generated image yet/i);
+    // Phase 61A wired composition_id into generation and Phase 63 made the mode
+    // correct, so the old 'does not change the generated image yet' line became
+    // false. The panel now states the guarantee its MODE actually gives.
+    expect(src).toMatch(/Placed on this design as uploaded/i);
+    expect(src).toMatch(/Used as a reference for this design/i);
+    expect(src).not.toMatch(/does not change the generated image yet/i);
   });
 });

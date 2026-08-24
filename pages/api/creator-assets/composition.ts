@@ -49,7 +49,7 @@ function fail(res: NextApiResponse, err: unknown) {
   const message = err instanceof Error ? err.message : 'Request failed';
   const status = /not found/i.test(message) ? 404
     : /not ready|lifecycle/i.test(message) ? 409
-      : /required|not one Content Creator offers|Only image/i.test(message) ? 400
+      : /required|not one Content Creator offers|Only image|is not allowed for purpose/i.test(message) ? 400
         : 500;
   return res.status(status).json({ error: message });
 }
