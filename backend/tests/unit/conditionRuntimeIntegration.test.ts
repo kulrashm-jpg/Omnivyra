@@ -110,8 +110,20 @@ describe('D — absent identity leaves generation unchanged', () => {
   });
 
   it('MUTATION GUARD: a reference that could not be used is reported, never dropped in silence', () => {
-    expect(strip(CALLER)).toContain('resolved.rejected.length > 0');
-    expect(CALLER).toContain('[creator-composition-references][rejected]');
+    /*
+     * Phase 63 strengthened this rather than relaxing it.
+     *
+     * Reporting used to be `console.warn` behind `resolved.rejected.length > 0`
+     * — visible only to whoever read logs, which is exactly why a defect that
+     * discarded nearly every attached asset went unnoticed. It is now one
+     * COUNTED telemetry event per rejected reference, so the rate and the
+     * dominant reason are answerable. The guard pins the new form; deleting the
+     * emission still fails here.
+     */
+    const body = strip(CALLER);
+    expect(body).toContain('for (const rejection of resolved.rejected) {');
+    expect(body).toContain('CREATOR_EVENTS.REFERENCE_ROUTING_REJECTED');
+    expect(body).toContain('reason: rejection.reason');
   });
 });
 
