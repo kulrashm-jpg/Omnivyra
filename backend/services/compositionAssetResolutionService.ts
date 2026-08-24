@@ -33,6 +33,7 @@ import type { CompositionAssetReference } from '../../lib/content/compositionAss
 import {
   routeCompositionReferences,
   toAdditionalReferences,
+  type RoutedReference,
   type RoutingRejection,
   type RoutingResult,
   type TemplateAssetSlot,
@@ -77,6 +78,20 @@ export interface ResolvedCompositionReferences {
   additionalReferences: ReferenceImage[];
   /** True when the provider cannot take image bytes and these become text. */
   conditionDegradedToText: boolean;
+  /**
+   * COMPOSE lane, deferred.
+   *
+   * Everything needed to build deterministic layers EXCEPT the canvas size,
+   * which only the renderer knows at render time — the same late binding
+   * `defaultBrandPlacement` already relies on. Carried separately from
+   * `additionalReferences` so the two lanes cannot be confused: nothing here
+   * ever reaches a provider.
+   */
+  composePlan: {
+    companyId: string;
+    compose: RoutedReference[];
+    templateSlots?: readonly TemplateAssetSlot[];
+  };
 }
 
 export interface ResolveCompositionAssetsInput {
@@ -173,6 +188,11 @@ export async function resolveCompositionAssets(
       brand: RESOLVED_REFERENCES_BRAND,
       additionalReferences,
       conditionDegradedToText: routing.conditionDegradedToText,
+      composePlan: {
+        companyId: input.companyId,
+        compose: routing.compose,
+        templateSlots: input.templateSlots,
+      },
     },
     rejected,
   };

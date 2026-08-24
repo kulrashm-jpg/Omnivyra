@@ -436,6 +436,34 @@ export async function composeSingleVisualAsset(
     composites.push({ input: brandMark, top: brandPlacement.top, left: brandPlacement.left });
   }
 
+  // Canonical COMPOSE assets — an ADDITIONAL top layer, appended after the
+  // overlay and the brand mark so neither is covered. The background buffer and
+  // the brandKit path above are untouched: this only adds.
+  //
+  // Deterministic by construction — nothing here consults the provider. Bytes
+  // come from server-side storage download, never a URL, and every reference has
+  // already passed the company-scoped lookup, the lifecycle gate and slot
+  // validation inside the branded carrier.
+  const composePlan = options.compositionReferences?.composePlan;
+  if (composePlan && composePlan.compose.length > 0) {
+    const { buildComposeLayers } = await import('./compositionAssetComposeService');
+    const composed = await buildComposeLayers({
+      companyId: composePlan.companyId,
+      compose: composePlan.compose,
+      templateSlots: composePlan.templateSlots,
+      width,
+      height,
+    });
+    // Declared ordinal order is preserved — a composition is a stack, and
+    // re-sorting it would change which layer sits on top.
+    for (const layer of composed.layers) {
+      composites.push({ input: layer.input, top: layer.top, left: layer.left });
+    }
+    if (composed.rejected.length > 0) {
+      console.warn('[creator-asset-renderer][compose-rejected]', composed.rejected);
+    }
+  }
+
   const composed = sharp(background.buffer);
   const fileBuffer = await (composites.length ? composed.composite(composites) : composed).png().toBuffer();
   const effectiveFallbackReason = background.fallbackReason || (providerImage ? undefined : providerResult.fallbackReason);

@@ -29,6 +29,7 @@ import {
   type CompositionAssetMode,
   type CompositionAssetPurpose,
   type CompositionAssetReference,
+  type ReferenceValidationResult,
 } from './compositionAssetReference';
 
 /* ── Which modes each purpose may legally take ──────────────────────────────
@@ -123,6 +124,75 @@ export interface TemplateAssetSlot {
   mode?: CompositionAssetMode;
   /** Maximum references for this slot. Omitted = 1. */
   max?: number;
+  /**
+   * Where a COMPOSE-mode asset is placed, as fractions of the canvas in [0,1].
+   *
+   * Fractions rather than pixels because one template renders at many platform
+   * sizes — the same reason `defaultBrandPlacement` derives from width/height
+   * at render time rather than storing constants.
+   *
+   * There is no default and no fallback: a compose reference whose slot omits
+   * this is REFUSED. The audit found the renderer carries geometry for exactly
+   * one role (the brand mark) and even that exists twice with disagreeing
+   * values — bottom-right in `defaultBrandPlacement`, top-right in
+   * `buildOverlaySvg`. With no canonical source to infer from, inventing
+   * coordinates would place a user's asset somewhere nobody chose.
+   */
+  placement?: TemplateAssetPlacement;
+}
+
+export interface TemplateAssetPlacement {
+  /** Distance from the top edge, as a fraction of canvas height. */
+  top: number;
+  /** Distance from the left edge, as a fraction of canvas width. */
+  left: number;
+  /** Box width, as a fraction of canvas width. */
+  maxWidth: number;
+  /** Box height, as a fraction of canvas height. */
+  maxHeight: number;
+  /**
+   * `contain` fits the whole source inside the box and crops nothing — the only
+   * mode that preserves every source pixel. `cover` fills the box and discards
+   * the overflowing edges. Stated, never inferred: which one applies changes
+   * whether pixels survive.
+   */
+  fit?: 'contain' | 'cover';
+}
+
+const PLACEMENT_FITS = ['contain', 'cover'] as const;
+
+/**
+ * Validate placement geometry structurally.
+ *
+ * Rejects rather than repairs. Clamping an out-of-range coordinate would put
+ * the asset somewhere the template author did not choose while reporting
+ * success, which is the silent-wrong-output failure this whole layer exists to
+ * prevent.
+ */
+export function validateTemplateAssetPlacement(
+  placement: Partial<TemplateAssetPlacement> | null | undefined,
+): ReferenceValidationResult {
+  const errors: string[] = [];
+  if (!placement || typeof placement !== 'object') {
+    return { ok: false, errors: ['placement is required'] };
+  }
+
+  const inUnit = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+  const inOpenUnit = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= 1;
+
+  if (!inUnit(placement.top)) errors.push('placement.top must be within [0,1]');
+  if (!inUnit(placement.left)) errors.push('placement.left must be within [0,1]');
+  if (!inOpenUnit(placement.maxWidth)) errors.push('placement.maxWidth must be within (0,1]');
+  if (!inOpenUnit(placement.maxHeight)) errors.push('placement.maxHeight must be within (0,1]');
+
+  if (
+    placement.fit !== undefined &&
+    !(PLACEMENT_FITS as readonly string[]).includes(placement.fit as string)
+  ) {
+    errors.push(`placement.fit must be one of: ${PLACEMENT_FITS.join(', ')}`);
+  }
+
+  return { ok: errors.length === 0, errors };
 }
 
 /**
@@ -154,7 +224,9 @@ export type RoutingRejectionReason =
   | 'mode_not_allowed_for_purpose'
   | 'mode_not_allowed_by_template_slot'
   | 'slot_capacity_exceeded'
-  | 'provider_reference_limit_exceeded';
+  | 'provider_reference_limit_exceeded'
+  | 'slot_missing_placement'
+  | 'slot_placement_invalid';
 
 export interface RoutedReference {
   reference: CompositionAssetReference;
@@ -242,6 +314,22 @@ export function routeCompositionReferences(input: RoutingInput): RoutingResult {
       reject(r, 'mode_not_allowed_by_template_slot',
         `The template slot for "${r.purpose}" accepts only mode "${slot.mode}".`);
       continue;
+    }
+
+    // A compose reference is only placeable if the slot says where. There is no
+    // fallback geometry — see the note on TemplateAssetSlot.placement.
+    if (r.mode === 'compose') {
+      if (!slot.placement) {
+        reject(r, 'slot_missing_placement',
+          `The template slot for "${r.purpose}" declares no placement, so a compose asset cannot be positioned.`);
+        continue;
+      }
+      const geometry = validateTemplateAssetPlacement(slot.placement);
+      if (!geometry.ok) {
+        reject(r, 'slot_placement_invalid',
+          `The template slot for "${r.purpose}" has invalid placement: ${geometry.errors.join('; ')}`);
+        continue;
+      }
     }
 
     const used = perSlotCount.get(r.purpose) ?? 0;

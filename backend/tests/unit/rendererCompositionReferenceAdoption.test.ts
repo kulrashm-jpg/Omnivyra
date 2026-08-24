@@ -61,11 +61,13 @@ import type { TemplateAssetSlot } from '../../../lib/content/compositionAssetRou
 
 const COMPANY_A = 'company-aaaa';
 const COMPANY_B = 'company-bbbb';
+const FIXTURE_PLACEMENT = { top: 0.1, left: 0.1, maxWidth: 0.2, maxHeight: 0.2, fit: 'contain' as const };
+// Phase 59B: compose-mode slots must declare placement or the reference is refused.
 const SLOTS: TemplateAssetSlot[] = [
   { purpose: 'subject', mode: 'condition' },
-  { purpose: 'background', max: 3 },
-  { purpose: 'logo', mode: 'compose' },
-  { purpose: 'overlay' },
+  { purpose: 'background', max: 3, placement: FIXTURE_PLACEMENT },
+  { purpose: 'logo', mode: 'compose', placement: FIXTURE_PLACEMENT },
+  { purpose: 'overlay', placement: FIXTURE_PLACEMENT },
 ];
 const REF_PROVIDER = { acceptsReferenceImages: true, maxReferenceImages: 4 };
 const NO_REF_PROVIDER = { acceptsReferenceImages: false, maxReferenceImages: 0 };

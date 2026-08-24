@@ -112,12 +112,21 @@ function ref(
 
 const item = (r: CompositionAssetReference) => ({ reference: r, sourceUrl: `media-uploads/${r.assetId}.png` });
 
+/**
+ * Phase 59B: a compose-mode slot must declare placement or the reference is
+ * refused — there is no fallback geometry. These fixtures therefore carry
+ * placement on every slot that can accept compose. The value is arbitrary here
+ * (routing never reads the numbers, only their validity); the DECIDED
+ * production geometry is pinned separately in composeLogoPlacement.test.ts.
+ */
+const FIXTURE_PLACEMENT = { top: 0.1, left: 0.1, maxWidth: 0.2, maxHeight: 0.2, fit: 'contain' as const };
+
 const SLOTS: TemplateAssetSlot[] = [
   { purpose: 'subject', mode: 'condition' },
-  { purpose: 'background' },
-  { purpose: 'logo', mode: 'compose' },
-  { purpose: 'product', max: 2 },
-  { purpose: 'overlay' },
+  { purpose: 'background', placement: FIXTURE_PLACEMENT },
+  { purpose: 'logo', mode: 'compose', placement: FIXTURE_PLACEMENT },
+  { purpose: 'product', max: 2, placement: FIXTURE_PLACEMENT },
+  { purpose: 'overlay', placement: FIXTURE_PLACEMENT },
   { purpose: 'style_reference' },
 ];
 
@@ -436,7 +445,7 @@ describe('F — resolution: tenancy, lifecycle, reuse', () => {
 describe('R — reconciliation with the foundation', () => {
   const SUPPORTING_SLOTS: TemplateAssetSlot[] = [
     ...SLOTS,
-    { purpose: 'supporting', max: 2 },
+    { purpose: 'supporting', max: 2, placement: FIXTURE_PLACEMENT },
   ];
 
   it('supporting has an explicit policy — no catch-all, no default fallback', () => {
