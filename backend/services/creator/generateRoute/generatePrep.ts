@@ -51,6 +51,20 @@ export type GenerateCreatorBody = {
    *  fetches the campaign's persisted variant_strategy and applies it
    *  via the campaignVariantApplier helper. Absence = unchanged behavior. */
   campaign_id?: string;
+  /**
+   * The Creator draft whose attached assets this generation should use.
+   *
+   * `composition_asset_references` identifies its owner by a TYPE plus an ID
+   * because no canonical composition table exists yet, so the server has no way
+   * to find a draft's attachments without being told which draft it is — the
+   * gap that left the CONDITION resolver unreachable.
+   *
+   * A LOOKUP KEY ONLY. It never influences authorization: the company is taken
+   * from the authenticated context and passed to the company-scoped resolver,
+   * so a token minted under another tenant resolves to nothing rather than to
+   * that tenant's references.
+   */
+  composition_id?: string;
 };
 
 const CREATOR_GENERATION_API_TIMEOUT_MS = 120_000;

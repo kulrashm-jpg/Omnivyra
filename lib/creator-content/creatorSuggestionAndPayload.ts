@@ -326,6 +326,8 @@ export interface BuildGenerationBodyInput {
   lightweightContext: CreatorFlowContext;
   /** From ?blueprint= (was router.query.blueprint). */
   blueprintId: string | null;
+  /** Draft identity for attached assets. Lookup key only. */
+  compositionId?: string | null;
   variantPinOverride: string | null;
 }
 
@@ -428,6 +430,12 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
       : null;
     return {
       company_id: selectedCompanyId || undefined,
+      // The Creator draft whose attached assets this generation should use.
+      // Sent so the server can find them: composition_asset_references is keyed
+      // by type + id, so without it a user's attachment is silently ignored.
+      // A lookup key only — the server takes the company from the authenticated
+      // context, never from here.
+      ...(compositionId ? { composition_id: compositionId } : {}),
       creator_type: type,
       content_type: consolidatedContentType,
       topic: String(answers.topic || '').trim(),

@@ -28,6 +28,7 @@ import { createHash } from 'crypto';
 import { ownedDbTable } from '../../db/writeOwner';
 import { createCreatorExecutionEngine } from '../executionEngines/creatorExecutionEngine';
 import { renderAsset } from '../creatorAssetRenderer';
+import { resolveCompositionReferencesForRender } from './resolveCompositionReferencesForRender';
 import { validateAssetReadiness } from '../creatorAssetValidationService';
 import { validateCreatorExecutionOutput } from '../creatorExecutionContracts';
 // CAMPAIGN-IMPL-007A: reuse the ONE semantic validation engine + regeneration
@@ -69,6 +70,12 @@ import type { CanonicalCreatorOutput, CreatorGenerationContext } from '../execut
 export type CreatorOrchestrationOrigin = 'direct' | 'bolt' | 'queue';
 
 export type CreatorOrchestrationInput = {
+  /**
+   * Creator draft whose attached assets this generation should use. A LOOKUP
+   * KEY ONLY — companyId remains the authorization input. Absent => generation
+   * is byte-identical to before composition references existed.
+   */
+  compositionId?: string | null;
   /** Logical campaign / session identifier. Direct flow synthesizes one. */
   campaignId: string;
   /** Activity-consumption correlation envelope (forwarded to LLM + media metering). */
@@ -407,6 +414,8 @@ async function runRenderDispatch(input: {
   userId: string | null;
   campaignId: string | null;
   strategy: RenderStrategy;
+  /** Draft whose attached assets this render should use. Lookup key only. */
+  compositionId?: string | null;
 }): Promise<{ output: CanonicalCreatorOutput; renderJob: { id: string; audit_id: string } | null }> {
   const renderInput = safeObject(input.output.asset_payload);
 
@@ -448,10 +457,19 @@ async function runRenderDispatch(input: {
       const { ensureUserTemplateRegisteredForAsset } = await import('./userTemplateService');
       await ensureUserTemplateRegisteredForAsset(renderInput);
     } catch { /* best-effort */ }
+    // THE single runtime entry into the composition-asset resolver. Everything
+    // downstream — routing, tenant checks, lifecycle, byte retrieval, the
+    // compose/condition split — already exists and is not re-implemented here.
+    // Absent compositionId => null => generation is byte-identical to before.
+    const compositionReferences = await resolveCompositionReferencesForRender({
+      companyId: input.companyId,
+      compositionId: input.compositionId ?? null,
+    });
     const rendered = await renderAsset(renderInput, {
       campaignId: input.campaignId,
       userId: input.userId,
       companyId: input.companyId,
+      compositionReferences,
     });
     return { output: mergeRenderedMedia(input.output, rendered), renderJob: null };
   }
@@ -692,6 +710,7 @@ async function runCreatorOrchestrationCore(
     userId: input.userId,
     campaignId: input.campaignId,
     strategy,
+    compositionId: input.compositionId ?? null,
   });
 
   // 3b) CREATOR DIAGNOSTIC REPORT — deterministic, READ-ONLY inspection artifact

@@ -17,6 +17,10 @@ import {
 import type { VariantFamily } from '../../variant-experience/useVariantApi';
 import { resolvePurposeStrategy, fitSlideArcToCount } from '../../../backend/services/creator/purposeStrategyRegistry';
 import type { TemplateAiAssistContext, TemplateAiAssistTarget } from '../TemplateFieldsPanel';
+// Same hook the upload panel uses. It reads sessionStorage by a per-type key and
+// only mints when absent, so both callers resolve to ONE draft identity rather
+// than minting a second one.
+import { useCreatorCompositionId } from '../useCreatorCompositionId';
 import { applyTemplateFieldUpdates } from '../../../lib/creator-templates/values';
 import {
   type CreatorResult, type RepurposePath, type SavedCreatorAsset,
@@ -535,6 +539,8 @@ export function useCreatorWorkflowActions(
   // error directly.
   // Shared payload builder (P1-1) — pure builder in lib/creator-content/creatorTypeWorkflow;
   // baseline Generate and variant fan-out both use it, so fan-out works on first click.
+  const compositionIdForGeneration = useCreatorCompositionId(type);
+
   const buildGenerationBody = React.useCallback((variantPinOverride: VariantFamily | null): Record<string, unknown> | null =>
     buildCreatorGenerationBody({
       type, config, answers, selectedAsset, selectedSuggestion, refinedSuggestion, refinePrompt,
@@ -543,6 +549,7 @@ export function useCreatorWorkflowActions(
       overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
       brandContextLines, selectedPlatform, selectedCompanyId,
       activeTemplate, templateValues,
+      compositionId: compositionIdForGeneration,
       lightweightContext: buildCurrentContext(selectedPlatform),
       blueprintId: typeof router.query.blueprint === 'string' && router.query.blueprint ? router.query.blueprint : null,
       variantPinOverride,
@@ -553,7 +560,7 @@ export function useCreatorWorkflowActions(
     writerAssetType, writerAttachmentMode, standaloneAttachmentMode,
     overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
     brandContextLines, selectedPlatform, selectedCompanyId,
-    activeTemplate, templateValues, router.query.blueprint,
+    activeTemplate, templateValues, router.query.blueprint, compositionIdForGeneration,
   ]);
 
   const handleGenerate = async () => {
