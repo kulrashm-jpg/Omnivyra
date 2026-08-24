@@ -38,11 +38,31 @@ const CAPABILITY_REGISTRY: Record<string, ProviderImageCapabilities> = {
   // reference images during generation (only during edit/variations
   // via a separate endpoint). Capability set accordingly so the
   // renderer falls back to text-enriched descriptors.
+  //
+  // This entry describes ONE ENDPOINT, and that is the point: the same model
+  // answers differently on `images.edit`, which is what
+  // `resolveProviderCapabilities(providerId, 'edit')` returns. Reading this row
+  // as "gpt-image-1 cannot take images" was the misreading that made user
+  // assets look impossible; it cannot, on `generate`.
   'openai-gpt-image-1': {
     providerId: 'openai-gpt-image-1',
     acceptsReferenceImages: false,
     maxReferenceImages: 0,
     supportsReferenceParameter: false,
+  },
+  /**
+   * The SAME model on `images.edit`.
+   *
+   * Not an aspiration and not raised to satisfy a test — these numbers are the
+   * installed SDK's own documented contract for this model (openai@5.23.2,
+   * `ImageEditParamsBase.image`): "each image should be a `png`, `webp`, or
+   * `jpg` file less than 50MB. You can provide up to 16 images."
+   */
+  'openai-gpt-image-1:edit': {
+    providerId: 'openai-gpt-image-1',
+    acceptsReferenceImages: true,
+    maxReferenceImages: 16,
+    supportsReferenceParameter: true,
   },
   // Architecture-future placeholder: any provider that exposes
   // multi-image conditioning at generate time can register here and
@@ -55,7 +75,23 @@ const CAPABILITY_REGISTRY: Record<string, ProviderImageCapabilities> = {
   },
 };
 
-export function resolveProviderCapabilities(providerId: string): ProviderImageCapabilities {
+/** Which API operation the capability question is being asked about. */
+export type ProviderImageEndpoint = 'generate' | 'edit';
+
+/**
+ * Capability is a property of (model, endpoint), not of the model alone.
+ *
+ * Defaults to `generate` so every existing caller keeps its exact answer; only
+ * a caller that is actually about to call `images.edit` sees the edit row.
+ */
+export function resolveProviderCapabilities(
+  providerId: string,
+  endpoint: ProviderImageEndpoint = 'generate',
+): ProviderImageCapabilities {
+  if (endpoint === 'edit') {
+    const edit = CAPABILITY_REGISTRY[`${providerId}:edit`];
+    if (edit) return edit;
+  }
   return CAPABILITY_REGISTRY[providerId] ?? CAPABILITY_REGISTRY['openai-gpt-image-1'];
 }
 

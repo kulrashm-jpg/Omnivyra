@@ -94,6 +94,17 @@ export async function generateProviderImage(input: {
    *  via images.edit. Absent/flag-off → plain text-to-image (unchanged). */
   referenceImageUrl?: string | null;
   /**
+   * Canonical CONDITION references, already resolved to bytes by
+   * `resolveConditionReferenceBytes` — company-scoped, lifecycle-gated,
+   * format- and size-checked, and capped at the endpoint's documented maximum.
+   *
+   * Supplied as BYTES rather than a URL on purpose: these are tenant-owned
+   * private objects, and minting a fetchable address for them would trade a
+   * tenancy guarantee for convenience. Present → `images.edit` runs with the
+   * whole set; absent → behaviour is exactly as before.
+   */
+  referenceImages?: Array<{ bytes: Buffer; mimeType: string }> | null;
+  /**
    * Telemetry-only context. Passed through to `creatorEvent` so a
    * dashboard can pivot provider failures by platform / attachment mode /
    * subtype / creator type. Does NOT affect the prompt or the API call.
@@ -141,6 +152,64 @@ export async function generateProviderImage(input: {
   // 404, edit unsupported, provider error) falls through to the plain
   // text-to-image loop below — it can never break existing generation.
   const referenceUrl = input.referenceImageUrl;
+  const canonicalRefs = input.referenceImages ?? [];
+  // Canonical CONDITION bytes take precedence over the flag-gated showcase URL:
+  // a user's own reference is a stronger signal than a template's style sample,
+  // and unlike the showcase it is not gated behind CREATOR_IMAGE_REFERENCE_MODE
+  // because it only exists when a user deliberately attached something.
+  if (canonicalRefs.length > 0) {
+    const editModel = modelCandidates[0];
+    const editStartedAt = Date.now();
+    try {
+      const { toFile } = await import('openai');
+      // Extension must match the actual bytes/type or the provider rejects the
+      // upload — the same constraint the showcase path documents below.
+      const files = await Promise.all(canonicalRefs.map(async (r, i) => {
+        const ext = r.mimeType.includes('png') ? 'png'
+          : (r.mimeType.includes('jpeg') || r.mimeType.includes('jpg')) ? 'jpg' : 'webp';
+        return toFile(r.bytes, `reference-${i}.${ext}`, { type: r.mimeType });
+      }));
+      const editResp = await Promise.race([
+        client.images.edit(
+          {
+            model: editModel,
+            // The SDK accepts an array for gpt-image-1 (up to 16); the caller
+            // has already capped and rejected beyond that.
+            image: files.length === 1 ? files[0] : files,
+            prompt: input.prompt,
+            n: 1,
+            size: AI_IMAGE_SIZE,
+            quality: (process.env.CREATOR_IMAGE_REFERENCE_QUALITY || 'low'),
+          } as Parameters<typeof client.images.edit>[0],
+          { timeout: AI_IMAGE_TIMEOUT_MS },
+        ),
+        timeoutAfter<Awaited<ReturnType<typeof client.images.edit>>>(AI_IMAGE_TIMEOUT_MS, `Image edit ${editModel}`),
+      ]);
+      recordCreatorDuration('provider_image', Date.now() - editStartedAt, {
+        model: `${editModel}:edit`,
+        platform: input.eventContext?.platform ?? null,
+        creatorType: input.eventContext?.creatorType ?? null,
+        attachmentMode: input.eventContext?.attachmentMode ?? null,
+      });
+      const first = getFirstImageResult(editResp);
+      if (first?.b64_json || first?.url) {
+        recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
+        console.log('[creator-asset-renderer][canonical-reference-edit-ok]', {
+          model: editModel, references: files.length, ms: Date.now() - editStartedAt,
+        });
+        if (first.b64_json) {
+          return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model: `${editModel}:edit` } };
+        }
+        return { image: { buffer: await bufferFromRemoteImage(first.url as string), model: `${editModel}:edit` } };
+      }
+    } catch (err) {
+      // Falls through to the existing paths below. The failure is logged rather
+      // than swallowed silently, because "conditioning was attempted and did
+      // not happen" must never be reported as successful conditioning.
+      console.warn('[creator-asset-renderer][canonical-reference-edit-failed]',
+        (err as Error)?.message?.slice(0, 200));
+    }
+  }
   if (process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit' && typeof referenceUrl === 'string' && referenceUrl.trim()) {
     const editModel = modelCandidates[0];
     const editStartedAt = Date.now();

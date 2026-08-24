@@ -92,6 +92,15 @@ export interface ResolvedCompositionReferences {
     compose: RoutedReference[];
     templateSlots?: readonly TemplateAssetSlot[];
   };
+  /**
+   * CONDITION lane, deferred for the same reason: capability depends on the
+   * endpoint the renderer is about to call. Held separately from composePlan so
+   * the two lanes cannot be confused at the call site.
+   */
+  conditionPlan: {
+    companyId: string;
+    condition: RoutedReference[];
+  };
 }
 
 export interface ResolveCompositionAssetsInput {
@@ -192,6 +201,10 @@ export async function resolveCompositionAssets(
         companyId: input.companyId,
         compose: routing.compose,
         templateSlots: input.templateSlots,
+      },
+      conditionPlan: {
+        companyId: input.companyId,
+        condition: routing.condition,
       },
     },
     rejected,
