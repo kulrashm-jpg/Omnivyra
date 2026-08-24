@@ -278,9 +278,37 @@ export async function composeSingleVisualAsset(
     const base = String(process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'https://www.omnivyra.com').replace(/\/$/, '');
     return `${base}/creator-showcases/${bpId}/image.webp`;
   })();
+  // Canonical CONDITION references as real image input. Resolved here because
+  // only the renderer knows which endpoint is about to run, and capability is a
+  // property of (model, endpoint) rather than of the model alone.
+  //
+  // Compose is deliberately absent from this call: it is a different lane with
+  // a different guarantee and never becomes provider input.
+  const conditionRefs = await (async () => {
+    const plan = options.compositionReferences?.composePlan;
+    const condition = options.compositionReferences?.conditionPlan;
+    if (!condition || condition.condition.length === 0 || !plan) return null;
+    const { resolveConditionReferenceBytes } = await import('./compositionAssetConditionService');
+    const resolved = await resolveConditionReferenceBytes({
+      companyId: condition.companyId,
+      condition: condition.condition,
+      providerId: 'openai-gpt-image-1',
+      endpoint: 'edit',
+    });
+    if (resolved.rejected.length > 0) {
+      console.warn('[creator-asset-renderer][condition-rejected]', resolved.rejected);
+    }
+    if (resolved.degradedToText) {
+      console.warn('[creator-asset-renderer][condition-degraded-to-text]',
+        { references: condition.condition.length });
+    }
+    return resolved;
+  })();
+
   const providerResult = await generateProviderImage({
     prompt: providerPrompt,
     referenceImageUrl,
+    referenceImages: conditionRefs?.references.map((r) => ({ bytes: r.bytes, mimeType: r.mimeType })) ?? null,
     eventContext: {
       creatorType: fileNamePrefix,
       attachmentMode: attachmentRenderPolicy,
