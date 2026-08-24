@@ -7,6 +7,7 @@
  */
 import React from 'react';
 import TemplateFieldsPanel from '../TemplateFieldsPanel';
+import { IMAGE_COPY_FIELD_KEYS } from '../../../lib/creator-templates/types';
 import CreatorVariantExperienceSection from '../CreatorVariantExperienceSection';
 import { runVariantFanOut } from '../../../lib/variants/fanOutRunner';
 import { resolvePurposeStrategy } from '../../../backend/services/creator/purposeStrategyRegistry';
@@ -150,6 +151,42 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
   // PHASE 2B — identity of the design being composed, so an uploaded image can
   // be attached to it and survive the trip to the template gallery.
   const compositionId = useCreatorCompositionId(type);
+
+  /**
+   * Does on-image copy apply to this composition?
+   *
+   * Deliberately the SAME predicate the payload gate uses (Phase 61D) and the
+   * same one the Platform & Overlay Text block below already applies, read from
+   * the existing embedded_copy / supporting_visual vocabulary. No second mode
+   * flag: the screen and the generated image must not be able to disagree.
+   */
+  const imageCopyActiveForUi = !writerSupportingVisual
+    && (!writerSource
+      ? !(type === 'image' && standaloneAttachmentMode === 'supporting_visual')
+      : writerEmbeddedCopy);
+
+  /**
+   * The template as the FORM should present it.
+   *
+   * In "Post + Image" the image-copy fields are dropped from the template the
+   * panel sees, so rendering, validation, progress and readiness all agree.
+   * Hiding the inputs alone would not do: `headline` is `required: true`, so a
+   * hidden-but-required field leaves the form permanently invalid and blocks
+   * generation in the very mode where that field is irrelevant.
+   *
+   * Non-copy fields (a visual-direction hint, say) are untouched, and the
+   * template contract itself is never mutated — only this view of it.
+   */
+  const effectiveTemplate = React.useMemo(() => {
+    if (!activeTemplate || imageCopyActiveForUi) return activeTemplate;
+    const excluded = new Set<string>(IMAGE_COPY_FIELD_KEYS);
+    const fd = activeTemplate.formDefinition;
+    return {
+      ...activeTemplate,
+      formDefinition: { ...fd, fields: (fd.fields ?? []).filter((f) => !excluded.has(f.key)) },
+    };
+  }, [activeTemplate, imageCopyActiveForUi]);
+
   return (
           <div className="rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
             <div className="mb-6 flex items-center justify-between">
@@ -162,6 +199,12 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
               </span>
             </div>
 
+            {/*
+              Whether on-image copy belongs to THIS composition. Same
+              authoritative vocabulary the payload gate uses (Phase 61D), so the
+              screen and the generated image cannot disagree: embedded_copy =
+              "Text Inside Image", supporting_visual = "Post + Image".
+            */}
             <div className="space-y-5">
               <AiActivityIndicator aiBusyKey={aiBusyKey} />
               {activeTemplate ? (
@@ -179,8 +222,24 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                       Change
                     </button>
                   </div>
+                  {!imageCopyActiveForUi ? (
+                    <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                      <span className="font-semibold">Post + Image:</span> this image is visual-only,
+                      so headline, subheadline and call-to-action are written on the post rather than
+                      on the picture. Switch to <span className="font-semibold">Text Inside Image</span> to
+                      put copy on the image itself.
+                    </div>
+                  ) : null}
+                  {/*
+                    The panel receives a template narrowed to the fields that
+                    actually apply. Narrowing the TEMPLATE rather than hiding
+                    inputs keeps rendering, validation, progress and readiness in
+                    agreement — `headline` is `required: true`, so merely hiding
+                    it would leave the form permanently invalid and block
+                    generation in a mode where the field is irrelevant.
+                  */}
                   <TemplateFieldsPanel
-                    template={activeTemplate}
+                    template={effectiveTemplate}
                     values={templateValues}
                     onChange={handleEditorChange}
                     onAiAssist={handleTemplateAiAssist}

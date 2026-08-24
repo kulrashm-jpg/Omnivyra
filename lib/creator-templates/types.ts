@@ -258,6 +258,19 @@ export interface TemplateGenerationDNA {
 }
 
 /** A first-class Creator Template. */
+/**
+ * Template form keys that are ON-IMAGE COPY.
+ *
+ * These are the fields headlineForm() produces — the label on the first one
+ * literally reads "Headline / Image Text". They belong to the image only when
+ * the composition mode is embedded_copy; in supporting_visual the post carries
+ * the words and the image is visual-only.
+ *
+ * Declared once so the UI and the payload agree on what "image copy" means
+ * rather than each re-deriving it from field labels.
+ */
+export const IMAGE_COPY_FIELD_KEYS = ['headline', 'subheadline', 'cta'] as const;
+
 export interface CreatorTemplate {
   id: string;
   assetFamily: TemplateAssetFamily;

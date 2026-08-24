@@ -347,6 +347,18 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
     const writerCopyPolicy = writerCompositionIntent?.copyPolicy ?? null;
     const standaloneEmbeddedCopy = standaloneAttachmentMode === 'embedded_copy';
     const overlayAllowed = !writerSource || writerEmbeddedCopy;
+    /**
+     * Does on-image copy belong to THIS composition?
+     *
+     * The user's choice between "Text Inside Image" (embedded_copy) and
+     * "Post + Image" (supporting_visual) decides it, and it must decide it for
+     * EVERY source of image copy. Previously only the non-template path
+     * consulted it: with an image template selected, the template-authoritative
+     * branch below emitted overlay_text unconditionally, so choosing
+     * "Post + Image" changed the form but not the generated image.
+     */
+    const imageCopyActive = overlayAllowed
+      && (!writerSource ? standaloneEmbeddedCopy : writerEmbeddedCopy);
     const overlayPayload = isSocialCreativeType(type) && overlayAllowed && (!writerSource ? !(type === 'image' && !standaloneEmbeddedCopy) : writerEmbeddedCopy)
       ? {
           hook: String(overlayText.hook || '').trim(),
@@ -468,7 +480,13 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
         copy_policy: writerCopyPolicy,
         source_text_transform: writerCopyPolicy?.sourceTextTransform ?? null,
         infographic_layout: type === 'infographic' ? String(answers.structureMode || 'framework') : null,
-        overlay_text: activeTemplate && activeTemplate.assetFamily === 'image'
+        // imageCopyActive gates the TEMPLATE path too. In "Post + Image" the
+        // post carries the copy and the image is visual-only, so no template
+        // field, intake answer or stale overlay value may reach generation as
+        // on-image text.
+        overlay_text: !imageCopyActive && isSocialCreativeType(type) && type === 'image'
+          ? null
+          : activeTemplate && activeTemplate.assetFamily === 'image'
           // Template "Text Inside Image" — the template fields are the ONLY
           // source of on-image text. `__template_authoritative` tells the
           // renderer to render exactly these fields (no topic/title/"Learn
