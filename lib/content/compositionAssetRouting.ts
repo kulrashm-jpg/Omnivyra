@@ -29,6 +29,7 @@ import {
   type CompositionAssetMode,
   type CompositionAssetPurpose,
   type CompositionAssetReference,
+  type ReferenceValidationResult,
 } from './compositionAssetReference';
 
 /* ── Which modes each purpose may legally take ──────────────────────────────
