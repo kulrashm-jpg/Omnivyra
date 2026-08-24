@@ -36,7 +36,7 @@ const TABLE = 'composition_asset_references';
 
 /** Explicit projection so a later schema addition cannot silently widen reads. */
 const COLUMNS =
-  'id, company_id, composition_type, composition_id, asset_id, purpose, mode, ordinal, created_at, updated_at';
+  'id, company_id, composition_type, composition_id, asset_id, purpose, mode, ordinal, metadata, created_at, updated_at';
 
 type Row = Record<string, unknown>;
 
@@ -50,6 +50,12 @@ function toDomain(row: Row): CompositionAssetReference {
     purpose: row.purpose as CompositionAssetPurpose,
     mode: row.mode as CompositionAssetMode,
     ordinal: Number(row.ordinal ?? 0),
+    // Always an object. A legacy row written before the column existed, or a
+    // driver that hands back null, must not make consumers branch on null.
+    metadata:
+      row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+        ? (row.metadata as Record<string, unknown>)
+        : {},
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -84,6 +90,7 @@ export async function addCompositionAssetReference(
       purpose: input.purpose,
       mode: input.mode,
       ordinal: input.ordinal ?? 0,
+      metadata: input.metadata ?? {},
     })
     .select(COLUMNS)
     .single();

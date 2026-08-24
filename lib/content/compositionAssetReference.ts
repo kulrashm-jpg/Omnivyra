@@ -67,6 +67,13 @@ export const COMPOSITION_ONLY_PURPOSES = [
   'overlay',
   /** A real product photograph — distinct from `product_screenshot`, which is UI. */
   'product',
+  /**
+   * Present but not the point — a secondary image that supports the subject
+   * rather than being it. Distinct from `background` (which is the scene) and
+   * from `overlay` (which sits on top): a supporting image occupies its own
+   * place in the composition alongside the subject.
+   */
+  'supporting',
 ] as const;
 
 export type CompositionOnlyPurpose = (typeof COMPOSITION_ONLY_PURPOSES)[number];
@@ -141,6 +148,17 @@ export interface CompositionAssetReference {
    * property of the read, and it is tested.
    */
   ordinal: number;
+  /**
+   * Per-USE attributes: how THIS asset sits in THIS composition — focal point,
+   * crop, opacity, provider hints. Always an object; `{}` when nothing has been
+   * recorded, so consumers never branch on null.
+   *
+   * It exists so that adding a composition property does not require a schema
+   * migration every time. It is deliberately NOT a second home for `purpose` or
+   * `mode`: those are columns precisely so the database constrains them.
+   * Trace and presentation only — never authorization, never identity.
+   */
+  metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
@@ -153,6 +171,7 @@ export interface CompositionAssetReferenceInput {
   purpose: CompositionAssetPurpose;
   mode: CompositionAssetMode;
   ordinal?: number;
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -207,6 +226,18 @@ export function validateCompositionAssetReferenceInput(
       input.ordinal < 0
     ) {
       errors.push('ordinal must be a non-negative integer when supplied');
+    }
+  }
+
+  // Same rule the asset contract applies to its own metadata: a plain object or
+  // nothing. Arrays and scalars are rejected because `{}`-shaped access is what
+  // every consumer will assume.
+  if (input.metadata !== undefined && input.metadata !== null) {
+    if (
+      typeof input.metadata !== 'object' ||
+      Array.isArray(input.metadata)
+    ) {
+      errors.push('metadata must be an object when supplied');
     }
   }
 
