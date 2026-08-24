@@ -338,7 +338,7 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
     writerAssetType, writerAttachmentMode, standaloneAttachmentMode,
     overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
     brandContextLines, selectedPlatform, selectedCompanyId,
-    activeTemplate, templateValues, lightweightContext, blueprintId, variantPinOverride,
+    activeTemplate, templateValues, lightweightContext, blueprintId, compositionId, variantPinOverride,
   } = input;
     if (!String(answers.topic || '').trim()) return null;
     const writerStructureGuidance = writerSource && isDeterministicStructuredType(type)
