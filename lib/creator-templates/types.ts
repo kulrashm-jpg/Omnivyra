@@ -25,6 +25,7 @@ import type { InfographicStyleSchema } from './infographicStyle';
 import type { ImageStyleSchema } from './imageStyle';
 import type { CarouselStyleSchema } from './carouselStyle';
 import type { SemanticBlock, InfographicComposition } from './styleVariants';
+import type { TemplateAssetSlot } from '../content/compositionAssetRouting';
 
 export type TemplateAssetFamily = 'image' | 'carousel' | 'infographic';
 
@@ -315,6 +316,21 @@ export interface CreatorTemplate {
    * everything (today's behavior: all stages optional/skippable).
    */
   stageRequirements?: CreatorStageRequirementOverride;
+  /**
+   * Which user-supplied asset references this template accepts, and in which
+   * mode. Declared ONCE here rather than re-derived by every renderer — that
+   * duplication is what the content-architecture audit found everywhere else.
+   *
+   * Optional and additive, and absence is meaningful: a template with no
+   * `assetSlots` accepts NO references (fail-closed). Treating "undeclared" as
+   * "anything goes" would let a reference reach a layout with nowhere to put
+   * it, and the user would see it silently ignored. No template declares slots
+   * today, so nothing changes until one opts in.
+   *
+   * Type-only import: erased at compile time, so this adds no runtime edge
+   * between the template registry and the content package.
+   */
+  assetSlots?: TemplateAssetSlot[];
 }
 
 /** Which optional Creator workflow stages a template/asset REQUIRES (override shape). */

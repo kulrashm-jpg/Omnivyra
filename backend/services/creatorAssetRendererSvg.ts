@@ -87,6 +87,9 @@ ensureRenderFonts();
 import { AI_IMAGE_TIMEOUT_MS, safeObject, compactText } from './creatorAssetRendererContracts';
 import { buildOverlaySvg } from './creatorAssetRendererOverlay';
 import { generateProviderImage, type ImageSubtypeHint } from './creatorAssetRendererMedia';
+// Type-only: the composer itself stays lazily required below (import cycle), so
+// this adds no runtime edge.
+import type { ReferenceImage } from './creator/creatorPromptComposer';
 
 export function buildAiImagePrompt(input: {
   title: string;
@@ -98,6 +101,16 @@ export function buildAiImagePrompt(input: {
   subtypeHint?: ImageSubtypeHint | null;
   /** Used for brand visual memory lookup/update (Phase 9). */
   companyId?: string | null;
+  /**
+   * CONDITION-lane composition references, already resolved and routed by
+   * `resolveCompositionAssets`. Passed straight through to the existing
+   * `additionalReferences` parameter of `assembleMultimodalPayload` — no second
+   * provider call, no reinterpretation, and provider capability remains
+   * authoritative over what actually reaches the model.
+   *
+   * Omitted (every existing caller) → the payload is assembled exactly as before.
+   */
+  additionalReferences?: ReferenceImage[];
 }): string {
   const brandContext = safeObject(input.metadata.brand_context);
   const selectedAssets = safeObject(input.metadata.selected_brand_assets);
@@ -475,6 +488,10 @@ export function buildAiImagePrompt(input: {
   const multimodal = assembleMultimodalPayload({
     composed,
     providerId: 'openai-gpt-image-1',
+    // The existing seam, finally carrying a user asset. Capability still
+    // decides the outcome: with acceptsReferenceImages=false these degrade to
+    // text descriptors rather than bytes, exactly as brand references already do.
+    additionalReferences: input.additionalReferences,
   });
 
   // Phase 8 — record this attempt in brand visual memory so future
