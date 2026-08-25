@@ -50,13 +50,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const providedUserId = Array.isArray(fields.user_id) ? fields.user_id[0] : fields.user_id;
     const campaignId = Array.isArray(fields.campaign_id) ? fields.campaign_id[0] : fields.campaign_id;
     const platform = Array.isArray(fields.platform) ? fields.platform[0] : fields.platform;
-    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const userId = typeof providedUserId === 'string' && uuidPattern.test(providedUserId)
-      ? providedUserId
-      : user.id;
 
-    if (!userId) {
-      return res.status(400).json({ error: 'user_id is required' });
+    /*
+     * OWNERSHIP IS THE AUTHENTICATED IDENTITY. Always.
+     *
+     * This used to prefer the browser-supplied `user_id` whenever it merely
+     * LOOKED like a uuid, falling back to `user.id` only when it did not:
+     *
+     *     const userId = uuidPattern.test(providedUserId) ? providedUserId : user.id;
+     *
+     * So an authenticated caller could file an upload under any uuid it chose.
+     * Phase 67 hit the benign form of that: the Creator panel sends
+     * `getSupabaseBrowser().auth.getUser().id`, which on a browser whose
+     * Supabase session has drifted from its server session is a DIFFERENT user.
+     * The row was stored under that other id, and canonical registration then
+     * correctly refused to promote a file the caller does not own — a real
+     * upload silently misfiled, and unusable.
+     *
+     * `user.id` here is already the server-resolved principal (the same one
+     * `resolveUserContext` derives), so it is the only identity that can be
+     * right. The field is still ACCEPTED so existing clients keep working, but
+     * it no longer decides anything: `companyProfileFormController` already
+     * uploads without it, which is what proves this path is sufficient.
+     *
+     * A conflict is corrected rather than rejected. There is no legitimate
+     * caller that needs to name another owner — every caller is a browser UI
+     * uploading its own file — so a mismatch is a drifted client session, not a
+     * choice. Rejecting it would break those users while protecting nothing the
+     * server identity does not already protect. It is logged so the drift is
+     * visible instead of silent.
+     */
+    const userId = user.id;
+    if (typeof providedUserId === 'string' && providedUserId && providedUserId !== userId) {
+      console.warn('[media-upload] ignoring client-supplied user_id; ownership is the authenticated user', {
+        authenticatedUserId: userId,
+      });
     }
 
     // Get uploaded file
