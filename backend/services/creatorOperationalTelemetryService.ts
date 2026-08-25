@@ -78,6 +78,13 @@ export const CREATOR_EVENTS = {
   // succeeds, so without this there is no way to measure how often a person's
   // upload is discarded, or which reason dominates.
   REFERENCE_ROUTING_REJECTED: 'reference_routing_rejected',
+  //
+  // A reference PASSED routing, reached the provider, and still could not be
+  // applied — the edit call failed or returned nothing usable, and generation
+  // fell back. Distinct from the rejection above, which happens before the
+  // provider is ever called. The `category` field carries which of the two,
+  // and the fallback is implied rather than counted separately.
+  CONDITION_REFERENCE_DEGRADED: 'condition_reference_degraded',
 } as const;
 
 export type CreatorEventType =

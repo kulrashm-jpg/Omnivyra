@@ -84,7 +84,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
-import { type ProviderImageResult, IMAGE_BUCKET, DOCUMENT_BUCKET, AI_IMAGE_TIMEOUT_MS, AI_IMAGE_SIZE, bucketReadyByName, safeObject, getOverlayPreset } from './creatorAssetRendererContracts';
+import { type ProviderImageResult, type ConditionDegradation, type ConditionDegradationCategory, IMAGE_BUCKET, DOCUMENT_BUCKET, AI_IMAGE_TIMEOUT_MS, AI_IMAGE_SIZE, bucketReadyByName, safeObject, getOverlayPreset } from './creatorAssetRendererContracts';
 import { timeoutAfter, getFirstImageResult, bufferFromRemoteImage, resolveOpenAiImageKey } from './creatorAssetRendererSvg';
 // THE feature gate for reference-conditioned generation — one definition,
 // shared with the renderer that decides which endpoint it may call.
@@ -166,6 +166,25 @@ export async function generateProviderImage(input: {
   const referenceModeEnabled = creatorImageReferenceModeEnabled();
   const referenceUrl = input.referenceImageUrl;
   const canonicalRefs = referenceModeEnabled ? (input.referenceImages ?? []) : [];
+
+  /*
+   * Set ONLY when a canonical CONDITION attempt was made and could not be
+   * applied. It rides out on whichever result is finally produced, so the
+   * finished asset can say so instead of being indistinguishable from an
+   * ordinary generation. Never set when no reference was attempted; never set
+   * on a successful edit, because that path returns before it can be.
+   *
+   * The copy is fixed here rather than derived from the provider's error: a
+   * provider message is an internal diagnostic and must not reach a person.
+   */
+  let conditionDegradation: ConditionDegradation | null = null;
+  const degradedBy = (category: ConditionDegradationCategory): ConditionDegradation => ({
+    status: 'not_applied',
+    category,
+    userMessage:
+      'Your reference image could not be applied, so this result was generated without it. Regenerate to try again.',
+  });
+
   if (canonicalRefs.length > 0) {
     const editModel = modelCandidates[0];
     const editStartedAt = Date.now();
@@ -211,10 +230,17 @@ export async function generateProviderImage(input: {
         }
         return { image: { buffer: await bufferFromRemoteImage(first.url as string), model: `${editModel}:edit` } };
       }
+      // The call completed and returned nothing usable. This used to fall out
+      // of the try with no log and no marker at all — the one path more silent
+      // than the legacy showcase branch it replaced, which does record it.
+      conditionDegradation = degradedBy('edit_no_image');
+      console.warn('[creator-asset-renderer][canonical-reference-edit-no-image]', { model: editModel });
     } catch (err) {
-      // Falls through to the existing paths below. The failure is logged rather
-      // than swallowed silently, because "conditioning was attempted and did
-      // not happen" must never be reported as successful conditioning.
+      // Falls through to the existing paths below — the fallback itself is the
+      // supported behaviour and is deliberately unchanged. What changes is that
+      // "conditioning was attempted and did not happen" now survives the request
+      // as durable metadata rather than only as a log line.
+      conditionDegradation = degradedBy('edit_failed');
       console.warn('[creator-asset-renderer][canonical-reference-edit-failed]',
         (err as Error)?.message?.slice(0, 200));
     }
@@ -274,8 +300,8 @@ export async function generateProviderImage(input: {
         }
         recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
         console.log('[creator-asset-renderer][provider-image-edit-ok]', { model: editModel, ms: Date.now() - editStartedAt });
-        if (firstEdit.b64_json) return { image: { buffer: Buffer.from(firstEdit.b64_json, 'base64'), model: `${editModel}:edit` } };
-        return { image: { buffer: await bufferFromRemoteImage(firstEdit.url as string), model: `${editModel}:edit` } };
+        if (firstEdit.b64_json) return { image: { buffer: Buffer.from(firstEdit.b64_json, 'base64'), model: `${editModel}:edit` }, conditionDegradation };
+        return { image: { buffer: await bufferFromRemoteImage(firstEdit.url as string), model: `${editModel}:edit` }, conditionDegradation };
       }
       failures.push(`${editModel}:edit: no image returned`);
     } catch (error) {
@@ -350,9 +376,9 @@ export async function generateProviderImage(input: {
         // together via the entry-consumption lifecycle (no new primitive).
         recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
         if (first.b64_json) {
-          return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model } };
+          return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model }, conditionDegradation };
         }
-        return { image: { buffer: await bufferFromRemoteImage(first.url as string), model } };
+        return { image: { buffer: await bufferFromRemoteImage(first.url as string), model }, conditionDegradation };
       }
       failures.push(`${model}: no image returned`);
     } catch (error) {
@@ -381,6 +407,7 @@ export async function generateProviderImage(input: {
 
   return {
     image: null,
+    conditionDegradation,
     fallbackReason: failures.join(' | ') || 'Provider image generation failed',
   };
 }

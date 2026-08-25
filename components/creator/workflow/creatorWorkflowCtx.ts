@@ -160,6 +160,9 @@ export interface CreatorWorkflowCtx {
   documentUrl: string;
   documentFallbackReason: string;
   pdfDocumentStatus: string;
+  conditionReferenceFallbackCategory: string;
+  conditionReferenceStatus: string;
+  conditionReferenceUserMessage: string;
   pdfDocumentFallbackCategory: string;
   pdfDocumentUserMessage: string;
   pdfPreviewPagesAvailable: number;

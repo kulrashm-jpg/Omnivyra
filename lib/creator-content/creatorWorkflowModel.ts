@@ -50,6 +50,16 @@ export type CreatorResult = {
           pdf_document_fallback_category?: 'storage_mime_blocked' | 'storage_permission' | 'storage_unavailable' | 'unknown_storage_error';
           pdf_document_user_message?: string;
           pdf_preview_pages_available?: number;
+          /**
+           * CONDITION graceful degradation block — the same status / category /
+           * user_message shape as the PDF block above, for the case where a
+           * user's reference image could not be applied and generation fell
+           * back. ABSENT on ordinary and successful-CONDITION results; their
+           * absence is what distinguishes them.
+           */
+          condition_reference_status?: 'not_applied';
+          condition_reference_fallback_category?: 'edit_failed' | 'edit_no_image';
+          condition_reference_user_message?: string;
           width?: number;
           height?: number;
           overlay_quality?: {

@@ -124,9 +124,43 @@ export type CreatorReviewPreviewInput = {
   };
 };
 
+/**
+ * Why a user's CONDITION reference did not reach the finished image.
+ *
+ * Machine-readable and stable — never prose. `edit_failed` is "the edit call
+ * did not complete"; `edit_no_image` is "it completed and returned nothing
+ * usable". They are separated because they point at different causes, and the
+ * second one used to fall out of the try with no record at all.
+ */
+export type ConditionDegradationCategory = 'edit_failed' | 'edit_no_image';
+
+/**
+ * The same three-part shape the document lane already ships
+ * (`pdf_document_status` / `pdf_document_fallback_category` /
+ * `pdf_document_user_message`): a status, a machine-readable category, and copy
+ * a client can display as-is.
+ *
+ * Kept as its own Creator-image type rather than reusing the PDF one — the two
+ * describe different subjects and sharing the literal type would couple the
+ * image lane to document semantics.
+ *
+ * `userMessage` never carries provider text. The provider's own error is an
+ * internal diagnostic; what reaches a person is a fixed sentence.
+ */
+export type ConditionDegradation = {
+  status: 'not_applied';
+  category: ConditionDegradationCategory;
+  userMessage: string;
+};
+
 export type ProviderImageResult =
-  | { image: { buffer: Buffer; model: string }; fallbackReason?: never }
-  | { image: null; fallbackReason: string };
+  | {
+      image: { buffer: Buffer; model: string };
+      fallbackReason?: never;
+      /** Present ONLY when conditioning was attempted and could not be applied. */
+      conditionDegradation?: ConditionDegradation | null;
+    }
+  | { image: null; fallbackReason: string; conditionDegradation?: ConditionDegradation | null };
 
 export type RenderOptions = {
   campaignId?: string | null;

@@ -266,6 +266,18 @@ export default function CreatorTypeWorkflowPage() {
   const pdfDocumentFallbackCategory = typeof previewMetadata.pdf_document_fallback_category === 'string'
     ? previewMetadata.pdf_document_fallback_category
     : '';
+  // CONDITION disclosure — read exactly like the PDF block above, because it is
+  // the same contract: status / machine-readable category / ready-to-display
+  // copy. Empty on ordinary and successful-CONDITION results.
+  const conditionReferenceStatus = typeof previewMetadata.condition_reference_status === 'string'
+    ? previewMetadata.condition_reference_status
+    : '';
+  const conditionReferenceFallbackCategory = typeof previewMetadata.condition_reference_fallback_category === 'string'
+    ? previewMetadata.condition_reference_fallback_category
+    : '';
+  const conditionReferenceUserMessage = typeof previewMetadata.condition_reference_user_message === 'string'
+    ? previewMetadata.condition_reference_user_message
+    : '';
   const pdfDocumentUserMessage = typeof previewMetadata.pdf_document_user_message === 'string'
     ? previewMetadata.pdf_document_user_message
     : '';
@@ -367,6 +379,9 @@ export default function CreatorTypeWorkflowPage() {
     overlayFieldSuggestions,
     overlayQuality,
     overlayText,
+    conditionReferenceFallbackCategory,
+    conditionReferenceStatus,
+    conditionReferenceUserMessage,
     pdfDocumentFallbackCategory,
     pdfDocumentStatus,
     pdfDocumentUserMessage,
