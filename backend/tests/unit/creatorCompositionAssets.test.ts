@@ -131,7 +131,6 @@ import {
   detachCreatorCompositionAsset,
   changeCreatorCompositionAssetUsage,
   listCreatorAssetUsages,
-  storageKeyFromMediaPath,
 } from '../../services/creator/creatorCompositionAssetService';
 import {
   CREATOR_ASSET_USAGE_OPTIONS,
@@ -152,20 +151,27 @@ const USER_A = 'user-a';
 const USER_B = 'user-b';
 const COMP = 'creator_image_1700000000_abc';
 
-/** Seed a stored upload exactly as mediaService writes it. */
-function seedUpload(userId: string, name = 'person.png'): string {
+/**
+ * Seed a stored upload as production media_files ACTUALLY records it.
+ *
+ * This fixture used to carry storage_bucket / file_path / mime_type / file_size
+ * / width / height / file_url. None of those columns exist in production — it
+ * described the INTENDED schema, which is exactly why the suite stayed green
+ * while registration was impossible against the real table (Phase 65).
+ */
+function seedUpload(userId: string, name = 'product.png'): string {
   const id = `mf-${++seq}`;
   mediaFiles.push({
     id,
     user_id: userId,
-    storage_bucket: 'media-images',
-    file_path: `media-images/${userId}/${Date.now()}-${name}`,
-    mime_type: 'image/png',
-    file_size: 2048,
-    width: 1200,
-    height: 800,
     file_name: name,
-    file_url: `https://cdn.example/${name}`,
+    original_name: name,
+    file_type: 'image/png',
+    file_size_bytes: 2048,
+    storage_url:
+      `https://ref.supabase.co/storage/v1/object/public/media-images/${userId}/1700000000-${name}`,
+    dimensions: '1200x800',
+    metadata: { width: 1200, height: 800 },
   });
   return id;
 }
@@ -189,11 +195,15 @@ describe('A — an upload becomes a canonical media asset', () => {
     expect(asset.byteSize).toBe(2048);
   });
 
-  it('stores the storage KEY, not the bucket-prefixed path', () => {
-    // mediaService writes `<bucket>/<key>`; Storage addresses `<key>`.
-    expect(storageKeyFromMediaPath('media-images', 'media-images/u/1-a.png')).toBe('u/1-a.png');
-    expect(storageKeyFromMediaPath('media-images', 'u/1-a.png')).toBe('u/1-a.png');
-    expect(storageKeyFromMediaPath('', 'u/1-a.png')).toBe('u/1-a.png');
+  it('stores the storage KEY and bucket separately, as the storage API takes them', async () => {
+    // The location is recovered from `storage_url` by parseMediaStorageLocator.
+    // `storageKeyFromMediaPath` is gone — it parsed `file_path`, a column that
+    // does not exist in production, and a second parser invites reuse.
+    const mf = seedUpload(USER_A);
+    const asset = await registerUploadedMediaAsset({ companyId: CO_A, userId: USER_A, mediaFileId: mf });
+    expect(asset.storageBucket).toBe('media-images');
+    expect(asset.storagePath).toBe(`${USER_A}/1700000000-product.png`);
+    expect(asset.storagePath.startsWith('media-images')).toBe(false);
   });
 
   it('carries NO usage on the asset — usage belongs to the relationship', async () => {
@@ -225,7 +235,7 @@ describe('A — an upload becomes a canonical media asset', () => {
 
   it('refuses a non-image upload', async () => {
     const mf = seedUpload(USER_A);
-    (mediaFiles.find((m) => m.id === mf) as Row).mime_type = 'application/pdf';
+    (mediaFiles.find((m) => m.id === mf) as Row).file_type = 'application/pdf';
     await expect(registerUploadedMediaAsset({ companyId: CO_A, userId: USER_A, mediaFileId: mf }))
       .rejects.toThrow(/Only image uploads/i);
   });
@@ -323,7 +333,9 @@ describe('C — asset and reference are correctly linked', () => {
     expect(items).toHaveLength(1);
     expect(items[0].reference.assetId).toBe(asset.id);
     expect(items[0].asset?.id).toBe(asset.id);
-    expect(items[0].asset?.sourceUrl).toContain('https://cdn.example/');
+    // sourceUrl is provenance: the storage_url the server itself wrote. It is
+    // never read back to address the object — bucket/path are.
+    expect(items[0].asset?.sourceUrl).toContain('/storage/v1/object/public/media-images/');
   });
 
   it('a composition with no uploads reads as empty — the image is optional', async () => {
