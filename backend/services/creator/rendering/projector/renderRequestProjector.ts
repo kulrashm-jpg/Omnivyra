@@ -18,6 +18,10 @@ import {
   getCreatorAsset,
 } from '../../intelligence/canonical';
 import { computeDeterministicInputHash } from '../contracts';
+// THE feature gate for reference-conditioned generation. Behaviour-identical to
+// the inline comparison this replaces; routed through the one function so the
+// gate has a single definition rather than four copies that can drift.
+import { creatorImageReferenceModeEnabled } from '../../creatorMultimodalReferences';
 import type { RenderSpec, RenderModality } from '../contracts';
 import {
   sanitizeRenderProjection,
@@ -138,7 +142,7 @@ export function projectRenderRequest(
       // Style reference (img2img) — included ONLY when the render-layer flag is on,
       // the family is image, and production supplied a reference URL. Absent by
       // default so the deterministic hash + output stay byte-identical.
-      ...(process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit'
+      ...(creatorImageReferenceModeEnabled()
         && canonical_asset_family === 'image'
         && typeof production.reference_image_url === 'string'
         && (production.reference_image_url as string).trim()

@@ -120,7 +120,11 @@ describe('A — no references: existing behaviour is untouched', () => {
     // Decision A: canonical references enter through a DIFFERENT seam
     // (additionalReferences); the flag-gated img2img showcase remains exactly
     // as it was and is not superseded.
-    expect(strip(IMAGE)).toContain("process.env.CREATOR_IMAGE_REFERENCE_MODE !== 'edit'");
+    // The gate moved behind ONE function so the canonical and legacy lanes
+    // cannot drift apart. The showcase is governed by exactly that gate, and by
+    // nothing else — which is the invariant this guard was always protecting.
+    expect(strip(IMAGE)).toContain('!creatorImageReferenceModeEnabled()');
+    expect(strip(IMAGE)).not.toMatch(/process\.env\.CREATOR_IMAGE_REFERENCE_MODE/);
     expect(strip(IMAGE)).toContain('creator-showcases/');
     expect(strip(IMAGE)).toContain('referenceImageUrl,');
   });

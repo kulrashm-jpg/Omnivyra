@@ -20,6 +20,10 @@ import type {
   ProviderStatus,
   RenderOutputRef,
 } from '../contracts';
+// THE feature gate for reference-conditioned generation. Behaviour-identical to
+// the inline comparison this replaces; routed through the one function so the
+// gate has a single definition rather than four copies that can drift.
+import { creatorImageReferenceModeEnabled } from '../../creatorMultimodalReferences';
 
 const SUPPORTED = [
   { w: 1024, h: 1024 }, { w: 1080, h: 1080 },
@@ -104,7 +108,7 @@ export function createOpenAIRenderProvider(
     // no ref, fetch 404, provider error) falls through to the plain text-to-image
     // path below — so this can never break existing generation.
     const referenceUrl = spec.blueprint_projection.reference_image_url;
-    if (process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit' && typeof referenceUrl === 'string' && referenceUrl.trim()) {
+    if (creatorImageReferenceModeEnabled() && typeof referenceUrl === 'string' && referenceUrl.trim()) {
       try {
         const refResp = await doFetch(referenceUrl.trim());
         if (refResp.ok) {
