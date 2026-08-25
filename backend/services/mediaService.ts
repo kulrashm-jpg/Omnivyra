@@ -21,6 +21,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import { supabase } from '../db/supabaseClient';
+import { parseMediaStorageLocator } from '../../lib/content/mediaStorageLocator';
 
 export type MediaType = 'image' | 'video' | 'audio' | 'document';
 
@@ -39,6 +40,8 @@ export interface MediaFile {
   duration?: number;
   storage_provider: string;
   storage_bucket: string;
+  /** The authoritative production locator — see mediaStorageLocator. */
+  storage_url?: string | null;
   metadata: Record<string, any>;
   created_at: string;
   updated_at: string;
@@ -407,15 +410,32 @@ export async function deleteMediaFile(mediaId: string): Promise<void> {
     throw new Error('Media file not found');
   }
 
-  // Delete from storage
-  const fileName = mediaFile.file_path.split('/').slice(1).join('/'); // Remove bucket name
-  const { error: storageError } = await supabase.storage
-    .from(mediaFile.storage_bucket)
-    .remove([fileName]);
+  /*
+   * The object's location comes from `storage_url`, through the ONE shared
+   * parser.
+   *
+   * This read `mediaFile.file_path.split('/')` and `mediaFile.storage_bucket` —
+   * neither column exists in production, so every delete threw
+   * "Cannot read properties of undefined (reading 'split')" and no media file
+   * could be removed at all. Deriving the location from a column that is
+   * actually written is what makes deletion work.
+   *
+   * An unparseable locator does NOT fall back to a guessed bucket: removing the
+   * wrong object is far worse than leaving this one. The row is still deleted,
+   * matching the pre-existing behaviour for a failed storage removal.
+   */
+  const locator = parseMediaStorageLocator(mediaFile.storage_url);
+  if (!locator.ok) {
+    console.warn(`Skipping storage delete for ${mediaId}: ${locator.error}`);
+  } else {
+    const { error: storageError } = await supabase.storage
+      .from(locator.bucket)
+      .remove([locator.path]);
 
-  if (storageError) {
-    console.warn(`Failed to delete from storage: ${storageError.message}`);
-    // Continue to delete DB record even if storage deletion fails
+    if (storageError) {
+      console.warn(`Failed to delete from storage: ${storageError.message}`);
+      // Continue to delete DB record even if storage deletion fails
+    }
   }
 
   // Delete from database

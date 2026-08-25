@@ -49,31 +49,29 @@ import {
   CREATOR_COMPOSITION_TYPE,
   isCreatorAssetUsagePurpose,
 } from '../../../lib/content/creatorCompositionAsset';
+import {
+  parseMediaStorageLocator,
+  parseMediaDimensions,
+} from '../../../lib/content/mediaStorageLocator';
 
-/** A stored upload, as `media_files` records it. */
+/**
+ * A stored upload, as production `media_files` ACTUALLY records it.
+ *
+ * This previously named `storage_bucket`, `file_path`, `mime_type`, `file_size`,
+ * `width`, `height` and `file_url` — none of which exist on the production
+ * table. The SELECT itself failed ("column media_files.storage_bucket does not
+ * exist"), so canonical registration could never succeed against production.
+ * The fields below are the real ones; `storage_url` carries the location.
+ */
 interface MediaFileRow {
   id: string;
   user_id: string | null;
-  storage_bucket: string | null;
-  file_path: string | null;
-  mime_type: string | null;
-  file_size: number | null;
-  width: number | null;
-  height: number | null;
+  storage_url: string | null;
+  file_type: string | null;
+  file_size_bytes: number | null;
+  dimensions: string | null;
+  metadata: unknown;
   file_name: string | null;
-  file_url: string | null;
-}
-
-/**
- * `mediaService` writes `file_path` as `<bucket>/<key>` while Supabase Storage
- * addresses the object by `<key>` alone. `canonical_media_assets` stores bucket
- * and path as the two separate values the storage API actually takes, so strip
- * the redundant prefix rather than persisting a path that resolves to nothing.
- */
-export function storageKeyFromMediaPath(bucket: string, filePath: string): string {
-  const b = String(bucket || '').replace(/^\/+|\/+$/g, '');
-  const p = String(filePath || '').replace(/^\/+/, '');
-  return b && p.startsWith(`${b}/`) ? p.slice(b.length + 1) : p;
 }
 
 export interface RegisterUploadedAssetInput {
@@ -109,7 +107,7 @@ export async function registerUploadedMediaAsset(
 
   const { data, error } = await supabase
     .from('media_files')
-    .select('id, user_id, storage_bucket, file_path, mime_type, file_size, width, height, file_name, file_url')
+    .select('id, user_id, storage_url, file_type, file_size_bytes, dimensions, metadata, file_name')
     .eq('id', mediaFileId)
     .maybeSingle();
   if (error) throw new Error(`Failed to read uploaded file: ${error.message}`);
@@ -122,15 +120,27 @@ export async function registerUploadedMediaAsset(
     throw new Error('Uploaded file not found for this user');
   }
 
-  const bucket = String(row.storage_bucket || '').trim();
-  const filePath = String(row.file_path || '').trim();
-  if (!bucket || !filePath) throw new Error('Uploaded file has no storage location');
-  const storagePath = storageKeyFromMediaPath(bucket, filePath);
+  /*
+   * The location comes from `storage_url`, which the server itself wrote via
+   * `getPublicUrl`. It is parsed — never trusted from a caller and never
+   * rebuilt into a URL — and a locator that is not a known-bucket public
+   * object fails closed rather than resolving to a guessed object.
+   */
+  const locator = parseMediaStorageLocator(row.storage_url);
+  if (!locator.ok) {
+    throw new Error(`Uploaded file has no usable storage location: ${locator.error}`);
+  }
+  const bucket = locator.bucket;
+  const storagePath = locator.path;
 
-  const mimeType = String(row.mime_type || '').trim();
+  const mimeType = String(row.file_type || '').trim();
   if (!mimeType.startsWith('image/')) {
     throw new Error('Only image uploads can be attached to a composition');
   }
+
+  // Absent or unparseable dimensions stay NULL. A guessed size would be
+  // indistinguishable downstream from a measured one.
+  const { width, height } = parseMediaDimensions(row.dimensions, row.metadata);
 
   // Reuse rather than duplicate — the storage pair is UNIQUE, and the same file
   // registered twice is the same asset.
@@ -143,11 +153,13 @@ export async function registerUploadedMediaAsset(
     storageBucket: bucket,
     storagePath,
     mimeType,
-    byteSize: typeof row.file_size === 'number' ? row.file_size : null,
-    width: typeof row.width === 'number' ? row.width : null,
-    height: typeof row.height === 'number' ? row.height : null,
+    byteSize: typeof row.file_size_bytes === 'number' ? row.file_size_bytes : null,
+    width,
+    height,
     originalFilename: row.file_name ?? null,
-    sourceUrl: row.file_url ?? null,
+    // Provenance only — the canonical record of where this row came from. It is
+    // never read back to address the object; `storageBucket`/`storagePath` are.
+    sourceUrl: row.storage_url ?? null,
     origin: 'upload',
     // Trace only — how this canonical row came to exist. No application
     // semantics, and emphatically no usage: usage is the relationship's job.
