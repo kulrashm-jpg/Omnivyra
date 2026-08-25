@@ -89,6 +89,12 @@ import { buildStatCardSvg, buildQuoteCardSvg, buildSplitCardSvg, buildTwoColumnC
 import { buildStyleCardSvg, buildOverlaySvg, loadBrandMark, normalizeBackgroundBuffer } from './creatorAssetRendererOverlay';
 import { buildAiImagePrompt } from './creatorAssetRendererSvg';
 import { generateProviderImage, uploadRenderedPng, type AttachmentRenderPolicy, resolveImageSubtype, resolveCanonicalRenderPolicy } from './creatorAssetRendererMedia';
+// THE feature gate for reference-conditioned generation — one definition,
+// shared with the provider seam.
+import {
+  creatorImageReferenceModeEnabled,
+  resolveCreatorImageEndpoint,
+} from './creator/creatorMultimodalReferences';
 
 export async function composeSingleVisualAsset(
   assetPayload: Record<string, unknown>,
@@ -272,7 +278,9 @@ export async function composeSingleVisualAsset(
   // image so the provider can condition on it. Null unless the flag is on and a
   // blueprint id is present → plain text-to-image (unchanged).
   const referenceImageUrl = (() => {
-    if (process.env.CREATOR_IMAGE_REFERENCE_MODE !== 'edit') return null;
+    // Same gate, read through the one function rather than re-testing the
+    // environment, so the legacy and canonical lanes cannot drift apart.
+    if (!creatorImageReferenceModeEnabled()) return null;
     const bpId = typeof metadata.blueprint_id === 'string' ? metadata.blueprint_id.trim() : '';
     if (!bpId) return null;
     const base = String(process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'https://www.omnivyra.com').replace(/\/$/, '');
@@ -293,7 +301,12 @@ export async function composeSingleVisualAsset(
       companyId: condition.companyId,
       condition: condition.condition,
       providerId: 'openai-gpt-image-1',
-      endpoint: 'edit',
+      // THE GATE. With CREATOR_IMAGE_REFERENCE_MODE off this resolves to
+      // 'generate', whose capability row accepts no reference images — so the
+      // service returns no bytes, never reads storage for a reference that
+      // could not have been sent, and reports degradedToText. The references
+      // themselves stay resolved and durable; only DELIVERY is disabled.
+      endpoint: resolveCreatorImageEndpoint(),
     });
     if (resolved.rejected.length > 0) {
       console.warn('[creator-asset-renderer][condition-rejected]', resolved.rejected);

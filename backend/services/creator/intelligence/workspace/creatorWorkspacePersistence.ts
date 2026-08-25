@@ -22,6 +22,10 @@
  */
 
 import { getPlatformVariation } from '../planning/platformVariation';
+// THE feature gate for reference-conditioned generation. Behaviour-identical to
+// the inline comparison this replaces; routed through the one function so the
+// gate has a single definition rather than four copies that can drift.
+import { creatorImageReferenceModeEnabled } from '../../creatorMultimodalReferences';
 // Step-13 Phase-8 cutover: human-production truth derives from the
 // canonical CreatorAssetRegistry (behavior-preserving for reel/video/
 // short; de-drifts aliases like reels/tiktok/youtube_short).
@@ -329,7 +333,7 @@ export function fromPersistedCreatorRow(
       // img2img style reference (flag-gated): point at the curated template's
       // showcase image so a reference-capable provider can condition on it. No-op
       // unless CREATOR_IMAGE_REFERENCE_MODE='edit' and a blueprint id is known.
-      ...(process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit'
+      ...(creatorImageReferenceModeEnabled()
         ? (() => {
             const bpId = asStr((persistedMeta as Record<string, unknown>).blueprint_id);
             const fam = String(assetType || 'image');

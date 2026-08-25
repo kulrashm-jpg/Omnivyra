@@ -95,6 +95,50 @@ export function resolveProviderCapabilities(
   return CAPABILITY_REGISTRY[providerId] ?? CAPABILITY_REGISTRY['openai-gpt-image-1'];
 }
 
+/* ── The feature gate ────────────────────────────────────────────────────────
+ *
+ * THE single environment read governing reference-conditioned generation.
+ *
+ * `images.edit` is the only operation that can consume a reference image, and
+ * the repository has gated that operation behind CREATOR_IMAGE_REFERENCE_MODE
+ * since the img2img spike. The canonical CONDITION lane arrived without
+ * consulting it — deliberately, while nothing called the resolver — and that
+ * became a live release-safety hole the moment the lane got a runtime caller:
+ * an attached image would reach the model in a release whose intended state is
+ * OFF, and nothing would say so.
+ *
+ * The gate is expressed as WHICH ENDPOINT a render may call rather than as a
+ * boolean tested near the provider. That is deliberate: the capability matrix
+ * above already knows `generate` accepts no reference images, so with the gate
+ * off the condition lane degrades to text descriptors through machinery that
+ * exists, is tested, and already reports honestly what it did. A second branch
+ * around the provider call would have needed its own degradation reporting and
+ * its own way to be wrong.
+ *
+ * SCOPE. This governs CONDITION delivery only. COMPOSE is deterministic
+ * placement of exact pixels — a different guarantee, no model involved — and is
+ * untouched by it. Upload, canonical asset persistence, reference persistence
+ * and template slots are likewise untouched, so references keep accumulating
+ * durably while delivery is off and enabling the flag later needs no backfill.
+ */
+
+/**
+ * Is reference-conditioned generation enabled?
+ *
+ * Exact match on the one supported value. Anything else — unset, empty, `off`,
+ * `Edit`, a trailing space — is OFF, matching the comparison this repository
+ * has always used. A gate that also accepts the spellings it was not told about
+ * is a gate that opens on a typo.
+ */
+export function creatorImageReferenceModeEnabled(): boolean {
+  return process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit';
+}
+
+/** The endpoint a render may call, given the gate. */
+export function resolveCreatorImageEndpoint(): ProviderImageEndpoint {
+  return creatorImageReferenceModeEnabled() ? 'edit' : 'generate';
+}
+
 /* ── Payload assembly ───────────────────────────────────────────────── */
 
 export type MultimodalImagePayload = {

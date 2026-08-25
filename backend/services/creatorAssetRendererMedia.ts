@@ -86,6 +86,9 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 ensureRenderFonts();
 import { type ProviderImageResult, IMAGE_BUCKET, DOCUMENT_BUCKET, AI_IMAGE_TIMEOUT_MS, AI_IMAGE_SIZE, bucketReadyByName, safeObject, getOverlayPreset } from './creatorAssetRendererContracts';
 import { timeoutAfter, getFirstImageResult, bufferFromRemoteImage, resolveOpenAiImageKey } from './creatorAssetRendererSvg';
+// THE feature gate for reference-conditioned generation — one definition,
+// shared with the renderer that decides which endpoint it may call.
+import { creatorImageReferenceModeEnabled } from './creator/creatorMultimodalReferences';
 
 export async function generateProviderImage(input: {
   prompt: string;
@@ -151,12 +154,18 @@ export async function generateProviderImage(input: {
   // output resembles the picked template. ANY failure (flag off, no ref, fetch
   // 404, edit unsupported, provider error) falls through to the plain
   // text-to-image loop below — it can never break existing generation.
+  // THE GATE, applied once and to BOTH sources.
+  //
+  // The caller already declines to fetch bytes when the gate is off; this is
+  // the second, independent check. A caller that hands bytes in directly — a
+  // future entry point, a test, a mistake — still cannot reach the endpoint.
+  //
+  // Canonical references retain their precedence over the showcase URL when the
+  // gate IS on: a user's own reference is a stronger signal than a template's
+  // style sample. What changed is that they no longer bypass the gate.
+  const referenceModeEnabled = creatorImageReferenceModeEnabled();
   const referenceUrl = input.referenceImageUrl;
-  const canonicalRefs = input.referenceImages ?? [];
-  // Canonical CONDITION bytes take precedence over the flag-gated showcase URL:
-  // a user's own reference is a stronger signal than a template's style sample,
-  // and unlike the showcase it is not gated behind CREATOR_IMAGE_REFERENCE_MODE
-  // because it only exists when a user deliberately attached something.
+  const canonicalRefs = referenceModeEnabled ? (input.referenceImages ?? []) : [];
   if (canonicalRefs.length > 0) {
     const editModel = modelCandidates[0];
     const editStartedAt = Date.now();
@@ -210,7 +219,7 @@ export async function generateProviderImage(input: {
         (err as Error)?.message?.slice(0, 200));
     }
   }
-  if (process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit' && typeof referenceUrl === 'string' && referenceUrl.trim()) {
+  if (referenceModeEnabled && typeof referenceUrl === 'string' && referenceUrl.trim()) {
     const editModel = modelCandidates[0];
     const editStartedAt = Date.now();
     try {

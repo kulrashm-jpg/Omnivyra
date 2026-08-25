@@ -289,12 +289,18 @@ describe('H — one provider invocation', () => {
   });
 
   it('the showcase path is unchanged and still flag-gated', () => {
-    expect(MEDIA).toContain("process.env.CREATOR_IMAGE_REFERENCE_MODE === 'edit'");
+    // Same gate, read through the one function rather than re-testing the
+    // environment — so the canonical and legacy lanes cannot diverge.
+    expect(MEDIA).toMatch(/if \(referenceModeEnabled && typeof referenceUrl/);
+    expect(MEDIA).not.toMatch(/process\.env\.CREATOR_IMAGE_REFERENCE_MODE/);
     expect(MEDIA).toContain('reference.${refExt}');
   });
 
   it('absent references change nothing', () => {
-    expect(MEDIA).toContain('const canonicalRefs = input.referenceImages ?? [];');
+    // Canonical bytes are now gated too. They were deliberately exempt when the
+    // lane had no runtime caller and could not fire; once it had one, that
+    // exemption became a way to reach the model in a release meant to be OFF.
+    expect(MEDIA).toContain('referenceModeEnabled ? (input.referenceImages ?? []) : []');
     expect(MEDIA).toContain('if (canonicalRefs.length > 0) {');
   });
 });
