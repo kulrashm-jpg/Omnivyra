@@ -17,6 +17,7 @@ import { fitSlideArcToCount } from './creator/purposeStrategyRegistry';
 import { resolveTemplateStyle } from '../../lib/creator-outcomes/creatorVisualStyleRegistry';
 import { isBetaAiRenderMode, createBetaMockImage, BETA_MOCK_MODEL } from './creator/rendering/providers/betaMockRenderProvider';
 import { creatorEvent } from './creatorObservation';
+import { emitCreatorEvent, CREATOR_EVENTS } from './creatorOperationalTelemetryService';
 import { recordCreatorDuration } from './creatorRuntimeMetrics';
 import { validateProviderImageTextSafety } from './creatorImageTextValidation';
 import { runCreatorOcr, isLightweightSocialEmbeddedCopy } from './creatorOcrProvider';
@@ -364,6 +365,39 @@ export async function composeSingleVisualAsset(
     provider: providerOcr?.provider,
   });
   const providerImage = providerResult.image;
+
+  /*
+   * A CONDITION attempt that could not be applied is reported ONCE, here.
+   *
+   * Emitted from the renderer rather than the provider wrapper because this is
+   * where the composition context lives — purpose and mode come from the routed
+   * reference, and the wrapper knows neither. One event per failed attempt: the
+   * category distinguishes the two causes, and the fallback is implied by it,
+   * so no second "fallback happened" event is needed.
+   *
+   * Structured fields only. No provider text, no storage path, no URL, no bytes,
+   * no filename, no prompt — the category already says what happened.
+   */
+  const conditionDegradation = providerResult.conditionDegradation ?? null;
+  if (conditionDegradation) {
+    const routed = options.compositionReferences?.conditionPlan?.condition ?? [];
+    emitCreatorEvent({
+      event: CREATOR_EVENTS.CONDITION_REFERENCE_DEGRADED,
+      severity: 'warning',
+      companyId: options.companyId ?? null,
+      metadata: {
+        stage: 'provider_edit',
+        category: conditionDegradation.category,
+        references: routed.length,
+        // purpose/mode come from the reference itself. Deliberately NOT
+        // `routed[0].sourceUrl`, which is a storage location and must never
+        // reach telemetry.
+        purpose: routed[0]?.reference?.purpose ?? null,
+        mode: routed[0]?.reference?.mode ?? null,
+      },
+    });
+  }
+
   const { width, height } = resolveRenderSize(platform, fileNamePrefix);
   const background = await normalizeBackgroundBuffer({
     providerBuffer: providerImage?.buffer ?? null,
@@ -517,6 +551,18 @@ export async function composeSingleVisualAsset(
     height,
     preview_kind: 'social_creative',
     provider_model: providerImage?.model,
+    /*
+     * The same three-part disclosure the document lane already ships
+     * (`pdf_document_status` / `_fallback_category` / `_user_message`), so the
+     * client renders it the way it already renders that one.
+     *
+     * UNDEFINED on the ordinary and successful-CONDITION paths — an absent
+     * marker is what makes those two clean, and `provider_model: …:edit` alone
+     * was never sufficient to tell a degraded result from an ordinary one.
+     */
+    condition_reference_status: conditionDegradation?.status,
+    condition_reference_fallback_category: conditionDegradation?.category,
+    condition_reference_user_message: conditionDegradation?.userMessage,
     image_subtype: subtypeHint?.subtypeId ?? null,
     attachment_mode: metadata.attachment_mode ?? null,
     writer_asset_type: metadata.writer_asset_type ?? null,

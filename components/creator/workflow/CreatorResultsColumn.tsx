@@ -46,6 +46,9 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
     isThemeTreatment,
     mediaUrls,
     overlayQuality,
+    conditionReferenceFallbackCategory,
+    conditionReferenceStatus,
+    conditionReferenceUserMessage,
     pdfDocumentFallbackCategory,
     pdfDocumentStatus,
     pdfDocumentUserMessage,
@@ -633,6 +636,21 @@ export default function CreatorResultsColumn({ ctx }: { ctx: CreatorWorkflowCtx 
                       {isDirectionCardPreview ? (
                         <p className="mt-2 rounded-2xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
                           Image provider preview was not available, so this output is showing a generated direction card. Customize or regenerate to try again.
+                        </p>
+                      ) : null}
+                      {/* The user attached a reference and it could not be applied.
+                        * Saying so is the point: without it this result is
+                        * indistinguishable from an ordinary generation, and the
+                        * attachment panel already told them the image would be
+                        * "used as a reference for this design". Same amber
+                        * treatment as the degradation notice above. */}
+                      {conditionReferenceStatus === 'not_applied' ? (
+                        <p
+                          className="mt-2 rounded-2xl border border-amber-100 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800"
+                          data-condition-fallback={conditionReferenceFallbackCategory || 'unknown'}
+                        >
+                          {conditionReferenceUserMessage
+                            || 'Your reference image could not be applied, so this result was generated without it. Regenerate to try again.'}
                         </p>
                       ) : null}
                       {overlayQuality?.flags?.length ? (
