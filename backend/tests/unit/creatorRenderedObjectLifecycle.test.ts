@@ -301,18 +301,20 @@ const SVC = strip(read('../../services/creatorAssetPersistenceService.ts'));
 
 describe('E — mutation guards on the shipped code', () => {
   it('M1: rendered-object deletion is invoked from the delete path', () => {
-    expect(SVC).toContain('removeRenderedObjectForDeletedAsset(input.companyId,');
+    expect(SVC).toContain('await removeRenderedObjectsForDeletedAsset(');
     expect(SVC).toContain('.remove([path])');
   });
 
   it('M2: the DB delete precedes the storage call in source order', () => {
     expect(SVC.indexOf("ownedDbTable('creator_assets')\n    .delete()"))
-      .toBeLessThan(SVC.indexOf('removeRenderedObjectForDeletedAsset(input.companyId,'));
+      .toBeLessThan(SVC.indexOf('await removeRenderedObjectsForDeletedAsset('));
   });
 
   it('M3/M9: the location is parsed from the row by the EXISTING parser', () => {
     expect(SVC).toContain('parseStorageReference(url)');
-    expect(SVC).toContain(".select('id, url')");
+    // Phase 78 widened this projection: `url` alone orphaned every slide of a
+    // carousel but the first, plus its PDF.
+    expect(SVC).toContain("    .select('id, url, files, metadata');");
     // Exactly one parser in the file — no duplicate.
     expect((SVC.match(/function parseStorageReference/g) ?? [])).toHaveLength(1);
   });

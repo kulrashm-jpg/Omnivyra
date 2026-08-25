@@ -131,6 +131,34 @@ export async function regenerateCreatorAssetSignedUrl(input: {
   return { signedUrl: data?.signedUrl || null, bucket: reference.bucket, path: reference.path };
 }
 
+/**
+ * EVERY storage URL a creator asset row owns — the one definition.
+ *
+ * A single-visual render owns exactly `url`. A carousel owns N slides in
+ * `files[]` (with `url` being `files[0]`) AND a separate PDF in
+ * `metadata.document_url`. Deletion previously read `url` alone, so removing a
+ * carousel left N-1 slides and the document behind permanently.
+ *
+ * Extracted from `buildStorageReferences`, which already collected exactly this
+ * set for the integrity report, so the report and the deletion path cannot
+ * disagree about what a row owns. Deduplicated: the same object may legitimately
+ * appear in more than one field (`url` IS `files[0]`), and it must be removed
+ * at most once.
+ */
+function renderedObjectUrlsForRow(row: {
+  url?: string | null;
+  files?: unknown;
+  metadata?: unknown;
+}): string[] {
+  const metadata = safeObject(row.metadata);
+  const urls = [
+    typeof row.url === 'string' ? row.url : null,
+    ...normalizeFiles(row.files),
+    typeof metadata.document_url === 'string' ? metadata.document_url : null,
+  ].filter((value): value is string => Boolean(value && value.trim()));
+  return Array.from(new Set(urls));
+}
+
 function buildStorageReferences(input: {
   url?: string | null;
   files?: string[];
@@ -138,14 +166,7 @@ function buildStorageReferences(input: {
   companyId: string;
   userId: string;
 }): CreatorAssetIntegrityReport['storageReferences'] {
-  const metadata = safeObject(input.metadata);
-  const urls = [
-    input.url,
-    ...normalizeFiles(input.files),
-    typeof metadata.document_url === 'string' ? metadata.document_url : null,
-  ].filter((value): value is string => Boolean(value));
-
-  return Array.from(new Set(urls)).map((url) => {
+  return renderedObjectUrlsForRow(input).map((url) => {
     const parsed = parseStorageReference(url);
     const path = parsed.path || '';
     return {
@@ -697,26 +718,73 @@ export async function deleteCreatorAssetRecord(input: {
     // Best-effort: attachment cleanup failure must not block asset delete.
   }
 
-  // `url` is projected so the DELETE itself hands back the rendered object's
-  // location. Reading it from the deleted row — rather than from a caller — is
-  // what makes an arbitrary storage path unexpressible here.
+  // `url`, `files` and `metadata` are projected so the DELETE itself hands back
+  // every location the row owned. Reading them from the deleted row — rather
+  // than from a caller — is what makes an arbitrary storage path unexpressible
+  // here. Projecting `url` alone was the defect: a carousel owns N slides and a
+  // document, and only the first slide was ever removed.
   const { data, error } = await ownedDbTable('creator_assets')
     .delete()
     .eq('id', input.assetId)
     .eq('company_id', input.companyId)
-    .select('id, url');
+    .select('id, url, files, metadata');
   if (error) throw new Error(`Failed to delete creator asset: ${error.message}`);
 
   const deletedAsset = Array.isArray(data) && data.length > 0;
   if (deletedAsset) {
-    // Row first, object second — the ordering Phase 64 settled. Supabase gives
+    // Row first, objects second — the ordering Phase 64 settled. Supabase gives
     // no transaction across database and storage, so the question is only which
     // residue is safer: orphaned bytes nothing reads (a cost), or a row
     // pointing at bytes that are gone (a defect the renderer would hit).
-    await removeRenderedObjectForDeletedAsset(input.companyId, (data as Array<{ url?: string | null }>)[0]?.url ?? null);
+    await removeRenderedObjectsForDeletedAsset(
+      input.companyId,
+      renderedObjectUrlsForRow((data as Array<Record<string, unknown>>)[0] ?? {}),
+    );
   }
 
   return { deletedAsset, deletedAttachments };
+}
+
+/**
+ * Bound on the sharer scan.
+ *
+ * The scan must SEE every remaining row to be sure an object is unreferenced.
+ * If a company has more rows than this, the answer would be incomplete — and an
+ * incomplete "nothing references it" is precisely the false negative that would
+ * widen deletion. So a truncated scan skips deletion rather than guessing.
+ */
+const SHARER_SCAN_LIMIT = 2000;
+
+/**
+ * Every `bucket/path` still referenced by the company's REMAINING creator
+ * assets, or `null` when that cannot be established completely.
+ *
+ * Read in JS rather than filtered in the query because `files` and `metadata`
+ * are jsonb: PostgREST cannot substring-match inside them, and matching on the
+ * full URL would not work either — a render's stored URL is normally SIGNED, so
+ * two rows pointing at the same object can carry different URL strings. The
+ * object identity is the bucket and key, which only parsing yields.
+ */
+async function referencedRenderPathsForCompany(companyId: string): Promise<Set<string> | null> {
+  try {
+    const { data, error } = await ownedDbTable('creator_assets')
+      .select('id, url, files, metadata')
+      .eq('company_id', companyId)
+      .limit(SHARER_SCAN_LIMIT);
+    if (error) return null;
+    const rows = Array.isArray(data) ? data : [];
+    if (rows.length >= SHARER_SCAN_LIMIT) return null;   // possibly truncated → refuse
+    const referenced = new Set<string>();
+    for (const row of rows as Array<Record<string, unknown>>) {
+      for (const url of renderedObjectUrlsForRow(row)) {
+        const { bucket, path } = parseStorageReference(url);
+        if (bucket && path) referenced.add(`${bucket}/${path}`);
+      }
+    }
+    return referenced;
+  } catch {
+    return null;
+  }
 }
 
 /** Buckets a creator render is ever written to (`creatorAssetRendererMedia`). */
@@ -725,46 +793,61 @@ const RENDER_BUCKETS: ReadonlySet<string> = new Set([IMAGE_BUCKET, DOCUMENT_BUCK
 const RENDER_NAMESPACE = 'creator/';
 
 /**
- * Remove the rendered object belonging to a creator asset that was just deleted.
+ * Remove EVERY rendered object belonging to a creator asset that was just
+ * deleted.
  *
  * WHY THIS EXISTS
  * ---------------
  * Deleting a creator asset removed the row and its attachments but left the
- * rendered image in storage forever. Nothing swept it: the janitor scans
+ * rendered images in storage forever. Nothing swept them: the janitor scans
  * `media-uploads`, renders live in `media-images`/`media-documents`, and it is
- * dormant regardless. So every user who deleted a generated image left its
- * bytes behind permanently.
+ * dormant regardless.
+ *
+ * Phase 74 closed that for single-visual assets. It read `url` alone, so a
+ * CAROUSEL — which owns N slides in `files[]` and a separate PDF in
+ * `metadata.document_url` — still orphaned everything except its first slide.
+ * This closes the rest.
+ *
+ * PER OBJECT, NOT ALL-OR-NOTHING. Each object is judged on its own: a shared
+ * slide is retained while its unshared siblings and the document are removed.
+ * That is the faithful extension of the single-object rule, not a new policy.
  *
  * FAIL-SOFT, MATCHING ITS SIBLINGS. The row is already gone and that deletion
  * is committed; `deleteMediaFile` and `deleteCanonicalMediaAsset` both warn and
- * continue when storage removal fails, so this does too rather than inventing a
- * third convention. The residue is an orphaned object, logged.
+ * continue when storage removal fails, so this does too. One object's failure
+ * never stops the others.
  *
- * REFUSES ANYTHING IT CANNOT PROVE. The location comes from the deleted row, is
- * parsed by the existing `parseStorageReference` (which already understands both
- * the signed and public URL shapes renders use), and must land inside the
- * creator render namespace of a known render bucket. Anything else is skipped —
- * deleting the wrong object is far worse than leaving this one.
+ * REFUSES ANYTHING IT CANNOT PROVE. Locations come from the deleted row, are
+ * parsed by the existing `parseStorageReference` (which already understands
+ * both the signed and public URL shapes renders use), and must land inside the
+ * creator render namespace OF THIS COMPANY in a known render bucket. Anything
+ * else is skipped — deleting the wrong object is far worse than leaving one.
  */
-async function removeRenderedObjectForDeletedAsset(
+async function removeRenderedObjectsForDeletedAsset(
   companyId: string,
-  url: string | null,
+  urls: string[],
 ): Promise<void> {
-  if (!url || !url.trim()) return;      // nothing was rendered for this row
+  if (!Array.isArray(urls) || urls.length === 0) return;   // nothing was rendered
   const skip = (reason: string) =>
     console.warn('[creator-asset][rendered-object-skipped]', { companyId, reason });
 
-  const { bucket, path } = parseStorageReference(url);
-  if (!bucket || !path) return skip('unparseable storage reference');
-  if (!RENDER_BUCKETS.has(bucket)) return skip(`bucket "${bucket}" is not a render bucket`);
-  if (path.split('/').some((seg) => seg === '..' || seg === '.')) return skip('path contains traversal');
-  // TENANT-SCOPED, not merely namespaced. `buildStorageReferences` already
-  // treats `creator/<companyId>/…` as the tenant-scoped shape; requiring it here
-  // means a row whose url somehow named another company's render still cannot
-  // reach that company's object.
-  if (!path.startsWith(`${RENDER_NAMESPACE}${companyId}/`)) {
-    return skip('path is outside this company\'s creator render namespace');
+  // Validate first, so a malformed sibling cannot cost the others their turn.
+  const targets = new Map<string, { bucket: string; path: string }>();
+  for (const url of urls) {
+    const { bucket, path } = parseStorageReference(url);
+    if (!bucket || !path) { skip('unparseable storage reference'); continue; }
+    if (!RENDER_BUCKETS.has(bucket)) { skip(`bucket "${bucket}" is not a render bucket`); continue; }
+    if (path.split('/').some((seg) => seg === '..' || seg === '.')) { skip('path contains traversal'); continue; }
+    // TENANT-SCOPED, not merely namespaced. `buildStorageReferences` already
+    // treats `creator/<companyId>/…` as the tenant-scoped shape; requiring it
+    // here means a row whose url somehow named another company's render still
+    // cannot reach that company's object.
+    if (!path.startsWith(`${RENDER_NAMESPACE}${companyId}/`)) {
+      skip("path is outside this company's creator render namespace"); continue;
+    }
+    targets.set(`${bucket}/${path}`, { bucket, path });   // dedup: remove at most once
   }
+  if (targets.size === 0) return;
 
   /*
    * SHARED OBJECT CHECK. The object key ends in a sha1 of the rendered bytes,
@@ -773,27 +856,22 @@ async function removeRenderedObjectForDeletedAsset(
    * one. Removing it while another row still points at it would leave that row
    * dangling, which is the failure this whole change exists to avoid.
    *
-   * Company-scoped, and deliberately over-inclusive: `_` in a path is a LIKE
-   * wildcard, so a false positive can only ever SKIP a delete, never widen one.
+   * The deleted row is already gone, so whatever remains IS the set of other
+   * owners. An indeterminate answer skips every object rather than guessing.
    */
-  try {
-    const { data: sharers } = await ownedDbTable('creator_assets')
-      .select('id')
-      .eq('company_id', companyId)
-      .ilike('url', `%${path}%`)
-      .limit(1);
-    if (Array.isArray(sharers) && sharers.length > 0) {
-      return skip('another creator asset still references this object');
-    }
-  } catch {
-    return skip('could not confirm the object is unreferenced');
+  const referenced = await referencedRenderPathsForCompany(companyId);
+  if (referenced === null) {
+    return skip('could not confirm the objects are unreferenced');
   }
 
-  try {
-    const { error } = await supabase.storage.from(bucket).remove([path]);
-    if (error) skip(`storage remove failed: ${error.message}`);
-  } catch (err) {
-    skip(`storage remove threw: ${(err as Error)?.message?.slice(0, 120)}`);
+  for (const [key, { bucket, path }] of targets) {
+    if (referenced.has(key)) { skip('another creator asset still references this object'); continue; }
+    try {
+      const { error } = await supabase.storage.from(bucket).remove([path]);
+      if (error) skip(`storage remove failed: ${error.message}`);
+    } catch (err) {
+      skip(`storage remove threw: ${(err as Error)?.message?.slice(0, 120)}`);
+    }
   }
 }
 
