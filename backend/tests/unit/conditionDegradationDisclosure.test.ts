@@ -242,7 +242,8 @@ describe('F — untouched behaviour', () => {
 
   it('Phase 74 rendered-object lifecycle is intact', () => {
     const persistence = strip(read('../../services/creatorAssetPersistenceService.ts'));
-    expect(persistence).toContain('removeRenderedObjectForDeletedAsset(input.companyId,');
+    // Phase 78 made this plural: a carousel owns many rendered objects.
+    expect(persistence).toContain('await removeRenderedObjectsForDeletedAsset(');
     expect(persistence).toContain('RENDER_BUCKETS.has(bucket)');
   });
 
