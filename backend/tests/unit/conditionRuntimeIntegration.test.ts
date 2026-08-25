@@ -162,8 +162,11 @@ describe('E — the CONDITION template opt-in', () => {
 describe('F — existing guards are untouched', () => {
   it('fail-closed routing still rejects undeclared slots', () => {
     const ROUTING = P('../../../lib/content/compositionAssetRouting.ts');
-    expect(ROUTING).toContain("reject(r, 'template_accepts_no_references'");
-    expect(ROUTING).toContain("reject(r, 'mode_not_allowed_for_purpose'");
+    // Both refusals now live in the shared slotAcceptance predicate — the one
+    // the router and the panel's offer list both consult — so the guard follows
+    // it there rather than pinning the call it used to be written as.
+    expect(ROUTING).toContain("reason: 'template_accepts_no_references'");
+    expect(ROUTING).toContain("reason: 'mode_not_allowed_for_purpose'");
   });
 
   it('COMPOSE still cannot reach the provider', () => {

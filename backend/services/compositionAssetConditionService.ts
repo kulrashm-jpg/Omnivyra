@@ -23,7 +23,9 @@
  * Only the condition lane reaches this module, and only ever as provider input.
  */
 
-import { supabase } from '../db/supabaseClient';
+/* The ONE byte source for reference images — shared with the compose lane so
+ * the two cannot diverge on how a user's file is read. */
+import { readCanonicalAssetBytes } from './creator/creatorReferenceImageFetch';
 import { getCanonicalMediaAsset } from './canonicalMediaAssetService';
 import { isUsableMediaAsset } from '../../lib/content/canonicalMediaAsset';
 import type { RoutedReference } from '../../lib/content/compositionAssetRouting';
@@ -70,12 +72,6 @@ export interface ConditionReferencesResult {
    * are different products.
    */
   degradedToText: boolean;
-}
-
-async function downloadBytes(bucket: string, path: string): Promise<Buffer | null> {
-  const { data, error } = await supabase.storage.from(bucket).download(path);
-  if (error || !data) return null;
-  return Buffer.from(await data.arrayBuffer());
 }
 
 /**
@@ -138,7 +134,7 @@ export async function resolveConditionReferenceBytes(input: {
       continue;
     }
 
-    const bytes = await downloadBytes(asset.storageBucket, asset.storagePath);
+    const bytes = await readCanonicalAssetBytes(asset.storageBucket, asset.storagePath);
     if (!bytes) {
       reject('bytes_unavailable', 'The stored object could not be read.');
       continue;

@@ -207,9 +207,17 @@ describe('C — storage: private bytes, never a URL', () => {
   it('MUTATION GUARD: the compose path contains no URL construction', () => {
     const SRC = fs.readFileSync(
       path.resolve(__dirname, '../../services/compositionAssetComposeService.ts'), 'utf8');
-    const body = SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    expect(body).not.toMatch(/getPublicUrl|createSignedUrl|https?:\/\//);
-    expect(body).toContain('.download(path)');
+    const FETCH = fs.readFileSync(
+      path.resolve(__dirname, '../../services/creator/creatorReferenceImageFetch.ts'), 'utf8');
+    const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    expect(strip(SRC)).not.toMatch(/getPublicUrl|createSignedUrl|https?:\/\//);
+    // The download moved into the ONE shared reader that both lanes now use, so
+    // the guard follows the architecture rather than the moved literal: what it
+    // protects is "private bytes, never a locator".
+    expect(strip(SRC)).toContain('readCanonicalAssetBytes(');
+    expect(strip(FETCH)).not.toMatch(/getPublicUrl|createSignedUrl|https?:\/\//);
+    expect(strip(FETCH)).toContain('.download(path)');
   });
 });
 

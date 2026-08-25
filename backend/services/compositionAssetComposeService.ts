@@ -23,7 +23,9 @@
  * CONDITION.
  */
 
-import { supabase } from '../db/supabaseClient';
+/* The ONE byte source for reference images — shared with the condition lane so
+ * the two cannot diverge on how a user's file is read. */
+import { readCanonicalAssetBytes } from './creator/creatorReferenceImageFetch';
 import { getCanonicalMediaAsset } from './canonicalMediaAssetService';
 import { isUsableMediaAsset } from '../../lib/content/canonicalMediaAsset';
 import {
@@ -62,18 +64,6 @@ export interface ComposeRejection {
 export interface ComposeLayersResult {
   layers: ComposeLayer[];
   rejected: ComposeRejection[];
-}
-
-/**
- * Fetch a canonical asset's bytes.
- *
- * Deliberately the ONLY byte source in this module, and deliberately not a URL.
- */
-async function downloadCanonicalBytes(bucket: string, path: string): Promise<Buffer | null> {
-  const { data, error } = await supabase.storage.from(bucket).download(path);
-  if (error || !data) return null;
-  const arrayBuffer = await data.arrayBuffer();
-  return Buffer.from(arrayBuffer);
 }
 
 /**
@@ -125,7 +115,7 @@ export async function buildComposeLayers(input: {
     }
     const placement: TemplateAssetPlacement = slot.placement;
 
-    const bytes = await downloadCanonicalBytes(asset.storageBucket, asset.storagePath);
+    const bytes = await readCanonicalAssetBytes(asset.storageBucket, asset.storagePath);
     if (!bytes) {
       reject('bytes_unavailable', 'The stored object could not be read.');
       continue;

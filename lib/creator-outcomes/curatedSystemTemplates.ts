@@ -16,6 +16,16 @@
 
 import type { CreatorTemplate } from '../creator-templates/types';
 import galleryData from '../../content/creator-templates/system-templates.gallery.json';
+import { withDerivedAssetSlots } from '../creator-templates/templateAssetSlots';
 
-/** Lean, display-complete SYSTEM templates the Sample Gallery renders. */
-export const CURATED_SYSTEM_TEMPLATES: CreatorTemplate[] = galleryData as unknown as CreatorTemplate[];
+/**
+ * Lean, display-complete SYSTEM templates the Sample Gallery renders.
+ *
+ * Slots are derived HERE, where the pool is constructed, for the same reason
+ * the in-code registry derives them at construction: this array is read
+ * directly by the canonical pool builder as well as through the resolver, and a
+ * curated design that reached one path without slots would accept no reference
+ * images at all while its blueprint twin accepted several.
+ */
+export const CURATED_SYSTEM_TEMPLATES: CreatorTemplate[] =
+  (galleryData as unknown as CreatorTemplate[]).map(withDerivedAssetSlots);

@@ -49,7 +49,10 @@ describe('Generate font parity (render-inline ↔ generate)', () => {
     // generate → orchestrator inline branch → renderAsset (same module that now
     // initializes fonts). render-inline → renderAsset too. Single chokepoint.
     const orchestrator = read('backend/services/creator/creatorOrchestrator.ts');
-    expect(orchestrator).toContain("import { renderAsset } from '../creatorAssetRenderer'");
+    // The orchestrator now imports a second symbol from the same barrel, so
+    // the guard pins the CHOKEPOINT — renderAsset comes from this one module —
+    // rather than the exact shape the import statement happened to have.
+    expect(orchestrator).toMatch(/import \{[^}]*\brenderAsset\b[^}]*\} from '\.\.\/creatorAssetRenderer'/);
     expect(orchestrator).toContain('renderAsset(');
   });
 });

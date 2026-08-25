@@ -27,7 +27,7 @@
 import { createHash } from 'crypto';
 import { ownedDbTable } from '../../db/writeOwner';
 import { createCreatorExecutionEngine } from '../executionEngines/creatorExecutionEngine';
-import { renderAsset } from '../creatorAssetRenderer';
+import { renderAsset, templateAssetSlotsForRenderPayload } from '../creatorAssetRenderer';
 import { resolveCompositionReferencesForRender } from './resolveCompositionReferencesForRender';
 import { validateAssetReadiness } from '../creatorAssetValidationService';
 import { validateCreatorExecutionOutput } from '../creatorExecutionContracts';
@@ -464,6 +464,18 @@ async function runRenderDispatch(input: {
     const compositionReferences = await resolveCompositionReferencesForRender({
       companyId: input.companyId,
       compositionId: input.compositionId ?? null,
+      /*
+       * The template decides what it can accept, so its slots have to travel
+       * WITH the composition into routing. Omitting them is not a neutral
+       * default: the resolver reads absent slots as "this template accepts no
+       * references" and rejects every attachment, which is how a user's
+       * uploaded image reached storage, reached the composition, and then never
+       * reached the render.
+       *
+       * Read from the render payload — the same template id the renderer
+       * itself resolves — so the slots belong to the design being rendered.
+       */
+      templateSlots: templateAssetSlotsForRenderPayload(renderInput),
     });
     const rendered = await renderAsset(renderInput, {
       campaignId: input.campaignId,

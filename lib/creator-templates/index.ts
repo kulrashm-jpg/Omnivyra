@@ -14,6 +14,7 @@ import {
   isTemplateAssetFamily,
 } from './types';
 import { SYSTEM_TEMPLATES, ALL_SYSTEM_TEMPLATES } from './systemTemplates';
+import { withDerivedAssetSlots } from './templateAssetSlots';
 import {
   canonicalizeTemplates,
   type CanonicalGroup,
@@ -293,7 +294,17 @@ export function getTemplateById(id: string, family?: TemplateAssetFamily): Creat
     ?? null;
   if (!found) return null;
   if (family && found.assetFamily !== family) return null;
-  return found;
+  /*
+   * Slots reach USER / AI / curated templates here — the one resolver every
+   * surface already goes through — so a design authored at runtime accepts the
+   * same references as an equivalent system design instead of silently
+   * accepting none.
+   *
+   * System templates already carry slots from construction, so this returns
+   * them untouched: `getTemplateById(t.id) === t` still holds. The derivation
+   * caches on the source object, so it holds for the other registries too.
+   */
+  return withDerivedAssetSlots(found);
 }
 
 /**

@@ -28,8 +28,9 @@ import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import {
   creatorAssetUsageLabel,
   creatorAssetUsageOptionsForTemplate,
+  templateAcceptsAttachedReference,
 } from '../../lib/content/creatorCompositionAsset';
-import type { CompositionAssetPurpose } from '../../lib/content/compositionAssetReference';
+import type { CompositionAssetMode, CompositionAssetPurpose } from '../../lib/content/compositionAssetReference';
 import type { TemplateAssetSlot } from '../../lib/content/compositionAssetRouting';
 
 interface AttachedItem {
@@ -37,7 +38,7 @@ interface AttachedItem {
     id: string;
     assetId: string;
     purpose: CompositionAssetPurpose;
-    mode: string;
+    mode: CompositionAssetMode;
     ordinal: number;
   };
   asset: { id: string; sourceUrl: string | null; originalFilename: string | null } | null;
@@ -67,6 +68,15 @@ export default function CreatorImageAssetPanel({
   /** Set while the user is choosing a usage for a file already uploaded. */
   const [pendingMediaFileId, setPendingMediaFileId] = React.useState<string | null>(null);
   const [pendingPreview, setPendingPreview] = React.useState<string | null>(null);
+  /**
+   * The attachment this upload is replacing, captured when Replace was pressed.
+   *
+   * Held across the usage choice because the usage may differ from the one the
+   * old image had — and it is precisely that case where the old reference would
+   * otherwise survive under its previous purpose, invisible to a panel that
+   * shows a single image and still reaching the render.
+   */
+  const [replacingReferenceId, setReplacingReferenceId] = React.useState<string | null>(null);
 
   const ready = Boolean(companyId && compositionId);
 
@@ -122,7 +132,9 @@ export default function CreatorImageAssetPanel({
     }
     const id = json?.data?.id ? String(json.data.id) : '';
     if (!id) { setError('Upload succeeded but the file could not be identified.'); return null; }
-    return { id, url: String(json?.data?.file_url || json?.data?.storage_url || '') };
+    // `storage_url` is the column production actually writes; `file_url` was
+    // proven not to exist on media_files, so it is only a legacy fallback.
+    return { id, url: String(json?.data?.storage_url || json?.data?.file_url || '') };
   };
 
   const onPick = async (file: File | null) => {
@@ -154,6 +166,7 @@ export default function CreatorImageAssetPanel({
         body: JSON.stringify({
           company_id: companyId, composition_id: compositionId,
           media_file_id: pendingMediaFileId, purpose,
+          replaces_reference_id: replacingReferenceId,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -161,10 +174,10 @@ export default function CreatorImageAssetPanel({
         // The file reached storage but never became a usable asset. Say so, and
         // clear the pending selection so nothing on screen implies otherwise.
         setError(data?.error || 'The image was uploaded but could not be registered.');
-        setPendingMediaFileId(null); setPendingPreview(null);
+        setPendingMediaFileId(null); setPendingPreview(null); setReplacingReferenceId(null);
         return;
       }
-      setPendingMediaFileId(null); setPendingPreview(null);
+      setPendingMediaFileId(null); setPendingPreview(null); setReplacingReferenceId(null);
       await load();
     } catch {
       setError('The image was uploaded but could not be registered.');
@@ -211,6 +224,19 @@ export default function CreatorImageAssetPanel({
 
   const attached = items[0] ?? null;
   const choosing = Boolean(pendingMediaFileId);
+  /*
+   * Does the CURRENT template accept the attachment as it stands?
+   *
+   * The composition outlives a template change — that is deliberate, so a trip
+   * to the gallery does not cost the user their upload — which means an image
+   * attached as a subject can find itself on a design that has no subject. The
+   * honest thing is to say so: the reference is still there, the file is still
+   * theirs, but this design will not use it. Judged by the same predicate the
+   * router uses, on the relationship the reference actually has.
+   */
+  const attachedUsable = attached
+    ? templateAcceptsAttachedReference(templateSlots, attached.reference)
+    : true;
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-4">
@@ -227,7 +253,7 @@ export default function CreatorImageAssetPanel({
         {attached && !choosing ? (
           <button
             type="button"
-            onClick={() => fileRef.current?.click()}
+            onClick={() => { setReplacingReferenceId(attached.reference.id); fileRef.current?.click(); }}
             disabled={Boolean(busy)}
             className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:border-gray-300 disabled:opacity-50"
           >
@@ -253,7 +279,7 @@ export default function CreatorImageAssetPanel({
 
       {/* The template accepts nothing, so there is nothing honest to offer.
         * Saying so beats presenting six usages that routing would discard. */}
-      {!templateAcceptsAssets ? (
+      {!templateAcceptsAssets && !attached ? (
         <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-xs text-gray-600">
           <span className="font-semibold text-gray-800">
             {templateName ? `${templateName} ` : 'This template '}
@@ -268,7 +294,7 @@ export default function CreatorImageAssetPanel({
       {templateAcceptsAssets && !attached && !choosing ? (
         <button
           type="button"
-          onClick={() => fileRef.current?.click()}
+          onClick={() => { setReplacingReferenceId(null); fileRef.current?.click(); }}
           disabled={busy === 'upload'}
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-gray-300 bg-white px-3 py-6 text-sm font-semibold text-gray-600 hover:border-emerald-300 hover:text-emerald-700 disabled:opacity-60"
         >
@@ -307,7 +333,7 @@ export default function CreatorImageAssetPanel({
               </div>
               <button
                 type="button"
-                onClick={() => { setPendingMediaFileId(null); setPendingPreview(null); }}
+                onClick={() => { setPendingMediaFileId(null); setPendingPreview(null); setReplacingReferenceId(null); }}
                 className="mt-2 text-xs font-semibold text-gray-500 hover:text-gray-700"
               >
                 Cancel
@@ -376,11 +402,25 @@ export default function CreatorImageAssetPanel({
             * to the model as reference and may reinterpret it. Saying "it does
             * not change the generated image" — which this said before the
             * runtime was wired — is now simply untrue. */}
-          <p className="mt-2 text-[11px] text-gray-400">
-            {attached.reference.mode === 'compose'
-              ? 'Placed on this design as uploaded.'
-              : 'Used as a reference for this design, so the result may differ from the original.'}
-          </p>
+          {attachedUsable ? (
+            <p className="mt-2 text-[11px] text-gray-400">
+              {attached.reference.mode === 'compose'
+                ? 'Placed on this design as uploaded.'
+                : 'Used as a reference for this design, so the result may differ from the original.'}
+            </p>
+          ) : (
+            /* Not a warning about a mistake — a statement about this design.
+             * The image is kept, and either another usage or another template
+             * puts it back to work. */
+            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-800">
+              {templateName ? `${templateName} does not use` : 'This template does not use'} an
+              image as {creatorAssetUsageLabel(attached.reference.purpose).toLowerCase()}, so it
+              will not appear in what you generate.{' '}
+              {usageOptions.length > 0
+                ? 'Choose one of the usages above, or remove it — the image stays in your library either way.'
+                : 'Pick a template that accepts an image, or remove it — the image stays in your library either way.'}
+            </p>
+          )}
         </div>
       ) : null}
 

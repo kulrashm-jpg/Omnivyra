@@ -74,6 +74,7 @@ import {
   type PresetVariant,
   type CreatorTemplate,
 } from '../../lib/creator-templates';
+import type { TemplateAssetSlot } from '../../lib/content/compositionAssetRouting';
 import { registerCuratedSystemTemplates } from '../../lib/creator-outcomes/curatedSystemTemplatesFull';
 import { ensureRenderFonts } from './creatorRenderFonts';
 
@@ -458,6 +459,35 @@ export function curatedDesignTemplate(metadata: Record<string, unknown>): Creato
   registerCuratedSystemTemplates();
   const t = resolveTemplate(tid, { family: 'infographic' }).template;
   return t && t.composition && Array.isArray(t.semanticStructure) && t.semanticStructure.length > 0 ? t : null;
+}
+
+/**
+ * The asset slots the ACTIVE template declares, read from a render payload.
+ *
+ * This is what closes the gap between "the user attached an image" and "the
+ * renderer received it": the composition resolver treats absent slots as *the
+ * template accepts nothing*, so calling it without them rejected every
+ * reference — on every template, including the ones that do declare slots.
+ *
+ * The template is found through the SAME accessors the renderer already uses
+ * (`templateIdForRender` + the one canonical `resolveTemplate`), so slots come
+ * from the design the render is actually using and not from a second lookup
+ * that could disagree with it. No family is imposed: a slot declaration is
+ * valid for whatever family the template belongs to.
+ *
+ * Returns `undefined` when there is no template — which the resolver reads as
+ * "accepts none", the correct fail-closed answer rather than a permissive one.
+ */
+export function templateAssetSlotsForRenderPayload(
+  assetPayload: Record<string, unknown>,
+): readonly TemplateAssetSlot[] | undefined {
+  const metadata = safeObject(safeObject(assetPayload?.media_bundle).metadata);
+  const templateId = templateIdForRender(metadata);
+  if (!templateId) return undefined;
+  // Curated ids only resolve once their pool is registered — the same
+  // lazy + idempotent registration `curatedDesignTemplate` performs.
+  registerCuratedSystemTemplates();
+  return resolveTemplate(templateId).template?.assetSlots;
 }
 
 export function resolveInfographicRenderStyle(metadata: Record<string, unknown>): InfographicStyleSchema {

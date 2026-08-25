@@ -35,6 +35,7 @@ import {
 } from '../creator-templates/styleVariants';
 import { VISUAL_BLUEPRINTS, getBlueprint } from './creatorVisualBlueprintRegistry';
 import { getSample, type MarketingSample } from './marketingSample';
+import { withDerivedAssetSlots } from '../creator-templates/templateAssetSlots';
 
 /** Stable id for a materialized curated SYSTEM template (unique per family). */
 export function materializedTemplateId(blueprintId: string, family: TemplateAssetFamily): string {
@@ -139,7 +140,10 @@ export function materializeCuratedTemplate(blueprintId: string, family: Template
     : family === 'infographic' ? `/creator-showcases/${blueprintId}/infographic.webp`
       : `/creator-showcases/${blueprintId}/image.webp`;
 
-  return {
+  /* Slots are derived at materialization, so a curated design resolved on
+   * demand accepts exactly what the same design accepts when it arrives from
+   * the gallery pool. One rule, applied wherever a template is built. */
+  return withDerivedAssetSlots({
     id: materializedTemplateId(blueprintId, family),
     assetFamily: family,
     name: sample.title,
@@ -182,7 +186,7 @@ export function materializeCuratedTemplate(blueprintId: string, family: Template
     lockedRegions: [...sample.lockedRegions],
     editableRegions: [...sample.editableRegions],
     adaptation: { immutable: [...sample.generationDNA.adaptation.immutable], adaptable: [...sample.generationDNA.adaptation.adaptable] },
-  };
+  });
 }
 
 /** Materialize EVERY curated design across all supported families. Data only. */

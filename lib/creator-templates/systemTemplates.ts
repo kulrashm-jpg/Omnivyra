@@ -25,6 +25,11 @@ import {
   defaultAiAssist,
 } from './types';
 import { styleFieldsForTemplate } from './styleVariants';
+/* Slots are declared HERE, at registry CONSTRUCTION, rather than at resolution:
+ * the registry must hold ONE object per template id (`getTemplateById(t.id) === t`
+ * is a pinned contract), and enriching on the way out would hand back a fresh
+ * copy on every call. */
+import { withDerivedAssetSlots } from './templateAssetSlots';
 
 /** Attach the template's assigned production style variant (by inheritance
  *  from DEFAULT_*_STYLE). Templates without an explicit mapping inherit the
@@ -901,9 +906,9 @@ function enrichMetadata(t: CreatorTemplate): CreatorTemplate {
 // Production style differentiation: each template carries its assigned variant
 // (TEMPLATE-013), built by inheritance from DEFAULT_*_STYLE; then deterministic
 // library metadata is enriched onto every template.
-const IMAGE_AND_BANNER_TEMPLATES: CreatorTemplate[] = [...IMAGE_TEMPLATES, ...BANNER_TEMPLATES, ...MORE_IMAGE_TEMPLATES].map(withVariant).map(enrichMetadata);
-const CAROUSEL_TEMPLATES_STYLED: CreatorTemplate[] = [...CAROUSEL_TEMPLATES, ...MORE_CAROUSEL_TEMPLATES].map(withVariant).map(enrichMetadata);
-const INFOGRAPHIC_TEMPLATES_STYLED: CreatorTemplate[] = [...INFOGRAPHIC_TEMPLATES, ...MORE_INFOGRAPHIC_TEMPLATES].map(withVariant).map(enrichMetadata);
+const IMAGE_AND_BANNER_TEMPLATES: CreatorTemplate[] = [...IMAGE_TEMPLATES, ...BANNER_TEMPLATES, ...MORE_IMAGE_TEMPLATES].map(withVariant).map(enrichMetadata).map(withDerivedAssetSlots);
+const CAROUSEL_TEMPLATES_STYLED: CreatorTemplate[] = [...CAROUSEL_TEMPLATES, ...MORE_CAROUSEL_TEMPLATES].map(withVariant).map(enrichMetadata).map(withDerivedAssetSlots);
+const INFOGRAPHIC_TEMPLATES_STYLED: CreatorTemplate[] = [...INFOGRAPHIC_TEMPLATES, ...MORE_INFOGRAPHIC_TEMPLATES].map(withVariant).map(enrichMetadata).map(withDerivedAssetSlots);
 
 export const SYSTEM_TEMPLATES: Readonly<Record<'image' | 'carousel' | 'infographic', readonly CreatorTemplate[]>> = Object.freeze({
   image: Object.freeze(IMAGE_AND_BANNER_TEMPLATES),
