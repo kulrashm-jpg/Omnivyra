@@ -16,11 +16,11 @@
  * Pure — no DB, no fetch, no Node built-ins. Safe on both sides.
  */
 
-import type { CompositionAssetPurpose } from './compositionAssetReference';
+import type { CompositionAssetMode, CompositionAssetPurpose } from './compositionAssetReference';
 import type { TemplateAssetSlot } from './compositionAssetRouting';
 import {
   defaultModeForPurpose,
-  isModeAllowedForPurpose,
+  slotAcceptance,
 } from './compositionAssetRouting';
 
 const EMPTY_USAGE_OPTIONS: readonly CreatorAssetUsageOption[] = Object.freeze([]);
@@ -173,22 +173,39 @@ export function creatorAssetUsageLabel(purpose: CompositionAssetPurpose | string
  * derived from the template's own declared slots — never from its name,
  * category or description, and never widened to "look complete".
  *
- * A purpose is offered only when the template declares a slot for it AND the
- * mode that purpose derives to is one both the policy and that slot accept. A
- * slot demanding a mode its purpose cannot produce is simply not offered; it is
- * never satisfied by rewriting the slot's declared mode.
+ * A purpose is offered only when routing would actually admit it, in the mode
+ * that purpose derives to. That question is not re-answered here: `slotAcceptance`
+ * is the same predicate the router applies, so the panel cannot offer a usage the
+ * renderer would discard — including a compose slot with no placement, which
+ * accepts the attach and then has nowhere to put the image.
  */
 export function creatorAssetUsageOptionsForTemplate(
   slots: readonly TemplateAssetSlot[] | null | undefined,
 ): readonly CreatorAssetUsageOption[] {
   if (!Array.isArray(slots) || slots.length === 0) return EMPTY_USAGE_OPTIONS;
-  return Object.freeze(CREATOR_ASSET_USAGE_OPTIONS.filter((option) => {
-    const slot = slots.find((s) => s && s.purpose === option.purpose);
-    if (!slot) return false;
-    const mode = defaultModeForPurpose(option.purpose);
-    if (!isModeAllowedForPurpose(option.purpose, mode)) return false;
-    return !slot.mode || slot.mode === mode;
-  }));
+  return Object.freeze(CREATOR_ASSET_USAGE_OPTIONS.filter(
+    (option) => slotAcceptance(slots, option.purpose, defaultModeForPurpose(option.purpose)).ok,
+  ));
+}
+
+/**
+ * Is an ALREADY-ATTACHED reference still usable by this template?
+ *
+ * Asked when the template changes under an existing attachment. The stored mode
+ * is used rather than the purpose's default, because that reference was created
+ * with a mode and it is that relationship — not a hypothetical one — that the
+ * new template either accepts or does not.
+ */
+export function templateAcceptsAttachedReference(
+  slots: readonly TemplateAssetSlot[] | null | undefined,
+  reference: { purpose: CompositionAssetPurpose; mode: CompositionAssetMode },
+): boolean {
+  if (!reference) return false;
+  return slotAcceptance(
+    Array.isArray(slots) ? slots : undefined,
+    reference.purpose,
+    reference.mode,
+  ).ok;
 }
 
 /** Does this template accept any Content Creator reference asset at all? */

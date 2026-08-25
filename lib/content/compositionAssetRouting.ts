@@ -259,6 +259,67 @@ export interface RoutingResult {
   conditionDegradedToText: boolean;
 }
 
+/**
+ * Can this template slot honour `purpose` in `mode`?
+ *
+ * THE single compatibility answer. Routing asks it before admitting a
+ * reference, and the Content Creator panel asks it before OFFERING a usage —
+ * because a panel that offers what routing discards is exactly how an attach
+ * looked successful while generation ignored it. Two implementations of "is
+ * this allowed" would drift the moment either changed; there is one.
+ *
+ * Capacity is NOT decided here: it depends on how many references have already
+ * been admitted in this run, which is routing's state and not a property of the
+ * slot.
+ */
+export interface SlotAcceptance {
+  ok: boolean;
+  /** The slot that admitted this reference. Null when `ok` is false. */
+  slot: TemplateAssetSlot | null;
+  /** Why it was refused, in the router's own vocabulary. Null when `ok` is true. */
+  reason: RoutingRejectionReason | null;
+  detail: string;
+}
+
+export function slotAcceptance(
+  slots: readonly TemplateAssetSlot[] | undefined,
+  purpose: CompositionAssetPurpose,
+  mode: CompositionAssetMode,
+): SlotAcceptance {
+  if (!templateAcceptsReferences(slots)) {
+    return { ok: false, slot: null, reason: 'template_accepts_no_references', detail: 'The template declares no assetSlots, so it accepts no references.' };
+  }
+
+  const slot = slotFor(slots, purpose);
+  if (!slot) {
+    return { ok: false, slot: null, reason: 'purpose_not_accepted_by_template', detail: `The template declares no slot for purpose "${purpose}".` };
+  }
+
+  // A stated mode is honoured or refused — never converted.
+  if (!isModeAllowedForPurpose(purpose, mode)) {
+    return { ok: false, slot: null, reason: 'mode_not_allowed_for_purpose', detail: `Purpose "${purpose}" does not allow mode "${mode}".` };
+  }
+  if (slot.mode && slot.mode !== mode) {
+    return { ok: false, slot: null, reason: 'mode_not_allowed_by_template_slot', detail: `The template slot for "${purpose}" accepts only mode "${slot.mode}".` };
+  }
+
+  // A compose reference is only placeable if the slot says where. There is no
+  // fallback geometry — see the note on TemplateAssetSlot.placement.
+  if (mode === 'compose') {
+    if (!slot.placement) {
+      return { ok: false, slot: null, reason: 'slot_missing_placement',
+        detail: `The template slot for "${purpose}" declares no placement, so a compose asset cannot be positioned.` };
+    }
+    const geometry = validateTemplateAssetPlacement(slot.placement);
+    if (!geometry.ok) {
+      return { ok: false, slot: null, reason: 'slot_placement_invalid',
+        detail: `The template slot for "${purpose}" has invalid placement: ${geometry.errors.join('; ')}` };
+    }
+  }
+
+  return { ok: true, slot, reason: null, detail: '' };
+}
+
 export interface RoutingInput {
   /** Ordered references — ordering is the caller's, already made deterministic. */
   references: Array<{ reference: CompositionAssetReference; sourceUrl: string }>;
@@ -291,46 +352,14 @@ export function routeCompositionReferences(input: RoutingInput): RoutingResult {
   for (const item of input.references) {
     const r = item.reference;
 
-    if (!templateAcceptsReferences(slots)) {
-      reject(r, 'template_accepts_no_references',
-        'The template declares no assetSlots, so it accepts no references.');
+    // Compatibility is decided in ONE place, shared with the surface that
+    // offers these usages, so the two cannot disagree.
+    const acceptance = slotAcceptance(slots, r.purpose, r.mode);
+    if (!acceptance.ok) {
+      reject(r, acceptance.reason, acceptance.detail);
       continue;
     }
-
-    const slot = slotFor(slots, r.purpose);
-    if (!slot) {
-      reject(r, 'purpose_not_accepted_by_template',
-        `The template declares no slot for purpose "${r.purpose}".`);
-      continue;
-    }
-
-    // A stated mode is honoured or refused — never converted.
-    if (!isModeAllowedForPurpose(r.purpose, r.mode)) {
-      reject(r, 'mode_not_allowed_for_purpose',
-        `Purpose "${r.purpose}" does not allow mode "${r.mode}".`);
-      continue;
-    }
-    if (slot.mode && slot.mode !== r.mode) {
-      reject(r, 'mode_not_allowed_by_template_slot',
-        `The template slot for "${r.purpose}" accepts only mode "${slot.mode}".`);
-      continue;
-    }
-
-    // A compose reference is only placeable if the slot says where. There is no
-    // fallback geometry — see the note on TemplateAssetSlot.placement.
-    if (r.mode === 'compose') {
-      if (!slot.placement) {
-        reject(r, 'slot_missing_placement',
-          `The template slot for "${r.purpose}" declares no placement, so a compose asset cannot be positioned.`);
-        continue;
-      }
-      const geometry = validateTemplateAssetPlacement(slot.placement);
-      if (!geometry.ok) {
-        reject(r, 'slot_placement_invalid',
-          `The template slot for "${r.purpose}" has invalid placement: ${geometry.errors.join('; ')}`);
-        continue;
-      }
-    }
+    const slot = acceptance.slot;
 
     const used = perSlotCount.get(r.purpose) ?? 0;
     const capacity = slot.max ?? 1;

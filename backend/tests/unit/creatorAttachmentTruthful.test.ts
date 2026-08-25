@@ -107,9 +107,15 @@ describe('B — the attachment path derives, and does so once', () => {
   });
 
   it('usage change reuses the same attach, so it cannot diverge', () => {
-    // Not a parallel implementation: one derivation, two entry points.
+    // Not a parallel implementation: one derivation, several entry points.
+    // Changing a usage now moves through the REPLACE helper — so a purpose
+    // another asset already occupies is displaced rather than joined — and that
+    // helper is the only thing in the service that calls attach.
     expect(ATTACH).toMatch(
-      /changeCreatorCompositionAssetUsage[\s\S]{0,600}attachCreatorCompositionAsset\(/);
+      /changeCreatorCompositionAssetUsage[\s\S]{0,900}replaceCreatorCompositionAssetForPurpose\(/);
+    expect(ATTACH).toMatch(
+      /replaceCreatorCompositionAssetForPurpose[\s\S]{0,2000}attachCreatorCompositionAsset\(/);
+    expect(ATTACH.split('await attachCreatorCompositionAsset(').length - 1).toBe(1);
   });
 });
 
@@ -146,8 +152,19 @@ describe('C — the template decides what is offered', () => {
   });
 
   it('a slot with no stated mode accepts the purpose default', () => {
-    expect(creatorAssetUsageOptionsForTemplate([{ purpose: 'logo' }]).map((o) => o.purpose))
-      .toEqual(['logo']);
+    expect(creatorAssetUsageOptionsForTemplate([{ purpose: 'subject' }]).map((o) => o.purpose))
+      .toEqual(['subject']);
+  });
+
+  it('a COMPOSE-default purpose is not offered until the slot says where it goes', () => {
+    // `logo` derives to compose, and compose has no fallback geometry. Offering
+    // it on a slot with no placement is the original defect in miniature: the
+    // attach succeeds, and routing then refuses it as `slot_missing_placement`.
+    expect(creatorAssetUsageOptionsForTemplate([{ purpose: 'logo' }])).toHaveLength(0);
+    expect(creatorAssetUsageOptionsForTemplate([{
+      purpose: 'logo',
+      placement: { top: 0.35, left: 0.35, maxWidth: 0.3, maxHeight: 0.3, fit: 'contain' },
+    }]).map((o) => o.purpose)).toEqual(['logo']);
   });
 
   it('MUTATION GUARD: no template contract is mutated by filtering', () => {
@@ -186,8 +203,16 @@ describe('D — the panel offers only those, and says so when there are none', (
   });
 
   it('a slotless template is explained rather than silently empty', () => {
-    expect(PANEL).toContain('{!templateAcceptsAssets ? (');
+    expect(PANEL).toContain('{!templateAcceptsAssets && !attached ? (');
     expect(PANEL_SRC).toMatch(/use a reference image/);
+  });
+
+  it('an attachment the CURRENT template cannot use is not shown as usable', () => {
+    // The composition outlives a template change by design, so an image
+    // attached as a subject can end up on a design that has no subject. Saying
+    // "Using as Main subject" there would be the same lie in a new place.
+    expect(PANEL).toContain('templateAcceptsAttachedReference(templateSlots, attached.reference)');
+    expect(PANEL_SRC).toMatch(/will not appear in what you generate/);
   });
 
   it('the panel is given the ACTIVE template slots by its parent', () => {

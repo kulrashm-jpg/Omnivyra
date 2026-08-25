@@ -3,8 +3,11 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * /api/creator-assets/composition — Content Creator's canonical asset surface.
  *
  *   GET    ?company_id&composition_id            → { items: [{ reference, asset }] }
- *   POST   { company_id, composition_id, media_file_id, purpose }
- *            register the upload as a canonical asset, then attach it
+ *   POST   { company_id, composition_id, media_file_id, purpose,
+ *            replaces_reference_id? }
+ *            register the upload as a canonical asset, then give it that
+ *            purpose — DISPLACING whatever held the purpose before, because a
+ *            purpose holds one asset and "replace" must not mean "append"
  *   PATCH  { company_id, composition_id, reference_id, asset_id, purpose }
  *            change how an attached asset is used (no re-upload)
  *   DELETE ?company_id&reference_id              → detach (asset survives)
@@ -26,10 +29,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '@/backend/services/userContextService';
 import {
   registerUploadedMediaAsset,
-  attachCreatorCompositionAsset,
   listCreatorCompositionAssetsResolved,
   detachCreatorCompositionAsset,
   changeCreatorCompositionAssetUsage,
+  replaceCreatorCompositionAssetForPurpose,
 } from '@/backend/services/creator/creatorCompositionAssetService';
 import { isCreatorAssetUsagePurpose } from '@/lib/content/creatorCompositionAsset';
 
@@ -89,8 +92,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!user?.userId) return res.status(401).json({ error: 'authentication required' });
 
   const compositionId = str(req.body?.composition_id);
-  const purpose = str(req.body?.purpose);
   if (!compositionId) return res.status(400).json({ error: 'composition_id required' });
+
+  // Every remaining write names a usage, so the vocabulary is checked once here.
+  const purpose = str(req.body?.purpose);
   if (!isCreatorAssetUsagePurpose(purpose)) {
     return res.status(400).json({ error: 'purpose is not one Content Creator offers' });
   }
@@ -117,10 +122,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // caller learns the upload never became a usable asset rather than seeing a
     // selection that only looks valid.
     const asset = await registerUploadedMediaAsset({ companyId, userId: user.userId, mediaFileId });
-    const reference = await attachCreatorCompositionAsset({
+    // Replace, not append: the panel shows ONE asset per purpose, so a second
+    // upload into the same purpose used to leave an invisible reference behind
+    // that still reached the render.
+    const { reference, replacedReferenceIds } = await replaceCreatorCompositionAssetForPurpose({
       companyId, compositionId, assetId: asset.id, purpose,
+      // A single-image surface replacing its one attachment says so, so the old
+      // reference cannot survive under a different usage.
+      replacesReferenceId: str(req.body?.replaces_reference_id) || null,
     });
-    return res.status(200).json({ asset, reference });
+    return res.status(200).json({ asset, reference, replaced_reference_ids: replacedReferenceIds });
   } catch (err) { return fail(res, err); }
 }
 

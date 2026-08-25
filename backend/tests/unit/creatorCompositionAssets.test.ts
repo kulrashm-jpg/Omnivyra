@@ -130,6 +130,7 @@ import {
   listCreatorCompositionAssetsResolved,
   detachCreatorCompositionAsset,
   changeCreatorCompositionAssetUsage,
+  replaceCreatorCompositionAssetForPurpose,
   listCreatorAssetUsages,
 } from '../../services/creator/creatorCompositionAssetService';
 import {
@@ -143,6 +144,7 @@ import {
   mintCreatorCompositionId,
 } from '../../../lib/content/creatorCompositionAsset';
 import { defaultModeForPurpose } from '../../../lib/content/compositionAssetRouting';
+import type { CompositionAssetPurpose } from '../../../lib/content/compositionAssetReference';
 import { COMPOSITION_ASSET_PURPOSES } from '../../../lib/content/compositionAssetReference';
 
 const CO_A = 'company-a';
@@ -567,5 +569,174 @@ describe('J — nothing reaches generation', () => {
     expect(src).toMatch(/Placed on this design as uploaded/i);
     expect(src).toMatch(/Used as a reference for this design/i);
     expect(src).not.toMatch(/does not change the generated image yet/i);
+  });
+});
+
+/* ── H. Replace — a purpose holds ONE asset ──────────────────────────────────
+ *
+ * Replacing used to APPEND. The uniqueness key includes `asset_id`, so a second
+ * upload under the same purpose was a legitimately distinct row and the database
+ * had no reason to refuse it; the composition then held both images while the
+ * panel — which shows one attachment — displayed only one of them. The other
+ * stayed invisible and kept reaching the renderer.
+ *
+ * These assert the OUTCOME (how many references exist, and which asset they
+ * point at), not which functions ran.
+ */
+describe('Replace semantics', () => {
+  async function attach(purpose: CompositionAssetPurpose, file: string) {
+    const asset = await registerUploadedMediaAsset({
+      companyId: CO_A, userId: USER_A, mediaFileId: seedUpload(USER_A, file),
+    });
+    const { reference, replacedReferenceIds } = await replaceCreatorCompositionAssetForPurpose({
+      companyId: CO_A, compositionId: COMP, assetId: asset.id, purpose,
+    });
+    return { assetId: asset.id, reference, replacedReferenceIds };
+  }
+
+  it('first attachment creates exactly one reference and displaces nothing', async () => {
+    const a = await attach('subject', 'a.png');
+
+    const all = await listCreatorCompositionAssets(CO_A, COMP);
+    expect(all).toHaveLength(1);
+    expect(all[0].assetId).toBe(a.assetId);
+    expect(a.replacedReferenceIds).toEqual([]);
+  });
+
+  it('replacing with a DIFFERENT asset leaves exactly one reference, pointing at the new asset', async () => {
+    const a = await attach('subject', 'a.png');
+    const d = await attach('subject', 'd.png');
+
+    const all = await listCreatorCompositionAssets(CO_A, COMP);
+    expect(all).toHaveLength(1);
+    expect(all[0].assetId).toBe(d.assetId);
+    expect(all[0].assetId).not.toBe(a.assetId);
+    expect(d.replacedReferenceIds).toEqual([a.reference.id]);
+  });
+
+  it('the displaced asset survives in the library — only the relationship ended', async () => {
+    const a = await attach('subject', 'a.png');
+    await attach('subject', 'd.png');
+
+    expect(await listCreatorAssetUsages(CO_A, a.assetId)).toHaveLength(0);
+    expect(assets.find((row) => row.id === a.assetId)).toBeTruthy();
+  });
+
+  it('unrelated purposes are untouched by a replace', async () => {
+    const subject = await attach('subject', 'a.png');
+    const background = await attach('background', 'b.png');
+    const style = await attach('style_reference', 'c.png');
+    const replacement = await attach('subject', 'd.png');
+
+    const all = await listCreatorCompositionAssets(CO_A, COMP);
+    const byPurpose = Object.fromEntries(all.map((r) => [r.purpose, r.assetId]));
+    expect(all).toHaveLength(3);
+    expect(byPurpose.subject).toBe(replacement.assetId);
+    expect(byPurpose.subject).not.toBe(subject.assetId);
+    expect(byPurpose.background).toBe(background.assetId);
+    expect(byPurpose.style_reference).toBe(style.assetId);
+  });
+
+  it('re-attaching the SAME asset to the SAME purpose is the state already reached, not a duplicate', async () => {
+    const asset = await registerUploadedMediaAsset({
+      companyId: CO_A, userId: USER_A, mediaFileId: seedUpload(USER_A, 'a.png'),
+    });
+    const first = await replaceCreatorCompositionAssetForPurpose({
+      companyId: CO_A, compositionId: COMP, assetId: asset.id, purpose: 'subject',
+    });
+    const again = await replaceCreatorCompositionAssetForPurpose({
+      companyId: CO_A, compositionId: COMP, assetId: asset.id, purpose: 'subject',
+    });
+
+    expect(again.reference.id).toBe(first.reference.id);
+    expect(await listCreatorCompositionAssets(CO_A, COMP)).toHaveLength(1);
+  });
+
+  it('Remove after Replace leaves no reference at all', async () => {
+    await attach('subject', 'a.png');
+    const d = await attach('subject', 'd.png');
+    await detachCreatorCompositionAsset(CO_A, d.reference.id);
+
+    expect(await listCreatorCompositionAssets(CO_A, COMP)).toHaveLength(0);
+  });
+
+  it('changing USAGE into an occupied purpose displaces the occupant rather than joining it', async () => {
+    const background = await attach('background', 'b.png');
+    const subject = await attach('subject', 'a.png');
+
+    await changeCreatorCompositionAssetUsage({
+      companyId: CO_A,
+      compositionId: COMP,
+      referenceId: subject.reference.id,
+      assetId: subject.assetId,
+      purpose: 'background',
+    });
+
+    const all = await listCreatorCompositionAssets(CO_A, COMP);
+    expect(all).toHaveLength(1);
+    expect(all[0].purpose).toBe('background');
+    expect(all[0].assetId).toBe(subject.assetId);
+    expect(all[0].assetId).not.toBe(background.assetId);
+  });
+
+  it('order is total — equal ordinals resolve on (created_at, id), never on arrival', async () => {
+    await attach('subject', 'a.png');
+    await attach('background', 'b.png');
+    await attach('style_reference', 'c.png');
+
+    const once = (await listCreatorCompositionAssets(CO_A, COMP)).map((r) => r.id);
+    refs.reverse();
+    const twice = (await listCreatorCompositionAssets(CO_A, COMP)).map((r) => r.id);
+
+    expect(twice).toEqual(once);
+    const ordinals = (await listCreatorCompositionAssets(CO_A, COMP)).map((r) => r.ordinal);
+    expect(new Set(ordinals).size).toBe(1);
+  });
+
+  it('a single-image surface replacing into a DIFFERENT usage leaves nothing behind', async () => {
+    // The purpose-scoped rule alone would keep the old subject alive while the
+    // replacement became a background: attached, invisible to a one-image
+    // panel, and still reaching the render. The surface names what it replaces.
+    const subject = await attach('subject', 'a.png');
+    const asset = await registerUploadedMediaAsset({
+      companyId: CO_A, userId: USER_A, mediaFileId: seedUpload(USER_A, 'd.png'),
+    });
+    const replacement = await replaceCreatorCompositionAssetForPurpose({
+      companyId: CO_A,
+      compositionId: COMP,
+      assetId: asset.id,
+      purpose: 'background',
+      replacesReferenceId: subject.reference.id,
+    });
+
+    const all = await listCreatorCompositionAssets(CO_A, COMP);
+    expect(all).toHaveLength(1);
+    expect(all[0].purpose).toBe('background');
+    expect(all[0].assetId).toBe(asset.id);
+    expect(replacement.replacedReferenceIds).toEqual([subject.reference.id]);
+    // Still only the relationship — the displaced file remains the user's.
+    expect(assets.find((row) => row.id === subject.assetId)).toBeTruthy();
+  });
+
+  it('naming a reference to replace does not disturb the other usages', async () => {
+    const subject = await attach('subject', 'a.png');
+    const logoish = await attach('background', 'b.png');
+    const asset = await registerUploadedMediaAsset({
+      companyId: CO_A, userId: USER_A, mediaFileId: seedUpload(USER_A, 'e.png'),
+    });
+    await replaceCreatorCompositionAssetForPurpose({
+      companyId: CO_A,
+      compositionId: COMP,
+      assetId: asset.id,
+      purpose: 'style_reference',
+      replacesReferenceId: subject.reference.id,
+    });
+
+    const all = await listCreatorCompositionAssets(CO_A, COMP);
+    const byPurpose = Object.fromEntries(all.map((r) => [r.purpose, r.assetId]));
+    expect(all).toHaveLength(2);
+    expect(byPurpose.background).toBe(logoish.assetId);
+    expect(byPurpose.style_reference).toBe(asset.id);
+    expect(byPurpose.subject).toBeUndefined();
   });
 });

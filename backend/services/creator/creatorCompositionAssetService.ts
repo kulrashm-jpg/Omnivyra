@@ -311,6 +311,89 @@ export async function detachCreatorCompositionAsset(
 }
 
 /**
+ * Replace whatever currently occupies a purpose with a different asset.
+ *
+ * "Replace" was an append. The uniqueness key includes `asset_id`, so a second
+ * upload under the same purpose is a legitimately distinct row — the database
+ * had no reason to refuse it — and the composition ended up holding both the
+ * old image and the new one while the panel, which shows a single attachment,
+ * displayed only one of them. The other stayed invisible and kept feeding the
+ * render.
+ *
+ * Order is attach-then-detach, matching `changeCreatorCompositionAssetUsage`:
+ * if the detach fails the composition still has an asset for that purpose,
+ * whereas detach-first would leave it with none.
+ *
+ * Only the named purpose is touched. A subject being replaced says nothing
+ * about the background or the logo, and removing them would discard choices the
+ * user never revisited.
+ *
+ * The canonical asset behind the displaced reference is NOT deleted: it belongs
+ * to the company's library, may be referenced by another composition, and
+ * outliving one draft's use of it is the entire point of separating identity
+ * from usage.
+ */
+export async function replaceCreatorCompositionAssetForPurpose(input: {
+  companyId: string;
+  compositionId: string;
+  assetId: string;
+  purpose: CompositionAssetPurpose;
+  mode?: CompositionAssetMode;
+  ordinal?: number;
+  metadata?: Record<string, unknown>;
+  /**
+   * A reference the CALLER is replacing, whatever purpose it holds.
+   *
+   * The purpose-scoped rule alone is not enough for a single-image surface: a
+   * panel that shows one attachment and offers "Replace" means "this image
+   * becomes that one", and if the replacement is given a different usage the
+   * old reference would survive under its old purpose — attached, invisible,
+   * and still reaching the render. The surface states what it is replacing.
+   */
+  replacesReferenceId?: string | null;
+}): Promise<{ reference: CompositionAssetReference; replacedReferenceIds: string[] }> {
+  const companyId = String(input?.companyId || '').trim();
+  const compositionId = String(input?.compositionId || '').trim();
+  const assetId = String(input?.assetId || '').trim();
+
+  // Read BEFORE attaching, so the new reference is never mistaken for one of
+  // the ones being displaced.
+  const occupying = (await listCreatorCompositionAssets(companyId, compositionId))
+    .filter((r) => r.purpose === input.purpose);
+  const already = occupying.find((r) => r.assetId === assetId) ?? null;
+  const stale = occupying.filter((r) => r.assetId !== assetId);
+
+  /*
+   * Re-attaching what is already attached is the same request twice — a double
+   * click, a retry — and the uniqueness key would refuse it as a duplicate. The
+   * requested state already holds, so report it rather than fail it, and still
+   * clear anything else sitting in this purpose.
+   */
+  const reference = already ?? await attachCreatorCompositionAsset({
+    companyId,
+    compositionId,
+    assetId,
+    purpose: input.purpose,
+    mode: input.mode,
+    ordinal: input.ordinal,
+    metadata: input.metadata,
+  });
+
+  const supersededId = String(input.replacesReferenceId || '').trim();
+  const displaced = supersededId && supersededId !== reference.id
+    && !stale.some((r) => r.id === supersededId)
+      ? [...stale, { id: supersededId } as CompositionAssetReference]
+      : stale;
+
+  const replacedReferenceIds: string[] = [];
+  for (const gone of displaced) {
+    await detachCreatorCompositionAsset(companyId, gone.id);
+    replacedReferenceIds.push(gone.id);
+  }
+  return { reference, replacedReferenceIds };
+}
+
+/**
  * Change how an attached asset is used, without re-uploading it.
  *
  * `purpose` is part of the uniqueness key, so a change is a detach plus an
@@ -326,7 +409,9 @@ export async function changeCreatorCompositionAssetUsage(input: {
   ordinal?: number;
   metadata?: Record<string, unknown>;
 }): Promise<CompositionAssetReference> {
-  const attached = await attachCreatorCompositionAsset({
+  // Moving into a purpose that another asset already occupies displaces it —
+  // the destination holds one asset, exactly as the source did.
+  const { reference } = await replaceCreatorCompositionAssetForPurpose({
     companyId: input.companyId,
     compositionId: input.compositionId,
     assetId: input.assetId,
@@ -336,8 +421,10 @@ export async function changeCreatorCompositionAssetUsage(input: {
   });
   // Only after the new relationship exists, so a failure cannot leave the
   // composition with no asset at all.
-  await detachCreatorCompositionAsset(input.companyId, input.referenceId);
-  return attached;
+  if (reference.id !== input.referenceId) {
+    await detachCreatorCompositionAsset(input.companyId, input.referenceId);
+  }
+  return reference;
 }
 
 /** Where else is this asset used? Proves detach did not orphan the file. */

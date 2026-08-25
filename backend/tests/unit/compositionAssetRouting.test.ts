@@ -544,11 +544,14 @@ describe('G — mutation guards', () => {
   it('MUTATION GUARD: no auto-correction of a stated mode', () => {
     // A tempting "fix" is to coerce an illegal mode to the purpose's default.
     expect(ROUTING).not.toMatch(/mode\s*=\s*defaultModeForPurpose/);
-    expect(ROUTING).toContain("reject(r, 'mode_not_allowed_for_purpose'");
+    // The refusal now lives in the shared `slotAcceptance` predicate — the one
+    // both the router and the surface that offers usages consult — so the guard
+    // follows it there rather than pinning the call it used to be written as.
+    expect(ROUTING).toContain("reason: 'mode_not_allowed_for_purpose'");
   });
 
   it('MUTATION GUARD: undeclared template slots stay fail-closed', () => {
-    expect(ROUTING).toContain("reject(r, 'template_accepts_no_references'");
+    expect(ROUTING).toContain("reason: 'template_accepts_no_references'");
     expect(ROUTING).toMatch(/return Array\.isArray\(slots\) && slots\.length > 0;/);
   });
 
