@@ -20,6 +20,7 @@
  */
 
 import { ownedDbTable } from '../db/writeOwner';
+import { supabase } from '../db/supabaseClient';
 import {
   canTransitionMediaAsset,
   validateCanonicalMediaAssetInput,
@@ -29,6 +30,20 @@ import {
 } from '../../lib/content/canonicalMediaAsset';
 
 const TABLE = 'canonical_media_assets';
+
+/**
+ * The reference table, named here rather than imported.
+ *
+ * `compositionAssetReferenceService` imports `getCanonicalMediaAsset` from THIS
+ * module, so importing its `listReferencesForAsset` back would close a runtime
+ * cycle (`check:runtime-cycles` enforces against exactly that). Deletion needs
+ * only "does any reference exist", which is one scoped existence probe, so the
+ * table name is duplicated deliberately in preference to the cycle.
+ */
+const REFERENCE_TABLE = 'composition_asset_references';
+
+/** Thrown when an asset is still in use. Distinct so callers can map it to 409. */
+export const ASSET_STILL_REFERENCED = 'Asset is still referenced by a composition';
 
 /** Columns every read projects. Explicit so a schema addition cannot silently widen reads. */
 const COLUMNS =
@@ -172,4 +187,97 @@ export async function setCanonicalMediaAssetLifecycle(
 
   if (error) throw new Error(`Failed to update canonical media asset: ${error.message}`);
   return toDomain(data as Row);
+}
+
+/**
+ * Delete one asset within a company: the row, then its storage object.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * Every other artifact in this flow could already be removed through a
+ * supported path — the reference by detach, the upload and its bytes by
+ * `DELETE /api/media/[id]` — but a canonical row could not, so any asset ever
+ * created was permanent. That is what blocked controlled production testing.
+ * Nothing in the contract, the migration or the table asks for retention; the
+ * omission was an omission.
+ *
+ * REFUSES WHILE REFERENCED. The composite foreign key is `ON DELETE CASCADE`,
+ * so deleting a referenced asset would silently destroy the user's composition
+ * relationships — including ones in OTHER compositions, since an asset is
+ * "reusable by design". Detach is deliberately not deletion, and deletion is
+ * deliberately not a cascading detach: the caller must detach first.
+ *
+ * ORDERING: row first, object second — the opposite of `deleteMediaFile`.
+ * Both orders can fail halfway, and Supabase gives no transaction spanning the
+ * database and storage, so the choice is which residue is safer:
+ *
+ *   row → object   worst case leaves BYTES with no row. Nothing reads them;
+ *                  the cost is storage.
+ *   object → row   worst case leaves a ROW pointing at bytes that are gone,
+ *                  which the compose and condition lanes would then try to
+ *                  download mid-render. That is a user-visible failure.
+ *
+ * Orphaned bytes are a cost; a dangling row is a defect. Hence row first. The
+ * residual failure mode is therefore an orphaned storage object, and it is NOT
+ * cleaned up here — this phase adds no janitor.
+ *
+ * Returns true when a row was deleted, false when there was nothing to delete.
+ * A missing asset and another company's asset both return false: the caller
+ * learns nothing either way, matching `getCanonicalMediaAsset`.
+ */
+export async function deleteCanonicalMediaAsset(
+  companyId: string,
+  assetId: string,
+): Promise<boolean> {
+  if (!companyId?.trim() || !assetId?.trim()) return false;
+
+  // Company-scoped read first. This is the ONLY authorization input, and it
+  // also supplies the bucket and path — the client never names either, so an
+  // arbitrary storage location is not expressible through this function.
+  const asset = await getCanonicalMediaAsset(companyId, assetId);
+  if (!asset) return false;
+
+  const { data: refRows, error: refError } = await ownedDbTable(REFERENCE_TABLE)
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('asset_id', assetId)
+    .limit(1);
+  if (refError) {
+    throw new Error(`Failed to check composition references: ${refError.message}`);
+  }
+  if (Array.isArray(refRows) && refRows.length > 0) {
+    throw new Error(`${ASSET_STILL_REFERENCED}; detach it before deleting.`);
+  }
+
+  const { error: deleteError } = await ownedDbTable(TABLE)
+    .delete()
+    .eq('company_id', companyId)
+    .eq('id', assetId);
+  if (deleteError) {
+    // Storage is untouched, so the asset remains wholly intact and retryable.
+    throw new Error(`Failed to delete canonical media asset: ${deleteError.message}`);
+  }
+
+  // Best effort, and deliberately after the row. A storage object that is
+  // already gone is success, not an error: the desired end state is reached.
+  try {
+    const { error: storageError } = await supabase.storage
+      .from(asset.storageBucket)
+      .remove([asset.storagePath]);
+    if (storageError) {
+      console.warn('[canonical-media-asset][storage-orphan]', {
+        companyId,
+        assetId,
+        reason: storageError.message,
+      });
+    }
+  } catch (err) {
+    console.warn('[canonical-media-asset][storage-orphan]', {
+      companyId,
+      assetId,
+      reason: (err as Error)?.message ?? String(err),
+    });
+  }
+
+  return true;
 }
