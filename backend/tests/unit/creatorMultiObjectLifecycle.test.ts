@@ -336,6 +336,25 @@ describe('M9–M10 — single-object and empty assets behave as before', () => {
   });
 });
 
+describe('A scan that cannot see every row refuses to delete', () => {
+  it('CRITICAL: at the scan limit, nothing is removed — an incomplete "unreferenced" is a guess', async () => {
+    const id = seedCarousel();
+    // 2000 rows REMAIN after the doomed one goes, so the scan may be truncated
+    // and cannot prove these objects are unowned.
+    for (let i = 0; i < 2000; i += 1) seed({ id: `bulk-${i}`, url: null, files: [] });
+    const r = await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    expect(r.deletedAsset).toBe(true);          // the row still goes
+    expect(removes()).toHaveLength(0);          // the objects do not
+  });
+
+  it('just under the limit, deletion proceeds normally', async () => {
+    const id = seedCarousel();
+    for (let i = 0; i < 1998; i += 1) seed({ id: `bulk-${i}`, url: null, files: [] });
+    await deleteCreatorAssetRecord({ assetId: id, companyId: CO });
+    expect(removes()).toHaveLength(4);
+  });
+});
+
 describe('M11 — no caller-supplied storage location', () => {
   it('CRITICAL: bucket/path/url on the input are ignored entirely', async () => {
     const id = seed({ url: signed('media-images', slidePath(1)) });
