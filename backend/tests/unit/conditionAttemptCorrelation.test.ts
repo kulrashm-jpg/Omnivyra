@@ -154,6 +154,11 @@ describe('D — telemetry still gates nothing', () => {
   it('CRITICAL: persistence does not depend on the event or the id', () => {
     expect(PERSIST).not.toContain('condition_attempt_id');
     expect(PERSIST).not.toContain('emitCreatorEvent');
+    // Not just the call — the dependency. A coupling introduced by importing
+    // the telemetry module (statically or dynamically) would let a telemetry
+    // failure surface on the write path, which is the thing being prevented.
+    expect(PERSIST).not.toContain('creatorOperationalTelemetryService');
+    expect(PERSIST).not.toMatch(/import\([^)]*[Tt]elemetry/);
   });
 
   it('CRITICAL: billing is unchanged and not gated on telemetry', () => {
@@ -202,7 +207,15 @@ describe('E — event semantics and payload are preserved', () => {
 
 describe('F — Phase 74/78 lifecycle is untouched', () => {
   it('deletion still projects every object-bearing column', () => {
-    expect(PERSIST).toContain(".select('id, url, files, metadata')");
+    // Anchored to the DELETE chain. A bare substring passes on the sharer
+    // scan's identical projection, so it would not notice the delete narrowing
+    // back to `url` — the exact Phase 78 defect.
+    expect(PERSIST).toContain(
+      "    .delete()\n" +
+      "    .eq('id', input.assetId)\n" +
+      "    .eq('company_id', input.companyId)\n" +
+      "    .select('id, url, files, metadata');",
+    );
     expect(PERSIST).toContain('await removeRenderedObjectsForDeletedAsset(');
   });
 
