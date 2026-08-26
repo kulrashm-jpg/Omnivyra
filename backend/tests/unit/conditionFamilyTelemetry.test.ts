@@ -174,8 +174,11 @@ describe('E — nothing else moved', () => {
      * telemetry neither introduced a charge nor put one on a path that only
      * runs when a reference could not be applied.
      */
-    expect((INFO.match(/recordAssetCredits\(/g) ?? [])).toHaveLength(1);
-    expect((INFO.match(/captureImageProviderCost\(/g) ?? [])).toHaveLength(1);
+    // Both are imported by this module but never invoked — it calls no
+    // provider and charges nothing. Asserting invocations, not mentions: a
+    // grep for the bare name matches the import line and proves nothing.
+    expect((INFO.match(/recordAssetCredits\(/g) ?? [])).toHaveLength(0);
+    expect((INFO.match(/captureImageProviderCost\(/g) ?? [])).toHaveLength(0);
     expect(FAMILY).not.toContain('recordAssetCredits');
     expect(FAMILY).not.toContain('captureImageProviderCost');
   });
