@@ -495,6 +495,13 @@ function CampaignPlannerLayout({
                 onConfirmed={() => navigateTab(hasSkeleton ? 'build' : 'skeleton')}
                 canConfirm={hasStrategyDraft}
                 skeletonAlreadyConfirmed={hasSkeleton}
+                // P0 honesty pass: the theme-card activity preview hands off to
+                // the Content Workspace — the ONE surface where campaign copy is
+                // written, generated, and persisted.
+                onOpenContentWorkspace={(week) => {
+                  setSelectedThemeWeek(week);
+                  navigateTab('content');
+                }}
               />
             </div>
           </div>
