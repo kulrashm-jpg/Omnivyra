@@ -19,6 +19,7 @@ import {
   FileText,
   Shield,
   Compass,
+  Gauge,
 } from 'lucide-react';
 import {
   type DeletionAudit,
@@ -80,6 +81,22 @@ const CreditsBillingTab = dynamic(() => import('../components/super-admin/tabs/C
   loading: SuperAdminTabLoader,
 });
 const CuratedSourcesTab = dynamic(() => import('../components/super-admin/tabs/CuratedSourcesTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+/*
+ * Creator operations.
+ *
+ * The component, its API and its tests all already existed — it was simply
+ * never imported by anything, so nothing it rendered reached an operator and
+ * none of it appeared in a build. Its CONDITION panel (attempts / applied /
+ * degraded / degradation rate) was the visible half of Phase 86, and was
+ * invisible in the only place it was meant to be read.
+ *
+ * Same dynamic-import shape as every neighbour above: no props, client-only,
+ * shared loader.
+ */
+const CreatorOperationsTab = dynamic(() => import('../components/super-admin/tabs/CreatorOperationsTab'), {
   ssr: false,
   loading: SuperAdminTabLoader,
 });
@@ -432,6 +449,9 @@ export default function SuperAdminPanel() {
             { id: 'audit',          label: 'Audit Logs',         icon: Eye        },
             { id: 'social-platforms', label: 'APIs',             icon: Globe      },
             { id: 'security',       label: 'Security',           icon: Shield     },
+            // Inserted before `blog`, which is a link-out rather than a tab, so
+            // every existing tab keeps its current relative order.
+            { id: 'creator-ops',    label: 'Creator Ops',        icon: Gauge      },
             { id: 'blog',           label: 'Blog',               icon: FileText   },
           ].map((tab) => {
             const Icon = tab.icon;
@@ -527,6 +547,10 @@ export default function SuperAdminPanel() {
 
         {activeTab === 'security' && (
           <SecurityTab />
+        )}
+
+        {activeTab === 'creator-ops' && (
+          <CreatorOperationsTab />
         )}
 
         {activeTab === 'cost-analysis' && (
