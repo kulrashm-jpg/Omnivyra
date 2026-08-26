@@ -11,7 +11,10 @@ import {
 } from 'lucide-react';
 import { usePlannerSession, type CalendarPlanActivity } from './plannerSessionStore';
 import PlatformIcon from '../ui/PlatformIcon';
-import ActivityWorkspaceDrawer, { type ContentGroup } from './ActivityWorkspaceDrawer';
+import ActivityWorkspaceDrawer, {
+  type ContentGroup,
+  type GroupPlatformContent,
+} from './ActivityWorkspaceDrawer';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import type { PlannerStrategicCard } from '../../lib/plannerStrategicCard';
 
@@ -63,8 +66,21 @@ function groupActivitiesForWeek(
       const first = acts[0];
       const platforms = [...new Set(acts.map((a) => a.platform ?? 'linkedin').filter(Boolean))];
       const contentTypes: Record<string, string> = {};
+      // P0: lift the ALREADY-PERSISTED planning content onto the group so the
+      // preview drawer can show it without owning any state of its own. Read
+      // path only — the Content Workspace remains the sole writer.
+      const existingContent: Record<string, GroupPlatformContent> = {};
       for (const a of acts) {
-        if (a.platform) contentTypes[a.platform] = a.content_type ?? 'post';
+        if (!a.platform) continue;
+        contentTypes[a.platform] = a.content_type ?? 'post';
+        const body = a.draft_content?.body;
+        if (typeof body === 'string' && body.trim()) {
+          existingContent[a.platform] = {
+            body,
+            status: a.content_planning_status ?? 'draft',
+            manuallyEdited: a.draft_content?.manually_edited === true,
+          };
+        }
       }
       return {
         title: first.title ?? first.theme ?? 'Untitled',
@@ -75,6 +91,7 @@ function groupActivitiesForWeek(
         theme: first.theme,
         objective: first.objective,
         companyId,
+        existingContent,
       };
     });
     return { day, groups };
@@ -478,6 +495,7 @@ export function StrategicThemeCards({
   onConfirmed,
   canConfirm = false,
   skeletonAlreadyConfirmed = false,
+  onOpenContentWorkspace,
 }: {
   companyId?: string | null;
   selectedWeek?: number | null;
@@ -485,6 +503,8 @@ export function StrategicThemeCards({
   onConfirmed?: () => void;
   canConfirm?: boolean;
   skeletonAlreadyConfirmed?: boolean;
+  /** Navigate to the canonical Content Workspace tab for a week (P0). */
+  onOpenContentWorkspace?: (week: number) => void;
 }) {
   const { state, confirmStrategy } = usePlannerSession();
   const themes = state.strategic_themes ?? [];
@@ -577,6 +597,7 @@ export function StrategicThemeCards({
         <ActivityWorkspaceDrawer
           group={activeWorkspace}
           onClose={() => setActiveWorkspace(null)}
+          onOpenContentWorkspace={onOpenContentWorkspace}
         />
       )}
     </>
