@@ -1,5 +1,5 @@
 /** Part 6/10 of creatorAssetRenderer.ts — verbatim split (barrel preserved; importers unchanged). */
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { config } from '../../config';
 import {
@@ -380,6 +380,23 @@ export async function composeSingleVisualAsset(
    */
   const conditionDegradation = providerResult.conditionDegradation ?? null;
   const conditionApplied = providerResult.conditionApplied === true;
+  /*
+   * The join key between a CONDITION event and the asset that attempt produced.
+   *
+   * The event necessarily fires here — this is where the composition context
+   * lives — while the asset row does not exist until persistence, much later
+   * and in another service. So there is no asset id to put on the event.
+   *
+   * Minting an id here and stamping it on BOTH sides gives a durable join
+   * without moving the event, duplicating it, or making persistence wait on
+   * telemetry. `trace_id` was the only existing bridge and it is ambient: null
+   * whenever the render runs outside a trace, which is exactly when an
+   * investigation needs it most.
+   *
+   * Null when no CONDITION attempt was made, so an ordinary generation carries
+   * no key and cannot be mistaken for one.
+   */
+  const conditionAttemptId = (conditionDegradation || conditionApplied) ? randomUUID() : null;
   if (conditionDegradation || conditionApplied) {
     const conditionPlan = options.compositionReferences?.conditionPlan;
     const routed = conditionPlan?.condition ?? [];
@@ -402,6 +419,8 @@ export async function composeSingleVisualAsset(
       // Null rather than absent when the plan carries no id — an honest
       // "unknown" instead of a value invented to fill the column.
       composition_id: conditionPlan?.compositionId ?? null,
+      // Carried on the asset too; this is the pair that makes the join work.
+      condition_attempt_id: conditionAttemptId,
     };
     /*
      * Latency is the provider edit call, measured at the provider boundary and
@@ -595,6 +614,28 @@ export async function composeSingleVisualAsset(
     condition_reference_status: conditionDegradation?.status,
     condition_reference_fallback_category: conditionDegradation?.category,
     condition_reference_user_message: conditionDegradation?.userMessage,
+    /*
+     * The other half of the event↔asset join. Absent unless a CONDITION attempt
+     * was actually made, so it never appears on an ordinary generation.
+     *
+     * NOT part of the disclosure above: nothing renders it, and the banner
+     * remains keyed solely on `condition_reference_status`, so a successful
+     * CONDITION stays visually unmarked exactly as Phase 76 requires.
+     */
+    condition_attempt_id: conditionAttemptId ?? undefined,
+    /*
+     * Provenance for historical asset queries.
+     *
+     * `provider_model` reads `gpt-image-1:edit` for BOTH the canonical CONDITION
+     * path and the legacy showcase edit path, so it cannot tell them apart after
+     * the fact. Phase 86 solved that for counting, by emitting the event only
+     * from the canonical branch — but an event is not reachable from a row.
+     *
+     * Set only when the canonical edit actually applied. `provider_model` is
+     * left exactly as it was; this is additive, and absence keeps every existing
+     * row and every other path unchanged.
+     */
+    condition_reference_applied: conditionApplied || undefined,
     image_subtype: subtypeHint?.subtypeId ?? null,
     attachment_mode: metadata.attachment_mode ?? null,
     writer_asset_type: metadata.writer_asset_type ?? null,
