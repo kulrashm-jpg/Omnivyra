@@ -1,5 +1,5 @@
 /** Part 9/10 of creatorAssetRenderer.ts — verbatim split (barrel preserved; importers unchanged). */
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { config } from '../../config';
 import {
@@ -85,6 +85,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
 import { sharp, unsupportedFamilyConditionDegradation, type RenderedMediaBundle, type RenderOptions, getCachedRenderBuffer, safeObject, escapeXml, balanceTextLines, renderWrappedBodyText, blueprintIdForRender, curatedDesignTemplate, resolveInfographicRenderStyle, compactText, buildAccessibleAltText, resolveRenderSize, fitTextToBox } from './creatorAssetRendererContracts';
+import { emitCreatorEvent, CREATOR_EVENTS } from './creatorOperationalTelemetryService';
 import { loadBrandMark } from './creatorAssetRendererOverlay';
 import { bufferFromRemoteImage } from './creatorAssetRendererSvg';
 import { uploadRenderedPng } from './creatorAssetRendererMedia';
@@ -1591,11 +1592,47 @@ export async function renderInfographicAsset(
      */
     ...(() => {
       const degradation = unsupportedFamilyConditionDegradation(options.compositionReferences);
-      return degradation ? {
+      if (!degradation) return {};
+      /*
+       * Disclosed AND counted.
+       *
+       * The disclosure alone left this attempt invisible to operations: it
+       * emitted no event, so it fell outside `attempts = applied + degraded`
+       * and the degradation rate under-reported every reference a family could
+       * never apply. A person was told; nobody could measure how often it
+       * happened.
+       *
+       * Same event, same dimensions and same join key as the provider lane, so
+       * the three categories aggregate as one population. `latencyMs` is null
+       * rather than 0 — no provider call was made, and a fabricated zero would
+       * drag the edit-latency percentiles down with attempts that never
+       * reached a model.
+       */
+      const conditionPlan = options.compositionReferences?.conditionPlan;
+      const routed = conditionPlan?.condition ?? [];
+      const conditionAttemptId = randomUUID();
+      emitCreatorEvent({
+        event: CREATOR_EVENTS.CONDITION_REFERENCE_DEGRADED,
+        severity: 'warning',
+        companyId: options.companyId ?? null,
+        latencyMs: null,
+        metadata: {
+          stage: 'render_family',
+          category: degradation.category,
+          references: routed.length,
+          // From the routed reference, never from a storage location.
+          purpose: (routed[0] as { reference?: { purpose?: unknown } } | undefined)?.reference?.purpose ?? null,
+          mode: (routed[0] as { reference?: { mode?: unknown } } | undefined)?.reference?.mode ?? null,
+          composition_id: conditionPlan?.compositionId ?? null,
+          condition_attempt_id: conditionAttemptId,
+        },
+      });
+      return {
         condition_reference_status: degradation.status,
         condition_reference_fallback_category: degradation.category,
         condition_reference_user_message: degradation.userMessage,
-      } : {};
+        condition_attempt_id: conditionAttemptId,
+      };
     })(),
     ...buildCreatorBrandKitMetadata(brandKit, {
       platform,
