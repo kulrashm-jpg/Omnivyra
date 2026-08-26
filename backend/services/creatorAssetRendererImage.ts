@@ -379,23 +379,55 @@ export async function composeSingleVisualAsset(
    * no filename, no prompt — the category already says what happened.
    */
   const conditionDegradation = providerResult.conditionDegradation ?? null;
-  if (conditionDegradation) {
-    const routed = options.compositionReferences?.conditionPlan?.condition ?? [];
-    emitCreatorEvent({
-      event: CREATOR_EVENTS.CONDITION_REFERENCE_DEGRADED,
-      severity: 'warning',
-      companyId: options.companyId ?? null,
-      metadata: {
-        stage: 'provider_edit',
-        category: conditionDegradation.category,
-        references: routed.length,
-        // purpose/mode come from the reference itself. Deliberately NOT
-        // `routed[0].sourceUrl`, which is a storage location and must never
-        // reach telemetry.
-        purpose: routed[0]?.reference?.purpose ?? null,
-        mode: routed[0]?.reference?.mode ?? null,
-      },
-    });
+  const conditionApplied = providerResult.conditionApplied === true;
+  if (conditionDegradation || conditionApplied) {
+    const conditionPlan = options.compositionReferences?.conditionPlan;
+    const routed = conditionPlan?.condition ?? [];
+    /*
+     * ONE payload for both outcomes, built once.
+     *
+     * Success and failure must be counted over the same dimensions or the rate
+     * is meaningless — a degradation percentage sliced by `purpose` only works
+     * if both sides carry `purpose`. Building them separately is how the two
+     * drift apart.
+     */
+    const metadata = {
+      stage: 'provider_edit',
+      references: routed.length,
+      // purpose/mode come from the reference itself. Deliberately NOT
+      // `routed[0].sourceUrl`, which is a storage location and must never
+      // reach telemetry.
+      purpose: routed[0]?.reference?.purpose ?? null,
+      mode: routed[0]?.reference?.mode ?? null,
+      // Null rather than absent when the plan carries no id — an honest
+      // "unknown" instead of a value invented to fill the column.
+      composition_id: conditionPlan?.compositionId ?? null,
+    };
+    /*
+     * Latency is the provider edit call, measured at the provider boundary and
+     * applied identically to both events so they are comparable. Null when the
+     * wrapper reported none — never coerced to 0, which would silently drag a
+     * p50 down with attempts that never happened.
+     */
+    const latencyMs = typeof providerResult.conditionLatencyMs === 'number'
+      ? providerResult.conditionLatencyMs
+      : null;
+
+    emitCreatorEvent(conditionDegradation
+      ? {
+        event: CREATOR_EVENTS.CONDITION_REFERENCE_DEGRADED,
+        severity: 'warning',
+        companyId: options.companyId ?? null,
+        latencyMs,
+        metadata: { ...metadata, category: conditionDegradation.category },
+      }
+      : {
+        event: CREATOR_EVENTS.CONDITION_REFERENCE_APPLIED,
+        severity: 'info',
+        companyId: options.companyId ?? null,
+        latencyMs,
+        metadata,
+      });
   }
 
   const { width, height } = resolveRenderSize(platform, fileNamePrefix);

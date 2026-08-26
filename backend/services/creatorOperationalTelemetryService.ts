@@ -85,6 +85,22 @@ export const CREATOR_EVENTS = {
   // provider is ever called. The `category` field carries which of the two,
   // and the fallback is implied rather than counted separately.
   CONDITION_REFERENCE_DEGRADED: 'condition_reference_degraded',
+  //
+  // A reference reached the provider and WAS applied — the canonical edit
+  // returned a usable image.
+  //
+  // This exists to supply a denominator. The degradation event above counted
+  // failures against nothing: with no record of success, "how often is a
+  // person's reference actually used?" was unanswerable, and a rate could not
+  // be computed from durable data. `provider_model` could not stand in for it,
+  // because the showcase edit path stamps the identical `…:edit` string.
+  //
+  // Emitted ONLY from the canonical branch, after a usable image is in hand —
+  // never on routing success, never before the provider result is known.
+  //
+  //   attempts = applied + degraded
+  //
+  CONDITION_REFERENCE_APPLIED: 'condition_reference_applied',
 } as const;
 
 export type CreatorEventType =

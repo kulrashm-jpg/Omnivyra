@@ -155,6 +155,28 @@ export default function CreatorOperationsTab() {
             <Row label="Attachment readiness conversion" value={fmtPct(data.snapshot.rates.attachment_readiness_conversion ?? 0)} />
           </Panel>
 
+          {/*
+            CONDITION reference application.
+
+            Counts and rate come from the durable event stream, so an empty
+            window reads as "0 attempts" rather than as a healthy 0% — the two
+            mean very different things when the feature may simply not be
+            reaching the provider at all.
+          */}
+          <Panel
+            title="CONDITION references"
+            subtitle={
+              (data.snapshot.rates.condition_attempts ?? 0) > 0
+                ? 'Reference images sent to the provider'
+                : 'No attempts in this window'
+            }
+          >
+            <Row label="Attempts" value={`${data.snapshot.rates.condition_attempts ?? 0}`} />
+            <Row label="Applied" value={`${data.snapshot.rates.condition_applied ?? 0}`} />
+            <Row label="Degraded" value={`${data.snapshot.rates.condition_degraded ?? 0}`} />
+            <Row label="Degradation rate" value={fmtPct(data.snapshot.rates.condition_degradation ?? 0)} />
+          </Panel>
+
           {/* Anomalies */}
           {data.snapshot.anomalies.length > 0 && (
             <Panel title="Anomalies">

@@ -178,6 +178,13 @@ export async function generateProviderImage(input: {
    * provider message is an internal diagnostic and must not reach a person.
    */
   let conditionDegradation: ConditionDegradation | null = null;
+  /*
+   * Set on the degraded paths only. The success path returns directly and
+   * carries its own value, so this stays null there. Null — never 0 — when no
+   * canonical attempt happened, so an absent attempt cannot be mistaken for an
+   * instantaneous one.
+   */
+  let conditionLatencyMs: number | null = null;
   const degradedBy = (category: ConditionDegradationCategory): ConditionDegradation => ({
     status: 'not_applied',
     category,
@@ -225,15 +232,34 @@ export async function generateProviderImage(input: {
         console.log('[creator-asset-renderer][canonical-reference-edit-ok]', {
           model: editModel, references: files.length, ms: Date.now() - editStartedAt,
         });
+        /*
+         * The ONLY place `conditionApplied` is set. The showcase branch below
+         * produces the same `…:edit` model string, so the model alone can never
+         * tell the two apart — emitting from here is what makes the success
+         * event mean "canonical CONDITION" and nothing else.
+         *
+         * Latency is measured to HERE, not to the end of the render: it is the
+         * provider edit call, so overlay compositing and upload stay out of it.
+         */
+        const conditionLatencyMs = Date.now() - editStartedAt;
         if (first.b64_json) {
-          return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model: `${editModel}:edit` } };
+          return {
+            image: { buffer: Buffer.from(first.b64_json, 'base64'), model: `${editModel}:edit` },
+            conditionApplied: true,
+            conditionLatencyMs,
+          };
         }
-        return { image: { buffer: await bufferFromRemoteImage(first.url as string), model: `${editModel}:edit` } };
+        return {
+          image: { buffer: await bufferFromRemoteImage(first.url as string), model: `${editModel}:edit` },
+          conditionApplied: true,
+          conditionLatencyMs,
+        };
       }
       // The call completed and returned nothing usable. This used to fall out
       // of the try with no log and no marker at all — the one path more silent
       // than the legacy showcase branch it replaced, which does record it.
       conditionDegradation = degradedBy('edit_no_image');
+      conditionLatencyMs = Date.now() - editStartedAt;
       console.warn('[creator-asset-renderer][canonical-reference-edit-no-image]', { model: editModel });
     } catch (err) {
       // Falls through to the existing paths below — the fallback itself is the
@@ -241,6 +267,7 @@ export async function generateProviderImage(input: {
       // "conditioning was attempted and did not happen" now survives the request
       // as durable metadata rather than only as a log line.
       conditionDegradation = degradedBy('edit_failed');
+      conditionLatencyMs = Date.now() - editStartedAt;
       console.warn('[creator-asset-renderer][canonical-reference-edit-failed]',
         (err as Error)?.message?.slice(0, 200));
     }
@@ -300,8 +327,11 @@ export async function generateProviderImage(input: {
         }
         recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
         console.log('[creator-asset-renderer][provider-image-edit-ok]', { model: editModel, ms: Date.now() - editStartedAt });
-        if (firstEdit.b64_json) return { image: { buffer: Buffer.from(firstEdit.b64_json, 'base64'), model: `${editModel}:edit` }, conditionDegradation };
-        return { image: { buffer: await bufferFromRemoteImage(firstEdit.url as string), model: `${editModel}:edit` }, conditionDegradation };
+        // Showcase success. `conditionApplied` is deliberately NOT set here —
+        // this branch is not canonical CONDITION. It still forwards any earlier
+        // canonical degradation (and its latency), which is Phase 76 behaviour.
+        if (firstEdit.b64_json) return { image: { buffer: Buffer.from(firstEdit.b64_json, 'base64'), model: `${editModel}:edit` }, conditionDegradation, conditionLatencyMs };
+        return { image: { buffer: await bufferFromRemoteImage(firstEdit.url as string), model: `${editModel}:edit` }, conditionDegradation, conditionLatencyMs };
       }
       failures.push(`${editModel}:edit: no image returned`);
     } catch (error) {
@@ -376,9 +406,9 @@ export async function generateProviderImage(input: {
         // together via the entry-consumption lifecycle (no new primitive).
         recordAssetCredits(resolveCostProfile('image').expected_credits_per_asset);
         if (first.b64_json) {
-          return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model }, conditionDegradation };
+          return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model }, conditionDegradation, conditionLatencyMs };
         }
-        return { image: { buffer: await bufferFromRemoteImage(first.url as string), model }, conditionDegradation };
+        return { image: { buffer: await bufferFromRemoteImage(first.url as string), model }, conditionDegradation, conditionLatencyMs };
       }
       failures.push(`${model}: no image returned`);
     } catch (error) {
@@ -408,6 +438,7 @@ export async function generateProviderImage(input: {
   return {
     image: null,
     conditionDegradation,
+    conditionLatencyMs,
     fallbackReason: failures.join(' | ') || 'Provider image generation failed',
   };
 }

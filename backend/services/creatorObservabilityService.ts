@@ -58,6 +58,14 @@ export type MetricSnapshot = {
     orphan_cleanup_rate: number;
     upload_retry_per_hour: number;
     attachment_readiness_conversion: number; // (ready_for_schedule events / upload_started events)
+    /** CONDITION attempts in the window = applied + degraded. A COUNT, not a ratio. */
+    condition_attempts: number;
+    /** Canonical CONDITION applications that succeeded. A COUNT. */
+    condition_applied: number;
+    /** Canonical CONDITION attempts that fell back. A COUNT. */
+    condition_degraded: number;
+    /** degraded / attempts, 0-1. 0 when no attempt was made. */
+    condition_degradation: number;
   };
   health_score: number;            // 0-100, higher = healthier
   anomalies: AnomalyFinding[];
@@ -148,6 +156,17 @@ function computeRates(counts: EventCounts, windowMs: number): MetricSnapshot['ra
   const publishFail = counts[CREATOR_EVENTS.PUBLISH_VALIDATION_FAILED] ?? 0;
   const orphan = counts[CREATOR_EVENTS.ORPHAN_DELETED] ?? 0;
   const readyForSchedule = counts[CREATOR_EVENTS.ATTACHMENT_READY_FOR_SCHEDULE] ?? 0;
+  /*
+   * CONDITION attempts come from the event stream and NOTHING else.
+   *
+   * `provider_model` cannot serve as the denominator (the showcase edit path
+   * stamps the same `…:edit`), and `creator_assets` cannot either, because
+   * lifecycle deletion removes assets while the events correctly survive. The
+   * two events are the only pair that always sum to the attempts made.
+   */
+  const conditionApplied = counts[CREATOR_EVENTS.CONDITION_REFERENCE_APPLIED] ?? 0;
+  const conditionDegraded = counts[CREATOR_EVENTS.CONDITION_REFERENCE_DEGRADED] ?? 0;
+  const conditionAttempts = conditionApplied + conditionDegraded;
 
   // When a metric has no signal (denominator = 0) treat it as neutral/best-case
   // rather than 0 — an empty window should not score as "incident".
@@ -162,6 +181,10 @@ function computeRates(counts: EventCounts, windowMs: number): MetricSnapshot['ra
   const orphan_cleanup_rate = orphan / (windowMs / 3_600_000); // per hour
   const upload_retry_per_hour = (uploadResumed) / (windowMs / 3_600_000);
   const attachment_readiness_conversion = neutralRatio(readyForSchedule, uploadStart, 1);
+  // Zero attempts is not zero-percent-degraded and not an incident — it is no
+  // signal. `neutralRatio` returns the best case (0 degraded) rather than
+  // dividing by zero, matching every other rate here.
+  const condition_degradation = neutralRatio(conditionDegraded, conditionAttempts, 0);
 
   return {
     upload_success,
@@ -172,6 +195,10 @@ function computeRates(counts: EventCounts, windowMs: number): MetricSnapshot['ra
     orphan_cleanup_rate,
     upload_retry_per_hour,
     attachment_readiness_conversion,
+    condition_attempts: conditionAttempts,
+    condition_applied: conditionApplied,
+    condition_degraded: conditionDegraded,
+    condition_degradation,
   };
 }
 
