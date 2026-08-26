@@ -94,7 +94,10 @@ describe('B — both failure cases are captured, and the fallback is untouched',
   });
 
   it('the marker rides out on the fallback result', () => {
-    expect(MEDIA).toMatch(/return \{ image: \{ buffer: [^}]+model \}, conditionDegradation \};/);
+    // Phase 86 added `conditionLatencyMs` alongside it on the same returns.
+    // The property under test is unchanged: the marker rides out on a result
+    // that DID produce an image.
+    expect(MEDIA).toMatch(/return \{ image: \{ buffer: [^}]+model \}, conditionDegradation, conditionLatencyMs \};/);
   });
 
   it('CRITICAL: no provider error text is put into the user message', () => {
@@ -140,7 +143,12 @@ describe('D — one event per failed attempt', () => {
   });
 
   it('CRITICAL: emitted exactly once, guarded on degradation being present', () => {
-    expect(IMAGE).toContain('if (conditionDegradation) {');
+    // Phase 86 widened the guard to cover the success event too. The degraded
+    // event is still emitted from exactly one place, and still only when a
+    // degradation is present — the ternary is what enforces the "only when"
+    // half now that the outer guard admits both outcomes.
+    expect(IMAGE).toContain('if (conditionDegradation || conditionApplied) {');
+    expect(IMAGE).toContain('emitCreatorEvent(conditionDegradation');
     expect((IMAGE.match(/CREATOR_EVENTS\.CONDITION_REFERENCE_DEGRADED/g) ?? [])).toHaveLength(1);
   });
 
@@ -149,11 +157,15 @@ describe('D — one event per failed attempt', () => {
   });
 
   it('carries what operations needs: how often, why, and where', () => {
-    const ev = IMAGE.slice(IMAGE.indexOf('CREATOR_EVENTS.CONDITION_REFERENCE_DEGRADED'));
-    expect(ev.slice(0, 500)).toContain("stage: 'provider_edit'");
-    expect(ev.slice(0, 500)).toContain('category: conditionDegradation.category');
-    expect(ev.slice(0, 500)).toContain('purpose:');
-    expect(ev.slice(0, 500)).toContain('mode:');
+    // Phase 86 hoisted the shared fields into one `metadata` object built above
+    // both events, so the dimensions are asserted at that definition. `category`
+    // stays on the degraded branch, because only it has one.
+    const block = IMAGE.slice(IMAGE.indexOf('const metadata = {'), IMAGE.indexOf('CREATOR_EVENTS.CONDITION_REFERENCE_APPLIED'));
+    expect(block).toContain("stage: 'provider_edit'");
+    expect(block).toContain('purpose:');
+    expect(block).toContain('mode:');
+    expect(block).toContain('references:');
+    expect(block).toContain('category: conditionDegradation.category');
   });
 
   it('CRITICAL: carries no URL, path, bytes, filename, prompt or provider text', () => {

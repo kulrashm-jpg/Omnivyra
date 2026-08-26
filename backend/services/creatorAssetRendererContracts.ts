@@ -153,14 +153,44 @@ export type ConditionDegradation = {
   userMessage: string;
 };
 
+/**
+ * What a CONDITION attempt did, for measurement only.
+ *
+ * Success previously had NO representation at all: an applied reference and an
+ * ordinary generation returned the identical shape, so "how often does
+ * conditioning work?" had no denominator. `conditionDegradation` counted the
+ * failures; nothing counted the attempts.
+ *
+ * These are deliberately two plain optional fields rather than a discriminated
+ * union with the degradation above: this repository compiles with
+ * `"strict": false`, where narrowing a union by a discriminant silently fails
+ * and reads as a missing property. A flat shape cannot be narrowed wrongly.
+ *
+ * `conditionApplied` is set ONLY by the canonical branch, which is what makes
+ * the resulting event provably canonical rather than the showcase edit path —
+ * both of which stamp `provider_model` as `…:edit` and are indistinguishable
+ * from it.
+ */
+export type ConditionAttemptTelemetry = {
+  /** True only when the canonical edit returned a usable image. */
+  conditionApplied?: boolean | null;
+  /**
+   * Milliseconds spent in the canonical `images.edit` call, measured at the
+   * provider boundary so it excludes overlay, upload and persistence work.
+   * Null when no canonical attempt was made — never a fabricated zero.
+   */
+  conditionLatencyMs?: number | null;
+};
+
 export type ProviderImageResult =
-  | {
+  | ({
       image: { buffer: Buffer; model: string };
       fallbackReason?: never;
       /** Present ONLY when conditioning was attempted and could not be applied. */
       conditionDegradation?: ConditionDegradation | null;
-    }
-  | { image: null; fallbackReason: string; conditionDegradation?: ConditionDegradation | null };
+    } & ConditionAttemptTelemetry)
+  | ({ image: null; fallbackReason: string; conditionDegradation?: ConditionDegradation | null }
+      & ConditionAttemptTelemetry);
 
 export type RenderOptions = {
   campaignId?: string | null;

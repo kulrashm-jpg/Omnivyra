@@ -99,6 +99,15 @@ export interface ResolvedCompositionReferences {
    */
   conditionPlan: {
     companyId: string;
+    /**
+     * Carried so a CONDITION telemetry event can name the composition it came
+     * from. Without it a degraded attempt could be counted but never traced
+     * back to the composition that produced it — the event and the asset had
+     * no join key beyond an ambient trace id that is not always present.
+     *
+     * A lookup key, not a secret and not a storage location.
+     */
+    compositionId: string;
     condition: RoutedReference[];
   };
 }
@@ -204,6 +213,7 @@ export async function resolveCompositionAssets(
       },
       conditionPlan: {
         companyId: input.companyId,
+        compositionId: input.compositionId,
         condition: routing.condition,
       },
     },
