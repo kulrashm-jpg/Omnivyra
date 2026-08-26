@@ -215,12 +215,25 @@ describe('D — runtime resolver propagation', () => {
     expect(call![0]).toContain('templateSlots');
   });
 
-  it('there is exactly one runtime entry into the composition resolver', () => {
+  it('ONLY render dispatch enters the composition resolver', () => {
+    /*
+     * This asserted a single caller while there was a single dispatch path.
+     * Phase 61D added the second one: a queued render is dispatched by the
+     * worker, not by the orchestrator, and until it could resolve references a
+     * scheduled or campaign render would silently ignore an attachment that was
+     * sitting durably in the database.
+     *
+     * The rule was never "one caller" for its own sake — it was that resolution
+     * happens at render dispatch and nowhere else, so no surface can acquire a
+     * private path to a user's assets. Two dispatchers, two entries, still one
+     * resolver. The list stays exact so a third has to be deliberate.
+     */
     const runtimeCallers = walk(path.resolve(__dirname, '../../services'))
       .filter((f) => !f.includes(`${path.sep}tests${path.sep}`))
       .filter((f) => /resolveCompositionReferencesForRender\s*\(/.test(fs.readFileSync(f, 'utf8')))
       .filter((f) => !f.endsWith('resolveCompositionReferencesForRender.ts'));
-    expect(runtimeCallers.map((f) => path.basename(f))).toEqual(['creatorOrchestrator.ts']);
+    expect(runtimeCallers.map((f) => path.basename(f)).sort())
+      .toEqual(['creatorOrchestrator.ts', 'creatorRenderWorkerProcessor.ts']);
   });
 
   it('the slots come from the render payload the renderer itself resolves', () => {

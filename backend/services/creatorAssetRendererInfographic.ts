@@ -84,7 +84,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
-import { sharp, type RenderedMediaBundle, type RenderOptions, getCachedRenderBuffer, safeObject, escapeXml, balanceTextLines, renderWrappedBodyText, blueprintIdForRender, curatedDesignTemplate, resolveInfographicRenderStyle, compactText, buildAccessibleAltText, resolveRenderSize, fitTextToBox } from './creatorAssetRendererContracts';
+import { sharp, unsupportedFamilyConditionDegradation, type RenderedMediaBundle, type RenderOptions, getCachedRenderBuffer, safeObject, escapeXml, balanceTextLines, renderWrappedBodyText, blueprintIdForRender, curatedDesignTemplate, resolveInfographicRenderStyle, compactText, buildAccessibleAltText, resolveRenderSize, fitTextToBox } from './creatorAssetRendererContracts';
 import { loadBrandMark } from './creatorAssetRendererOverlay';
 import { bufferFromRemoteImage } from './creatorAssetRendererSvg';
 import { uploadRenderedPng } from './creatorAssetRendererMedia';
@@ -1576,6 +1576,27 @@ export async function renderInfographicAsset(
     auto_corrections: corrected.corrections,
     overlay_renderer: 'none',
     provider_text_validation: providerTextValidation,
+    /*
+     * An attached reference this family cannot apply is DISCLOSED, not dropped.
+     *
+     * This renderer composites SVG over a base layer and never calls an image
+     * model, so a CONDITION reference — whose meaning is "give this to the
+     * model" — has no stage to reach. Until now that produced silence: the
+     * image was accepted, persisted and routed, and the finished infographic
+     * looked exactly like one with nothing attached.
+     *
+     * The SAME three fields the image lane already emits, so the client renders
+     * this through the disclosure it already has. Undefined when nothing was
+     * attached, which is what keeps an ordinary infographic clean.
+     */
+    ...(() => {
+      const degradation = unsupportedFamilyConditionDegradation(options.compositionReferences);
+      return degradation ? {
+        condition_reference_status: degradation.status,
+        condition_reference_fallback_category: degradation.category,
+        condition_reference_user_message: degradation.userMessage,
+      } : {};
+    })(),
     ...buildCreatorBrandKitMetadata(brandKit, {
       platform,
       overlayConfiguration: { mode: 'infographic_deterministic_sections' },

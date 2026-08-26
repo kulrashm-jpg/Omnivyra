@@ -110,8 +110,25 @@ describe('B/C — both degradation causes still emit, unchanged', () => {
     expect(CANONICAL).toContain("conditionDegradation = degradedBy('edit_no_image');");
   });
 
-  it('the two categories remain the only ones', () => {
-    expect(CONTRACTS).toContain("export type ConditionDegradationCategory = 'edit_failed' | 'edit_no_image';");
+  it('the two PROVIDER causes remain the only provider causes', () => {
+    /*
+     * This pinned the whole union when every cause was a provider outcome.
+     * Phase 61E added `family_unsupported`, which is not one: it says the asset
+     * family has no stage that could consume a reference, so no call was ever
+     * made and no provider could have failed.
+     *
+     * What this suite is guarding is unchanged — that measurement work added no
+     * new way for the PROVIDER to fail. So it now asserts exactly that: the
+     * provider causes are still the two, and the only other member is the
+     * non-provider one, named explicitly so a genuine third provider cause
+     * still has to be deliberate.
+     */
+    const union = /export type ConditionDegradationCategory =([^;]+);/.exec(CONTRACTS);
+    expect(union).not.toBeNull();
+    const categories = union![1].split('|').map((s) => s.trim().replace(/'/g, ''));
+    const providerCauses = categories.filter((c) => c.startsWith('edit_'));
+    expect(providerCauses.sort()).toEqual(['edit_failed', 'edit_no_image']);
+    expect(categories.filter((c) => !c.startsWith('edit_'))).toEqual(['family_unsupported']);
   });
 });
 
