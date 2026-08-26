@@ -125,14 +125,22 @@ export type CreatorReviewPreviewInput = {
 };
 
 /**
- * Why a user's CONDITION reference did not reach the finished image.
+ * Why a reference that was accepted, persisted and routed did not reach the
+ * finished asset.
  *
- * Machine-readable and stable — never prose. `edit_failed` is "the edit call
- * did not complete"; `edit_no_image` is "it completed and returned nothing
- * usable". They are separated because they point at different causes, and the
- * second one used to fall out of the try with no record at all.
+ * Machine-readable and stable — never prose.
+ *
+ * `edit_failed` and `edit_no_image` are provider outcomes: the call was made
+ * and did not produce a usable result. They are separated because they point at
+ * different causes, and the second used to fall out of the try with no record
+ * at all.
+ *
+ * `family_unsupported` is not a provider outcome — it says the asset family has
+ * no stage that could ever consume the reference, which is a property of the
+ * renderer rather than of the attempt. Distinguishing it matters because one
+ * kind of not-applied is worth retrying and the other never is.
  */
-export type ConditionDegradationCategory = 'edit_failed' | 'edit_no_image';
+export type ConditionDegradationCategory = 'edit_failed' | 'edit_no_image' | 'family_unsupported';
 
 /**
  * The same three-part shape the document lane already ships
@@ -181,6 +189,46 @@ export type ConditionAttemptTelemetry = {
    */
   conditionLatencyMs?: number | null;
 };
+
+/**
+ * The disclosure a family that cannot consume references must make.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * Some asset families have no stage a reference could reach. An infographic is
+ * composited deterministically — SVG over a base layer, no model anywhere in
+ * the path — so a CONDITION reference, whose whole meaning is "hand this to the
+ * model", has nothing to be handed to. That is a legitimate limit, but it was
+ * being expressed as silence: the user attached a photograph, the reference was
+ * accepted, persisted and routed, and the finished asset was indistinguishable
+ * from one where they had attached nothing at all.
+ *
+ * This returns the SAME three-part disclosure the provider lane already
+ * produces, so a family limit and a provider failure reach the client through
+ * one mechanism rather than two. No second status field, no second vocabulary —
+ * only a category saying which kind of not-applied this is.
+ *
+ * Null when nothing was attached: an absent marker is what keeps an ordinary
+ * generation clean.
+ */
+export function unsupportedFamilyConditionDegradation(
+  compositionReferences: { conditionPlan?: { condition?: readonly unknown[] } | null } | null | undefined,
+): ConditionDegradation | null {
+  const attempted = compositionReferences?.conditionPlan?.condition?.length ?? 0;
+  if (attempted === 0) return null;
+  return {
+    status: 'not_applied',
+    category: 'family_unsupported',
+    /*
+     * Deliberately different copy from the provider-failure message. Telling
+     * someone to "regenerate to try again" when the family can never apply a
+     * reference would send them round a loop that cannot succeed; what they
+     * need is to know the image survived and which designs can use it.
+     */
+    userMessage:
+      'This design is built from your text and brand rather than generated from a photo, so your image was not used here. It is still attached — choose an image design to use it.',
+  };
+}
 
 export type ProviderImageResult =
   | ({

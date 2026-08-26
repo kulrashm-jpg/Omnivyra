@@ -40,8 +40,23 @@ const CTX = strip(read('../../../components/creator/workflow/creatorWorkflowCtx.
 /* ── 1. The contract, modelled on the shipped one ─────────────────────────── */
 
 describe('A — failure categories are stable and machine-readable', () => {
-  it('exactly two categories, neither of them prose', () => {
-    expect(CONTRACTS).toContain("export type ConditionDegradationCategory = 'edit_failed' | 'edit_no_image';");
+  it('every category is a machine-readable slug, none of them prose', () => {
+    /*
+     * This used to pin the literal two-category union. Phase 61E added a third,
+     * `family_unsupported`, for the case the provider never sees: an asset
+     * family with no model in its path, which cannot apply a reference however
+     * well the call would have gone.
+     *
+     * The count was never the point — the point is that a category is something
+     * a client can branch on rather than a sentence to display, and that the
+     * set stays small and closed. So this asserts the shape, plus the exact
+     * membership, so an accidental fourth still has to be deliberate.
+     */
+    const union = /export type ConditionDegradationCategory =([^;]+);/.exec(CONTRACTS);
+    expect(union).not.toBeNull();
+    const categories = union![1].split('|').map((s) => s.trim().replace(/'/g, ''));
+    expect(categories.sort()).toEqual(['edit_failed', 'edit_no_image', 'family_unsupported']);
+    for (const c of categories) expect(c).toMatch(/^[a-z][a-z_]{2,31}$/);
   });
 
   it('the triple mirrors the shipped document-lane contract', () => {

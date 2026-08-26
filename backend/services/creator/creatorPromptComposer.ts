@@ -185,8 +185,22 @@ export type ReferenceImagePurpose =
 export type ReferenceImage = {
   url: string;
   purpose: ReferenceImagePurpose;
-  /** Free-text hint passed to the provider when capability allows. */
+  /**
+   * Application-authored hint. Written by us, one of a fixed set of sentences,
+   * and therefore safe to state as an instruction.
+   */
   hint?: string;
+  /**
+   * What the USER typed about this image. Untrusted content.
+   *
+   * Kept in its own field rather than folded into `hint` precisely so the two
+   * can never be confused at the point they become prompt text: once a user's
+   * sentence and an application sentence share a field, nothing downstream can
+   * tell which is which, and the only safe choice left is to distrust both or
+   * trust both. Separated here, the composer can present this as a quoted
+   * description of the picture rather than as something to obey.
+   */
+  userInstruction?: string;
 };
 
 /* ── SaaS creative-direction templates ──────────────────────────────── */

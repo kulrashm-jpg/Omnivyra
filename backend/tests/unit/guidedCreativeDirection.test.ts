@@ -379,10 +379,19 @@ describe('I — an image instruction reaches the prompt', () => {
     expect(userInstructionFor(reference({ metadata: { userInstruction: 42 } }))).toBeNull();
   });
 
-  it('CRITICAL: the user\'s words replace the canned purpose hint', () => {
+  it('CRITICAL: the user\'s words travel in their OWN field, beside the canned hint', () => {
+    /*
+     * They used to REPLACE `hint`, which put user-authored text into the field
+     * the composer treats as application-authored — so a sentence a stranger
+     * typed reached the model in the same voice as our own instructions.
+     * Phase 61C separated them: the words still carry (and still outrank the
+     * canned line in the prompt), but the composer can now tell whose they are.
+     */
     const routed = [{ reference: reference({ metadata: { userInstruction: 'use me as the main person on the right' } }), sourceUrl: 's' }];
     const [out] = toAdditionalReferences(routed);
-    expect(out.hint).toBe('use me as the main person on the right');
+    expect(out.userInstruction).toBe('use me as the main person on the right');
+    expect(out.hint).toContain('primary subject');
+    expect(out.hint).not.toContain('use me as the main person');
   });
 
   it('without an instruction the canned hint still applies', () => {
@@ -394,7 +403,9 @@ describe('I — an image instruction reaches the prompt', () => {
     const [out] = toAdditionalReferences([
       { reference: reference({ metadata: { userInstruction: 'y'.repeat(900) } }), sourceUrl: 's' },
     ]);
-    expect(out.hint).toHaveLength(400);
+    // Bounded in the one place that bounds it — `userInstructionFor` — and the
+    // composer adds no second limit of its own.
+    expect(out.userInstruction).toHaveLength(400);
   });
 
   it('no migration was added for it — it rides existing metadata', () => {

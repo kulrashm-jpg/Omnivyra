@@ -448,12 +448,28 @@ export function toAdditionalReferences(condition: readonly RoutedReference[]): R
      * merely receives.
      */
     const instruction = userInstructionFor(reference);
-    if (adapted) return { url: sourceUrl, purpose: adapted.purpose, hint: instruction ?? adapted.hint };
+    /*
+     * The user's words travel in their OWN field, never in `hint`.
+     *
+     * They used to replace the adapter's sentence, which put user-authored text
+     * into the field the composer treats as application-authored — so a
+     * sentence a stranger typed reached the prompt in the same voice as our own
+     * instructions. The words still outrank the canned hint in prominence; what
+     * changed is that the composer can now tell whose words they are.
+     */
+    if (adapted) {
+      return {
+        url: sourceUrl,
+        purpose: adapted.purpose,
+        hint: adapted.hint,
+        ...(instruction ? { userInstruction: instruction } : {}),
+      };
+    }
     // Already a provider purpose — pass through unchanged.
     return {
       url: sourceUrl,
       purpose: reference.purpose as ReferenceImagePurpose,
-      ...(instruction ? { hint: instruction } : {}),
+      ...(instruction ? { userInstruction: instruction } : {}),
     };
   });
 }

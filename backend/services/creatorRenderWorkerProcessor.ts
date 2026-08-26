@@ -49,13 +49,49 @@ export async function processCreatorRenderJob(job: Job<CreatorDurableRenderJobDa
     await ensureUserTemplateRegisteredForAsset(assetPayload);
   } catch { /* best-effort — system + default-style resolution unaffected */ }
 
+  /*
+   * A queued render resolves its draft's attachments the SAME way an inline one
+   * does — through the one resolver, given the identity the payload carried.
+   *
+   * Without this a scheduled or campaign render could never see a reference the
+   * user had attached: the rows were durable, but the worker had no name for
+   * the composition they belonged to. Absent identity => null => the render is
+   * byte-identical to before, which is every job that has no draft.
+   *
+   * `companyId` from the payload remains the ONLY authorization input, exactly
+   * as on the inline path; `compositionId` is a lookup key that finds nothing
+   * outside its own tenant.
+   */
+  const workerCompanyId = typeof options.companyId === 'string' ? options.companyId : null;
+  const workerCompositionId = typeof options.compositionId === 'string' ? options.compositionId : null;
+  const compositionReferences = await (async () => {
+    if (!workerCompanyId || !workerCompositionId) return null;
+    try {
+      const { resolveCompositionReferencesForRender } = await import('./creator/resolveCompositionReferencesForRender');
+      const { templateAssetSlotsForRenderPayload } = await import('./creatorAssetRenderer');
+      return await resolveCompositionReferencesForRender({
+        companyId: workerCompanyId,
+        compositionId: workerCompositionId,
+        // The template's own slots decide what it accepts. Omitting them is not
+        // a neutral default — the resolver reads absent slots as "accepts
+        // nothing" and rejects every attachment.
+        templateSlots: templateAssetSlotsForRenderPayload(assetPayload),
+      });
+    } catch {
+      // Resolution is an enhancement, never a reason a queued render fails.
+      // The reference stays attached and the next attempt can still apply it.
+      return null;
+    }
+  })();
+
   // ── Render (the ONE rendering path — shared by every job type) ──
   let result: Awaited<ReturnType<typeof renderAsset>>;
   try {
     result = await renderAsset(assetPayload, {
       campaignId: typeof options.campaignId === 'string' ? options.campaignId : null,
       userId: typeof options.userId === 'string' ? options.userId : null,
-      companyId: typeof options.companyId === 'string' ? options.companyId : null,
+      companyId: workerCompanyId,
+      compositionReferences,
     });
   } catch (error) {
     // USER_TEMPLATE_PREVIEW: on TERMINAL failure (no retries left), mark the

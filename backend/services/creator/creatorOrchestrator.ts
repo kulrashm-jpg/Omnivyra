@@ -438,6 +438,19 @@ async function runRenderDispatch(input: {
           campaignId: input.campaignId,
           userId: input.userId,
           companyId: input.companyId,
+          /*
+           * The draft identity has to SURVIVE the queue.
+           *
+           * References are persisted durably against the composition, but the
+           * worker had no way to name which composition it was rendering, so a
+           * queued render could never resolve them — the attachment existed and
+           * was unreachable. This is a lookup key only; `companyId` above stays
+           * the authorization input, exactly as on the inline path.
+           *
+           * Optional by design: a render with no draft omits it and behaves
+           * byte-identically to before.
+           */
+          compositionId: input.compositionId ?? null,
         },
       },
     });
