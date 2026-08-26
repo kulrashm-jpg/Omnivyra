@@ -8,6 +8,7 @@ import { buildCreatorFlowContext, type CreatorFlowContext } from '../../../lib/c
 import { type WriterOverlayText, type WriterCreatorSourcePayload } from '../../../lib/content/writerCreatorAssetLaunch';
 import { loadAttachmentSession } from '../../../lib/content/creatorAttachmentSession';
 import { readMarketingBrief, MARKETING_BRIEF_SESSION_KEY } from '../../../lib/content/marketingBriefResolver';
+import { readGuidedChoices, GUIDED_CHOICES_SESSION_KEY } from '../../../lib/content/guidedCreativeSession';
 import {
   buildAssetCompositionIntent, normalizeAttachmentMode, normalizeSourceTextTransform,
   normalizeWriterCreatorAssetType, type AssetCompositionIntent, type AttachmentMode,

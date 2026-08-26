@@ -550,6 +550,8 @@ export function useCreatorWorkflowActions(
       brandContextLines, selectedPlatform, selectedCompanyId,
       activeTemplate, templateValues,
       compositionId: compositionIdForGeneration,
+      // The user's own creative answers. Absent → inference, exactly as before.
+      guidedChoices: s.guidedChoices ?? null,
       lightweightContext: buildCurrentContext(selectedPlatform),
       blueprintId: typeof router.query.blueprint === 'string' && router.query.blueprint ? router.query.blueprint : null,
       variantPinOverride,
@@ -561,6 +563,7 @@ export function useCreatorWorkflowActions(
     overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
     brandContextLines, selectedPlatform, selectedCompanyId,
     activeTemplate, templateValues, router.query.blueprint, compositionIdForGeneration,
+    s.guidedChoices,
   ]);
 
   const handleGenerate = async () => {

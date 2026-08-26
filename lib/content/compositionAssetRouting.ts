@@ -437,10 +437,41 @@ const COMPOSITION_PURPOSE_ADAPTER: Record<string, { purpose: ReferenceImagePurpo
 export function toAdditionalReferences(condition: readonly RoutedReference[]): ReferenceImage[] {
   return condition.map(({ reference, sourceUrl }) => {
     const adapted = COMPOSITION_PURPOSE_ADAPTER[reference.purpose];
-    if (adapted) return { url: sourceUrl, purpose: adapted.purpose, hint: adapted.hint };
+    /*
+     * The USER'S OWN WORDS about this image outrank the canned hint.
+     *
+     * The adapter sentences are a reasonable default for "background" or
+     * "product", but they are the same six sentences for everybody. Someone who
+     * wrote "use me as the main person on the right" has said something the
+     * purpose enum cannot express, and dropping it in favour of a generic line
+     * is the difference between a reference the model understands and one it
+     * merely receives.
+     */
+    const instruction = userInstructionFor(reference);
+    if (adapted) return { url: sourceUrl, purpose: adapted.purpose, hint: instruction ?? adapted.hint };
     // Already a provider purpose — pass through unchanged.
-    return { url: sourceUrl, purpose: reference.purpose as ReferenceImagePurpose };
+    return {
+      url: sourceUrl,
+      purpose: reference.purpose as ReferenceImagePurpose,
+      ...(instruction ? { hint: instruction } : {}),
+    };
   });
+}
+
+/**
+ * The instruction a user attached to this reference, if any.
+ *
+ * Stored on the reference's existing `metadata` JSONB — no new column, no
+ * migration. Bounded and trimmed here so a malformed or oversized value can
+ * never reach the prompt, whatever wrote it.
+ */
+export function userInstructionFor(
+  reference: Pick<CompositionAssetReference, 'metadata'>,
+): string | null {
+  const metadata = (reference?.metadata ?? {}) as Record<string, unknown>;
+  const raw = metadata.userInstruction;
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  return text ? text.slice(0, 400) : null;
 }
 
 /** Every purpose must have a policy — guards against a purpose added without one. */

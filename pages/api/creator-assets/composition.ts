@@ -4,11 +4,12 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *
  *   GET    ?company_id&composition_id            → { items: [{ reference, asset }] }
  *   POST   { company_id, composition_id, media_file_id, purpose,
- *            replaces_reference_id? }
+ *            replaces_reference_id?, instruction?, ai_proposed? }
  *            register the upload as a canonical asset, then give it that
  *            purpose — DISPLACING whatever held the purpose before, because a
  *            purpose holds one asset and "replace" must not mean "append"
- *   PATCH  { company_id, composition_id, reference_id, asset_id, purpose }
+ *   PATCH  { company_id, composition_id, reference_id, asset_id, purpose,
+ *            instruction?, ai_proposed? }
  *            change how an attached asset is used (no re-upload)
  *   DELETE ?company_id&reference_id              → detach (asset survives)
  *
@@ -40,6 +41,26 @@ const METHODS = ['GET', 'POST', 'PATCH', 'DELETE'];
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
+}
+
+/**
+ * The instruction, shaped for the reference's `metadata` JSONB.
+ *
+ * Returns undefined rather than an empty object when nothing was typed, so an
+ * absent instruction leaves existing metadata untouched instead of writing a
+ * key that means "the user said nothing".
+ */
+function instructionMetadata(raw: unknown, aiProposed?: unknown): Record<string, unknown> | undefined {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  const meta: Record<string, unknown> = {};
+  if (text) meta.userInstruction = text.slice(0, 400);
+  /*
+   * Provenance, not semantics. Records that the treatment was OUR suggestion
+   * rather than the user's own pick, so a later template change can tell the
+   * two apart. Nothing routes on it — purpose remains the only routing input.
+   */
+  if (aiProposed === true) meta.aiProposed = true;
+  return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
 /**
@@ -109,6 +130,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       const reference = await changeCreatorCompositionAssetUsage({
         companyId, compositionId, referenceId, assetId, purpose,
+        metadata: instructionMetadata(req.body?.instruction, req.body?.ai_proposed),
       });
       return res.status(200).json({ reference });
     } catch (err) { return fail(res, err); }
@@ -130,6 +152,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       // A single-image surface replacing its one attachment says so, so the old
       // reference cannot survive under a different usage.
       replacesReferenceId: str(req.body?.replaces_reference_id) || null,
+      // The user's own words about this image, kept on the reference's existing
+      // metadata. Optional, and absent means exactly today's behaviour.
+      metadata: instructionMetadata(req.body?.instruction, req.body?.ai_proposed),
     });
     return res.status(200).json({ asset, reference, replaced_reference_ids: replacedReferenceIds });
   } catch (err) { return fail(res, err); }

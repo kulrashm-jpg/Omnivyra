@@ -32,6 +32,12 @@ import {
 } from '../../lib/content/creatorCompositionAsset';
 import type { CompositionAssetMode, CompositionAssetPurpose } from '../../lib/content/compositionAssetReference';
 import type { TemplateAssetSlot } from '../../lib/content/compositionAssetRouting';
+import {
+  proposeImageTreatment,
+  describeTreatment,
+  EMPTY_GUIDED_CHOICES,
+  type GuidedCreativeChoices,
+} from '../../lib/content/guidedCreativeDirection';
 
 interface AttachedItem {
   reference: {
@@ -52,6 +58,11 @@ export default function CreatorImageAssetPanel({
   creatorTypeLabel,
   templateSlots,
   templateName,
+  templateCategory,
+  templatePurposeKey,
+  guidedChoices,
+  brief,
+  onAttachmentChange,
 }: {
   companyId: string | null | undefined;
   compositionId: string | null;
@@ -59,6 +70,26 @@ export default function CreatorImageAssetPanel({
   /** The ACTIVE template's declared slots. They decide what may be offered. */
   templateSlots?: readonly TemplateAssetSlot[] | null;
   templateName?: string | null;
+  /** Category + purpose key let the proposal read the design's own contract. */
+  templateCategory?: string | null;
+  templatePurposeKey?: string | null;
+  /** The user's creative answers — what they said should be featured, and the look. */
+  guidedChoices?: GuidedCreativeChoices | null;
+  /** The brief, read only as a signal for the proposal. */
+  brief?: string | null;
+  /**
+   * Reports the attachment as it actually stands, so the pre-generation summary
+   * can state what will happen to the user's picture.
+   *
+   * The panel already holds the truth — it loaded the references — so telling
+   * the parent is cheaper and more honest than having the parent fetch the same
+   * rows again and risk disagreeing with what is on screen.
+   */
+  onAttachmentChange?: (attachment: {
+    filename: string | null;
+    purpose: CompositionAssetPurpose;
+    placedExactly: boolean;
+  } | null) => void;
 }) {
   const [items, setItems] = React.useState<AttachedItem[]>([]);
   const [loading, setLoading] = React.useState(false);
@@ -77,6 +108,24 @@ export default function CreatorImageAssetPanel({
    * shows a single image and still reaching the render.
    */
   const [replacingReferenceId, setReplacingReferenceId] = React.useState<string | null>(null);
+  /**
+   * What the user told us about this image, in their words.
+   *
+   * Asked once, right after the upload, while they are still thinking about the
+   * picture — not buried behind an "advanced" disclosure. The six usages cover
+   * the common cases; a sentence covers the one the user actually has.
+   */
+  const [instruction, setInstruction] = React.useState('');
+  /**
+   * The user asked us to pick the treatment.
+   *
+   * No composition reference exists while this is true — the upload is held,
+   * exactly as it is held while they read the usage buttons. A reference is
+   * created only once a concrete treatment is accepted, so nothing is ever
+   * persisted with a purpose the user did not agree to.
+   */
+  const [letUsChoose, setLetUsChoose] = React.useState(false);
+  const instructionRef = React.useRef<HTMLInputElement | null>(null);
 
   const ready = Boolean(companyId && compositionId);
 
@@ -167,6 +216,8 @@ export default function CreatorImageAssetPanel({
           company_id: companyId, composition_id: compositionId,
           media_file_id: pendingMediaFileId, purpose,
           replaces_reference_id: replacingReferenceId,
+          instruction: instruction.trim() || null,
+          ai_proposed: letUsChoose,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -174,10 +225,10 @@ export default function CreatorImageAssetPanel({
         // The file reached storage but never became a usable asset. Say so, and
         // clear the pending selection so nothing on screen implies otherwise.
         setError(data?.error || 'The image was uploaded but could not be registered.');
-        setPendingMediaFileId(null); setPendingPreview(null); setReplacingReferenceId(null);
+        setPendingMediaFileId(null); setPendingPreview(null); setReplacingReferenceId(null); setInstruction(''); setLetUsChoose(false);
         return;
       }
-      setPendingMediaFileId(null); setPendingPreview(null); setReplacingReferenceId(null);
+      setPendingMediaFileId(null); setPendingPreview(null); setReplacingReferenceId(null); setInstruction(''); setLetUsChoose(false);
       await load();
     } catch {
       setError('The image was uploaded but could not be registered.');
@@ -225,6 +276,27 @@ export default function CreatorImageAssetPanel({
   const attached = items[0] ?? null;
   const choosing = Boolean(pendingMediaFileId);
   /*
+   * The proposal is DERIVED from current state, never stored.
+   *
+   * That is what makes staleness impossible rather than merely handled: change
+   * the template, the look, what's featured, or the note, and this recomputes
+   * on the next render. There is no saved decision that can quietly stop
+   * matching the design it was made for.
+   */
+  const proposal = React.useMemo(
+    () => proposeImageTreatment({
+      templateSlots,
+      templateCategory,
+      templatePurposeKey,
+      subject: (guidedChoices ?? EMPTY_GUIDED_CHOICES).subject ?? null,
+      visualDirectionId: (guidedChoices ?? EMPTY_GUIDED_CHOICES).visualDirectionId ?? null,
+      instruction,
+      brief,
+    }),
+    [templateSlots, templateCategory, templatePurposeKey, guidedChoices, instruction, brief],
+  );
+
+  /*
    * Does the CURRENT template accept the attachment as it stands?
    *
    * The composition outlives a template change — that is deliberate, so a trip
@@ -237,6 +309,22 @@ export default function CreatorImageAssetPanel({
   const attachedUsable = attached
     ? templateAcceptsAttachedReference(templateSlots, attached.reference)
     : true;
+
+  /*
+   * Tell the parent what is attached, whenever that changes.
+   *
+   * Reported from the loaded reference rather than from what was just sent, so
+   * a failed or displaced attach cannot leave the summary claiming an image the
+   * composition does not have.
+   */
+  React.useEffect(() => {
+    if (!onAttachmentChange) return;
+    onAttachmentChange(attached ? {
+      filename: attached.asset?.originalFilename ?? null,
+      purpose: attached.reference.purpose,
+      placedExactly: attached.reference.mode === 'compose',
+    } : null);
+  }, [onAttachmentChange, attached]);
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-4">
@@ -317,23 +405,113 @@ export default function CreatorImageAssetPanel({
             )}
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-gray-900">How do you want to use this image?</p>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {usageOptions.map((o) => (
-                  <button
-                    key={o.purpose}
-                    type="button"
-                    title={o.hint}
-                    disabled={busy === 'attach'}
-                    onClick={() => void attach(o.purpose)}
-                    className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-50"
-                  >
-                    {o.label}
-                  </button>
-                ))}
-              </div>
+              {!letUsChoose ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {usageOptions.map((o) => (
+                    <button
+                      key={o.purpose}
+                      type="button"
+                      title={o.hint}
+                      disabled={busy === 'attach'}
+                      onClick={() => void attach(o.purpose)}
+                      className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-50"
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                  {/* Offered last, and only when there is something to choose
+                    * between — a single acceptable usage is not a decision. */}
+                  {usageOptions.length > 1 ? (
+                    <button
+                      type="button"
+                      title="We'll pick what works best for this design."
+                      disabled={busy === 'attach'}
+                      onClick={() => setLetUsChoose(true)}
+                      className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 hover:border-emerald-400 disabled:opacity-50"
+                    >
+                      Let us choose
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {/* "Let us choose" — the proposal, and the three things a person
+                * can do with it. Shown instead of the raw usage buttons, because
+                * asking someone to pick a usage AND read a proposal at the same
+                * time is the choice they already said they didn't want to make. */}
+              {letUsChoose ? (
+                <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-2.5 py-2">
+                  {proposal.purpose ? (
+                    <>
+                      <p className="text-xs font-semibold text-emerald-900">
+                        {describeTreatment(proposal.purpose).headline}
+                      </p>
+                      <p className="mt-1 text-[11px] leading-4 text-emerald-800">
+                        {describeTreatment(proposal.purpose).promise}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          disabled={busy === 'attach'}
+                          onClick={() => void attach(proposal.purpose!)}
+                          className="rounded-lg border border-emerald-500 bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          Looks right
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLetUsChoose(false)}
+                          className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-emerald-300"
+                        >
+                          Use it differently
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => instructionRef.current?.focus()}
+                          className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-emerald-300"
+                        >
+                          Tell us more
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    /* Truthful rather than a guess: we say we could not choose,
+                     * and hand the decision straight back. */
+                    <>
+                      <p className="text-xs font-semibold text-amber-900">
+                        We couldn&rsquo;t confidently choose how to use this image.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setLetUsChoose(false)}
+                        className="mt-2 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:border-emerald-300"
+                      >
+                        Choose how to use it
+                      </button>
+                    </>
+                  )}
+                </div>
+              ) : null}
+
+              <label className="mt-3 block">
+                <span className="text-xs font-semibold text-gray-700">
+                  Anything we should know about this image?
+                </span>
+                <input
+                  type="text"
+                  ref={instructionRef}
+                  value={instruction}
+                  maxLength={400}
+                  onChange={(e) => setInstruction(e.target.value)}
+                  placeholder="e.g. Use me as the main person on the right"
+                  className="mt-1 w-full rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-800 placeholder:text-gray-400 focus:border-emerald-400 focus:outline-none"
+                />
+                <span className="mt-1 block text-[11px] text-gray-400">
+                  Optional. Skip it and we&rsquo;ll work it out from your design.
+                </span>
+              </label>
               <button
                 type="button"
-                onClick={() => { setPendingMediaFileId(null); setPendingPreview(null); setReplacingReferenceId(null); }}
+                onClick={() => { setPendingMediaFileId(null); setPendingPreview(null); setReplacingReferenceId(null); setInstruction(''); setLetUsChoose(false); }}
                 className="mt-2 text-xs font-semibold text-gray-500 hover:text-gray-700"
               >
                 Cancel

@@ -16,10 +16,15 @@
  */
 
 import React from 'react';
-import { ArrowLeft, Check, Sparkles, Wand2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Sparkles, Wand2 } from 'lucide-react';
 import { listOutcomesByCategory, getOutcome } from '../../lib/creator-outcomes/outcomeRegistry';
 import { emptyMarketingBrief, mergeBrief, type MarketingBrief } from '../../lib/content/unifiedCreationModel';
 import { SampleGallery } from './SampleGallery';
+import { VisualDirectionStep, SubjectStep } from './GuidedCreativeSteps';
+import {
+  GUIDED_CHOICES_SESSION_KEY, serializeGuidedChoices,
+  type SubjectChoice,
+} from '../../lib/content/guidedCreativeSession';
 import type { CreatorTemplate } from '../../lib/creator-templates/types';
 import type { TemplateAssetFamily } from '../../lib/creator-templates/types';
 import { MARKETING_BRIEF_SESSION_KEY, serializeMarketingBrief } from '../../lib/content/marketingBriefResolver';
@@ -40,22 +45,22 @@ const ASSET_CONFIG: Record<Asset, AssetConfig> = {
     rootName: 'ImageCreationWorkspace', label: 'image',
     heroTitle: 'What should your image achieve?',
     heroSub: 'Pick a goal, choose an image example you like, and we generate a finished image from your brief.',
-    goalKicker: 'New image', briefSub: 'A few details and we generate your image — you only tell us once.',
-    briefCta: 'Generate my image', family: 'image', editorRoute: '/command-center/creator-content/image',
+    goalKicker: 'New image', briefSub: 'A few details, then you review everything before we generate.',
+    briefCta: 'Continue to customize', family: 'image', editorRoute: '/command-center/creator-content/image',
   },
   carousel: {
     rootName: 'CarouselCreationWorkspace', label: 'carousel',
     heroTitle: 'What should your carousel achieve?',
     heroSub: 'Pick a goal, choose a carousel example you like, and we build a multi-slide carousel from your brief.',
-    goalKicker: 'New carousel', briefSub: 'A few details and we build your carousel — you only tell us once.',
-    briefCta: 'Generate my carousel', family: 'carousel', editorRoute: '/command-center/creator-content/carousel',
+    goalKicker: 'New carousel', briefSub: 'A few details, then you review everything before we generate.',
+    briefCta: 'Continue to customize', family: 'carousel', editorRoute: '/command-center/creator-content/carousel',
   },
   infographic: {
     rootName: 'InfographicCreationWorkspace', label: 'infographic',
     heroTitle: 'What should your infographic achieve?',
     heroSub: 'Pick a goal, choose an infographic example you like, and we generate a clear infographic from your brief.',
-    goalKicker: 'New infographic', briefSub: 'A few details and we generate your infographic — you only tell us once.',
-    briefCta: 'Generate my infographic', family: 'infographic', editorRoute: '/command-center/creator-content/infographic',
+    goalKicker: 'New infographic', briefSub: 'A few details, then you review everything before we generate.',
+    briefCta: 'Continue to customize', family: 'infographic', editorRoute: '/command-center/creator-content/infographic',
   },
 };
 
@@ -71,11 +76,15 @@ interface WorkspaceProps { onNavigate: (url: string) => void; onAdvanced?: () =>
 
 function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProps & { asset: Asset }) {
   const cfg = ASSET_CONFIG[asset];
-  const [step, setStep] = React.useState<'goal' | 'samples' | 'brief'>('goal');
+  const [step, setStep] = React.useState<'goal' | 'samples' | 'look' | 'brief'>('goal');
   const [goalId, setGoalId] = React.useState<string | null>(null);
   const [customLabel, setCustomLabel] = React.useState<string | null>(null);
   const [brief, setBrief] = React.useState<MarketingBrief>(emptyMarketingBrief());
   const [selectedSample, setSelectedSample] = React.useState<CreatorTemplate | null>(null);
+  /* The user's own creative answers. Null on both means "AI decides", which is
+   * the default and is shown as such rather than left blank. */
+  const [visualDirectionId, setVisualDirectionId] = React.useState<string | null>(null);
+  const [subject, setSubject] = React.useState<SubjectChoice | null>(null);
   const [aiBusy, setAiBusy] = React.useState(false);
   const [aiError, setAiError] = React.useState<string | null>(null);
   const [chatOpen, setChatOpen] = React.useState(false);
@@ -137,7 +146,7 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
 
   // ── Goal ─────────────────────────────────────────────────────────────────
   if (step === 'goal') {
-    const pick = (id: string, lbl?: string) => { setGoalId(id); setCustomLabel(lbl ?? null); setBrief(emptyMarketingBrief(id)); setSelectedSample(null); setStep('samples'); };
+    const pick = (id: string, lbl?: string) => { setGoalId(id); setCustomLabel(lbl ?? null); setBrief(emptyMarketingBrief(id)); setSelectedSample(null); setVisualDirectionId(null); setSubject(null); setStep('samples'); };
     return (
       <div style={wrap}>
         {header(cfg.heroTitle, cfg.heroSub)}
@@ -173,16 +182,42 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
         goalId={goalId}
         goalLabel={customLabel ?? getOutcome(goalId ?? '')?.label ?? undefined}
         family={cfg.family}
-        onUse={(s) => { setSelectedSample(s); setStep('brief'); }}
+        onUse={(s) => { setSelectedSample(s); setStep('look'); }}
         onBack={() => setStep('goal')}
         onAdvanced={onAdvanced}
       />
     );
   }
 
-  // ── Brief → Generate ─────────────────────────────────────────────────────
-  const generate = () => {
+  // ── How should it look? + What's featured? ───────────────────────────────
+  if (step === 'look') {
+    return (
+      <div style={wrap}>
+        <VisualDirectionStep
+          family={cfg.family}
+          outcomeId={goalId}
+          value={visualDirectionId}
+          onChange={setVisualDirectionId}
+          onBack={() => setStep('samples')}
+          onContinue={() => setStep('brief')}
+        />
+        <SubjectStep value={subject} onChange={setSubject} />
+      </div>
+    );
+  }
+
+  // ── Brief → continue to the editor ───────────────────────────────────────
+  const continueToEditor = () => {
     try { sessionStorage.setItem(MARKETING_BRIEF_SESSION_KEY, serializeMarketingBrief({ ...brief, goalId })); } catch { /* noop */ }
+    /* The creative answers travel the same way the brief does — session storage
+     * keyed to this draft — so the editor can restore them without a second
+     * transport and without putting a style id in the URL. */
+    try {
+      sessionStorage.setItem(
+        GUIDED_CHOICES_SESSION_KEY,
+        serializeGuidedChoices({ visualDirectionId, subject, visualInstruction: null }),
+      );
+    } catch { /* noop */ }
     // CREATOR-125: the gallery now selects a SYSTEM CreatorTemplate — store its
     // template_id as the canonical selection identity. The downstream editor +
     // generate runtime still consume blueprint_id, so we project the template's
@@ -198,7 +233,7 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
   };
   return (
     <div style={wrap}>
-      {header('Tell us once', cfg.briefSub, () => setStep('samples'))}
+      {header('Tell us once', cfg.briefSub, () => setStep('look'))}
       <div style={{ position: 'relative', marginBottom: 6 }}>
         <textarea value={brief.freeText ?? ''} onChange={(e) => { voiceBaseRef.current = e.target.value; setField('freeText', e.target.value); }} rows={5}
           placeholder={`Type or speak — e.g. ${customLabel ?? cfg.label} for our SaaS — audience busy founders, confident friendly tone, CTA "Start free".`}
@@ -254,7 +289,7 @@ function AssetCreationWorkspace({ asset, onNavigate, onAdvanced }: WorkspaceProp
             <input type="text" value={(brief[k] as string) ?? ''} onChange={(e) => setField(k, e.target.value)} style={input} /></div>
         ))}
       </div>
-      <button type="button" style={{ ...primaryBtn, marginTop: 22 }} onClick={generate}><Sparkles size={16} /> {cfg.briefCta}</button>
+      <button type="button" style={{ ...primaryBtn, marginTop: 22 }} onClick={continueToEditor}><ArrowRight size={16} /> {cfg.briefCta}</button>
     </div>
   );
 }

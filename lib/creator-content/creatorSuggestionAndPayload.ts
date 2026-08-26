@@ -328,6 +328,8 @@ export interface BuildGenerationBodyInput {
   blueprintId: string | null;
   /** Draft identity for attached assets. Lookup key only. */
   compositionId?: string | null;
+  /** The user's own answers to "how should it look?" and "what's featured?". */
+  guidedChoices?: import('../content/guidedCreativeDirection').GuidedCreativeChoices | null;
   variantPinOverride: string | null;
 }
 
@@ -338,7 +340,7 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
     writerAssetType, writerAttachmentMode, standaloneAttachmentMode,
     overlayText, brandMode, brandPresence, brandSelections, brandProfile, brandOverrides,
     brandContextLines, selectedPlatform, selectedCompanyId,
-    activeTemplate, templateValues, lightweightContext, blueprintId, compositionId, variantPinOverride,
+    activeTemplate, templateValues, lightweightContext, blueprintId, compositionId, guidedChoices, variantPinOverride,
   } = input;
     if (!String(answers.topic || '').trim()) return null;
     const writerStructureGuidance = writerSource && isDeterministicStructuredType(type)
@@ -477,6 +479,20 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
         creator_content_asset_type: type,
         attachment_mode: writerAttachmentMode,
         asset_composition_intent: writerCompositionIntent,
+        /*
+         * The user's creative choices ride on the SAME creator_card the
+         * renderer already reads. No second envelope, and an absent object is
+         * byte-identical to every generation before this existed.
+         */
+        ...(guidedChoices && (guidedChoices.visualDirectionId || guidedChoices.subject || guidedChoices.visualInstruction)
+          ? {
+              guided_creative: {
+                visual_direction_id: guidedChoices.visualDirectionId ?? null,
+                subject: guidedChoices.subject ?? null,
+                visual_instruction: guidedChoices.visualInstruction ?? null,
+              },
+            }
+          : {}),
         copy_policy: writerCopyPolicy,
         source_text_transform: writerCopyPolicy?.sourceTextTransform ?? null,
         infographic_layout: type === 'infographic' ? String(answers.structureMode || 'framework') : null,
@@ -494,16 +510,26 @@ export function buildCreatorGenerationBody(input: BuildGenerationBodyInput): Rec
           ? (v2Runtime
               ? (v2Runtime.payload.overlay_text as Record<string, unknown>)
               : (() => {
-                  // The overlay copy must be the OPERATOR'S submitted inputs, never a
-                  // template placeholder example (which the model then bakes garbled).
-                  // Prefer the intake answers (topic → headline, main message →
-                  // keyInsight, CTA); fall back to any real template-field value.
+                  /*
+                   * TEMPLATE FIELDS WIN. That is what `__template_authoritative`
+                   * has always claimed, and until now the code did the opposite:
+                   * it read `answers.topic` first, and topic is REQUIRED before
+                   * Generate is allowed, so the template's own "Headline / Image
+                   * Text" field could never win. A user typed a headline into a
+                   * required field and the image showed their brief topic
+                   * instead, with nothing to explain why.
+                   *
+                   * The intake answers remain the fallback — a template whose
+                   * headline was left blank still produces an image with words
+                   * on it — but they no longer outrank what the user typed into
+                   * the field labelled as the image's text.
+                   */
                   const tv = projectImageOverlayText(activeTemplate, templateValues);
                   return {
                     hook: '',
-                    headline: (String(answers.topic || '').trim() || String(tv.headline || '').trim()).slice(0, 84),
-                    keyInsight: (String(answers.keyMessage || '').trim() || String(tv.keyInsight || '').trim()).slice(0, 190),
-                    cta: (String(answers.cta || '').trim() || String(tv.cta || '').trim()).slice(0, 42),
+                    headline: (String(tv.headline || '').trim() || String(answers.topic || '').trim()).slice(0, 84),
+                    keyInsight: (String(tv.keyInsight || '').trim() || String(answers.keyMessage || '').trim()).slice(0, 190),
+                    cta: (String(tv.cta || '').trim() || String(answers.cta || '').trim()).slice(0, 42),
                     supportingText: String(tv.supportingText || '').trim().slice(0, 96),
                     __template_authoritative: true,
                   } as Record<string, unknown>;

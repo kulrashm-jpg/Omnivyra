@@ -9,6 +9,9 @@ import { type WriterOverlayText, type WriterCreatorSourcePayload } from '../../.
 import type { AttachmentMode, WriterCreatorAssetType } from '../../../lib/content/writerCreatorAttachmentContracts';
 import type { VariantExecutionResult, VariantFamily } from '../../variant-experience/useVariantApi';
 import { freshSyncState, type BriefEditorSyncState } from '../../../lib/content/creatorBriefEditorSync';
+import type { GuidedCreativeChoices } from '../../../lib/content/guidedCreativeDirection';
+import { EMPTY_GUIDED_CHOICES, sanitizeGuidedChoices } from '../../../lib/content/guidedCreativeDirection';
+import { readGuidedChoices, GUIDED_CHOICES_SESSION_KEY } from '../../../lib/content/guidedCreativeSession';
 import { getTemplateById, familyForCreatorType, creatorIngestPrefillKey, type CreatorTemplate } from '../../../lib/creator-templates';
 import { type TemplateFieldValues, initTemplateValues } from '../../../lib/creator-templates/values';
 import {
@@ -122,7 +125,25 @@ export function useCreatorWorkflowState() {
   // Creator Template Foundation — active template + its form values. When a
   // template is active, it drives the form fields AND the generation inputs
   // (purpose_key / subtype / infographic_layout / attachment_mode / slides).
-  const [activeTemplate, setActiveTemplate] = React.useState<CreatorTemplate | null>(null);
+  /*
+   * The user's creative answers, restored from the guided workspace.
+   *
+   * Held next to the template rather than inside it: the template is a design
+   * the company published, and these are one person's choices about one draft.
+   */
+  const [guidedChoices, setGuidedChoices] = React.useState<GuidedCreativeChoices>(EMPTY_GUIDED_CHOICES);
+  React.useEffect(() => {
+    if (!router.isReady || router.query.from !== 'workspace' || typeof window === 'undefined') return;
+    const family = familyForCreatorType(type);
+    if (!family) return;
+    try {
+      const restored = readGuidedChoices(window.sessionStorage.getItem(GUIDED_CHOICES_SESSION_KEY));
+      // Sanitised against THIS family: a look chosen for an image is dropped
+      // rather than forced onto an infographic the renderer cannot style.
+      if (restored) setGuidedChoices(sanitizeGuidedChoices(restored, family));
+    } catch { /* unreadable storage → AI decides, exactly as before */ }
+  }, [router.isReady, router.query.from, type]);
+    const [activeTemplate, setActiveTemplate] = React.useState<CreatorTemplate | null>(null);
   const [templateValues, setTemplateValues] = React.useState<TemplateFieldValues>({ fields: {} });
   // Canonical Brief ⇄ Editor sync state (per synchronized endpoint). Reset below
   // whenever a different template / new asset / different draft loads.
@@ -250,6 +271,7 @@ export function useCreatorWorkflowState() {
     isSavingBlock, notice, overlayText, processedWriterPrefillRef, recommendedAttachmentMode, refinePrompt,
     refinedSuggestion, regenCount, regenSeenResultRef, renderJobProgress, result, resultPanelRef, router,
     saveInFlightRef, savedAssets, savedBlock, selectNewestAssetRef, selectedAssetId, selectedCompanyId,
+    guidedChoices, setGuidedChoices,
     selectedCompanyName, selectedPlatform, selectedSuggestionId, setActionInProgress, setActiveTemplate,
     setAiBusyKey, setAnswers, setAssetReloadNonce, setBrandMode, setBrandOverrides, setBrandPanelOpen,
     setBrandPresence, setBrandProfile, setBrandSelections, setConnectedPlatforms, setError,

@@ -160,7 +160,7 @@ export default function CreatorTypeWorkflowPage() {
   const {
     actionInProgress, activeTemplate, aiBusyKey, answers, assetReloadNonce, attachmentSessionTokenRef,
     authChecked, brandMode, brandOverrides, brandPanelOpen, brandPresence, brandProfile, brandSelections,
-    config, connectedPlatforms, error, generatedSnapshot, generationInFlightRef, generationStage, hadResultRef,
+    config, connectedPlatforms, error, generatedSnapshot, generationInFlightRef, generationStage, guidedChoices, setGuidedChoices, hadResultRef,
     inlineRenderError, inlineRenderInFlight, isGenerating, isLoading, isLoadingAssets, isLoadingBrandProfile,
     isSavingBlock, notice, overlayText, processedWriterPrefillRef, recommendedAttachmentMode, refinePrompt,
     refinedSuggestion, regenCount, regenSeenResultRef, renderJobProgress, result, resultPanelRef, router,
@@ -334,6 +334,8 @@ export default function CreatorTypeWorkflowPage() {
     activeTemplate,
     aiBusyKey,
     answers,
+    guidedChoices,
+    setGuidedChoices,
     attachmentSessionTokenRef,
     availablePlatforms,
     brandMode,
