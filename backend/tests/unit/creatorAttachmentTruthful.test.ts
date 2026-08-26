@@ -223,7 +223,10 @@ describe('D — the panel offers only those, and says so when there are none', (
     // The endpoint already returns a typed rejection; the panel must consume it
     // and clear the pending selection, so nothing on screen implies it attached.
     expect(PANEL).toMatch(
-      /if \(!res\.ok\) \{[\s\S]{0,320}setError\([\s\S]{0,160}setPendingMediaFileId\(null\); setPendingPreview\(null\);[\s\S]{0,40}return;/);
+      /if \(!res\.ok\) \{[\s\S]{0,320}setError\([\s\S]{0,160}setPendingMediaFileId\(null\); setPendingPreview\(null\);[\s\S]{0,120}return;/);
+    // The user's note about the image is pending state too: leaving it behind
+    // would attach it to whatever they uploaded next.
+    expect(PANEL).toMatch(/setPendingMediaFileId\(null\); setPendingPreview\(null\); setReplacingReferenceId\(null\); setInstruction\(''\);/);
   });
 
   it('MUTATION GUARD: no new mode flag was introduced', () => {

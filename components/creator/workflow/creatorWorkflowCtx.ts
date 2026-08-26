@@ -59,6 +59,9 @@ export interface CreatorWorkflowCtx {
 
   /* ── template foundation ── */
   activeTemplate: CreatorTemplate | null;
+  /** The user's own creative answers from the guided workspace. */
+  guidedChoices: import('../../../lib/content/guidedCreativeDirection').GuidedCreativeChoices;
+  setGuidedChoices: React.Dispatch<React.SetStateAction<import('../../../lib/content/guidedCreativeDirection').GuidedCreativeChoices>>;
   templateValues: TemplateFieldValues;
   handleEditorChange: (next: TemplateFieldValues) => void;
   handleTemplateAiAssist: (ctx: TemplateAiAssistContext) => Promise<void>;

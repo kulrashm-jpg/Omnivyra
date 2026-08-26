@@ -84,6 +84,26 @@ export type CreatorPromptInput = {
    * prompt vs. prior behavior).
    */
   governance?: GovernancePromptContext | null;
+  /**
+   * THE USER'S OWN VISUAL DIRECTION.
+   *
+   * Everything else in this input describes the campaign; this describes what
+   * the person asked the picture to look like. It joins the EXISTING
+   * `visualDirection` layer rather than opening a new one, and it leads that
+   * layer: a user who chose a graffiti treatment has said something more
+   * specific than any inferred art direction, and burying it under six derived
+   * lines is how a chosen style ends up ignored.
+   *
+   * Absent (every pre-existing caller) → the layer is built exactly as before.
+   */
+  userVisualDirection?: {
+    /** Human-readable style name, for the operator-facing audit trail. */
+    title?: string | null;
+    /** The registry's own prompt fragment for that style. */
+    stylePrompt?: string | null;
+    /** The user's free-form words about how the creative should look. */
+    instruction?: string | null;
+  } | null;
 };
 
 export type CreatorPromptLayers = {
@@ -595,6 +615,34 @@ function buildProductLayer(input: CreatorPromptInput): { lines: string[]; ground
   return { lines, grounded: groundingScore >= 3 };
 }
 
+
+/**
+ * The user's chosen look, as prompt lines.
+ *
+ * Two lines at most, and both are the user's own decision rather than a derived
+ * one: the style the registry describes, and whatever they typed. They are
+ * stated as requirements ("Visual style:", "Creative direction:") because a
+ * hint is what the inferred lines already are, and the difference between what
+ * was guessed and what was asked for has to survive into the prompt.
+ */
+function userVisualDirectionLines(
+  chosen: CreatorPromptInput['userVisualDirection'],
+): string[] {
+  if (!chosen) return [];
+  const lines: string[] = [];
+  const stylePrompt = String(chosen.stylePrompt || '').trim();
+  const title = String(chosen.title || '').trim();
+  if (stylePrompt) {
+    lines.push(title ? `Visual style — ${title}: ${stylePrompt}.` : `Visual style: ${stylePrompt}.`);
+  } else if (title) {
+    lines.push(`Visual style: ${title}.`);
+  }
+  const instruction = String(chosen.instruction || '').trim();
+  // Bounded: a prompt line, not an essay. The field is already capped upstream;
+  // capping again here keeps the composer safe against any other caller.
+  if (instruction) lines.push(`Creative direction from the requester: ${instruction.slice(0, 400)}`);
+  return lines;
+}
 function buildVisualDirectionLayer(template: CreativeDirectionTemplate): string[] {
   return renderProfile(TEMPLATE_PROFILES[template]);
 }
@@ -802,7 +850,10 @@ export function composeCreatorImagePrompt(
     asset: buildAssetLayer(input),
     brand: brand.lines,
     product: product.lines,
-    visualDirection: buildVisualDirectionLayer(template),
+    visualDirection: [
+      ...userVisualDirectionLines(input.userVisualDirection),
+      ...buildVisualDirectionLayer(template),
+    ],
     realism: [...REALISM_DIRECTIVES],
     composition: compositionLayer,
     negative: [...NEGATIVE_DIRECTIVES_BASE],

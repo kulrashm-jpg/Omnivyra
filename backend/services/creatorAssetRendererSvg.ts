@@ -132,6 +132,12 @@ export function buildAiImagePrompt(input: {
     require('./creator/creatorOutputQualityRanking') as typeof import('./creator/creatorOutputQualityRanking');
   const { getBrandVisualPreference, updateBrandVisualPreference } =
     require('./creator/creatorVisualBrandMemory') as typeof import('./creator/creatorVisualBrandMemory');
+  const {
+    sanitizeGuidedChoices, subjectEmphasisFor, getVisualDirection,
+  } = require('../../lib/content/guidedCreativeDirection') as typeof import('../../lib/content/guidedCreativeDirection');
+  type SubjectChoice = import('../../lib/content/guidedCreativeDirection').SubjectChoice;
+  const { getVisualStyle } =
+    require('../../lib/creator-outcomes/creatorVisualStyleRegistry') as typeof import('../../lib/creator-outcomes/creatorVisualStyleRegistry');
   const { planCreativeDirection } =
     require('./creator/creativeDirectorEngine') as typeof import('./creator/creativeDirectorEngine');
   const { orchestrateCreativeVariants } =
@@ -149,7 +155,7 @@ export function buildAiImagePrompt(input: {
   const { recordTelemetryEvent } =
     require('./creator/creatorPerformanceTelemetry') as typeof import('./creator/creatorPerformanceTelemetry');
 
-  const composerInput = {
+  const composerInput: import('./creator/creatorPromptComposer').CreatorPromptInput & Record<string, unknown> = {
     title: input.title,
     body: input.body,
     eyebrow: input.eyebrow,
@@ -273,6 +279,45 @@ export function buildAiImagePrompt(input: {
   // project the per-asset plan FROM the DNA so emotional / realism /
   // composition / human presence are inherited. Otherwise plan from
   // brand-memory continuity (no campaign DNA case).
+  /*
+   * THE USER'S OWN CHOICES, read from the render metadata the form submitted.
+   *
+   * Sanitised against the asset family first, so a style chosen for an image
+   * and then carried onto an infographic is dropped rather than forced — the
+   * documented safe fallback is inference, not a style the renderer has no
+   * expression for.
+   */
+  const guidedChoices = (() => {
+    const card = safeObject(input.metadata.creator_card);
+    const raw = safeObject(input.metadata.guided_creative ?? card.guided_creative);
+    const family = String(input.metadata.asset_family || card.creator_content_asset_type || 'image');
+    const assetFamily = (family === 'carousel' || family === 'infographic') ? family : 'image';
+    return sanitizeGuidedChoices(
+      {
+        visualDirectionId: typeof raw.visual_direction_id === 'string' ? raw.visual_direction_id : null,
+        subject: typeof raw.subject === 'string' ? (raw.subject as SubjectChoice) : null,
+        visualInstruction: typeof raw.visual_instruction === 'string' ? raw.visual_instruction : null,
+      },
+      assetFamily as 'image' | 'carousel' | 'infographic',
+    );
+  })();
+  const chosenDirection = getVisualDirection(guidedChoices.visualDirectionId ?? null);
+  const chosenStyle = chosenDirection ? getVisualStyle(chosenDirection.id) : null;
+  const userChoicesForPlanner = {
+    visualDirectionId: guidedChoices.visualDirectionId ?? null,
+    subjectEmphasis: subjectEmphasisFor(guidedChoices.subject ?? null),
+    visualInstruction: guidedChoices.visualInstruction ?? null,
+  };
+  // The composer receives the registry's OWN prompt fragment — the style
+  // vocabulary lives in one place and is quoted here, never restated.
+  composerInput.userVisualDirection = (chosenStyle || guidedChoices.visualInstruction)
+    ? {
+        title: chosenStyle?.title ?? null,
+        stylePrompt: chosenStyle?.stylePrompt ?? null,
+        instruction: guidedChoices.visualInstruction ?? null,
+      }
+    : null;
+
   const plan = campaignDNA
     ? projectAssetPlanFromDNA({
         dna: campaignDNA,
@@ -293,6 +338,9 @@ export function buildAiImagePrompt(input: {
         brandMemory: brandPreference?.preferredStrategy
           ? { preferredStrategy: brandPreference.preferredStrategy as any }
           : null,
+        // Outranks brand-memory continuity: a user who picks a look is
+        // overriding the brand's habit deliberately.
+        userChoices: userChoicesForPlanner,
       });
 
   // Phase 3 — platform-native adaptation resolved from the asset's

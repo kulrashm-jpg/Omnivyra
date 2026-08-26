@@ -487,16 +487,33 @@ describe('R — reconciliation with the foundation', () => {
     expect(r.rejected[0].reason).toBe('purpose_not_accepted_by_template');
   });
 
-  it('metadata is REQUIRED on the reference contract and carried, not consumed', () => {
+  it('metadata is REQUIRED on the reference contract, and never a ROUTING input', () => {
     const r = ref('subject', 'condition');
     // Present on every reference the routing layer sees...
     expect(r.metadata).toEqual({});
-    // ...and never read as a routing input: purpose and mode are columns
-    // precisely so the database constrains them.
+
     const ROUTING_SRC = fs.readFileSync(
       path.resolve(__dirname, '../../../lib/content/compositionAssetRouting.ts'), 'utf8');
     const body = ROUTING_SRC.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    expect(body).not.toMatch(/\.metadata\b/);
+
+    // ...and never read where a ROUTING DECISION is made. `routeCompositionReferences`
+    // and `slotAcceptance` decide lane, acceptance and refusal, and they must do so
+    // from purpose, mode and slots alone — those are columns precisely so the
+    // database constrains them, and a decision keyed on free-form JSON would be
+    // unconstrained by anything.
+    const decisionRegion = body.slice(
+      body.indexOf('export function slotAcceptance'),
+      body.indexOf('export function toAdditionalReferences'),
+    );
+    expect(decisionRegion.length).toBeGreaterThan(0);
+    expect(decisionRegion).not.toMatch(/\.metadata\b/);
+
+    // The PROJECTION into provider references may read it: a user's own words
+    // about their image become the reference hint, which is prompt text and not
+    // a routing decision. That read is confined to one named accessor.
+    expect(body).toContain('export function userInstructionFor');
+    const metadataReads = body.match(/\.metadata\b/g) ?? [];
+    expect(metadataReads).toHaveLength(1);
   });
 
   it('MUTATION GUARD: the policy map stays exhaustive by TYPE, not by fallback', () => {

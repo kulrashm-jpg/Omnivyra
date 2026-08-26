@@ -230,6 +230,20 @@ export type CreativeDirectionPlan = {
   humanPresenceMode: HumanPresenceMode;
   visualDensity: VisualDensity;
   premiumBias: boolean;
+  /**
+   * The visual style the USER chose, when they chose one.
+   *
+   * Deliberately separate from everything above: the fields above are what the
+   * engine worked out, and this is what the person asked for. Merging them
+   * would make it impossible to tell afterwards which was which, and the
+   * summary the user is shown before generating has to be able to say
+   * "you chose graffiti" rather than "we decided graffiti".
+   */
+  userVisualDirectionId: string | null;
+  /** The user's own words about how it should look. Null when they said nothing. */
+  userVisualInstruction: string | null;
+  /** True when the user, not inference, decided who or what is featured. */
+  subjectChosenByUser: boolean;
   /** Audit trail — signals that drove this plan. */
   rationale: string[];
 };
@@ -246,6 +260,25 @@ export type CreativeDirectionInput = {
   /** When provided, the planner reuses the brand's preferred strategy for continuity (Phase 8). */
   brandMemory?: {
     preferredStrategy?: CreativeStrategyId | null;
+  } | null;
+  /*
+   * THE USER'S OWN CHOICES.
+   *
+   * Everything else on this input is a signal the planner reads in order to
+   * GUESS what the person wanted. These three are what they actually said, and
+   * they outrank the guess — including brand-memory continuity, because a user
+   * who picks a style is overriding the brand's habit on purpose.
+   *
+   * All optional. Omitted (every pre-existing caller) → inference is untouched
+   * and the plan is identical to before.
+   */
+  userChoices?: {
+    /** A `VISUAL_STYLES` id. The planner does not interpret it — it carries it. */
+    visualDirectionId?: string | null;
+    /** Explicit emphasis, already mapped from the user's plain-language answer. */
+    subjectEmphasis?: { humanEmphasis: SubjectEmphasis; productEmphasis: SubjectEmphasis } | null;
+    /** Free-form direction, in the user's words. */
+    visualInstruction?: string | null;
   } | null;
 };
 
@@ -420,19 +453,44 @@ export function planCreativeDirection(input: CreativeDirectionInput): CreativeDi
   const premiumBias = brandSignals >= 3;
   if (premiumBias) rationale.push('premium_bias:brand_grounded');
 
+  /*
+   * The user's answer to "what should be featured?" replaces the profile's own
+   * emphasis, and only that. The rest of the profile — lighting, framing,
+   * narrative — still applies, because choosing "no person" is a statement
+   * about the subject, not a request to abandon the art direction.
+   *
+   * Everything derived below is recomputed from the OVERRIDDEN profile, so the
+   * plan cannot describe a central human while simultaneously reporting that
+   * the user asked for none.
+   */
+  const chosen = input.userChoices ?? null;
+  const emphasis = chosen?.subjectEmphasis ?? null;
+  const effectiveProfile: CreativeStrategyProfile = emphasis
+    ? { ...profile, humanEmphasis: emphasis.humanEmphasis, productEmphasis: emphasis.productEmphasis }
+    : profile;
+  if (emphasis) rationale.push(`user_subject:${emphasis.humanEmphasis}/${emphasis.productEmphasis}`);
+
+  const visualDirectionId = String(chosen?.visualDirectionId || '').trim() || null;
+  if (visualDirectionId) rationale.push(`user_visual_direction:${visualDirectionId}`);
+  const visualInstruction = String(chosen?.visualInstruction || '').trim() || null;
+  if (visualInstruction) rationale.push('user_visual_instruction');
+
   return {
     strategyProfile: profileId,
-    emotionalDirection: deriveEmotionalDirection(profile),
-    compositionStrategy: deriveCompositionStrategy(profile),
-    realismProfile: profile.realismLevel,
-    visualNarrative: deriveVisualNarrative(input.campaignIntent ?? '', profile),
-    artDirectionStyle: `${profile.framingStyle} · ${profile.lightingDiscipline}`,
-    framingStrategy: deriveFramingStrategy(profile),
-    subjectPriority: deriveSubjectPriority(profile),
-    environmentStyle: profile.environmentBehavior,
-    humanPresenceMode: profile.humanEmphasis,
-    visualDensity: profile.visualDensity,
+    emotionalDirection: deriveEmotionalDirection(effectiveProfile),
+    compositionStrategy: deriveCompositionStrategy(effectiveProfile),
+    realismProfile: effectiveProfile.realismLevel,
+    visualNarrative: deriveVisualNarrative(input.campaignIntent ?? '', effectiveProfile),
+    artDirectionStyle: `${effectiveProfile.framingStyle} · ${effectiveProfile.lightingDiscipline}`,
+    framingStrategy: deriveFramingStrategy(effectiveProfile),
+    subjectPriority: deriveSubjectPriority(effectiveProfile),
+    environmentStyle: effectiveProfile.environmentBehavior,
+    humanPresenceMode: effectiveProfile.humanEmphasis,
+    visualDensity: effectiveProfile.visualDensity,
     premiumBias,
+    userVisualDirectionId: visualDirectionId,
+    userVisualInstruction: visualInstruction,
+    subjectChosenByUser: Boolean(emphasis),
     rationale,
   };
 }

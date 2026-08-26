@@ -26,6 +26,8 @@ import {
 import type { CreatorWorkflowCtx } from './creatorWorkflowCtx';
 import CreatorImageAssetPanel from '../CreatorImageAssetPanel';
 import { useCreatorCompositionId } from '../useCreatorCompositionId';
+import CreativeSummaryCard, { type CreativeSummaryProps } from '../CreativeSummaryCard';
+import { EMPTY_GUIDED_CHOICES } from '../../../lib/content/guidedCreativeDirection';
 
 /**
  * Global AI-activity indicator. EVERY AI operation on this screen sets `aiBusyKey`
@@ -96,6 +98,7 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
     error,
     freeformFieldSuggestions,
     generationInFlightRef,
+    guidedChoices,
     generationModeLabel,
     generationStage,
     handleEditorChange,
@@ -151,6 +154,15 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
   // PHASE 2B — identity of the design being composed, so an uploaded image can
   // be attached to it and survive the trip to the template gallery.
   const compositionId = useCreatorCompositionId(type);
+  /*
+   * What is actually attached, as the image panel reports it.
+   *
+   * Held here rather than fetched, because the panel has already loaded the
+   * references and a second fetch could disagree with what the user is looking
+   * at — a summary that contradicts the screen above it is worse than none.
+   */
+  const [imageAttachment, setImageAttachment] =
+    React.useState<CreativeSummaryProps['attachment']>(null);
 
   /**
    * Does on-image copy apply to this composition?
@@ -482,6 +494,14 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                    * reference assets the design accepts. */
                   templateSlots={activeTemplate?.assetSlots ?? null}
                   templateName={activeTemplate?.name ?? null}
+                  /* Signals the treatment proposal reads. All optional: absent
+                   * simply means fewer signals, never a different mechanism. */
+                  templateCategory={activeTemplate?.category ?? null}
+                  templatePurposeKey={activeTemplate?.renderingContract?.purposeKey ?? null}
+                  guidedChoices={guidedChoices ?? EMPTY_GUIDED_CHOICES}
+                  brief={String(answers.topic || '')}
+                  /* So the summary below can state what happens to their image. */
+                  onAttachmentChange={setImageAttachment}
                 />
               ) : null}
 
@@ -1040,6 +1060,24 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                 }
               }}
             />
+
+            {/* The last thing before a generation is spent. Every value is read
+              * from the state about to be submitted — see CreativeSummaryCard. */}
+            {isSocialCreativeType(type) && activeTemplate ? (
+              <div className="mt-6">
+                <CreativeSummaryCard
+                  templateName={activeTemplate.name ?? null}
+                  goalLabel={typeof router.query.goal === 'string' && router.query.goal ? String(router.query.goal) : null}
+                  choices={guidedChoices ?? EMPTY_GUIDED_CHOICES}
+                  attachment={imageAttachment}
+                  headline={String(templateValues?.fields?.headline || answers.topic || '').trim() || null}
+                  subheadline={String(templateValues?.fields?.subheadline || '').trim() || null}
+                  cta={String(templateValues?.fields?.cta || answers.cta || '').trim() || null}
+                  platform={selectedPlatform ?? null}
+                  brandAware={brandMode === 'brand-aware'}
+                />
+              </div>
+            ) : null}
 
             <div className="mt-6 flex flex-wrap gap-3">
               <button
