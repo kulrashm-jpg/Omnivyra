@@ -590,6 +590,71 @@ describe('P1.2 — optional legacy column compatibility', () => {
   });
 });
 
+/**
+ * P4 — week SELECTION maps onto the existing P1 release contract. No second
+ * release API: the UI narrows `scope`, the server re-validates every week and
+ * remains authoritative. A selection can never widen the scope.
+ */
+describe('P4 — week selection → scope:"weeks" (no scope widening)', () => {
+  const sixWeeks = [
+    approvedRow('w1', 1, 'linkedin'), approvedRow('w2', 2, 'linkedin'),
+    approvedRow('w3', 3, 'linkedin'), approvedRow('w4', 4, 'linkedin'),
+    approvedRow('w5', 5, 'linkedin'), approvedRow('w6', 6, 'linkedin'),
+  ];
+
+  it('selecting weeks 1,2 schedules ONLY weeks 1,2 — never 3-6', async () => {
+    wireSupabase({ planRows: sixWeeks });
+    const res = await post({ scope: 'weeks', weeks: [1, 2] });
+    expect(res.statusCode).toBe(200);
+    const [, , options] = mockScheduleStructuredPlan.mock.calls[0];
+    expect(options.restrictToDailyPlanIds.sort()).toEqual(['w1', 'w2']);
+    // The decisive assertion: nothing outside the selection was scheduled.
+    for (const outside of ['w3', 'w4', 'w5', 'w6']) {
+      expect(options.restrictToDailyPlanIds).not.toContain(outside);
+    }
+    expect(res.body.eligible_weeks).toEqual([1, 2]);
+  });
+
+  it('a non-contiguous selection is honoured exactly', async () => {
+    wireSupabase({ planRows: sixWeeks });
+    await post({ scope: 'weeks', weeks: [1, 3, 5] });
+    const [, , options] = mockScheduleStructuredPlan.mock.calls[0];
+    expect(options.restrictToDailyPlanIds.sort()).toEqual(['w1', 'w3', 'w5']);
+  });
+
+  it('an unknown week is rejected — the selection cannot invent scope', async () => {
+    wireSupabase({ planRows: sixWeeks });
+    const res = await post({ scope: 'weeks', weeks: [1, 99] });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('UNKNOWN_WEEKS');
+    expect(res.body.unknown_weeks).toEqual([99]);
+    expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
+  });
+
+  it('a duplicate week collapses rather than double-scheduling', async () => {
+    wireSupabase({ planRows: sixWeeks });
+    await post({ scope: 'weeks', weeks: [2, 2, 2] });
+    const [, , options] = mockScheduleStructuredPlan.mock.calls[0];
+    expect(options.restrictToDailyPlanIds).toEqual(['w2']);
+  });
+
+  it('an EMPTY selection is rejected rather than silently widening to the whole campaign', async () => {
+    wireSupabase({ planRows: sixWeeks });
+    const res = await post({ scope: 'weeks', weeks: [] });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.code).toBe('INVALID_RELEASE_SCOPE');
+    expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
+  });
+
+  it('a week whose slots are all unapproved releases nothing, and says why', async () => {
+    wireSupabase({ planRows: [approvedRow('w1', 1, 'linkedin'), draftRow('w2', 2, 'linkedin')] });
+    const res = await post({ scope: 'weeks', weeks: [2] });
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('NOTHING_RELEASABLE');
+    expect(res.body.skipped_by_reason.content_in_draft).toBe(1);
+  });
+});
+
 describe('canonical stage mapping', () => {
   it("maps the scheduling writers' current_stage='schedule' onto the canonical 'scheduling' stage", () => {
     // commit-plan, schedule-structured-plan, the live BOLT path and the
