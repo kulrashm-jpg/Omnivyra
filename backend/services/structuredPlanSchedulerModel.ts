@@ -800,6 +800,17 @@ export type ScheduleStructuredPlanOptions = {
    */
   run_id?: string;
   executionProfile?: string;
+  /**
+   * Strategic Mix P1 — scoped release. When present, the daily_content_plans
+   * the scheduler considers are restricted to these ids (and `plan.weeks` is
+   * filtered to the weeks those rows cover). ABSENT ⇒ byte-identical legacy
+   * behaviour: every existing caller (BOLT, schedule-structured-plan) omits
+   * this and processes the whole campaign exactly as before.
+   *
+   * The caller derives the id set with lib/campaign/campaignRelease —
+   * scheduling policy is NOT decided here.
+   */
+  restrictToDailyPlanIds?: string[];
 };
 
 export function tryParseExecutionContent(value: unknown): Record<string, unknown> {
