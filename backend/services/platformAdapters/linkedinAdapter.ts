@@ -14,6 +14,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { providerErrorFromResponse } from '../engagement/providerRequestError';
 
 const LINKEDIN_API = 'https://api.linkedin.com/v2';
 
@@ -110,6 +111,15 @@ export const linkedinAdapter: IPlatformAdapter = {
     });
   },
 
+  /**
+   * Comments on a post.
+   *
+   * `X-Restli-Protocol-Version: 2.0.0` is required by LinkedIn's v2 Rest.li
+   * endpoints and every other call in this adapter sends it — this one did not,
+   * which is a real defect on the exact request that has been failing. It is
+   * added here so the remaining failure, if any, is unambiguously about the
+   * credential rather than the protocol header.
+   */
   async fetchComments(params: FetchCommentsParams): Promise<unknown> {
     return withRateLimit('linkedin', async () => {
     const response = await fetch(
@@ -118,11 +128,12 @@ export const linkedinAdapter: IPlatformAdapter = {
         headers: {
           Authorization: `Bearer ${params.accessToken}`,
           Accept: 'application/json',
+          'X-Restli-Protocol-Version': '2.0.0',
         },
       }
     );
     if (!response.ok) {
-      throw new Error(`LinkedIn comments fetch failed: ${response.statusText}`);
+      throw await providerErrorFromResponse(response, { provider: 'linkedin', endpointCategory: 'comments' });
     }
     return response.json();
     });

@@ -19,6 +19,20 @@ import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore
 import { syncFromPostComments } from './engagementNormalizationService';
 import { getPlatformAdapter } from './platformAdapters';
 import { getPlatformCategory } from './platformRegistryService';
+import {
+  providerErrorFromResponse,
+  isProviderRequestError,
+  isAuthFailure,
+  ProviderRequestError,
+} from './engagement/providerRequestError';
+import { buildXConversationSearchUrl } from './engagement/xReplyQuery';
+import { markSocialAccountNeedsReauth } from '../auth/tokenStore';
+
+/**
+ * How far back scheduled ingestion looks for posts to poll. See the rationale
+ * at the query site in `ingestRecentPublishedPosts`.
+ */
+export const INGEST_WINDOW_DAYS = 30;
 
 export type IngestCommentRow = {
   scheduled_post_id: string;
@@ -43,24 +57,33 @@ async function fetchLinkedInComments(accessToken: string, platformPostId: string
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json',
+        // Required by LinkedIn's v2 Rest.li endpoints; was missing here too.
+        'X-Restli-Protocol-Version': '2.0.0',
       },
     }
   );
   if (!response.ok) {
-    throw new Error(`LinkedIn comments fetch failed: ${response.statusText}`);
+    throw await providerErrorFromResponse(response, { provider: 'linkedin', endpointCategory: 'comments' });
   }
   return response.json();
 }
 
+/**
+ * Replies to an X post, via conversation search.
+ *
+ * NOT `/2/tweets/{id}/replies` — that endpoint does not exist, and the 404 it
+ * returned was previously misread as a credential problem. See `xReplyQuery.ts`
+ * for the 7-day recent-search limitation this inherits.
+ */
 async function fetchTwitterComments(accessToken: string, platformPostId: string): Promise<any> {
-  const response = await fetch(`https://api.twitter.com/2/tweets/${platformPostId}/replies`, {
+  const response = await fetch(buildXConversationSearchUrl('https://api.twitter.com/2', platformPostId), {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
     },
   });
   if (!response.ok) {
-    throw new Error(`Twitter replies fetch failed: ${response.statusText}`);
+    throw await providerErrorFromResponse(response, { provider: 'x', endpointCategory: 'replies' });
   }
   return response.json();
 }
@@ -111,7 +134,15 @@ function fetchCommentsFromPlatform(
 }
 
 /**
- * Fetch comments via platform adapter when available; fallback to legacy direct fetchers.
+ * Fetch comments via platform adapter when available; fall back to the legacy
+ * direct fetchers ONLY when the adapter could not attempt the call.
+ *
+ * The fallback exists to cover platforms with no adapter — not to retry a
+ * request the provider already answered. Previously any adapter throw fell
+ * through to the legacy fetcher, which re-issued the SAME request with the SAME
+ * token: an expired credential therefore produced two guaranteed-failing
+ * provider calls per post per cycle (observed as 88 provider errors for 44
+ * attempts). A provider that has already said 401 or 404 will say it again.
  */
 async function fetchCommentsWithAdapterFallback(
   platform: string,
@@ -123,7 +154,15 @@ async function fetchCommentsWithAdapterFallback(
     try {
       return await adapter.fetchComments({ platformPostId, accessToken });
     } catch (e: any) {
-      console.warn('[engagementIngestion] Adapter fetch failed, falling back to legacy:', e?.message);
+      // A real provider response — the request was made and answered. Retrying
+      // it through the legacy path would only duplicate the failure.
+      if (isProviderRequestError(e)) throw e;
+      // Adapter could not attempt the call (unsupported operation, adapter
+      // defect). The legacy fetcher is a genuine alternative here.
+      console.warn('[engagementIngestion] adapter could not attempt fetch, using legacy path', {
+        platform,
+        reason: e?.message ?? 'unknown',
+      });
     }
   }
   return fetchCommentsFromPlatform(platform, platformPostId, accessToken);
@@ -437,10 +476,25 @@ async function syncToUnifiedEngagement(
 
 // ---- Public API ----
 
+/**
+ * Why an ingest attempt failed, as a value rather than a prose message.
+ *
+ * `needs_reauth` is the one an operator must act on: the connection has been
+ * parked and will stay parked until the user reconnects.
+ */
+export type IngestFailureKind =
+  | 'config'          // no credential on the account at all
+  | 'needs_reauth'    // credential proven dead; account parked for reconnection
+  | 'refresh_failed'  // refresh failed before the request; nothing was sent
+  | 'auth'            // provider rejected the credential
+  | 'not_found'       // endpoint/resource absent — no credential will fix this
+  | 'provider';       // any other provider or persistence failure
+
 export type IngestCommentsResult = {
   success: boolean;
   ingested: number;
   error?: string;
+  failure?: IngestFailureKind;
 };
 
 /**
@@ -458,20 +512,79 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
   }
   let token = await getToken(post.social_account_id);
   if (!token?.access_token) {
-    return { success: false, ingested: 0, error: 'No access token for social account' };
+    return { success: false, ingested: 0, error: 'No access token for social account', failure: 'config' };
+  }
+  // Parked for reconnection — the credential is known dead. Re-attempting it
+  // every 10 minutes is what produced an unbounded failure loop before.
+  if (token.is_active === false) {
+    return {
+      success: false,
+      ingested: 0,
+      error: 'Social account requires reconnection',
+      failure: 'needs_reauth',
+    };
   }
   if (isTokenExpiringSoon(token, 5)) {
     const refreshedToken = await refreshPlatformToken(post.platform, post.social_account_id, token);
     if (refreshedToken?.access_token) {
       token = refreshedToken;
+    } else {
+      // Previously this fell through and called the provider with the stale
+      // token — a guaranteed 401 reported as a fetch failure. Stop here and say
+      // what actually happened. Not parked: a refresh can fail transiently.
+      console.warn('[engagementIngestion] proactive token refresh failed', {
+        scheduled_post_id,
+        platform: post.platform,
+      });
+      return {
+        success: false,
+        ingested: 0,
+        error: 'Token refresh failed before request; not retrying with stale credential',
+        failure: 'refresh_failed',
+      };
     }
   }
   try {
-    const raw = await fetchCommentsWithAdapterFallback(
-      post.platform,
-      platformPostId,
-      token.access_token
-    );
+    let raw: any;
+    try {
+      raw = await fetchCommentsWithAdapterFallback(post.platform, platformPostId, token.access_token);
+    } catch (firstErr: any) {
+      if (!isAuthFailure(firstErr)) throw firstErr;
+      // The provider rejected the credential. Refresh ONCE and retry ONCE —
+      // never a loop, and never a second attempt on the same token.
+      const refreshedToken = await refreshPlatformToken(post.platform, post.social_account_id, token);
+      if (!refreshedToken?.access_token) {
+        await markSocialAccountNeedsReauth(
+          post.social_account_id,
+          `${post.platform} rejected credential and refresh failed`,
+        );
+        return {
+          success: false,
+          ingested: 0,
+          error: 'Authentication failed and token refresh failed; reconnection required',
+          failure: 'needs_reauth',
+        };
+      }
+      token = refreshedToken;
+      try {
+        raw = await fetchCommentsWithAdapterFallback(post.platform, platformPostId, token.access_token);
+      } catch (retryErr: any) {
+        if (isAuthFailure(retryErr)) {
+          // Refreshed credential still rejected — this is unrecoverable.
+          await markSocialAccountNeedsReauth(
+            post.social_account_id,
+            `${post.platform} rejected refreshed credential`,
+          );
+          return {
+            success: false,
+            ingested: 0,
+            error: 'Authentication failed after token refresh; reconnection required',
+            failure: 'needs_reauth',
+          };
+        }
+        throw retryErr;
+      }
+    }
     const rows = normalizeCommentsForPlatform(scheduled_post_id, post.platform, raw);
     await persistComments(rows);
     const ingested = rows.length;
@@ -511,16 +624,24 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
     }
     return { success: true, ingested };
   } catch (e: any) {
+    // Structured, redacted diagnosis. `statusText` alone made a permanent wrong
+    // endpoint ("Not Found") and an expired token ("Unauthorized") look like the
+    // same class of problem; the failure kind and provider code separate them.
+    const providerDetail = isProviderRequestError(e) ? e.toLogPayload() : {};
     console.warn('[engagementIngestion] ingestComments failed', {
       scheduled_post_id,
       platform: post.platform,
       platform_post_id: platformPostId,
       error: e?.message ?? 'Failed to fetch or persist comments',
+      ...providerDetail,
     });
     return {
       success: false,
       ingested: 0,
       error: e?.message ?? 'Failed to fetch or persist comments',
+      failure: isProviderRequestError(e)
+        ? (e.kind === 'not_found' ? 'not_found' : e.kind === 'auth' ? 'auth' : 'provider')
+        : 'provider',
     };
   }
 }
@@ -534,10 +655,21 @@ export async function ingestRecentPublishedPosts(): Promise<{
   totalIngested: number;
   errors: { scheduled_post_id: string; error: string }[];
 }> {
+  // The function is named "recent" and documented as "recently published", but
+  // had no date filter — so every 10-minute tick reprocessed the entire lifetime
+  // population of published posts, and the failure volume grew with post count.
+  //
+  // 30 days is chosen from the ingestion semantics, not to quieten logs: late
+  // engagement on social posts is real and worth collecting for weeks, while X
+  // recent search cannot see replies older than 7 days at all, and LinkedIn
+  // comment activity on a month-old post is negligible. 30 days comfortably
+  // covers both providers' useful range with headroom.
+  const windowStart = new Date(Date.now() - INGEST_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const { data: posts, error } = await ownedDbTable('scheduled_posts')
     .select('id')
     .eq('status', 'published')
-    .not('platform_post_id', 'is', null);
+    .not('platform_post_id', 'is', null)
+    .gte('published_at', windowStart);
 
   if (error) {
     throw new Error(`Failed to query published posts: ${error.message}`);
