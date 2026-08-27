@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { campaignLifecycleSelect } from '../../../lib/campaign/executionStatusCompat';
 /**
  * POST /api/campaigns/planner-draft — Strategic Mix P1 (SPEC-001 invariant I-1).
  *
@@ -24,7 +25,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireTenantAccess } from '../../../backend/security/TenantGuard';
-import { resolveCampaignStage } from '../../../lib/campaign/campaignStage';
+import { resolveCampaignStage, CampaignStatusFields } from '../../../lib/campaign/campaignStage';
 
 /** Thread-id marker identifying Strategic Mix planner drafts (resume key). */
 const PLANNER_DRAFT_THREAD_PREFIX = 'planner_draft_';
@@ -48,9 +49,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // NOTE: `.eq('status', 'draft')` is the physical RESUME-KEY filter (row
     // lookup), not lifecycle interpretation — interpretation happens below
     // through the canonical read model only (R2-P4).
-    const { data: existing } = await supabase
+    // R5 — TWO defects fixed here, both proven against live production.
+    //
+    // 1. `execution_status` does not exist. Naming it made PostgREST fail the
+    //    WHOLE query with 42703, so `data` was always null.
+    // 2. The result destructured `data` only and DISCARDED `error`. A failed
+    //    read was therefore indistinguishable from "no draft exists", and the
+    //    route fell through to CREATE — silently minting a new draft campaign
+    //    on every planner open and losing the user's previous session.
+    //
+    // The resume-key filter (company + user + status 'draft' + thread_id
+    // prefix) is unchanged; only the column list and the error handling are.
+    const { data: existing, error: existingErr } = await supabase
       .from('campaigns')
-      .select('id, updated_at, status, current_stage, execution_status, thread_id')
+      .select(campaignLifecycleSelect('updated_at', 'company_id'))
       .eq('company_id', companyId)
       .eq('user_id', access.userId)
       .eq('status', 'draft')
@@ -59,11 +71,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .limit(1)
       .maybeSingle();
 
-    if (existing?.id) {
+    // A database failure must NEVER be silently converted into "no draft
+    // exists" — that is what produced the duplicate-draft behaviour above.
+    if (existingErr) {
+      return res.status(500).json({
+        code: 'PLANNER_DRAFT_LOOKUP_FAILED',
+        error: 'Could not check for an existing planner draft.',
+        message: (existingErr as { message?: string }).message ?? 'Unknown database error',
+      });
+    }
+
+    const existingDraft = existing as unknown as (CampaignStatusFields & { id?: string }) | null;
+    if (existingDraft?.id) {
       return res.status(200).json({
-        campaign_id: existing.id,
+        campaign_id: existingDraft.id,
         resumed: true,
-        stage: resolveCampaignStage(existing as Record<string, unknown>).stage,
+        stage: resolveCampaignStage(existingDraft).stage,
       });
     }
 

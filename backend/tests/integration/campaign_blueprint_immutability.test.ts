@@ -110,7 +110,12 @@ describe('Blueprint Execution Integrity Guard', () => {
       expect(blockedCalls.length).toBeGreaterThan(0);
       expect(blockedCalls[0][0].metadata).toMatchObject({
         campaignId: CAMPAIGN_ID,
-        execution_status: 'ACTIVE',
+        // R5: this diagnostic previously echoed `execution_status`, a column
+        // that does not exist in production. The event now reports the
+        // canonical stage that was actually consulted. The 409, the
+        // BLUEPRINT_IMMUTABLE code and the emission of this event are all
+        // unchanged — only the diagnostic key is.
+        campaign_stage: 'executing',
         blueprint_status: 'ACTIVE',
       });
     });

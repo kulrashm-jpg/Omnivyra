@@ -1,4 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { CampaignStatusFields, resolveCampaignStage } from '../../../lib/campaign/campaignStage';
+import { campaignLifecycleSelect, isCampaignFinalized } from '../../../lib/campaign/executionStatusCompat';
 
 /**
  * POST /api/campaigns/run-preplanning
@@ -11,8 +13,6 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
 import { getUnifiedCampaignBlueprint, assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../backend/services/campaignBlueprintService';
-import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../backend/services/CampaignFinalizationGuard';
-import { normalizeExecutionState } from '../../../backend/governance/ExecutionStateMachine';
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { generatePrePlanningExplanation } from '../../../backend/services/aiGateway';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
@@ -60,7 +60,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const { data: campaign, error: campError } = await supabase
       .from('campaigns')
-      .select('id, execution_status, duration_weeks')
+      // R5: execution_status is absent in production; naming it 42703-failed
+      // the whole read, so this route answered 404 for every campaign.
+      // Pre-planning never branched on the value.
+      .select(campaignLifecycleSelect('duration_weeks'))
       .eq('id', campaignId)
       .maybeSingle();
 
@@ -69,10 +72,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // DB first: if duration already set (e.g. after restart), return it — never contradict
-    const dbWeeks = typeof (campaign as { duration_weeks?: number }).duration_weeks === 'number' &&
-      (campaign as { duration_weeks: number }).duration_weeks >= 1 &&
-      (campaign as { duration_weeks: number }).duration_weeks <= 52
-      ? (campaign as { duration_weeks: number }).duration_weeks
+    // R5: the centralized select list is a dynamic string, so supabase-js
+    // widens the row type; re-assert the shape once, here.
+    const campaignRow = campaign as unknown as CampaignStatusFields & { duration_weeks?: number };
+    const dbWeeks = typeof campaignRow.duration_weeks === 'number' &&
+      campaignRow.duration_weeks >= 1 &&
+      campaignRow.duration_weeks <= 52
+      ? campaignRow.duration_weeks
       : null;
     if (dbWeeks != null) {
       return res.status(200).json({
@@ -88,24 +94,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
     }
 
-    const executionStatus = normalizeExecutionState((campaign as any).execution_status);
-    try {
-      assertCampaignNotFinalized(executionStatus);
-    } catch (err: any) {
-      if (err instanceof CampaignFinalizedError) {
-        await recordGovernanceEvent({
-          companyId,
-          campaignId,
-          eventType: 'CAMPAIGN_MUTATION_BLOCKED_FINALIZED',
-          eventStatus: 'BLOCKED',
-          metadata: { campaignId, execution_status: executionStatus },
-        });
-        return res.status(409).json({
-          code: 'CAMPAIGN_FINALIZED',
-          message: 'Campaign is finalized and cannot be modified',
-        });
-      }
-      throw err;
+    // R5: canonical stage replaces the absent column's execution state. The
+    // old form normalized a missing value to 'DRAFT', which is never terminal
+    // — so the guard could not fire even when the read succeeded.
+    const campaignStage = resolveCampaignStage(campaignRow).stage;
+    if (isCampaignFinalized(campaignRow)) {
+      await recordGovernanceEvent({
+        companyId,
+        campaignId,
+        eventType: 'CAMPAIGN_MUTATION_BLOCKED_FINALIZED',
+        eventStatus: 'BLOCKED',
+        metadata: { campaignId, campaign_stage: campaignStage },
+      });
+      return res.status(409).json({
+        code: 'CAMPAIGN_FINALIZED',
+        message: 'Campaign is finalized and cannot be modified',
+      });
     }
 
     const blueprint = await getUnifiedCampaignBlueprint(campaignId);
@@ -124,9 +128,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
               hoursUntilExecution: err.hoursUntilExecution,
               freezeWindowHours: err.freezeWindowHours,
             },
-            evaluationContext: {
-              execution_status: executionStatus,
-            },
+            // R5: execution_status intentionally OMITTED — production has no
+            // such column, so reporting any value would be an invention. The
+            // canonical stage is carried in metadata above instead.
+            evaluationContext: {},
           });
           return res.status(409).json({
             code: 'EXECUTION_WINDOW_FROZEN',
@@ -136,7 +141,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (err instanceof BlueprintImmutableError) {
           const { data: camp } = await supabase
             .from('campaigns')
-            .select('execution_status, blueprint_status')
+            .select(campaignLifecycleSelect())
             .eq('id', campaignId)
             .maybeSingle();
           await recordGovernanceEvent({
@@ -146,7 +151,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
             eventStatus: 'BLOCKED',
             metadata: {
               campaignId,
-              execution_status: (camp as any)?.execution_status ?? 'ACTIVE',
+              // R5: canonical stage instead of an absent column's invented
+              // 'ACTIVE' default. Diagnostics only — nothing branches on it.
+              campaign_stage: resolveCampaignStage(camp as unknown as CampaignStatusFields).stage,
               blueprint_status: (camp as any)?.blueprint_status ?? 'ACTIVE',
             },
           });
