@@ -171,7 +171,13 @@ describe('findDuePostsAndEnqueue — identical decisions, batched queries', () =
     });
   });
 
-  it('mixed readiness states → identical skip decisions (not-active, not-ready, missing rows, duplicates)', async () => {
+  /**
+   * R2-IMPL B1 — RETARGETED. Campaign-global readiness no longer gates enqueue,
+   * so `c-active-notready` now ENQUEUES: its post is released (status
+   * 'scheduled') on an active campaign, and the campaign's planning progress is
+   * no longer the post's business. Every other skip reason is unchanged.
+   */
+  it('mixed campaign states → skip decisions (not-active, missing rows, duplicates); readiness no longer skips', async () => {
     primeDb({
       duePosts: [
         post('p1', 'c-active-ready'),
@@ -193,10 +199,27 @@ describe('findDuePostsAndEnqueue — identical decisions, batched queries', () =
       ],
     });
     const res = await findDuePostsAndEnqueue();
-    // p1 + p5 enqueue; p2 (not active), p3 (not ready), p4 (missing campaign), p6 (dup) skip.
-    expect(res).toEqual({ found: 6, created: 2, skipped: 4 });
+    // p1 + p3 + p5 enqueue; p2 (not active), p4 (missing campaign), p6 (dup) skip.
+    // p3 is THE governance change: partial readiness no longer blocks a
+    // released post — this is what makes partial release work.
+    expect(res).toEqual({ found: 6, created: 3, skipped: 3 });
     const jobs = queueAddBulk.mock.calls[0][0] as any[];
-    expect(jobs.map((j) => j.data.scheduled_post_id)).toEqual(['p1', 'p5']);
+    expect(jobs.map((j) => j.data.scheduled_post_id)).toEqual(['p1', 'p3', 'p5']);
+  });
+
+  it('an UNRELEASED post is skipped even on an active campaign (the replacement gate)', async () => {
+    primeDb({
+      duePosts: [
+        { ...post('p1', 'c-active'), status: 'scheduled' },
+        { ...post('p2', 'c-active'), status: 'draft' },     // never released
+        { ...post('p3', 'c-active'), status: 'cancelled' }, // withdrawn
+      ],
+      campaigns: [{ id: 'c-active', status: 'active' }],
+    });
+    const res = await findDuePostsAndEnqueue();
+    expect(res).toEqual({ found: 3, created: 1, skipped: 2 });
+    const jobs = queueAddBulk.mock.calls[0][0] as any[];
+    expect(jobs.map((j) => j.data.scheduled_post_id)).toEqual(['p1']);
   });
 
   it('hundreds of posts → constant query count (N+1 eliminated) and preserved order', async () => {
@@ -210,10 +233,13 @@ describe('findDuePostsAndEnqueue — identical decisions, batched queries', () =
     expect(res).toEqual({ found: 100, created: 100, skipped: 0 });
 
     // Round-trip proof: 1 due-posts select + 1 dup-check + 1 campaigns +
-    // 1 readiness + 1 bulk insert = 5 total for 100 posts across 10 campaigns
-    // (was 2 + 2×100 lookups + 100 inserts = ~302 before HARDEN-004).
+    // 1 bulk insert = 4 total for 100 posts across 10 campaigns (was 2 + 2×100
+    // lookups + 100 inserts = ~302 before HARDEN-004). R2-IMPL B1 removed the
+    // readiness batch — one FEWER round-trip, N+1 elimination preserved.
     const roundTrips = dbCalls.filter((c) => c.op === 'resolve').length;
-    expect(roundTrips).toBe(5);
+    expect(roundTrips).toBe(4);
+    // The readiness table is no longer consulted for enqueue decisions at all.
+    expect(dbCalls.filter((c) => c.table === 'campaign_readiness')).toHaveLength(0);
     expect(dbCalls.filter((c) => c.op === 'insert')).toHaveLength(1);
     expect(queueAddBulk).toHaveBeenCalledTimes(1);
     expect(queueAdd).not.toHaveBeenCalled();
@@ -266,12 +292,25 @@ describe('findDuePostsAndEnqueue — identical decisions, batched queries', () =
     expect(queueAddBulk).not.toHaveBeenCalled();
   });
 
-  it('readiness batch error → run throws (matches old getCampaignReadiness throw)', async () => {
+  /**
+   * R2-IMPL B1 — RETARGETED. The readiness batch query is gone, so a broken
+   * readiness table can no longer take down the scheduler run. That is the
+   * intended consequence of demoting readiness to an informational metric:
+   * a diagnostics failure must not stop releasing campaigns from publishing.
+   */
+  it('a broken readiness table no longer affects the run (readiness is informational)', async () => {
     primeDb({
       duePosts: [post('p1', 'c1')],
       campaigns: [{ id: 'c1', status: 'active' }],
     });
     dbResponses['campaign_readiness:select'] = { data: null, error: { message: 'readiness table on fire' } };
-    await expect(findDuePostsAndEnqueue()).rejects.toThrow('Failed to load campaign readiness');
+    const res = await findDuePostsAndEnqueue();
+    expect(res).toEqual({ found: 1, created: 1, skipped: 0 });
+  });
+
+  it('the CAMPAIGNS batch error still throws (that gate is retained)', async () => {
+    primeDb({ duePosts: [post('p1', 'c1')] });
+    dbResponses['campaigns:select'] = { data: null, error: { message: 'campaigns table on fire' } };
+    await expect(findDuePostsAndEnqueue()).rejects.toThrow('Failed to query campaigns');
   });
 });

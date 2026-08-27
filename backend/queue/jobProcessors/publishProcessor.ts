@@ -35,7 +35,10 @@ import { recordPostAnalytics } from '../../services/analyticsService';
 import { schedulePostPolls } from '../../services/analyticsNormalizationService';
 import { logActivity } from '../../services/activityLogger';
 import { createUserNotification } from '../../services/userNotificationService';
-import { getCampaignReadiness } from '../../services/campaignReadinessService';
+// R2-IMPL B1 — campaign readiness is no longer a publish authorization input.
+// It remains a planning/diagnostic metric (Campaign Board, growth guidance,
+// campaign health); publication is authorized per post by this predicate.
+import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
 import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
 import { runJob } from '../../services/jobRunner';
 
@@ -236,43 +239,61 @@ async function processPublishJobInner(params: {
       return;
     }
 
-    // Step 3: Readiness and status guard
-    if (scheduledPost.campaign_id) {
-      const { data: campaign, error: campaignError } = await supabase
-        .from('campaigns')
-        .select('status')
-        .eq('id', scheduledPost.campaign_id)
-        .single();
-
-      if (campaignError || !campaign || campaign.status !== 'active') {
-        await updateQueueJobStatus(jobId as string, 'failed', {
-          error_message: 'Campaign is not active',
-          error_code: 'PUBLISH_BLOCKED_CAMPAIGN_NOT_ACTIVE',
-        });
-        await createQueueJobLog(
-          jobId as string,
-          'warn',
-          'Publish blocked: campaign is not active',
-          { campaign_id: scheduledPost.campaign_id }
-        );
-        const blockedError: any = new Error('PUBLISH_BLOCKED_CAMPAIGN_NOT_ACTIVE');
-        blockedError.skipQueueStatusUpdate = true;
-        throw blockedError;
+    // ── Step 3: PER-POST publish authorization (R2-IMPL B1) ────────────────
+    //
+    // Was: campaign active AND campaign_readiness.readiness_state === 'ready'.
+    // That second condition is CAMPAIGN-GLOBAL — it demands the entire campaign
+    // be 100% planned and 100% scheduled — so releasing weeks 1-2 of a six-week
+    // campaign blocked the released weeks along with the unreleased ones. In
+    // production it was satisfied by zero campaigns, so nothing published
+    // through this worker at all.
+    //
+    // Now: authorization is a property of THIS post — see
+    // lib/campaign/publishAuthorization for the full safety mapping. The
+    // campaign-active requirement is unchanged; campaign readiness is no longer
+    // an authorization input (it remains a planning/diagnostic metric).
+    //
+    // The release gate (`post_status` releasable) is what keeps an unreleased
+    // week blocked: the release seam never schedules draft/review content, so
+    // an unreleased slot has no scheduled_posts row to authorize.
+    {
+      let campaignStatus: string | null = null;
+      if (scheduledPost.campaign_id) {
+        const { data: campaign, error: campaignError } = await supabase
+          .from('campaigns')
+          .select('status')
+          .eq('id', scheduledPost.campaign_id)
+          .single();
+        // A missing/unreadable campaign leaves status null ⇒ not active ⇒ denied,
+        // exactly as the previous `campaignError || !campaign` branch did.
+        campaignStatus = campaignError || !campaign ? null : ((campaign as { status?: string }).status ?? null);
       }
 
-      const readiness = await getCampaignReadiness(scheduledPost.campaign_id);
-      if (!readiness || readiness.readiness_state !== 'ready') {
+      const authorization = authorizePostPublish({
+        campaign_id: scheduledPost.campaign_id,
+        campaign_status: campaignStatus,
+        post_status: (scheduledPost as { status?: string | null }).status ?? null,
+        // platform_post_id is handled by the Step-2 idempotency short-circuit
+        // above; passing it here would double-report the same condition.
+        platform_post_id: null,
+        is_thread_start: scheduledPost.is_thread_start === true,
+        has_content: Boolean(
+          scheduledPost.content && String(scheduledPost.content).trim().length > 0,
+        ),
+      });
+
+      if (!authorization.authorized) {
         await updateQueueJobStatus(jobId as string, 'failed', {
-          error_message: 'Campaign readiness check failed',
-          error_code: 'PUBLISH_BLOCKED_CAMPAIGN_NOT_READY',
+          error_message: `Publish blocked: ${authorization.reason}`,
+          error_code: authorization.code,
         });
         await createQueueJobLog(
           jobId as string,
           'warn',
-          'Publish blocked: campaign not ready',
-          { campaign_id: scheduledPost.campaign_id }
+          `Publish blocked: ${authorization.reason}`,
+          { campaign_id: scheduledPost.campaign_id, code: authorization.code },
         );
-        const blockedError: any = new Error('PUBLISH_BLOCKED_CAMPAIGN_NOT_READY');
+        const blockedError: any = new Error(authorization.code);
         blockedError.skipQueueStatusUpdate = true;
         throw blockedError;
       }

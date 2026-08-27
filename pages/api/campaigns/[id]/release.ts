@@ -79,6 +79,9 @@ import {
 import { recordGovernanceEvent } from '../../../../backend/services/GovernanceEventService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 import { checkAndCompleteCampaignIfEligible } from '../../../../backend/services/CampaignCompletionService';
+// R2-IMPL B1 §12 — readiness is refreshed after scheduling as an INFORMATIONAL
+// metric. It is not a publish prerequisite (see lib/campaign/publishAuthorization).
+import { evaluateCampaignReadiness } from '../../../../backend/services/campaignReadinessService';
 import { resolveCampaignStage } from '../../../../lib/campaign/campaignStage';
 import {
   deriveReleasePlan,
@@ -396,6 +399,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     void syncCampaignVersionStage(id, 'schedule', companyId ?? undefined).catch(() => {});
     void checkAndCompleteCampaignIfEligible(id).catch(() => {});
+
+    // R2-IMPL B1 §12 — refresh the campaign readiness METRIC after scheduling so
+    // the Board / guidance surfaces stop reading stale-or-absent data. It is
+    // fire-and-forget by design: readiness no longer authorizes publication, so
+    // a failure here must never invalidate an otherwise valid scheduled post.
+    // Uses the existing service — no second evaluator.
+    void evaluateCampaignReadiness(id).catch(() => {
+      /* informational metric only — never blocks or fails the release */
+    });
 
     // Same P1.2 rule for the post-release read: canonical fields only, with
     // the optional legacy field carried over from the pre-release read (its

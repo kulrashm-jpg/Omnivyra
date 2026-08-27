@@ -315,6 +315,15 @@ export async function runScheduleStructuredPlan(
     })
     .eq('id', campaignId);
 
+  // R2-IMPL B1 §12 — parity with the Strategic Mix release seam: refresh the
+  // campaign readiness METRIC after scheduling so Board/guidance surfaces are
+  // not stale. Fire-and-forget: readiness no longer authorizes publication, so
+  // a failure here must never affect this run's scheduled posts.
+  void (async () => {
+    const { evaluateCampaignReadiness } = await import('./campaignReadinessService');
+    await evaluateCampaignReadiness(campaignId);
+  })().catch(() => { /* informational metric only */ });
+
   return { scheduled_count: result.scheduled_count };
 }
 
