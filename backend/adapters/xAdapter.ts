@@ -24,6 +24,8 @@
 
 import axios from 'axios';
 import type { PublishResult } from './platformAdapterTypes';
+// P3-A — reuse the EXISTING pipeline error vocabulary; no new codes.
+import { PipelineErrorCode } from '../../lib/shared/pipelineErrorCodes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
 import { uploadXMedia } from './xMedia';
@@ -117,16 +119,48 @@ export async function publishToX(
     // media.write scope, or a transient failure), fall back to a text-only
     // tweet rather than failing the whole post.
     if (post.media_urls && post.media_urls.length > 0) {
+      // P3-A — a post that ASKED for media must never be reported as a
+      // successful text-only publication. Previously both the empty-ids case
+      // and the thrown-error case fell through to a text-only tweet and
+      // returned success, so a reviewed image post shipped as bare text with
+      // only a server-log warning. Media failure is now a truthful failure.
+      //
+      // Retryable: unlike a switched-off capability, an upload failure here is
+      // typically transient (scope, rate limit, network), so the EXISTING
+      // BullMQ retry/DLQ semantics should get another attempt. No new retry
+      // mechanism is introduced.
+      let mediaIds: string[] = [];
       try {
-        const mediaIds = await uploadXMedia(post.media_urls, token);
-        if (mediaIds.length > 0) {
-          payload.media = { media_ids: mediaIds };
-          console.log(`✅ X media uploaded (${mediaIds.length}): ${mediaIds.join(', ')}`);
-        } else {
-          console.warn('⚠️ X media upload produced no media_ids — posting text-only');
-        }
+        mediaIds = await uploadXMedia(post.media_urls, token);
       } catch (mediaError: any) {
-        console.warn('⚠️ X media upload failed — posting text-only:', mediaError?.response?.data || mediaError?.message);
+        const detail = mediaError?.response?.data || mediaError?.message || 'unknown error';
+        console.warn('⚠️ X media upload failed — refusing to post text-only:', detail);
+        return {
+          success: false,
+          error: {
+            code: PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED,
+            message:
+              `This post has ${post.media_urls.length} attached media item(s), but the X media upload failed, ` +
+              `so publishing would have sent TEXT ONLY. Nothing was published.`,
+            retryable: true,
+          },
+        };
+      }
+      if (mediaIds.length > 0) {
+        payload.media = { media_ids: mediaIds };
+        console.log(`✅ X media uploaded (${mediaIds.length}): ${mediaIds.join(', ')}`);
+      } else {
+        console.warn('⚠️ X media upload produced no media_ids — refusing to post text-only');
+        return {
+          success: false,
+          error: {
+            code: PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED,
+            message:
+              `This post has ${post.media_urls.length} attached media item(s), but X returned no usable media, ` +
+              `so publishing would have sent TEXT ONLY. Nothing was published.`,
+            retryable: true,
+          },
+        };
       }
     }
 
