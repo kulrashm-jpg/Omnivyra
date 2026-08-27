@@ -109,6 +109,9 @@ describe('A — the existing relationship is read, not invented', () => {
     expect(activityCreativeIsRefinable({
       activityId: 'a', campaignId: 'c', creatorAssetId: 'x', assetType: null, templateId: null,
       urls: [], contentStatus: null, compositionType: 'activity-creative', compositionId: 'a',
+      // Phase 65 added these to the record; an asset with no rendered url is
+      // still version 1 and unrefined, which is exactly the case under test.
+      currentVersion: 1, isRefined: false,
     })).toBe(false);
   });
 });
