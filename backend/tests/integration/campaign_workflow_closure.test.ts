@@ -28,6 +28,19 @@ import { deriveReleasePlan } from '../../../lib/campaign/campaignRelease';
 import { resolveGenerationContext, buildGroundedContextBlock } from '../../../lib/campaign/generationContext';
 import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
 import type { CampaignAssignment } from '../../../lib/campaign/campaignAssignments';
+import type { ContentBearingActivity, ContentPlanLike } from '../../../lib/campaign/campaignContentModel';
+import type { PlannerStateLike } from '../../../lib/campaign/generationContext';
+import type { PlannerSessionState } from '../../../components/planner/plannerSessionStore';
+
+/**
+ * PlannerStateLike models the planner SNAPSHOT loosely (`week_number?: unknown`,
+ * `PlannerActivityLike`), while ContentPlanLike is the stricter shape the
+ * derivation functions accept. Both describe the same runtime data; this states
+ * that narrowing once, at the boundary, instead of at every call site.
+ */
+const asContentPlan = (p: PlannerStateLike['calendar_plan']): ContentPlanLike =>
+  (p ?? undefined) as unknown as ContentPlanLike;
+
 
 /* ────────────────────────────────────────────────────────────────────────
  * One realistic campaign, built the way a CMO would.
@@ -47,7 +60,7 @@ const manual = (body: string) => ({
   content_planning_status: 'approved' as const,
 });
 
-const ACTIVITIES = [
+const ACTIVITIES: ContentBearingActivity[] = [
   // Week 1 — fully approved, one manually edited
   { execution_id: 'w1-mon-li', week_number: 1, day: 'Monday', platform: 'linkedin', content_type: 'post', title: 'Twelve-day close', ...approved('W1 LinkedIn post.') },
   { execution_id: 'w1-tue-li', week_number: 1, day: 'Tuesday', platform: 'linkedin', content_type: 'carousel', title: 'Where days go', ...manual('W1 carousel, hand-written.') },
@@ -117,7 +130,7 @@ const PLANNER_STATE = {
   health_report: { score: 91 },
   selected_activity: ACTIVITIES[0],
   recommended_goal: 'Win mid-market CFOs',
-} as never;
+} as PlannerStateLike & Record<string, unknown>;
 
 const ASSET_LIBRARY = new Map([
   ['asset-carousel', { id: 'asset-carousel', title: 'Customer proof deck', url: null, version: 2,
@@ -147,10 +160,10 @@ const planRows = ACTIVITIES.map((a) => ({
 
 describe('the four derivations agree on one planner_state', () => {
   const weekStates = deriveCampaignWeekStates({
-    plan: PLANNER_STATE.calendar_plan, assignments: ASSIGNMENTS, durationWeeks: 3,
+    plan: asContentPlan(PLANNER_STATE.calendar_plan), assignments: ASSIGNMENTS, durationWeeks: 3,
   });
   const packages = deriveSlotReviewPackages({
-    plan: PLANNER_STATE.calendar_plan, assignments: ASSIGNMENTS,
+    plan: asContentPlan(PLANNER_STATE.calendar_plan), assignments: ASSIGNMENTS,
     assets: ASSET_LIBRARY as never, requireApproval: true,
     capability: { mediaCapableByPlatform: { linkedin: true, x: true } },
   });
@@ -241,7 +254,7 @@ describe('the four derivations agree on one planner_state', () => {
 
 describe('full CMO scenario: skeleton → content → review → select → release → publish', () => {
   const weekStates = deriveCampaignWeekStates({
-    plan: PLANNER_STATE.calendar_plan, assignments: ASSIGNMENTS, durationWeeks: 3,
+    plan: asContentPlan(PLANNER_STATE.calendar_plan), assignments: ASSIGNMENTS, durationWeeks: 3,
   });
 
   it('STEP 1 — the skeleton produced day-specific, platform-specific slots', () => {
@@ -270,7 +283,7 @@ describe('full CMO scenario: skeleton → content → review → select → rele
 
   it('STEP 3 — review shows the real package: 5 ordered slides, approved asset', () => {
     const pkg = deriveSlotReviewPackages({
-      plan: PLANNER_STATE.calendar_plan, assignments: ASSIGNMENTS,
+      plan: asContentPlan(PLANNER_STATE.calendar_plan), assignments: ASSIGNMENTS,
       assets: ASSET_LIBRARY as never, requireApproval: true,
       capability: { mediaCapableByPlatform: { linkedin: true, x: true } },
     }).find((p) => p.slot.structure_id === 'w1-tue-li')!;
@@ -318,7 +331,7 @@ describe('full CMO scenario: skeleton → content → review → select → rele
  * ──────────────────────────────────────────────────────────────────────── */
 
 describe('close the planner, reopen it — everything represented as persisted is still there', () => {
-  const serialized = serializePlannerState(PLANNER_STATE);
+  const serialized = serializePlannerState(PLANNER_STATE as unknown as PlannerSessionState);
   /** The jsonb seam: what actually survives a database round-trip. */
   const reopened = JSON.parse(JSON.stringify(serialized));
 
@@ -368,7 +381,7 @@ describe('close the planner, reopen it — everything represented as persisted i
 
   it('the reopened state produces IDENTICAL derivations — nothing is lost in the round trip', () => {
     const before = deriveCampaignWeekStates({
-      plan: PLANNER_STATE.calendar_plan, assignments: ASSIGNMENTS, durationWeeks: 3,
+      plan: asContentPlan(PLANNER_STATE.calendar_plan), assignments: ASSIGNMENTS, durationWeeks: 3,
     });
     const after = deriveCampaignWeekStates({
       plan: reopened.calendar_plan, assignments: reopened.assignments, durationWeeks: 3,

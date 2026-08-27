@@ -182,7 +182,7 @@ describe('scope parsing (untrusted request bodies)', () => {
   });
 
   it('rejects an unknown scope rather than silently widening to the whole campaign', () => {
-    const parsed = parseReleaseScope({ scope: 'everything' });
+    const parsed = parseReleaseScope({ scope: 'everything' }) as { ok: boolean; error?: string };
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) expect(parsed.error).toMatch(/unknown scope/i);
   });

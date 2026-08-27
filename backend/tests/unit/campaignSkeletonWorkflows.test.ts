@@ -21,6 +21,17 @@ import {
   buildGroundedContextBlock,
   type PlannerStateLike,
 } from '../../../lib/campaign/generationContext';
+import type { ContentPlanLike } from '../../../lib/campaign/campaignContentModel';
+
+/**
+ * PlannerStateLike models the planner SNAPSHOT loosely (`week_number?: unknown`,
+ * `PlannerActivityLike`), while ContentPlanLike is the stricter shape the
+ * derivation functions accept. Both describe the same runtime data; this states
+ * that narrowing once, at the boundary, instead of at every call site.
+ */
+const asContentPlan = (p: PlannerStateLike['calendar_plan']): ContentPlanLike =>
+  (p ?? undefined) as unknown as ContentPlanLike;
+
 
 const CAMPAIGN = 'camp-a';
 
@@ -68,7 +79,7 @@ describe('strategy-first: cards exist before any skeleton', () => {
 
   it('week states surface the DECLARED weeks as empty rather than hiding them', () => {
     const states = deriveCampaignWeekStates({
-      plan: strategyOnly.calendar_plan, assignments: [], durationWeeks: 2,
+      plan: asContentPlan(strategyOnly.calendar_plan), assignments: [], durationWeeks: 2,
     });
     expect(states.map((w) => w.week)).toEqual([1, 2]);
     expect(states.every((w) => w.state === 'empty')).toBe(true);
@@ -117,7 +128,7 @@ describe('skeleton-first: structure exists before any strategy', () => {
 
   it('week states are real immediately — no orphan weeks or slots', () => {
     const states = deriveCampaignWeekStates({
-      plan: skeletonOnly.calendar_plan, assignments: [], durationWeeks: 2,
+      plan: asContentPlan(skeletonOnly.calendar_plan), assignments: [], durationWeeks: 2,
     });
     expect(states.map((w) => w.week)).toEqual([1, 2]);
     expect(states.every((w) => w.counts.total === 1)).toBe(true);
@@ -125,7 +136,7 @@ describe('skeleton-first: structure exists before any strategy', () => {
   });
 
   it('the skeleton alone validates against its own declaration', () => {
-    const states = deriveCampaignWeekStates({ plan: skeletonOnly.calendar_plan, durationWeeks: 2 });
+    const states = deriveCampaignWeekStates({ plan: asContentPlan(skeletonOnly.calendar_plan), durationWeeks: 2 });
     const v = validateSkeleton({ platformContentRequests: { linkedin: { post: 1 } }, states });
     expect(v.ok).toBe(true);
   });
@@ -138,8 +149,8 @@ describe('skeleton-first: structure exists before any strategy', () => {
 
   it('adding cards afterwards preserves the skeleton slots exactly', () => {
     const withCards: PlannerStateLike = { ...skeletonOnly, strategy_context: STRATEGY, strategic_card: CARD, strategic_themes: THEMES };
-    const before = deriveCampaignWeekStates({ plan: skeletonOnly.calendar_plan, durationWeeks: 2 });
-    const after = deriveCampaignWeekStates({ plan: withCards.calendar_plan, durationWeeks: 2 });
+    const before = deriveCampaignWeekStates({ plan: asContentPlan(skeletonOnly.calendar_plan), durationWeeks: 2 });
+    const after = deriveCampaignWeekStates({ plan: asContentPlan(withCards.calendar_plan), durationWeeks: 2 });
     expect(after).toEqual(before);
     // …and generation now resolves.
     expect(ctxFor(withCards, 's1').ok).toBe(true);
@@ -197,7 +208,7 @@ describe('skeleton edits change the intended slot only', () => {
       strategy_context: { ...STRATEGY, duration_weeks: 4 },
       calendar_plan: { activities: [...(base.calendar_plan!.activities as never[]), act('w3', 3)] },
     };
-    const states = deriveCampaignWeekStates({ plan: longer.calendar_plan, durationWeeks: 4 });
+    const states = deriveCampaignWeekStates({ plan: asContentPlan(longer.calendar_plan), durationWeeks: 4 });
     expect(states.map((w) => w.week)).toEqual([1, 2, 3, 4]);
     expect(states[3].state).toBe('empty'); // week 4 declared, unplanned — visible, not hidden
     // Week-1 grounding is unchanged apart from the campaign-length line.
@@ -205,7 +216,7 @@ describe('skeleton edits change the intended slot only', () => {
   });
 
   it('removing a platform leaves the remaining slots grounded and flags the gap', () => {
-    const states = deriveCampaignWeekStates({ plan: base.calendar_plan, durationWeeks: 1 });
+    const states = deriveCampaignWeekStates({ plan: asContentPlan(base.calendar_plan), durationWeeks: 1 });
     // Declared instagram, none placed → reported, never silently reconciled.
     const v = validateSkeleton({ platformContentRequests: { instagram: { post: 1 } }, states });
     expect(v.issues.some((i) => i.code === 'platform_unplaced')).toBe(true);
@@ -217,7 +228,7 @@ describe('skeleton edits change the intended slot only', () => {
       ...base,
       calendar_plan: { activities: [act('mon', 1, { day: 'Friday', content_type: 'post' })] },
     };
-    expect(deriveDayAllocation({ plan: edited.calendar_plan, week: 1 }))
+    expect(deriveDayAllocation({ plan: asContentPlan(edited.calendar_plan), week: 1 }))
       .toEqual([{ day: 'Friday', platform: 'linkedin', content_type: 'post', count: 1 }]);
   });
 });
@@ -258,7 +269,7 @@ describe('P2/P3 grounding is preserved end to end', () => {
 
   it('week-state derivation does not mutate the plan generation reads', () => {
     const before = JSON.stringify(full.calendar_plan);
-    deriveCampaignWeekStates({ plan: full.calendar_plan, assignments: full.assignments as never });
+    deriveCampaignWeekStates({ plan: asContentPlan(full.calendar_plan), assignments: full.assignments as never });
     expect(JSON.stringify(full.calendar_plan)).toBe(before);
     expect(resolveGenerationContext({ campaignId: CAMPAIGN, plannerState: full, slotId: 's1' }).ok).toBe(true);
   });

@@ -448,7 +448,7 @@ describe('idempotency and concurrency', () => {
 
   it('a concurrent release is rejected by the existing scheduler lock', async () => {
     wireSupabase({});
-    mockAcquireLock.mockRejectedValue(new SchedulerLockError('SCHEDULER_LOCKED'));
+    mockAcquireLock.mockRejectedValue(new SchedulerLockError('SCHEDULER_ALREADY_RUNNING'));
     const res = await post();
     expect(res.statusCode).toBe(409);
     expect(res.body.code).toBe('SCHEDULER_ALREADY_RUNNING');

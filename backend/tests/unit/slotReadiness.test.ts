@@ -233,7 +233,7 @@ describe('text and asset approval are independent facts', () => {
 
   it("legacy assignments with no approval field behave as 'not_required'", () => {
     const a = assignment();
-    delete (a as Record<string, unknown>).approval;
+    delete (a as unknown as Record<string, unknown>).approval;
     const p = pkg({ assignments: [a], assets: lib([image]), requireApproval: true, capability: { linkedin: true } });
     expect(p.assets[0].approval).toBe('not_required');
     expect(p.readiness.code).toBe('ready');
