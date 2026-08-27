@@ -53,7 +53,19 @@ function formatStamp(value: string | null | undefined): string {
   });
 }
 
-export function CampaignReleasePanel({ campaignId }: { campaignId?: string | null }) {
+export function CampaignReleasePanel({
+  campaignId,
+  weeks,
+}: {
+  campaignId?: string | null;
+  /**
+   * P4 — when the CMO has selected weeks, release only those. Maps straight
+   * onto the EXISTING P1 contract (scope: 'weeks'); the server re-validates
+   * every week and rejects any that do not belong to the campaign, so a
+   * selection can never widen the scope.
+   */
+  weeks?: number[] | null;
+}) {
   const { state } = usePlannerSession();
   const [confirming, setConfirming] = useState(false);
   const [releasing, setReleasing] = useState(false);
@@ -85,7 +97,11 @@ export function CampaignReleasePanel({ campaignId }: { campaignId?: string | nul
       const res = await fetchWithAuth(`/api/campaigns/${encodeURIComponent(campaignId)}/release`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'campaign' }),
+        body: JSON.stringify(
+          Array.isArray(weeks) && weeks.length > 0
+            ? { scope: 'weeks', weeks }
+            : { scope: 'campaign' },
+        ),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -99,7 +115,7 @@ export function CampaignReleasePanel({ campaignId }: { campaignId?: string | nul
     } finally {
       setReleasing(false);
     }
-  }, [campaignId, releasing]);
+  }, [campaignId, releasing, weeks]);
 
   if (!campaignId) {
     return (
