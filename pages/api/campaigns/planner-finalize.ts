@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { campaignLifecycleSelect } from '../../../lib/campaign/executionStatusCompat';
 
 /**
  * Planner Finalize API
@@ -13,6 +14,7 @@ import { createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getCampaignById } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 import { fromStructuredPlan } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveStructuredCampaignPlan, commitDraftBlueprint } from '../../../backend/db/campaignPlanStore';
 import { generateFromManualPlanner } from '../../../backend/services/executionPlannerService';
@@ -26,7 +28,7 @@ import {
   type PlannerActivityInput,
 } from '../../../lib/adapters/plannerToExecutionAdapter';
 import { saveCampaignContextSnapshot } from '../../../backend/services/campaignContextService';
-import { isFinalizedStage, resolveCampaignStage } from '../../../lib/campaign/campaignStage';
+import { isFinalizedStage, resolveCampaignStage, CampaignStatusFields } from '../../../lib/campaign/campaignStage';
 
 const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -307,6 +309,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId || typeof companyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required' });
     }
+    // B4.2 — verify the claim before any write. companyId is written to
+    // campaign_versions.company_id, which campaign authorization resolves
+    // ownership from, so authenticating the user is not enough: an unverified
+    // value would let an authenticated user create a campaign owned by another
+    // company. requireTenantAccess is the same guard planner-draft.ts (this
+    // route's sibling) already applies to a body-supplied companyId; it responds
+    // with the project's existing vocabulary and audits the denial itself.
+    const tenantAccess = await requireTenantAccess(req, res, companyId);
+    if (!tenantAccess) return; // guard already responded (403 NOT_A_MEMBER)
     if (!strategy_context || typeof strategy_context !== 'object') {
       return res.status(400).json({ error: 'strategy_context is required' });
     }
@@ -482,7 +493,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       });
       if (cvErr) console.warn('campaign_versions insert failed:', cvErr.message);
     } else {
-      const existing = await getCampaignById<{ id?: string; start_date?: string; duration_weeks?: number; status?: string; current_stage?: string; execution_status?: string }>(campaignId, 'id, start_date, duration_weeks, status, current_stage, execution_status');
+      // R5: `execution_status` does not exist in production, and naming it
+      // made PostgREST fail the WHOLE read (42703) — getCampaignById returns
+      // null on error, so every real campaign reported "Campaign not found".
+      // The finalized check below reads the canonical stage, which resolves
+      // from status/current_stage/thread_id; the absent column contributed no
+      // reachable branch (R4: nothing has ever written 'ACTIVE').
+      const existing = await getCampaignById<CampaignStatusFields & { id?: string; start_date?: string; duration_weeks?: number }>(
+        campaignId,
+        campaignLifecycleSelect('start_date', 'duration_weeks'),
+      );
       if (!existing) {
         return res.status(404).json({ error: 'Campaign not found' });
       }

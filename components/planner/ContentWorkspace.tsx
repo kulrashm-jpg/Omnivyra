@@ -46,6 +46,16 @@ import {
   type ContentPlanningStatus,
   type ContentWorkspaceItem,
 } from '../../lib/campaign/campaignContentModel';
+// P3-B — derived per-slot review package (text + assets + readiness).
+import {
+  deriveSlotReviewPackages,
+  summarizeSlotReadiness,
+  type ReviewableAssetSource,
+  type SlotReviewPackage,
+} from '../../lib/campaign/slotReadiness';
+import { SlotReviewPanel } from './SlotReviewPanel';
+import { fetchLibraryMaterializableAssets } from '../../lib/content/creatorAssetServerBackend';
+import { fetchRequireAssignmentApproval } from './useApprovalSettings';
 
 const ASSIST_VERBS: Array<{ action: string; label: string }> = [
   { action: 'improve', label: 'Improve' },
@@ -79,7 +89,7 @@ export interface ContentWorkspaceProps {
   campaignId?: string | null;
 }
 
-export function ContentWorkspace({ companyId }: ContentWorkspaceProps) {
+export function ContentWorkspace({ companyId, campaignId }: ContentWorkspaceProps) {
   const { state, setCalendarPlan } = usePlannerSession();
   const plan = (state.execution_plan?.calendar_plan ?? state.calendar_plan) as CalendarPlan | null;
   const assignments = state.assignments ?? [];
@@ -97,6 +107,37 @@ export function ContentWorkspace({ companyId }: ContentWorkspaceProps) {
     }
     return Array.from(byWeek.entries()).sort((a, b) => (a[0] ?? 0) - (b[0] ?? 0));
   }, [items]);
+
+  // P3-B — asset facts for review, from the SAME company-scoped library seam
+  // Alignment and Finalize use (ownership enforced server-side there).
+  const [assetLibrary, setAssetLibrary] = useState<Map<string, ReviewableAssetSource> | null>(null);
+  const [requireApproval, setRequireApproval] = useState(false);
+  React.useEffect(() => {
+    let cancelled = false;
+    const cid = typeof companyId === 'string' ? companyId.trim() : '';
+    if (!cid) { setAssetLibrary(null); return; }
+    void (async () => {
+      const [assets, approvals] = await Promise.all([
+        fetchLibraryMaterializableAssets(cid).catch(() => new Map()),
+        fetchRequireAssignmentApproval(cid).catch(() => false),
+      ]);
+      if (cancelled) return;
+      setAssetLibrary(assets as Map<string, ReviewableAssetSource>);
+      setRequireApproval(approvals === true);
+    })();
+    return () => { cancelled = true; };
+  }, [companyId]);
+
+  // Derived on read — never persisted, never a lifecycle status.
+  const reviewPackages = useMemo(
+    () => deriveSlotReviewPackages({ plan, assignments, assets: assetLibrary, requireApproval }),
+    [plan, assignments, assetLibrary, requireApproval],
+  );
+  const packageBySlot = useMemo(
+    () => new Map(reviewPackages.map((p) => [p.slot.structure_id, p])),
+    [reviewPackages],
+  );
+  const readiness = useMemo(() => summarizeSlotReadiness(reviewPackages), [reviewPackages]);
 
   const [collapsed, setCollapsed] = useState<Set<number | null>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -143,6 +184,11 @@ export function ContentWorkspace({ companyId }: ContentWorkspaceProps) {
             theme: theme?.title,
             objective: theme?.objective,
             week: target.week ?? undefined,
+            // P2 — name the slot; the SERVER resolves strategy/skeleton/slot
+            // context from the campaign's own planner_state. Sent only when
+            // the session owns a campaign; without it the route keeps its
+            // pre-P2 behaviour exactly.
+            ...(campaignId ? { campaignId, slot_id: target.slot_id } : {}),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -164,7 +210,7 @@ export function ContentWorkspace({ companyId }: ContentWorkspaceProps) {
       setProgress((p) => ({ ...p, done: i + 1, failures: [...failures] }));
     }
     setProgress((p) => ({ ...p, running: false }));
-  }, [companyId, commitPlan, themeForWeek]);
+  }, [companyId, campaignId, commitPlan, themeForWeek]);
 
   const startGeneration = useCallback((scope: ContentGenerationScope, mode: ContentGenerationMode, label: string) => {
     const targets = planContentGeneration(planRef.current ?? {}, scope, mode, Array.from(selected));
@@ -209,6 +255,14 @@ export function ContentWorkspace({ companyId }: ContentWorkspaceProps) {
         </div>
         <span className="text-sm text-gray-500">
           {coverage.with_content}/{coverage.total} written · {coverage.approved} approved
+          {readiness.total > 0 && (
+            <>
+              {' · '}
+              <span className="text-emerald-600">{readiness.ready} ready</span>
+              {readiness.blocked_asset > 0 && <span className="text-amber-700">{' · '}{readiness.blocked_asset} asset issue{readiness.blocked_asset === 1 ? '' : 's'}</span>}
+              {readiness.blocked_execution > 0 && <span className="text-red-600">{' · '}{readiness.blocked_execution} cannot publish media</span>}
+            </>
+          )}
           {coverage.in_review > 0 ? ` · ${coverage.in_review} in review` : ''}
         </span>
         <div className="ml-auto flex items-center gap-2">
@@ -360,6 +414,7 @@ export function ContentWorkspace({ companyId }: ContentWorkspaceProps) {
                     selected={selected.has(item.slot.structure_id)}
                     onToggleSelect={() => setSelected((prev) => { const next = new Set(prev); const id = item.slot.structure_id; if (next.has(id)) next.delete(id); else next.add(id); return next; })}
                     hasAssignment={assignedSlotIds.has(item.slot.structure_id)}
+                    reviewPackage={packageBySlot.get(item.slot.structure_id)}
                     busy={progress.running}
                     emptySlots={items.filter((i) => !i.has_content && i.slot.structure_id !== item.slot.structure_id)}
                     onGenerate={(overwrite) => {
@@ -400,6 +455,8 @@ interface ActivityContentRowProps {
   selected: boolean;
   onToggleSelect: () => void;
   hasAssignment: boolean;
+  /** P3-B — the derived review package for this slot (read-only). */
+  reviewPackage?: SlotReviewPackage;
   busy: boolean;
   emptySlots: ContentWorkspaceItem[];
   onGenerate: (overwrite: boolean) => void;
@@ -412,7 +469,7 @@ interface ActivityContentRowProps {
 }
 
 function ActivityContentRow({
-  item, companyId, expanded, onToggleExpand, selected, onToggleSelect, hasAssignment, busy,
+  item, companyId, expanded, onToggleExpand, selected, onToggleSelect, hasAssignment, reviewPackage, busy,
   emptySlots, onGenerate, onManualSave, onApplyProposal, onStatus, onRemove, onDuplicateTo, onMoveTo,
 }: ActivityContentRowProps) {
   const { slot, draft, status, has_content } = item;
@@ -487,6 +544,10 @@ function ActivityContentRow({
 
       {expanded && (
         <div className="mt-2.5 ml-6 space-y-2.5">
+          {/* P3-B — the content PACKAGE that would actually execute: derived
+              readiness plus every assigned asset, rendered in order. */}
+          {reviewPackage && <SlotReviewPanel pkg={reviewPackage} />}
+
           {/* Body editor */}
           <textarea
             value={editBody ?? draft?.body ?? ''}

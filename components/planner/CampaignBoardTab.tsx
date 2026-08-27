@@ -35,6 +35,13 @@ import {
 import { usePlannerSession } from './plannerSessionStore';
 import { useAssignmentExecutionSync } from './useAssignmentExecutionSync';
 import { useApprovalSettings } from './useApprovalSettings';
+import { CampaignReleasePanel } from './CampaignReleasePanel';
+// P4 — structural week control: derived states, conditions, bulk selection.
+import { WeekSelectionBar } from './WeekSelectionBar';
+import {
+  deriveCampaignWeekStates,
+  validateSkeleton,
+} from '../../lib/campaign/campaignWeekState';
 
 const HEALTH_STYLE: Record<string, string> = {
   ready: 'border-emerald-200 bg-emerald-50 text-emerald-800',
@@ -61,6 +68,25 @@ export function CampaignBoardTab({ companyId, campaignId, onNavigate }: Props) {
   const slots = useMemo(() => deriveStructureSlots(state.calendar_plan), [state.calendar_plan]);
 
   const { sync, lastSyncAt } = useAssignmentExecutionSync({ campaignId, assignments, setAssignments });
+
+  // P4 — every week state is DERIVED from the slots/assignments already in
+  // session state. No week model, no persistence.
+  const [selectedWeeks, setSelectedWeeks] = useState<number[]>([]);
+  const weekStates = useMemo(
+    () => deriveCampaignWeekStates({
+      plan: state.calendar_plan,
+      assignments,
+      durationWeeks: state.strategy_context?.duration_weeks ?? null,
+    }),
+    [state.calendar_plan, assignments, state.strategy_context?.duration_weeks],
+  );
+  const skeletonValidation = useMemo(
+    () => validateSkeleton({
+      platformContentRequests: state.platform_content_requests ?? null,
+      states: weekStates,
+    }),
+    [state.platform_content_requests, weekStates],
+  );
 
   // Content facts (Asset Library metadata — read-only, same source as Alignment).
   const [assets, setAssets] = useState<AssignableAsset[]>([]);
@@ -118,6 +144,36 @@ export function CampaignBoardTab({ companyId, campaignId, onNavigate }: Props) {
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+      {/* ── P4: structural week control — select by hand or by condition ── */}
+      <WeekSelectionBar
+        states={weekStates}
+        selected={selectedWeeks}
+        onChange={setSelectedWeeks}
+      />
+
+      {/* ── P4: skeleton validation — reports, never silently fixes ── */}
+      {!skeletonValidation.ok && skeletonValidation.issues.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-xs font-semibold text-amber-900">
+            Skeleton needs attention ({skeletonValidation.issues.length})
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {skeletonValidation.issues.slice(0, 6).map((issue, i) => (
+              <li key={i} className="text-[11px] text-amber-900/85">• {issue.message}</li>
+            ))}
+          </ul>
+          {skeletonValidation.issues.length > 6 && (
+            <p className="text-[10px] text-amber-800 mt-1">
+              +{skeletonValidation.issues.length - 6} more
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ── P1: the release seam — the ONE handoff into execution ── */}
+      {/* P4 — a week selection narrows the release to scope:'weeks'. */}
+      <CampaignReleasePanel campaignId={campaignId} weeks={selectedWeeks} />
+
       {/* ── Campaign Health ── */}
       <div className={`rounded-xl border px-4 py-3 ${HEALTH_STYLE[h.label]}`}>
         <div className="flex items-center gap-2">

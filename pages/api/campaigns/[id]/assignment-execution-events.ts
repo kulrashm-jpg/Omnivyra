@@ -1,4 +1,5 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
+import { campaignLifecycleSelect } from '../../../../lib/campaign/executionStatusCompat';
 /**
  * GET /api/campaigns/[id]/assignment-execution-events — Strategic Mix P5/P7.
  *
@@ -36,7 +37,7 @@ import {
   type ScheduledPostFact,
 } from '../../../../lib/campaign/assignmentExecutionSync';
 import { normalizeAssignments } from '../../../../lib/campaign/campaignAssignments';
-import { resolveCampaignStage } from '../../../../lib/campaign/campaignStage';
+import { resolveCampaignStage, CampaignStatusFields } from '../../../../lib/campaign/campaignStage';
 
 /** Fold events onto the snapshot's stored assignments and persist the result
  *  iff the projection changed. Never creates assignments, never bumps the
@@ -108,7 +109,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     const [{ data: campaign }, { data: planRows }, { data: posts }] = await Promise.all([
-      supabase.from('campaigns').select('status, current_stage, execution_status').eq('id', campaignId).maybeSingle(),
+      // R5: execution_status dropped — absent in production, and naming it
+      // 42703-failed this read. resolveCampaignStage already treats it as
+      // optional, and campaigns.status covers the 'completed' branch it fed.
+      supabase.from('campaigns').select(campaignLifecycleSelect()).eq('id', campaignId).maybeSingle(),
       supabase
         .from('daily_content_plans')
         .select('execution_id, scheduled_post_id, content_status')
@@ -121,7 +125,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // R2-P4 — lifecycle interpretation goes through the canonical read
     // model only (never raw status-field comparisons).
-    const campaignCompleted = resolveCampaignStage(campaign as Record<string, unknown> | null).stage === 'completed';
+    const campaignCompleted = resolveCampaignStage(campaign as unknown as CampaignStatusFields | null).stage === 'completed';
     const events = deriveExecutionEvents({
       campaignId,
       planRows: (Array.isArray(planRows) ? planRows : []) as ExecutionPlanRowFact[],

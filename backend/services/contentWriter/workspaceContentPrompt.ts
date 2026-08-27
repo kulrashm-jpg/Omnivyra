@@ -230,16 +230,35 @@ export function buildContextLines(opts: { theme?: string; objective?: string; we
   return contextLines;
 }
 
-/** Build the user prompt — verbatim. */
+/**
+ * Build the user prompt.
+ *
+ * P2 — `groundedContext` carries the SERVER-RESOLVED campaign context
+ * (strategy / structure / this piece / assets / constraints, assembled by
+ * lib/campaign/generationContext). When present it REPLACES the thin
+ * `CAMPAIGN CONTEXT` block, because that block was built from three
+ * client-supplied strings (theme / objective / week) which the server can now
+ * resolve authoritatively from the campaign's own planner_state.
+ *
+ * When absent, the output is byte-identical to the pre-P2 prompt — every
+ * caller that does not name a campaign slot is unchanged.
+ */
 export function buildWorkspaceUserPrompt(opts: {
   brandContext: string;
   contextLines: string[];
   platforms: string[];
   topic: string;
   contentTypes?: Record<string, string>;
+  groundedContext?: string | null;
 }): string {
   const platformBlocks = buildPlatformBlocks(opts.platforms, opts.contentTypes);
-  return `${opts.brandContext ? `BRAND CONTEXT:\n${opts.brandContext}\n\n` : ''}${opts.contextLines.length > 0 ? `CAMPAIGN CONTEXT:\n${opts.contextLines.join('\n')}\n\n` : ''}TOPIC / ANGLE:\n${opts.topic.trim()}
+  const grounded = typeof opts.groundedContext === 'string' ? opts.groundedContext.trim() : '';
+  const campaignBlock = grounded
+    ? `${grounded}\n\n`
+    : opts.contextLines.length > 0
+    ? `CAMPAIGN CONTEXT:\n${opts.contextLines.join('\n')}\n\n`
+    : '';
+  return `${opts.brandContext ? `BRAND CONTEXT:\n${opts.brandContext}\n\n` : ''}${campaignBlock}TOPIC / ANGLE:\n${opts.topic.trim()}
 
 Generate platform-specific content for each platform below. Follow each platform's structure template exactly.
 

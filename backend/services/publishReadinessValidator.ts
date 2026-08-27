@@ -59,15 +59,51 @@ function publishCharLimitMode(): GuardMode {
  * (not what the registry declares). Source: Round-1 audit of
  * backend/adapters/*Adapter.ts.
  */
-const ADAPTER_CAN_PUBLISH_MEDIA: Record<string, boolean> = {
+/**
+ * Platforms whose adapter genuinely uploads media.
+ *
+ * P3-A — LinkedIn is CONFIGURATION-DRIVEN, not a code constant.
+ *
+ * Previously this was a hardcoded `linkedin: false` while the adapter gated
+ * its (fully implemented) upload pipeline on `LINKEDIN_MEDIA_UPLOAD_ENABLED`.
+ * The two could disagree, and in the one direction that mattered they always
+ * did: setting `LINKEDIN_MEDIA_UPLOAD_ENABLED=true` did NOT flip this
+ * constant, so the guard below still rejected every LinkedIn media row. The
+ * adapter's own header instructs operators to "flip both flags together" —
+ * but one of them was source code, so enabling LinkedIn media was impossible
+ * without a code change and deploy.
+ *
+ * Reading the same env var here makes the two structurally incapable of
+ * disagreeing and turns the operational decision into configuration.
+ * DEFAULT IS UNCHANGED: absent/false ⇒ false ⇒ the guard blocks exactly as it
+ * does today.
+ */
+const STATIC_ADAPTER_CAN_PUBLISH_MEDIA: Record<string, boolean> = {
   instagram: true,
   youtube: true,
   tiktok: true,
   pinterest: true,
   facebook: true, // via link/source param (partial but delivered)
-  linkedin: false, // adapter sends shareMediaCategory NONE — media dropped
-  x: false, // adapter explicitly drops media
+  // x: the adapter DOES call uploadXMedia, but on failure/empty-ids it must
+  // not fall back to a text-only "success" (P3-A hardened that in xAdapter).
+  // Left false until the upload path is validated against a real account —
+  // flipping it is a capability decision, not a bug fix.
+  x: false,
 };
+
+/**
+ * True when this platform's adapter will actually deliver attached media.
+ *
+ * Semantics preserved EXACTLY from the previous `[platform] === false` test:
+ * a platform absent from the registry is NOT treated as media-incapable, so
+ * the guard's blast radius is unchanged for anything but LinkedIn.
+ */
+export function adapterCanPublishMedia(platform: string): boolean {
+  if (platform === 'linkedin') {
+    return String(process.env.LINKEDIN_MEDIA_UPLOAD_ENABLED ?? 'false').trim().toLowerCase() === 'true';
+  }
+  return STATIC_ADAPTER_CAN_PUBLISH_MEDIA[platform] !== false;
+}
 /** Platforms with a working canonical publish case in platformAdapter.ts. */
 const ADAPTER_HAS_PUBLISH_PATH: Record<string, boolean> = {
   linkedin: true,
@@ -168,7 +204,7 @@ export function validatePublishReadiness(
   }
 
   // 3. ADAPTER-REALITY: media present but the adapter would drop it.
-  if (hasMedia && ADAPTER_CAN_PUBLISH_MEDIA[platform] === false) {
+  if (hasMedia && !adapterCanPublishMedia(platform)) {
     const err = pipelineError(
       PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED,
       `"${platform}" would publish this post as TEXT ONLY — its adapter does not upload media yet. The attached media (${mediaUrls.length}) would be silently lost. Resolve before publishing (remove media, or publish to a media-capable platform).`,

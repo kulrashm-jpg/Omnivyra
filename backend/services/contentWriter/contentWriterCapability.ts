@@ -34,6 +34,9 @@ export interface WorkspaceWriteInput {
   theme?: string;
   objective?: string;
   week?: string | number;
+  /** P2 — server-resolved campaign grounding (lib/campaign/generationContext).
+   *  Absent ⇒ pre-P2 prompt, byte-identical. */
+  groundedContext?: string | null;
   now?: string;
   correlationId?: string;
 }
@@ -53,6 +56,7 @@ function promptAssembler(_def: CapabilityDefinition, request: CapabilityRequest,
   const contextLines = buildContextLines({ theme: input.theme, objective: input.objective, week: input.week });
   const user = buildWorkspaceUserPrompt({
     brandContext, contextLines, platforms: input.platforms ?? [], topic: input.topic ?? '', contentTypes: input.contentTypes,
+    groundedContext: input.groundedContext ?? null,
   });
   return [
     { role: 'system' as const, content: WORKSPACE_SYSTEM_PROMPT },
@@ -104,7 +108,7 @@ export async function generateWorkspaceVariants(inp: WorkspaceWriteInput): Promi
     capability: 'CONTENT_WRITER_WORKSPACE',
     companyId: inp.companyId,
     userId: inp.userId,
-    input: { topic: inp.topic, platforms: inp.platforms, contentTypes: inp.contentTypes, theme: inp.theme, objective: inp.objective, week: inp.week },
+    input: { topic: inp.topic, platforms: inp.platforms, contentTypes: inp.contentTypes, theme: inp.theme, objective: inp.objective, week: inp.week, groundedContext: inp.groundedContext ?? null },
     now: inp.now,
     correlationId: inp.correlationId,
   };

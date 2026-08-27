@@ -218,6 +218,17 @@ async function scheduleStructuredPlanRuntime(
   // rows only. Fail-soft ⇒ stays the original query result.
   let dailyPlans = dailyPlansRaw;
 
+  // Strategic Mix P1 — scoped release. Restrict the considered rows to the
+  // caller-supplied id set BEFORE any governance/eligibility evaluation, so a
+  // week-scoped or slot-scoped release is judged only on the rows it targets.
+  // Omitted by every legacy caller ⇒ unchanged behaviour.
+  if (Array.isArray(options?.restrictToDailyPlanIds) && Array.isArray(dailyPlans)) {
+    const allowed = new Set(options!.restrictToDailyPlanIds);
+    dailyPlans = (dailyPlans as Array<{ id?: unknown }>).filter(
+      (row) => typeof row?.id === 'string' && allowed.has(row.id),
+    ) as typeof dailyPlans;
+  }
+
   if (dailyPlansError) {
     console.warn('[schedule] daily_content_plans query failed — falling back to allocation scheduling', dailyPlansError.message);
   }

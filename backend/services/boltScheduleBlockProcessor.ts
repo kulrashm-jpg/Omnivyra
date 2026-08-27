@@ -1005,7 +1005,19 @@ async function executeBlockScheduleRuntime(
                   .update({ scheduled_post_id })
                   .eq('id', id)
                   .then(({ error }: { error: { message: string } | null }) => {
-                    if (error) console.warn('[block-processor] scheduled_post_id link failed (non-fatal):', id, error.message);
+                    // R2-IMPL B1 §13 — this link is the ONLY signal that a plan
+                    // row produced a scheduled post; campaign readiness (C5) and
+                    // performance attribution both join on it. The write stays
+                    // best-effort (a failure must not undo the content persist
+                    // above), but it is no longer only a console line: the
+                    // failure is counted through the existing observability
+                    // registry so a systemic writeback failure is visible.
+                    if (error) {
+                      console.warn('[block-processor] scheduled_post_id link failed (non-fatal):', id, error.message);
+                      recordRawCounter('planner.schedule.link_writeback_failed', 1, { mode: 'weekly' });
+                    } else {
+                      recordRawCounter('planner.schedule.link_writeback_ok', 1, { mode: 'weekly' });
+                    }
                   }),
               );
             }

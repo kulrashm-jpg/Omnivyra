@@ -1,4 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
+import { CampaignStatusFields, resolveCampaignStage } from '../../../lib/campaign/campaignStage';
+import { campaignLifecycleSelect, isCampaignFinalized } from '../../../lib/campaign/executionStatusCompat';
 
 /**
  * POST /api/campaigns/update-duration
@@ -12,8 +14,6 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
 import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../backend/services/campaignBlueprintService';
-import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../backend/services/CampaignFinalizationGuard';
-import { normalizeExecutionState } from '../../../backend/governance/ExecutionStateMachine';
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
@@ -57,7 +57,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const { data: campaign, error: campError } = await supabase
       .from('campaigns')
-      .select('id, duration_locked, duration_weeks, blueprint_status, execution_status')
+      // R5: execution_status removed — absent in production, and naming it
+      // 42703-failed the whole read. duration_locked is untouched: it exists,
+      // and its semantics below are deliberately unchanged.
+      .select(campaignLifecycleSelect('duration_locked', 'duration_weeks'))
       .eq('id', campaignId)
       .maybeSingle();
 
@@ -65,31 +68,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    if (campaign.duration_locked && !override_lock) {
+    // R5: centralized (dynamic) select widens the row type; assert once here.
+    const campaignRow = campaign as unknown as CampaignStatusFields & { duration_locked?: boolean; duration_weeks?: number };
+    if (campaignRow.duration_locked && !override_lock) {
       return res.status(403).json({
         error: 'DURATION_LOCKED',
         message: 'Duration is locked. Pass override_lock: true to force change.',
       });
     }
 
-    const executionStatus = normalizeExecutionState((campaign as any).execution_status);
-    try {
-      assertCampaignNotFinalized(executionStatus);
-    } catch (err: any) {
-      if (err instanceof CampaignFinalizedError) {
-        await recordGovernanceEvent({
-          companyId,
-          campaignId,
-          eventType: 'CAMPAIGN_MUTATION_BLOCKED_FINALIZED',
-          eventStatus: 'BLOCKED',
-          metadata: { campaignId, execution_status: executionStatus },
-        });
-        return res.status(409).json({
-          code: 'CAMPAIGN_FINALIZED',
-          message: 'Campaign is finalized and cannot be modified',
-        });
-      }
-      throw err;
+    // R5: canonical stage replaces the absent column's execution state. Same
+    // protection, same 409 vocabulary, same governance event — the metadata
+    // now reports the stage that was actually consulted instead of a value
+    // invented for a column production does not have.
+    if (isCampaignFinalized(campaignRow)) {
+      await recordGovernanceEvent({
+        companyId,
+        campaignId,
+        eventType: 'CAMPAIGN_MUTATION_BLOCKED_FINALIZED',
+        eventStatus: 'BLOCKED',
+        metadata: { campaignId, campaign_stage: resolveCampaignStage(campaignRow).stage },
+      });
+      return res.status(409).json({
+        code: 'CAMPAIGN_FINALIZED',
+        message: 'Campaign is finalized and cannot be modified',
+      });
     }
 
     try {
@@ -113,14 +116,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
       if (err instanceof BlueprintImmutableError) {
-        const execStatus = (campaign as any).execution_status ?? 'ACTIVE';
-        const bpStatus = (campaign as any).blueprint_status ?? 'ACTIVE';
+        // R5: report the canonical stage rather than an absent column's
+        // invented 'ACTIVE' default. Diagnostics only — nothing branches here.
+        const execStatus = resolveCampaignStage(campaignRow).stage;
+        const bpStatus = campaignRow.blueprint_status ?? 'ACTIVE';
         await recordGovernanceEvent({
           companyId,
           campaignId,
           eventType: 'BLUEPRINT_MUTATION_BLOCKED',
           eventStatus: 'BLOCKED',
-          metadata: { campaignId, execution_status: execStatus, blueprint_status: bpStatus },
+          metadata: { campaignId, campaign_stage: execStatus, blueprint_status: bpStatus },
         });
         return res.status(409).json({
           code: 'BLUEPRINT_IMMUTABLE',

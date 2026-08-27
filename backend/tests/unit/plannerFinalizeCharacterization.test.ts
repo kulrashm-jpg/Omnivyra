@@ -53,6 +53,27 @@ jest.mock('../../db/supabaseClient', () => ({
   },
 }));
 
+// ── R5 harness repair ────────────────────────────────────────────────────
+// planner-finalize gained requireTenantAccess (B4.2) AFTER this
+// characterization was written, and the suite never mocked it — so every
+// authenticated case died at TenantGuard's own 401 before reaching a single
+// route assertion. Mocking it restores the intended authenticated
+// environment. Deliberately CONTROLLABLE rather than a blanket grant, so
+// tenancy stays ASSERTED by this suite instead of bypassed by it.
+let mockTenantAccessGranted = true;
+jest.mock('../../security/TenantGuard', () => ({
+  requireTenantAccess: jest.fn(async (_req: unknown, res: any) => {
+    if (!mockTenantAccessGranted) {
+      res.status(403).json({ error: 'Not a member of this organization', code: 'NOT_A_MEMBER' });
+      return null;
+    }
+    return {
+      userId: 'user-1', supabaseUid: 'uid-1', organizationId: 'co-1',
+      role: 'COMPANY_ADMIN', bypass: false, isPlatformSuperAdmin: false,
+    };
+  }),
+}));
+
 jest.mock('../../services/supabaseAuthService', () => ({
   getSupabaseUserFromRequest: jest.fn(async (req: { headers?: Record<string, string> }) =>
     req.headers?.authorization ? { user: { id: 'user-1' }, error: null } : { user: null, error: 'no auth' }),

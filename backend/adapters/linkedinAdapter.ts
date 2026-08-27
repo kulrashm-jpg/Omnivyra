@@ -14,6 +14,8 @@
  */
 
 import type { PublishResult } from './platformAdapterTypes';
+// P3-A — reuse the EXISTING pipeline error vocabulary; no new codes.
+import { PipelineErrorCode } from '../../lib/shared/pipelineErrorCodes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
 import { outboundBreakerFor } from '../../lib/security/safeFetch';
@@ -173,11 +175,35 @@ export async function publishToLinkedIn(
       };
     }
   } else if (mediaUrls.length > 0 && !linkedinMediaEnabled) {
-    // Media present but flag off — emit a structured warning so the operator
-    // sees this row had media that was silently dropped. The publish-readiness
-    // guard (PUBLISH_GUARD_MODE=enforce) should normally reject this row
-    // before it reaches the adapter; this branch is the defense-in-depth log.
-    console.warn('[linkedin] LINKEDIN_MEDIA_UPLOAD_ENABLED=false but row has', mediaUrls.length, 'media url(s) — publishing as TEXT ONLY');
+    // P3-A — HONEST FAILURE, not a silent strip.
+    //
+    // This row asked for media and this adapter cannot deliver it. Previously
+    // we logged a warning and published TEXT ONLY, reporting success — so an
+    // approved image campaign shipped as bare text and nothing downstream
+    // could tell. A warning in a server log is not user-facing honesty.
+    //
+    // The publish-readiness guard (PUBLISH_GUARD_MODE=enforce, the default)
+    // normally rejects this row before it reaches the adapter; this branch is
+    // reachable when that guard is in `warn`/`off`. In those modes the correct
+    // outcome is still a truthful failure, never materially different content
+    // published as a success.
+    //
+    // Not retryable: retrying cannot change a capability that is switched off.
+    // Resolution is operational — enable LINKEDIN_MEDIA_UPLOAD_ENABLED (which
+    // now also opens the readiness guard, see publishReadinessValidator) or
+    // remove the media from the post.
+    console.warn('[linkedin] LINKEDIN_MEDIA_UPLOAD_ENABLED=false and row has', mediaUrls.length, 'media url(s) — refusing to publish as text-only');
+    return {
+      success: false,
+      error: {
+        code: PipelineErrorCode.MEDIA_WOULD_BE_STRIPPED,
+        message:
+          `This post has ${mediaUrls.length} attached media item(s), but LinkedIn media upload is turned off, ` +
+          `so publishing would have sent TEXT ONLY. Nothing was published. ` +
+          `Enable LinkedIn media upload, or remove the media from this post.`,
+        retryable: false,
+      },
+    };
   }
 
   console.log('[linkedin] publishing as author:', authorUrn, '| content length:', formatted.text.length);

@@ -69,6 +69,12 @@ const CURRENT_STAGE_MAP: Record<string, CanonicalCampaignStage> = {
   campaign_week_plan: 'scheduling',
   blueprint_committed: 'scheduling',
   execution_ready: 'ready',
+  // P1: 'schedule' is what the scheduling writers have always emitted
+  // (commit-plan, schedule-structured-plan, the live BOLT path, and now the
+  // Strategic Mix release seam). It was absent here, so a genuinely scheduled
+  // campaign read back as 'planning'. No new vocabulary — an existing raw
+  // value mapped onto the existing canonical stage it always meant.
+  schedule: 'scheduling',
 };
 
 /**
