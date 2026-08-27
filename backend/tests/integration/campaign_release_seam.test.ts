@@ -117,11 +117,23 @@ const draftRow = (id: string, week: number, platform: string): PlanRow => ({
   }),
 });
 
-/** Wire `supabase.from(table)` for the four tables the route reads. */
+/**
+ * Wire `supabase.from(table)`.
+ *
+ * P1.2 — the campaigns mock is COLUMN-AWARE: it inspects the requested select
+ * list and, when `hasExecutionStatusColumn` is false, replies with the real
+ * PostgREST undefined-column error (42703) exactly as production does. That is
+ * the boundary that caused the false 404, so the tests must cross it rather
+ * than mock it away.
+ */
 function wireSupabase(opts: {
   campaign?: Record<string, unknown> | null;
   planRows?: PlanRow[];
   campaignAfter?: Record<string, unknown>;
+  /** false ⇒ simulate production, where campaigns.execution_status is absent. */
+  hasExecutionStatusColumn?: boolean;
+  /** Simulate an unrelated, genuine database failure on the campaigns read. */
+  campaignsError?: { code?: string; message: string };
 }) {
   const campaign = opts.campaign === undefined
     ? {
@@ -143,6 +155,7 @@ function wireSupabase(opts: {
     thread_id: null,
   };
 
+  const hasExecCol = opts.hasExecutionStatusColumn !== false;
   let campaignSelectCount = 0;
 
   (supabase.from as jest.Mock).mockImplementation((table: string) => {
@@ -164,11 +177,42 @@ function wireSupabase(opts: {
     }
     if (table === 'campaigns') {
       return {
-        select: () => ({
+        select: (columns: string) => ({
           eq: () => ({
             maybeSingle: async () => {
+              const requested = String(columns ?? '')
+                .split(',')
+                .map((c) => c.trim())
+                .filter(Boolean);
+              const wantsExec = requested.includes('execution_status');
+
+              // Real PostgREST: selecting a column the table lacks fails the
+              // WHOLE query with 42703 — it does not return a partial row.
+              if (wantsExec && !hasExecCol) {
+                return {
+                  data: null,
+                  error: { code: '42703', message: 'column campaigns.execution_status does not exist' },
+                };
+              }
+              // A genuine, unrelated database failure.
+              if (opts.campaignsError) {
+                return { data: null, error: opts.campaignsError };
+              }
+              // The optional single-column read.
+              if (wantsExec && requested.length === 1) {
+                return { data: { execution_status: campaign?.execution_status ?? null }, error: null };
+              }
+              // Canonical reads: pre-release, then post-release.
               campaignSelectCount += 1;
-              return { data: campaignSelectCount === 1 ? campaign : after, error: null };
+              const row = campaignSelectCount === 1 ? campaign : after;
+              if (!row) return { data: null, error: null };
+              // Only return columns the mock schema actually has.
+              const projected: Record<string, unknown> = {};
+              for (const key of Object.keys(row)) {
+                if (key === 'execution_status' && !hasExecCol) continue;
+                projected[key] = (row as Record<string, unknown>)[key];
+              }
+              return { data: projected, error: null };
             },
           }),
         }),
@@ -432,6 +476,117 @@ describe('idempotency and concurrency', () => {
     expect(second.statusCode).toBe(409);
     expect(second.body.code).toBe('NOTHING_RELEASABLE');
     expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * P1.2 — live-schema compatibility.
+ *
+ * `campaigns.execution_status` is NOT in the canonical baseline schema; it is
+ * added only by database/campaign_preemption_status.sql, which is outside the
+ * Supabase migration tree. It was VERIFIED ABSENT in production (PostgREST
+ * 42703). Because the release route selected it in the mandatory campaign
+ * read, that absence failed the whole query and surfaced as a false
+ * "404 Campaign not found" — the release seam could never run.
+ */
+describe('P1.2 — optional legacy column compatibility', () => {
+  it('A. column PRESENT: release works and the result is unchanged', async () => {
+    wireSupabase({ hasExecutionStatusColumn: true });
+    const res = await post();
+    expect(res.statusCode).toBe(200);
+    expect(mockScheduleStructuredPlan).toHaveBeenCalledTimes(1);
+    expect(res.body.scheduled_count).toBe(1);
+  });
+
+  it('B. column ABSENT: release still works — no false 404', async () => {
+    wireSupabase({ hasExecutionStatusColumn: false });
+    const res = await post();
+    expect(res.statusCode).not.toBe(404);
+    expect(res.statusCode).toBe(200);
+    // …and it proceeds under the canonical P1 contract, unchanged.
+    expect(mockScheduleStructuredPlan).toHaveBeenCalledTimes(1);
+    expect(mockOwnedUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'active', current_stage: 'schedule', blueprint_status: 'ACTIVE' }),
+    );
+  });
+
+  it('B2. column ABSENT: canonical stage still resolves (not degraded to planning)', async () => {
+    wireSupabase({ hasExecutionStatusColumn: false });
+    const res = await post();
+    expect(res.body.stage_before).toBe('ready');
+    expect(res.body.stage).toBe('scheduling');
+  });
+
+  it('B3. column ABSENT: the finalization guard simply does not apply', async () => {
+    // With no column there is no COMPLETED/PREEMPTED value to enforce; the
+    // route must not invent one, and must not block.
+    wireSupabase({ hasExecutionStatusColumn: false });
+    expect((await post()).statusCode).toBe(200);
+  });
+
+  it('B4. column PRESENT and terminal: the finalization guard STILL blocks', async () => {
+    // Compatibility must not weaken the guard where the column exists.
+    wireSupabase({
+      hasExecutionStatusColumn: true,
+      campaign: {
+        id: CAMPAIGN_ID, status: 'planning', current_stage: 'execution_ready',
+        execution_status: 'COMPLETED', blueprint_status: 'ACTIVE', thread_id: null, start_date: '2026-09-01',
+      },
+    });
+    const res = await post();
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('CAMPAIGN_FINALIZED');
+    expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
+  });
+
+  it('C. a genuinely missing campaign still returns 404', async () => {
+    wireSupabase({ campaign: null });
+    const res = await post();
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBe('Campaign not found');
+    expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
+  });
+
+  it('D. a real database error is NOT disguised as "Campaign not found"', async () => {
+    wireSupabase({ campaignsError: { code: '08006', message: 'connection failure' } });
+    const res = await post();
+    expect(res.statusCode).toBe(500);
+    expect(res.body.code).toBe('CAMPAIGN_READ_FAILED');
+    expect(res.body.message).toMatch(/connection failure/);
+    expect(mockScheduleStructuredPlan).not.toHaveBeenCalled();
+    expect(mockOwnedUpdate).not.toHaveBeenCalled();
+  });
+
+  it('D2. only 42703 is tolerated — no generic error swallowing', async () => {
+    // A permission error on the campaigns read must surface, not degrade.
+    wireSupabase({ campaignsError: { code: '42501', message: 'permission denied for table campaigns' } });
+    const res = await post();
+    expect(res.statusCode).toBe(500);
+    expect(res.body.code).toBe('CAMPAIGN_READ_FAILED');
+  });
+
+  it('E. the mandatory campaign read no longer requests the optional column', async () => {
+    const selects: string[] = [];
+    wireSupabase({});
+    const original = (supabase.from as jest.Mock).getMockImplementation()!;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      const built = original(table);
+      if (table !== 'campaigns') return built;
+      return {
+        select: (cols: string) => {
+          selects.push(cols);
+          return built.select(cols);
+        },
+      };
+    });
+    await post();
+    // Exactly one read asks for execution_status, and it asks for nothing else.
+    const execSelects = selects.filter((s) => s.includes('execution_status'));
+    expect(execSelects).toEqual(['execution_status']);
+    // The canonical reads never mention it.
+    for (const s of selects.filter((x) => x !== 'execution_status')) {
+      expect(s).not.toContain('execution_status');
+    }
   });
 });
 

@@ -28,9 +28,14 @@ import { withIdempotency } from '../../../../backend/middleware/withIdempotency'
  *
  * ── Why this route does NOT call assertSchedulerExecutable ──────────────────
  * That guard (SchedulerIntegrityGuard) requires `execution_status='ACTIVE'`
- * AND `duration_locked=true`. NOTHING in production sets either column — only
- * test fixtures do — which is precisely why `schedule-structured-plan` is
- * unreachable for a planner-built campaign. The LIVE, production-proven
+ * AND `duration_locked=true`. No production code writes `execution_status='ACTIVE'`
+ * (the only writers set COMPLETED/PREEMPTED), and the two writers of
+ * `duration_locked=true` also set `blueprint_status='INVALIDATED'`, which fails
+ * the SAME assertion — so it is unsatisfiable. P1.1 additionally VERIFIED that
+ * `campaigns.execution_status` does not exist in production at all (PostgREST
+ * 42703), making the guard doubly unreachable. That is precisely why
+ * `schedule-structured-plan` is unreachable for a planner-built campaign. The
+ * LIVE, production-proven
  * scheduling path (boltPipelineServiceRunExecWeekly) does not call that guard
  * either: it invokes `scheduleStructuredPlan` directly and then applies
  * `{ status:'active', current_stage:'schedule', blueprint_status:'ACTIVE' }`.
@@ -140,6 +145,52 @@ function buildWeeksEnvelope(snapshotWeeks: unknown[], rows: ReleaseCandidateRow[
   return Array.from(byWeek.values()).sort((a, b) => a.week_number - b.week_number);
 }
 
+/**
+ * P1.2 — read the OPTIONAL legacy `campaigns.execution_status` column.
+ *
+ * That column is NOT in the canonical baseline schema (supabase/_schema/
+ * baseline.sql); it is introduced only by database/campaign_preemption_status.sql,
+ * which is not part of the Supabase migration tree. It is therefore absent in
+ * some environments (verified absent in production: PostgREST 42703) and
+ * present in others. Selecting it in the mandatory campaign read turned its
+ * absence into a false "Campaign not found".
+ *
+ * Narrow contract, deliberately not a generic error-swallowing helper:
+ *   • column absent (42703)   → { ok: true, value: null }   — degrade
+ *   • column present          → { ok: true, value }         — enforce as before
+ *   • ANY other error         → { ok: false }               — a REAL failure,
+ *                                surfaced by the caller, never disguised
+ *
+ * No other field, table or error class is covered by this tolerance.
+ */
+const UNDEFINED_COLUMN = '42703';
+
+/** NOTE: this repo compiles with `strict: false`, so discriminated-union
+ *  narrowing on `.ok` does not apply — both arms are declared optional and the
+ *  caller reads them explicitly. */
+interface OptionalExecStatusRead {
+  ok: boolean;
+  value?: string | null;
+  message?: string;
+}
+
+async function readOptionalExecutionStatus(
+  campaignId: string,
+): Promise<OptionalExecStatusRead> {
+  const { data, error } = await supabase
+    .from('campaigns')
+    .select('execution_status')
+    .eq('id', campaignId)
+    .maybeSingle();
+  if (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === UNDEFINED_COLUMN) return { ok: true, value: null };
+    return { ok: false, message: (error as { message?: string }).message ?? 'execution_status read failed' };
+  }
+  const value = (data as { execution_status?: unknown } | null)?.execution_status;
+  return { ok: true, value: typeof value === 'string' ? value : null };
+}
+
 function summarizeWindow(rows: ReleaseCandidateRow[], ids: string[]): { first: string | null; last: string | null } {
   const set = new Set(ids);
   const stamps = rows
@@ -193,17 +244,44 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     await assertBlueprintActive(id);
     await assertBlueprintMutable(id);
 
+    // MANDATORY campaign read — canonical fields only. `execution_status` is
+    // deliberately NOT here (P1.2): it is an optional legacy column, and its
+    // absence must never read as "campaign missing".
     const { data: campaign, error: campErr } = await supabase
       .from('campaigns')
-      .select('id, status, current_stage, execution_status, blueprint_status, thread_id, start_date')
+      .select('id, status, current_stage, blueprint_status, thread_id, start_date')
       .eq('id', id)
       .maybeSingle();
-    if (campErr || !campaign) {
+    // A real database failure is NOT a missing campaign — keep them distinct.
+    if (campErr) {
+      return res.status(500).json({
+        code: 'CAMPAIGN_READ_FAILED',
+        message: (campErr as { message?: string }).message ?? 'Could not read the campaign.',
+      });
+    }
+    if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    const campaignRow = campaign as Record<string, unknown>;
-    assertCampaignNotFinalized(normalizeExecutionState(campaignRow.execution_status as string | null));
+    // OPTIONAL legacy field — enforced where the column exists, skipped where
+    // it does not. A non-42703 error here is a real failure and is surfaced.
+    const execStatus = await readOptionalExecutionStatus(id);
+    if (!execStatus.ok) {
+      return res.status(500).json({
+        code: 'CAMPAIGN_READ_FAILED',
+        message: execStatus.message ?? 'Could not read the campaign.',
+      });
+    }
+    /** null ⇒ the optional column is absent (or NULL); never `undefined`. */
+    const execStatusValue: string | null = execStatus.value ?? null;
+
+    const campaignRow: Record<string, unknown> = {
+      ...(campaign as Record<string, unknown>),
+      // Present ⇒ the finalization guard and stage resolver see the real value.
+      // Absent ⇒ undefined, exactly as before this column was ever selected.
+      ...(execStatusValue !== null ? { execution_status: execStatusValue } : {}),
+    };
+    assertCampaignNotFinalized(normalizeExecutionState(execStatusValue));
 
     const stageBefore = resolveCampaignStage(campaignRow).stage;
     if (stageBefore === 'draft') {
@@ -319,12 +397,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     void syncCampaignVersionStage(id, 'schedule', companyId ?? undefined).catch(() => {});
     void checkAndCompleteCampaignIfEligible(id).catch(() => {});
 
+    // Same P1.2 rule for the post-release read: canonical fields only, with
+    // the optional legacy field carried over from the pre-release read (its
+    // value is execution-owned and untouched by this route).
     const { data: after } = await supabase
       .from('campaigns')
-      .select('status, current_stage, execution_status, blueprint_status, thread_id')
+      .select('status, current_stage, blueprint_status, thread_id')
       .eq('id', id)
       .maybeSingle();
-    const stageAfter = resolveCampaignStage((after ?? {}) as Record<string, unknown>).stage;
+    const stageAfter = resolveCampaignStage({
+      ...((after ?? {}) as Record<string, unknown>),
+      ...(execStatusValue !== null ? { execution_status: execStatusValue } : {}),
+    }).stage;
 
     if (companyId) {
       await recordGovernanceEvent({
