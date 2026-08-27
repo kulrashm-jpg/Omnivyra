@@ -92,6 +92,24 @@ function chain(result: ChainResult) {
   return q;
 }
 
+// R5 — this fixture described a schema production does not have: it set ONLY
+// `execution_status`, a column that has never existed in the database (R3/R4:
+// absent, no migration ever created it, and naming it makes PostgREST fail the
+// whole read). The routes now read the canonical lifecycle columns, so the
+// fixture supplies the state production would ACTUALLY carry.
+//
+// The assertions are unchanged: a finalized campaign must still answer 409
+// CAMPAIGN_FINALIZED and must still emit CAMPAIGN_MUTATION_BLOCKED_FINALIZED.
+// Only the input's schema is corrected.
+//
+//   COMPLETED -> status 'completed'
+//   PREEMPTED -> status 'archived'  (this suite's own vocabulary: the
+//                preemption test below asserts PREEMPTED emits CAMPAIGN_ARCHIVED)
+const CANONICAL_STATUS_FOR: Record<'COMPLETED' | 'PREEMPTED', string> = {
+  COMPLETED: 'completed',
+  PREEMPTED: 'archived',
+};
+
 function setupCampaign(executionStatus: 'COMPLETED' | 'PREEMPTED') {
   (supabase.from as jest.Mock).mockImplementation((table: string) => {
     if (table === 'campaigns') {
@@ -101,6 +119,7 @@ function setupCampaign(executionStatus: 'COMPLETED' | 'PREEMPTED') {
           duration_locked: false,
           duration_weeks: 12,
           blueprint_status: 'ACTIVE',
+          status: CANONICAL_STATUS_FOR[executionStatus],
           execution_status: executionStatus,
         },
         error: null,
@@ -245,7 +264,10 @@ describe('Campaign Finalization Guard (Stage 20)', () => {
       expect(calls.length).toBeGreaterThan(0);
       expect(calls[0][0].metadata).toMatchObject({
         campaignId: CAMPAIGN_ID,
-        execution_status: 'COMPLETED',
+        // R5: the event now reports the canonical stage that was actually
+        // consulted, instead of an absent column's value. Same event, same
+        // trigger — only the diagnostic key changed.
+        campaign_stage: 'completed',
       });
     });
   });

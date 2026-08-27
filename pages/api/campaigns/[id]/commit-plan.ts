@@ -1,4 +1,6 @@
 import { createApiRoute as __createApiRoute } from '../../../../lib/platform/routeFactory';
+import { CampaignStatusFields } from '../../../../lib/campaign/campaignStage';
+import { campaignLifecycleSelect, isCampaignFinalized } from '../../../../lib/campaign/executionStatusCompat';
 
 /**
  * POST /api/campaigns/[id]/commit-plan
@@ -13,8 +15,6 @@ import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockd
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
 import { assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../../backend/services/campaignBlueprintService';
-import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../../backend/services/CampaignFinalizationGuard';
-import { normalizeExecutionState } from '../../../../backend/governance/ExecutionStateMachine';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 
@@ -63,7 +63,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const { data: campaign, error: campError } = await supabase
       .from('campaigns')
-      .select('execution_status, blueprint_status')
+      // R5: `execution_status` is absent in production, and naming it made
+      // PostgREST fail the WHOLE read (42703) — so this route answered 404
+      // "Campaign not found" for every campaign that exists.
+      .select(campaignLifecycleSelect())
       .eq('id', id)
       .maybeSingle();
 
@@ -71,17 +74,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    const executionStatus = normalizeExecutionState((campaign as any).execution_status);
-    try {
-      assertCampaignNotFinalized(executionStatus);
-    } catch (err: any) {
-      if (err instanceof CampaignFinalizedError) {
-        return res.status(409).json({
-          code: 'CAMPAIGN_FINALIZED',
-          message: 'Campaign is finalized and cannot be modified',
-        });
-      }
-      throw err;
+    // R5: was assertCampaignNotFinalized(normalizeExecutionState(
+    // campaign.execution_status)). Two defects in one line: the select above
+    // 42703-failed so this was unreachable, and had it been reached the absent
+    // column normalizes to 'DRAFT' — never terminal — making the guard a
+    // silent no-op. isCampaignFinalized expresses the SAME protection through
+    // the canonical read model over columns that exist in production.
+    // Response vocabulary (409 CAMPAIGN_FINALIZED) is unchanged.
+    if (isCampaignFinalized(campaign as unknown as CampaignStatusFields)) {
+      return res.status(409).json({
+        code: 'CAMPAIGN_FINALIZED',
+        message: 'Campaign is finalized and cannot be modified',
+      });
     }
 
     try {
