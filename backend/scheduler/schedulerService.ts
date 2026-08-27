@@ -1,5 +1,8 @@
 import { ownedDbTable } from '../db/writeOwner';
 import { safeEnqueue } from '../middleware/queueBackpressure';
+// R2-IMPL B1 — the ONE publish-authorization predicate, shared with
+// publishProcessor so cron eligibility and publish-time authorization agree.
+import { authorizePostPublish } from '../../lib/campaign/publishAuthorization';
 /**
  * Scheduler Service
  *
@@ -94,13 +97,17 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
     existingJobs?.map(j => j.scheduled_post_id) || []
   );
 
-  // ── HARDEN-004: batch the per-post campaign + readiness lookups ─────────────
-  // The loop below used to run `campaigns` and `campaign_readiness` .single()
-  // queries PER POST (2×N round-trips, repeated even for posts sharing a
-  // campaign). Two batched .in() queries + in-memory maps produce the exact
-  // same per-post decisions: a campaign missing from the map ⇔ the old
-  // .single() error path (CAMPAIGN_NOT_ACTIVE); a readiness row missing from
-  // the map ⇔ the old PGRST116→null path (CAMPAIGN_NOT_READY).
+  // ── HARDEN-004: batch the per-post campaign lookup ──────────────────────────
+  // The loop below used to run a `campaigns` .single() query PER POST (repeated
+  // even for posts sharing a campaign). One batched .in() query + an in-memory
+  // map produces the same per-post decision: a campaign missing from the map ⇔
+  // the old .single() error path (CAMPAIGN_NOT_ACTIVE).
+  //
+  // R2-IMPL B1: the parallel `campaign_readiness` batch is GONE. Campaign-global
+  // readiness no longer authorizes enqueue — eligibility is decided per post by
+  // lib/campaign/publishAuthorization, the same predicate the publish worker
+  // uses. The due-post query above already filters `status = 'scheduled'`, so an
+  // unreleased sibling week is never a candidate in the first place.
   const campaignIds = [...new Set(
     (duePosts || [])
       .filter((p) => !existingPostIds.has(p.id) && p.campaign_id)
@@ -108,7 +115,6 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
   )];
 
   const campaignStatusById = new Map<string, string>();
-  const readinessStateById = new Map<string, string>();
   if (campaignIds.length > 0) {
     const { data: campaignRows, error: campaignsError } = await ownedDbTable('campaigns')
       .select('id, status')
@@ -119,17 +125,6 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
     }
     for (const row of campaignRows || []) {
       campaignStatusById.set(row.id, String(row.status ?? ''));
-    }
-
-    const { data: readinessRows, error: readinessError } = await ownedDbTable('campaign_readiness')
-      .select('campaign_id, readiness_state')
-      .in('campaign_id', campaignIds);
-    if (readinessError) {
-      // Old behavior: getCampaignReadiness threw on non-missing-row errors.
-      throw new Error(`Failed to load campaign readiness: ${readinessError.message}`);
-    }
-    for (const row of readinessRows || []) {
-      readinessStateById.set(row.campaign_id, String(row.readiness_state ?? ''));
     }
   }
 
@@ -149,28 +144,26 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
       continue;
     }
 
-    if (post.campaign_id) {
-      const campaignStatus = campaignStatusById.get(post.campaign_id);
-      if (campaignStatus !== 'active') {
-        console.warn({
-          campaign_id: post.campaign_id,
-          scheduled_post_id: post.id,
-          reason: 'CAMPAIGN_NOT_ACTIVE',
-        });
-        skipped++;
-        continue;
-      }
-
-      const readinessState = readinessStateById.get(post.campaign_id);
-      if (readinessState !== 'ready') {
-        console.warn({
-          campaign_id: post.campaign_id,
-          scheduled_post_id: post.id,
-          reason: 'CAMPAIGN_NOT_READY',
-        });
-        skipped++;
-        continue;
-      }
+    // R2-IMPL B1 — ONE authorization predicate, shared with the publish worker,
+    // so cron eligibility and publish-time authorization cannot diverge (and
+    // BOLT and Strategic Mix obey identical semantics).
+    const authorization = authorizePostPublish({
+      campaign_id: post.campaign_id,
+      campaign_status: post.campaign_id ? (campaignStatusById.get(post.campaign_id) ?? null) : null,
+      post_status: (post as { status?: string | null }).status ?? null,
+      // Cron already filters to due, unpublished posts; platform_post_id is not
+      // selected here, so idempotency stays with the queue-job duplicate guard
+      // above and the worker's own short-circuit.
+      platform_post_id: null,
+    });
+    if (!authorization.authorized) {
+      console.warn({
+        campaign_id: post.campaign_id,
+        scheduled_post_id: post.id,
+        reason: authorization.code,
+      });
+      skipped++;
+      continue;
     }
 
     eligible.push(post);
