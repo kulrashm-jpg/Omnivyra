@@ -497,6 +497,8 @@ export default function CreatorFormColumn({ ctx }: { ctx: CreatorWorkflowCtx }) 
                   /* Signals the treatment proposal reads. All optional: absent
                    * simply means fewer signals, never a different mechanism. */
                   templateCategory={activeTemplate?.category ?? null}
+                  /* Family decides the WORDING of a treatment, never its routing. */
+                  assetFamily={type === 'infographic' ? 'infographic' : type === 'carousel' ? 'carousel' : 'image'}
                   templatePurposeKey={activeTemplate?.renderingContract?.purposeKey ?? null}
                   guidedChoices={guidedChoices ?? EMPTY_GUIDED_CHOICES}
                   brief={String(answers.topic || '')}

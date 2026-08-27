@@ -71,7 +71,10 @@ const consumesReferences = (src: string) => src.includes('compositionReferences'
  * carrier, and all three disclosure fields must be assigned from its result.
  */
 const disclosesUnsupported = (src: string) => {
-  const called = /unsupportedFamilyConditionDegradation\(\s*options\.compositionReferences\s*\)/.test(src);
+  // The call may now carry a second argument naming the purposes this render
+  // DID apply (Phase 63), so the shape check allows arguments after the
+  // carrier but still requires the carrier itself to be passed.
+  const called = /unsupportedFamilyConditionDegradation\(\s*options\.compositionReferences\s*[,)]/.test(src);
   const fields = ['condition_reference_status', 'condition_reference_fallback_category', 'condition_reference_user_message']
     .every((f) => new RegExp(`${f}:\\s*degradation\\.`).test(src));
   return called && fields;
@@ -92,13 +95,28 @@ describe('A — offered upload implies consume-or-disclose', () => {
     expect(offending).toEqual([]);
   });
 
-  it('CRITICAL: infographic specifically — the exact P0 that shipped', () => {
-    // A user attaches a photo to an infographic. The renderer has no model in
-    // its path, so it cannot apply the reference — but it MUST say so.
+  it('CRITICAL: infographic specifically — it now CONSUMES and STILL discloses', () => {
+    /*
+     * The original P0: a user attached a photo to an infographic and the
+     * renderer silently ignored it. Phase 63 made half of that promise real —
+     * `background` is now composited deterministically — while the other half
+     * stays honestly unsupported, because a compositor with no model cannot act
+     * on a `style_reference`.
+     *
+     * So this family must satisfy BOTH halves of the invariant at once. It is
+     * the strictest case in the suite: consume what it can, disclose what it
+     * cannot, and never confuse the two.
+     */
     expect(isSocialCreativeType('infographic' as never)).toBe(true);
     const src = read(RENDERER_FOR_TYPE.infographic);
+    expect(consumesReferences(src)).toBe(true);
     expect(disclosesUnsupported(src)).toBe(true);
     expect(src).toContain('condition_reference_user_message');
+    // The background genuinely reaches the compositor…
+    expect(src).toContain('resolveInfographicBackgroundBytes({');
+    // …and ONLY the background is ever reported as applied.
+    expect(src).toMatch(/appliedPurposes: userBackgroundApplied \? \['background'\] : \[\]/);
+    expect(src).not.toContain("appliedPurposes: ['style_reference']");
   });
 
   it('image and banner still CONSUME — the working path is not weakened', () => {
@@ -191,5 +209,77 @@ describe('D — one disclosure, correct by construction', () => {
     const column = read('components/creator/workflow/CreatorResultsColumn.tsx');
     expect(column).toContain('conditionReferenceStatus');
     expect(column).toContain("=== 'not_applied'");
+  });
+});
+
+/* ── E. Compose placement may only exist where a compose lane does ──────────*/
+
+describe('E — a placement no renderer can honour is forbidden (Phase 68)', () => {
+  /**
+   * THE LATENT HOLE THIS CLOSES
+   *
+   * `slotAcceptance` refuses a compose slot with no `placement`
+   * (`slot_missing_placement`), which is why 194 of the 195 declared `logo`
+   * slots are never offered to anyone — the router turns them down before the
+   * UI can promise anything. That is the architecture protecting itself, and it
+   * is why logo carries no false promise today.
+   *
+   * But the protection is accidental rather than stated. Add a `placement` to
+   * one infographic or carousel logo slot — a single line in a template — and
+   * the chain inverts: the router admits it, the panel offers "logo", the
+   * reference persists, and the renderer drops it in silence, because neither
+   * of those families consumes the compose lane at all.
+   *
+   * Worse, the existing disclosure could not report it. It reads
+   * `conditionPlan.condition`; a compose reference lives in
+   * `composePlan.compose` and would never be seen.
+   *
+   * So the rule is stated here: a family may declare a placement only if its
+   * renderer can actually place things.
+   */
+  const COMPOSE_LANE_FAMILIES = new Set(['image']);   // banner shares this renderer
+
+  it('CRITICAL: only families whose renderer consumes the compose lane may declare placement', () => {
+    registerCuratedSystemTemplates();
+    const offenders: string[] = [];
+    for (const family of ['image', 'carousel', 'infographic'] as const) {
+      const templates = listCanonicalTemplatesForFamily(family) as Array<{
+        id: string; assetSlots?: Array<{ purpose: string; mode?: string; placement?: unknown }>;
+      }>;
+      for (const t of templates) {
+        for (const slot of t.assetSlots ?? []) {
+          if (!slot.placement) continue;
+          if (!COMPOSE_LANE_FAMILIES.has(family)) {
+            offenders.push(`${family}/${t.id}:${slot.purpose} declares placement but ${family} has no compose lane`);
+          }
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('the compose lane is wired in exactly the families that claim it', () => {
+    const image = read('backend/services/creatorAssetRendererImage.ts');
+    expect(image).toContain('buildComposeLayers');
+    // The deterministic families do not consume it — which is precisely why
+    // they must not declare placements.
+    for (const rel of ['backend/services/creatorAssetRendererInfographic.ts',
+                       'backend/services/creatorAssetRendererCarousel.ts']) {
+      expect(read(rel)).not.toContain('buildComposeLayers');
+    }
+  });
+
+  it('CRITICAL: a placement-less compose slot is refused, not guessed', () => {
+    // The property that keeps 194 dormant logo declarations harmless.
+    const routing = read('lib/content/compositionAssetRouting.ts');
+    expect(routing).toContain('slot_missing_placement');
+  });
+
+  it('the existing disclosure reads the CONDITION plan — compose is not covered', () => {
+    // Recorded deliberately: this is why the guard above matters. If a compose
+    // reference were ever dropped, today's disclosure would not report it.
+    const contracts = read('backend/services/creatorAssetRendererContracts.ts');
+    expect(contracts).toContain('conditionPlan?: { condition?');
+    expect(contracts).not.toContain('composePlan?: { compose?');
   });
 });

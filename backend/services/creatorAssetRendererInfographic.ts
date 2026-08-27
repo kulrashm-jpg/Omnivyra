@@ -86,6 +86,7 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 ensureRenderFonts();
 import { sharp, unsupportedFamilyConditionDegradation, type RenderedMediaBundle, type RenderOptions, getCachedRenderBuffer, safeObject, escapeXml, balanceTextLines, renderWrappedBodyText, blueprintIdForRender, curatedDesignTemplate, resolveInfographicRenderStyle, compactText, buildAccessibleAltText, resolveRenderSize, fitTextToBox } from './creatorAssetRendererContracts';
 import { emitCreatorEvent, CREATOR_EVENTS } from './creatorOperationalTelemetryService';
+import { resolveInfographicBackgroundBytes } from './creator/infographicUserBackground';
 import { loadBrandMark } from './creatorAssetRendererOverlay';
 import { bufferFromRemoteImage } from './creatorAssetRendererSvg';
 import { uploadRenderedPng } from './creatorAssetRendererMedia';
@@ -442,8 +443,35 @@ export async function renderInfographicAsset(
   //    falls back to gradient → byte-identical with default.
   const backgroundConfig = resolveBackgroundConfig(metadata);
   let backgroundImageBuffer: Buffer | null = null;
+  let userBackgroundApplied = false;
+  {
+    const resolved = await resolveInfographicBackgroundBytes({
+      companyId: options.companyId,
+      condition: options.compositionReferences?.conditionPlan?.condition,
+      width,
+      height,
+    });
+    if (resolved.bytes && resolved.cacheKey) {
+      try {
+        const bytes = resolved.bytes;
+        backgroundImageBuffer = await getCachedRenderBuffer(resolved.cacheKey, async () =>
+          sharp(bytes, { failOn: 'none' })
+            .resize(width, height, { fit: 'cover' })
+            .png()
+            .toBuffer());
+        userBackgroundApplied = Boolean(backgroundImageBuffer);
+      } catch {
+        // Decode or resize failed on bytes we were allowed to read. Same
+        // contract as the URL path: fall open to gradient, disclose below.
+        backgroundImageBuffer = null;
+        userBackgroundApplied = false;
+      }
+    }
+  }
+
   if (
-    infographicBackgroundImagesEnabled()
+    !backgroundImageBuffer
+    && infographicBackgroundImagesEnabled()
     && backgroundConfig.mode === 'image'
     && backgroundConfig.imageUrl
   ) {
@@ -1591,7 +1619,12 @@ export async function renderInfographicAsset(
      * attached, which is what keeps an ordinary infographic clean.
      */
     ...(() => {
-      const degradation = unsupportedFamilyConditionDegradation(options.compositionReferences);
+      const degradation = unsupportedFamilyConditionDegradation(
+        options.compositionReferences,
+        // Phase 63: a background this family DID apply is not reported as
+        // not-applied. Only the purposes it genuinely cannot honour are.
+        { appliedPurposes: userBackgroundApplied ? ['background'] : [] },
+      );
       if (!degradation) return {};
       /*
        * Disclosed AND counted.

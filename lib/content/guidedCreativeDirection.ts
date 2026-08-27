@@ -388,8 +388,23 @@ export function proposeImageTreatment(input: {
   visualDirectionId?: string | null;
   instruction?: string | null;
   brief?: string | null;
+  /**
+   * Which family is being made. Narrows what may be PROPOSED — never how a
+   * chosen purpose routes, which stays a property of purpose and mode alone.
+   */
+  family?: 'image' | 'carousel' | 'infographic' | null;
 }): TreatmentProposal {
-  const acceptable = acceptablePurposes(input.templateSlots);
+  /*
+   * A deterministic family cannot guide a look, so it is never PROPOSED one.
+   *
+   * The template still declares the slot and the router still admits it — a
+   * user who deliberately picks "style reference" gets the existing truthful
+   * refusal from the renderer. What changes is that the system stops
+   * SUGGESTING something it knows it cannot do.
+   */
+  const deterministic = input.family === 'infographic' || input.family === 'carousel';
+  const acceptable = acceptablePurposes(input.templateSlots)
+    .filter((p) => !(deterministic && p === 'style_reference'));
   if (acceptable.length === 0) return CANNOT_DECIDE;
 
   /** First acceptable candidate from an ordered wish-list, else null. */
@@ -475,7 +490,69 @@ export function proposeImageTreatment(input: {
  * purpose ever became proposable this would have to say something different,
  * which is why it is computed and not written down.
  */
-export function describeTreatment(purpose: ProposablePurpose): { headline: string; promise: string } {
+export function describeTreatment(
+  purpose: ProposablePurpose,
+  /**
+   * Which family is being made.
+   *
+   * The same purpose does not mean the same thing everywhere, and pretending it
+   * does is how a promise stops being true. An infographic is composited
+   * deterministically with no model in its path: a `background` there is placed
+   * and softened, never reinterpreted, so the referential wording every other
+   * family needs would be simply wrong. Omitted → the generative wording, which
+   * is correct for image and banner and is what every existing caller gets.
+   */
+  family?: 'image' | 'carousel' | 'infographic' | null,
+): { headline: string; promise: string } {
+  /*
+   * INFOGRAPHIC — deterministic, and described as such.
+   *
+   * Only `background` is honoured here, so only it gets the placement wording.
+   * Anything else on this family is genuinely unsupported and keeps the
+   * referential sentence rather than borrowing a promise it cannot keep.
+   */
+  if (family === 'infographic' && purpose === 'background') {
+    return {
+      headline: 'We’ll use your image as a faded background',
+      promise: 'It’s cropped to fit and softened behind the design so the text stays readable.',
+    };
+  }
+
+  /*
+   * CAROUSEL — the same deterministic placement, across the whole deck.
+   *
+   * One accepted background sits behind every slide, so the promise has to say
+   * "the carousel", not "this image". Saying it the generative way would claim
+   * a reinterpretation that no model performs here.
+   */
+  if (family === 'carousel' && purpose === 'background') {
+    return {
+      headline: 'We’ll use your image as the background across the carousel',
+      promise: 'The same picture sits behind every slide, cropped to fit and softened so the text stays readable.',
+    };
+  }
+
+  /*
+   * DETERMINISTIC FAMILIES CANNOT GUIDE A LOOK.
+   *
+   * Infographic and carousel composite SVG over a base layer with no model
+   * anywhere in the path. A style reference asks for a manner of seeing to be
+   * emulated, and a compositor that copies pixels cannot do it — so the
+   * renderer refuses and discloses `family_unsupported`.
+   *
+   * Until this line, the proposal still told those users "we'll use it as a
+   * visual reference, so the GENERATED result may differ" — a promise about a
+   * generation that never happens, made moments before the disclosure
+   * contradicted it. Saying so up front is the honest order: refuse first,
+   * rather than accept and then explain.
+   */
+  if ((family === 'infographic' || family === 'carousel') && purpose === 'style_reference') {
+    return {
+      headline: 'This design can’t take a style reference',
+      promise: 'It’s built from your text and brand rather than generated from a picture, so your image wouldn’t be used. It stays in your library — choose an image design to guide a look.',
+    };
+  }
+
   const headline = {
     subject: 'We’ll use your image as the main subject',
     product: 'We’ll use your image as the product',

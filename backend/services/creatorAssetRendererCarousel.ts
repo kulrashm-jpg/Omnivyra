@@ -84,8 +84,9 @@ import { ensureRenderFonts } from './creatorRenderFonts';
 // identical font contract render-inline previously had alone. Idempotent +
 // never throws; a no-op where system fonts already exist (e.g. the worker).
 ensureRenderFonts();
-import { sharp, PDFDocument, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, type OverlayQualityReport, safeObject, resolveCarouselRenderStyle, resolveCarouselTemplateArc, carouselOverlayBaseStyle, renderBackgroundPng, classifyPdfStorageFailure, USER_MESSAGE_FOR_PDF_FALLBACK, compactText } from './creatorAssetRendererContracts';
+import { sharp, PDFDocument, type RenderedMediaBundle, type CreatorReviewPreviewInput, type RenderOptions, type OverlayQualityReport, safeObject, resolveCarouselRenderStyle, resolveCarouselTemplateArc, carouselOverlayBaseStyle, renderBackgroundPng, classifyPdfStorageFailure, USER_MESSAGE_FOR_PDF_FALLBACK, compactText, getCachedRenderBuffer, unsupportedFamilyConditionDegradation } from './creatorAssetRendererContracts';
 import { buildOverlaySvg, loadBrandMark } from './creatorAssetRendererOverlay';
+import { resolveUserBackgroundBytes, carouselUserBackgroundEnabled } from './creator/userBackgroundReference';
 import { uploadRenderedPng, uploadRenderedFile } from './creatorAssetRendererMedia';
 import { renderCreatorAssetReviewPreview } from './creatorAssetRendererImage';
 
@@ -457,6 +458,8 @@ async function renderStructuredSlidePng(input: {
   /** Canonical carousel visual language (deck path). Drives the slide overlay
    *  base preset + continuity-wave gating. Default style → byte-identical. */
   carouselStyle?: CarouselStyleSchema;
+  /** The deck-wide user background, already resized. Same for every slide. */
+  deckBackground?: Buffer | null;
 }): Promise<{ buffer: Buffer; quality: OverlayQualityReport }> {
   const platform = compactText(input.metadata.platform || input.metadata.primary_platform, 'linkedin');
   // Operator feedback: drop the third "supporting / explanation"
@@ -476,7 +479,10 @@ async function renderStructuredSlidePng(input: {
     cta: input.index === input.total - 1 ? compactText(input.metadata.cta || 'Take the next step') : '',
     supportingText: '',
   };
-  const background = await renderBackgroundPng({
+  /* The user's picture is the base layer when one was accepted; otherwise the
+   * brand gradient, byte-identical to before. The overlay SVG — scrim, text,
+   * CTA — composites on top either way, so readability is unchanged. */
+  const background = input.deckBackground ?? await renderBackgroundPng({
     width: input.width,
     height: input.height,
     colors: input.brandKit.normalizedPalette,
@@ -686,6 +692,44 @@ export async function composeStructuredDeckAsset(
     width,
     height,
   });
+
+  /*
+   * THE USER'S OWN PHOTOGRAPH, behind the WHOLE DECK.
+   *
+   * Resolved ONCE here rather than per slide, and that is the semantic as much
+   * as it is the optimisation: one accepted `background` reference means one
+   * backdrop for the carousel, not a different picture on each frame. Slide
+   * index is never consulted, and `ordinal` keeps its existing meaning —
+   * ordering within a purpose — because reading it as a slide number would give
+   * one column two jobs.
+   *
+   * Every slide then composites the SAME resized buffer, so the deck reads as
+   * one piece. Null whenever the capability is off, nothing is attached, or the
+   * asset could not be used — and then every slide falls back to the brand
+   * gradient exactly as before.
+   */
+  const deckBackground = await (async (): Promise<Buffer | null> => {
+    const resolved = await resolveUserBackgroundBytes({
+      companyId: options.companyId,
+      condition: options.compositionReferences?.conditionPlan?.condition,
+      width,
+      height,
+      enabled: carouselUserBackgroundEnabled(),
+      namespace: 'carousel-bg:user',
+    });
+    if (!resolved.bytes || !resolved.cacheKey) return null;
+    try {
+      const bytes = resolved.bytes;
+      return await getCachedRenderBuffer(resolved.cacheKey, async () =>
+        sharp(bytes, { failOn: 'none' })
+          .resize(width, height, { fit: 'cover' })
+          .png()
+          .toBuffer());
+    } catch {
+      // Undecodable bytes must never cost the user their deck.
+      return null;
+    }
+  })();
   for (let index = 0; index < renderItems.length; index += 1) {
     const rendered = await renderStructuredSlidePng({
       item: renderItems[index],
@@ -698,6 +742,8 @@ export async function composeStructuredDeckAsset(
       height,
       brandKit,
       deckContext,
+      // ONE deck-wide user background. Same buffer for every slide.
+      deckBackground,
       carouselStyle,
     });
     qualityReports.push(rendered.quality);
@@ -979,6 +1025,27 @@ export async function composeStructuredDeckAsset(
       final_ocr_results: slideOcrResults,
       render_manifest: manifest,
       renderer_id: rendererId,
+      /*
+       * Background is CONSUMED; anything else attached is DISCLOSED.
+       *
+       * Carousel templates declare subject, style_reference and supporting as
+       * well, and this compositor can honour none of them — it places pixels,
+       * it cannot reinterpret a subject or emulate a style. Saying so reuses
+       * the SAME three fields the provider lane and the infographic already
+       * use, under the same `family_unsupported` category. Silence here would
+       * recreate exactly the defect Phase 61 removed.
+       */
+      ...(() => {
+        const degradation = unsupportedFamilyConditionDegradation(
+          options.compositionReferences,
+          { appliedPurposes: deckBackground ? ['background'] : [] },
+        );
+        return degradation ? {
+          condition_reference_status: degradation.status,
+          condition_reference_fallback_category: degradation.category,
+          condition_reference_user_message: degradation.userMessage,
+        } : {};
+      })(),
       ...buildCreatorBrandKitMetadata(brandKit, {
         platform,
         overlayConfiguration: {

@@ -59,6 +59,7 @@ export default function CreatorImageAssetPanel({
   templateSlots,
   templateName,
   templateCategory,
+  assetFamily,
   templatePurposeKey,
   guidedChoices,
   brief,
@@ -72,6 +73,14 @@ export default function CreatorImageAssetPanel({
   templateName?: string | null;
   /** Category + purpose key let the proposal read the design's own contract. */
   templateCategory?: string | null;
+  /**
+   * Which family is being made.
+   *
+   * Decides how a treatment is DESCRIBED, never how it routes. An infographic
+   * places a background deterministically where an image conditions a model on
+   * it, and telling both users the same sentence would make one of them false.
+   */
+  assetFamily?: 'image' | 'carousel' | 'infographic' | null;
   templatePurposeKey?: string | null;
   /** The user's creative answers — what they said should be featured, and the look. */
   guidedChoices?: GuidedCreativeChoices | null;
@@ -292,8 +301,9 @@ export default function CreatorImageAssetPanel({
       visualDirectionId: (guidedChoices ?? EMPTY_GUIDED_CHOICES).visualDirectionId ?? null,
       instruction,
       brief,
+      family: assetFamily,
     }),
-    [templateSlots, templateCategory, templatePurposeKey, guidedChoices, instruction, brief],
+    [templateSlots, templateCategory, templatePurposeKey, guidedChoices, instruction, brief, assetFamily],
   );
 
   /*
@@ -443,10 +453,10 @@ export default function CreatorImageAssetPanel({
                   {proposal.purpose ? (
                     <>
                       <p className="text-xs font-semibold text-emerald-900">
-                        {describeTreatment(proposal.purpose).headline}
+                        {describeTreatment(proposal.purpose, assetFamily).headline}
                       </p>
                       <p className="mt-1 text-[11px] leading-4 text-emerald-800">
-                        {describeTreatment(proposal.purpose).promise}
+                        {describeTreatment(proposal.purpose, assetFamily).promise}
                       </p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         <button
