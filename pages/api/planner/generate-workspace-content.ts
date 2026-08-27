@@ -1,5 +1,9 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
+// P2 — canonical campaign grounding (pure resolver + prompt sections).
+import { resolveGenerationContext, buildGroundedContextBlock } from '../../../lib/campaign/generationContext';
+import { resolveCampaignCompanyId } from '../../../backend/services/campaignAccessService';
+import { supabase } from '../../../backend/db/supabaseClient';
 
 /**
  * POST /api/planner/generate-workspace-content
@@ -36,6 +40,32 @@ import {
   generateWorkspaceVariants, recordContentWriterRuntime, compareVariantParity,
 } from '../../../backend/services/contentWriter/contentWriterCapability';
 
+/**
+ * P2 — load the campaign's own planner_state (the canonical server-side
+ * strategy/skeleton snapshot the release seam also reads). Read-only; a
+ * missing or unreadable snapshot yields null, which the resolver turns into a
+ * structured MISSING_SKELETON_CONTEXT rather than ungrounded generation.
+ */
+async function loadPlannerState(campaignId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const { data } = await supabase
+      .from('campaign_versions')
+      .select('campaign_snapshot')
+      .eq('campaign_id', campaignId)
+      .order('version', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const snapshot = (data as { campaign_snapshot?: Record<string, unknown> } | null)?.campaign_snapshot;
+    const plannerState = snapshot?.planner_state;
+    return plannerState && typeof plannerState === 'object'
+      ? (plannerState as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -43,7 +73,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { companyId, topic, platforms, contentTypes, theme, objective, week, activity_key, attempt } = req.body || {};
+    const {
+      companyId, topic, platforms, contentTypes, theme, objective, week, activity_key, attempt,
+      // P2 — canonical grounding identifiers. The client names WHICH slot; the
+      // server resolves WHAT that slot means. No strategy is accepted from the
+      // browser (see resolveCampaignGrounding below).
+      campaignId: bodyCampaignId, slot_id: bodySlotId,
+    } = req.body || {};
 
     if (!companyId || typeof companyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required' });
@@ -78,12 +114,58 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       brandContext = parts.join('\n');
     }
 
+    // ── P2 — server-side canonical grounding ─────────────────────────────
+    // When the caller names a campaign slot, the campaign's OWN planner_state
+    // is the sole source of strategy/structure/slot context. Three guards, in
+    // order, make cross-campaign grounding impossible:
+    //   1. the campaign must belong to the authorized company (tenancy)
+    //   2. the slot must exist in THAT campaign's plan (resolver)
+    //   3. any client-asserted platform must match the slot's own platform
+    // A named-but-unresolvable slot is a STRUCTURED FAILURE, never a silent
+    // fallback to generic generation.
+    let groundedContext: string | null = null;
+    const campaignIdIn = typeof bodyCampaignId === 'string' ? bodyCampaignId.trim() : '';
+    const slotIdIn = typeof bodySlotId === 'string' ? bodySlotId.trim() : '';
+    if (campaignIdIn && slotIdIn) {
+      const owningCompanyId = await resolveCampaignCompanyId(campaignIdIn);
+      if (!owningCompanyId || owningCompanyId !== companyId.trim()) {
+        return res.status(403).json({
+          code: 'CAMPAIGN_NOT_IN_COMPANY',
+          error: 'That campaign does not belong to this company.',
+        });
+      }
+      const plannerState = await loadPlannerState(campaignIdIn);
+      const resolved = resolveGenerationContext({
+        campaignId: campaignIdIn,
+        plannerState,
+        slotId: slotIdIn,
+        platform: (platforms as string[]).length === 1 ? (platforms as string[])[0] : null,
+      });
+      if (!resolved.ok || !resolved.context) {
+        return res.status(409).json({
+          code: resolved.code ?? 'GENERATION_CONTEXT_UNRESOLVED',
+          error: resolved.message ?? 'Could not resolve campaign context for this slot.',
+        });
+      }
+      groundedContext = buildGroundedContextBlock(resolved.context);
+      // Diagnosable without logging content (existing console/telemetry only).
+      console.info('[generate-workspace-content][grounded]', {
+        campaign_id: campaignIdIn,
+        slot_id: slotIdIn,
+        week: resolved.context.slot.week,
+        platform: resolved.context.slot.platform,
+        content_type: resolved.context.slot.content_type,
+        assets: resolved.context.assets.length,
+      });
+    }
+
     // Prompt (single-sourced; identical strings to the pre-migration inline build).
     const contextLines = buildContextLines({ theme, objective, week });
     const grounding = await resolveCompanyGroundingGuard(companyId);
     const systemPrompt = WORKSPACE_SYSTEM_PROMPT + '\n\n' + grounding.directive;
     const userPrompt = buildWorkspaceUserPrompt({
       brandContext, contextLines, platforms: platforms as string[], topic, contentTypes: contentTypeMap,
+      groundedContext,
     });
 
     // Phase 8G-A — credit-economy shadow (dark, fire-and-forget; never blocks/mutates).
@@ -149,7 +231,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         const r = await generateWorkspaceVariants({
           companyId: companyId.trim(), userId: access.userId, topic,
           platforms: platforms as string[], contentTypes: contentTypeMap,
-          theme, objective, week, correlationId: referenceId,
+          theme, objective, week, groundedContext, correlationId: referenceId,
         });
         rawVariants = r.variants;
       } else {
@@ -161,7 +243,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         void generateWorkspaceVariants({
           companyId: companyId.trim(), userId: access.userId, topic,
           platforms: platforms as string[], contentTypes: contentTypeMap,
-          theme, objective, week, correlationId: referenceId,
+          theme, objective, week, groundedContext, correlationId: referenceId,
         })
           .then((p) => { try { console.info('[content-writer:dual-parity]', compareVariantParity(rawVariants, p.variants)); } catch { /* noop */ } })
           .catch(() => {});

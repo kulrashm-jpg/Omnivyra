@@ -79,7 +79,7 @@ export interface ContentWorkspaceProps {
   campaignId?: string | null;
 }
 
-export function ContentWorkspace({ companyId }: ContentWorkspaceProps) {
+export function ContentWorkspace({ companyId, campaignId }: ContentWorkspaceProps) {
   const { state, setCalendarPlan } = usePlannerSession();
   const plan = (state.execution_plan?.calendar_plan ?? state.calendar_plan) as CalendarPlan | null;
   const assignments = state.assignments ?? [];
@@ -143,6 +143,11 @@ export function ContentWorkspace({ companyId }: ContentWorkspaceProps) {
             theme: theme?.title,
             objective: theme?.objective,
             week: target.week ?? undefined,
+            // P2 — name the slot; the SERVER resolves strategy/skeleton/slot
+            // context from the campaign's own planner_state. Sent only when
+            // the session owns a campaign; without it the route keeps its
+            // pre-P2 behaviour exactly.
+            ...(campaignId ? { campaignId, slot_id: target.slot_id } : {}),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -164,7 +169,7 @@ export function ContentWorkspace({ companyId }: ContentWorkspaceProps) {
       setProgress((p) => ({ ...p, done: i + 1, failures: [...failures] }));
     }
     setProgress((p) => ({ ...p, running: false }));
-  }, [companyId, commitPlan, themeForWeek]);
+  }, [companyId, campaignId, commitPlan, themeForWeek]);
 
   const startGeneration = useCallback((scope: ContentGenerationScope, mode: ContentGenerationMode, label: string) => {
     const targets = planContentGeneration(planRef.current ?? {}, scope, mode, Array.from(selected));
