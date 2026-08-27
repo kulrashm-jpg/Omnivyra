@@ -118,8 +118,10 @@ describe('canonical context chain', () => {
   });
 
   it('resolves ASSIGNED assets for the slot — and only for that slot', () => {
-    expect(resolveA('slot-w2-li').context!.assets).toEqual([
-      { asset_id: 'asset-1', slot: 'primary', status: 'confirmed', content_type: 'carousel' },
+    // P3-C added asset FACTS + user intent + position to this shape; the P2
+    // assertion intent (the right asset, scoped to the right slot) is kept.
+    expect(resolveA('slot-w2-li').context!.assets).toMatchObject([
+      { asset_id: 'asset-1', slot: 'primary', status: 'confirmed', content_type: 'carousel', position: 1 },
     ]);
     expect(resolveA('slot-w1-li').context!.assets).toEqual([]);
   });
@@ -220,8 +222,9 @@ describe('prompt block — grounding actually reaches the model', () => {
   });
 
   it('carries the assigned asset and instructs the model to work WITH it', () => {
+    // P3-C renamed the section header when it added asset facts/intent.
     const b = block();
-    expect(b).toContain('ASSIGNED ASSETS');
+    expect(b).toContain('ASSETS ALREADY ASSIGNED TO THIS PIECE');
     expect(b).toContain('asset-1');
     expect(b).toMatch(/complement it/);
   });

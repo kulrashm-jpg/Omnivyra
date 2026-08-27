@@ -1,7 +1,11 @@
 import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeFactory';
 import { resolveCompanyGroundingGuard } from '../../../backend/services/context/canonicalContentContextResolver';
 // P2 — canonical campaign grounding (pure resolver + prompt sections).
-import { resolveGenerationContext, buildGroundedContextBlock } from '../../../lib/campaign/generationContext';
+import {
+  resolveGenerationContext,
+  buildGroundedContextBlock,
+  type GenerationAssetFacts,
+} from '../../../lib/campaign/generationContext';
 import { resolveCampaignCompanyId } from '../../../backend/services/campaignAccessService';
 import { supabase } from '../../../backend/db/supabaseClient';
 
@@ -64,6 +68,48 @@ async function loadPlannerState(campaignId: string): Promise<Record<string, unkn
   } catch {
     return null;
   }
+}
+
+/**
+ * P3-C — company-scoped asset facts for grounding, keyed by asset id.
+ *
+ * Reuses the EXISTING library reader (creator_assets, company-filtered) — no
+ * new asset store and no new query surface. Read-only and fail-safe: when the
+ * library is unavailable the map is empty, and every assignment then resolves
+ * as UNAVAILABLE, which the prompt states explicitly rather than inventing
+ * media that may not exist.
+ */
+async function loadCompanyAssetFacts(companyId: string): Promise<Map<string, GenerationAssetFacts>> {
+  const out = new Map<string, GenerationAssetFacts>();
+  try {
+    const { libraryListAssets } = await import('../../../backend/services/creatorAssetPersistenceService');
+    const records = await libraryListAssets({ companyId, limit: 500 });
+    for (const record of records ?? []) {
+      const envelope = (record as { envelope?: Record<string, unknown> })?.envelope;
+      if (!envelope || typeof envelope !== 'object') continue;
+      const id = typeof envelope.id === 'string' ? envelope.id : null;
+      if (!id) continue;
+      const versions = Array.isArray(envelope.versions) ? envelope.versions : [];
+      const current =
+        versions.find((v) => (v as { version?: unknown })?.version === envelope.currentVersion)
+        ?? versions[versions.length - 1];
+      const payload = (current as { payload?: Record<string, unknown> } | undefined)?.payload ?? {};
+      const meta = (envelope.metadata ?? {}) as Record<string, unknown>;
+      out.set(id, {
+        id,
+        title: typeof payload.title === 'string' ? payload.title : null,
+        url: typeof payload.url === 'string' ? payload.url : null,
+        files: Array.isArray(payload.files) ? payload.files : null,
+        creatorType:
+          typeof payload.creatorType === 'string' ? payload.creatorType
+          : typeof meta.assetType === 'string' ? meta.assetType
+          : null,
+      });
+    }
+  } catch {
+    // Library unavailable ⇒ empty map ⇒ assignments report UNAVAILABLE.
+  }
+  return out;
 }
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -135,11 +181,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
       const plannerState = await loadPlannerState(campaignIdIn);
+      // P3-C — asset FACTS, resolved company-scoped AFTER the tenancy check
+      // above. The client never supplies asset identity or contents; it only
+      // named the slot. An assignment pointing at an asset outside this
+      // company simply will not resolve, and is reported to the model as
+      // UNAVAILABLE rather than described.
+      const assetLibrary = await loadCompanyAssetFacts(companyId.trim());
       const resolved = resolveGenerationContext({
         campaignId: campaignIdIn,
         plannerState,
         slotId: slotIdIn,
         platform: (platforms as string[]).length === 1 ? (platforms as string[])[0] : null,
+        assetLibrary,
       });
       if (!resolved.ok || !resolved.context) {
         return res.status(409).json({
@@ -156,6 +209,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         platform: resolved.context.slot.platform,
         content_type: resolved.context.slot.content_type,
         assets: resolved.context.assets.length,
+        // P3-C — identifiers/counts only; asset descriptions are user content
+        // and are deliberately NOT logged.
+        assets_unavailable: resolved.context.assets.filter((a) => a.unavailable).length,
+        assets_with_intent: resolved.context.assets.filter((a) => Boolean(a.intended_use)).length,
       });
     }
 
