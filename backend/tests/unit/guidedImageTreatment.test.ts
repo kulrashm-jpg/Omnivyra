@@ -250,7 +250,7 @@ describe('E — hold until accepted', () => {
     // Recomputed from template, choices and instruction — there is no stored
     // decision that could stop matching the design it was made for.
     expect(PANEL).toContain('const proposal = React.useMemo(');
-    expect(PANEL).toMatch(/\[templateSlots, templateCategory, templatePurposeKey, guidedChoices, instruction, brief\]/);
+    expect(PANEL).toMatch(/\[templateSlots, templateCategory, templatePurposeKey, guidedChoices, instruction, brief, assetFamily\]/);
   });
 
   it('"Tell us more" reuses the one instruction field rather than adding another', () => {
@@ -302,6 +302,48 @@ describe('F — no second system was introduced', () => {
   });
 });
 
+/* ── H. Family-aware wording (Phase 63) ────────────────────────────────────*/
+
+describe('H — an infographic background is described as what it is', () => {
+  it('CRITICAL: infographic background promises a FADED BACKGROUND, not a reference', () => {
+    const { headline, promise } = describeTreatment('background', 'infographic');
+    expect(headline).toContain('faded background');
+    // The two sentences this family must never say: it has no model to
+    // reinterpret with, and it crops and softens rather than placing exactly.
+    expect(promise).not.toContain('may differ from the original');
+    expect(promise).not.toContain('placed exactly');
+    expect(promise).toContain('cropped to fit');
+    expect(promise).toContain('softened');
+  });
+
+  it('CRITICAL: image and banner wording is UNCHANGED', () => {
+    for (const family of [undefined, null, 'image'] as const) {
+      const { headline, promise } = describeTreatment('background', family as never);
+      expect(headline).toBe('We’ll use your image as the background');
+      expect(promise).toContain('may differ from the original');
+    }
+  });
+
+  it('CRITICAL: an infographic style_reference does NOT borrow the background promise', () => {
+    /*
+     * Phase 65 asserted this kept the GENERIC referential wording. Phase 67
+     * found that wording was itself untrue here — it promised a generated
+     * result from a family with no model — so it now refuses outright. What
+     * this test guards is unchanged: style_reference must never inherit the
+     * background promise.
+     */
+    const { headline, promise } = describeTreatment('style_reference', 'infographic');
+    expect(headline).not.toContain('faded background');
+    expect(promise).not.toContain('cropped to fit');
+    expect(headline).toContain('can’t take a style reference');
+  });
+
+  it('every other purpose on infographic keeps the generic wording', () => {
+    for (const p of ['subject', 'product'] as const) {
+      expect(describeTreatment(p, 'infographic')).toEqual(describeTreatment(p));
+    }
+  });
+});
 /* ── G. The summary tells the truth about their picture ─────────────────────*/
 
 describe('G — the pre-generation summary states the actual treatment', () => {
@@ -334,5 +376,68 @@ describe('G — the pre-generation summary states the actual treatment', () => {
   it('an absent attachment produces no image row at all', () => {
     const card = read('../../../components/creator/CreativeSummaryCard.tsx');
     expect(card).toContain('if (props.attachment) {');
+  });
+});
+/* ── I. Style reference on deterministic families (Phase 67) ────────────────*/
+
+describe('I — a family with no model is not offered a style reference', () => {
+  const SLOTS = [{ purpose: 'background' }, { purpose: 'style_reference' }] as never;
+
+  it('CRITICAL: infographic and carousel are never PROPOSED a style reference', () => {
+    for (const family of ['infographic', 'carousel'] as const) {
+      const out = proposeImageTreatment({
+        templateSlots: SLOTS, family,
+        // A look-led instruction that would otherwise land on style_reference.
+        instruction: 'use this as inspiration, do not copy it exactly',
+      });
+      expect(out.purpose).not.toBe('style_reference');
+    }
+  });
+
+  it('CRITICAL: image and banner still CAN be proposed one', () => {
+    for (const family of [undefined, 'image'] as const) {
+      const out = proposeImageTreatment({
+        templateSlots: SLOTS, family: family as never,
+        instruction: 'use this as inspiration, do not copy it exactly',
+      });
+      expect(out.purpose).toBe('style_reference');
+    }
+  });
+
+  it('CRITICAL: if a user picks it anyway, the wording refuses rather than promises', () => {
+    for (const family of ['infographic', 'carousel'] as const) {
+      const { headline, promise } = describeTreatment('style_reference' as never, family);
+      expect(headline).toContain('can’t take a style reference');
+      // The two false claims it used to make.
+      expect(promise).not.toContain('may differ from the original');
+      expect(promise).not.toContain('visual reference');
+      // And it says the image survives.
+      expect(promise).toContain('stays in your library');
+    }
+  });
+
+  it('CRITICAL: carousel background promises the WHOLE deck', () => {
+    const { headline, promise } = describeTreatment('background' as never, 'carousel');
+    expect(headline).toContain('across the carousel');
+    expect(promise).toContain('behind every slide');
+    expect(promise).not.toContain('may differ from the original');
+  });
+
+  it('image/banner style wording is unchanged', () => {
+    const { promise } = describeTreatment('style_reference' as never, 'image');
+    expect(promise).toContain('may differ from the original');
+  });
+
+  it('narrowing what is PROPOSED never changes how a purpose ROUTES', () => {
+    // Routing still depends on purpose/mode alone — the family only filters
+    // what may be suggested, and the router is untouched.
+    const src = fs.readFileSync(
+      path.resolve(__dirname, '../../../lib/content/guidedCreativeDirection.ts'), 'utf8');
+    expect(src).toContain('slotAcceptance(');
+    // Compatibility is still asked of the router's own predicate, with the
+    // purpose's own mode — the family narrows the CANDIDATE list and nothing
+    // more. It never reaches mode resolution.
+    expect(src).toContain('defaultModeForPurpose(p)).ok');
+    expect(src).not.toContain('defaultModeForPurpose(input.family');
   });
 });

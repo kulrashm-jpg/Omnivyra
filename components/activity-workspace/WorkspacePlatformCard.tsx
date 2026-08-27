@@ -8,6 +8,7 @@ import PlatformIcon from '@/components/ui/PlatformIcon';
 import RichTextEditor from '@/components/RichTextEditorLazy'; // W5-2: lazy tiptap chunk
 import { apiFetch } from '@/lib/apiFetch';
 import ImagePicker from '../../pages/activity-workspace/ImagePicker';
+import ActivityCreativeRefinementPanel from './ActivityCreativeRefinementPanel';
 import PlatformContentPreview from '../../pages/activity-workspace/PlatformContentPreview';
 import type { useActivityWorkspace } from '../../hooks/useActivityWorkspace';
 import type { ScheduleItem } from '../../types/activityWorkspace';
@@ -312,6 +313,22 @@ export default function WorkspacePlatformCard({ d, item, idx }: { d: S; item: Sc
               />
             )}
           </div>
+
+          {/*
+            * The AI creative, and its own refinement action.
+            *
+            * A SIBLING of the stock-image control above, never a replacement
+            * for it: "+ Add image" attaches a stock photograph to the post,
+            * this refines the image the campaign generated. Merging them would
+            * give one control two different meanings, which is the kind of
+            * quiet untruth this whole line of work has been removing.
+            *
+            * Renders nothing at all until the activity actually has a creative.
+            */}
+          <ActivityCreativeRefinementPanel
+            companyId={d.selectedCompanyId || d.payload?.companyId || null}
+            activityId={d.payload?.activityId || null}
+          />
 
           <div className="px-4 py-3 bg-gray-50/60 flex flex-wrap items-end gap-3">
             <label className="text-xs text-gray-600 flex-1 min-w-[120px]">

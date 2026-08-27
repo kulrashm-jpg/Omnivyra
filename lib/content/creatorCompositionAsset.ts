@@ -41,6 +41,24 @@ const EMPTY_USAGE_OPTIONS: readonly CreatorAssetUsageOption[] = Object.freeze([]
  */
 export const CREATOR_COMPOSITION_TYPE = 'creator-composition';
 
+/**
+ * The composition that belongs to ONE generated activity.
+ *
+ * The Creator's own token above is deliberately a browser-session thing: it
+ * means "the design I am working on right now", which is exactly right while
+ * someone is composing and exactly wrong for anything that outlives the tab.
+ * A campaign activity is the opposite — it already has a durable, server-owned
+ * row, and its creative is refined days after the session that produced it.
+ *
+ * So refinement identifies its composition by the ACTIVITY, and the reference
+ * table needs no change to allow it: it has always keyed its owner by a type
+ * plus an id precisely so a second kind of owner could exist without a
+ * migration or a second table.
+ *
+ * Two activities can never share a composition, because the id IS the activity.
+ */
+export const ACTIVITY_CREATIVE_COMPOSITION_TYPE = 'activity-creative';
+
 /** sessionStorage key holding the draft token for one creator asset type. */
 export function creatorCompositionKey(creatorType: string | null | undefined): string {
   return `creator_composition_id:${String(creatorType ?? 'unknown').trim() || 'unknown'}`;

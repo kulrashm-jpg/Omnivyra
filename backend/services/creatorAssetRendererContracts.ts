@@ -212,9 +212,28 @@ export type ConditionAttemptTelemetry = {
  * generation clean.
  */
 export function unsupportedFamilyConditionDegradation(
-  compositionReferences: { conditionPlan?: { condition?: readonly unknown[] } | null } | null | undefined,
+  compositionReferences: {
+    conditionPlan?: { condition?: readonly { reference?: { purpose?: string } }[] } | null;
+  } | null | undefined,
+  /**
+   * Purposes this render actually honoured.
+   *
+   * A family is rarely all-or-nothing. An infographic can place a `background`
+   * deterministically and still have no way to act on a `style_reference`, and
+   * reporting the whole family as not-applied would then be as untrue as the
+   * silence this replaced — it would tell someone their background was ignored
+   * when it is visibly there.
+   *
+   * Absent means "nothing was applied", which is the original behaviour and
+   * remains correct for a family with no reference capability at all.
+   */
+  applied?: { appliedPurposes?: readonly string[] },
 ): ConditionDegradation | null {
-  const attempted = compositionReferences?.conditionPlan?.condition?.length ?? 0;
+  const attempts = compositionReferences?.conditionPlan?.condition ?? [];
+  const appliedPurposes = new Set(applied?.appliedPurposes ?? []);
+  const attempted = attempts.filter(
+    (r) => !appliedPurposes.has(String(r?.reference?.purpose ?? '')),
+  ).length;
   if (attempted === 0) return null;
   return {
     status: 'not_applied',
