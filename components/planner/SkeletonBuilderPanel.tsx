@@ -11,6 +11,17 @@ import { useRef, useState } from 'react';
 import { Sparkles, Loader2, CalendarDays, Send } from 'lucide-react';
 import { usePlannerSession, type StrategyContext, type IdeaSpine } from './plannerSessionStore';
 import { weeksToCalendarPlan } from './calendarPlanConverter';
+// P4.1 — the AI plan response becomes a REVIEWABLE proposal instead of an
+// immediate commit. Pure helpers only; nothing imported here persists.
+import {
+  readSkeletonProposal,
+  applyProposalEdit,
+  validateProposal,
+  proposalToPlanLike,
+  deriveSkeletonImpact,
+  type SkeletonProposal,
+} from '../../lib/campaign/skeletonProposal';
+import { SkeletonProposalReview } from './SkeletonProposalReview';
 import { PlatformContentMatrix } from './PlatformContentMatrix';
 import ChatVoiceButton from '../ChatVoiceButton';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
@@ -109,6 +120,10 @@ export function SkeletonBuilderPanel({
 
   // Schedule tab state
   const [scheduleLoading, setScheduleLoading] = useState(false);
+  // P4.1 — the pending AI proposal. Lives ONLY in component state between the
+  // ai/plan response and the CMO's decision; canonical planner_state is
+  // untouched until Accept runs the existing write path.
+  const [proposal, setProposal] = useState<SkeletonProposal | null>(null);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
 
   // AI Chat tab state
@@ -122,6 +137,22 @@ export function SkeletonBuilderPanel({
   const platform_content_requests = state.platform_content_requests ?? null;
   const strategyFromMatrix = deriveStrategyFromMatrix(platform_content_requests, durationWeeks, startDate, prev);
   const canSchedule = durationWeeks > 0 && !!strategyFromMatrix && strategyFromMatrix.platforms.length > 0;
+
+  /**
+   * P4.1 — ACCEPT. The ONLY place a proposal becomes canonical, and it uses
+   * the EXISTING write path (weeksToCalendarPlan → setCampaignStructure +
+   * setCalendarPlan) that the panel already used. No second write path.
+   */
+  const acceptProposal = (accepted: SkeletonProposal) => {
+    const { campaign_structure, calendar_plan } = weeksToCalendarPlan(accepted.weeks);
+    setCampaignStructure(campaign_structure);
+    setCalendarPlan(calendar_plan);
+    if (Object.keys(accepted.platform_content_requests).length > 0) {
+      setPlatformContentRequests(accepted.platform_content_requests);
+    }
+    setProposal(null);
+    onGenerate?.();
+  };
 
   const handleScheduleGenerate = async () => {
     if (!canSchedule || !strategyFromMatrix) return;
@@ -175,10 +206,14 @@ export function SkeletonBuilderPanel({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || 'Generation failed');
       const weeks = Array.isArray(data?.plan?.weeks) ? data.plan.weeks : [];
-      const { campaign_structure, calendar_plan } = weeksToCalendarPlan(weeks);
-      setCampaignStructure(campaign_structure);
-      setCalendarPlan(calendar_plan);
-      onGenerate?.();
+      // P4.1 — HOLD the response as a proposal. Previously this committed
+      // straight to planner_state, so the CMO never got to review, edit or
+      // reject what the AI produced.
+      setProposal(readSkeletonProposal({
+        weeks,
+        startDate: strategyFromMatrix?.planned_start_date ?? null,
+        campaignType: state.campaign_type ?? null,
+      }));
     } catch (e) {
       setScheduleError(e instanceof Error ? e.message : 'Could not generate skeleton');
     } finally {
@@ -489,6 +524,21 @@ export function SkeletonBuilderPanel({
         <div className="flex-1 overflow-y-auto flex flex-col gap-4 p-4">
           <PlatformContentMatrix companyId={companyId} durationWeeks={durationWeeks} />
           {scheduleError && <p className="text-xs text-red-600">{scheduleError}</p>}
+
+          {/* P4.1 — the AI's answer is a PROPOSAL until the CMO accepts it.
+              Canonical planner_state is untouched while this is on screen. */}
+          {proposal && (
+            <SkeletonProposalReview
+              proposal={proposal}
+              currentPlan={state.calendar_plan ?? state.execution_plan?.calendar_plan ?? null}
+              assignments={state.assignments ?? []}
+              onAccept={acceptProposal}
+              onReject={() => setProposal(null)}
+              onRegenerate={() => { setProposal(null); void handleScheduleGenerate(); }}
+              regenerating={scheduleLoading}
+            />
+          )}
+
           <button
             type="button"
             onClick={handleScheduleGenerate}
@@ -497,7 +547,7 @@ export function SkeletonBuilderPanel({
           >
             {scheduleLoading
               ? <><Loader2 className="h-4 w-4 animate-spin" />Generating…</>
-              : 'Generate Skeleton'}
+              : proposal ? 'Generate a different structure' : 'Generate Skeleton'}
           </button>
         </div>
       )}
