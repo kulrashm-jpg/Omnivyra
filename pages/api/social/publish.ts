@@ -6,6 +6,7 @@ import { isSuperAdmin } from '../../../backend/services/rbacService';
 import { getScheduledPost } from '../../../backend/db/queries';
 import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
 import { publishNow } from '../../../backend/services/publishNowService';
+import { authorizePostPublish } from '../../../lib/campaign/publishAuthorization';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
@@ -128,6 +129,85 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const superAdmin = await isSuperAdmin(user.id);
     if (!superAdmin && post.user_id !== user.id) {
       return res.status(403).json({ error: 'Forbidden: you do not own this post' });
+    }
+
+    // ── R6-B — publish authorization, converged with the scheduled path ─────
+    //
+    // Ownership (above) answers "is this your post". This answers "may this
+    // post be published at all" — the question the canonical queue path has
+    // always asked and this route never did. Before R6-B it validated
+    // capability and media but read neither `status` nor `campaign_id`, so a
+    // campaign post could be published straight past the release decision the
+    // CMO made in the planner (P1/B1).
+    //
+    // The predicate is REUSED, not reproduced: authorizePostPublish already
+    // encodes the campaign-linked vs standalone split — a post with no
+    // campaign_id skips the campaign gate by design, so standalone publishing
+    // keeps working (PromotionWorkspace and the multi-platform scheduler both
+    // stage `status='scheduled'`, `campaign_id=null` rows, which stay
+    // authorized). `failed` remains releasable so manual retry still works.
+    //
+    // ORDER: after ownership, so a non-owner still gets the plain 403 and
+    // learns nothing about campaign or release state; and before the
+    // social-account patch below, so a denied request performs no write.
+    //
+    // Idempotency precedes authorization, exactly as it does in
+    // publishProcessor (its Step-2 platform_post_id short-circuit runs before
+    // Step-3 authorization): an already-published single-row post keeps its
+    // existing idempotent 200 rather than being re-judged by a release gate it
+    // has legitimately moved past. Thread roots are excluded from that skip —
+    // publishNow's own short-circuit exempts them too, because a published
+    // root may still have unpublished children.
+    const alreadyPublishedSingleRow =
+      typeof post.platform_post_id === 'string' &&
+      post.platform_post_id.trim().length > 0 &&
+      post.is_thread_start !== true;
+
+    if (!alreadyPublishedSingleRow) {
+      // Same lookup semantics as publishProcessor.ts: a missing or unreadable
+      // campaign leaves the status null ⇒ not active ⇒ denied. Fail closed.
+      let campaignStatus: string | null = null;
+      if (post.campaign_id) {
+        const { data: campaignRow, error: campaignError } = await supabase
+          .from('campaigns')
+          .select('status')
+          .eq('id', post.campaign_id)
+          .single();
+        campaignStatus =
+          campaignError || !campaignRow ? null : ((campaignRow as { status?: string }).status ?? null);
+      }
+
+      const authorization = authorizePostPublish({
+        campaign_id: post.campaign_id,
+        campaign_status: campaignStatus,
+        post_status: (post as { status?: string | null }).status ?? null,
+        // Handled by the short-circuit above; passing it here would
+        // double-report the same condition (mirrors publishProcessor).
+        platform_post_id: null,
+        is_thread_start: post.is_thread_start === true,
+        has_content: Boolean(post.content && String(post.content).trim().length > 0),
+      });
+
+      if (!authorization.authorized) {
+        void logAuditEvent({
+          operation: 'INSERT',
+          table: 'social_publish_rejected',
+          companyId: post.user_id ?? 'unknown',
+          userId: user.id,
+          success: false,
+          errorMessage: authorization.reason,
+          metadata: {
+            platform: post.platform,
+            code: authorization.code,
+            post_id,
+            campaign_id: post.campaign_id ?? null,
+          },
+        }).catch(() => {});
+        return res.status(409).json({
+          error: authorization.reason,
+          code: authorization.code,
+        });
+      }
     }
 
     // Resolve social_account_id — fall back to user's connected account for this platform
