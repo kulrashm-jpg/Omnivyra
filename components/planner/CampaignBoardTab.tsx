@@ -35,6 +35,7 @@ import {
 import { usePlannerSession } from './plannerSessionStore';
 import { useAssignmentExecutionSync } from './useAssignmentExecutionSync';
 import { useApprovalSettings } from './useApprovalSettings';
+import { CampaignReleasePanel } from './CampaignReleasePanel';
 
 const HEALTH_STYLE: Record<string, string> = {
   ready: 'border-emerald-200 bg-emerald-50 text-emerald-800',
@@ -118,6 +119,9 @@ export function CampaignBoardTab({ companyId, campaignId, onNavigate }: Props) {
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+      {/* ── P1: the release seam — the ONE handoff into execution ── */}
+      <CampaignReleasePanel campaignId={campaignId} />
+
       {/* ── Campaign Health ── */}
       <div className={`rounded-xl border px-4 py-3 ${HEALTH_STYLE[h.label]}`}>
         <div className="flex items-center gap-2">

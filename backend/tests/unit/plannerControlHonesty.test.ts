@@ -85,8 +85,16 @@ describe('no planner control fabricates a completed-action state', () => {
     expect(src).not.toMatch(/bolt\/execute/);
   });
 
-  it('no planner component calls a scheduling or execution endpoint (P1 not implemented)', () => {
-    const EXECUTION_ENDPOINTS = [
+  /**
+   * P1 UPDATE — Strategic Mix now HAS a sanctioned execution handoff: the
+   * release seam (`/api/campaigns/[id]/release`), which composes the existing
+   * scheduler behind campaign RBAC, the scheduler lock, idempotency and
+   * governance events. These three legacy endpoints remain forbidden from
+   * planner components: they belong to the BOLT generator and the per-activity
+   * workspace, and reaching them from planning would fork the execution path.
+   */
+  it('no planner component reaches a legacy execution endpoint directly', () => {
+    const FORBIDDEN_ENDPOINTS = [
       'schedule-structured-plan',
       '/api/bolt/execute',
       '/api/activity-workspace/schedule',
@@ -94,11 +102,26 @@ describe('no planner control fabricates a completed-action state', () => {
     const offenders: string[] = [];
     for (const rel of plannerComponentFiles()) {
       const src = readCode(rel);
-      for (const endpoint of EXECUTION_ENDPOINTS) {
+      for (const endpoint of FORBIDDEN_ENDPOINTS) {
         if (src.includes(endpoint)) offenders.push(`${rel} → ${endpoint}`);
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('exactly ONE planner component performs the release handoff', () => {
+    const callers = plannerComponentFiles().filter((rel) => readCode(rel).includes('}/release'));
+    expect(callers).toEqual(['components/planner/CampaignReleasePanel.tsx']);
+  });
+
+  it('the release panel reports the SERVER result — it never fakes success', () => {
+    const src = readCode('components/planner/CampaignReleasePanel.tsx');
+    // Success state is set only from a parsed response body…
+    expect(src).toMatch(/setResult\(data as ReleaseResult\)/);
+    // …and a non-ok response surfaces an error instead of a success state.
+    expect(src).toMatch(/if \(!res\.ok\)/);
+    // No timer-driven pseudo-success (the P0 defect's shape).
+    expect(src).not.toMatch(/setTimeout\([^)]*setResult/);
   });
 });
 
