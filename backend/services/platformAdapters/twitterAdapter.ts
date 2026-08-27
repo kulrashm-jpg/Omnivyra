@@ -14,6 +14,8 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { providerErrorFromResponse } from '../engagement/providerRequestError';
+import { buildXConversationSearchUrl } from '../engagement/xReplyQuery';
 
 const TWITTER_API = 'https://api.twitter.com/2';
 
@@ -106,10 +108,21 @@ export const twitterAdapter: IPlatformAdapter = {
     });
   },
 
+  /**
+   * Replies to a post, via conversation search.
+   *
+   * NOT `/2/tweets/{id}/replies` — that endpoint does not exist in X API v2 and
+   * returned 404 for every request, which read as a credential failure. The URL
+   * now lives in one place (`engagement/xReplyQuery`) so this and the legacy
+   * fetcher cannot drift apart again.
+   *
+   * Inherits recent search's 7-day window: replies to older posts are not
+   * retrievable here, and an empty result must not be read as "no replies".
+   */
   async fetchComments(params: FetchCommentsParams): Promise<unknown> {
     return withRateLimit('twitter', async () => {
     const response = await fetch(
-      `${TWITTER_API}/tweets/${encodeURIComponent(params.platformPostId)}/replies`,
+      buildXConversationSearchUrl(TWITTER_API, params.platformPostId),
       {
         headers: {
           Authorization: `Bearer ${params.accessToken}`,
@@ -118,7 +131,7 @@ export const twitterAdapter: IPlatformAdapter = {
       }
     );
     if (!response.ok) {
-      throw new Error(`Twitter replies fetch failed: ${response.statusText}`);
+      throw await providerErrorFromResponse(response, { provider: 'x', endpointCategory: 'replies' });
     }
     return response.json();
     });

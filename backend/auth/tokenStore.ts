@@ -107,6 +107,12 @@ export interface TokenObject {
   expires_at?: string; // ISO timestamp
   token_type?: string;
   scope?: string;
+  /**
+   * Connection state of the owning social account. Absent on tokens built by
+   * refresh flows (which carry credentials, not account state) — treat only an
+   * explicit `false` as "parked for reconnection".
+   */
+  is_active?: boolean;
 }
 
 /**
@@ -117,7 +123,7 @@ export interface TokenObject {
  */
 export async function getToken(socialAccountId: string): Promise<TokenObject | null> {
   const { data, error } = await ownedDbTable('social_accounts')
-    .select('access_token, refresh_token, token_expires_at')
+    .select('access_token, refresh_token, token_expires_at, is_active')
     .eq('id', socialAccountId)
     .single();
 
@@ -145,6 +151,10 @@ export async function getToken(socialAccountId: string): Promise<TokenObject | n
       refresh_token: refreshToken,
       expires_at: data.token_expires_at || undefined,
       token_type: 'Bearer',
+      // Callers that poll on a schedule need to know the connection has been
+      // parked for reconnection, so they can skip it instead of retrying a
+      // credential the provider has already rejected permanently.
+      is_active: data.is_active !== false,
     };
   } catch (error: any) {
     console.error(`Failed to decrypt token for account ${socialAccountId}:`, error.message);
@@ -314,6 +324,43 @@ export async function dualWriteSocialAccount(opts: {
  * Deactivate social_accounts row on disconnect (companion to revokeToken).
  * Non-fatal — errors are logged but do not throw.
  */
+/**
+ * Park a social account for reconnection after a confirmed, unrecoverable
+ * authentication failure.
+ *
+ * Deliberately reuses `is_active` rather than introducing a `needs_reauth`
+ * column: that flag ALREADY means exactly this everywhere it is read —
+ * `refreshAccountResolver` and the refresh cron both filter on
+ * `is_active = true`, the UI renders a false row as "Not connected", and
+ * `storeToken` sets it back to true on every reconnect. So one write stops the
+ * retry loop, surfaces a reconnect prompt, and self-clears on re-auth, with no
+ * migration and no second source of truth.
+ *
+ * Only call this when a credential has been proven dead — a provider 401 that
+ * survived one refresh-and-retry. A transient network failure must not park a
+ * working account.
+ *
+ * Non-fatal: parking is an operational courtesy, not part of the ingest result.
+ */
+export async function markSocialAccountNeedsReauth(
+  socialAccountId: string,
+  reason: string,
+): Promise<void> {
+  try {
+    await ownedDbTable('social_accounts').update({
+      is_active: false,
+      updated_at: new Date().toISOString(),
+    })
+      .eq('id', socialAccountId);
+    console.warn('[tokenStore] social account parked for reconnection', {
+      social_account_id: socialAccountId,
+      reason,
+    });
+  } catch (err: any) {
+    console.warn('[markSocialAccountNeedsReauth] non-fatal error:', socialAccountId, err?.message);
+  }
+}
+
 export async function deactivateSocialAccount(opts: {
   userId: string;
   companyId: string;
