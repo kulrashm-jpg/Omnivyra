@@ -229,6 +229,23 @@ async function recordTwitterRefreshOutcome(
     };
     if (successAt) patch.last_successful_refresh_at = successAt;
 
+    // PROVIDER_REAUTH_REQUIRED is terminal — either the provider said
+    // invalid_grant, or bounded retries are exhausted. Until now that set a
+    // LABEL, not a STOP: the refresh resolver selects on `is_active`, so an
+    // account marked terminal kept being selected and retried every ten
+    // minutes. Production found @omnivyra at refresh_retry_count = 4104
+    // against a ceiling of 4, is_active still true, its provider error
+    // ("invalid_request: Value passed for the token was invalid") matching
+    // neither invalid_grant nor invalid_client and so taking the transient
+    // branch forever.
+    //
+    // Parking here — in the one place that already computes the terminal
+    // determination — ends the loop, and the existing UI renders the account
+    // as "Not connected". A reconnect sets is_active back to true.
+    if (connectionState === 'PROVIDER_REAUTH_REQUIRED') {
+      patch.is_active = false;
+    }
+
     await ownedDbTable('social_accounts').update(patch).eq('id', accountId);
   } catch (err: any) {
     // Non-fatal — telemetry write failure must not bubble up over the actual refresh result.
