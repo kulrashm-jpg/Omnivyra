@@ -26,6 +26,12 @@ import {
   ProviderRequestError,
 } from './engagement/providerRequestError';
 import { buildXConversationSearchUrl } from './engagement/xReplyQuery';
+import {
+  summarizeIngestionCycle,
+  ingestionCycleLogPayload,
+  type IngestionCycleSummary,
+  type IngestOutcome,
+} from './engagement/ingestionHealth';
 import { markSocialAccountNeedsReauth } from '../auth/tokenStore';
 
 /**
@@ -659,6 +665,11 @@ export async function ingestRecentPublishedPosts(): Promise<{
   processed: number;
   totalIngested: number;
   errors: { scheduled_post_id: string; error: string }[];
+  /**
+   * Operator-facing breakdown of the cycle. Additive — existing callers read
+   * the three fields above and are unaffected.
+   */
+  summary: IngestionCycleSummary;
 }> {
   // The function is named "recent" and documented as "recently published", but
   // had no date filter — so every 10-minute tick reprocessed the entire lifetime
@@ -670,8 +681,11 @@ export async function ingestRecentPublishedPosts(): Promise<{
   // comment activity on a month-old post is negligible. 30 days comfortably
   // covers both providers' useful range with headroom.
   const windowStart = new Date(Date.now() - INGEST_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  // `platform` rides along purely for attribution: it lets the cycle summary
+  // say WHICH provider is failing without asking ingestComments to carry it
+  // back through eight return sites.
   const { data: posts, error } = await ownedDbTable('scheduled_posts')
-    .select('id')
+    .select('id, platform')
     .eq('status', 'published')
     .not('platform_post_id', 'is', null)
     .gte('published_at', windowStart);
@@ -688,26 +702,45 @@ export async function ingestRecentPublishedPosts(): Promise<{
   // errors array are identical to the sequential run.
   const { mapWithConcurrency, getSchedulerConcurrency } = await import('../scheduler/schedulerBatching');
   const results = await mapWithConcurrency(list, getSchedulerConcurrency(), (p) => ingestComments(p.id));
+  const outcomes: IngestOutcome[] = [];
   for (let i = 0; i < results.length; i++) {
     const slot = results[i];
-    const result = (slot.ok && slot.value !== undefined)
+    const result: IngestCommentsResult = (slot.ok && slot.value !== undefined)
       ? slot.value
-      : { success: false, ingested: 0, error: slot.error?.message ?? 'unknown error' };
+      // A thrown item has no typed reason of its own; 'provider' is the
+      // catch-all, and it is still attributed to the right platform.
+      : { success: false, ingested: 0, error: slot.error?.message ?? 'unknown error', failure: 'provider' };
+    outcomes.push({
+      platform: (list[i] as { platform?: string | null }).platform ?? null,
+      success: result.success,
+      failure: result.failure ?? null,
+    });
     if (result.success) {
       totalIngested += result.ingested;
     } else if (result.error) {
       errors.push({ scheduled_post_id: list[i].id, error: result.error });
     }
   }
-  console.info('[engagementIngestion] ingestRecentPublishedPosts completed', {
-    processed: list.length,
-    total_ingested: totalIngested,
-    errors: errors.length,
-  });
+
+  // ONE line an operator can act on. Three aggregate numbers could not say
+  // which provider was failing or why, which is why weeks of total failure
+  // went unnoticed. Counts and typed reasons only — no ids, no URLs, no
+  // provider bodies — so it is safe wherever logs are shipped.
+  const summary = summarizeIngestionCycle(outcomes, totalIngested);
+  const payload = ingestionCycleLogPayload(summary);
+  if (summary.actionable) {
+    // Eligible work existed and NOTHING succeeded. This is the only state
+    // worth escalating; an idle cycle never reaches here.
+    console.error('[engagementIngestion] ingestion cycle FAILING', payload);
+  } else {
+    console.info('[engagementIngestion] ingestRecentPublishedPosts completed', payload);
+  }
+
   return {
     processed: list.length,
     totalIngested,
     errors,
+    summary,
   };
 }
 
