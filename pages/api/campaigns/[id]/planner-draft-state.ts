@@ -23,8 +23,43 @@ import { createApiRoute as __createApiRoute } from '../../../../lib/platform/rou
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCampaignTenantAccess } from '../../../../backend/security/TenantGuard';
+import { campaignLifecycleSelect } from '../../../../lib/campaign/executionStatusCompat';
+import { resolveCampaignStage, isFinalizedStage, CampaignStatusFields } from '../../../../lib/campaign/campaignStage';
+import { DRAFT_FINALIZED_CODE } from '../../../../lib/campaign/plannerDraftLifecycle';
 
 const MAX_STATE_BYTES = 256 * 1024; // generous ceiling; planner state is small
+
+/**
+ * BLOCK-1 — this route is the DRAFT state seam, so it must refuse a campaign
+ * that is no longer a draft. A stale `draft_campaign_id` cached in the
+ * browser survives finalize; without this guard the route happily served the
+ * finalized campaign's planner_state back (200), the client re-adopted it,
+ * and the next finalize answered `400 Campaign already finalized` — a second
+ * campaign could never be created.
+ *
+ * Interpretation is NOT re-implemented here: it comes from the canonical read
+ * model (`resolveCampaignStage` + `isFinalizedStage`, R2-P4). The column list
+ * comes from `campaignLifecycleSelect` so the absent `execution_status`
+ * column cannot 42703 the read (R5).
+ *
+ * Returns null when the campaign is still a usable draft.
+ */
+async function finalizedStageOrNull(campaignId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('campaigns')
+    .select(campaignLifecycleSelect())
+    .eq('id', campaignId)
+    .maybeSingle();
+
+  // A failed lookup is NOT evidence that the campaign is finalized. Treat it
+  // as "still a draft" and let the existing paths handle the real error —
+  // locking a legitimate draft out on a transient read is the worse failure
+  // (the same principle as enforceCompanyAccess's TENANT_LOOKUP_ERROR 503).
+  if (error || !data) return null;
+
+  const stage = resolveCampaignStage(data as unknown as CampaignStatusFields).stage;
+  return isFinalizedStage(stage) ? stage : null;
+}
 
 async function loadLatestVersion(campaignId: string) {
   const { data } = await supabase
@@ -45,6 +80,20 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const access = await requireCampaignTenantAccess(req, res, campaignId);
   if (!access) return;
+
+  // BLOCK-1: one lifecycle check covering BOTH verbs. A finalized campaign
+  // may neither hand its state to a new planner session (GET) nor accept
+  // draft writes from a stale tab (PUT).
+  if (req.method === 'GET' || req.method === 'PUT') {
+    const finalizedStage = await finalizedStageOrNull(campaignId);
+    if (finalizedStage) {
+      return res.status(409).json({
+        code: DRAFT_FINALIZED_CODE,
+        error: 'This campaign is no longer a draft.',
+        stage: finalizedStage,
+      });
+    }
+  }
 
   if (req.method === 'GET') {
     const version = await loadLatestVersion(campaignId);

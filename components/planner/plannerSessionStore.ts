@@ -22,7 +22,12 @@ import {
   nextDraftSaveStatus,
   type DraftSaveStatus,
   type PlannerDraftState,
+  type PlannerDraftStateResult,
 } from './plannerDraftPersistence';
+import {
+  decideDraftBootstrap,
+  probeOutcomeFromDraftState,
+} from '../../lib/campaign/plannerDraftLifecycle';
 import { normalizeAssignments, type CampaignAssignment } from '../../lib/campaign/campaignAssignments';
 
 const PLANNER_STORAGE_KEY_PREFIX = 'omnivyra_planner_session_';
@@ -539,7 +544,48 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
     };
 
     (async () => {
-      let id = urlDraftId || localDraftIdRef.current;
+      // BLOCK-1 — the candidate id is now PROVEN before it is trusted.
+      //
+      // Previously this read `urlDraftId || localDraftIdRef.current` and, if
+      // that produced anything, skipped create-or-resume outright. The id is
+      // cached in company-scoped localStorage and survives finalize, so a
+      // finalized campaign stayed the active draft forever: re-entry adopted
+      // its planner_state and the next finalize answered `400 Campaign
+      // already finalized`. A second campaign was unreachable.
+      const candidateId = urlDraftId || localDraftIdRef.current;
+      let id: string | null = null;
+      let server: PlannerDraftStateResult | null = null;
+
+      if (candidateId) {
+        const probed = await fetchPlannerDraftState(candidateId);
+        if (cancelled) return;
+        const decision = decideDraftBootstrap({
+          candidateId,
+          probe: probeOutcomeFromDraftState(probed),
+        });
+        if (decision.action === 'resume') {
+          id = candidateId;
+          server = probed;
+        } else if (decision.invalidateCache) {
+          // Drop the identity AND the cached plan. Keeping the plan would
+          // hand campaign A's spine/structure/calendar to campaign B — the
+          // cache is company-scoped, so a fresh server draft (planner_state
+          // null) would otherwise let the local copy migrate straight back up
+          // on the first autosave.
+          localDraftIdRef.current = null;
+          lastSavedJsonRef.current = null;
+          try { localStorage.removeItem(storageKey); } catch { /* ignore */ }
+          setState((prev) => ({
+            ...defaultState,
+            // Entry-context fields belong to the live entry, not the
+            // discarded draft — the same rule adoptServerState follows.
+            planner_entry_mode: prev.planner_entry_mode,
+            source_ids: prev.source_ids,
+            account_context: prev.account_context ?? null,
+          }));
+        }
+      }
+
       if (!id) {
         let inFlight = draftBootstrapInFlight.get(companyId);
         if (!inFlight) {
@@ -550,9 +596,13 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
         const created = await inFlight;
         if (cancelled || !created) return; // offline → planner works on cache; next entry retries
         id = created.campaignId;
+        server = await fetchPlannerDraftState(id);
+        if (cancelled) return;
+        // A campaign create-or-resume just handed back cannot be finalized;
+        // if it somehow is, adopting it would recreate the very bug above.
+        if (server?.finalized === true) return;
       }
-      const server = await fetchPlannerDraftState(id);
-      if (cancelled) return;
+
       adoptServerState(server?.plannerState ?? null, server?.revision ?? 0, id);
     })();
 
@@ -600,6 +650,20 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
           } catch { /* keep local; next change retries */ }
         }
       } else {
+        // BLOCK-1: a 409 DRAFT_FINALIZED is terminal, not transient. The
+        // campaign left draft space (another tab finalized it, or this tab
+        // did), so retrying would keep writing draft state into a finalized
+        // campaign. Stop autosaving and drop the cached identity so the NEXT
+        // planner entry bootstraps a genuinely new draft instead of
+        // resurrecting this one.
+        const finalized = (result as { finalized?: boolean }).finalized === true;
+        if (finalized) {
+          draftIdRef.current = null;
+          serverReadyRef.current = false;
+          localDraftIdRef.current = null;
+          try { localStorage.removeItem(storageKey); } catch { /* ignore */ }
+          return;
+        }
         // !ok && !conflict → transient/offline: retried on the next state change.
         emitSaveEvent('save_failed');
       }

@@ -15,6 +15,7 @@
  */
 
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { DRAFT_FINALIZED_CODE } from '../../lib/campaign/plannerDraftLifecycle';
 import type { PlannerSessionState } from './plannerSessionStore';
 
 /** The persisted subset — deliberately identical to the localStorage cache
@@ -61,13 +62,34 @@ export async function createOrResumePlannerDraft(
   }
 }
 
+/**
+ * BLOCK-1 — the probe result for a candidate draft id.
+ *
+ * `finalized` is a LIFECYCLE verdict from the server (409 DRAFT_FINALIZED).
+ * A `null` return is the absence of a verdict — the request itself failed —
+ * and callers must not treat it as evidence either way.
+ */
+export interface PlannerDraftStateResult {
+  plannerState: PlannerDraftState | null;
+  revision: number;
+  /** The campaign is at or past the execution handoff; it is not a draft. */
+  finalized: boolean;
+}
+
 export async function fetchPlannerDraftState(
   campaignId: string,
-): Promise<{ plannerState: PlannerDraftState | null; revision: number } | null> {
+): Promise<PlannerDraftStateResult | null> {
   try {
     const res = await fetchWithAuth(
       `/api/campaigns/${encodeURIComponent(campaignId)}/planner-draft-state`,
     );
+    if (res.status === 409) {
+      const data = await res.json().catch(() => null);
+      if (data?.code === DRAFT_FINALIZED_CODE) {
+        return { plannerState: null, revision: 0, finalized: true };
+      }
+      return null; // an unrecognised 409 is not a lifecycle verdict
+    }
     if (!res.ok) return null;
     const data = await res.json().catch(() => null);
     if (!data) return null;
@@ -75,6 +97,7 @@ export async function fetchPlannerDraftState(
       plannerState:
         data.planner_state && typeof data.planner_state === 'object' ? data.planner_state : null,
       revision: Number(data.revision ?? 0),
+      finalized: false,
     };
   } catch {
     return null;
@@ -84,7 +107,10 @@ export async function fetchPlannerDraftState(
 export type SaveDraftResult =
   | { ok: true; conflict: false; revision: number }
   | { ok: false; conflict: true; plannerState: PlannerDraftState | null; revision: number }
-  | { ok: false; conflict: false };
+  /** BLOCK-1: `finalized` separates "this campaign is no longer a draft" from
+   *  an ordinary transient failure. The former is terminal for the session;
+   *  the latter is retried on the next state change. */
+  | { ok: false; conflict: false; finalized: boolean };
 
 /* ── R2-P5: Draft Status indicator (SPEC-001 §6.2 "Always saved") ─────────
  * A pure reducer over the EXISTING persistence lifecycle's events — the
@@ -142,6 +168,13 @@ export async function savePlannerDraftState(
     );
     if (res.status === 409) {
       const data = await res.json().catch(() => null);
+      // Two distinct 409s share this route. DRAFT_FINALIZED is a lifecycle
+      // verdict — the campaign left draft space, so there is nothing to adopt
+      // and nothing to retry. Anything else is the stale-revision conflict,
+      // whose server copy must be adopted.
+      if (data?.code === DRAFT_FINALIZED_CODE) {
+        return { ok: false, conflict: false, finalized: true };
+      }
       return {
         ok: false,
         conflict: true,
@@ -150,10 +183,10 @@ export async function savePlannerDraftState(
         revision: Number(data?.revision ?? 0),
       };
     }
-    if (!res.ok) return { ok: false, conflict: false };
+    if (!res.ok) return { ok: false, conflict: false, finalized: false };
     const data = await res.json().catch(() => null);
     return { ok: true, conflict: false, revision: Number(data?.revision ?? baseRevision + 1) };
   } catch {
-    return { ok: false, conflict: false }; // offline → retry on next change
+    return { ok: false, conflict: false, finalized: false }; // offline → retry on next change
   }
 }
