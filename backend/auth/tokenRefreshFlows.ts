@@ -17,7 +17,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 
 import axios from 'axios';
-import { getToken, setToken, TokenObject } from './tokenStore';
+import { getToken, setToken, markSocialAccountNeedsReauth, TokenObject } from './tokenStore';
 import { supabase } from '../db/supabaseClient';
 import { config } from '@/config';
 import { getOAuthCredentialsForPlatform } from './oauthCredentialResolver';
@@ -419,11 +419,37 @@ export async function refreshExpiringSocialAccountsForCompany(
             summary.refreshed++;
           } else if (refreshed.status === 'refresh_failed') {
             summary.errors++;
+          } else if (refreshed.status === 'requires_reconnect') {
+            // TERMINAL. The provider has rejected the refresh credential; no
+            // number of retries can change that.
+            //
+            // This previously fell into `skipped`, alongside `still_valid`. The
+            // caller only logs when refreshed>0 || errors>0, so a permanently
+            // dead account produced a completely silent run — and kept doing so
+            // every ten minutes. Production found @omnivyra at
+            // refresh_retry_count = 4097 with
+            // last_refresh_error = "invalid_request: Value passed for the token
+            // was invalid", refresh_status already PROVIDER_REAUTH_REQUIRED, and
+            // is_active still true.
+            //
+            // The diagnosis was right and simply never acted on. Park the
+            // account so the retry loop ends, platform health stops reporting it
+            // as connected, and campaigns stop allocating slots to it. Counted
+            // as an error so the run is no longer silent.
+            summary.errors++;
+            await markSocialAccountNeedsReauth(
+              acc.id,
+              `${acc.platform} refresh: provider requires reconnect`,
+            );
           } else {
             summary.skipped++;
           }
         } else {
           if (!token.refresh_token) {
+            // Nothing to attempt — this platform's credential is not refreshable
+            // (LinkedIn/Facebook issue long-lived tokens and no refresh token).
+            // Not an error, and NOT grounds to park: the access token may still
+            // be perfectly valid.
             summary.skipped++;
             return;
           }
@@ -431,7 +457,14 @@ export async function refreshExpiringSocialAccountsForCompany(
           if (refreshed?.access_token) {
             summary.refreshed++;
           } else {
+            // A refresh token EXISTED and still produced nothing — the provider
+            // rejected it. Same terminal condition as the X branch above, so the
+            // same treatment, platform-agnostically.
             summary.errors++;
+            await markSocialAccountNeedsReauth(
+              acc.id,
+              `${acc.platform} refresh: rejected with a stored refresh credential`,
+            );
           }
         }
       } catch (err: any) {
