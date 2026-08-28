@@ -254,6 +254,10 @@ export function SkeletonBuilderPanel({
   );
   const canSubmitSkeleton = canConfirm && touchedWeeks.size >= durationWeeks;
 
+  // CP-STRUCT-003 — there is only something to warn about once a structure
+  // exists. On a first pass the notice would be noise.
+  const hasExistingStructure = flatActivities().length > 0 || Boolean(state.campaign_structure);
+
   function handleConfirmSkeleton() {
     if (!canSubmitSkeleton) return;
     confirmSkeleton();
@@ -535,6 +539,33 @@ export function SkeletonBuilderPanel({
       {/* Schedule tab */}
       {skeletonTab === 'schedule' && (
         <div className="flex-1 overflow-y-auto flex flex-col gap-4 p-4">
+          {/* CP-STRUCT-003 — say what editing costs, BEFORE it is edited.
+              The invalidation itself is deliberate and unchanged: changing the
+              matrix clears calendar_plan + campaign_structure and un-confirms
+              the skeleton, and changing duration/start date additionally clears
+              the strategic card and its confirmation. What was wrong is that it
+              happened SILENTLY — the skeleton simply vanished, which reads as
+              lost work rather than as "this needs regenerating", and is why
+              revising looked like it required a new campaign.
+              Shown only when there is something to invalidate. */}
+          {hasExistingStructure && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+              <p className="text-[11px] font-semibold text-amber-900">
+                Editing this structure regenerates the skeleton
+              </p>
+              <ul className="mt-1 space-y-0.5 text-[10px] text-amber-900/85">
+                <li>
+                  • Changing platforms or content types clears the current skeleton — generate
+                  and accept a new one to continue.
+                </li>
+                <li>
+                  • Changing the duration or start date also clears the strategic card, so the
+                  strategy will need regenerating.
+                </li>
+                <li>• You stay on this campaign — nothing else is deleted, and no new campaign is created.</li>
+              </ul>
+            </div>
+          )}
           <PlatformContentMatrix companyId={companyId} durationWeeks={durationWeeks} />
           {scheduleError && <p className="text-xs text-red-600">{scheduleError}</p>}
 
