@@ -84,16 +84,27 @@ describe('structurally invariant dimensions → DROP (terminal)', () => {
     return ctx;
   };
 
-  it('duplicate semantic idea (fingerprint)', () => {
+  // POLICY CHANGE (Phase 104). These two previously asserted that a repeated
+  // idea/narrative fingerprint DROPs within a run. That behaviour dropped five
+  // of six activities in production (campaign 4ead230b) because both values are
+  // campaign-constant: every sibling of a campaign carries the same fingerprint
+  // by construction, so the check could only ever mean "same campaign".
+  //
+  // The decided policy is that planner allocation is authoritative — a campaign
+  // may generate its narrative across many slots. So the assertions are inverted
+  // deliberately, not relaxed: in-run duplicate protection moved to ACTUAL
+  // content (duplicate_asset / headline / opening / cta), which the surrounding
+  // tests still cover, and cross-campaign reuse stays with the ledger.
+  it('repeated semantic-idea fingerprint in one run is accepted (campaign siblings)', () => {
     const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', variant_id: 'cv_b', idea_fingerprint: 'idea_a' }), setup());
-    expect(r.findings.some((f) => f.dimension === 'duplicate_semantic_idea')).toBe(true);
-    expect(r.decision).toBe('DROP');
+    expect(r.findings.some((f) => f.dimension === 'duplicate_semantic_idea')).toBe(false);
+    expect(r.decision).toBe('ACCEPT');
   });
 
-  it('duplicate narrative (fingerprint)', () => {
+  it('repeated narrative fingerprint in one run is accepted (campaign siblings)', () => {
     const r = validateAsset(asset({ headline: 'new', opening: 'new', cta: 'new', text: 'x', idea_fingerprint: 'x', variant_id: 'cv_b', narrative_fingerprint: 'narr_a' }), setup());
-    expect(r.findings.some((f) => f.dimension === 'duplicate_narrative')).toBe(true);
-    expect(r.decision).toBe('DROP');
+    expect(r.findings.some((f) => f.dimension === 'duplicate_narrative')).toBe(false);
+    expect(r.decision).toBe('ACCEPT');
   });
 });
 
