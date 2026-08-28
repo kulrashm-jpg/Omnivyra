@@ -145,11 +145,24 @@ export function SkeletonBuilderPanel({
    */
   const acceptProposal = (accepted: SkeletonProposal) => {
     const { campaign_structure, calendar_plan } = weeksToCalendarPlan(accepted.weeks);
-    setCampaignStructure(campaign_structure);
-    setCalendarPlan(calendar_plan);
+    // CP-STRUCT-002 — ORDER IS LOAD-BEARING. `setPlatformContentRequests`
+    // deliberately clears calendar_plan + campaign_structure and resets
+    // skeleton_confirmed whenever the matrix changes, so that a stale skeleton
+    // can never outlive the configuration it was built from. It compares by
+    // REFERENCE, and the proposal always carries a freshly-built matrix object,
+    // so that reset fired every single time.
+    //
+    // Running it AFTER the writes therefore erased the structure this function
+    // had just accepted: the panel fell straight back to the generation
+    // controls, and `hasSkeletonDraft` went false again so "Confirm Skeleton"
+    // could never be enabled. Applying the matrix FIRST lets its reset land on
+    // the OLD skeleton — which is what it is for — and the accepted plan is
+    // then written on top and survives.
     if (Object.keys(accepted.platform_content_requests).length > 0) {
       setPlatformContentRequests(accepted.platform_content_requests);
     }
+    setCampaignStructure(campaign_structure);
+    setCalendarPlan(calendar_plan);
     setProposal(null);
     onGenerate?.();
   };
