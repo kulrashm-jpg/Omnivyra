@@ -86,41 +86,82 @@ const failure = (
  * rather than papering over: a refinement that rendered but could not be
  * recorded is not a success.
  */
+/** How many times a refinement re-reads and re-appends after losing a race. */
+const APPEND_CONFLICT_RETRIES = 2;
+
+/**
+ * Append this refinement as the next version.
+ *
+ * CONCURRENCY
+ * -----------
+ * This is read-modify-write over a single JSONB envelope, so two refinements
+ * of the same activity can both read vN and both compute vN+1. The write is
+ * therefore a compare-and-set on the version it was derived from: if another
+ * refinement landed in between, the write is refused and we re-read and
+ * re-append on top of the newer state rather than replacing it.
+ *
+ * Both refinements are real work a user asked for, so the right outcome is two
+ * distinct recoverable versions — not a conflict thrown back at whoever was
+ * slower. Retries are bounded; if the row is genuinely too hot we fail rather
+ * than loop, and the caller reports an honest failure instead of a version
+ * that silently overwrote someone else's.
+ */
 async function appendRefinedVersion(input: {
   companyId: string;
   userId: string | null;
   assetId: string;
   payload: Record<string, unknown>;
 }): Promise<{ version: number; originalVersion: number } | null> {
-  const record = await libraryReadAsset({ companyId: input.companyId, assetId: input.assetId });
-  const envelope = asObject((record as unknown as Record<string, unknown> | null)?.library ?? record ?? null);
-  const versions = Array.isArray(envelope.versions) ? envelope.versions as Record<string, unknown>[] : [];
-  if (!envelope.id || versions.length === 0) return null;
+  for (let attempt = 0; ; attempt += 1) {
+    const record = await libraryReadAsset({ companyId: input.companyId, assetId: input.assetId });
+    const envelope = asObject((record as unknown as Record<string, unknown> | null)?.library ?? record ?? null);
+    const versions = Array.isArray(envelope.versions) ? envelope.versions as Record<string, unknown>[] : [];
+    if (!envelope.id || versions.length === 0) return null;
 
-  const nextVersion = versions.reduce((max, v) => Math.max(max, Number(v.version) || 0), 0) + 1;
-  const nextEnvelope: Record<string, unknown> = {
-    ...envelope,
-    currentVersion: nextVersion,
-    versions: [
-      ...versions,
-      {
-        version: nextVersion,
-        op: 'version',
-        payload: input.payload,
-        createdAt: new Date().toISOString(),
-      },
-    ],
-  };
+    const highest = versions.reduce((max, v) => Math.max(max, Number(v.version) || 0), 0);
+    const nextVersion = highest + 1;
+    // Guard on what the stored envelope says is current, which is what the CAS
+    // filter compares against. Fall back to the highest version for envelopes
+    // written before `currentVersion` was carried.
+    const expectedCurrentVersion = Number(envelope.currentVersion ?? highest);
+    const nextEnvelope: Record<string, unknown> = {
+      ...envelope,
+      currentVersion: nextVersion,
+      versions: [
+        ...versions,
+        {
+          version: nextVersion,
+          op: 'version',
+          payload: input.payload,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    };
 
-  await libraryWriteAsset({
-    companyId: input.companyId,
-    userId: input.userId || '',
-    envelope: nextEnvelope,
-  });
+    try {
+      await libraryWriteAsset({
+        companyId: input.companyId,
+        userId: input.userId || '',
+        envelope: nextEnvelope,
+        expectedCurrentVersion,
+      });
+    } catch (err: unknown) {
+      // Lost the race: someone else's version landed first. Re-read and append
+      // after theirs — never overwrite it.
+      if (isLibraryVersionConflict(err) && attempt < APPEND_CONFLICT_RETRIES) continue;
+      if (isLibraryVersionConflict(err)) return null;
+      throw err;
+    }
 
-  // The campaign's own render is always version 1 — that is what "original"
-  // means here, and it is never rewritten.
-  return { version: nextVersion, originalVersion: 1 };
+    // The campaign's own render is always version 1 — that is what "original"
+    // means here, and it is never rewritten.
+    return { version: nextVersion, originalVersion: 1 };
+  }
+}
+
+/** Structural check — survives the error crossing a module/mock boundary. */
+function isLibraryVersionConflict(err: unknown): boolean {
+  return Boolean(err) && (err as { name?: string }).name === 'LibraryVersionConflictError';
 }
 
 /**
