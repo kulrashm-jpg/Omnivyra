@@ -971,10 +971,33 @@ function envelopeCurrentPayload(envelope: Record<string, unknown>): Record<strin
  *  version so every legacy reader (reuse picker, workflow recent-8, GET list)
  *  reflects library edits. The row `metadata` column is NOT overwritten for
  *  rows that already carry the reconstruction envelope. */
+/**
+ * Raised when a compare-and-set write loses to a concurrent writer.
+ *
+ * Only reachable by callers that opt into `expectedCurrentVersion` — every
+ * existing caller keeps the blind-upsert behaviour and can never see this.
+ */
+export class LibraryVersionConflictError extends Error {
+  readonly assetId: string;
+  readonly expectedCurrentVersion: number;
+  constructor(assetId: string, expectedCurrentVersion: number) {
+    super(`library asset ${assetId} changed concurrently (expected version ${expectedCurrentVersion})`);
+    this.name = 'LibraryVersionConflictError';
+    this.assetId = assetId;
+    this.expectedCurrentVersion = expectedCurrentVersion;
+  }
+}
+
 export async function libraryWriteAsset(input: {
   companyId: string;
   userId: string;
   envelope: Record<string, unknown>;
+  /**
+   * The `currentVersion` this write was computed from. When supplied, the
+   * write becomes a compare-and-set and only lands if the stored envelope is
+   * still on that version — see the CAS block below.
+   */
+  expectedCurrentVersion?: number;
 }): Promise<LibraryAssetRecord> {
   const availability = await checkCreatorPersistenceAvailability();
   if (!availability.available) {
@@ -1012,6 +1035,33 @@ export async function libraryWriteAsset(input: {
     row.metadata = { ...safeObject(payload.metadata), companyId: input.companyId, userId: input.userId };
     row.source_type = null;
     row.source_id = null;
+  }
+
+  // Optional compare-and-set, the same idiom `updateScheduledPostOnPublish`
+  // uses for its G12 guard: when the caller supplies the version it read, the
+  // UPDATE only applies while the stored envelope is still on that version.
+  //
+  // This matters because the envelope is one JSONB document written whole. Two
+  // refinements that both start from vN both compute vN+1, and the second
+  // blind write — assembled from a snapshot that never contained the first —
+  // replaces the row and discards it. Guarding on the version the write was
+  // derived from turns that silent loss into a detectable conflict.
+  //
+  // Callers that omit `expectedCurrentVersion` keep the original upsert, which
+  // is still what creation and non-versioned writes need.
+  if (typeof input.expectedCurrentVersion === 'number') {
+    const { data, error } = await ownedDbTable('creator_assets')
+      .update(row)
+      .eq('id', id)
+      .eq('company_id', input.companyId)
+      .eq('library->>currentVersion', String(input.expectedCurrentVersion))
+      .select()
+      .maybeSingle();
+    if (error) throw new Error(`Failed to persist library asset: ${error.message}`);
+    // No row matched: another writer moved currentVersion on. Refuse rather
+    // than overwrite — the caller decides whether to retry.
+    if (!data) throw new LibraryVersionConflictError(id, input.expectedCurrentVersion);
+    return rowToLibraryRecord(data as Record<string, unknown>);
   }
 
   const { data, error } = await ownedDbTable('creator_assets')
