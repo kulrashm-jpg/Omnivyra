@@ -278,6 +278,24 @@ export async function dualWriteSocialAccount(opts: {
         token_expires_at: token.expires_at || undefined,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        // A reconnect RESOLVES whatever made the connection terminal, so the
+        // terminal record must be cleared with it. Previously only is_active
+        // and the expiry were reset: a freshly reconnected LinkedIn came back
+        // with a valid 60-day token, is_active true, and
+        // connection_state still PROVIDER_REAUTH_REQUIRED — and
+        // connection_state is the field health badges and probes read, so the
+        // account kept presenting as needing reauth immediately after being
+        // reconnected.
+        //
+        // The retry counter matters too: X sat at refresh_retry_count 4111,
+        // far past the ceiling of 4. Carried across a reconnect, the very next
+        // refresh failure — however transient — would re-park the account
+        // instantly instead of getting its bounded retries.
+        connection_state: 'CONNECTED',
+        refresh_status: null,
+        refresh_retry_count: 0,
+        last_refresh_error: null,
+        last_provider_error: null,
       };
       // Keep platform_user_id in sync when Meta hands us a fresh value on
       // reconnect. Without this the row's platform_user_id stays at the
