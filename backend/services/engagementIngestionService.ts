@@ -15,7 +15,7 @@ import { supabase } from '../db/supabaseClient';
 import { getScheduledPost } from '../db/queries';
 import { getToken, isTokenExpiringSoon } from '../auth/tokenStore';
 import { refreshPlatformToken } from '../auth/tokenRefresh';
-import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
+import { resolveCampaignCompanyId } from './campaignAccessService';
 import { syncFromPostComments } from './engagementNormalizationService';
 import { getPlatformAdapter } from './platformAdapters';
 import { getPlatformCategory } from './platformRegistryService';
@@ -595,10 +595,15 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
       ingested,
     });
     if (ingested > 0) {
+      // B4.1 — campaign → company goes through THE seam, not a local copy of
+      // it. This resolved the latest `campaign_versions.company_id` inline,
+      // which is byte-for-byte what `resolveCampaignCompanyId` does (same
+      // table, filter, ordering, limit and null handling) while also selecting
+      // eight columns nobody here reads. Two copies of one rule is how the X
+      // reply endpoint stayed wrong in two places for months.
       let organizationId: string | null = null;
       if (post.campaign_id) {
-        const version = await getLatestCampaignVersionByCampaignId(post.campaign_id);
-        organizationId = version?.company_id ? String(version.company_id) : null;
+        organizationId = await resolveCampaignCompanyId(post.campaign_id);
       }
       if (!organizationId && post.user_id) {
         const { data: role } = await ownedDbTable('user_company_roles')
