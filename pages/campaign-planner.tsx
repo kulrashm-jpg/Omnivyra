@@ -104,6 +104,19 @@ function CampaignPlannerLayout({
   // and Content as unordered peers until a door is chosen.
   const [structureDoorOpened, setStructureDoorOpened] = useState(false);
 
+  // CP-STRUCT-003 — a one-line description of the configured structure, so the
+  // Strategy stage states what "Edit Structure" would actually take you back to.
+  const structureSummary = useMemo(() => {
+    const requests = state.platform_content_requests ?? {};
+    const parts = Object.entries(requests).map(([platform, types]) => {
+      const counts = Object.entries((types ?? {}) as Record<string, number>)
+        .filter(([, n]) => Number(n) > 0)
+        .map(([type, n]) => `${n}x ${type}`);
+      return counts.length > 0 ? `${platform} ${counts.join(', ')}` : null;
+    });
+    return parts.filter(Boolean).join(' · ');
+  }, [state.platform_content_requests]);
+
   // Load account context on mount; bust cache when returning from OAuth (connected=*)
   useEffect(() => {
     if (!companyId) return;
@@ -193,7 +206,10 @@ function CampaignPlannerLayout({
           }`}
         >
           <CalendarDays className="h-4 w-4" />
-          Skeleton
+          {/* CP-STRUCT-003: user-facing label is "Structure" — the workflow's own
+              vocabulary. The internal tab value stays 'skeleton', which is the
+              established state identifier across the planner. */}
+          Structure
         </button>
         <button
           type="button"
@@ -388,6 +404,34 @@ function CampaignPlannerLayout({
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden p-3 gap-3">
           {/* Top: social insight + setup */}
           <div className="flex-shrink-0 space-y-3">
+            {/* CP-STRUCT-003 — the way BACK to Structure.
+                The transition already existed and always worked; what was
+                missing was any sign of it from here. The only route back was a
+                tab labelled "Skeleton", which reads as a different thing from
+                "the campaign's structure", so revising duration/platforms/
+                content mix looked like it required starting a new campaign.
+                This reuses navigateTab('skeleton') — the same safe transition
+                the tab bar uses. No new route, no new campaign, no change of
+                draft identity. */}
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-2.5">
+              <p className="text-xs text-gray-600">
+                Structure set:{' '}
+                <span className="font-medium text-gray-900">
+                  {state.strategy_context?.duration_weeks ?? '—'} week
+                  {(state.strategy_context?.duration_weeks ?? 0) === 1 ? '' : 's'}
+                </span>
+                {structureSummary ? <> · <span className="font-medium text-gray-900">{structureSummary}</span></> : null}
+                . Changing it regenerates the skeleton.
+              </p>
+              <button
+                type="button"
+                onClick={() => navigateTab('skeleton')}
+                className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-semibold hover:bg-indigo-100 transition-colors"
+              >
+                <CalendarDays className="h-3.5 w-3.5" />
+                Edit Structure
+              </button>
+            </div>
             <AccountInsightPanel variant="content" />
             <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
               <StrategySetupPanel companyId={companyId} />
