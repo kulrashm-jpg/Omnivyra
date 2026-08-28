@@ -35,6 +35,7 @@ import { AssignmentWorkspace } from '../components/planner/AssignmentWorkspace';
 import { CampaignBoardTab } from '../components/planner/CampaignBoardTab';
 import { PlannerOrchestrationStrip } from '../components/orchestration/PlannerOrchestrationStrip';
 import { weeksToCalendarPlan } from '../components/planner/calendarPlanConverter';
+import { decidePlanAdoption } from '../lib/campaign/plannerPlanLoad';
 import styles from '../styles/planner-layout.module.css';
 import { useCampaignResume } from '../hooks/useCampaignResume';
 import { AccountContext } from '../lib/shared/accountContext';
@@ -669,11 +670,17 @@ function PlanLoader({
   refreshTrigger: number;
 }) {
   const { state, setCampaignStructure, setCalendarPlan } = usePlannerSession();
+
+  // CP-STRUCT-002 — read local state through a ref, NOT through the dependency
+  // array. This effect WRITES calendar_plan and campaign_structure, and
+  // weeksToCalendarPlan allocates fresh objects on every call, so depending on
+  // those two values meant every write changed the dependencies and re-ran the
+  // effect: fetch → write → fetch → write, indefinitely.
+  const hasLocalPlanRef = useRef(false);
+  hasLocalPlanRef.current = Boolean(state.calendar_plan || state.campaign_structure);
+
   useEffect(() => {
     if (!campaignId || !companyId) {
-      return;
-    }
-    if (refreshTrigger === 0 && (state.calendar_plan || state.campaign_structure)) {
       return;
     }
     let cancelled = false;
@@ -683,18 +690,31 @@ function PlanLoader({
         if (cancelled) return;
         const weeks =
           data?.committedPlan?.weeks ?? data?.draftPlan?.weeks ?? data?.weeks ?? [];
+        // An EMPTY server plan must never overwrite canonical planner state.
+        // retrieve-plan returning no weeks means "the server has nothing yet",
+        // not "this campaign has no skeleton" — and because both setters reset
+        // skeleton_confirmed, writing it dropped a just-accepted structure and
+        // sent the planner back to the generation controls.
+        const decision = decidePlanAdoption({
+          refreshTrigger,
+          hasLocalPlan: hasLocalPlanRef.current,
+          weeks,
+        });
+        if (!decision.adopt) return;
         const result = weeksToCalendarPlan(weeks);
         setCampaignStructure(result.campaign_structure);
         setCalendarPlan(result.calendar_plan);
       })
-      .catch(() => {
+      .catch((err) => {
+        // A failed RELOAD must not destroy work the user already has. Clearing
+        // here turned a transient network error into a silent loss of the
+        // accepted structure. Surface it; leave canonical state alone.
         if (!cancelled) {
-          setCampaignStructure(null);
-          setCalendarPlan(null);
+          console.warn('[planner] retrieve-plan failed; keeping current planner state:', err);
         }
       });
     return () => { cancelled = true; };
-  }, [campaignId, companyId, refreshTrigger, setCampaignStructure, setCalendarPlan, state.calendar_plan, state.campaign_structure]);
+  }, [campaignId, companyId, refreshTrigger, setCampaignStructure, setCalendarPlan]);
   return null;
 }
 
