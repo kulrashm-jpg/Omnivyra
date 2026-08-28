@@ -899,6 +899,9 @@ function CampaignPlannerWithSession() {
   return (
     <PlannerSessionProvider
       companyId={companyId}
+      // BLOCK-3 — an explicit existing-campaign entry is a VIEW of a
+      // server-owned campaign, so it must not share the draft's cache slot.
+      campaignId={typeof q.campaignId === 'string' ? q.campaignId : null}
       serverDraft={{ enabled: serverDraftEnabled, urlDraftId, onDraftIdChange }}
     >
       <CampaignPlannerContent />
