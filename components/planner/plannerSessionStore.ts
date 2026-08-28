@@ -28,15 +28,16 @@ import {
   decideDraftBootstrap,
   probeOutcomeFromDraftState,
 } from '../../lib/campaign/plannerDraftLifecycle';
+import { resolvePlannerStorageKey } from '../../lib/campaign/plannerSessionScope';
 import { normalizeAssignments, type CampaignAssignment } from '../../lib/campaign/campaignAssignments';
 
-const PLANNER_STORAGE_KEY_PREFIX = 'omnivyra_planner_session_';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const PLANNER_DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
+/** BLOCK-3 — the DRAFT's slot. Never used by an explicit-campaign entry;
+ *  `resolvePlannerStorageKey` returns null for those. */
 function getPlannerStorageKey(companyId: string | null | undefined): string {
-  const id = typeof companyId === 'string' && companyId.trim() ? companyId.trim() : 'default';
-  return `${PLANNER_STORAGE_KEY_PREFIX}${id}`;
+  return resolvePlannerStorageKey({ companyId }) as string;
 }
 
 export type PlannerEntryMode = 'direct' | 'turbo' | 'recommendation' | 'opportunity' | 'campaign';
@@ -411,6 +412,14 @@ export interface PlannerSessionProviderProps {
   /** Company ID for session isolation. Passed explicitly by parent. */
   companyId?: string | null;
   /**
+   * BLOCK-3 — the campaign id of an EXPLICIT existing-campaign entry
+   * (`?campaignId=`). Present only in that mode, and used solely to decide
+   * cache ownership: such a session is a VIEW of a server-owned campaign, so
+   * it must neither read nor write the company's draft slot. Its canonical
+   * state lives in campaign_versions and is hydrated by PlanLoader.
+   */
+  campaignId?: string | null;
+  /**
    * Strategic Mix P1 — server Draft Campaign persistence. When enabled, a
    * Draft Campaign is created/resumed on entry and becomes the SOURCE OF
    * TRUTH for planner state; localStorage remains a cache only. Disabled
@@ -429,7 +438,15 @@ export interface PlannerSessionProviderProps {
  *  and concurrent effects so at most ONE draft is created per entry. */
 const draftBootstrapInFlight = new Map<string, Promise<{ campaignId: string; resumed: boolean } | null>>();
 
-export function PlannerSessionProvider({ children, companyId, serverDraft }: PlannerSessionProviderProps) {
+export function PlannerSessionProvider({ children, companyId, campaignId, serverDraft }: PlannerSessionProviderProps) {
+  // BLOCK-3 — null for an explicit-campaign entry: no restore, no persist.
+  // Null does NOT mean "wipe". Keeping whatever is already in memory is what
+  // makes BLOCK-2's post-finalize handoff work — the planner moves from
+  // ?mode=direct to ?campaignId=<the campaign just finalized> inside the same
+  // mounted tree, and the session it just built survives the transition.
+  const cacheKey = resolvePlannerStorageKey({ companyId, campaignId });
+  // The draft's slot, always resolvable. Used only by the server-draft seam
+  // (bootstrap/autosave), which never runs in explicit-campaign mode.
   const storageKey = getPlannerStorageKey(companyId ?? null);
 
   const [state, setState] = useState<PlannerSessionState>(defaultState);
@@ -467,7 +484,18 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
   }, []);
 
   useEffect(() => {
-    const restored = loadPersistedSession(storageKey);
+    // BLOCK-3 — an explicit-campaign entry has no slot to restore from. It
+    // must NOT read the draft's cache: doing so handed a server-owned
+    // campaign the open draft's spine, strategy and assignments. Its state
+    // comes from the server (PlanLoader -> retrieve-plan), which is canonical
+    // anyway (SPEC-001 I-2: browser storage is a cache, never the truth).
+    if (cacheKey === null) {
+      hasLoadedFromStorage.current = true;
+      localDraftIdRef.current = null;
+      setRestoreTick((t) => t + 1);
+      return;
+    }
+    const restored = loadPersistedSession(cacheKey);
     hasLoadedFromStorage.current = true;
     localDraftIdRef.current = (restored?.draft_campaign_id as string | null) ?? null;
     if (restored) {
@@ -486,7 +514,7 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
       }
     }
     setRestoreTick((t) => t + 1);
-  }, [storageKey]);
+  }, [cacheKey]);
 
   // ── Strategic Mix P1: Draft Campaign bootstrap + server hydrate ─────────
   // Runs once per entry (after the localStorage cache restore). Order of
@@ -674,7 +702,10 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
 
   useEffect(() => {
     if (!hasLoadedFromStorage.current) return;
-    persistSession(state, storageKey);
+    // BLOCK-3 — and it must not write back either: an opened campaign was
+    // overwriting the draft's cached session with its own.
+    if (cacheKey === null) return;
+    persistSession(state, cacheKey);
     if (ENABLE_UNIFIED_CAMPAIGN_WIZARD && state.strategy_context) {
       const hydrated = hydrateWizardFromPlannerSession(state);
       if (Object.keys(hydrated).length > 0) {
@@ -683,7 +714,7 @@ export function PlannerSessionProvider({ children, companyId, serverDraft }: Pla
         wizardStore.setState(hydrated);
       }
     }
-  }, [state, storageKey]);
+  }, [state, cacheKey]);
 
   const setIdeaSpine = useCallback((value: IdeaSpine | null) => {
     setState((prev) => ({ ...prev, idea_spine: value, strategic_card: null, strategy_confirmed: false }));
