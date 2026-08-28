@@ -254,7 +254,14 @@ describe('processBlockSchedule — pre-R3-P2 contract', () => {
     expect(mockedVariants).toHaveBeenCalledTimes(2);
   });
 
-  test('a semantic-idea collision spends NO regeneration attempt (idea fingerprint is row metadata)', async () => {
+  // POLICY CHANGE (Phase 104). These two previously asserted that cards sharing
+  // a campaign fingerprint are DROPPED. In production that dropped five of six
+  // activities (campaign 4ead230b) because both fingerprints are campaign
+  // metadata — every card of a campaign shares them by construction. Planner
+  // allocation is now authoritative, so sibling cards SCHEDULE. Genuine
+  // duplicate protection (identical body/headline/CTA) is asserted by the
+  // neighbouring tests and is unchanged.
+  test('cards sharing a semantic-idea fingerprint both schedule (campaign siblings)', async () => {
     // Two cards, different titles and different bodies, no CTA — the ONLY thing
     // they share is fingerprint.idea, which buildAsset reads off the row.
     mockedVariants
@@ -265,12 +272,12 @@ describe('processBlockSchedule — pre-R3-P2 contract', () => {
       content: JSON.stringify({ execution_id: ex, topic: title, fingerprint: { idea: 'idea-shared', narrative: `narr-${ex}` } }),
     });
     const result = await run([mk('row-ri1', 'ex-i1', 'Idea card one', '2099-01-04', 'Monday'), mk('row-ri2', 'ex-i2', 'Idea card two', '2099-01-06', 'Wednesday')]);
-    expect(result.skipped_count).toBe(1);
-    expect(drops).toContainEqual({ reason: 'duplicate_content', count: 1 });
+    expect(result.skipped_count).toBe(0);
+    expect(drops).not.toContainEqual({ reason: 'duplicate_content', count: 1 });
     expect(mockedVariants).toHaveBeenCalledTimes(2); // two cards, no retry
   });
 
-  test('a narrative collision spends NO regeneration attempt (narrative fingerprint is row metadata)', async () => {
+  test('cards sharing a narrative fingerprint both schedule (campaign siblings)', async () => {
     mockedVariants
       .mockResolvedValueOnce([{ platform: 'linkedin', content_type: 'post', generated_content: 'Narrative-card one body.', generation_status: 'generated' }])
       .mockResolvedValueOnce([{ platform: 'linkedin', content_type: 'post', generated_content: 'Narrative-card two, wholly different.', generation_status: 'generated' }]);
@@ -279,8 +286,8 @@ describe('processBlockSchedule — pre-R3-P2 contract', () => {
       content: JSON.stringify({ execution_id: ex, topic: title, fingerprint: { idea: `idea-${ex}`, narrative: 'narr-shared' } }),
     });
     const result = await run([mk('row-rn1', 'ex-n1', 'Narr card one', '2099-01-04', 'Monday'), mk('row-rn2', 'ex-n2', 'Narr card two', '2099-01-06', 'Wednesday')]);
-    expect(result.skipped_count).toBe(1);
-    expect(drops).toContainEqual({ reason: 'duplicate_content', count: 1 });
+    expect(result.skipped_count).toBe(0);
+    expect(drops).not.toContainEqual({ reason: 'duplicate_content', count: 1 });
     expect(mockedVariants).toHaveBeenCalledTimes(2); // two cards, no retry
   });
 

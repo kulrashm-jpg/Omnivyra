@@ -102,8 +102,26 @@ export class ValidationContext {
    * campaign-global set flagged each sibling as a duplicate of its own card.
    */
   readonly ctas = new Map<string, Set<string>>();
-  readonly ideaFingerprints = new Set<string>();
-  readonly narrativeFingerprints = new Set<string>();
+  /*
+   * There is deliberately NO in-run set of idea/narrative fingerprints.
+   *
+   * Both are sourced from FIXED campaign metadata — bolt closes over
+   * `rowContentJson.fingerprint`, creator reads `content.fingerprint` off
+   * `input.existingContent`. Every activity of one campaign therefore carries
+   * the SAME fingerprint by construction, so comparing them WITHIN a run
+   * carries no information: it cannot tell a second legitimate planner slot
+   * from a genuine duplicate. Held campaign-globally it dropped five of six
+   * activities in production (campaign 4ead230b: generated 6, accepted 1),
+   * because every sibling looked like a duplicate of its own campaign.
+   *
+   * Scoping it to platform+content_type was not enough either — a campaign may
+   * legitimately fill two slots of the same format on the same platform.
+   *
+   * So these fingerprints are now a CROSS-CAMPAIGN signal only, checked against
+   * the historical ledger in `validateAsset`. In-run duplicate protection is
+   * unchanged and rests on ACTUAL generated content: duplicate_asset (identical
+   * text in scope), duplicate_headline, duplicate_opening, duplicate_cta.
+   */
   /** platform::content_type → set of normalized text hashes (same-platform exact/near dup). */
   readonly assetHashes = new Map<string, Set<string>>();
   /** normalized text hash → platform (cross-platform detection). */
@@ -132,16 +150,20 @@ export class ValidationContext {
       if (!this.ctas.has(scope)) this.ctas.set(scope, new Set());
       this.ctas.get(scope)!.add(cta);
     }
-    if (asset.idea_fingerprint) this.ideaFingerprints.add(asset.idea_fingerprint);
-    if (asset.narrative_fingerprint) this.narrativeFingerprints.add(asset.narrative_fingerprint);
     const textHash = fingerprint(asset.text);
     const k = this.scopeKey(asset.platform, asset.content_type);
     if (!this.assetHashes.has(k)) this.assetHashes.set(k, new Set());
     this.assetHashes.get(k)!.add(textHash);
     if (!asset.shared) this.textToPlatform.set(textHash, String(asset.platform).toLowerCase());
     if (asset.variant_id && asset.master_idea_id) this.variantToMaster.set(asset.variant_id, asset.master_idea_id);
+    // Only content-derived hashes are learned during a run. A campaign-constant
+    // idea/narrative fingerprint must NOT be written back mid-run: every later
+    // sibling of this campaign carries the same value, so the ledger would
+    // start rejecting the campaign's own remaining activities the moment one
+    // was accepted — the in-run bug this fix removes, reintroduced through the
+    // historical door. Seeding the ledger from PRIOR campaigns is the caller's
+    // job and stays fully effective.
     this.ledger?.add?.(textHash);
-    if (asset.idea_fingerprint) this.ledger?.add?.(asset.idea_fingerprint);
   }
 }
 
@@ -198,8 +220,21 @@ export function validateAsset(
   if (cta && ctx.ctas.get(scope)?.has(cta)) findings.push({ dimension: 'duplicate_cta', detail: 'CTA already used on this platform+type' });
 
   // 4/5. Duplicate semantic idea / narrative (via fingerprints).
-  if (asset.idea_fingerprint && ctx.ideaFingerprints.has(asset.idea_fingerprint)) findings.push({ dimension: 'duplicate_semantic_idea', detail: 'semantic idea already covered' });
-  if (asset.narrative_fingerprint && ctx.narrativeFingerprints.has(asset.narrative_fingerprint)) findings.push({ dimension: 'duplicate_narrative', detail: 'narrative already used' });
+  // 4/5. Duplicate semantic idea / narrative — deliberately NOT evaluated here.
+  //
+  // Both fingerprints are campaign-constant, so within a run every activity of
+  // a campaign matches every other by construction: the check could only ever
+  // say "these belong to the same campaign", which is not a defect. Evaluating
+  // it dropped five of six activities in production (campaign 4ead230b).
+  //
+  // Cross-campaign reuse is already covered by `historical_duplication` below,
+  // which consults the same ledger and keeps its existing REGENERATE policy —
+  // the caller CAN rewrite the content even though it cannot change a fixed
+  // fingerprint. Re-adding a terminal fingerprint check here would silently
+  // convert that long-standing REGENERATE into a DROP.
+  //
+  // The two dimensions remain in the contract for callers that supply a
+  // per-activity fingerprint; no in-run producer does today.
 
   // 7. Duplicate asset within campaign (same platform + type, same text).
   const textHash = fingerprint(asset.text);
