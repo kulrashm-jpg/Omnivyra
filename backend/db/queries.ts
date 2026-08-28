@@ -304,9 +304,9 @@ export async function updateScheduledPostOnFailure(
     if (error) {
       throw new Error(`Failed to update scheduled post: ${error.message}`);
     }
-    return Array.isArray(data) && data.length > 0
-      ? { applied: true }
-      : { applied: false, reason: 'cas_mismatch' };
+    const applied = Array.isArray(data) && data.length > 0;
+    if (applied) await propagatePublishFailureToPlan(postId, errorMessage);
+    return applied ? { applied: true } : { applied: false, reason: 'cas_mismatch' };
   }
 
   const { error } = await supabase
@@ -317,7 +317,38 @@ export async function updateScheduledPostOnFailure(
   if (error) {
     throw new Error(`Failed to update scheduled post: ${error.message}`);
   }
+  await propagatePublishFailureToPlan(postId, errorMessage);
   return { applied: true };
+}
+
+/**
+ * Carry a publish failure back to the activity that planned it.
+ *
+ * Without this a failed publish left its `daily_content_plans` row reading
+ * `status='planned', failure_reason=null, attempts=0` — indistinguishable from
+ * an activity that simply has not run yet. Campaign 4ead230b showed exactly
+ * that: the post carried "Your linkedin session has expired", the plan row
+ * looked untouched, and the only way to see the failure was to open the
+ * individual post.
+ *
+ * Placed in the canonical failure writer so every publish path inherits it
+ * rather than each caller remembering. Non-fatal by construction: the post is
+ * already correctly marked failed, and losing this annotation must never turn a
+ * handled failure into a thrown one.
+ */
+async function propagatePublishFailureToPlan(postId: string, errorMessage: string): Promise<void> {
+  try {
+    await supabase
+      .from('daily_content_plans')
+      .update({
+        failure_reason: String(errorMessage ?? '').slice(0, 500),
+        failure_type: 'publish_failed',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('scheduled_post_id', postId);
+  } catch {
+    /* annotation only — never mask the handled publish failure */
+  }
 }
 
 /**

@@ -18,7 +18,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import { getToken, isTokenExpiringSoon } from '../auth/tokenStore';
+import { getToken, isTokenExpiringSoon, markSocialAccountNeedsReauth } from '../auth/tokenStore';
 import { refreshPlatformToken, refreshTwitterTokenIfNeeded } from '../auth/tokenRefresh';
 import { getScheduledPost, getSocialAccount } from '../db/queries';
 import { publishToLinkedIn } from './linkedinAdapter';
@@ -142,6 +142,13 @@ export async function publishToPlatform(
       });
 
       if (refreshResult.status === 'requires_reconnect' || refreshResult.status === 'refresh_failed') {
+        // The credential is proven unrecoverable: refresh was attempted and the
+        // provider refused. Park the connection so the rest of the product stops
+        // treating it as healthy — see the note at the sibling site below.
+        await markSocialAccountNeedsReauth(
+          socialAccountId,
+          `${socialAccount.platform} publish: refresh ${refreshResult.status}`,
+        );
         throw new Error(
           `Your ${socialAccount.platform} session has expired. ` +
           `Please reconnect your account in Settings â†’ Social Accounts.`
@@ -160,6 +167,25 @@ export async function publishToPlatform(
       console.log(`🔄 Token expiring soon, refreshing...`);
       const refreshedToken = await refreshPlatformToken(socialAccount.platform, socialAccountId, token);
       if (!refreshedToken) {
+        // Refresh was ATTEMPTED and could not produce a credential — either the
+        // provider rejected it or no refresh token exists (LinkedIn issues a
+        // 60-day access token and no refresh token unless the app is approved
+        // for programmatic refresh). Either way this connection cannot publish
+        // again until a human reconnects it.
+        //
+        // Park it, exactly as ingestion does on the same evidence. Without this
+        // `is_active` stays true, so platform health keeps reporting the account
+        // as connected, every later campaign keeps allocating slots to it, and
+        // each one fails the same way — the failure being visible only inside an
+        // individual post's error_message. Reusing the existing primitive means
+        // the UI already renders it as "Not connected" and a reconnect clears it.
+        //
+        // Platform-agnostic on purpose: this is the shared publish path for every
+        // registered platform, not a LinkedIn branch.
+        await markSocialAccountNeedsReauth(
+          socialAccountId,
+          `${socialAccount.platform} publish: token refresh unavailable`,
+        );
         throw new Error(
           `Your ${socialAccount.platform} session has expired. ` +
           `Please reconnect your account in Settings → Social Accounts.`
