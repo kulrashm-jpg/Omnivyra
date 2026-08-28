@@ -20,6 +20,7 @@ import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../
 import { materializeAssignments, type MaterializationResult } from '../../lib/campaign/assignmentMaterialization';
 import { fetchLibraryMaterializableAssets } from '../../lib/content/creatorAssetServerBackend';
 import { fetchRequireAssignmentApproval } from './useApprovalSettings';
+import { campaignReleaseHandoffPath } from '../../lib/campaign/campaignHandoffRoute';
 
 export interface FinalizeSectionProps {
   companyId?: string | null;
@@ -254,8 +255,21 @@ export function FinalizeSection({
         if (materialization && materialization.materialized_ids.length > 0) {
           setAssignments(materialization.assignments);
         }
-        onFinalize?.(cid);
-        window.location.href = `/campaign-calendar/${cid}`;
+        // BLOCK-2 — this used to call onFinalize AND then immediately do a
+        // full-page `window.location.href` to /campaign-calendar, so the
+        // navigation always won and the handler's destination was dead code.
+        // That page has no release affordance, and nothing links back into
+        // the planner for a specific campaign, so the finalized campaign was
+        // stranded at status='planning' — publishable by nothing.
+        //
+        // Delegate to the handler when there is one (it routes to the Board,
+        // which owns the release seam); keep the calendar as the fallback for
+        // callers that pass none. Same shape CalendarPlannerStep already uses.
+        if (onFinalize) {
+          onFinalize(cid);
+        } else {
+          window.location.href = campaignReleaseHandoffPath(cid);
+        }
       }
     } catch (e) {
       setFinalizeError(e instanceof Error ? e.message : 'Failed to finalize');

@@ -36,6 +36,7 @@ import { CampaignBoardTab } from '../components/planner/CampaignBoardTab';
 import { PlannerOrchestrationStrip } from '../components/orchestration/PlannerOrchestrationStrip';
 import { weeksToCalendarPlan } from '../components/planner/calendarPlanConverter';
 import { decidePlanAdoption } from '../lib/campaign/plannerPlanLoad';
+import { campaignReleaseHandoffPath } from '../lib/campaign/campaignHandoffRoute';
 import styles from '../styles/planner-layout.module.css';
 import { useCampaignResume } from '../hooks/useCampaignResume';
 import { AccountContext } from '../lib/shared/accountContext';
@@ -846,7 +847,11 @@ function CampaignPlannerInner({
               opportunityContext={opportunityContext}
               initialIdea={context.initial_idea}
               onRefresh={() => setPlanRefreshTrigger((t) => t + 1)}
-              onFinalize={(cid) => router.push(`/campaign-calendar/${cid}`)}
+              // BLOCK-2 — finalize is not the handoff to execution; RELEASE
+              // is, and it lives on the Board. Landing on /campaign-calendar
+              // left the campaign at status='planning' with no reachable way
+              // to activate it, so nothing it scheduled could ever publish.
+              onFinalize={(cid) => router.push(campaignReleaseHandoffPath(cid))}
             />
           </div>
         </div>

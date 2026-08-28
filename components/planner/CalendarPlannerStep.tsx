@@ -11,6 +11,7 @@ import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import { buildPlannerExecutionHandoff } from '../../lib/plannerExecutionHandoff';
+import { campaignReleaseHandoffPath } from '../../lib/campaign/campaignHandoffRoute';
 
 export interface CalendarPlannerStepProps {
   /** Plan from retrieve-plan API (when campaignId exists) */
@@ -205,7 +206,10 @@ export function CalendarPlannerStep({
       if (cid && onFinalize) {
         onFinalize(cid);
       } else if (cid) {
-        window.location.href = `/campaign-calendar/${cid}`;
+        // BLOCK-2 — the no-handler fallback lands on the Board too. Release
+        // is the handoff to execution and lives there; /campaign-calendar
+        // cannot activate a campaign.
+        window.location.href = campaignReleaseHandoffPath(cid);
       }
     } catch (e) {
       setFinalizeError(e instanceof Error ? e.message : 'Failed to finalize');
