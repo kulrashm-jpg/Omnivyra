@@ -34,6 +34,34 @@ export type ContentLifecycleStatus =
 /** Mirrors the content.content_type CHECK. */
 export type CanonicalContentType = 'post' | 'thread' | 'blog' | 'article' | 'story';
 
+/** The same five values as a runtime set, so type and guard cannot drift. */
+const CANONICAL_CONTENT_TYPES: readonly string[] = ['post', 'thread', 'blog', 'article', 'story'];
+
+/**
+ * Narrow a generation-side content type onto the canonical column's CHECK.
+ *
+ * WHY THIS EXISTS: the BOLT scheduler's card vocabulary is far wider than the
+ * canonical column — blog, article, white_paper, newsletter, short_story,
+ * thread, post, carousel, image, story, reel, short, video, poll. The canonical
+ * persistence seam used to hardcode 'post', so an accepted `article` master was
+ * stored as a `post` and the row misreported its own type to every downstream
+ * reader.
+ *
+ * Passing the raw value straight through is NOT the fix: nine of those fourteen
+ * values violate `content_type IN ('post','thread','blog','article','story')`.
+ * The generation paths catch persistence errors and continue with
+ * `content_id: null`, so a CHECK violation would silently regress B4.1 for
+ * those types instead of surfacing.
+ *
+ * So: identity on the five representable values, 'post' otherwise — which is
+ * exactly what those nine already do today, making this a strict improvement
+ * that changes behaviour only for the four types it fixes.
+ */
+export function toCanonicalContentType(raw: unknown): CanonicalContentType {
+  const value = String(raw ?? '').trim().toLowerCase();
+  return CANONICAL_CONTENT_TYPES.includes(value) ? (value as CanonicalContentType) : 'post';
+}
+
 /** Mirrors content_variant.approval_state CHECK. */
 export type VariantApprovalState = 'draft' | 'approved' | 'rejected';
 

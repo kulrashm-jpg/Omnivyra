@@ -66,6 +66,7 @@ import {
 // in the canonical spine. Governed by the existing default-DENY persistence
 // policy: with CANONICAL_PERSISTENCE_ENABLED off, nothing below runs at all.
 import { createContent } from './content/contentService';
+import { toCanonicalContentType } from '../../lib/content/canonicalContent';
 import { isCanonicalPersistenceEnabled } from './content/canonicalPersistencePolicy';
 // R3-P2 — Content Workspace adoption. ONE pure resolver decides when a row's
 // planner-approved copy is the canonical publishing source (approved →
@@ -755,7 +756,9 @@ async function executeBlockScheduleRuntime(
                   const created = await createContent({
                     companyId,
                     campaignId,
-                    contentType: 'post',
+                    // The ACCEPTED MASTER owns the type. Platform expansion happens
+                    // downstream of this seam and must never decide it.
+                    contentType: toCanonicalContentType(contentType),
                     title: topic || null,
                     body: acceptedText,
                     topic: topic || null,

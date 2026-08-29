@@ -53,6 +53,7 @@ import {
 // same default-DENY policy, so with CANONICAL_PERSISTENCE_ENABLED off nothing
 // below runs at all.
 import { createContent } from './content/contentService';
+import { toCanonicalContentType } from '../../lib/content/canonicalContent';
 import { isCanonicalPersistenceEnabled } from './content/canonicalPersistencePolicy';
 
 /** Accepts DB shape where title/topic/scheduled_time may be null */
@@ -503,7 +504,9 @@ export async function generateContentForDailyPlans(
               const created = await createContent({
                 companyId: campaignCompanyId,
                 campaignId,
-                contentType: 'post',
+                // The ACCEPTED MASTER owns the type; the group's rows all share
+                // it. Platform expansion must never decide it.
+                contentType: toCanonicalContentType(first.content_type),
                 title: asStringOrNull(itemRecord.topic),
                 body: acceptedText,
                 topic: asStringOrNull(itemRecord.topic),
