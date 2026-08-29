@@ -273,6 +273,20 @@ export const enforceRole = async (input: {
   allowedRoles: Role[];
 }): Promise<{ userId: string; role: Role } | null> => {
   const user = await resolvePermissionUserContext(input.req);
+
+  // AUTH-CTX-001 — the RBAC seam shares `resolveUserContext`, so it inherited
+  // the same masking: an unauthenticated caller was role-checked as the
+  // synthetic identity and reported FORBIDDEN_ROLE (403) instead of 401.
+  // Answer authentication first; role authorization below is unchanged.
+  if (user.authenticated === false) {
+    input.res.status(401).json({
+      error: 'Authentication required. Please sign in again.',
+      code: 'UNAUTHENTICATED',
+      reason: user.authError ?? 'INVALID_AUTH',
+    });
+    return null;
+  }
+
   const companyId = input.companyId;
   if (!companyId) {
     input.res.status(400).json({ error: 'companyId required' });
