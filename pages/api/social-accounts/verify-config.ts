@@ -7,8 +7,9 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  * 2. Finding a connected account to test.
  * 3. Running a live token check when the platform supports it.
  *
- * Super admin session (cookie) picks up any active account across all users.
- * Regular users test their own account only.
+ * Requires an authenticated principal. The account is selected strictly within
+ * the caller's own companies (social_accounts.company_id is the tenant field);
+ * there is no cross-tenant fallback and no "borrow any active account" path.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
@@ -189,6 +190,40 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'platform required' });
   }
 
+  /*
+   * SOCIAL-ACCOUNTS-SEC-001 — identity is established BEFORE any configuration
+   * is read.
+   *
+   * This is an authenticated super-admin diagnostic: the only caller is
+   * SocialPlatformsSectionMain, which uses fetchWithAuth. But the route never
+   * required a principal. An anonymous GET reached
+   * `getOAuthCredentialsForPlatform` and came back 200 with `credentials_ok`
+   * and `credentials_source` — disclosing which platforms have OAuth
+   * credentials configured, and where they come from.
+   *
+   * No token or account ever leaked: the account lookup below is scoped to the
+   * caller's own `companyIds`, and an unauthenticated context now carries none
+   * (AUTH-CTX-001), so no row was selected, no token read, and no provider call
+   * made. Before AUTH-CTX-001 that was NOT true — `resolveUserContext` returned
+   * a synthetic identity holding a real company, so this route would have
+   * picked that tenant's account, read its token and live-tested it. That hole
+   * is already closed; this gate removes the remaining configuration
+   * disclosure and stops the credential read happening for a caller with no
+   * identity at all.
+   *
+   * Only an EXPLICIT `authenticated === false` triggers the 401, matching the
+   * AUTH-CTX-001 contract, so an authentication failure is never reported as a
+   * tenancy denial.
+   */
+  const userContext = await resolveUserContext(req).catch(() => null);
+  if (!userContext || userContext.authenticated === false) {
+    return res.status(401).json({
+      error: 'Authentication required. Please sign in again.',
+      code: 'UNAUTHENTICATED',
+      reason: userContext?.authError ?? 'INVALID_AUTH',
+    });
+  }
+
   const checked_at = new Date().toISOString();
   const credentialPlatform = platform === 'threads' ? 'instagram' : platform;
   const creds = await getOAuthCredentialsForPlatform(credentialPlatform).catch(() => null);
@@ -216,8 +251,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   //     in Company B) is never selected, never named, never token-tested.
   // This is strict same-tenant scoping: there is NO cross-tenant fallback and
   // NO "borrow any active account" path.
-  const userContext = await resolveUserContext(req).catch(() => null);
-  const companyIds = userContext?.companyIds ?? [];
+  const companyIds = userContext.companyIds ?? [];
   const platformAliases = getPlatformAliases(platform);
 
   let accountId: string | null = null;
