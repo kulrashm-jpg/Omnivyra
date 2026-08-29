@@ -24,7 +24,6 @@
     "pages/api/command-center/company-state.ts",
     "pages/api/company/billing/ledger.ts",
     "pages/api/company/billing/summary.ts",
-    "pages/api/debug/bolt-state.ts",
     "pages/api/domain/verification-status.ts",
     "pages/api/engagement/unified.ts",
     "pages/api/extension/validate.ts",
