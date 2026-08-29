@@ -59,6 +59,17 @@ export interface ContentSourceRef {
 export interface CanonicalContent {
   id: string;
   companyId: string;
+  /**
+   * B4.1 — the campaign this artifact belongs to, or null.
+   *
+   * Single-valued and nullable because that is what the data shows: content is
+   * often campaign-independent, and nothing in the codebase exhibits one
+   * artifact belonging to several campaigns. Variants and publication lineage
+   * inherit the campaign transitively via content_id, so they need no column of
+   * their own. NOT a foreign key — campaign deletion must never cascade content
+   * away.
+   */
+  campaignId: string | null;
   contentType: CanonicalContentType;
   lifecycleStatus: ContentLifecycleStatus;
   title: string | null;

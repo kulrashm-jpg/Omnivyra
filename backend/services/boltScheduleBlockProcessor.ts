@@ -49,6 +49,24 @@ import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation
 import { regenerateBeforeDrop } from '../../lib/shared/campaign/campaignLifecycle';
 import { recordRawCounter, recordRawHistogram } from '../observability';
 import { emitMetrics, buildGenerationDurationMetric } from './campaign/campaignObservability';
+// EC-R2 — campaign content uniqueness. THE live campaign text path had no
+// originality check and never indexed its output, so every week was generated
+// blind to every other week. This routes the fresh-master generation through the
+// existing originality gate, scoped to (company, campaign). See
+// backend/services/content/campaignUniquenessGuard.ts for why both halves
+// (check AND index) are required.
+import {
+  assertBriefNotDegenerate,
+  buildCampaignNegativeContext,
+  generateUniqueCampaignMaster,
+} from './content/campaignUniquenessGuard';
+// B4.1 - the campaign to canonical content bridge. The campaign spine
+// (daily_content_plans -> scheduled_posts) is UNCHANGED; this only mints a
+// canonical `content` artifact ALONGSIDE it so campaign output finally exists
+// in the canonical spine. Governed by the existing default-DENY persistence
+// policy: with CANONICAL_PERSISTENCE_ENABLED off, nothing below runs at all.
+import { createContent } from './content/contentService';
+import { isCanonicalPersistenceEnabled } from './content/canonicalPersistencePolicy';
 // R3-P2 — Content Workspace adoption. ONE pure resolver decides when a row's
 // planner-approved copy is the canonical publishing source (approved →
 // generation fallback; review/draft are planning-only, R3-P2.1). Mirrors the
@@ -180,6 +198,14 @@ function tryParseJson<T>(v: unknown): T | null {
   if (v == null) return null;
   if (typeof v === 'string') { try { return JSON.parse(v) as T; } catch { return null; } }
   return typeof v === 'object' ? (v as T) : null;
+}
+
+/** B4.1 - narrow an untyped item field to a trimmed string, or null. Never
+ *  fabricates: an absent/blank/non-primitive field stays null. */
+function asStringOrNull(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t.length > 0 ? t : null;
 }
 
 function isPlaceholder(text: string): boolean {
@@ -453,9 +479,16 @@ async function executeBlockScheduleRuntime(
     } catch { /* non-fatal */ }
   }
 
+  // B4.1 - evaluated ONCE per run so a policy flip mid-run cannot make one card
+  // canonical and the next not. Default DENY: when this is false the canonical
+  // bridge is not merely skipped at write time, it is never constructed, so the
+  // campaign path is byte-identical to its pre-B4.1 behaviour.
+  const canonicalPersistOn = isCanonicalPersistenceEnabled();
+
   console.log('[block-processor] START', {
     campaignId,
     companyId,
+    canonicalPersistOn,
     dailyPlansCount: dailyPlans.length,
     accountMapKeys: Array.from(accountMap.keys()),
     userId: campaign.user_id,
@@ -643,11 +676,94 @@ async function executeBlockScheduleRuntime(
           // Closure Pass — Phase 4. Enrich item with governance.
           const { enrichItemWithGovernance } = await import('./creator/governanceItemEnricher');
           const item = await enrichItemWithGovernance(baseItem as any) as typeof baseItem;
+          // EC-R2 (a) — refuse a brief that carries no campaign-specific signal.
+          // Such a brief produces a byte-identical prompt every week, which the
+          // exact-key AI cache then answers with byte-identical content. Failing
+          // here is loud and actionable; generating would be silently wrong.
+          assertBriefNotDegenerate(item as unknown as Record<string, unknown>, {
+            campaignId,
+            weekNumber: firstRow.week_number,
+          });
+          // EC-R2 (b) — tell the model what this campaign has already said, via
+          // the EXISTING additional_guidance slot. Appended, never replacing the
+          // strategic context already threaded onto extra_instruction.
+          const negativeContext = companyId
+            ? await buildCampaignNegativeContext({ companyId, campaignId, contentType: 'post' })
+            : null;
+          if (negativeContext) {
+            const existingGuidance = String((item as any).extra_instruction ?? '').trim();
+            (item as any).extra_instruction = existingGuidance
+              ? `${existingGuidance}\n\n${negativeContext}`
+              : negativeContext;
+          }
           console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] Generating master for:`, {
             contentType, topic,
           });
           const genStartedAt = Date.now();
-          master = await generateMasterContentFromIntent(item);
+          // EC-R2 (c) — generate through the originality gate, campaign-scoped.
+          // Throws CampaignDuplicateContentError when a confirmed duplicate
+          // survives the engine's own bounded regeneration policy; the catch
+          // below records it as a master failure so nothing is persisted.
+          const uniqueOutcome = await generateUniqueCampaignMaster({
+            companyId,
+            campaignId,
+            contentType: 'post',
+            platform: null,
+            weekNumber: firstRow.week_number,
+            generate: async () => {
+              const generated = await generateMasterContentFromIntent(item);
+              return { text: generated.content ?? '', result: generated };
+            },
+            // B4.1 — mint the canonical artifact for the ACCEPTED master and
+            // hand its id back so campaign memory stops recording contentId
+            // null. Invoked ONCE per card, after acceptance — platform
+            // expansion happens downstream of this, so a card that fans out to
+            // eleven platforms still mints exactly one canonical row.
+            // `companyId` is the value BOLT already resolved SERVER-SIDE from
+            // the campaign (never from a client), and `campaignId` is this
+            // campaign.
+            persistAccepted: canonicalPersistOn && companyId
+              ? async (acceptedText: string) => {
+                  // The brief fields live where buildItemFromEnriched puts them:
+                  // objective/audience under `intent`, brand voice under the
+                  // writer brief's `narrativeStyle`. Reading them off the item
+                  // root would silently persist null for all three.
+                  const itemIntent = ((item as Record<string, unknown>).intent ?? {}) as Record<string, unknown>;
+                  const itemBrief = ((item as Record<string, unknown>).writer_content_brief ?? {}) as Record<string, unknown>;
+                  const created = await createContent({
+                    companyId,
+                    campaignId,
+                    contentType: 'post',
+                    title: topic || null,
+                    body: acceptedText,
+                    topic: topic || null,
+                    objective: asStringOrNull(itemIntent.objective),
+                    audience: asStringOrNull(itemIntent.target_audience),
+                    tone: asStringOrNull(itemBrief.narrativeStyle),
+                    lifecycleStatus: 'generated',
+                    sourceMetadata: {
+                      source: 'boltScheduleBlockProcessor',
+                      campaign_id: campaignId,
+                      week_number: firstRow.week_number ?? null,
+                      day_of_week: firstRow.day_of_week ?? null,
+                    },
+                  });
+                  return created.id;
+                }
+              : undefined,
+          });
+          master = uniqueOutcome.result;
+          if (uniqueOutcome.contentId) {
+            console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] canonical content created`, {
+              contentId: uniqueOutcome.contentId, campaignId,
+            });
+          }
+          if (uniqueOutcome.regenerated) {
+            console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] regenerated for uniqueness`, {
+              attempts: uniqueOutcome.attempts,
+              originality: uniqueOutcome.originality.score,
+            });
+          }
           // CAMPAIGN-OPS-001: text generation duration per content type + platform.
           try { emitMetrics([buildGenerationDurationMetric(Date.now() - genStartedAt, { content_type: contentType, platform: platformTargets[0]?.platform })]); } catch { /* fail-safe */ }
         }
