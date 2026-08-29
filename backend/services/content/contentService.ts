@@ -69,6 +69,7 @@ function mapContentRow(row: any): CanonicalContent {
   return {
     id: row.id,
     companyId: row.company_id,
+    campaignId: row.campaign_id ?? null,
     contentType: row.content_type as CanonicalContentType,
     lifecycleStatus: row.lifecycle_status as ContentLifecycleStatus,
     title: row.title ?? null,
@@ -154,6 +155,14 @@ function snapshotFields(row: any): Record<string, unknown> {
 export interface CreateContentInput {
   companyId: string;
   contentType: CanonicalContentType;
+  /**
+   * B4.1 — optional campaign association (content.campaign_id).
+   *
+   * The column exists in production. `undefined` and `null` both persist as
+   * NULL — a campaign association is never invented for a caller that did not
+   * supply one.
+   */
+  campaignId?: string | null;
   title?: string | null;
   body?: string | null;
   topic?: string | null;
@@ -251,6 +260,8 @@ export async function createContent(input: CreateContentInput): Promise<Canonica
 
   const insertRow = {
     company_id: input.companyId,
+    // B4.1 — nullable BY DESIGN: content is legitimately campaign-independent.
+    campaign_id: input.campaignId ?? null,
     content_type: input.contentType,
     lifecycle_status: input.lifecycleStatus ?? 'draft',
     title: input.title ?? null,
@@ -659,6 +670,11 @@ export function adaptExternalContent(row: ExternalContentRow): CanonicalContent 
   return {
     id: row.id,
     companyId: row.companyId,
+    // B4.1 — adapted external rows (blog/article/story) carry no campaign of
+    // their own. They are projected from a different table, so inventing a
+    // campaign here would attribute content to a campaign that never produced
+    // it; the campaign association belongs to rows minted through createContent.
+    campaignId: null,
     contentType: row.contentType,
     lifecycleStatus: row.lifecycleStatus ?? 'adapted',
     title: row.title ?? null,
