@@ -84,7 +84,7 @@ export const CANONICAL_PERSISTENCE_ENV = 'CANONICAL_PERSISTENCE_ENABLED';
 
 /**
  * Matches the house boolean-env convention used by SEMANTIC_ROOT_ENABLED and
- * BOLT_RUNTIME_DELEGATION_ENABLED: an explicit affirmative token, anything else
+ * CONTENT_MEMORY_WRITE_ENABLED: an explicit affirmative token, anything else
  * (including unset, '', 'yes please', 'TRUE!', 'maybe') is false.
  *
  * NOTE: deliberately NOT `Boolean(process.env.X)`, which would treat 'false' and
