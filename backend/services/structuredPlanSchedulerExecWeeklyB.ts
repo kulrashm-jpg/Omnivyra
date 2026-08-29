@@ -494,6 +494,7 @@ async function scheduleStructuredPlanRuntime(
           normalize,
           typeMapByPlatform,
           {
+            draftOnly: options?.draftOnly === true,
             onProgress: (event) => {
               if (event.phase === 'block-start') {
                 options?.onProgress?.(`schedule-block-${event.contentType}`);
@@ -628,6 +629,7 @@ async function scheduleStructuredPlanRuntime(
         normalize,
         typeMapByPlatform,
         {
+          draftOnly: options?.draftOnly === true,
           onProgress: (event) => {
             if (event.phase === 'block-start') {
               options?.onProgress?.(`schedule-block-${event.contentType}`);

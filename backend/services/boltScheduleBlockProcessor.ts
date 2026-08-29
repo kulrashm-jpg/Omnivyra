@@ -111,6 +111,25 @@ export type BlockProgressEvent =
 
 export type BlockScheduleOptions = {
   onProgress?: (event: BlockProgressEvent) => void;
+  /**
+   * DRAFT-ONLY EXECUTION. Runs the REAL generation pipeline — same AI calls,
+   * same semantic gate, same canonical content bridge — but leaves every
+   * scheduled_post unpublishable.
+   *
+   * Two independent guards, both using semantics the product already has:
+   *   1. the row is written with status 'draft'. The publisher selects on
+   *      `status = 'scheduled'` (schedulerService), so a draft row is never
+   *      picked up. 'draft' is already the column default and already inside
+   *      chk_status — no new status, no migration.
+   *   2. enqueueScheduledPostAt is skipped, so the row never reaches the queue
+   *      that would publish it independently of that query.
+   *
+   * Either guard alone prevents publication; both are applied so a future
+   * change to one cannot silently re-enable publishing.
+   *
+   * Default (undefined/false) is byte-identical to the previous behaviour.
+   */
+  draftOnly?: boolean;
 };
 
 export type BlockScheduleResult = {
@@ -465,6 +484,9 @@ async function executeBlockScheduleRuntime(
   options?: BlockScheduleOptions
 ): Promise<BlockScheduleResult> {
   const emit = options?.onProgress;
+  // Bound ONCE per run so a mid-run change cannot make one card publishable
+  // and the next not.
+  const draftOnly = options?.draftOnly === true;
 
   // ── 0. Resolve campaign metadata ─────────────────────────────────────────
   // Prefer company_id from caller (already resolved); fall back to DB query.
@@ -885,7 +907,10 @@ async function executeBlockScheduleRuntime(
           blockSkipped++;
           continue;
         }
-        const postStatus = 'scheduled';
+        // GUARD 1 — a draft-only run writes an unpublishable status. The publisher
+        // selects `status = 'scheduled'`; 'draft' is already legal and is the
+        // column default, so this needs no schema change.
+        const postStatus = draftOnly ? 'draft' : 'scheduled';
 
         const rowContentType = String(row.content_type || 'post').toLowerCase();
         const variantKey     = `${platform}::${rowContentType}`;
@@ -1071,7 +1096,9 @@ async function executeBlockScheduleRuntime(
           continue;
         }
 
-        if ((inserted as any)?.id) {
+        // GUARD 2 — never hand a draft-only row to the publish queue. This is
+        // deliberately redundant with the status guard above.
+        if ((inserted as any)?.id && !draftOnly) {
           try {
             await enqueueScheduledPostAt(
               String((inserted as any).id),
