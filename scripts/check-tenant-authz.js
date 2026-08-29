@@ -50,6 +50,9 @@ const APPROVED = [
   // Canonical tenant-access guards.
   'enforceCompanyAccess', 'requireCapability', 'requireCampaignAccess',
   'assertTenantAccess', 'requireTenantAccess', 'enforceRole', 'requireCompanyRole',
+  // Documented shim over assertTenantAccess (authMiddleware): verifies an
+  // active role in the requested company, 403s otherwise, super-admin bypass.
+  'requireCompanyAccess', 'requireCampaignTenantAccess',
   'withTenantGuard',
   // RBAC membership/role helpers — a role lookup for the requested company IS a
   // tenant-authorization check (rbacService).

@@ -23,6 +23,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware';
 
 interface PlatformSummary {
   impressions:      number;
@@ -52,6 +53,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const { company_id, date_from, date_to } = req.query as Record<string, string>;
   if (!company_id) return res.status(400).json({ error: 'company_id is required' });
+
+  /*
+   * ANALYTICS-SEC-001 — authorize the company BEFORE it becomes a query
+   * predicate.
+   *
+   * Authentication proved WHO the caller is; it proved nothing about WHICH
+   * company they may read. `company_id` arrives in the query string and was
+   * used directly as the tenant predicate against a service-role client that
+   * bypasses RLS, so any authenticated user — including a brand-new signup in
+   * an unrelated tenant — could read any company's analytics by naming its id.
+   *
+   * requireCompanyAccess is the primitive this cluster already uses: the
+   * sibling force-sync route calls it, and it delegates to
+   * TenantGuard.assertTenantAccess, so soft-deleted orgs and stale memberships
+   * are rejected centrally and platform super-admins keep their bypass. It
+   * answers 400/404/403 itself; nothing is queried before it returns true.
+   */
+  if (!(await requireCompanyAccess(user.id, company_id, res))) return;
 
   const today    = new Date().toISOString().split('T')[0];
   const dfrom    = date_from ?? new Date(Date.now() - 30 * 86400_000).toISOString().split('T')[0];
