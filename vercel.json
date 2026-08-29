@@ -64,9 +64,9 @@
       "schedule": "*/15 * * * *"
     }
   ],
-  "services": {
+  "experimentalServices": {
     "web": {
-      "root": ".",
+      "routePrefix": "/",
       "framework": "nextjs"
     }
   }
