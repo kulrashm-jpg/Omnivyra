@@ -73,12 +73,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
+  /*
+   * EXTERNAL-API-SEC-001 — `?scope=platform` is a scope REQUEST, not a grant.
+   *
+   * GET and PUT dropped the `company_id` filter whenever the caller merely
+   * ASKED for platform scope:
+   *
+   *     if (!platformScopeRequested) query = query.eq('company_id', companyId);
+   *
+   * `platformScopeRequested` is a query parameter. `hasPlatformScope` is the
+   * server's verdict (legacy super-admin session, platform super admin, or
+   * super admin). Only DELETE consulted the verdict; GET and PUT consulted the
+   * request. So `?scope=platform&companyId=<a company the caller belongs to>`
+   * passed the role check against the caller's OWN company and then read and
+   * wrote rows with no company filter at all.
+   *
+   * Every row in this table is platform-level (company_id IS NULL), so the
+   * tenant-scoped path matches nothing and this flag was the ONLY way a tenant
+   * reached them: any COMPANY_ADMIN could read and rewrite the global API
+   * catalog — base_url, auth_type, headers, api_key_env_name — for every
+   * tenant at once.
+   *
+   * The scope is now the AND of request and privilege, which is exactly what
+   * DELETE already did. A caller without platform privilege is not rejected;
+   * the flag is simply ignored and they keep their ordinary company scope, so
+   * no legitimate client changes behaviour — only the super-admin catalog UI
+   * sends this flag, and super admins still get full scope.
+   */
+  const platformScopeGranted = platformScopeRequested && hasPlatformScope;
+
   if (req.method === 'GET') {
     let query = supabase
       .from('external_api_sources')
       .select('*')
       .eq('id', id);
-    if (!platformScopeRequested) {
+    if (!platformScopeGranted) {
       query = query.eq('company_id', companyId);
     }
     const { data, error } = await query.single();
@@ -130,7 +159,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     let resolvedPlatformType = platform_type;
     if (!resolvedPlatformType || !auth_type || !api_key_name || !api_key_env_name || !method) {
       let existingQuery = supabase.from('external_api_sources').select('*').eq('id', id);
-      if (!platformScopeRequested && companyId) existingQuery = existingQuery.eq('company_id', companyId);
+      if (!platformScopeGranted && companyId) existingQuery = existingQuery.eq('company_id', companyId);
       const { data: existing } = await existingQuery.single();
       existingRecord = existing;
       resolvedPlatformType = resolvedPlatformType ?? existing?.platform_type ?? 'social';
@@ -231,7 +260,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         requires_admin: requires_admin ?? true,
       })
       .eq('id', id);
-    if (!platformScopeRequested) {
+    if (!platformScopeGranted) {
       updateQuery = updateQuery.eq('company_id', companyId);
     }
     const { data, error } = await updateQuery.select('*').single();
