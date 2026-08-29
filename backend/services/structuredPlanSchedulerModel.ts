@@ -784,6 +784,12 @@ export function scheduleFromLegacy(
 }
 
 export type ScheduleStructuredPlanOptions = {
+  /**
+   * DRAFT-ONLY EXECUTION (operator capability). Runs the real pipeline but
+   * leaves every generated scheduled_post unpublishable — see
+   * BlockScheduleOptions.draftOnly for the two guards. Default false.
+   */
+  draftOnly?: boolean;
   /** When true (BOLT schedule outcome), generate master content + repurpose variants before scheduling. */
   generateContent?: boolean;
   /** Called when transitioning between schedule sub-stages (BOLT progress). */

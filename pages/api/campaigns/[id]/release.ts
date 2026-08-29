@@ -56,6 +56,9 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { ownedDbTable } from '../../../../backend/db/writeOwner';
 import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockdownService';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
+import { resolvePrincipal } from '../../../../backend/security/IdentityResolver';
+import { hasCapability } from '../../../../backend/security/AuthorizationService';
+import { AUTOMATION_EXECUTE_PROD } from '../../../../shared/contracts/security/SecurityCapabilities';
 import {
   scheduleStructuredPlan,
   ScheduleEligibilityError,
@@ -224,6 +227,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await requireCampaignAccess(req, res, id);
   if (!access) return;
 
+  // ── DRAFT-ONLY EXECUTION (operator capability) ──────────────────────────
+  // Runs the real pipeline — same AI calls, same semantic gate, same canonical
+  // content bridge — but every generated scheduled_post is left unpublishable.
+  // This is what makes production runtime verification possible without
+  // publishing to a real audience.
+  //
+  // Gated on AUTOMATION_EXECUTE_PROD, which the capability registry grants to
+  // SUPER_ADMIN alone (COMPANY_ADMIN holds only AUTOMATION_EXECUTE, whose own
+  // comment says production execution requires step-up).
+  //
+  // An unauthorized request is REFUSED, never silently downgraded to a normal
+  // release. Ignoring the flag would publish to a real audience for a caller
+  // who explicitly asked not to — the exact accident this capability exists to
+  // prevent, and far worse than a 403.
+  const draftOnlyRequested = req.body?.draftOnly === true;
+  if (draftOnlyRequested) {
+    const principalResult = await resolvePrincipal(req);
+    const principal = principalResult?.ok === true ? principalResult.principal : null;
+    if (!hasCapability(principal, AUTOMATION_EXECUTE_PROD)) {
+      return res.status(403).json({
+        code: 'DRAFT_ONLY_FORBIDDEN',
+        message: 'Draft-only execution requires the production automation capability.',
+      });
+    }
+  }
+
   // NOTE: this repo compiles with `strict: false`, so discriminated-union
   // narrowing on `.ok` does not apply — read both arms explicitly.
   const parsedScope = parseReleaseScope(req.body) as {
@@ -383,6 +412,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         skipExisting: true,
         executionProfile,
         restrictToDailyPlanIds: plan.eligible_ids,
+        draftOnly: draftOnlyRequested,
       },
     );
 
