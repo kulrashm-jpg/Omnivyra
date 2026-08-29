@@ -9,7 +9,6 @@ import { recordRowFailureBatch, type RowFailureRecord } from './boltRowFailureDi
 // governance registry — kept there to avoid duplicate identifier.
 
 import { getPlatformRules, listPlatformCatalog } from './platformIntelligenceService';
-import { generateContentForDailyPlans } from './boltContentGenerationForSchedule';
 import { processBlockSchedule } from './boltScheduleBlockProcessor';
 import { evaluateScheduleEligibility } from './campaignScheduleEligibilityService';
 import { getExecutionEngine } from './executionEngines';

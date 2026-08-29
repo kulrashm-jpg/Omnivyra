@@ -346,7 +346,7 @@ async function annotateSemanticDrop(rowId: string, reason: string): Promise<void
 }
 
 // ---------------------------------------------------------------------------
-// Topic group key (mirrors boltContentGenerationForSchedule)
+// Topic group key
 // ---------------------------------------------------------------------------
 
 function topicGroupKey(row: BlockDailyPlanRow): string {
@@ -364,7 +364,7 @@ function topicGroupKey(row: BlockDailyPlanRow): string {
 }
 
 // ---------------------------------------------------------------------------
-// buildItemFromEnriched (mirrors boltContentGenerationForSchedule)
+// buildItemFromEnriched
 // ---------------------------------------------------------------------------
 
 function buildItemFromEnriched(
