@@ -104,6 +104,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const isSuperAdminUser =
     legacySession || (await isPlatformSuperAdmin(user.id)) || (await isSuperAdmin(user.id));
 
+  /*
+   * EXTERNAL-API-REQUEST-SEC-001 — the permission was checked against a company
+   * the CALLER names; the resource was then selected by id alone.
+   *
+   * `companyId` comes from `?companyId=`, `body.companyId`, or the caller's
+   * default. The role gate above proves MANAGE_EXTERNAL_APIS in THAT company —
+   * which a company admin legitimately has in their own. The request row was
+   * then fetched with `.eq('id', id)` and no tenant predicate, and every
+   * mutation below updates `.eq('id', id)` the same way. So a company admin of
+   * A could name their own company to pass the gate and then approve, reject,
+   * approve_by_admin or send_to_super_admin any OTHER company's request.
+   *
+   * Approve is the sharpest: it calls saveTenantPlatformConfig with
+   * `company_id: requestRow.company_id`, provisioning an external API source
+   * into the victim's tenant. Reject writes a caller-supplied
+   * `rejection_reason` into the victim's row.
+   *
+   * The permission must be held in the company that OWNS the request, not in
+   * one the caller nominates. A row with no company_id has no tenant owner, so
+   * only a platform/super admin may act on it.
+   *
+   * Answered as 404 — byte-identical to the not-found response above — so a
+   * foreign id is indistinguishable from a non-existent one. That is the
+   * no-existence-oracle convention MEDIA-SEC-001 established for this codebase.
+   * Nothing is written before this point.
+   */
+  if (!isSuperAdminUser && (!requestRow.company_id || requestRow.company_id !== companyId)) {
+    console.warn('CROSS_TENANT_REQUEST_DENIED', {
+      path: req.url,
+      userId: user.id,
+      authorizedCompanyId: companyId,
+    });
+    return res.status(404).json({ error: 'Request not found' });
+  }
+
   const now = new Date().toISOString();
 
   if (resolvedAction === 'approve' || resolvedAction === 'approved') {
