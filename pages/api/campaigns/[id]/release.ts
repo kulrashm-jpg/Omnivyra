@@ -58,7 +58,7 @@ import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockd
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 import { resolvePrincipal } from '../../../../backend/security/IdentityResolver';
 import { hasCapability } from '../../../../backend/security/AuthorizationService';
-import { AUTOMATION_EXECUTE_PROD } from '../../../../shared/contracts/security/SecurityCapabilities';
+import { CAMPAIGN_EXECUTE } from '../../../../shared/contracts/security/SecurityCapabilities';
 import {
   scheduleStructuredPlan,
   ScheduleEligibilityError,
@@ -233,9 +233,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // This is what makes production runtime verification possible without
   // publishing to a real audience.
   //
-  // Gated on AUTOMATION_EXECUTE_PROD, which the capability registry grants to
-  // SUPER_ADMIN alone (COMPANY_ADMIN holds only AUTOMATION_EXECUTE, whose own
-  // comment says production execution requires step-up).
+  // Gated on CAMPAIGN_EXECUTE — the capability for executing a campaign, held
+  // by COMPANY_ADMIN and SUPER_ADMIN alike.
+  //
+  // This previously required AUTOMATION_EXECUTE_PROD, which the registry grants
+  // to SUPER_ADMIN alone. That was wrong twice over. Operating a company's
+  // campaigns is COMPANY_ADMIN's job, not a platform administrator's. And it
+  // inverted risk: a normal release publishes to a real audience and requires
+  // no capability at all beyond requireCampaignAccess, so the SAFE operation
+  // demanded a HIGHER privilege than the dangerous one — a COMPANY_ADMIN could
+  // publish but could not dry-run.
+  //
+  // The check is kept explicit rather than dropped. Draft-only is strictly less
+  // privileged than the release it sits inside, so requireCampaignAccess alone
+  // would suffice, but naming the capability documents who this is for.
+  // Ownership is unchanged: requireCampaignAccess above remains the sole
+  // company/campaign boundary, resolving company from campaign_versions and
+  // never from the client.
   //
   // An unauthorized request is REFUSED, never silently downgraded to a normal
   // release. Ignoring the flag would publish to a real audience for a caller
@@ -245,10 +259,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (draftOnlyRequested) {
     const principalResult = await resolvePrincipal(req);
     const principal = principalResult?.ok === true ? principalResult.principal : null;
-    if (!hasCapability(principal, AUTOMATION_EXECUTE_PROD)) {
+    if (!hasCapability(principal, CAMPAIGN_EXECUTE)) {
       return res.status(403).json({
         code: 'DRAFT_ONLY_FORBIDDEN',
-        message: 'Draft-only execution requires the production automation capability.',
+        message: 'Draft-only execution requires the campaign execution capability.',
       });
     }
   }
