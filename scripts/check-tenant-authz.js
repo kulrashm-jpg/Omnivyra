@@ -53,6 +53,9 @@ const APPROVED = [
   // Documented shim over assertTenantAccess (authMiddleware): verifies an
   // active role in the requested company, 403s otherwise, super-admin bypass.
   'requireCompanyAccess', 'requireCampaignTenantAccess',
+  // Thin wrapper that unconditionally calls enforceRole with the request's
+  // companyId and returns early unless it passes (backend/middleware/withRBAC).
+  'withRBAC',
   'withTenantGuard',
   // RBAC membership/role helpers — a role lookup for the requested company IS a
   // tenant-authorization check (rbacService).

@@ -10,6 +10,28 @@ jest.mock('../../db/campaignVersionStore', () => ({
   getLatestCampaignVersionByCampaignId: jest.fn(),
 }));
 
+/*
+ * GOVERNANCE-SEC-001 — campaign-status and events now require an authenticated
+ * member of the owning company; before, they required nothing at all. These
+ * tests cover governance OUTPUT (cooldown maths, event shaping, filters), not
+ * the authorization boundary, so the caller is stood up as an authorized
+ * member and the two routes' behaviour assertions are unchanged.
+ *
+ * The authorization boundary itself — unauthenticated, wrong tenant,
+ * caller-supplied companyId, and the no-sink-after-denial guarantees — is
+ * covered against the real primitives in
+ * backend/tests/unit/governanceSec001Cluster.test.ts.
+ */
+jest.mock('../../services/supabaseAuthService', () => ({
+  getSupabaseUserFromRequest: jest.fn(async () => ({
+    user: { id: 'test-user', email: 't@example.com', emailVerified: true },
+    error: null,
+  })),
+}));
+jest.mock('../../middleware/authMiddleware', () => ({
+  requireCompanyAccess: jest.fn(async () => true),
+}));
+
 import { supabase } from '../../db/supabaseClient';
 import { getLatestCampaignVersionByCampaignId } from '../../db/campaignVersionStore';
 import campaignStatusHandler from '../../../pages/api/governance/campaign-status';
