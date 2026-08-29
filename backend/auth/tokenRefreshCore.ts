@@ -157,7 +157,73 @@ export async function refreshTwitterTokenIfNeeded(
   );
 }
 
-async function recordTwitterRefreshOutcome(
+/**
+ * The shared refresh-lifecycle vocabulary.
+ *
+ * 'skipped' means "the sweep looked at this account and correctly did nothing"
+ * — the token is still valid, or the account has no refresh token to rotate.
+ * It is NOT a failed refresh and must never park an account.
+ */
+export type RefreshOutcomeStatus = 'success' | 'failed' | 'requires_reconnect' | 'skipped';
+
+/**
+ * Strip credential material out of a provider error before it is persisted.
+ *
+ * last_refresh_error and last_provider_error store provider text verbatim, and
+ * some providers echo the offending token back in the error body. Without this
+ * the lifecycle row becomes a place secrets are written in the clear. Only
+ * values the caller KNOWS are secret are removed — no heuristics that could
+ * mangle a genuine diagnostic. Short values are ignored so a coincidental
+ * fragment can never blank out useful text.
+ */
+export function redactCredentials(text: string, secrets: Array<string | undefined | null>): string {
+  let out = String(text ?? '');
+  for (const secret of secrets) {
+    if (typeof secret !== 'string' || secret.length < 8) continue;
+    out = out.split(secret).join('[redacted]');
+  }
+  return out;
+}
+
+/**
+ * Record one refresh outcome on the shared social_accounts lifecycle columns.
+ *
+ * Renamed from recordTwitterRefreshOutcome: the state machine below was never
+ * X-specific, only its call sites were. X keeps calling it with exactly the
+ * statuses it always used, so its behaviour is unchanged; every other platform
+ * now reaches the same bookkeeping through refreshPlatformToken.
+ */
+export async function recordRefreshOutcome(
+  accountId: string,
+  status: RefreshOutcomeStatus,
+  error: string | null,
+): Promise<void> {
+  // A skip is an OBSERVATION, not an outcome: stamp only that the sweep looked.
+  //
+  // refresh_status is CHECK-constrained to
+  //   CONNECTED | TOKEN_EXPIRING | TOKEN_REFRESHING | TOKEN_EXPIRED |
+  //   PROVIDER_REAUTH_REQUIRED | REFRESH_FAILED_RETRYABLE |
+  //   REFRESH_FAILED_FATAL | SCHEDULER_UNREACHABLE
+  // and none of those means "nothing to do". Inventing a value would violate
+  // the constraint; reusing a failure value would libel a healthy account. So
+  // the skip touches no status, no retry count and no connection state — which
+  // is also exactly what "must never park" requires. Distinguishing the two
+  // skip reasons needs no new column: refresh_token presence and
+  // token_expires_at already say which one it was.
+  if (status === 'skipped') {
+    try {
+      await ownedDbTable('social_accounts')
+        .update({ last_refresh_attempt_at: new Date().toISOString() })
+        .eq('id', accountId);
+    } catch (err: any) {
+      console.warn('[tokenRefresh] failed to record refresh skip:', err?.message);
+    }
+    return;
+  }
+  return recordRefreshOutcomeInner(accountId, status, error);
+}
+
+async function recordRefreshOutcomeInner(
   accountId: string,
   status: 'success' | 'failed' | 'requires_reconnect',
   error: string | null,
@@ -264,7 +330,7 @@ async function doRefreshTwitterTokenInner(
       '[tokenRefresh][CRITICAL] X account has expired access_token AND no refresh_token in DB — reconnect required',
       JSON.stringify({ account_id: account.account_id })
     );
-    await recordTwitterRefreshOutcome(account.account_id, 'requires_reconnect', 'no_refresh_token_in_db');
+    await recordRefreshOutcome(account.account_id, 'requires_reconnect', 'no_refresh_token_in_db');
     return { status: 'requires_reconnect' };
   }
 
@@ -274,7 +340,7 @@ async function doRefreshTwitterTokenInner(
 
   if (!clientId || !clientSecret) {
     console.error('Twitter credentials not configured');
-    await recordTwitterRefreshOutcome(account.account_id, 'failed', 'credentials_not_configured');
+    await recordRefreshOutcome(account.account_id, 'failed', 'credentials_not_configured');
     return { status: 'refresh_failed' };
   }
 
@@ -296,7 +362,7 @@ async function doRefreshTwitterTokenInner(
 
     if (!response.data.access_token) {
       console.error('Twitter refresh: No access token in response');
-      await recordTwitterRefreshOutcome(account.account_id, 'failed', 'no_access_token_in_response');
+      await recordRefreshOutcome(account.account_id, 'failed', 'no_access_token_in_response');
       return { status: 'refresh_failed' };
     }
 
@@ -326,7 +392,7 @@ async function doRefreshTwitterTokenInner(
     // community_ai_platform_tokens (see mirrorTokenToCommunityAi). Both tables
     // receive the freshly-rotated refresh_token in the same call.
     await setToken(account.account_id, refreshed);
-    await recordTwitterRefreshOutcome(account.account_id, 'success', null);
+    await recordRefreshOutcome(account.account_id, 'success', null);
 
     return {
       access_token: refreshed.access_token,
@@ -351,7 +417,7 @@ async function doRefreshTwitterTokenInner(
       errorCode,
       errorDescription
     );
-    await recordTwitterRefreshOutcome(account.account_id, 'failed', persistedError);
+    await recordRefreshOutcome(account.account_id, 'failed', persistedError);
     return { status: 'refresh_failed' };
   }
 }

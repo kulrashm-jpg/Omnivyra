@@ -25,6 +25,7 @@ import { withRefreshLock } from './refreshLock';
 import { buildXRefreshLockKey } from './refreshAccountResolver';
 
 import { refreshLinkedInToken, refreshTwitterTokenIfNeeded, refreshTwitterToken, refreshFacebookToken, refreshInstagramToken, refreshYouTubeToken } from './tokenRefreshCore';
+import { recordRefreshOutcome, redactCredentials, type RefreshOutcomeStatus } from './tokenRefreshCore';
 
 export async function refreshSpotifyToken(
   socialAccountId: string,
@@ -310,6 +311,58 @@ export async function refreshPinterestToken(
 /**
  * Generic token refresh function that routes to platform-specific implementation
  */
+/**
+ * Platforms that actually implement a refresh, and how. X is deliberately
+ * absent: refreshTwitterToken delegates to refreshTwitterTokenIfNeeded, which
+ * records its own outcome under the refresh lock, so routing it through the
+ * wrapper below would double-write the same lifecycle row.
+ */
+/**
+ * Telemetry is ADDITIVE: recording an outcome must never be able to fail a
+ * refresh. The recorder already swallows its own database errors, but the call
+ * itself sits in the refresh hot path, so it is wrapped here too — a missing or
+ * broken recorder degrades to "no telemetry", never to "the token did not
+ * refresh".
+ */
+async function safeRecord(
+  accountId: string,
+  status: RefreshOutcomeStatus,
+  error: string | null,
+): Promise<void> {
+  try {
+    await recordRefreshOutcome(accountId, status, error);
+  } catch (err) {
+    console.warn('[tokenRefresh] refresh telemetry failed (non-fatal):', (err as Error)?.message);
+  }
+}
+
+const PLATFORM_REFRESHERS: Record<string, (id: string, t: TokenObject) => Promise<TokenObject | null>> = {
+  linkedin: refreshLinkedInToken,
+  facebook: refreshFacebookToken,
+  instagram: refreshInstagramToken,
+  threads: refreshInstagramToken,
+  youtube: refreshYouTubeToken,
+  tiktok: refreshTikTokToken,
+  spotify: refreshSpotifyToken,
+  pinterest: refreshPinterestToken,
+  reddit: refreshRedditToken,
+};
+
+/**
+ * Generic token refresh function that routes to platform-specific implementation.
+ *
+ * This is also THE shared lifecycle-telemetry boundary. Before, only X recorded
+ * refresh bookkeeping — its recorder was called from inside
+ * refreshTwitterTokenIfNeeded, and every other platform's refresher simply
+ * returned a token or null and wrote nothing. YouTube showed the consequence:
+ * its token demonstrably rotated in production while
+ * last_refresh_attempt_at / last_successful_refresh_at stayed null, so a
+ * healthy platform was indistinguishable from one that had never been tried.
+ *
+ * Recording here rather than in nine refreshers keeps ONE mechanism: every
+ * platform in PLATFORM_REFRESHERS inherits identical bookkeeping, and no
+ * platform-specific recorder exists.
+ */
 export async function refreshPlatformToken(
   platform: string,
   socialAccountId: string,
@@ -319,41 +372,54 @@ export async function refreshPlatformToken(
 
   console.log(`🔄 Attempting to refresh ${platformLower} token for account ${socialAccountId}`);
 
-  switch (platformLower) {
-    case 'linkedin':
-      return refreshLinkedInToken(socialAccountId, currentToken);
+  // X records its own outcome inside the refresh lock — delegate untouched.
+  if (platformLower === 'twitter' || platformLower === 'x') {
+    return refreshTwitterToken(socialAccountId, currentToken);
+  }
 
-    case 'twitter':
-    case 'x':
-      return refreshTwitterToken(socialAccountId, currentToken);
+  const refresher = PLATFORM_REFRESHERS[platformLower];
+  if (!refresher) {
+    // No refresh capability for this platform (e.g. whatsapp, blog). Nothing was
+    // attempted, so nothing is recorded — an unrefreshable account must not
+    // accumulate attempt history it never had.
+    console.warn(`⚠️ Token refresh not implemented for platform: ${platform}`);
+    return null;
+  }
 
-    case 'facebook':
-      return refreshFacebookToken(socialAccountId, currentToken);
+  // No refresh token is NOT a failure: there is nothing to rotate, and the
+  // account may be perfectly healthy (LinkedIn and Facebook long-lived tokens
+  // carry none). Recorded as a skip so it can never park the account.
+  if (!currentToken.refresh_token) {
+    await safeRecord(socialAccountId, 'skipped', null);
+    return null;
+  }
 
-    case 'instagram':
-      return refreshInstagramToken(socialAccountId, currentToken);
-
-    case 'threads':
-      return refreshInstagramToken(socialAccountId, currentToken);
-
-    case 'youtube':
-      return refreshYouTubeToken(socialAccountId, currentToken);
-
-    case 'tiktok':
-      return refreshTikTokToken(socialAccountId, currentToken);
-
-    case 'spotify':
-      return refreshSpotifyToken(socialAccountId, currentToken);
-
-    case 'pinterest':
-      return refreshPinterestToken(socialAccountId, currentToken);
-
-    case 'reddit':
-      return refreshRedditToken(socialAccountId, currentToken);
-
-    default:
-      console.warn(`⚠️ Token refresh not implemented for platform: ${platform}`);
-      return null;
+  try {
+    const refreshed = await refresher(socialAccountId, currentToken);
+    if (refreshed) {
+      await safeRecord(socialAccountId, 'success', null);
+      return refreshed;
+    }
+    // The refresher swallowed its own provider error and returned null, so the
+    // terminal signal is not visible here. Transient is the SAFE reading: it
+    // never parks a live account on one bad response, and bounded retries still
+    // park it at the ceiling if it never recovers.
+    await safeRecord(socialAccountId, 'failed', 'refresh_returned_no_token');
+    return null;
+  } catch (err: unknown) {
+    // Reported as 'failed' WITH the provider text: the recorder's existing state
+    // machine is what classifies terminal from transient (invalid_grant ->
+    // PROVIDER_REAUTH_REQUIRED, invalid_client -> fatal, everything else ->
+    // bounded retry). Re-deriving that here would duplicate a proven decision
+    // and let the two copies drift.
+    const raw = err instanceof Error ? err.message : String(err);
+    // Providers sometimes echo the offending token back in the error body, and
+    // this string is persisted. Scrub the values we know are secret first.
+    const message = (typeof redactCredentials === 'function'
+      ? redactCredentials(raw, [currentToken.access_token, currentToken.refresh_token])
+      : raw).slice(0, 300);
+    await safeRecord(socialAccountId, 'failed', message);
+    return null;
   }
 }
 

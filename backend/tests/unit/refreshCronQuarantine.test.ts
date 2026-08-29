@@ -51,6 +51,11 @@ jest.mock('../../auth/tokenRefreshCore', () => ({
   refreshFacebookToken: jest.fn(),
   refreshInstagramToken: jest.fn(),
   refreshYouTubeToken: jest.fn(),
+  // Phase 114 — the shared refresh boundary now records lifecycle telemetry
+  // through these. Present so this suite exercises the real code path rather
+  // than a boundary that silently degrades on a missing dependency.
+  recordRefreshOutcome: jest.fn(async () => undefined),
+  redactCredentials: (t: string) => t,
 }));
 jest.mock('../../auth/tokenStore', () => ({
   getToken: (...a: any[]) => mockGetToken(...a),
