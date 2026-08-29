@@ -3,9 +3,9 @@
  *
  * ONE pure function decides whether a plan row's content envelope carries
  * Content-Workspace copy that execution should publish INSTEAD of generating.
- * Both text-lane consumers (processBlockSchedule and
- * generateContentForDailyPlans) call this — the resolution order lives in
- * exactly one place, mirroring how creator_asset has one override seam.
+ * The text-lane consumer (processBlockSchedule) calls this — the resolution
+ * order lives in exactly one place, mirroring how creator_asset has one
+ * override seam.
  *
  * Resolution order (R3-P2.1 contract — Release 3 freeze semantics):
  *   1. APPROVED workspace content  → adopt (the ONLY adoption tier)

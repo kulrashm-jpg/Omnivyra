@@ -5,8 +5,8 @@ import { withIdempotency } from '../../../../backend/middleware/withIdempotency'
  * POST /api/campaigns/[id]/repurpose-and-schedule
  *
  * Bulk repurpose and schedule: generate platform variants for all daily plans,
- * then insert into scheduled_posts. Reuses generateContentForDailyPlans and
- * scheduleStructuredPlan (no modifications to those services).
+ * then insert into scheduled_posts. Delegates to scheduleStructuredPlan (no
+ * modifications to that service).
  *
  * Safety: prevents double scheduling, uses scheduler lock, validates campaign start_date.
  */

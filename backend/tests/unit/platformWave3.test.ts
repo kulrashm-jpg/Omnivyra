@@ -12,7 +12,6 @@ const ROOT = path.join(__dirname, '..', '..', '..');
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 // Register flags via module import (side-effect-light where possible).
-import '../../services/boltContentGenerationForSchedule';
 import '../../services/ai/aiExecutionResultStore';
 
 const mainSrc = read('backend/workers/main.ts');

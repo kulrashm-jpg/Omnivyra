@@ -75,7 +75,6 @@ function isArchitectureTarget(file) {
     /^backend\/services\/boltPipelineService\.ts$/,
     /^backend\/services\/structuredPlanScheduler\.ts$/,
     /^backend\/services\/boltScheduleBlockProcessor\.ts$/,
-    /^backend\/services\/boltContentGenerationForSchedule\.ts$/,
     /^backend\/services\/contentGeneration\//,
     /^backend\/queue\/jobProcessors\/(boltContentJobProcessor|contentGenerationProcessor)\.ts$/,
     /^backend\/services\/recommendation/,
@@ -425,7 +424,7 @@ writeMd('execution-map-scheduling-flow.md', executionMap('Scheduling Flow Execut
 
 writeMd('execution-map-content-generation.md', executionMap('Content Generation Execution Map', {
   entrypoints: ['pages/api/activity-workspace/content.ts', 'backend/queue/jobProcessors/boltContentJobProcessor.ts', 'backend/queue/jobProcessors/contentGenerationProcessor.ts', 'backend/domain/from-lib/post/runPostGeneration.ts', 'backend/domain/from-lib/thread/runThreadGeneration.ts'],
-  owners: ['backend/services/contentGeneration/blueprintGenerator.ts', 'backend/services/contentGeneration/platformVariantGenerator.ts', 'backend/services/boltContentGenerationForSchedule.ts', 'backend/services/boltScheduleBlockProcessor.ts'],
+  owners: ['backend/services/contentGeneration/blueprintGenerator.ts', 'backend/services/contentGeneration/platformVariantGenerator.ts', 'backend/services/boltScheduleBlockProcessor.ts'],
   dbMutations: dbWrites.filter((r) => /content|daily_content|asset|variant/.test(r.table)).slice(0, 30).map((r) => `${r.file}:${r.line} ${r.mutation} ${r.table}`),
   queues: ['backend/queue/jobProcessors/contentGenerationProcessor.ts', 'backend/queue/jobProcessors/boltContentJobProcessor.ts'],
   apis: ['pages/api/activity-workspace/content.ts', 'pages/api/content/**'],

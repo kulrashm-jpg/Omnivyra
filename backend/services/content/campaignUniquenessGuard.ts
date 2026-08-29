@@ -57,8 +57,8 @@ import {
 import type { OriginalityResult } from '../../../lib/content/originality/types';
 
 /**
- * The generic fallback constants used by BOTH `buildItemFromEnriched`
- * implementations (boltScheduleBlockProcessor + boltContentGenerationForSchedule).
+ * The generic fallback constants used by `buildItemFromEnriched` in
+ * boltScheduleBlockProcessor (the sole campaign text-generation path).
  *
  * These are NOT removed. They are legitimate for a brief that carries real
  * signal in its other fields — a missing CTA should not fail a well-specified
