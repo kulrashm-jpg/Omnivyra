@@ -252,6 +252,19 @@ export interface UniqueMasterInput<T> {
   lifecycleStatus?: string;
   /** Diagnostics only. */
   weekNumber?: number | null;
+  /**
+   * B4.1 — OPTIONAL canonical-artifact hook, invoked exactly once with the
+   * ACCEPTED text, immediately before the memory unit is indexed. Its return
+   * value becomes `content_memory.content_id`, which is `null` today because
+   * this path had no canonical artifact to point at.
+   *
+   * Deliberately a callback rather than a direct createContent call: this
+   * module owns UNIQUENESS, not persistence, and must not acquire a dependency
+   * on the canonical content service or its policy flag. Omitted ⇒ contentId
+   * stays null and behaviour is identical to before. Fail-safe: a throw or a
+   * null return degrades to null, never to a failed generation.
+   */
+  persistAccepted?: (acceptedText: string) => Promise<string | null>;
 }
 
 export interface UniqueMasterOutcome<T> {
@@ -262,6 +275,11 @@ export interface UniqueMasterOutcome<T> {
   regenerated: boolean;
   /** True when the accepted output was written to campaign memory. */
   indexed: boolean;
+  /**
+   * B4.1 — id of the canonical artifact minted for the accepted text, or null
+   * when no `persistAccepted` hook was supplied (or it declined/failed).
+   */
+  contentId: string | null;
 }
 
 /**
@@ -297,6 +315,10 @@ export async function generateUniqueCampaignMaster<T>(
       attempts: 1,
       regenerated: false,
       indexed: false,
+      // B4.1 — no tenant ⇒ no campaign scope ⇒ no canonical artifact. The hook
+      // is deliberately NOT invoked here: content.company_id is NOT NULL and
+      // content.campaign_id would be meaningless without both.
+      contentId: null,
     };
   }
 
@@ -346,11 +368,24 @@ export async function generateUniqueCampaignMaster<T>(
   // Indexed as a committed lifecycle so the gate's default retrieval filter
   // (published/approved/scheduled, or any platform variant) actually sees it —
   // indexing a master as 'draft' with platform=null would be invisible.
+  //
+  // B4.1 — mint the canonical artifact first (when a hook is supplied) so the
+  // memory unit can carry a real content_id instead of null. Runs ONLY after
+  // acceptance: rejected/duplicate text never produces a content row.
+  let contentId: string | null = null;
+  if (input.persistAccepted) {
+    try {
+      contentId = (await input.persistAccepted(outcome.text)) ?? null;
+    } catch {
+      /* fail-safe: the artifact is additive; generation must never fail on it */
+    }
+  }
+
   let indexed = false;
   try {
     const memory = await indexContentUnit({
       companyId,
-      contentId: null,
+      contentId,
       campaignId,
       contentType,
       platform,
@@ -369,5 +404,6 @@ export async function generateUniqueCampaignMaster<T>(
     attempts: outcome.attempts,
     regenerated: outcome.regenerated,
     indexed,
+    contentId,
   };
 }

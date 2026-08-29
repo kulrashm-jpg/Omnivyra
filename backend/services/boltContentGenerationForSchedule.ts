@@ -45,6 +45,15 @@ import {
   buildCampaignNegativeContext,
   generateUniqueCampaignMaster,
 } from './content/campaignUniquenessGuard';
+// B4.1 — the campaign → canonical content bridge, applied to the SECOND
+// campaign generation path (repurpose-and-schedule / structuredPlanScheduler)
+// exactly as processBlockSchedule applies it. Without this, masters minted
+// here still record content_memory.content_id = null and never reach the
+// canonical spine. The campaign spine itself is untouched; governed by the
+// same default-DENY policy, so with CANONICAL_PERSISTENCE_ENABLED off nothing
+// below runs at all.
+import { createContent } from './content/contentService';
+import { isCanonicalPersistenceEnabled } from './content/canonicalPersistencePolicy';
 
 /** Accepts DB shape where title/topic/scheduled_time may be null */
 type DailyPlanRow = {
@@ -81,6 +90,14 @@ function tryParseJson<T>(val: unknown): T | null {
     }
   }
   return typeof val === 'object' ? (val as T) : null;
+}
+
+/** B4.1 — narrow an untyped item field to a trimmed string, or null. Never
+ *  fabricates: an absent/blank/non-primitive field stays null. */
+function asStringOrNull(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t.length > 0 ? t : null;
 }
 
 function isPlaceholderLikeGeneratedText(content: string): boolean {
@@ -331,6 +348,12 @@ export async function generateContentForDailyPlans(
     campaignUserId = (campaign as any)?.user_id ?? null;
   } catch { /* non-fatal; generation continues without company_id */ }
 
+  // B4.1 — evaluated ONCE per run so a policy flip mid-run cannot make one
+  // topic group canonical and the next not. Default DENY: when this is false
+  // the bridge is never constructed and this path is byte-identical to its
+  // pre-B4.1 behaviour.
+  const canonicalPersistOn = isCanonicalPersistenceEnabled();
+
   const groups = groupPlansByDistribution(dailyPlans);
   const groupEntries = Array.from(groups.entries());
   let phaseCreatingFired = false;
@@ -463,8 +486,48 @@ export async function generateContentForDailyPlans(
           const generated = await generateBoltMaster(item);
           return { text: generated.content ?? '', result: generated };
         },
+        // B4.1 — mint the canonical artifact for the ACCEPTED master and hand
+        // its id back so campaign memory stops recording contentId null.
+        // `campaignCompanyId` is resolved server-side from the campaign row
+        // (never from a client) and `campaignId` is this campaign, so
+        // content.company_id is the authorized campaign company and
+        // content.campaign_id is that campaign.
+        persistAccepted: canonicalPersistOn && campaignCompanyId
+          ? async (acceptedText: string) => {
+              // The brief fields live where buildItemFromEnriched puts them:
+              // objective/audience under `intent`, brand voice under the
+              // writer brief's `narrativeStyle`.
+              const itemRecord = item as unknown as Record<string, unknown>;
+              const itemIntent = (itemRecord.intent ?? {}) as Record<string, unknown>;
+              const itemBrief = (itemRecord.writer_content_brief ?? {}) as Record<string, unknown>;
+              const created = await createContent({
+                companyId: campaignCompanyId,
+                campaignId,
+                contentType: 'post',
+                title: asStringOrNull(itemRecord.topic),
+                body: acceptedText,
+                topic: asStringOrNull(itemRecord.topic),
+                objective: asStringOrNull(itemIntent.objective),
+                audience: asStringOrNull(itemIntent.target_audience),
+                tone: asStringOrNull(itemBrief.narrativeStyle),
+                lifecycleStatus: 'generated',
+                sourceMetadata: {
+                  source: 'boltContentGenerationForSchedule',
+                  campaign_id: campaignId,
+                  week_number: first.week_number ?? null,
+                  day_of_week: first.day_of_week ?? null,
+                },
+              });
+              return created.id;
+            }
+          : undefined,
       });
       master = uniqueOutcome.result;
+      if (uniqueOutcome.contentId) {
+        console.log('[bolt-content-gen] canonical content created', {
+          contentId: uniqueOutcome.contentId, campaignId,
+        });
+      }
     }
 
     // WAVE-1B-002 — moderate generated master content ONCE before any campaign

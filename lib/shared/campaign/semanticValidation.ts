@@ -14,6 +14,7 @@
  */
 
 import { fingerprint, normalizeForFingerprint } from './masterIdea';
+import type { DropReasonCode } from './plannerDiagnostics';
 
 export type ValidationDecision = 'ACCEPT' | 'REGENERATE' | 'ADAPT' | 'DROP';
 
@@ -47,6 +48,26 @@ export interface GeneratedAsset {
   variant_id?: string | null;
   /** True for intentionally shared/cross-posted assets (excluded from cross-platform dup). */
   shared?: boolean;
+  /**
+   * The campaign CARD (activity / topic group) this asset belongs to.
+   *
+   * A card legitimately fans out to several platforms, and every sibling of one
+   * card carries the SAME headline, opening, CTA and idea/narrative fingerprints
+   * — that is what repurposing IS. Those five dimensions exist to stop DIFFERENT
+   * cards repeating each other across a campaign, never to stop one card
+   * reaching its platforms, so they are compared across groups only.
+   *
+   * Dimensions that must fire regardless of the card are deliberately NOT
+   * group-scoped: `duplicate_asset` (identical text on the same platform+type),
+   * `cross_platform_duplication`, `historical_duplication`, `duplicate_slide`
+   * and `master_idea_consistency`.
+   *
+   * OMITTED ⇒ pre-existing behaviour exactly: with no group on either side a
+   * repeat is always a finding. Suppression requires both sides to name the
+   * same non-empty group, so a caller that does not populate this can never be
+   * made more permissive by it.
+   */
+  group_id?: string | null;
 }
 
 export interface ValidationFinding {
@@ -74,6 +95,22 @@ export class InMemoryLedger implements HistoricalLedger {
   add(fp: string): void { if (fp) this.seen.add(fp); }
 }
 
+/** The asset's card, normalized. '' when the caller supplies none. */
+const groupOf = (asset: GeneratedAsset): string => String(asset.group_id ?? '').trim();
+
+/**
+ * Is `key` a duplicate for THIS asset? Only when the value is already owned by
+ * a DIFFERENT card. Both sides must name the same non-empty card for a repeat
+ * to be suppressed, so a caller that supplies no group_id keeps the original
+ * "any repeat is a finding" behaviour.
+ */
+const dupAcrossCards = (owners: Map<string, string>, key: string, group: string): boolean => {
+  if (!key) return false;
+  const owner = owners.get(key);
+  if (owner === undefined) return false;
+  return !(group !== '' && owner !== '' && owner === group);
+};
+
 const firstSentence = (text: string): string => {
   const t = String(text ?? '').trim();
   const m = t.match(/^.*?[.!?](\s|$)/);
@@ -82,11 +119,17 @@ const firstSentence = (text: string): string => {
 
 /** Accumulates what has already been accepted this campaign, for dup detection. */
 export class ValidationContext {
-  readonly headlines = new Set<string>();
-  readonly openings = new Set<string>();
-  readonly ctas = new Set<string>();
-  readonly ideaFingerprints = new Set<string>();
-  readonly narrativeFingerprints = new Set<string>();
+  /**
+   * Campaign-constant dimensions map normalized value → the CARD that first
+   * used it, so a card's own siblings are not read as duplicates of each other
+   * (see GeneratedAsset.group_id). '' means "no card known", which never
+   * suppresses anything.
+   */
+  readonly headlines = new Map<string, string>();
+  readonly openings = new Map<string, string>();
+  readonly ctas = new Map<string, string>();
+  readonly ideaFingerprints = new Map<string, string>();
+  readonly narrativeFingerprints = new Map<string, string>();
   /** platform::content_type → set of normalized text hashes (same-platform exact/near dup). */
   readonly assetHashes = new Map<string, Set<string>>();
   /** normalized text hash → platform (cross-platform detection). */
@@ -101,14 +144,14 @@ export class ValidationContext {
 
   /** Record an accepted asset so later assets are compared against it. */
   commit(asset: GeneratedAsset): void {
-    const hl = normalizeForFingerprint(asset.headline ?? '');
-    if (hl) this.headlines.add(hl);
-    const op = normalizeForFingerprint(asset.opening ?? firstSentence(asset.text));
-    if (op) this.openings.add(op);
-    const cta = normalizeForFingerprint(asset.cta ?? '');
-    if (cta) this.ctas.add(cta);
-    if (asset.idea_fingerprint) this.ideaFingerprints.add(asset.idea_fingerprint);
-    if (asset.narrative_fingerprint) this.narrativeFingerprints.add(asset.narrative_fingerprint);
+    // First owner wins: a value's card is whichever card introduced it, so a
+    // later card can never re-attribute it to itself and dodge the check.
+    const own = (m: Map<string, string>, k: string): void => { if (k && !m.has(k)) m.set(k, groupOf(asset)); };
+    own(this.headlines, normalizeForFingerprint(asset.headline ?? ''));
+    own(this.openings, normalizeForFingerprint(asset.opening ?? firstSentence(asset.text)));
+    own(this.ctas, normalizeForFingerprint(asset.cta ?? ''));
+    own(this.ideaFingerprints, String(asset.idea_fingerprint ?? ''));
+    own(this.narrativeFingerprints, String(asset.narrative_fingerprint ?? ''));
     const textHash = fingerprint(asset.text);
     const k = this.key(asset.platform, asset.content_type);
     if (!this.assetHashes.has(k)) this.assetHashes.set(k, new Set());
@@ -164,16 +207,20 @@ export function validateAsset(
   }
 
   // 1/2/3. Duplicate headline / opening / CTA (against prior accepted assets).
+  // Card-scoped: a card's own siblings share these BY DESIGN — only another
+  // card reusing them is a duplicate.
+  const group = groupOf(asset);
   const hl = normalizeForFingerprint(asset.headline ?? '');
-  if (hl && ctx.headlines.has(hl)) findings.push({ dimension: 'duplicate_headline', detail: 'headline already used' });
+  if (dupAcrossCards(ctx.headlines, hl, group)) findings.push({ dimension: 'duplicate_headline', detail: 'headline already used by another card' });
   const op = normalizeForFingerprint(asset.opening ?? firstSentence(asset.text));
-  if (op && ctx.openings.has(op)) findings.push({ dimension: 'duplicate_opening', detail: 'opening sentence already used' });
+  if (dupAcrossCards(ctx.openings, op, group)) findings.push({ dimension: 'duplicate_opening', detail: 'opening sentence already used by another card' });
   const cta = normalizeForFingerprint(asset.cta ?? '');
-  if (cta && ctx.ctas.has(cta)) findings.push({ dimension: 'duplicate_cta', detail: 'CTA already used' });
+  if (dupAcrossCards(ctx.ctas, cta, group)) findings.push({ dimension: 'duplicate_cta', detail: 'CTA already used by another card' });
 
-  // 4/5. Duplicate semantic idea / narrative (via fingerprints).
-  if (asset.idea_fingerprint && ctx.ideaFingerprints.has(asset.idea_fingerprint)) findings.push({ dimension: 'duplicate_semantic_idea', detail: 'semantic idea already covered' });
-  if (asset.narrative_fingerprint && ctx.narrativeFingerprints.has(asset.narrative_fingerprint)) findings.push({ dimension: 'duplicate_narrative', detail: 'narrative already used' });
+  // 4/5. Duplicate semantic idea / narrative (via fingerprints). Card-scoped for
+  // the same reason: every sibling of one card carries the card's fingerprints.
+  if (dupAcrossCards(ctx.ideaFingerprints, String(asset.idea_fingerprint ?? ''), group)) findings.push({ dimension: 'duplicate_semantic_idea', detail: 'semantic idea already covered by another card' });
+  if (dupAcrossCards(ctx.narrativeFingerprints, String(asset.narrative_fingerprint ?? ''), group)) findings.push({ dimension: 'duplicate_narrative', detail: 'narrative already used by another card' });
 
   // 7. Duplicate asset within campaign (same platform + type, same text).
   const textHash = fingerprint(asset.text);
@@ -213,13 +260,57 @@ function decide(findings: ValidationFinding[]): ValidationDecision {
   return 'ACCEPT';
 }
 
-function primaryReason(findings: ValidationFinding[], decision: ValidationDecision): string {
-  const pick =
-    decision === 'DROP' ? findings.find((f) => f.dimension === 'master_idea_consistency')
+/** The finding that actually drove the decision (mirrors `decide`'s priority). */
+function primaryFinding(findings: ValidationFinding[], decision: ValidationDecision): ValidationFinding | undefined {
+  return decision === 'DROP' ? findings.find((f) => f.dimension === 'master_idea_consistency')
     : decision === 'REGENERATE' ? findings.find((f) => REGENERATE_DIMENSIONS.has(f.dimension))
     : decision === 'ADAPT' ? findings.find((f) => f.dimension === 'cross_platform_duplication')
     : findings[0];
+}
+
+function primaryReason(findings: ValidationFinding[], decision: ValidationDecision): string {
+  const pick = primaryFinding(findings, decision);
   return pick ? `${pick.dimension}: ${pick.detail}` : 'passes semantic validation';
+}
+
+/**
+ * ValidationDimension → DropReasonCode.
+ *
+ * These are two SEPARATE taxonomies. `ValidationDimension` says which semantic
+ * rule fired; `DropReasonCode` is the planner's drop vocabulary that
+ * `publicDropReason` / `dropReasonMessage` and the scheduling-result UI are
+ * defined over. Emitting a dimension where a drop reason is expected is not a
+ * cosmetic mismatch: every dimension falls through `PUBLIC_DROP_REASON` to
+ * 'UNKNOWN_ERROR' and through `FRIENDLY` to the generic message, so a perfectly
+ * well-understood duplicate is reported to the user as an unknown failure.
+ *
+ * Kept here, beside the dimensions themselves, so any scheduler that drops on a
+ * verdict translates through ONE mapping rather than inventing its own.
+ */
+const DIMENSION_DROP_REASON: Record<ValidationDimension, DropReasonCode> = {
+  // Every duplication dimension is, to the planner, near-identical content.
+  duplicate_headline: 'duplicate_content',
+  duplicate_opening: 'duplicate_content',
+  duplicate_cta: 'duplicate_content',
+  duplicate_semantic_idea: 'duplicate_content',
+  duplicate_narrative: 'duplicate_content',
+  duplicate_slide: 'duplicate_content',
+  duplicate_asset: 'duplicate_content',
+  cross_platform_duplication: 'duplicate_content',
+  historical_duplication: 'duplicate_content',
+  // Not a duplicate: a variant bound to two Master Ideas is a structural
+  // violation, which is what validation_failure means.
+  master_idea_consistency: 'validation_failure',
+};
+
+/**
+ * The planner drop reason for a verdict, chosen from the SAME finding the
+ * verdict's own `reason` names — not `findings[0]`, which is merely insertion
+ * order and carries no contract.
+ */
+export function plannerDropReasonFor(result: ValidationResult): DropReasonCode {
+  const primary = primaryFinding(result.findings, result.decision);
+  return primary ? DIMENSION_DROP_REASON[primary.dimension] : 'duplicate_content';
 }
 
 /**
@@ -258,7 +349,28 @@ export function creatorAssetToGenerated(params: {
     master_idea_id: mi.id ?? null,
     variant_id: variant.variant_id ?? null,
     shared: String(content.distribution_mode ?? '').toLowerCase() === 'shared',
+    // Same card identity the text schedulers group by, read from the same row
+    // content JSON — a creator card fanned out to several platforms shares its
+    // CTA and idea/narrative fingerprints exactly as a text card does.
+    group_id: cardIdOf(content),
   };
+}
+
+/**
+ * The campaign card a row belongs to, from its content JSON. Mirrors the
+ * schedulers' topic-group key precedence (shared source → master content →
+ * execution), so text and creator assets of the SAME card agree on one id.
+ * Returns '' when the row carries no card identity, which suppresses nothing.
+ */
+export function cardIdOf(content: Record<string, any> | null | undefined): string {
+  const c = content && typeof content === 'object' ? content : {};
+  const src = String(c.source_execution_id ?? '').trim();
+  if (src) return `shared::${src}`;
+  const mid = String(c.master_content_id ?? '').trim();
+  if (mid) return `master::${mid}`;
+  const eid = String(c.execution_id ?? '').trim();
+  if (eid) return `unique::${eid}`;
+  return '';
 }
 
 /** Running tallies for observability (validation pass/regen/accept/drop rates). */

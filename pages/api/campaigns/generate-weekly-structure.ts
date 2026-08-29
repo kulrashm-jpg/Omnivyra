@@ -22,7 +22,7 @@ import { emitPlannerMetrics, emitLifecycleTransition } from '../../../backend/se
 import { deriveMasterIdeaBundle, normalizeForFingerprint } from '../../../lib/shared/campaign/masterIdea';
 import { assessCampaignQuality, type CampaignQualityAssessment, type PlannedAsset } from '../../../lib/shared/campaign/campaignQuality';
 import { optimizeCampaign, applyOptimizedContext, DEFAULT_MAX_OPTIMIZATION_PASSES, type OptimizationResult } from '../../../lib/shared/campaign/campaignOptimizer';
-import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type CampaignValidationLanes, type GeneratedAsset } from '../../../lib/shared/campaign/semanticValidation';
+import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, cardIdOf, type CampaignValidationLanes, type GeneratedAsset } from '../../../lib/shared/campaign/semanticValidation';
 import { emitQualityMetrics, emitOptimizationMetrics, emitCampaignRunMetrics } from '../../../backend/services/campaign/campaignObservability';
 import { recordRowFailureBatch, type RowFailureRecord } from '../../../backend/services/boltRowFailureDiagnostics';
 
@@ -2131,10 +2131,15 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       const CREATOR_TYPES = new Set(['carousel', 'infographic', 'image', 'banner', 'video', 'reel', 'short', 'story', 'slider', 'pdf', 'quote_card']);
       for (const row of persistRows as any[]) {
         const pa = toPlannedAsset(row);
+        let rowContent: any = {};
+        try { rowContent = typeof row?.content === 'string' ? JSON.parse(row.content) : (row?.content ?? {}); } catch { rowContent = {}; }
         const genAsset: GeneratedAsset = {
           content_type: pa.content_type,
           platform: String(pa.platform ?? ''),
           text: String(pa.topic_title ?? ''),
+          // Card identity — without it every sibling row of one card counts as a
+          // duplicate here and the diagnostics lanes over-report drops.
+          group_id: cardIdOf(rowContent),
           headline: pa.topic_title ?? null,
           cta: pa.cta ?? null,
           idea_fingerprint: pa.idea_fingerprint ?? null,

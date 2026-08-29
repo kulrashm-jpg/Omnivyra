@@ -45,7 +45,7 @@ import { emitPlannerDrop, emitLifecycleTransition } from './campaign/plannerMetr
 // prompt via the EXISTING additional_guidance slot (item.extra_instruction).
 import { buildStrategicContextString } from '../../lib/shared/campaign/campaignOptimizer';
 // CAMPAIGN-IMPL-007: centralized semantic validation gate + shared regeneration.
-import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type GeneratedAsset } from '../../lib/shared/campaign/semanticValidation';
+import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, plannerDropReasonFor, type GeneratedAsset } from '../../lib/shared/campaign/semanticValidation';
 import { regenerateBeforeDrop } from '../../lib/shared/campaign/campaignLifecycle';
 import { recordRawCounter, recordRawHistogram } from '../observability';
 import { emitMetrics, buildGenerationDurationMetric } from './campaign/campaignObservability';
@@ -60,6 +60,13 @@ import {
   buildCampaignNegativeContext,
   generateUniqueCampaignMaster,
 } from './content/campaignUniquenessGuard';
+// B4.1 — the campaign → canonical content bridge. The campaign spine
+// (daily_content_plans → scheduled_posts) is UNCHANGED; this only mints a
+// canonical `content` artifact ALONGSIDE it so campaign output finally exists
+// in the canonical spine. Governed by the existing default-DENY persistence
+// policy: with CANONICAL_PERSISTENCE_ENABLED off, nothing below runs at all.
+import { createContent } from './content/contentService';
+import { isCanonicalPersistenceEnabled } from './content/canonicalPersistencePolicy';
 // R3-P2 — Content Workspace adoption. ONE pure resolver decides when a row's
 // planner-approved copy is the canonical publishing source (approved →
 // generation fallback; review/draft are planning-only, R3-P2.1). Mirrors the
@@ -171,6 +178,14 @@ function tryParseJson<T>(v: unknown): T | null {
   return typeof v === 'object' ? (v as T) : null;
 }
 
+/** B4.1 — narrow an untyped item field to a trimmed string, or null. Never
+ *  fabricates: an absent/blank/non-primitive field stays null. */
+function asStringOrNull(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t.length > 0 ? t : null;
+}
+
 function isPlaceholder(text: string): boolean {
   const t = String(text || '').trim();
   if (!t) return true;
@@ -250,6 +265,43 @@ function buildBlogSlug(topic: string): string {
     .replace(/-+/g, '-')
     .slice(0, 70) || 'article';
   return `${base}-${Date.now().toString(36)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Semantic drop visibility
+// ---------------------------------------------------------------------------
+
+/**
+ * Phase 111 — a semantic-validation drop must be VISIBLE on the plan row it
+ * cost, not merely counted in a metric and a log line. Before this, a row lost
+ * to the gate was left byte-identical to a row that had simply not been
+ * processed yet, so nothing downstream could tell "rejected as a duplicate"
+ * from "never reached".
+ *
+ * Writes the canonical failure annotation and NOTHING else:
+ *   - never touches `content` or `content_status` — those are planner-owned and
+ *     a drop is an execution outcome, not a planning decision;
+ *   - guarded on `scheduled_post_id IS NULL`, so a row that another worker has
+ *     already scheduled is never relabelled a failure. A lost compare-and-swap
+ *     therefore matches zero rows and changes nothing, rather than destroying
+ *     the winner's result;
+ *   - fully non-fatal — the campaign continues through the remaining slots
+ *     whatever happens here, because visibility must never cost content.
+ */
+async function annotateSemanticDrop(rowId: string, reason: string): Promise<void> {
+  if (!rowId) return;
+  try {
+    await ownedDbTable('daily_content_plans')
+      .update({
+        failure_type: 'semantic_validation',
+        failure_reason: String(reason || 'semantic validation drop').slice(0, 500),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', rowId)
+      .is('scheduled_post_id', null);
+  } catch {
+    /* additive visibility only — a campaign must never fail on its own telemetry */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,9 +458,16 @@ async function executeBlockScheduleRuntime(
     } catch { /* non-fatal */ }
   }
 
+  // B4.1 — evaluated ONCE per run so a policy flip mid-run cannot make one card
+  // canonical and the next not. Default DENY: when this is false the canonical
+  // bridge is not merely skipped at write time, it is never constructed, so the
+  // campaign path is byte-identical to its pre-B4.1 behaviour.
+  const canonicalPersistOn = isCanonicalPersistenceEnabled();
+
   console.log('[block-processor] START', {
     campaignId,
     companyId,
+    canonicalPersistOn,
     dailyPlansCount: dailyPlans.length,
     accountMapKeys: Array.from(accountMap.keys()),
     userId: campaign.user_id,
@@ -634,8 +693,48 @@ async function executeBlockScheduleRuntime(
               const generated = await generateMasterContentFromIntent(item);
               return { text: generated.content ?? '', result: generated };
             },
+            // B4.1 — mint the canonical artifact for the ACCEPTED master and
+            // hand its id back so campaign memory stops recording contentId
+            // null. `companyId` is the value BOLT already resolved server-side
+            // from the campaign (never from a client), and `campaignId` is this
+            // campaign — satisfying content.company_id = authorized campaign
+            // company AND content.campaign_id = campaign id.
+            persistAccepted: canonicalPersistOn && companyId
+              ? async (acceptedText: string) => {
+                  // The brief fields live where buildItemFromEnriched puts them:
+                  // objective/audience under `intent`, brand voice under the
+                  // writer brief's `narrativeStyle`. Reading them off the item
+                  // root would silently persist null for all three.
+                  const itemIntent = ((item as Record<string, unknown>).intent ?? {}) as Record<string, unknown>;
+                  const itemBrief = ((item as Record<string, unknown>).writer_content_brief ?? {}) as Record<string, unknown>;
+                  const created = await createContent({
+                    companyId,
+                    campaignId,
+                    contentType: 'post',
+                    title: topic || null,
+                    body: acceptedText,
+                    topic: topic || null,
+                    objective: asStringOrNull(itemIntent.objective),
+                    audience: asStringOrNull(itemIntent.target_audience),
+                    tone: asStringOrNull(itemBrief.narrativeStyle),
+                    lifecycleStatus: 'generated',
+                    sourceMetadata: {
+                      source: 'boltScheduleBlockProcessor',
+                      campaign_id: campaignId,
+                      week_number: firstRow.week_number ?? null,
+                      day_of_week: firstRow.day_of_week ?? null,
+                    },
+                  });
+                  return created.id;
+                }
+              : undefined,
           });
           master = uniqueOutcome.result;
+          if (uniqueOutcome.contentId) {
+            console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] canonical content created`, {
+              contentId: uniqueOutcome.contentId, campaignId,
+            });
+          }
           if (uniqueOutcome.regenerated) {
             console.log(`[block-processor] [Card ${cardIdx + 1}/${totalCards}] regenerated for uniqueness`, {
               attempts: uniqueOutcome.attempts,
@@ -836,10 +935,16 @@ async function executeBlockScheduleRuntime(
         try { rowContentJson = row.content ? JSON.parse(row.content) : {}; } catch { rowContentJson = {}; }
         const rowMi = rowContentJson.master_idea ?? {};
         const rowFp = rowContentJson.fingerprint ?? {};
+        // The CARD this row belongs to — the same identity the scheduler groups
+        // by. Rows of one card fan out to several platforms and share the card's
+        // headline/CTA/fingerprints by design, so the semantic gate must not
+        // read a card's own siblings as duplicates of each other.
+        const rowCardId = topicGroupKey(row);
         const buildAsset = (text: string): GeneratedAsset => ({
           content_type: rowContentType,
           platform,
           text,
+          group_id: rowCardId,
           headline: rowContentJson.title ?? topic,
           cta: rowMi.cta_strategy ?? rowContentJson.desiredAction ?? null,
           idea_fingerprint: rowFp.idea ?? null,
@@ -882,7 +987,13 @@ async function executeBlockScheduleRuntime(
 
         if (verdict.decision === 'DROP' || verdict.decision === 'REGENERATE') {
           console.warn('[block-processor] semantic-validation drop', { platform, contentType: rowContentType, topic: topic.slice(0, 60), reason: verdict.reason });
-          emitPlannerDrop(verdict.findings[0]?.dimension ?? 'duplicate_content', 1, 'weekly');
+          // Translate the semantic dimension into the PLANNER's drop vocabulary.
+          // Emitting the raw dimension here made every semantic drop resolve to
+          // UNKNOWN_ERROR in publicDropReason/dropReasonMessage and polluted
+          // planner.item.dropped{reason} with out-of-taxonomy values.
+          emitPlannerDrop(plannerDropReasonFor(verdict), 1, 'weekly');
+          // Phase 111 — record WHY this plan row produced nothing, on the row.
+          await annotateSemanticDrop(row.id, verdict.reason);
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
           continue;
