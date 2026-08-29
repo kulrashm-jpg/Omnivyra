@@ -198,12 +198,55 @@ export async function setToken(socialAccountId: string, token: TokenObject): Pro
   if (encryptedRefreshToken) updateData.refresh_token = encryptedRefreshToken;
   if (token.expires_at) updateData.token_expires_at = token.expires_at;
 
+  // D4 — a newly issued token SUPERSEDES any earlier "this credential is dead"
+  // verdict, so the stale lifecycle columns are cleared here, at the ONE seam
+  // every OAuth callback and every successful refresh already passes through.
+  //
+  // Without this the platform had no quick way back from
+  // PROVIDER_REAUTH_REQUIRED: none of the ten OAuth callbacks reset
+  // `connection_state`, and healthProbeService deliberately SKIPS rows already
+  // in PROVIDER_REAUTH_REQUIRED / TOKEN_EXPIRED ("already have an actionable
+  // state"). Reconnecting therefore stored a fresh, valid token and left the row
+  // reading "session expired", so publishing kept telling the owner to reconnect
+  // an account they had just reconnected. The daily lifecycle sweep does
+  // eventually reconcile it, so this closes a window of up to ~24h rather than a
+  // permanent state.
+  //
+  // CONNECTED, not LIVE_VERIFIED: holding a fresh token is not proof the provider
+  // accepts it. The health probe re-verifies and promotes, which it can now do
+  // because the row is no longer skipped.
+  //
+  // Applied as a SEPARATE, best-effort write: storing the token is the job that
+  // must not fail. This repo has already lost an entire OAuth callback to one
+  // column dropped from social_accounts (see the `permissions` note in
+  // pages/api/auth/linkedin/callback.ts), so schema drift here degrades to
+  // "state not cleared" rather than "the user cannot connect".
+  const lifecycleReset = {
+    connection_state: 'CONNECTED',
+    refresh_status: null,
+    refresh_retry_count: 0,
+    last_provider_error: null,
+    last_refresh_error: null,
+    last_live_check_status: null,
+  };
+
   const { error } = await ownedDbTable('social_accounts')
     .update(updateData)
     .eq('id', socialAccountId);
 
   if (error) {
     throw new Error(`Failed to store token: ${error.message}`);
+  }
+
+  try {
+    const { error: resetError } = await ownedDbTable('social_accounts')
+      .update(lifecycleReset)
+      .eq('id', socialAccountId);
+    if (resetError) {
+      console.warn(`[tokenStore] connection lifecycle not reset for ${socialAccountId}: ${resetError.message}`);
+    }
+  } catch (resetErr) {
+    console.warn(`[tokenStore] connection lifecycle reset threw for ${socialAccountId}:`, resetErr);
   }
 
   console.log(`✅ Token stored for account ${socialAccountId}`);

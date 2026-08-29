@@ -14,6 +14,7 @@
  */
 
 import { fingerprint, normalizeForFingerprint } from './masterIdea';
+import type { DropReasonCode } from './plannerDiagnostics';
 
 export type ValidationDecision = 'ACCEPT' | 'REGENERATE' | 'ADAPT' | 'DROP';
 
@@ -291,13 +292,60 @@ function decide(findings: ValidationFinding[]): ValidationDecision {
   return 'ACCEPT';
 }
 
-function primaryReason(findings: ValidationFinding[], decision: ValidationDecision): string {
-  const pick =
-    decision === 'DROP' ? findings.find((f) => TERMINAL_DIMENSIONS.has(f.dimension))
+/** The finding that actually drove the decision (mirrors `decide`'s priority). */
+function primaryFinding(findings: ValidationFinding[], decision: ValidationDecision): ValidationFinding | undefined {
+  return decision === 'DROP' ? findings.find((f) => TERMINAL_DIMENSIONS.has(f.dimension))
     : decision === 'REGENERATE' ? findings.find((f) => REGENERATE_DIMENSIONS.has(f.dimension))
     : decision === 'ADAPT' ? findings.find((f) => f.dimension === 'cross_platform_duplication')
     : findings[0];
+}
+
+function primaryReason(findings: ValidationFinding[], decision: ValidationDecision): string {
+  const pick = primaryFinding(findings, decision);
   return pick ? `${pick.dimension}: ${pick.detail}` : 'passes semantic validation';
+}
+
+/**
+ * D1 — ValidationDimension -> DropReasonCode.
+ *
+ * These are two SEPARATE taxonomies. `ValidationDimension` says which semantic
+ * rule fired; `DropReasonCode` is the planner's drop vocabulary that
+ * `publicDropReason` / `dropReasonMessage` and the scheduling-result UI are
+ * defined over. A dimension emitted where a drop reason is expected falls
+ * through PUBLIC_DROP_REASON to 'UNKNOWN_ERROR' and through FRIENDLY to the
+ * generic message, so a well-understood duplicate reaches the user as an
+ * unknown failure.
+ *
+ * Hard-coding one reason avoids that but mislabels the dimensions that are NOT
+ * duplicates: a variant bound to two Master Ideas is a structural violation, and
+ * reporting it as DUPLICATE_CONTENT sends the user hunting for a duplicate that
+ * does not exist.
+ *
+ * Kept beside the dimensions themselves so every scheduler that drops on a
+ * verdict translates through ONE mapping instead of inventing its own.
+ */
+const DIMENSION_DROP_REASON: Record<ValidationDimension, DropReasonCode> = {
+  duplicate_headline: 'duplicate_content',
+  duplicate_opening: 'duplicate_content',
+  duplicate_cta: 'duplicate_content',
+  duplicate_semantic_idea: 'duplicate_content',
+  duplicate_narrative: 'duplicate_content',
+  duplicate_slide: 'duplicate_content',
+  duplicate_asset: 'duplicate_content',
+  cross_platform_duplication: 'duplicate_content',
+  historical_duplication: 'duplicate_content',
+  // Not a duplicate: a structural violation, which is what validation_failure means.
+  master_idea_consistency: 'validation_failure',
+};
+
+/**
+ * The planner drop reason for a verdict, chosen from the SAME finding the
+ * verdict's own `reason` names — not `findings[0]`, which is merely insertion
+ * order and carries no contract.
+ */
+export function plannerDropReasonFor(result: ValidationResult): DropReasonCode {
+  const primary = primaryFinding(result.findings, result.decision);
+  return primary ? DIMENSION_DROP_REASON[primary.dimension] : 'duplicate_content';
 }
 
 /**

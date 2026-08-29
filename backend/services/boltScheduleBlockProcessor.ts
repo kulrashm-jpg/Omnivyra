@@ -45,7 +45,7 @@ import { emitPlannerDrop, emitLifecycleTransition } from './campaign/plannerMetr
 // prompt via the EXISTING additional_guidance slot (item.extra_instruction).
 import { buildStrategicContextString } from '../../lib/shared/campaign/campaignOptimizer';
 // CAMPAIGN-IMPL-007: centralized semantic validation gate + shared regeneration.
-import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type GeneratedAsset } from '../../lib/shared/campaign/semanticValidation';
+import { validateAsset, ValidationContext, emptyValidationStats, tallyValidation, type GeneratedAsset, plannerDropReasonFor } from '../../lib/shared/campaign/semanticValidation';
 import { regenerateBeforeDrop } from '../../lib/shared/campaign/campaignLifecycle';
 import { recordRawCounter, recordRawHistogram } from '../observability';
 import { emitMetrics, buildGenerationDurationMetric } from './campaign/campaignObservability';
@@ -261,6 +261,42 @@ function buildBlogSlug(topic: string): string {
     .replace(/-+/g, '-')
     .slice(0, 70) || 'article';
   return `${base}-${Date.now().toString(36)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Semantic drop visibility
+// ---------------------------------------------------------------------------
+
+/**
+ * D3 — a semantic-validation drop must be VISIBLE on the plan row it cost, not
+ * merely counted in a metric and a log line. Before this, a row lost to the gate
+ * was left byte-identical to a row that had simply not been processed yet, so
+ * nothing downstream could tell "rejected as a duplicate" from "never reached".
+ *
+ * Writes the canonical failure annotation and NOTHING else:
+ *   - never touches `content` or `content_status` — those are planner-owned and
+ *     a drop is an execution outcome, not a planning decision;
+ *   - guarded on `scheduled_post_id IS NULL`, so a row another worker has already
+ *     scheduled is never relabelled a failure. A lost compare-and-swap therefore
+ *     matches zero rows and changes nothing, rather than destroying the winner's
+ *     result;
+ *   - fully non-fatal — the campaign continues through the remaining slots
+ *     whatever happens here, because visibility must never cost content.
+ */
+async function annotateSemanticDrop(rowId: string, reason: string): Promise<void> {
+  if (!rowId) return;
+  try {
+    await ownedDbTable('daily_content_plans')
+      .update({
+        failure_type: 'semantic_validation',
+        failure_reason: String(reason || 'semantic validation drop').slice(0, 500),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', rowId)
+      .is('scheduled_post_id', null);
+  } catch {
+    /* additive visibility only — a campaign must never fail on its own telemetry */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -859,7 +895,9 @@ async function executeBlockScheduleRuntime(
           // The planner metric takes a DropReasonCode, not a ValidationDimension --
           // two vocabularies that do not overlap. The semantic detail is already on
           // the warn above via verdict.reason, so nothing diagnostic is lost here.
-          emitPlannerDrop('duplicate_content', 1, 'weekly');
+          emitPlannerDrop(plannerDropReasonFor(verdict), 1, 'weekly');
+          // D3 — record WHY this plan row produced nothing, on the row itself.
+          await annotateSemanticDrop(row.id, verdict.reason);
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
           continue;
