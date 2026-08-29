@@ -12,6 +12,7 @@ import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { requireCampaignTenantAccess } from '@/backend/security/TenantGuard';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 import { grantEarnCredit } from '@/backend/services/earnCreditsService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
@@ -85,19 +86,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'campaignId, platform, content, and scheduledDate are required' });
   }
 
-  // Resolve companyId from campaign_versions when the workspace payload didn't supply it
-  if (!companyId) {
-    const { data: cv, error: cvErr } = await supabase
-      .from('campaign_versions')
-      .select('company_id')
-      .eq('campaign_id', campaignId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (cvErr) console.warn('[schedule] companyId lookup error:', cvErr);
-    companyId = cv?.company_id || '';
-    console.log('[schedule] resolved companyId:', companyId);
-  }
+  /*
+   * ACTIVITY-SEC-001 — the campaign is AUTHORIZED before anything is written.
+   *
+   * `campaignId` arrives in the request body and reached the write sinks
+   * unchecked. `scheduled_posts` rows are inserted with `status: 'scheduled'`,
+   * which is a RELEASABLE post status (lib/campaign/publishAuthorization), so
+   * an authenticated user in Company A could plant a post inside Company B's
+   * campaign — visible on B's calendar and board, and a candidate for B's
+   * release/publish pipeline.
+   *
+   * `requireCampaignTenantAccess` is the existing primitive (same one
+   * MEDIA-SEC-002 used): it resolves the campaign's `company_id` from the
+   * DATABASE — never from client input — and runs the canonical TenantGuard.
+   * Unknown campaign → 404, another tenant → 403, no principal → 401.
+   *
+   * The granted organisation then REPLACES any caller-supplied `companyId`.
+   * That body field previously chose the `grantEarnCredit` target org, so a
+   * caller could aim a credit grant at an organisation they have nothing to do
+   * with. Deriving it from the guard removes the field's authority entirely.
+   */
+  const campaignAccess = await requireCampaignTenantAccess(req, res, campaignId);
+  if (!campaignAccess) return;
+  companyId = campaignAccess.organizationId;
+  console.log('[schedule] authorized companyId:', companyId);
 
   // ── Step-16: automatic pre-enqueue shared-media finalization ──────────
   // Runs BEFORE any scheduled_posts persistence / enqueueScheduledPostAt,
@@ -434,9 +446,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const titleNorm = String(title || '').trim();
     if (campaignIdUuid && titleNorm) {
       try {
+        // ACTIVITY-SEC-001: scoped to the AUTHENTICATED owner. Without this the
+        // dedup match was campaign+platform+title — all caller-supplied — so a
+        // match could land on ANOTHER user's row, and the update below rewrites
+        // content, scheduled_for, user_id and social_account_id. That is a
+        // cross-user takeover of someone else's scheduled post, not a dedup.
+        // scheduled_posts is USER-anchored (user_id, no company_id), so
+        // ownership IS user_id — the same model MEDIA-SEC-001 established.
         const { data: existing } = await supabase
           .from('scheduled_posts')
           .select('id')
+          .eq('user_id', userId)
           .eq('campaign_id', campaignIdUuid)
           .eq('platform', platformNorm)
           .eq('title', titleNorm)
@@ -472,9 +492,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // --- Deduplication strategy 2: repurpose_parent_execution_id + platform (legacy fallback) ---
     if (!scheduledPostId && executionIdStr) {
       try {
+        // ACTIVITY-SEC-001: same ownership scope. `executionId` is caller
+        // supplied, so this lookup was likewise able to select another user's row.
         const { data: existing } = await supabase
           .from('scheduled_posts')
           .select('id')
+          .eq('user_id', userId)
           .eq('repurpose_parent_execution_id', executionIdStr)
           .eq('platform', platformNorm)
           .maybeSingle();
