@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware';
 import { getCampaignPlanningInputs } from '../../../backend/services/campaignPlanningInputsService';
 import {
   DEFAULT_BUILD_MODE_RECOMMENDATION,
@@ -30,6 +31,38 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!Array.isArray(groups) || groups.length === 0) {
       return res.status(400).json({ error: 'groups are required' });
     }
+
+    /*
+     * RECOMMENDATIONS-SEC-001 — authorize the company this route ACTUALLY
+     * operates on.
+     *
+     * withRBAC resolves its company from `req.query.companyId ||
+     * req.body.companyId` — camelCase. This handler operates on
+     * `req.body.company_id` — snake_case. They are DIFFERENT FIELDS, so the
+     * caller was authorized against one company and the route then acted on
+     * another: send `companyId=<a company you legitimately admin>` to satisfy
+     * the RBAC wrapper and `company_id=<victim>` to redirect every query and
+     * sink below at that victim tenant.
+     *
+     * This is the inverse of the usual pattern — the caller's company IS
+     * authorized, but the RESOURCE company never is. Binding authorization to
+     * the identifier that reaches the sinks is what closes it.
+     *
+     * requireCompanyAccess delegates to TenantGuard.assertTenantAccess, so
+     * soft-deleted orgs and stale memberships are rejected centrally and
+     * platform super-admins keep their bypass. withRBAC still enforces the
+     * ROLE requirement; this adds the missing tenant binding.
+     *
+     * This route WRITES: it inserts campaign_versions under company_id,
+     * UPDATES that company's recommendation_snapshots to point at the new
+     * campaign, and inserts an audit_logs row under it. Nothing may run
+     * before this gate.
+     */
+    const rbacUserId = (req as any)?.rbac?.userId as string | undefined;
+    if (!rbacUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    if (!(await requireCompanyAccess(rbacUserId, String(company_id), res))) return;
 
     const snapshotHashes = selected_recommendations
       .map((item: any) => item?.snapshot_hash)
