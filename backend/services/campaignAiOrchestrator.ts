@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { resolvePlannerFlag } from './plannerRolloutMode';
 import { logger } from './logger';
 import { getRequestContext } from './requestContext';
 import { generateCampaignPlan, getLlmPoolPressure } from './aiGateway';
@@ -405,7 +406,7 @@ async function runWithContext(
   // the accumulated partial output if the budget aborts mid-stream — far
   // better than the previous behavior where a timeout yielded an empty body.
   const streamingDraftEnabled =
-    String(process.env.STREAMING_DRAFT_ENABLED ?? 'true').toLowerCase() === 'true';
+    resolvePlannerFlag('STREAMING_DRAFT_ENABLED', true);
   const draftingController = new AbortController();
   let draftingTimeoutHandle: ReturnType<typeof setTimeout> | null = setTimeout(
     () => draftingController.abort(),

@@ -31,6 +31,7 @@
  */
 
 import { safeEnqueue } from '../../middleware/queueBackpressure';
+import { resolvePlannerFlag } from '../plannerRolloutMode';
 import { logger } from '../logger';
 import { getRequestContext } from '../requestContext';
 import { plannerEventBus } from '../plannerEventBus';
@@ -53,7 +54,7 @@ export interface AsyncRefinementJobPayload {
 }
 
 export function isAsyncRefinementEnabled(): boolean {
-  return String(process.env.ASYNC_REFINEMENT_ENABLED ?? 'false').toLowerCase() === 'true';
+  return resolvePlannerFlag('ASYNC_REFINEMENT_ENABLED', false);
 }
 
 /**

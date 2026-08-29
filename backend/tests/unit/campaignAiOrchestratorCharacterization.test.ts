@@ -134,9 +134,17 @@ jest.mock('../../services/distributedOverloadCoordinator', () => ({
 jest.mock('../../services/plannerCostGovernance', () => ({
   getCostGuidance: jest.fn(async () => ({ shouldRefine: true, reasons: [] })),
 }));
-jest.mock('../../services/plannerRolloutMode', () => ({
-  applyActiveRolloutMode: jest.fn((x: unknown) => x),
-}));
+jest.mock('../../services/plannerRolloutMode', () => {
+  // Delegate to the REAL module. The rollout resolver is pure — it reads
+  // configuration and returns booleans — so running it here costs nothing and
+  // means this suite actually exercises the code path that once crashed
+  // planning in production, instead of a stub that could never fail.
+  // Stubbing only applyActiveRolloutMode previously hid that entirely, and a
+  // stub factory that omitted resolvePlannerFlag would fail as "not a
+  // function" rather than as a real assertion.
+  const actual = jest.requireActual('../../services/plannerRolloutMode');
+  return { ...actual, applyActiveRolloutMode: jest.fn(actual.applyActiveRolloutMode) };
+});
 jest.mock('../../services/plannerAlerting', () => ({
   recordPlannerAlertCounter: jest.fn(),
 }));

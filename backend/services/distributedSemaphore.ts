@@ -32,6 +32,7 @@
  */
 
 import type IORedis from 'ioredis';
+import { resolvePlannerFlag } from './plannerRolloutMode';
 import { randomUUID } from 'crypto';
 import { logger } from './logger';
 import { getRequestContext } from './requestContext';
@@ -193,7 +194,7 @@ const REDIS_DISABLE_THRESHOLD = 5;
  * (circuit breaker — we'll retry every minute).
  */
 function getRedisOrNull(): IORedis | null {
-  if (String(process.env.DISTRIBUTED_POOL_ENABLED ?? 'true').toLowerCase() !== 'true') {
+  if (!resolvePlannerFlag('DISTRIBUTED_POOL_ENABLED', true)) {
     return null;
   }
   if (_redisFailureCount >= REDIS_DISABLE_THRESHOLD) return null;
