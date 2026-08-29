@@ -176,14 +176,60 @@ export function getActiveFeatureFlags(): PlannerFeatureFlags {
 export function applyActiveRolloutMode(): PlannerFeatureFlags {
   const mode = getActiveRolloutMode();
   const flags = getActiveFeatureFlags();
-  for (const k of Object.keys(flags) as Array<keyof PlannerFeatureFlags>) {
-    process.env[k] = flags[k] ? 'true' : 'false';
-  }
   if (_lastLoggedMode !== mode) {
     _lastLoggedMode = mode;
     logger.info('planner_rollout_mode_active', { mode, flags });
   }
   return flags;
+}
+
+/**
+ * Is the rollout mode an EXPLICIT operator decision?
+ *
+ * This is what decides whether the mode profile governs a flag. It matters
+ * because the six consumers each carry their own long-standing default (the
+ * pool, bucket and streaming flags default ON; the rest default OFF), and
+ * those predate the rollout-mode profiles. `legacy` — the value used when
+ * PLANNER_ROLLOUT_MODE is unset — turns all six OFF, so treating an absent
+ * mode as a decision would silently disable distributed pooling and provider
+ * bucketing for ALL AI traffic, not just the planner: aiGatewayCore consumes
+ * both.
+ *
+ * So an absent mode means "no opinion", and each consumer keeps its own
+ * default. Setting PLANNER_ROLLOUT_MODE is the operator opting in.
+ */
+export function isRolloutModeExplicit(): boolean {
+  const raw = String(process.env.PLANNER_ROLLOUT_MODE ?? '').toLowerCase().trim();
+  return raw !== '' && KNOWN_MODES.includes(raw as PlannerRolloutMode);
+}
+
+/**
+ * Resolve ONE planner rollout flag, explicitly, at the point of use.
+ *
+ * This replaces the mechanism it supersedes: applyActiveRolloutMode used to
+ * copy the resolved flags into process.env so downstream readers would see
+ * them. Production hardens process.env as a readonly proxy whose set-trap
+ * returns false, which throws under strict mode — that write crashed
+ * POST /api/campaigns/ai/plan with a 500 and took campaign planning with it.
+ * (The same failure mode was already hit and guarded in creatorRenderFonts.)
+ *
+ * Resolution order, unchanged in meaning:
+ *   1. an explicit per-flag env var always wins;
+ *   2. otherwise the mode profile, when the operator has set one;
+ *   3. otherwise the consumer's own default.
+ *
+ * The rollout decision is now data returned to the caller rather than global
+ * process state, so no mutation is required and nothing is hidden behind a
+ * try/catch.
+ */
+export function resolvePlannerFlag(
+  key: keyof PlannerFeatureFlags,
+  consumerDefault: boolean,
+): boolean {
+  const explicit = process.env[key];
+  if (explicit !== undefined) return parseBool(explicit, consumerDefault);
+  if (isRolloutModeExplicit()) return getActiveFeatureFlags()[key];
+  return consumerDefault;
 }
 
 /**

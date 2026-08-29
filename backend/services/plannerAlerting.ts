@@ -20,6 +20,7 @@
  */
 
 import { logger } from './logger';
+import { resolvePlannerFlag } from './plannerRolloutMode';
 import { getRequestContext } from './requestContext';
 
 export type PlannerAlertCounter =
@@ -90,7 +91,7 @@ let _redisFailureCount = 0;
 let _redisClientCache: any = null;
 
 function distributedMetricsEnabled(): boolean {
-  return String(process.env.DISTRIBUTED_METRICS_ENABLED ?? 'false').toLowerCase() === 'true';
+  return resolvePlannerFlag('DISTRIBUTED_METRICS_ENABLED', false);
 }
 
 function getRedisOrNull(): any {

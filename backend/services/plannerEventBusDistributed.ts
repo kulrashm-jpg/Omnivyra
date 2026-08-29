@@ -26,6 +26,7 @@
  */
 
 import type IORedis from 'ioredis';
+import { resolvePlannerFlag } from './plannerRolloutMode';
 import { randomUUID } from 'crypto';
 import { logger } from './logger';
 import { plannerEventBus, type PlannerEvent, type PlannerEventType } from './plannerEventBus';
@@ -53,7 +54,7 @@ let _failureCount = 0;
 const FAILURE_DISABLE_THRESHOLD = 5;
 
 function isEnabled(): boolean {
-  return String(process.env.DISTRIBUTED_EVENTS_ENABLED ?? 'false').toLowerCase() === 'true';
+  return resolvePlannerFlag('DISTRIBUTED_EVENTS_ENABLED', false);
 }
 
 function getPubClient(): IORedis | null {

@@ -26,6 +26,7 @@
  */
 
 import { logger } from './logger';
+import { resolvePlannerFlag } from './plannerRolloutMode';
 import { getRequestContext } from './requestContext';
 
 export type ProviderName = 'openai' | 'anthropic';
@@ -137,7 +138,7 @@ export interface TokenReceipt {
 }
 
 export function isEnabled(): boolean {
-  return String(process.env.PROVIDER_BUCKET_ENABLED ?? 'true').toLowerCase() === 'true';
+  return resolvePlannerFlag('PROVIDER_BUCKET_ENABLED', true);
 }
 
 /**
