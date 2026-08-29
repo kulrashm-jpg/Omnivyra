@@ -13,6 +13,22 @@ export type UserContext = {
   role: 'admin' | 'user';
   companyIds: string[];
   defaultCompanyId: string;
+  /**
+   * AUTH-CTX-001 — whether this context came from a PROVEN identity.
+   *
+   * `false` means authentication failed and no identity exists. Guards must
+   * answer 401 for such a context and must not consult tenancy: a caller who
+   * never authenticated is not a non-member, and reporting them as one sent
+   * CP-STRUCT-005 diagnosis at the wrong subsystem for two rounds.
+   *
+   * Absent means "not stated" — only an explicit `false` triggers the 401
+   * gate, so any other producer of a UserContext is unaffected.
+   */
+  authenticated?: boolean;
+  /** Why authentication failed (MISSING_AUTH, INVALID_AUTH, SESSION_REVOKED,
+   *  ACCOUNT_DELETED, ACCOUNT_SUSPENDED, ACCOUNT_INVITED). Never a tenancy
+   *  reason — those stay with TenantGuard. */
+  authError?: string | null;
   /** Default company's membership type. Present when resolved from DB. */
   membershipType?: MembershipType;
   /** Per-company membership. Used for future visibility filtering. */

@@ -4,6 +4,7 @@ import { resolveUserContext as resolveFromLib, type UserContext, type Membership
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
 import { getCompanyRoleIncludingInvited, normalizePermissionRole, Role } from './rbacPrimitives';
 import { assertTenantAccess } from '../security/TenantGuard';
+import { config } from '@/config';
 
 export type { UserContext, MembershipType };
 
@@ -14,12 +15,49 @@ function normalizeMembershipType(value: string | null | undefined): MembershipTy
   return v === 'EXTERNAL' ? 'EXTERNAL' : 'INTERNAL';
 }
 
+/**
+ * AUTH-CTX-001 — the context for a request that did NOT authenticate.
+ *
+ * Explicitly empty: no id, no admin role, no company. The previous behaviour
+ * substituted the synthetic dev identity here — `DEV_USER_ID || 'dev-user'`
+ * with `role: 'admin'` and, worst of all, `companyIds: [the most recently
+ * updated company_profiles row]`, i.e. an arbitrary real tenant. It was
+ * harmless only because 'dev-user' is a member of nothing, so every guard
+ * answered NOT_A_MEMBER — turning "you are not signed in" into "you are not
+ * allowed", on every route in the app.
+ */
+function unauthenticatedContext(authError: string | null): UserContext {
+  return {
+    userId: '',
+    role: 'user',
+    companyIds: [],
+    defaultCompanyId: '',
+    authenticated: false,
+    authError,
+  };
+}
+
+/**
+ * The synthetic dev identity is available ONLY as a deliberate local opt-in:
+ * `DEV_USER_ID` explicitly set AND a non-production build. No DEV_* variable
+ * exists in Vercel production, and nothing in the repo depends on this
+ * fallback (zero no-arg callers, zero tests), so production behaviour is
+ * unchanged apart from the failure it stops masking.
+ */
+function devIdentityOptIn(): boolean {
+  return Boolean(config.DEV_USER_ID) && config.NODE_ENV !== 'production';
+}
+
 export const resolveUserContext = async (req?: NextApiRequest): Promise<UserContext> => {
   if (!req) return resolveFromLib();
 
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user?.id) {
-    return resolveFromLib();
+    // The auth layer already distinguishes MISSING_AUTH / INVALID_AUTH /
+    // SESSION_REVOKED / ACCOUNT_DELETED / ACCOUNT_SUSPENDED. Discarding that
+    // and fabricating an identity is what produced the masking.
+    if (devIdentityOptIn()) return resolveFromLib();
+    return unauthenticatedContext(error ?? 'INVALID_AUTH');
   }
 
   const { data: roleRows, error: roleError } = await supabase
@@ -28,11 +66,16 @@ export const resolveUserContext = async (req?: NextApiRequest): Promise<UserCont
     .eq('user_id', user.id);
 
   if (roleError) {
+    // The IDENTITY is proven; only the membership read failed. Keep it
+    // authenticated so the failure surfaces as a tenancy problem (403/503),
+    // never as "you are not signed in".
     return {
       userId: user.id,
       role: 'user',
       companyIds: [],
       defaultCompanyId: '',
+      authenticated: true,
+      authError: null,
     };
   }
 
@@ -61,6 +104,8 @@ export const resolveUserContext = async (req?: NextApiRequest): Promise<UserCont
     defaultCompanyId,
     membershipType,
     membershipByCompany: Object.keys(membershipByCompany).length ? membershipByCompany : undefined,
+    authenticated: true,
+    authError: null,
   };
 };
 
@@ -109,6 +154,26 @@ export const enforceCompanyAccess = async (input: {
   requireCampaignId?: boolean;
 }): Promise<UserContext | null> => {
   const user = await resolveUserContext(input.req);
+
+  // AUTH-CTX-001 — authentication is answered FIRST, and separately.
+  //
+  // A caller who never authenticated is not a non-member; saying "Access
+  // denied to company" told them (and us) that the problem was tenancy. It
+  // ran before this gate existed because the fabricated identity looked like
+  // a real principal that simply belonged to nothing.
+  //
+  // Only an EXPLICIT false triggers this, so no other producer of a
+  // UserContext is affected, and authorization below is untouched: a genuine
+  // authenticated non-member still receives 403.
+  if (user.authenticated === false) {
+    console.warn('UNAUTHENTICATED', { path: input.req.url, reason: user.authError });
+    input.res.status(401).json({
+      error: 'Authentication required. Please sign in again.',
+      code: 'UNAUTHENTICATED',
+      reason: user.authError ?? 'INVALID_AUTH',
+    });
+    return null;
+  }
 
   if (!input.companyId) {
     console.warn('MISSING_COMPANY_ID', { path: input.req.url });
