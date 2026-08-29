@@ -20,7 +20,7 @@
     "build:ci": "node scripts/safe-build.js",
     "build:webpack": "node scripts/safe-build.js",
     "deploy:check": "node scripts/predeploy-check.js",
-    "deploy:prod": "node scripts/predeploy-check.js && vercel --prod --scope rawats-projects-5fb9f1f3",
+    "deploy:prod": "node scripts/predeploy-check.js && vercel --prod --skip-domain --scope rawats-projects-5fb9f1f3",
     "prestart": "node -e \"require('./scripts/dev-runtime-guard').assertNoActiveDevRuntime('start production server')\"",
     "start": "next start",
     "worker:all": "node dist/backend/workers/main.js",
@@ -150,7 +150,8 @@
     "fresh": "node scripts/safe-fresh.js",
     "rpa:install": "npx playwright install chromium",
     "rpa:check": "node -e \"(async()=>{try{const p=await import('playwright');const b=await p.chromium.launch({headless:true});await b.close();console.log('RPA_ENV_READY');}catch(e){console.error('RPA_ENV_NOT_READY',e?.message);process.exit(1);}})()\"",
-    "perf:journey": "tsx scripts/perf/journey.ts"
+    "perf:journey": "tsx scripts/perf/journey.ts",
+    "verify:deployment": "node scripts/verify-deployment.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
