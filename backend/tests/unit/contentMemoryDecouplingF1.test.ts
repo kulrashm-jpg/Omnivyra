@@ -163,34 +163,73 @@ describe('F1 · the memory row satisfies the live schema', () => {
   });
 });
 
-/* ── Reach: the ≥2-path gate ─────────────────────────────────────────────── */
+/* ── Independence: memory is decoupled from persistence ──────────────────── */
 
-describe('F1 · the memory stage is reachable from multiple generation paths', () => {
-  const PATHS = [
-    'backend/services/content/textGenerationOrchestrator.ts',
-    'backend/services/contentGenerationService.ts',
-  ];
+// WHY THIS IS NOT A PATH COUNT ANY MORE.
+//
+// This block used to assert "at least N generation paths pass persist:false".
+// That was never the invariant — it was circumstantial evidence for it, and it
+// was wrong twice over:
+//
+//   1. One of the two paths it counted (boltContentGenerationForSchedule) had
+//      no caller anywhere in the application, so the bar was partly cleared by
+//      unreachable code.
+//   2. The premise "every live caller passes persist:false" is simply false
+//      today: runPostGeneration and runThreadGeneration deliberately let the
+//      runtime persist for them (they return out.contentId). persist:true is a
+//      legitimate, supported mode — not a violation.
+//
+// The invariant F1 actually protects is INDEPENDENCE, and it holds no matter
+// how many callers exist or which mode they pick: the content_memory write is
+// gated ONLY by its own flag. It must never depend on `persist`, on canonical
+// persistence being allowed, on Stage 6 succeeding, or on a non-null contentId.
+// A count can go to zero or ten without that changing.
+describe('F1 · the memory write is independent of persistence', () => {
+  const src = read(RUNTIME);
+  const stage6b = src.indexOf('// ── Stage 6b');
+  // NOTE: a "Stage 7" section banner also appears near the top of the file, so
+  // the closing bound must be searched FORWARD from Stage 6b, not from 0.
+  const stage7 = src.indexOf('// ── Stage 7', stage6b);
+  const memoryStage = src.slice(stage6b, stage7);
 
-  it.each(PATHS)('%s routes through generationRuntime.generate()', (p) => {
-    expect(read(p)).toMatch(/generationRuntime\.generate\(/);
+  it('Stage 6b exists and sits after the persistence stage, not inside it', () => {
+    expect(stage6b).toBeGreaterThan(-1);
+    expect(stage7).toBeGreaterThan(stage6b);
+    // The decisive assertion, unchanged: the memory stage is not nested in the
+    // canonical-persistence success condition.
+    expect(memoryStage).not.toMatch(/if \(persist\)/);
   });
 
-  // HONESTY NOTE (Path B removal): this list used to include
-  // boltContentGenerationForSchedule.ts, and it was the SECOND persist:false
-  // path. That module had no caller anywhere in the application — so the
-  // "at least two" bar was only ever cleared by counting unreachable code.
-  // Deleting it makes the true count visible: exactly one REACHABLE generation
-  // path passes persist:false today. The number is lowered to match reality,
-  // not to make a failing test pass. The decisive assertion below — that Stage
-  // 6b sits OUTSIDE if(persist) — is what actually protects the behaviour, and
-  // it is unchanged.
-  it('a reachable persist:false path exists — persist:false previously skipped memory entirely', () => {
-    const withPersistFalse = PATHS.filter((p) => /persist:\s*false/.test(read(p)));
-    expect(withPersistFalse.length).toBeGreaterThanOrEqual(1);
-    // Those same paths now reach memory, because Stage 6b is outside if(persist).
-    const src = read(RUNTIME);
-    const stage6b = src.indexOf('// ── Stage 6b');
-    expect(src.slice(stage6b, stage6b + 1600)).not.toMatch(/if \(persist\)/);
+  it('the ONLY gate on the memory write is its own flag', () => {
+    // Exactly one guard, and it is the content-memory flag.
+    expect(memoryStage).toMatch(/if \(isContentMemoryWriteEnabled\(\)\) \{/);
+    // No persistence-derived precondition may creep back in.
+    expect(memoryStage).not.toMatch(/if \(contentId\)/);
+    expect(memoryStage).not.toMatch(/contentId\s*&&/);
+    expect(memoryStage).not.toMatch(/if \(created\)/);
+  });
+
+  it('the runtime indexes content in exactly one place — inside Stage 6b', () => {
+    const callSites = [...src.matchAll(/await indexContentUnit\(/g)].map((m) => m.index!);
+    expect(callSites).toHaveLength(1);
+    // That single call site lives in the memory stage, not the persistence one.
+    expect(callSites[0]).toBeGreaterThan(stage6b);
+    expect(callSites[0]).toBeLessThan(stage7);
+  });
+
+  it('a null contentId is passed through rather than suppressing the write', () => {
+    // content_memory.content_id is a nullable soft ref precisely so a
+    // persist:false generation still fills the corpus.
+    expect(memoryStage).toMatch(/contentId,/);
+  });
+
+  it('persistence itself remains gated on persist — the two stages stay distinct', () => {
+    // Guards against the inverse regression: collapsing Stage 6 into Stage 6b
+    // would make persist:false start writing canonical rows.
+    const stage6 = src.indexOf('// ── Stage 6 — Persistence');
+    expect(stage6).toBeGreaterThan(-1);
+    expect(stage6).toBeLessThan(stage6b);
+    expect(src.slice(stage6, stage6b)).toMatch(/if \(persist\) \{/);
   });
 });
 
