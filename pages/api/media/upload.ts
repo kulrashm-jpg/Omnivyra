@@ -18,6 +18,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import { uploadMedia, validateMedia } from '../../../backend/services/mediaService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 import fs from 'fs';
 
 // Disable body parser to allow file uploads
@@ -85,6 +86,42 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       console.warn('[media-upload] ignoring client-supplied user_id; ownership is the authenticated user', {
         authenticatedUserId: userId,
       });
+    }
+
+    /*
+     * MEDIA-SEC-002 — `campaign_id` is an ASSOCIATION, and it was unchecked.
+     *
+     * Ownership (`user_id`) has been the authenticated identity since #67, but
+     * `campaign_id` came straight off the form and was persisted verbatim. Any
+     * authenticated user could therefore name ANOTHER company's campaign, and
+     * `viralitySnapshotBuilder` reads campaign media by
+     * `.eq('campaign_id', …)` alone — no user or company scoping — so the row
+     * entered that campaign's virality snapshot and its AI context. The victim
+     * running their own assessment consumed the attacker's asset.
+     *
+     * The defence belongs HERE, not in the snapshot builder: the builder takes
+     * only a campaignId, has no request or principal to authorize against, and
+     * `media_files` is USER-anchored (no company_id), so scoping the read would
+     * mean inventing a second ownership model — and would risk dropping
+     * legitimate media uploaded by other members of the same company.
+     *
+     * `requireCampaignTenantAccess` is the existing primitive: it resolves the
+     * campaign's `company_id` from the DATABASE (never from client input) and
+     * runs the canonical TenantGuard. Unknown campaign → 404; a campaign in
+     * another tenant → 403; no principal → 401. Nothing is uploaded or written
+     * before it passes, so a rejected attempt leaves neither a storage object
+     * nor a row.
+     */
+    if (typeof campaignId === 'string' && campaignId.trim()) {
+      const campaignAccess = await requireCampaignTenantAccess(req, res, campaignId.trim());
+      if (!campaignAccess) {
+        // The guard already answered. Drop the parsed temp files so a refused
+        // request leaves nothing behind on disk either.
+        for (const parsed of Object.values(files).flat()) {
+          if (parsed?.filepath) { try { fs.unlinkSync(parsed.filepath); } catch { /* best effort */ } }
+        }
+        return;
+      }
     }
 
     // Get uploaded file
