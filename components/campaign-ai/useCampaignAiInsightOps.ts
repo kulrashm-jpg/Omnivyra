@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 
 type CampaignAiInsightTab =
   | 'chat'
@@ -56,7 +57,7 @@ export function useCampaignAiInsightOps({
     try {
       setIsPerformanceLoading(true);
       if (!ensureCompanyId()) return;
-      const analyticsResponse = await fetch('/api/analytics/report', {
+      const analyticsResponse = await fetchWithAuth('/api/analytics/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
