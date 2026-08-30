@@ -156,6 +156,21 @@ jobs:
     if: needs.e2e-secrets-preflight.outputs.provisioned == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # EPHEMERAL, per-run Redis. Created with the job and destroyed with the
+    # runner, so it holds no production state and the rate-limit reset below is
+    # safe by construction. There is deliberately NO externally hosted Redis:
+    # the only non-loopback instance that exists is production, which this suite
+    # must never touch. E2E_REDIS_URL is therefore redis://localhost:6379.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       # PHASE 147-FIX: MUST be localhost, not 127.0.0.1. The app 307-redirects
       # 127.0.0.1 -> localhost, and the E2E project's uri_allow_list is empty so
@@ -227,6 +242,27 @@ jobs:
       # /api/auth/login returns 429 — which surfaces as an auth timeout. The
       # limiter stays fully active DURING the run; only the pre-run counters are
       # cleared. Scoped SCAN+DEL of rl:* only; refuses a production Redis URL.
+      # Proves the service container is actually reachable from the job before
+      # anything depends on it, so an infrastructure failure is distinguishable
+      # from a test failure. Asserts the target is loopback (the ephemeral
+      # service), never an external or production Redis.
+      - name: Verify ephemeral Redis is healthy
+        run: |
+          node -e "
+            const u = new URL(process.env.E2E_REDIS_URL || process.env.REDIS_URL || '');
+            const loopback = ['localhost','127.0.0.1','::1'].includes(u.hostname);
+            if (!loopback) { console.error('REFUSING: E2E Redis is not the ephemeral service container.'); process.exit(1); }
+            console.log('E2E Redis target is the ephemeral loopback service: OK');
+          "
+          for i in $(seq 1 30); do
+            if redis-cli -h localhost -p 6379 ping 2>/dev/null | grep -q PONG; then
+              echo "Redis service responded to PING after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Ephemeral Redis service never became reachable"
+          exit 1
+
       - name: Reset auth rate-limit counters
         run: npm run reset:auth-e2e-rate-limits
 
