@@ -1,0 +1,206 @@
+name: Campaign Generation Contracts
+
+# DELIBERATELY SCOPED — NOT a whole-repo jest job.
+#
+# WHY THIS EXISTS
+# ---------------
+# The campaign generation spine (BOLT text scheduler → semantic validation →
+# accepted master → canonical `content` → platform expansion → draft/scheduled
+# activity) had NO CI coverage. Every suite below was manual-only: it ran when a
+# person remembered to run it, on a machine that happened to have `.env.local`.
+# A regression in canonical persistence, draft-only safety or the planner/config
+# boundary would have passed every required check.
+#
+# These are the invariants that have actually caught real defects here:
+#   - a canonical row is minted ONCE per accepted master, not per platform;
+#   - it carries the master's OWN content type (an article persisted as 'post');
+#   - content_memory links to it instead of recording contentId null;
+#   - draft-only execution writes `draft` and does NOT enqueue;
+#   - the draft-only gate checks CAMPAIGN_EXECUTE, behind requireCampaignAccess;
+#   - semantic drops map to the PUBLIC planner taxonomy and stay visible;
+#   - the planner rollout resolver never writes to process.env (production
+#     hardens it as a readonly proxy whose set-trap throws — that crashed a live
+#     release once);
+#   - runtime-delegated generation paths never double-persist.
+#
+# HERMETIC: every suite here is a pure unit test — no DB, no network, no LLM.
+# The env values below are deliberately FAKE placeholders whose only job is to
+# satisfy config/env.schema.ts validateEnv() at module import time. No real
+# Supabase project is ever contacted. Do NOT replace these with real credentials
+# — that adds prod-data risk for zero benefit.
+# (Same rationale and values as strategic-recommendation-intelligence.yml and
+# thread-runtime-observability.yml.)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/campaign-generation-contracts.yml'
+      # ── the generation spine ────────────────────────────────────────────
+      - 'backend/services/boltScheduleBlockProcessor.ts'
+      - 'backend/services/boltScheduleIdempotency.ts'
+      - 'backend/services/structuredPlanScheduler*.ts'
+      - 'backend/services/contentGenerationService.ts'
+      - 'backend/services/contentGenerationPipeline.ts'
+      - 'backend/services/contentOverlapService.ts'
+      # ── canonical content + memory + the generation runtime ─────────────
+      - 'backend/services/content/**'
+      - 'backend/services/context/canonicalContentContextResolver.ts'
+      - 'lib/content/canonicalContent.ts'
+      # ── planner: rollout resolution, metrics, drop taxonomy ─────────────
+      - 'backend/services/plannerRolloutMode.ts'
+      - 'backend/services/campaign/**'
+      - 'lib/shared/campaign/semanticValidation.ts'
+      - 'lib/shared/campaign/plannerDiagnostics.ts'
+      - 'lib/campaign/workspaceContentResolution.ts'
+      # ── the release seam the draft-only gate lives on ───────────────────
+      - 'pages/api/campaigns/[id]/release.ts'
+      # ── the suites themselves ──────────────────────────────────────────
+      - 'backend/tests/unit/campaignCanonical*.test.ts'
+      - 'backend/tests/unit/canonicalPersistencePolicy.test.ts'
+      - 'backend/tests/unit/contentMemoryDecouplingF1.test.ts'
+      - 'backend/tests/unit/draftOnly*.test.ts'
+      - 'backend/tests/unit/boltScheduleBlockProcessorCharacterization.test.ts'
+      - 'backend/tests/unit/plannerDropTaxonomyD1.test.ts'
+      - 'backend/tests/unit/semanticDropVisibilityP111.test.ts'
+      - 'backend/tests/unit/plannerRolloutEnforcerP126.test.ts'
+      - 'backend/tests/unit/taskProfileCapability.test.ts'
+      - 'backend/tests/unit/dayContentProfileQuality.test.ts'
+      - 'backend/tests/unit/textgenRuntimeParity.test.ts'
+      - 'backend/tests/unit/blueprintProfileQuality.test.ts'
+      - 'jest.config.js'
+      - 'package.json'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: campaign-generation-contracts-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  campaign-generation-contracts:
+    name: Campaign generation + canonical persistence contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_URL: https://placeholder.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ci-hermetic-placeholder-service-role-key
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-hermetic-placeholder-anon-key
+      REDIS_URL: 'redis://localhost:6379'
+      OPENAI_API_KEY: 'sk-ci-hermetic-placeholder'
+      ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      # CANONICAL_PERSISTENCE_ENABLED is deliberately LEFT UNSET so CI exercises
+      # the shipped default (DENY). The suites set it themselves where they need
+      # it, so coverage does not depend on the flag — and leaving it unset also
+      # proves the default really is deny.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # FAIL LOUDLY, NEVER SILENTLY SKIP.
+      # `npx jest <path>` on a renamed or deleted suite can degrade into "no
+      # tests found" — which is a PASS-shaped failure. This step pins the exact
+      # inventory: every gated file must exist, and jest must discover exactly
+      # as many suites as we list. A suite that is renamed, moved or dropped
+      # fails the gate here instead of vanishing from coverage unnoticed.
+      - name: Verify the gated suite inventory (no silent skips)
+        run: |
+          set -euo pipefail
+          EXPECTED=14
+          node -e "
+            const fs = require('fs');
+            const suites = [
+              'campaignCanonicalBlockPathB41','campaignCanonicalContentTypeP131',
+              'canonicalPersistencePolicy','contentMemoryDecouplingF1',
+              'draftOnlyExecutionP117','draftOnlyAuthorizationP117',
+              'boltScheduleBlockProcessorCharacterization','plannerDropTaxonomyD1',
+              'semanticDropVisibilityP111','plannerRolloutEnforcerP126',
+              'taskProfileCapability','dayContentProfileQuality',
+              'textgenRuntimeParity','blueprintProfileQuality',
+            ];
+            const missing = suites.filter((s) => !fs.existsSync('backend/tests/unit/' + s + '.test.ts'));
+            if (missing.length) {
+              console.error('Gated suite(s) missing — renamed, moved or deleted:', missing.join(', '));
+              process.exit(1);
+            }
+            if (suites.length !== $EXPECTED) {
+              console.error('Inventory drift: listed ' + suites.length + ', expected $EXPECTED');
+              process.exit(1);
+            }
+            console.log('All ' + suites.length + ' gated suites present.');
+          "
+          FOUND=$(npx jest --listTests \
+            backend/tests/unit/campaignCanonicalBlockPathB41.test.ts \
+            backend/tests/unit/campaignCanonicalContentTypeP131.test.ts \
+            backend/tests/unit/canonicalPersistencePolicy.test.ts \
+            backend/tests/unit/contentMemoryDecouplingF1.test.ts \
+            backend/tests/unit/draftOnlyExecutionP117.test.ts \
+            backend/tests/unit/draftOnlyAuthorizationP117.test.ts \
+            backend/tests/unit/boltScheduleBlockProcessorCharacterization.test.ts \
+            backend/tests/unit/plannerDropTaxonomyD1.test.ts \
+            backend/tests/unit/semanticDropVisibilityP111.test.ts \
+            backend/tests/unit/plannerRolloutEnforcerP126.test.ts \
+            backend/tests/unit/taskProfileCapability.test.ts \
+            backend/tests/unit/dayContentProfileQuality.test.ts \
+            backend/tests/unit/textgenRuntimeParity.test.ts \
+            backend/tests/unit/blueprintProfileQuality.test.ts \
+            2>/dev/null | grep -c 'test\.ts')
+          echo "jest discovered $FOUND suite(s); expected $EXPECTED"
+          test "$FOUND" -eq "$EXPECTED"
+
+      # B4.1 — the campaign → canonical content bridge. One canonical row per
+      # ACCEPTED MASTER (never per platform / content type / scheduled post),
+      # anchored to the server-resolved campaign + company, carrying the
+      # master's own content type, with honest source metadata. Also pins the
+      # default-DENY persistence policy and its affirmative-token semantics.
+      - name: B4.1 canonical persistence + content-type contract
+        run: npx jest backend/tests/unit/campaignCanonicalBlockPathB41.test.ts backend/tests/unit/campaignCanonicalContentTypeP131.test.ts backend/tests/unit/canonicalPersistencePolicy.test.ts --no-coverage --colors --ci
+
+      # F1 — the content_memory write must stay INDEPENDENT of persistence.
+      # Before F1 it lived inside if(persist) after createContent succeeded, so
+      # the corpus was structurally unfillable and the originality gate could
+      # never fail. Re-coupling it is silent in production.
+      - name: Content-memory independence (F1)
+        run: npx jest backend/tests/unit/contentMemoryDecouplingF1.test.ts --no-coverage --colors --ci
+
+      # Draft-only execution is the mechanism that lets an operator run a real
+      # campaign without publishing: status 'draft' instead of 'scheduled', and
+      # the enqueue call skipped. Its authorization must stay on CAMPAIGN_EXECUTE
+      # behind requireCampaignAccess — a regression here either blocks legitimate
+      # operators or, worse, publishes.
+      - name: Draft-only execution + authorization
+        run: npx jest backend/tests/unit/draftOnlyExecutionP117.test.ts backend/tests/unit/draftOnlyAuthorizationP117.test.ts --no-coverage --colors --ci
+
+      # The live text scheduler's characterized behaviour (dedup, regeneration
+      # budget, schedule floor, placeholder rejection) plus the drop taxonomy:
+      # semantic drops must map to the PUBLIC planner reasons and be persisted
+      # as a visible annotation rather than disappearing.
+      - name: Block scheduler characterization + drop taxonomy/visibility
+        run: npx jest backend/tests/unit/boltScheduleBlockProcessorCharacterization.test.ts backend/tests/unit/plannerDropTaxonomyD1.test.ts backend/tests/unit/semanticDropVisibilityP111.test.ts --no-coverage --colors --ci
+
+      # The planner rollout resolver must NEVER assign to process.env. In
+      # production the config enforcer wraps it in a readonly proxy whose set
+      # trap returns false — under strict mode that throws and took down a live
+      # campaign release. This suite pins resolution-without-mutation.
+      - name: Planner rollout vs config enforcer
+        run: npx jest backend/tests/unit/plannerRolloutEnforcerP126.test.ts --no-coverage --colors --ci
+
+      # Runtime delegation must not double-persist. Families that converge onto
+      # the canonical GenerationRuntime persist through their OWN path; the
+      # profile route is persistence-free by contract, and the parity corpus
+      # proves the delegated path matches legacy without writing canonical rows.
+      - name: Runtime delegation persistence contracts (no double-persist)
+        run: npx jest backend/tests/unit/taskProfileCapability.test.ts backend/tests/unit/dayContentProfileQuality.test.ts backend/tests/unit/textgenRuntimeParity.test.ts backend/tests/unit/blueprintProfileQuality.test.ts --no-coverage --colors --ci
