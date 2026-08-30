@@ -51,6 +51,15 @@ jobs:
       - name: Tenant-authz guard
         run: npm run check:authz
 
+      # WITHRBAC-STRUCT-001: fail the build if a withRBAC route re-derives a
+      # tenant identifier and operates on it without binding to the company the
+      # wrapper authorized (req.rbac.companyId) or an approved ownership
+      # primitive. This is the "wrapper authorizes A, handler operates on B"
+      # class found in RECOMMENDATIONS-SEC-001, OPPORTUNITIES-SEC-001 and
+      # WITHRBAC-SEC-001.
+      - name: withRBAC identifier-binding guard
+        run: npm run check:rbac-binding
+
       # AUTH-ENFORCEMENT Phase 1 (C-3/C-4): route-policy inventory + validation
       # warnings. Non-blocking by design in Phase 1 (docs/security/
       # AUTH-ENFORCEMENT-ARCHITECTURE.md v3 §5); ROUTE_POLICY_STRICT=1 promotes
