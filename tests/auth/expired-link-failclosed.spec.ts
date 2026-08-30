@@ -12,6 +12,7 @@ import {
   withBrowser,
   warmAuthRoutes,
 } from './authTestHarness';
+import { findAuthStateKeys } from './authStateKeys';
 
 test('expired or reused verification link fails closed and leaves no auth state', async () => {
   await assertDevServer();
@@ -30,7 +31,9 @@ test('expired or reused verification link fails closed and leaves no auth state'
       assert.match(expiredState.url, /\/login\?error=verification_invalid_or_expired/);
       assertNoResidualAuth(expiredState);
       assert.equal(expiredState.orgContext.status, null);
-      assert.deepEqual(expiredState.sessionStorageKeys, []);
+      // Auth-specific, not "sessionStorage must be empty": anonymous visitor
+      // telemetry (omn_session / omn_journey) legitimately survives.
+      assert.deepEqual(findAuthStateKeys(expiredState.sessionStorageKeys), []);
     });
   } finally {
     await cleanupUsersByEmail([email]);

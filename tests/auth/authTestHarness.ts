@@ -4,21 +4,59 @@ import path from 'node:path';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import {
+  assertNonProductionE2EEnvironment,
+  loadE2EEnvFile,
+  type E2EGuardResult,
+} from './e2eEnvironmentGuard';
+import { findAuthStateKeys, isAuthStateKey } from './authStateKeys';
+import { cleanupIdentity } from './e2eIdentityCleanup';
 
-dotenv.config({ path: '.env.local' });
+// NEVER load .env.local here: it points at the PRODUCTION Supabase project and
+// this suite creates and deletes real users. The E2E environment comes from an
+// E2E-specific file (default .env.e2e, gitignored) or from CI-supplied env vars.
+// There is deliberately no fallback to .env.local.
+loadE2EEnvFile(dotenv.config);
 
 export const BASE_URL = process.env.AUTH_E2E_BASE_URL || 'http://127.0.0.1:3000';
 export const TEST_PASSWORD = 'CodexTest9!';
 const DEFAULT_TIMEOUT_MS = Number(process.env.AUTH_E2E_TIMEOUT_MS ?? 120_000);
 const POLL_INTERVAL_MS = 250;
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseUrl =
+  process.env.E2E_SUPABASE_URL ||
+  process.env.E2E_NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey =
+  process.env.E2E_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-assert(supabaseUrl, 'SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL is required for auth E2E tests');
-assert(serviceRoleKey, 'SUPABASE_SERVICE_ROLE_KEY is required for auth E2E tests');
+// Fail-closed: refuses production, empty, malformed, local and placeholder
+// targets. Runs at module load, i.e. before any admin API call is reachable.
+export const e2eEnvironment: E2EGuardResult = assertNonProductionE2EEnvironment({
+  supabaseUrl,
+  serviceRoleKey,
+  expectedProjectRef: process.env.AUTH_E2E_EXPECTED_PROJECT_REF ?? undefined,
+});
 
-export const adminSupabase = createClient(supabaseUrl, serviceRoleKey, {
+/**
+ * Re-asserts the guard immediately before every privileged admin call, so that
+ * removing the module-level assertion alone cannot re-open the production path.
+ */
+function assertGuardedAdminCall(operation: string): void {
+  try {
+    assertNonProductionE2EEnvironment({
+      supabaseUrl,
+      serviceRoleKey,
+      expectedProjectRef: process.env.AUTH_E2E_EXPECTED_PROJECT_REF ?? undefined,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`refusing admin operation "${operation}": ${reason}`);
+  }
+}
+
+export const adminSupabase = createClient(supabaseUrl as string, serviceRoleKey as string, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
@@ -57,6 +95,7 @@ export async function warmAuthRoutes(): Promise<void> {
 }
 
 export async function createConfirmedUser(email: string): Promise<string> {
+  assertGuardedAdminCall('createUser');
   const { data, error } = await adminSupabase.auth.admin.createUser({
     email,
     password: TEST_PASSWORD,
@@ -68,6 +107,7 @@ export async function createConfirmedUser(email: string): Promise<string> {
 }
 
 export async function createSignupLink(email: string): Promise<string> {
+  assertGuardedAdminCall('generateLink');
   const { data, error } = await adminSupabase.auth.admin.generateLink({
     type: 'signup',
     email,
@@ -79,12 +119,23 @@ export async function createSignupLink(email: string): Promise<string> {
   return data.properties.action_link;
 }
 
+/**
+ * Removes the Supabase auth user AND every application-side row created for the
+ * test identity (see e2eIdentityCleanup.ts for the verified dependency order).
+ * Idempotent. Failures are aggregated and rethrown rather than swallowed, so a
+ * cleanup that silently leaves residue can no longer pass unnoticed.
+ */
 export async function cleanupUsersByEmail(emails: string[]): Promise<void> {
+  assertGuardedAdminCall('listUsers/deleteUser');
+  const failures: string[] = [];
   for (const email of emails) {
-    const { data } = await adminSupabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    const user = data?.users.find((candidate) => candidate.email?.toLowerCase() === email.toLowerCase());
-    if (user?.id) await adminSupabase.auth.admin.deleteUser(user.id).catch(() => undefined);
+    try {
+      await cleanupIdentity(adminSupabase, email);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
   }
+  if (failures.length) throw new Error(`auth E2E cleanup failed: ${failures.join(' | ')}`);
 }
 
 export async function withBrowser<T>(
@@ -183,14 +234,25 @@ export async function waitForLoggedOutState(page: Page, label = 'logout'): Promi
     lastState = state;
     return (
       state.identity.email === null &&
-      !state.cookies.includes('omnivyra_session') &&
-      !state.cookies.some((name) => name.startsWith('sb-')) &&
-      !state.localStorageKeys.some((key) => key.startsWith('sb-')) &&
-      !state.localStorageKeys.includes('selected_company_id') &&
-      !state.localStorageKeys.includes('company_id') &&
-      state.sessionStorageKeys.length === 0
+      !state.cookies.some(isAuthStateKey) &&
+      // Auth-specific, not "storage must be empty": anonymous visitor telemetry
+      // (omn_anon_id / omn_session / omn_journey) legitimately survives logout.
+      // isAuthStateKey mirrors the product's own definition of auth/tenant
+      // state, so new anonymous keys are allowed and new auth keys are caught.
+      findAuthStateKeys(state.localStorageKeys).length === 0 &&
+      findAuthStateKeys(state.sessionStorageKeys).length === 0
     );
-  }, () => `expected logged-out state during ${label}. Last state: ${formatSnapshot(lastState)}`, DEFAULT_TIMEOUT_MS);
+  }, () => {
+    const offenders = lastState
+      ? [
+          ...findAuthStateKeys(lastState.cookies).map((k) => `cookie:${k}`),
+          ...findAuthStateKeys(lastState.localStorageKeys).map((k) => `local:${k}`),
+          ...findAuthStateKeys(lastState.sessionStorageKeys).map((k) => `session:${k}`),
+        ]
+      : [];
+    const detail = offenders.length ? ` Residual auth keys: ${offenders.join(', ')}.` : '';
+    return `expected logged-out state during ${label}.${detail} Last state: ${formatSnapshot(lastState)}`;
+  }, DEFAULT_TIMEOUT_MS);
 }
 
 export async function waitForCompanyContext(page: Page, label = 'company context'): Promise<void> {
@@ -250,7 +312,11 @@ export async function snapshot(page: Page): Promise<BrowserAuthSnapshot> {
 export function assertNoResidualAuth(state: BrowserAuthSnapshot): void {
   assert.equal(state.identity.email, null, 'Supabase identity must be absent');
   assertCookieState(state, { omnivyra: 'absent', supabase: 'absent' });
-  assert(!state.localStorageKeys.some((key) => key.startsWith('sb-')), 'Supabase localStorage auth must be absent');
+  const residual = [
+    ...findAuthStateKeys(state.localStorageKeys).map((key) => `local:${key}`),
+    ...findAuthStateKeys(state.sessionStorageKeys).map((key) => `session:${key}`),
+  ];
+  assert.deepEqual(residual, [], `no auth-state storage keys may remain, found: ${residual.join(', ')}`);
   assertStorageIsolation(state);
 }
 
