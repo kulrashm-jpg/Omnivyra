@@ -32,43 +32,16 @@ name: Campaign Generation Contracts
 # thread-runtime-observability.yml.)
 
 on:
+  # NO path filter, deliberately. A path-filtered workflow emits NO check on a
+  # PR that does not match, and a REQUIRED status check that is never reported
+  # leaves the PR permanently stuck on "Expected — waiting for status to be
+  # reported". Branch protection requires this context, so it must be emitted on
+  # every PR. The job is hermetic and ~52s including install, so always running
+  # it is the correct trade for making it enforceable.
+  #
+  # The suites below are unaffected: on a PR that touches nothing they simply
+  # pass, which is exactly the signal a required check should give.
   pull_request:
-    paths:
-      - '.github/workflows/campaign-generation-contracts.yml'
-      # ── the generation spine ────────────────────────────────────────────
-      - 'backend/services/boltScheduleBlockProcessor.ts'
-      - 'backend/services/boltScheduleIdempotency.ts'
-      - 'backend/services/structuredPlanScheduler*.ts'
-      - 'backend/services/contentGenerationService.ts'
-      - 'backend/services/contentGenerationPipeline.ts'
-      - 'backend/services/contentOverlapService.ts'
-      # ── canonical content + memory + the generation runtime ─────────────
-      - 'backend/services/content/**'
-      - 'backend/services/context/canonicalContentContextResolver.ts'
-      - 'lib/content/canonicalContent.ts'
-      # ── planner: rollout resolution, metrics, drop taxonomy ─────────────
-      - 'backend/services/plannerRolloutMode.ts'
-      - 'backend/services/campaign/**'
-      - 'lib/shared/campaign/semanticValidation.ts'
-      - 'lib/shared/campaign/plannerDiagnostics.ts'
-      - 'lib/campaign/workspaceContentResolution.ts'
-      # ── the release seam the draft-only gate lives on ───────────────────
-      - 'pages/api/campaigns/[id]/release.ts'
-      # ── the suites themselves ──────────────────────────────────────────
-      - 'backend/tests/unit/campaignCanonical*.test.ts'
-      - 'backend/tests/unit/canonicalPersistencePolicy.test.ts'
-      - 'backend/tests/unit/contentMemoryDecouplingF1.test.ts'
-      - 'backend/tests/unit/draftOnly*.test.ts'
-      - 'backend/tests/unit/boltScheduleBlockProcessorCharacterization.test.ts'
-      - 'backend/tests/unit/plannerDropTaxonomyD1.test.ts'
-      - 'backend/tests/unit/semanticDropVisibilityP111.test.ts'
-      - 'backend/tests/unit/plannerRolloutEnforcerP126.test.ts'
-      - 'backend/tests/unit/taskProfileCapability.test.ts'
-      - 'backend/tests/unit/dayContentProfileQuality.test.ts'
-      - 'backend/tests/unit/textgenRuntimeParity.test.ts'
-      - 'backend/tests/unit/blueprintProfileQuality.test.ts'
-      - 'jest.config.js'
-      - 'package.json'
   push:
     branches: [main]
   workflow_dispatch:
