@@ -70,12 +70,56 @@ jobs:
       - name: Static auth integrity invariants
         run: node scripts/check-auth-integrity-invariants.js
 
+  # ── PROVISIONING PREFLIGHT ──────────────────────────────────────────────────
+  # Reports ONLY whether the E2E secrets exist. It never echoes a secret, and
+  # never fails: an unprovisioned repo yields provisioned=false and the E2E job
+  # below is skipped rather than failed.
+  e2e-secrets-preflight:
+    name: E2E provisioning preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      provisioned: ${{ steps.check.outputs.provisioned }}
+    steps:
+      - name: Detect E2E secret provisioning
+        id: check
+        env:
+          S1: ${{ secrets.SUPABASE_URL }}
+          S2: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          S3: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          S4: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          S5: ${{ secrets.SESSION_COOKIE_SECRET }}
+          S6: ${{ secrets.REDIS_URL }}
+          S7: ${{ secrets.ENCRYPTION_KEY }}
+        run: |
+          missing=0
+          for v in S1 S2 S3 S4 S5 S6 S7; do
+            if [ -z "${!v}" ]; then missing=$((missing+1)); fi
+          done
+          # Count only — naming which secret is absent is still safe, but the
+          # count alone is enough and leaks nothing about configuration.
+          if [ "$missing" -eq 0 ]; then
+            echo "All 7 E2E secrets present — auth E2E will run."
+            echo "provisioned=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$missing of 7 E2E secrets absent — auth E2E will SKIP (not fail)."
+            echo "provisioned=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ── PARKED HALF (live Supabase E2E) ─────────────────────────────────────────
   auth-integrity:
     name: Auth integrity regression lock
-    # PARKED: dispatch-only. This guard is what keeps the workflow's new
-    # `pull_request` trigger from ever reaching the secret-dependent E2E job.
-    if: github.event_name == 'workflow_dispatch'
+    # ACTIVATION IS DRIVEN BY PROVISIONING, NOT BY A HARD-CODED PARK.
+    #
+    # This job runs as soon as the E2E secrets exist and SKIPS (never fails)
+    # while they do not. A hard-coded park meant a human had to remember to
+    # come back and flip it; an unconditional trigger with no secrets would
+    # paint every PR red for an environment reason unrelated to authentication.
+    #
+    # The `secrets` context is NOT available in a job-level `if:`, so presence
+    # is computed by the preflight job, which emits only a boolean.
+    needs: e2e-secrets-preflight
+    if: needs.e2e-secrets-preflight.outputs.provisioned == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -86,6 +130,13 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET }}
+      # Phase 138 finding: config/env.schema.ts requires BOTH of these and the
+      # job supplied neither, so `npm run dev` died at config validation and the
+      # readiness poll timed out with a message that looked like an auth failure.
+      # REDIS_URL only has to be PRESENT and parseable (every Redis client uses
+      # lazyConnect), so a placeholder needs no Redis service container.
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -104,6 +155,25 @@ jobs:
 
       - name: Static auth integrity invariants
         run: npm run check:auth-integrity-invariants
+
+      # HARD SAFETY GATE. The harness calls admin.listUsers and admin.deleteUser.
+      # If SUPABASE_URL ever points at the production project this job must die
+      # BEFORE the server starts. Compares against the known production ref and
+      # prints only a boolean verdict, never the URL.
+      - name: Refuse to run against production
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          node -e "
+            const PROD='klkiseupptzbecbxwrky';
+            const url=String(process.env.SUPABASE_URL||'');
+            if (!url) { console.error('SUPABASE_URL empty'); process.exit(1); }
+            if (url.includes(PROD)) {
+              console.error('REFUSING TO RUN: SUPABASE_URL points at the PRODUCTION project.');
+              process.exit(1);
+            }
+            console.log('Target is non-production: OK');
+          "
 
       - name: Validate auth test environment
         run: |
