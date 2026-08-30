@@ -32,7 +32,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
-  const organizationId = String(body.org_id ?? body.organization_id ?? '').trim();
+  // ORGACCESS-BINDING-SEC-001: bind to the org withOrgAccess AUTHORIZED, not to
+  // one re-derived from the body. The wrapper's resolver reads query first, so
+  // `?org_id=<own>` with `{"org_id":"<victim>"}` authorized one organization
+  // while closePurchaseFromClient scoped its ownership check — and therefore the
+  // payment-state mutation — to another. A body identifier may still be sent for
+  // compatibility; it can no longer redirect the operation.
+  const organizationId = String((req as any).orgAccess?.orgId ?? '').trim();
   const purchaseId = String(body.purchase_id ?? '').trim();
   const rawReason = String(body.reason ?? 'client_reported_failure').trim();
 
