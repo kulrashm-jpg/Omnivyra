@@ -55,11 +55,47 @@ async function postHandler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'companyId and type are required' });
   }
 
+  /*
+   * OPPORTUNITIES-SEC-002 — operate on the company withRBAC AUTHORIZED.
+   *
+   * withRBAC resolves `req.query.companyId || req.body.companyId` — QUERY
+   * FIRST. This handler read `req.body.companyId` only, so
+   * `?companyId=<a company the caller legitimately admins>` with
+   * `{ companyId: <victim> }` in the body authorized one company and operated
+   * on another. Every sink below took the body value: fillOpportunitySlots
+   * passes it to countActive, to the trend generator, and to
+   * upsertOpportunities (a WRITE), and the response then returns the victim's
+   * opportunity list and count to the caller.
+   *
+   * The body identifier is kept — the only caller sends it and no query param
+   * (components/recommendations/tabs/useOpportunities), so for real traffic it
+   * already equals the authorized company. But it must AGREE with that company
+   * rather than override it, and the sinks now receive the authorized value.
+   *
+   * req.rbac.companyId is the company the wrapper actually authorized
+   * (WITHRBAC-STRUCT-001). Checked before any read, generator run or upsert.
+   *
+   * GET is unchanged and needs no binding: it reads `req.query.companyId`,
+   * which is the wrapper's own first precedence, so the two cannot diverge.
+   */
+  const authorizedCompanyId = (req as any)?.rbac?.companyId as string | undefined;
+  if (!authorizedCompanyId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (String(companyId) !== authorizedCompanyId) {
+    console.warn('OPPORTUNITIES_COMPANY_MISMATCH', {
+      path: req.url,
+      userId: (req as any)?.rbac?.userId,
+      authorizedCompanyId,
+    });
+    return res.status(403).json({ error: 'Company does not match the authorized company' });
+  }
+
   try {
-    await fillOpportunitySlots(companyId, type, strategicPayload);
+    await fillOpportunitySlots(authorizedCompanyId, type, strategicPayload);
     const [opportunities, activeCount] = await Promise.all([
-      listActiveOpportunities(companyId, type),
-      countActive(companyId, type),
+      listActiveOpportunities(authorizedCompanyId, type),
+      countActive(authorizedCompanyId, type),
     ]);
     return res.status(200).json({ opportunities, activeCount } as OpportunitiesListResponse);
   } catch (e) {
