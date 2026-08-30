@@ -53,6 +53,11 @@ const APPROVED = [
   // Documented shim over assertTenantAccess (authMiddleware): verifies an
   // active role in the requested company, 403s otherwise, super-admin bypass.
   'requireCompanyAccess', 'requireCampaignTenantAccess',
+  // Pass-through shim over requireTenantAccess (requestAccessService): it calls
+  // requireTenantAccess and returns null on refusal, adding no bypass of its
+  // own. Certified against company/billing/{ledger,summary} by
+  // companyBillingTenantBinding.test.ts (COMPANY-BILLING-BATCH-SEC-001).
+  'assertOrgAccess',
   // Thin wrapper that unconditionally calls enforceRole with the request's
   // companyId and returns early unless it passes (backend/middleware/withRBAC).
   'withRBAC',
