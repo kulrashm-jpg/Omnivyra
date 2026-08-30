@@ -26,7 +26,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
-  const companyId = String(body.companyId ?? body.org_id ?? body.organization_id ?? '').trim();
+  // ORGACCESS-BINDING-SEC-001: bind to the org withOrgAccess AUTHORIZED.
+  //
+  // This handler previously preferred `body.companyId` while the wrapper's
+  // resolver prefers `body.org_id`, so the two could disagree with NO query
+  // string at all: `{"org_id":"<own>","companyId":"<victim>"}` authorized one
+  // organization and attributed every ingested event to the other.
+  // ingestUsageEvents forces `ctx.companyId` onto each event (so a per-event
+  // companyId cannot spoof), which makes THIS value the sole attribution
+  // authority — it must therefore be the authorized one.
+  const companyId = String((req as any).orgAccess?.orgId ?? '').trim();
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
 
   // withOrgAccess already validated the caller's access to this company and

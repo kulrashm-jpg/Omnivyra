@@ -60,6 +60,15 @@ jobs:
       - name: withRBAC identifier-binding guard
         run: npm run check:rbac-binding
 
+      # ORGACCESS-BINDING-SEC-001: the same class for the OTHER wrapper.
+      # withOrgAccess resolves query.org_id || body.org_id || body.organization_id
+      # || body.companyId, so a handler re-deriving the organization can diverge
+      # both from the query AND — because the body keys are themselves ordered —
+      # from the body, with no query string at all. Found in
+      # checkout/{create-order,verify,close} and usage/track.
+      - name: withOrgAccess identifier-binding guard
+        run: npm run check:orgaccess-binding
+
       # AUTH-ENFORCEMENT Phase 1 (C-3/C-4): route-policy inventory + validation
       # warnings. Non-blocking by design in Phase 1 (docs/security/
       # AUTH-ENFORCEMENT-ARCHITECTURE.md v3 §5); ROUTE_POLICY_STRICT=1 promotes
