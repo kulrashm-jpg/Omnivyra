@@ -3,8 +3,6 @@
   "grandfathered": [
     "pages/api/account-context/analyze.ts",
     "pages/api/admin/check-super-admin.ts",
-    "pages/api/billing/checkout/create-order.ts",
-    "pages/api/billing/checkout/verify.ts",
     "pages/api/billing/invoices/[id]/pdf.ts",
     "pages/api/blogs/[id]/public.ts",
     "pages/api/blogs/public.ts",

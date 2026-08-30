@@ -22,7 +22,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
-  const organizationId = String(body.org_id ?? body.organization_id ?? '').trim();
+  // BILLING-CHECKOUT-SEC-001: bind to the org withOrgAccess AUTHORIZED, not to
+  // one re-derived from the body. The wrapper's resolver reads query first, so
+  // `?org_id=<own>` with `{"org_id":"<victim>"}` authorized one organization and
+  // charged, recorded and ordered against another.
+  const organizationId = String((req as any).orgAccess?.orgId ?? '').trim();
   const packageId = String(body.package_id ?? '').trim();
   if (!organizationId) return res.status(400).json({ error: 'org_id is required' });
   if (!packageId) return res.status(400).json({ error: 'package_id is required' });
