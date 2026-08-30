@@ -24,6 +24,18 @@ jest.mock('../../services/intelligenceExecutionContext', () => ({
 }));
 
 jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (h: any) => h }));
+/*
+ * WITHRBAC-SEC-001 — these routes now bind the campaign's server-owned company
+ * to the caller via requireCampaignTenantAccess before reading anything. This
+ * suite covers optimization OUTPUT, not the authorization boundary, and it
+ * already bypasses withRBAC, so the guard is granted here. The boundary itself
+ * (foreign campaign, identifier splits, ordering) is covered against the real
+ * primitives in backend/tests/unit/withRbacSec001IdentifierBinding.test.ts.
+ */
+jest.mock('../../security/TenantGuard', () => ({
+  requireCampaignTenantAccess: jest.fn(async () => ({ organizationId: 'test-company' })),
+}));
+
 
 import { supabase } from '../../db/supabaseClient';
 import { getCampaignRoiIntelligence } from '../../services/CampaignRoiIntelligenceService';
@@ -183,7 +195,7 @@ describe('Campaign Optimization Proposal', () => {
   });
 
   it('API returns 400 when campaignId is missing', async () => {
-    const req: any = { method: 'GET', query: {} };
+    const req: any = { method: 'GET', headers: {}, query: {} };
     const res: any = {
       statusCode: 200,
       setHeader: jest.fn(),
@@ -212,7 +224,7 @@ describe('Campaign Optimization Proposal', () => {
       },
     ]);
 
-    const req: any = { method: 'GET', query: { campaignId } };
+    const req: any = { method: 'GET', headers: {}, query: { campaignId } };
     const res: any = {
       statusCode: 200,
       setHeader: jest.fn(),

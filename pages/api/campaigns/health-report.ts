@@ -12,6 +12,7 @@ import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetSto
 import { getLatestAnalyticsReport, getLatestLearningInsights } from '../../../backend/db/performanceStore';
 import { ALL_ROLES } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -37,6 +38,28 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     if (!companyId || !campaignId) {
       return res.status(404).json({ status: 'blocked', reason: 'campaign not found' });
     }
+
+    /*
+     * WITHRBAC-SEC-001 — bind the campaign's OWNER to the authorized caller.
+     *
+     * withRBAC authorizes `query.companyId || body.companyId`; this handler read
+     * `body.companyId` only, and when that was absent it DERIVED the company
+     * from the campaign row. The ownership check below then compared the
+     * campaign against that derived value — self-consistent, but bound to
+     * nothing the caller was authorized for. So passing companyId in the QUERY
+     * (satisfying the wrapper) with another tenant's campaignId in the body read
+     * that tenant's company profile, resolved plan context, trend snapshots,
+     * analytics report and learning insights. This route allows ALL_ROLES, so
+     * any authenticated member of any company could do it.
+     *
+     * requireCampaignTenantAccess resolves the campaign's server-owned
+     * company_id and asserts tenant access against it; the authorized
+     * organization then replaces the caller-derived value for every read below.
+     * Super-admins keep their bypass.
+     */
+    const campaignAccess = await requireCampaignTenantAccess(req, res, String(campaignId));
+    if (!campaignAccess) return;
+    companyId = campaignAccess.organizationId;
 
     const { data: ownershipRows, error: ownershipError } = await supabase
       .from('campaign_versions')
