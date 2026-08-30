@@ -1066,6 +1066,10 @@ export function useRecommendationsState() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // withRBAC resolves the company from `companyId`; the handler operates on
+          // `company_id`. Send both so the RBAC wrapper and the route's own tenant
+          // guard authorize the SAME company (RECOMMENDATIONS-SEC-001).
+          companyId: selectedCompanyId,
           company_id: selectedCompanyId,
           selected_recommendations: selectedPayload,
         }),
@@ -1140,6 +1144,10 @@ export function useRecommendationsState() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // withRBAC resolves the company from `companyId`; the handler operates on
+          // `company_id`. Send both so the RBAC wrapper and the route's own tenant
+          // guard authorize the SAME company (RECOMMENDATIONS-SEC-001).
+          companyId: selectedCompanyId,
           company_id: selectedCompanyId,
           selected_recommendations: selectedPayload,
           groups,
