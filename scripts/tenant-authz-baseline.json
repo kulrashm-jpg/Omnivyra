@@ -11,7 +11,6 @@
     "pages/api/campaigns/[id]/strategic-insights.ts",
     "pages/api/campaigns/business-report.ts",
     "pages/api/campaigns/create-12week-plan.ts",
-    "pages/api/campaigns/health-report.ts",
     "pages/api/campaigns/platform-plan.ts",
     "pages/api/command-center/company-state.ts",
     "pages/api/company/billing/ledger.ts",
