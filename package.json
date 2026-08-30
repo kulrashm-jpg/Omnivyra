@@ -109,6 +109,7 @@
     "typecheck:certification:baseline": "node scripts/typecheck-certification.js --update-baseline",
     "check:ssrf": "node scripts/check-outbound-ssrf.js",
     "check:authz": "node scripts/check-tenant-authz.js",
+    "check:rbac-binding": "node scripts/check-withrbac-binding.js",
     "check:route-policy": "node scripts/check-route-policy.js",
     "verify:auth001-migration": "node scripts/verify-auth001-migration-readiness.js",
     "verify:onboard001-domains": "node scripts/verify-onboard001-domain-reconciliation.js",
