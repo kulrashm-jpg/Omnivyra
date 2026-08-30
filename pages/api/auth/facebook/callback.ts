@@ -255,6 +255,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       derivedThreadsCount = syncResult.threadsAccounts.length;
       if (syncResult.instagramAccounts.length > 0) {
         console.log('Instagram/Threads derived accounts synced from Facebook:', syncResult);
+      } else {
+        // The scope list above is Facebook-Page-only ON PURPOSE (see the note there:
+        // Meta rejects the entire consent dialog with "Invalid Scopes" when Instagram
+        // products are not fully provisioned). A token without instagram_basic can
+        // therefore never derive an Instagram account, so finding none here is the
+        // NORMAL outcome rather than a failure.
+        //
+        // It used to be logged as nothing at all, which made a successful sync that
+        // found nothing indistinguishable from a sync that never ran -- the exact
+        // ambiguity that makes a healthy Facebook connect look like a broken
+        // Instagram one. State the outcome and where Instagram actually comes from.
+        console.log(
+          '[facebook/callback] no Instagram business account derived from this Facebook token ' +
+          '(expected: Facebook scopes exclude Instagram; connect Instagram at /api/auth/instagram)',
+        );
       }
     } catch (syncError: any) {
       console.warn('[facebook/callback] Instagram/Threads derivation skipped:', syncError?.message);
