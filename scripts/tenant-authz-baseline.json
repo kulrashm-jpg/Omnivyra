@@ -21,7 +21,6 @@
     "pages/api/extension/validate.ts",
     "pages/api/feature-completion.ts",
     "pages/api/growth-intelligence/health.ts",
-    "pages/api/opportunities/[id]/action.ts",
     "pages/api/readiness-score.ts",
     "pages/api/reports/automation-activity.ts",
     "pages/api/reports/automation-config.ts",

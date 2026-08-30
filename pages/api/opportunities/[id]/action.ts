@@ -75,10 +75,44 @@ async function actionHandler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const rowCompanyId = String(opportunity.company_id);
-  const resolvedCompanyId = companyId || rowCompanyId;
-  if (companyId && companyId !== rowCompanyId) {
+
+  /*
+   * OPPORTUNITIES-SEC-001 — compare the opportunity's owner against the company
+   * withRBAC ACTUALLY authorized, and do it unconditionally.
+   *
+   * withRBAC resolves its company from `req.query.companyId || req.body.companyId`
+   * — QUERY FIRST. This handler read `body.companyId` alone, and the ownership
+   * comparison was guarded by that value's truthiness. So a request carrying
+   * companyId ONLY in the query string satisfied the wrapper while leaving the
+   * handler's `companyId` empty — and an empty value skipped the comparison
+   * entirely.
+   *
+   * A COMPANY_ADMIN of any company could therefore
+   * `POST /api/opportunities/<victim opportunity id>/action?companyId=<their own
+   * company>` with no companyId in the body: the wrapper authorized their own
+   * company, the ownership check was skipped, and `resolvedCompanyId` fell back
+   * to the VICTIM's company id — which was then handed to the sinks. Every
+   * action is a write: takeAction and setOpportunityReviewed UPDATE
+   * opportunity_items by id with no tenant predicate, promoteToCampaign INSERTs
+   * a campaign into the victim's company, and fillOpportunitySlots generates and
+   * upserts opportunities there.
+   *
+   * The fix resolves the authorized company exactly as the wrapper does, then
+   * requires it to equal the opportunity's server-owned company_id. No truthiness
+   * guard, so an absent identifier is a denial rather than a bypass. The sinks
+   * now receive rowCompanyId — server-owned data — never a caller-supplied value.
+   *
+   * The 403 and its message are unchanged; legitimate callers send companyId in
+   * the body (hooks/useRecommendationsState) and are unaffected. Platform
+   * super-admins keep their bypass through withRBAC and still act on any tenant
+   * by naming that tenant's id, which is the path they already used.
+   */
+  const authorizedCompanyId =
+    (typeof req.query.companyId === 'string' ? req.query.companyId : '') || companyId;
+  if (!authorizedCompanyId || authorizedCompanyId !== rowCompanyId) {
     return res.status(403).json({ error: 'Company does not match opportunity' });
   }
+  const resolvedCompanyId = rowCompanyId;
 
   const userId = (req as any)?.rbac?.userId;
   if (!userId) {
