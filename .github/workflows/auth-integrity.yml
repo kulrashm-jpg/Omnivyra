@@ -1,29 +1,43 @@
 name: Auth Integrity
 
-# ⏸️ STILL PARKED: runs on workflow_dispatch ONLY. This workflow is deliberately
-# NOT a required branch-protection check and must not become one until it has
-# demonstrated repeatable reliability (see PHASE 147 report).
+# This file holds TWO jobs with deliberately different lifecycles.
 #
-# This is a LIVE-Supabase E2E gate — tests/auth/authTestHarness.ts creates,
-# confirms and deletes real users via the Supabase admin API and exercises real
-# login/callback/logout flows.
+# 1. `auth-invariants-static` — RUNS ON EVERY PR. Hermetic: node builtins only
+#    (fs + path), no secrets, no network, no database, no node_modules. It is the
+#    static half that never needed the live backend, and it was being lost purely
+#    because it shared a file with the parked E2E job below.
+#    ⚠️ THIS JOB'S `name:` IS A REQUIRED STATUS CHECK on `main`
+#    ("Static auth invariants (hermetic, no secrets)"). Renaming it, removing it,
+#    or dropping the `pull_request:` trigger blocks every PR permanently.
 #
-# TARGET: the dedicated non-production Supabase project `omnivyra-e2e`
-# (ref lomndxmrpyudaegddpef). It must NEVER run against the production project
-# (ref klkiseupptzbecbxwrky), which holds real customer accounts, live OAuth
-# credentials and an active scheduler.
+# 2. `auth-integrity` — ⏸️ STILL PARKED, activated by provisioning rather than by
+#    a hard-coded park. This is a LIVE-Supabase E2E gate — tests/auth/
+#    authTestHarness.ts creates, confirms and DELETES real users via the Supabase
+#    admin API and exercises real login/callback/logout flows.
 #
-# SECRET NAMING: this workflow consumes E2E_-prefixed secrets ONLY. The generic
-# names (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, NEXT_PUBLIC_SUPABASE_*,
-# SESSION_COOKIE_SECRET) are consumed by platform-parity.yml, which audits the
-# PRODUCTION deployment and needs the production values. Populating the generic
-# names with E2E values would silently repoint that workflow — hence the prefix.
+# WHY THE SPLIT: the static check enforces two invariants that are live-relevant
+# right now — the auth callback must fail CLOSED (no auth.getSession() fallback,
+# session only from token exchange, clear browser state on failure), and NO
+# feature file may read or write the global `selected_company_id` / `company_id`
+# localStorage keys, which is a cross-tenant leakage vector. Tenant-authorization
+# fixes are landing regularly; that invariant should be checked on the PR that
+# would break it, not on a manual dispatch nobody runs.
 #
-# Behaviour when the E2E secrets are absent: the live job SKIPS (it does not
-# fail). The static safety jobs always run. If the supplied URL is production,
-# the workflow FAILS LOUDLY rather than skipping.
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 147 — E2E-SPECIFIC SECRET NAMES
+# The E2E half consumes E2E_-prefixed secrets ONLY. The generic names
+# (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, NEXT_PUBLIC_SUPABASE_*,
+# SESSION_COOKIE_SECRET) are also consumed by platform-parity.yml, which audits
+# the PRODUCTION Vercel deployment and needs the production values. Populating
+# the generic names with E2E values would silently repoint that workflow at the
+# E2E project; populating them with production values would point THIS suite at
+# production, where it would create and delete real users. The prefix makes both
+# mistakes impossible.
 #
-# Required repo secrets to enable the live job:
+# TARGET: the dedicated non-production project `omnivyra-e2e`
+# (ref lomndxmrpyudaegddpef). Never klkiseupptzbecbxwrky (production).
+#
+# Required repo secrets to activate the live half:
 #   E2E_SUPABASE_URL
 #   E2E_NEXT_PUBLIC_SUPABASE_URL
 #   E2E_NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -31,7 +45,12 @@ name: Auth Integrity
 #   E2E_SESSION_COOKIE_SECRET
 #   E2E_REDIS_URL
 #   E2E_ENCRYPTION_KEY        (32-byte hex or base64)
+# ─────────────────────────────────────────────────────────────────────────────
 on:
+  # Repo-wide on purpose: the localStorage invariant is scanned across EVERY
+  # .js/.jsx/.ts/.tsx file, so a path filter would miss a violation introduced in
+  # a file the filter does not list. The job costs seconds and installs nothing.
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -42,11 +61,16 @@ permissions:
   contents: read
 
 jobs:
-  # Always runs: needs no credentials and no database.
-  static-guards:
-    name: Static auth-integrity guards
+  # ── PR-SAFE HALF ────────────────────────────────────────────────────────────
+  # Deliberately installs NOTHING. scripts/check-auth-integrity-invariants.js
+  # requires only `fs` and `path` (Node builtins), so `npm ci` would add ~2
+  # minutes and a lockfile dependency for zero benefit. If that script ever grows
+  # a third-party import this job fails loudly on the missing module rather than
+  # skipping — which is the correct outcome, not a silent pass.
+  auth-invariants-static:
+    name: Static auth invariants (hermetic, no secrets)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,43 +79,45 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      # Fail loudly if the checker is renamed or deleted, rather than letting the
+      # invariant quietly stop being enforced.
+      - name: Verify the invariant checker exists
+        run: test -f scripts/check-auth-integrity-invariants.js
 
+      # Auth callback must fail CLOSED; no feature file may touch the global
+      # selected_company_id / company_id localStorage keys (cross-tenant vector).
       - name: Static auth integrity invariants
-        run: npm run check:auth-integrity-invariants
+        run: node scripts/check-auth-integrity-invariants.js
 
-      - name: E2E production-guard unit tests
-        run: npm run test:auth-e2e-guard
-
-  # Decides whether a genuinely non-production E2E environment is provisioned.
-  preflight:
-    name: E2E environment preflight
+  # ── PROVISIONING PREFLIGHT ──────────────────────────────────────────────────
+  # Reports ONLY whether the E2E secrets exist. It never echoes a secret. It does
+  # not fail on absence — an unprovisioned repo yields provisioned=false and the
+  # E2E job below is skipped rather than failed. It DOES fail loudly if a
+  # supplied URL points at production, because that is a misconfiguration which
+  # must never be silently skipped past.
+  e2e-secrets-preflight:
+    name: E2E provisioning preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
     outputs:
-      ready: ${{ steps.detect.outputs.ready }}
+      provisioned: ${{ steps.check.outputs.provisioned }}
     steps:
-      - name: Detect dedicated E2E provisioning
-        id: detect
+      - name: Detect E2E secret provisioning
+        id: check
         env:
-          # Presence-only inspection. Values are never echoed.
-          E2E_SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}
-          E2E_NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.E2E_NEXT_PUBLIC_SUPABASE_URL }}
-          E2E_NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.E2E_NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          E2E_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
-          E2E_SESSION_COOKIE_SECRET: ${{ secrets.E2E_SESSION_COOKIE_SECRET }}
-          E2E_REDIS_URL: ${{ secrets.E2E_REDIS_URL }}
-          E2E_ENCRYPTION_KEY: ${{ secrets.E2E_ENCRYPTION_KEY }}
+          S1: ${{ secrets.E2E_SUPABASE_URL }}
+          S2: ${{ secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
+          S3: ${{ secrets.E2E_NEXT_PUBLIC_SUPABASE_URL }}
+          S4: ${{ secrets.E2E_NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          S5: ${{ secrets.E2E_SESSION_COOKIE_SECRET }}
+          S6: ${{ secrets.E2E_REDIS_URL }}
+          S7: ${{ secrets.E2E_ENCRYPTION_KEY }}
           PRODUCTION_PROJECT_REF: klkiseupptzbecbxwrky
         run: |
-          set -euo pipefail
-
           # Fail closed and loudly if a production target has been configured,
           # whether or not the rest of the provisioning is complete.
-          for url in "${E2E_SUPABASE_URL:-}" "${E2E_NEXT_PUBLIC_SUPABASE_URL:-}"; do
+          for url in "${S1:-}" "${S3:-}"; do
             case "$url" in
               *"$PRODUCTION_PROJECT_REF"*)
                 echo "::error::E2E secrets point at the PRODUCTION Supabase project. Refusing to run."
@@ -100,43 +126,45 @@ jobs:
             esac
           done
 
-          missing=""
-          for name in \
-            E2E_SUPABASE_URL \
-            E2E_NEXT_PUBLIC_SUPABASE_URL \
-            E2E_NEXT_PUBLIC_SUPABASE_ANON_KEY \
-            E2E_SUPABASE_SERVICE_ROLE_KEY \
-            E2E_SESSION_COOKIE_SECRET \
-            E2E_REDIS_URL \
-            E2E_ENCRYPTION_KEY
-          do
-            eval "value=\${$name:-}"
-            if [ -z "$value" ]; then
-              missing="$missing $name"
-            fi
+          missing=0
+          for v in S1 S2 S3 S4 S5 S6 S7; do
+            if [ -z "${!v}" ]; then missing=$((missing+1)); fi
           done
-
-          if [ -n "$missing" ]; then
-            echo "::notice::Dedicated E2E environment not provisioned; skipping the live suite. Missing:$missing"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
+          # Count only — naming which secret is absent is still safe, but the
+          # count alone is enough and leaks nothing about configuration.
+          if [ "$missing" -eq 0 ]; then
+            echo "All 7 E2E secrets present — auth E2E will run."
+            echo "provisioned=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::Dedicated E2E environment detected; running the live suite."
-            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "$missing of 7 E2E secrets absent — auth E2E will SKIP (not fail)."
+            echo "provisioned=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # ── PARKED HALF (live Supabase E2E) ─────────────────────────────────────────
   auth-integrity:
     name: Auth integrity regression lock
-    needs: [static-guards, preflight]
-    if: needs.preflight.outputs.ready == 'true'
+    # ACTIVATION IS DRIVEN BY PROVISIONING, NOT BY A HARD-CODED PARK.
+    #
+    # This job runs as soon as the E2E secrets exist and SKIPS (never fails)
+    # while they do not. A hard-coded park meant a human had to remember to
+    # come back and flip it; an unconditional trigger with no secrets would
+    # paint every PR red for an environment reason unrelated to authentication.
+    #
+    # The `secrets` context is NOT available in a job-level `if:`, so presence
+    # is computed by the preflight job, which emits only a boolean.
+    needs: e2e-secrets-preflight
+    if: needs.e2e-secrets-preflight.outputs.provisioned == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # MUST be localhost, not 127.0.0.1: the app 307-redirects 127.0.0.1 -> localhost,
-      # and the E2E project's uri_allow_list is empty so generated action links are
-      # only accepted against site_url (http://localhost:3000). Verified in PHASE 147-FIX.
+      # PHASE 147-FIX: MUST be localhost, not 127.0.0.1. The app 307-redirects
+      # 127.0.0.1 -> localhost, and the E2E project's uri_allow_list is empty so
+      # generated action links are only accepted against site_url
+      # (http://localhost:3000). Measured: with 127.0.0.1 the callback specs fail.
       AUTH_E2E_BASE_URL: http://localhost:3000
       AUTH_E2E_TIMEOUT_MS: '120000'
-      # E2E-prefixed secrets only. `.env.local` is never created or read here.
+      # E2E-prefixed secrets ONLY — see the header. `.env.local` is never created
+      # or read by this job.
       E2E_SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}
       E2E_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
       # The Next.js dev server reads the unprefixed public names, so they are
@@ -146,7 +174,11 @@ jobs:
       SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.E2E_SUPABASE_SERVICE_ROLE_KEY }}
       SESSION_COOKIE_SECRET: ${{ secrets.E2E_SESSION_COOKIE_SECRET }}
+      # Phase 138 finding: config/env.schema.ts requires BOTH of these and the
+      # job supplied neither, so `npm run dev` died at config validation and the
+      # readiness poll timed out with a message that looked like an auth failure.
       REDIS_URL: ${{ secrets.E2E_REDIS_URL }}
+      E2E_REDIS_URL: ${{ secrets.E2E_REDIS_URL }}
       ENCRYPTION_KEY: ${{ secrets.E2E_ENCRYPTION_KEY }}
     steps:
       - name: Checkout
@@ -164,6 +196,16 @@ jobs:
       - name: Install Chromium
         run: npx playwright install chromium
 
+      - name: Static auth integrity invariants
+        run: npm run check:auth-integrity-invariants
+
+      # Unit tests for the production guard itself. Hermetic — no network, no
+      # database. If these fail the guard is not trustworthy and nothing below
+      # should run.
+      - name: E2E production-guard unit tests
+        run: npm run test:auth-e2e-guard
+
+      # The harness must never read .env.local: it points at PRODUCTION.
       - name: Assert no .env.local is present
         run: |
           if [ -f .env.local ]; then
@@ -172,14 +214,20 @@ jobs:
           fi
           echo "No .env.local present."
 
-      - name: Validate E2E target is non-production
+      # HARD SAFETY GATE. The harness calls admin.listUsers and admin.deleteUser.
+      # If the target ever points at the production project this job must die
+      # BEFORE the server starts. Rejects production ref/host, empty, malformed,
+      # local and placeholder targets, and anything that is not the expected E2E
+      # project. Prints only a verdict, never a secret.
+      - name: Refuse to run against production
         run: npm run check:auth-e2e-target
 
+      # lib/auth/rateLimit.ts allows 10 logins per IP per 15 minutes. A full
+      # suite performs ~5, so repeated runs on one runner IP trip the limit and
+      # /api/auth/login returns 429 — which surfaces as an auth timeout. The
+      # limiter stays fully active DURING the run; only the pre-run counters are
+      # cleared. Scoped SCAN+DEL of rl:* only; refuses a production Redis URL.
       - name: Reset auth rate-limit counters
-        # lib/auth/rateLimit.ts allows 10 logins per IP per 15 minutes. A full
-        # suite performs ~5, so repeated runs on one runner IP trip the limit and
-        # /api/auth/login returns 429. The limiter stays fully active during the
-        # run; only the pre-run counters are cleared. Refuses production Redis.
         run: npm run reset:auth-e2e-rate-limits
 
       - name: Start app server
@@ -187,6 +235,8 @@ jobs:
           npm run dev > auth-integrity-server.log 2>&1 &
           node -e "const url=process.env.AUTH_E2E_BASE_URL; const deadline=Date.now()+120000; (async()=>{ while(Date.now()<deadline){ try{ const res=await fetch(url); if(res.status<500) return; }catch{} await new Promise(r=>setTimeout(r,1000)); } console.error('Auth integrity dev server did not become ready'); process.exit(1); })();"
 
+      # Runs all five specs even if an earlier one fails, and still exits
+      # non-zero if any failed.
       - name: Auth integrity regression suite
         run: npm run test:auth-integrity
 
