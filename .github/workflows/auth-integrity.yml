@@ -195,6 +195,16 @@ jobs:
       REDIS_URL: ${{ secrets.E2E_REDIS_URL }}
       E2E_REDIS_URL: ${{ secrets.E2E_REDIS_URL }}
       ENCRYPTION_KEY: ${{ secrets.E2E_ENCRYPTION_KEY }}
+      # Same class of finding as REDIS_URL/ENCRYPTION_KEY above: config/env.schema.ts
+      # marks OPENAI_API_KEY required and validateEnv() calls process.exit(1) on a
+      # miss, so the dev server booted, served the warmup routes, then died the
+      # moment a route pulled in the config module — surfacing as "fetch failed"
+      # in specs 2-5 and a chrome-error page in spec 1, which looks like an auth
+      # failure and is not one.
+      # This is a NON-SECRET placeholder on purpose: the five auth specs exercise
+      # login/callback/logout only and never reach an AI code path, so the value
+      # only has to satisfy schema validation. No real key belongs in CI here.
+      OPENAI_API_KEY: e2e-placeholder-no-ai-calls-in-auth-specs
     steps:
       - name: Checkout
         uses: actions/checkout@v4
