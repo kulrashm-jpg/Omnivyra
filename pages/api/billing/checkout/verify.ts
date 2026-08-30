@@ -45,7 +45,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
-  const organizationId = String(body.org_id ?? body.organization_id ?? '').trim();
+  // BILLING-CHECKOUT-SEC-001: the ownership guard below compares the purchase
+  // against THIS value, so it must be the org withOrgAccess authorized rather
+  // than one re-derived from the body. The wrapper's resolver reads query
+  // first, so `?org_id=<own>` with `{"org_id":"<victim>"}` made the guard
+  // compare the victim's purchase against the victim's own id — and pass.
+  // Neither downstream sink re-checks: fulfillProviderConfirmedPurchase takes
+  // no organization at all, and closePurchaseFromClient scopes on the value
+  // handed to it here.
+  const organizationId = String((req as any).orgAccess?.orgId ?? '').trim();
   const purchaseId = String(body.purchase_id ?? '').trim();
   const provider = String(body.provider ?? 'razorpay').trim() as PaymentProviderId;
   const orderId = String(body.razorpay_order_id ?? body.order_id ?? '').trim();

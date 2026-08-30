@@ -4,6 +4,29 @@ import { getOrCreateRequestId, runWithRequestContext } from '../services/request
 
 type OrgResolver = (req: NextApiRequest) => string | null;
 
+/**
+ * BILLING-CHECKOUT-SEC-001 — what withOrgAccess puts on `req.orgAccess`.
+ *
+ * `orgId` is the organization the wrapper ACTUALLY AUTHORIZED — the exact value
+ * passed to assertOrgAccess for the decision. It is NOT merely "an org the
+ * request mentioned".
+ *
+ * This matters because the default resolver reads QUERY FIRST and only then the
+ * body. A handler that re-derives the org from `body.org_id` alone can therefore
+ * operate on a different organization than the one authorized, which is exactly
+ * how checkout/{create-order,verify} could be pointed at another tenant's
+ * purchases. Handlers must bind to THIS value (or to an approved
+ * resource-ownership primitive), never to a re-derived one.
+ *
+ * Mirrors `req.rbac.companyId` from WITHRBAC-STRUCT-001.
+ */
+export type OrgAccessContext = {
+  userId: string;
+  /** The organization withOrgAccess authorized for this request. */
+  orgId: string;
+  superAdmin: boolean;
+};
+
 function defaultResolver(req: NextApiRequest): string | null {
   const fromQuery = typeof req.query.org_id === 'string' ? req.query.org_id : null;
   if (fromQuery) return fromQuery;
@@ -34,6 +57,13 @@ export function withOrgAccess(
 
       const access = await assertOrgAccess(req, res, orgId);
       if (!access) return;
+
+      const orgAccess: OrgAccessContext = {
+        userId: access.userId,
+        orgId,
+        superAdmin: access.superAdmin,
+      };
+      (req as any).orgAccess = orgAccess;
 
       return handler(req, res);
     });
