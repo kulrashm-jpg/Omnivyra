@@ -205,6 +205,23 @@ jobs:
       # login/callback/logout only and never reach an AI code path, so the value
       # only has to satisfy schema validation. No real key belongs in CI here.
       OPENAI_API_KEY: e2e-placeholder-no-ai-calls-in-auth-specs
+      # lib/env/namespace.ts hard-blocks "remote Supabase + loopback Redis" because
+      # that topology lets a local process write to a remote DB while its queue
+      # jobs land in a Redis no remote worker reads. Our topology matches the
+      # SHAPE but not the DANGER: the database is the dedicated non-production E2E
+      # project (already proven twice in this job — the preflight hard-fails on the
+      # production ref, and `check:auth-e2e-target` refuses anything that is not
+      # the expected E2E project, both BEFORE the server starts), and that project
+      # has no remote workers consuming a queue. The Redis is an ephemeral
+      # container destroyed with the runner.
+      #
+      # This bypasses ONLY that queue-topology check. It does not touch, weaken or
+      # remove the production-target refusal.
+      #
+      # Note: this never fired locally because Next.js independently loads
+      # .env.local, which carries this flag. CI correctly has no .env.local (an
+      # earlier step asserts its absence), so the guard fires there and only there.
+      ALLOW_PROD_DB_WITH_LOCAL_REDIS: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
