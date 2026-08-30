@@ -1,11 +1,4 @@
 {
   "_comment": "WITHRBAC-STRUCT-001/002 — routes where the handler may operate on a company withRBAC did not authorize. A route may be listed ONLY with a recorded reason and an owning follow-up item; anything not listed fails CI. This is a findings ledger, not an exemption list: entries are expected to be removed by fixing the route, never grown to silence the guard.",
-  "accepted": [
-    {
-      "route": "pages/api/governance/verify-snapshot.ts",
-      "reason": "Takes a caller-supplied snapshotId and calls verifySnapshotIntegrity(snapshotId), which reads governance_snapshots by id with NO company predicate. Roles are [COMPANY_ADMIN, SUPER_ADMIN], so a COMPANY_ADMIN of one company can verify another company's snapshot. Surfaced by WITHRBAC-STRUCT-002's one-level service tracing: the route file itself has no tenant sink, so it was invisible to the route-level rules. Recorded, NOT fixed — the task that found it is a static-analysis enhancement, and fixing a runtime route inside it would ship an unaudited change.",
-      "severity": "LOW — read-only. Discloses only { valid: boolean, mismatchFields: string[] } plus a cross-tenant existence oracle for snapshot UUIDs ('snapshot_not_found' distinguishes absent from invalid). No snapshot content, no write.",
-      "follow_up": "GOVERNANCE-SEC-002"
-    }
-  ]
+  "accepted": []
 }

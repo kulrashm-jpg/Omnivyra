@@ -20,7 +20,30 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'snapshotId is required' });
   }
 
-  const result = await verifySnapshotIntegrity(snapshotId);
+  /*
+   * GOVERNANCE-SEC-002 — constrain the lookup to the company withRBAC authorized.
+   *
+   * The snapshot was selected by `id` alone, with no tenant predicate, so a
+   * COMPANY_ADMIN of one company could verify another company's snapshot and
+   * tell an existing-but-invalid snapshot from an absent one. Surfaced by the
+   * WITHRBAC-STRUCT-002 service tracer: the route file has no tenant sink of its
+   * own, so the route-level rules could not see it.
+   *
+   * req.rbac.companyId is the company the wrapper actually authorized
+   * (WITHRBAC-STRUCT-001). Passing it into the service makes it part of the
+   * query, so a foreign snapshot is never read and answers exactly as a
+   * nonexistent one does — the oracle closes without a new error shape.
+   *
+   * SUPER_ADMIN passes null and keeps platform-wide verification, which is the
+   * behaviour this route already had.
+   */
+  const rbac = (req as any)?.rbac as { role?: Role; companyId?: string } | undefined;
+  if (!rbac?.companyId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const tenantConstraint = rbac.role === Role.SUPER_ADMIN ? null : rbac.companyId;
+
+  const result = await verifySnapshotIntegrity(snapshotId, tenantConstraint);
   return res.status(200).json(result);
 }
 

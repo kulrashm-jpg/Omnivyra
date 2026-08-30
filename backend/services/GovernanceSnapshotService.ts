@@ -283,15 +283,35 @@ async function doRestore(
 /**
  * Verify snapshot integrity. Never throws.
  */
-export async function verifySnapshotIntegrity(snapshotId: string): Promise<{
+/**
+ * GOVERNANCE-SEC-002 — verify a snapshot's integrity, optionally constrained to
+ * an authorized company.
+ *
+ * `authorizedCompanyId` becomes part of the QUERY rather than a check applied to
+ * the result. That ordering matters twice over: a snapshot belonging to another
+ * company is never read at all, so its contents cannot be inspected, and it
+ * falls through to the SAME `snapshot_not_found` answer a nonexistent id gets —
+ * closing the existence oracle without inventing a new error shape.
+ *
+ * Omit it (or pass null) for platform-wide verification; the route does exactly
+ * that for SUPER_ADMIN, preserving the existing bypass. The parameter is
+ * optional so the signature stays compatible with existing callers.
+ */
+export async function verifySnapshotIntegrity(
+  snapshotId: string,
+  authorizedCompanyId?: string | null,
+): Promise<{
   valid: boolean;
   mismatchFields?: string[];
 }> {
   try {
-    const { data: snapshot, error } = await ownedDbTable('governance_snapshots')
+    let snapshotQuery = ownedDbTable('governance_snapshots')
       .select('snapshot_data, policy_hash')
-      .eq('id', snapshotId)
-      .single();
+      .eq('id', snapshotId);
+    if (authorizedCompanyId) {
+      snapshotQuery = snapshotQuery.eq('company_id', authorizedCompanyId);
+    }
+    const { data: snapshot, error } = await snapshotQuery.single();
 
     if (error || !snapshot) {
       return { valid: false, mismatchFields: ['snapshot_not_found'] };
