@@ -31,9 +31,21 @@
  *   4. derives no company and reaches no tenant sink in the route
  *   5. reads only the query company              — matches the wrapper's precedence
  *
- * LIMITATION, stated rather than hidden: this analyses ROUTE FILES. A tenant sink
- * reached inside a service the route calls is not visible here, and routes that do
- * not use withRBAC at all are the separate concern of check-tenant-authz.js.
+ * WITHRBAC-STRUCT-002 extends this ONE SERVICE LEVEL: for a route with no tenant
+ * signal of its own, the guard follows each direct call into the callee, matches
+ * the caller-controlled argument to its parameter, and asks whether that
+ * parameter reaches a tenant operation. It reports the whole chain
+ * (source -> call -> sink), not just "a service call exists".
+ *
+ * LIMITATIONS, stated rather than hidden:
+ *   - Exactly one level. When a parameter is handed onward past that depth,
+ *     safety cannot be established, so the result is SUSPICIOUS — but only for
+ *     TENANT-NAMED parameters, because "goes somewhere we cannot follow" is not
+ *     a finding for a `locale` handed to `translate()`.
+ *   - Only statically resolvable relative imports are followed; anything else is
+ *     reported UNKNOWN rather than assumed safe.
+ *   - Routes that do not use withRBAC at all remain check-tenant-authz.js's
+ *     concern.
  */
 
 const fs = require('fs');
@@ -127,7 +139,13 @@ const TENANT_TABLES = [
   'platform_metrics_snapshots', 'whatsapp_broadcasts', 'content_assets',
   'governance_snapshots', 'governance_audit_runs',
 ];
-const TENANT_TABLE_RE = new RegExp(`\\.from\\(\\s*['"](?:${TENANT_TABLES.join('|')})['"]`);
+// Both data-layer entrypoints: supabase.from(...) and ownedDbTable(...), which
+// is the HARDEN-001 observability wrapper around it. Recognising only `.from(`
+// made a service sink report as "passed onward to eq()" instead of naming the
+// table it actually reads.
+const TENANT_TABLE_RE = new RegExp(
+  `(?:\\.from|ownedDbTable)\\(\\s*['"](?:${TENANT_TABLES.join('|')})['"]`
+);
 /** A resource selected by a caller-supplied id. */
 const SELECT_BY_ID_RE = /\.eq\(\s*['"]id['"]\s*,/;
 
@@ -178,7 +196,183 @@ function isSuperAdminOnly(src) {
   );
 }
 
-function classify(src) {
+/* ─────────────────────────────────────────────────────────────────────────
+ * WITHRBAC-STRUCT-002 — one level of service tracing.
+ *
+ * The route-level rules above cannot see a tenant sink that lives one call
+ * below the route. OPPORTUNITIES-SEC-002 was exactly that shape: the route
+ * passed a caller-derived company into fillOpportunitySlots, and the generator
+ * and upsert happened inside the service. It was only caught because the route
+ * ALSO named a body company; a route handing a caller-controlled RESOURCE id to
+ * a service that resolves the tenant itself would have stayed invisible.
+ *
+ * Exactly one level. No recursion, no call graph. When the trace runs out of
+ * depth — the parameter is handed onward to another function — safety cannot be
+ * established, so the result is SUSPICIOUS rather than SAFE.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/** Caller-controlled reads. Anything derived from these is tainted. */
+const TAINT_SOURCE_RE = /req\s*\.\s*(?:query|body)\s*\??\s*(?:\.\s*[A-Za-z_$][\w$]*|\[)/;
+
+/** Parameter names that denote a tenant. */
+const TENANT_PARAM_RE = /^(?:company_?id|org(?:anization)?_?id|tenant_?id)$/i;
+
+/** Inert calls: passing a value here does not make it reach anything. */
+const INERT_CALLS = new Set([
+  'String', 'Number', 'Boolean', 'JSON', 'Array', 'Object', 'parseInt', 'parseFloat',
+  'encodeURIComponent', 'decodeURIComponent', 'console', 'expect', 'trim', 'toString',
+]);
+
+/** Identifiers in the route that came from caller-controlled input. */
+function collectTaintedLocals(src) {
+  const tainted = new Set();
+  // const { a, b } = req.body|req.query
+  for (const m of src.matchAll(/const\s*\{([^}]*)\}\s*=\s*req\s*\.\s*(?:body|query)\b/g)) {
+    for (const part of m[1].split(',')) {
+      const name = part.split(':').pop().split('=')[0].trim();
+      if (name) tainted.add(name);
+    }
+  }
+  // const x = ... req.body.y / req.query.y ...
+  for (const m of src.matchAll(/const\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]*)/g)) {
+    if (TAINT_SOURCE_RE.test(m[2])) tainted.add(m[1]);
+  }
+  // one alias hop: const y = x  (x already tainted)
+  for (const m of src.matchAll(/const\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*[;\n]/g)) {
+    if (tainted.has(m[2])) tainted.add(m[1]);
+  }
+  return tainted;
+}
+
+/** name -> resolved file path, from the route's relative imports. */
+function collectImports(src, routeFile) {
+  const map = new Map();
+  for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"](\.[^'"]+)['"]/g)) {
+    const spec = m[2];
+    const base = path.resolve(path.dirname(routeFile), spec);
+    let file = null;
+    for (const cand of [base + '.ts', base + '.tsx', path.join(base, 'index.ts')]) {
+      if (fs.existsSync(cand)) { file = cand; break; }
+    }
+    if (!file) continue;
+    for (const part of m[1].split(',')) {
+      const name = part.replace(/\s+as\s+.*/, '').trim();
+      if (name) map.set(name, file);
+    }
+  }
+  return map;
+}
+
+/** Extract a function's parameter names and body slice from its module. */
+function resolveFunction(file, name) {
+  const src = fs.readFileSync(file, 'utf8');
+  const re = new RegExp(
+    `export\\s+(?:async\\s+)?function\\s+${name}\\s*\\(|export\\s+const\\s+${name}\\s*=\\s*(?:async\\s*)?\\(`
+  );
+  const m = re.exec(src);
+  if (!m) return null;
+
+  // parameter list: balance parentheses from the opening paren
+  let i = src.indexOf('(', m.index);
+  let depth = 0, end = i;
+  for (; end < src.length; end++) {
+    if (src[end] === '(') depth++;
+    else if (src[end] === ')') { depth--; if (depth === 0) break; }
+  }
+  const paramSrc = src.slice(i + 1, end);
+  const params = [];
+  let d = 0, cur = '';
+  for (const ch of paramSrc) {
+    if ('({['.includes(ch)) d++;
+    if (')}]'.includes(ch)) d--;
+    if (ch === ',' && d === 0) { params.push(cur); cur = ''; } else cur += ch;
+  }
+  if (cur.trim()) params.push(cur);
+  const names = params.map(p => {
+    const t = p.split(':')[0].split('=')[0].trim();
+    return /^[A-Za-z_$][\w$]*$/.test(t) ? t : null;   // destructured params: unnamed
+  });
+
+  // body: from the parameter list to the next top-level export
+  const after = src.slice(end);
+  const nextExport = after.search(/\nexport\s/);
+  return { params: names, body: nextExport === -1 ? after : after.slice(0, nextExport) };
+}
+
+/** Does `param` reach a tenant-scoped operation inside this body? */
+function paramReachesTenantSink(body, param) {
+  if (!param) return { hit: false };
+  const p = param.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const direct = [
+    [new RegExp(`\\.eq\\(\\s*['"]company_id['"]\\s*,\\s*${p}\\b`), `.eq('company_id', ${param})`],
+    [new RegExp(`\\.in\\(\\s*['"]company_id['"]\\s*,\\s*${p}\\b`), `.in('company_id', ${param})`],
+    [new RegExp(`company_id\\s*:\\s*${p}\\b`), `company_id: ${param} (insert/update payload)`],
+    [new RegExp(`\\.eq\\(\\s*['"]id['"]\\s*,\\s*${p}\\b[\\s\\S]{0,200}?company_id`), `resource selected by ${param} in a tenant table`],
+  ];
+  for (const [re, label] of direct) if (re.test(body)) return { hit: true, sink: label };
+
+  // Tenant table touched anywhere in the body while the param is in scope.
+  if (TENANT_TABLE_RE.test(body) && new RegExp(`\\b${p}\\b`).test(body)) {
+    return { hit: true, sink: `${param} used in a body that queries a tenant table` };
+  }
+
+  /*
+   * Handed onward past our depth limit. Restricted to TENANT-NAMED parameters
+   * on purpose: "the value goes somewhere we cannot follow" is only a finding
+   * when the value is a tenant identifier. Applying it to every parameter
+   * flagged a service that merely passed a `locale` to `translate()` — a
+   * manufactured finding, which the guard must not produce.
+   *
+   * A non-tenant identifier that DOES reach tenant data is still caught, by the
+   * tenant-table rule above (that is how governance/verify-snapshot surfaces
+   * through its snapshotId).
+   */
+  if (TENANT_PARAM_RE.test(param)) {
+    const onward = [...body.matchAll(new RegExp(`([A-Za-z_$][\\w$]*)\\s*\\(([^)]*)\\)`, 'g'))]
+      .find(c => !INERT_CALLS.has(c[1]) && new RegExp(`\\b${p}\\b`).test(c[2]));
+    if (onward) return { hit: true, sink: `passed onward to ${onward[1]}() — beyond one level` };
+  }
+
+  return { hit: false };
+}
+
+/**
+ * Follow each direct call the route makes, one level, and report the first
+ * caller-controlled value that reaches a tenant operation inside it.
+ */
+function traceServiceCalls(src, routeFile) {
+  if (!routeFile) return null;
+  const tainted = collectTaintedLocals(src);
+  if (!tainted.size) return null;
+  const imports = collectImports(src, routeFile);
+  if (!imports.size) return null;
+
+  for (const call of src.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/g)) {
+    const fnName = call[1];
+    if (!imports.has(fnName) || INERT_CALLS.has(fnName)) continue;
+
+    const args = call[2].split(',').map(a => a.trim());
+    for (let i = 0; i < args.length; i++) {
+      if (!tainted.has(args[i])) continue;
+      const fn = resolveFunction(imports.get(fnName), fnName);
+      if (!fn) {
+        return { chain: `${args[i]} -> ${fnName}() [implementation not statically resolvable]`, unknown: true };
+      }
+      const param = fn.params[i];
+      if (!param) {
+        return { chain: `${args[i]} -> ${fnName}() arg ${i} [destructured parameter, not traceable]`, unknown: true };
+      }
+      const r = paramReachesTenantSink(fn.body, param);
+      if (r.hit) {
+        return { chain: `req input -> ${args[i]} -> ${fnName}(arg ${i} = ${param}) -> ${r.sink}` };
+      }
+    }
+  }
+  return null;
+}
+
+function classify(src, routeFile) {
   if (RBAC_COMPANY_RE.test(src)) return { cls: 'SAFE', why: 'binds req.rbac.companyId' };
   if (BINDER_RE.test(src)) return { cls: 'SAFE', why: 'approved ownership primitive' };
   if (isSuperAdminOnly(src)) return { cls: 'SAFE', why: 'SUPER_ADMIN-only (authorized for all tenants)' };
@@ -203,9 +397,23 @@ function classify(src) {
     return { cls: 'SUSPICIOUS', why: 'selects a tenant resource by caller-supplied id with no ownership binding' };
   }
   if (/req\.query\s*\??\.\s*companyId/.test(src)) {
+    // Query-only cannot diverge: it IS the wrapper's first precedence, so the
+    // company the handler uses is the company the wrapper authorized —
+    // including when it is handed to a service.
     return { cls: 'SAFE', why: 'reads only the query company — matches the wrapper precedence' };
   }
-  if (!tenantSink) return { cls: 'SAFE', why: 'no company derivation and no tenant sink in the route' };
+
+  // WITHRBAC-STRUCT-002 — the route itself shows no tenant sink, so before
+  // calling it safe, follow its direct calls one level down.
+  const traced = traceServiceCalls(src, routeFile);
+  if (traced) {
+    return {
+      cls: traced.unknown ? 'UNKNOWN' : 'SUSPICIOUS',
+      why: `caller-controlled input reaches a tenant operation one service level down: ${traced.chain}`,
+    };
+  }
+
+  if (!tenantSink) return { cls: 'SAFE', why: 'no company derivation and no tenant sink, in the route or one service level down' };
   return { cls: 'UNKNOWN', why: 'touches a tenant table but the binding could not be established' };
 }
 
@@ -217,7 +425,7 @@ function main() {
   const files = walk(API_DIR).filter(f => fs.readFileSync(f, 'utf8').includes('withRBAC'));
   const rows = files.map(f => {
     const rel = path.relative(ROOT, f).split(path.sep).join('/');
-    return { rel, ...classify(fs.readFileSync(f, 'utf8')) };
+    return { rel, ...classify(fs.readFileSync(f, 'utf8'), f) };
   });
 
   const counts = rows.reduce((a, r) => ((a[r.cls] = (a[r.cls] || 0) + 1), a), {});
