@@ -381,7 +381,19 @@ describe('Governance Snapshot', () => {
         return chain({ data: null, error: null });
       });
 
-      const req: any = { method: 'GET', query: { snapshotId: 'snap-1' } };
+      /*
+       * GOVERNANCE-SEC-002 — verify-snapshot now constrains the lookup to the
+       * company withRBAC authorized, read from req.rbac. This suite mocks
+       * withRBAC as a pass-through, so it must supply the context the wrapper
+       * would have set. The assertion below (the integrity RESULT) is unchanged;
+       * the authorization boundary itself is covered against the real chain in
+       * backend/tests/unit/governanceSec002VerifySnapshot.test.ts.
+       */
+      const req: any = {
+        method: 'GET',
+        query: { snapshotId: 'snap-1' },
+        rbac: { userId: 'test-user', role: 'COMPANY_ADMIN', companyId: 'company-1' },
+      };
       const res = mockRes() as any;
 
       await verifySnapshotHandler(req, res);
