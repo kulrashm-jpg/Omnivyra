@@ -7,7 +7,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
  *   negative > intent > questions > positive > neutral
  *
  * Query params:
- *   organization_id (required)
+ *   organization_id (optional; defaults to the caller's default company)
  *   limit           (default 50)
  *   offset          (default 0)
  *   sentiment       (optional filter: positive|neutral|negative|intent)
@@ -15,6 +15,7 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
+import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 const SENTIMENT_PRIORITY: Record<string, number> = {
   negative: 1,
@@ -26,12 +27,53 @@ const SENTIMENT_PRIORITY: Record<string, number> = {
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const orgId     = String(req.query.organization_id ?? '').trim();
+  /*
+   * ENGAGEMENT-UNIFIED-SEC-001 — this route had NO authentication and NO
+   * authorization.
+   *
+   * Its only wrapper was createApiRoute(handler, { route }), which is
+   * pass-through observability (request-context seeding plus an optional
+   * policy OBSERVER) and never an auth gate. `organization_id` arrived in the
+   * query string and went straight into `.eq('organization_id', orgId)` on the
+   * service-role client, which bypasses RLS — so an ANONYMOUS caller who knew
+   * an organization uuid could read that tenant's entire engagement inbox:
+   * every community_ai_action with its suggested reply text, intent
+   * classification, tone, status, target id and the discovered user id behind
+   * it.
+   *
+   * The fix is the pattern its own siblings already use — engagement/threads
+   * and engagement/platform-counts resolve the caller, fall back to the
+   * session's default company, and then call enforceCompanyAccess before any
+   * read. enforceCompanyAccess answers authentication FIRST (401), then
+   * delegates to TenantGuard.assertTenantAccess, so soft-deleted orgs and
+   * stale memberships are rejected centrally and platform super-admins keep
+   * their bypass. A caller-supplied identifier is something to AUTHORIZE,
+   * never proof of authority.
+   *
+   * The single `authorizedOrgId` below is the value the guard actually
+   * approved, and it is the only value that ever reaches the read predicate —
+   * authorizing one organization while reading another is the defect class
+   * this route must not regress into.
+   *
+   * Pinned by backend/tests/unit/engagementUnifiedSec001.test.ts.
+   */
+  const user = await resolveUserContext(req);
+  const requestedOrgId = String(
+    req.query.organization_id ?? req.query.organizationId ?? ''
+  ).trim();
+  const orgId = requestedOrgId || user?.defaultCompanyId || '';
+
   const limit     = Math.min(200, Math.max(1, Number(req.query.limit  ?? 50)));
   const offset    = Math.max(0, Number(req.query.offset ?? 0));
   const sentiment = String(req.query.sentiment ?? '').trim().toLowerCase();
 
   if (!orgId) return res.status(400).json({ error: 'organization_id required' });
+
+  const access = await enforceCompanyAccess({ req, res, companyId: orgId });
+  if (!access) return;
+
+  // The tenant the guard authorized — the ONLY organization this request may read.
+  const authorizedOrgId = orgId;
 
   try {
     // Pull from community_ai_actions (engagement ingest store)
@@ -49,7 +91,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         discovered_user_id,
         created_at
       `)
-      .eq('organization_id', orgId)
+      .eq('organization_id', authorizedOrgId)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 

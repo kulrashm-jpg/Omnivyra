@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { apiFetch } from '../../lib/apiFetch';
 import type { AiHistoryEntry } from './types';
 
 type CampaignAiOpsTab =
@@ -155,7 +156,11 @@ export function useCampaignAiOps({
     try {
       setIsExecutionLoading(true);
       if (!ensureCompanyId()) return;
-      const response = await fetch('/api/campaigns/platform-plan', {
+      // PLATFORM-PLAN-SEC-001 — /api/campaigns/platform-plan is now behind
+      // withRBAC. apiFetch is the repo's canonical authenticated client fetch:
+      // it attaches the Supabase Bearer token and sends credentials, so the
+      // route can resolve a principal even when the cookie is absent or stale.
+      const response = await apiFetch('/api/campaigns/platform-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -220,7 +225,8 @@ export function useCampaignAiOps({
       }
       const data = await response.json();
       setContentAssets(data.assets || []);
-      const planResponse = await fetch('/api/campaigns/platform-plan', {
+      // PLATFORM-PLAN-SEC-001 — authenticated client fetch (see loadExecutionPlan).
+      const planResponse = await apiFetch('/api/campaigns/platform-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

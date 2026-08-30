@@ -19,6 +19,87 @@ import type { CompanyProfile } from './companyProfile/types';
 
 export const PLAN_LIMIT_EXCEEDED = 'PLAN_LIMIT_EXCEEDED';
 
+/**
+ * COMPANY-INTELLIGENCE-SEC-001.
+ *
+ * A mutation that names a row the AUTHORIZED company does not own is rejected
+ * with this sentinel. The same sentinel is used whether the row belongs to
+ * another tenant, does not exist, or is not a well-formed identifier, so the
+ * response is not an existence oracle for another tenant's row ids.
+ *
+ * It is a distinct, distinguishable outcome — the route maps it to 404. A
+ * rejected mutation must never look like a successful one to the caller, which
+ * is what a bare `WHERE id = ? AND company_id = ?` UPDATE returning "0 rows
+ * changed" would have done.
+ */
+export const RESOURCE_NOT_FOUND = 'RESOURCE_NOT_FOUND';
+
+/**
+ * `id` and `company_id` are both `uuid` (database/company_intelligence_config.sql).
+ * A value that is not a uuid can never match a row, and comparing it in the
+ * predicate raises 22P02 instead — the same deterministic-identity reasoning
+ * TenantGuard.isDeterministicIdentityError applies. Rejecting it here keeps the
+ * outcome deterministic AND keeps the mutation sink unreached.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_RE.test(value.trim());
+}
+
+/**
+ * THE ownership predicate for this service.
+ *
+ * `companyId` is the company the ROUTE authorized (requireCompanyContext ->
+ * enforceCompanyAccess -> assertTenantAccess). It is never `body.companyId`
+ * taken on trust, and never the target row's own `company_id` — reading the
+ * tenant back off the row being mutated authorizes nothing.
+ *
+ * The ownership read runs BEFORE any mutation or any other sink, so a rejected
+ * request reaches no write and no downstream service at all. It is scoped by
+ * `company_id` too, so a foreign row is not even read back.
+ */
+async function requireOwnedRow(
+  table: string,
+  companyId: string,
+  id: string,
+  label: string,
+): Promise<void> {
+  if (!isUuid(companyId) || !isUuid(id)) throw new Error(RESOURCE_NOT_FOUND);
+  const { data, error } = await ownedDbTable(table)
+    .select('id')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .maybeSingle();
+  if (error) throw new Error(`${label} failed: ${error.message}`);
+  if (!data) throw new Error(RESOURCE_NOT_FOUND);
+}
+
+/**
+ * Ownership-bound update: the row must already have been proven to belong to
+ * `companyId`, and the UPDATE still carries the `company_id` predicate so the
+ * write cannot land on another tenant's row between the check and the write.
+ */
+async function updateOwnedRow<T>(
+  table: string,
+  columns: string,
+  companyId: string,
+  id: string,
+  patch: Record<string, unknown>,
+  label: string,
+): Promise<T> {
+  await requireOwnedRow(table, companyId, id, label);
+  const { data, error } = await ownedDbTable(table)
+    .update(patch)
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select(columns)
+    .maybeSingle();
+  if (error) throw new Error(`${label} failed: ${error.message}`);
+  if (!data) throw new Error(RESOURCE_NOT_FOUND);
+  return data as T;
+}
+
 export type ConfigItem = {
   id: string;
   company_id: string;
@@ -153,24 +234,20 @@ export async function createTopic(companyId: string, topic: string): Promise<Top
   return data as TopicItem;
 }
 
-export async function updateTopic(id: string, topic: string): Promise<TopicItem> {
-  const { data, error } = await ownedDbTable('company_intelligence_topics')
-    .update({ topic: topic.trim() })
-    .eq('id', id)
-    .select('id, company_id, topic, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`updateTopic failed: ${error.message}`);
-  return data as TopicItem;
+const TOPIC_COLUMNS = 'id, company_id, topic, enabled, created_at, updated_at';
+
+export async function updateTopic(companyId: string, id: string, topic: string): Promise<TopicItem> {
+  return updateOwnedRow<TopicItem>(
+    'company_intelligence_topics', TOPIC_COLUMNS, companyId, id,
+    { topic: topic.trim() }, 'updateTopic',
+  );
 }
 
-export async function setTopicEnabled(id: string, enabled: boolean): Promise<TopicItem> {
-  const { data, error } = await ownedDbTable('company_intelligence_topics')
-    .update({ enabled })
-    .eq('id', id)
-    .select('id, company_id, topic, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`setTopicEnabled failed: ${error.message}`);
-  return data as TopicItem;
+export async function setTopicEnabled(companyId: string, id: string, enabled: boolean): Promise<TopicItem> {
+  return updateOwnedRow<TopicItem>(
+    'company_intelligence_topics', TOPIC_COLUMNS, companyId, id,
+    { enabled }, 'setTopicEnabled',
+  );
 }
 
 // --- Competitors ---
@@ -212,30 +289,31 @@ export async function createCompetitor(companyId: string, competitorName: string
   return data as CompetitorItem;
 }
 
-export async function updateCompetitor(id: string, name: string): Promise<CompetitorItem> {
-  const { data: existing, error: lookupError } = await ownedDbTable('company_intelligence_competitors')
-    .select('company_id')
-    .eq('id', id)
-    .maybeSingle();
-  if (lookupError || !existing?.company_id) throw new Error(`updateCompetitor failed: ${lookupError?.message ?? 'missing competitor row'}`);
-  const validatedName = await requireValidatedCompetitorName(String(existing.company_id), name);
-  const { data, error } = await ownedDbTable('company_intelligence_competitors')
-    .update({ competitor_name: validatedName })
-    .eq('id', id)
-    .select('id, company_id, competitor_name, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`updateCompetitor failed: ${error.message}`);
-  return data as CompetitorItem;
+const COMPETITOR_COLUMNS = 'id, company_id, competitor_name, enabled, created_at, updated_at';
+
+export async function updateCompetitor(companyId: string, id: string, name: string): Promise<CompetitorItem> {
+  // Ownership is settled FIRST. The previous shape read the row's own
+  // company_id and validated against THAT, which authorized nothing and made
+  // the competitor-validation path (a network sink) reachable for a foreign
+  // row. The authorized company now drives both the check and the validation.
+  //
+  // This check is deliberately not folded into updateOwnedRow's: it must run
+  // BEFORE the validation call, and updateOwnedRow must keep its own so no
+  // future caller can reach the write without one. One extra indexed
+  // point-select on an admin PUT is the cost of that independence.
+  await requireOwnedRow('company_intelligence_competitors', companyId, id, 'updateCompetitor');
+  const validatedName = await requireValidatedCompetitorName(companyId, name);
+  return updateOwnedRow<CompetitorItem>(
+    'company_intelligence_competitors', COMPETITOR_COLUMNS, companyId, id,
+    { competitor_name: validatedName }, 'updateCompetitor',
+  );
 }
 
-export async function setCompetitorEnabled(id: string, enabled: boolean): Promise<CompetitorItem> {
-  const { data, error } = await ownedDbTable('company_intelligence_competitors')
-    .update({ enabled })
-    .eq('id', id)
-    .select('id, company_id, competitor_name, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`setCompetitorEnabled failed: ${error.message}`);
-  return data as CompetitorItem;
+export async function setCompetitorEnabled(companyId: string, id: string, enabled: boolean): Promise<CompetitorItem> {
+  return updateOwnedRow<CompetitorItem>(
+    'company_intelligence_competitors', COMPETITOR_COLUMNS, companyId, id,
+    { enabled }, 'setCompetitorEnabled',
+  );
 }
 
 // --- Products ---
@@ -259,24 +337,20 @@ export async function createProduct(companyId: string, productName: string): Pro
   return data as ProductItem;
 }
 
-export async function updateProduct(id: string, name: string): Promise<ProductItem> {
-  const { data, error } = await ownedDbTable('company_intelligence_products')
-    .update({ product_name: name.trim() })
-    .eq('id', id)
-    .select('id, company_id, product_name, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`updateProduct failed: ${error.message}`);
-  return data as ProductItem;
+const PRODUCT_COLUMNS = 'id, company_id, product_name, enabled, created_at, updated_at';
+
+export async function updateProduct(companyId: string, id: string, name: string): Promise<ProductItem> {
+  return updateOwnedRow<ProductItem>(
+    'company_intelligence_products', PRODUCT_COLUMNS, companyId, id,
+    { product_name: name.trim() }, 'updateProduct',
+  );
 }
 
-export async function setProductEnabled(id: string, enabled: boolean): Promise<ProductItem> {
-  const { data, error } = await ownedDbTable('company_intelligence_products')
-    .update({ enabled })
-    .eq('id', id)
-    .select('id, company_id, product_name, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`setProductEnabled failed: ${error.message}`);
-  return data as ProductItem;
+export async function setProductEnabled(companyId: string, id: string, enabled: boolean): Promise<ProductItem> {
+  return updateOwnedRow<ProductItem>(
+    'company_intelligence_products', PRODUCT_COLUMNS, companyId, id,
+    { enabled }, 'setProductEnabled',
+  );
 }
 
 // --- Regions ---
@@ -300,24 +374,20 @@ export async function createRegion(companyId: string, region: string): Promise<R
   return data as RegionItem;
 }
 
-export async function updateRegion(id: string, region: string): Promise<RegionItem> {
-  const { data, error } = await ownedDbTable('company_intelligence_regions')
-    .update({ region: region.trim() })
-    .eq('id', id)
-    .select('id, company_id, region, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`updateRegion failed: ${error.message}`);
-  return data as RegionItem;
+const REGION_COLUMNS = 'id, company_id, region, enabled, created_at, updated_at';
+
+export async function updateRegion(companyId: string, id: string, region: string): Promise<RegionItem> {
+  return updateOwnedRow<RegionItem>(
+    'company_intelligence_regions', REGION_COLUMNS, companyId, id,
+    { region: region.trim() }, 'updateRegion',
+  );
 }
 
-export async function setRegionEnabled(id: string, enabled: boolean): Promise<RegionItem> {
-  const { data, error } = await ownedDbTable('company_intelligence_regions')
-    .update({ enabled })
-    .eq('id', id)
-    .select('id, company_id, region, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`setRegionEnabled failed: ${error.message}`);
-  return data as RegionItem;
+export async function setRegionEnabled(companyId: string, id: string, enabled: boolean): Promise<RegionItem> {
+  return updateOwnedRow<RegionItem>(
+    'company_intelligence_regions', REGION_COLUMNS, companyId, id,
+    { enabled }, 'setRegionEnabled',
+  );
 }
 
 // --- Keywords ---
@@ -341,24 +411,20 @@ export async function createKeyword(companyId: string, keyword: string): Promise
   return data as KeywordItem;
 }
 
-export async function updateKeyword(id: string, keyword: string): Promise<KeywordItem> {
-  const { data, error } = await ownedDbTable('company_intelligence_keywords')
-    .update({ keyword: keyword.trim() })
-    .eq('id', id)
-    .select('id, company_id, keyword, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`updateKeyword failed: ${error.message}`);
-  return data as KeywordItem;
+const KEYWORD_COLUMNS = 'id, company_id, keyword, enabled, created_at, updated_at';
+
+export async function updateKeyword(companyId: string, id: string, keyword: string): Promise<KeywordItem> {
+  return updateOwnedRow<KeywordItem>(
+    'company_intelligence_keywords', KEYWORD_COLUMNS, companyId, id,
+    { keyword: keyword.trim() }, 'updateKeyword',
+  );
 }
 
-export async function setKeywordEnabled(id: string, enabled: boolean): Promise<KeywordItem> {
-  const { data, error } = await ownedDbTable('company_intelligence_keywords')
-    .update({ enabled })
-    .eq('id', id)
-    .select('id, company_id, keyword, enabled, created_at, updated_at')
-    .single();
-  if (error) throw new Error(`setKeywordEnabled failed: ${error.message}`);
-  return data as KeywordItem;
+export async function setKeywordEnabled(companyId: string, id: string, enabled: boolean): Promise<KeywordItem> {
+  return updateOwnedRow<KeywordItem>(
+    'company_intelligence_keywords', KEYWORD_COLUMNS, companyId, id,
+    { enabled }, 'setKeywordEnabled',
+  );
 }
 
 // --- Query builder helpers (random selection for placeholder resolution) ---

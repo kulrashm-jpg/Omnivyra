@@ -15,6 +15,7 @@ import {
   updateCompetitor,
   setCompetitorEnabled,
   PLAN_LIMIT_EXCEEDED,
+  RESOURCE_NOT_FOUND,
 } from '../../../../backend/services/companyIntelligenceConfigService';
 import { trackEvent } from '../../../../backend/services/telemetry/telemetryDispatcher';
 
@@ -62,7 +63,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (!id || !competitor_name?.trim()) {
           return res.status(400).json({ error: 'id and competitor_name are required' });
         }
-        const updated = await updateCompetitor(id, competitor_name);
+        const updated = await updateCompetitor(companyContext.companyId, id, competitor_name);
         return res.status(200).json({ competitor: updated });
       }
       case 'PATCH': {
@@ -70,7 +71,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (!id || typeof enabled !== 'boolean') {
           return res.status(400).json({ error: 'id and enabled (boolean) are required' });
         }
-        const updated = await setCompetitorEnabled(id, enabled);
+        const updated = await setCompetitorEnabled(companyContext.companyId, id, enabled);
         return res.status(200).json({ competitor: updated });
       }
       default:
@@ -80,6 +81,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const message = (err as Error)?.message ?? '';
     if (message === PLAN_LIMIT_EXCEEDED) {
       return res.status(403).json({ error: PLAN_LIMIT_EXCEEDED });
+    }
+    // COMPANY-INTELLIGENCE-SEC-001 - the row is not owned by the company this
+    // request authorized (foreign tenant, absent, or a malformed identifier).
+    // One outcome for all three so the response is not an existence oracle.
+    if (message === RESOURCE_NOT_FOUND) {
+      return res.status(404).json({ error: RESOURCE_NOT_FOUND });
     }
     return res.status(500).json({ error: message || 'Internal server error' });
   }
