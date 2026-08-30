@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getCampaignById } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 
 import { fromLegacyRefinements, fromStructuredPlan, blueprintWeeksToLegacyRefinements } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
@@ -45,6 +46,47 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     
     let campaign = await getCampaignById(campaignId, '*');
 
+    /*
+     * TENANT-AUTHZ-BATCH-SEC-001 — authorize BEFORE any write.
+     *
+     * This route authenticated the caller and then performed no tenant
+     * authorization at all: the campaign was fetched by id alone and updated
+     * with `.eq('id', …)` and no tenant predicate, while `companyId` came
+     * straight from the body into campaign_versions.company_id. An
+     * authenticated user of any company could therefore overwrite another
+     * tenant's campaign and attach a version row to any company.
+     *
+     * The operative company is now SERVER-DERIVED from the campaign, and the
+     * caller must be a member of it. The three legitimate shapes are preserved:
+     *   - existing campaign in a company  -> membership required;
+     *   - existing campaign with no company (legacy row) -> creator only;
+     *   - new campaign -> the body company is authorized before it is used,
+     *     and omitting it still works (the shipped caller sends it optionally).
+     */
+    const campaignCompanyId = (campaign as { company_id?: string | null } | null)?.company_id ?? null;
+    const campaignOwnerId = (campaign as { user_id?: string | null } | null)?.user_id ?? null;
+    let authorizedCompanyId: string | null = null;
+
+    if (campaign) {
+      if (campaignCompanyId) {
+        const ctx = await requireCompanyContext({
+          req, res, companyId: campaignCompanyId, campaignId, requireCampaignId: false,
+        });
+        if (!ctx) return;
+        authorizedCompanyId = ctx.companyId;
+      } else if (campaignOwnerId !== user.id) {
+        // A company-less legacy campaign is owned by its creator. 404 rather
+        // than 403 so a probe cannot use this route to enumerate campaign ids.
+        return res.status(404).json({ error: 'Campaign not found' });
+      }
+    } else if (typeof companyId === 'string' && companyId.trim()) {
+      const ctx = await requireCompanyContext({
+        req, res, companyId: companyId.trim(), campaignId, requireCampaignId: false,
+      });
+      if (!ctx) return;
+      authorizedCompanyId = ctx.companyId;
+    }
+
     if (!campaign) {
       console.log('Campaign does not exist, creating new one');
       // Create the campaign with the provided campaignId
@@ -76,10 +118,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       campaign = newCampaign;
       console.log('Campaign created successfully:', campaign?.id);
 
-      // Ensure campaign appears on dashboard: insert campaign_versions when companyId provided
-      if (companyId && typeof companyId === 'string') {
+      // Ensure campaign appears on dashboard: insert campaign_versions when an
+      // AUTHORIZED company is available. Binding to authorizedCompanyId rather
+      // than the raw body value is what stops a version row being attached to
+      // another tenant's company.
+      if (authorizedCompanyId) {
         const { error: cvError } = await supabase.from('campaign_versions').insert({
-          company_id: companyId,
+          company_id: authorizedCompanyId,
           campaign_id: campaignId,
           campaign_snapshot: { campaign },
           status: 'planning',
@@ -164,7 +209,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         updated_at: new Date().toISOString()
       })
       .eq('id', campaignId);
-    void syncCampaignVersionStage(campaignId, 'campaign_week_plan', companyId).catch(() => {});
+    void syncCampaignVersionStage(campaignId, 'campaign_week_plan', authorizedCompanyId ?? undefined).catch(() => {});
 
     await saveCampaignBlueprintFromLegacy({
       campaignId,
