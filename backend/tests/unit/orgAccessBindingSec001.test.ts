@@ -361,3 +361,43 @@ describe('usage/track — org binding', () => {
     expect(sinks).toEqual([]);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * USAGE-SINK-PARITY-001 — the fail-safe persistence contract.
+ *
+ * customer_usage_events is deliberately NOT auto-applied ("controlled migration
+ * process only"), so until it exists ingestUsageEvents reports ok:false with a
+ * failure metric rather than throwing. These pin the ROUTE-level half of that
+ * contract, which was previously unpinned: a 202 here means "accepted, outcome
+ * in the body", NOT "persisted". Anyone later turning this into a 500 — or
+ * hiding the ok:false — has to change a test that says why it exists.
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe('usage/track — fail-safe persistence semantics', () => {
+  const { ingestUsageEvents } = require('../../services/usage/usageIngestionService');
+
+  it('a missing persistence table yields 202 with ok:false and persisted:0', async () => {
+    ingestUsageEvents.mockImplementationOnce(async (events: any[], ctx: any) => {
+      sinks.push({ fn: 'ingestUsageEvents', org: ctx?.companyId, args: { events, ctx } });
+      // What the real service returns when the table is absent.
+      return { ok: false, received: events.length, persisted: 0, duplicates: 0,
+               rejected: 0, reasons: { write_failed: events.length } };
+    });
+
+    const res = await call(trackRoute, MEMBER_A, { body: { org_id: ORG_A, events: [EVENT] } });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.persisted).toBe(0);
+    expect(res.body.received).toBe(1);
+    // Still attributed to the authorized org — the security boundary holds on
+    // the failure path too.
+    expect(sinks[0].org).toBe(ORG_A);
+  });
+
+  it('a successful persist is distinguishable from a failed one at the route', async () => {
+    const res = await call(trackRoute, MEMBER_A, { body: { org_id: ORG_A, events: [EVENT] } });
+    expect(res.statusCode).toBe(202);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.persisted).toBe(1);
+  });
+});
