@@ -77,7 +77,19 @@ jest.mock('../../services/supabaseAuthService', () => ({
     authUser ? { user: { id: authUser }, error: null } : { user: null, error: 'NO_AUTH' }),
 }));
 
-jest.mock('../../../lib/supabaseBrowser', () => {
+/*
+ * COMMAND-CENTER-CLIENT-CORRECTNESS-001 — the mock seam moved, the contract did
+ * not. The route now imports the canonical service-role client
+ * (backend/db/supabaseClient) instead of the anon-key browser client, so the
+ * mock targets that module. Every assertion below is unchanged: the builder,
+ * the fixtures, the canaries and the expectations are identical to the version
+ * certified by COMMAND-CENTER-COMPANY-STATE-SEC-001. Only the module being
+ * intercepted differs.
+ *
+ * This matters more than before, not less: the service-role client bypasses
+ * RLS, so the membership gate these tests pin is now the ENTIRE boundary.
+ */
+jest.mock('../../db/supabaseClient', () => {
   const build = (table: string) => {
     const filters: Record<string, unknown> = {};
     const b: any = {};
@@ -106,7 +118,7 @@ jest.mock('../../../lib/supabaseBrowser', () => {
     };
     return b;
   };
-  return { getSupabaseBrowser: () => ({ from: (t: string) => build(t) }) };
+  return { supabase: { from: (t: string) => build(t) } };
 });
 
 const route = require('../../../pages/api/command-center/company-state').default;
@@ -131,6 +143,58 @@ async function call(user: string | null, query: any = {}, method = 'GET') {
 /** Reads of tenant data — i.e. everything except the membership lookup itself. */
 const dataReads = () => queries.filter(q => q.table !== 'user_company_roles');
 const dump = (res: any) => JSON.stringify(res.body ?? {});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * COMMAND-CENTER-CLIENT-CORRECTNESS-001 — the client-selection boundary.
+ *
+ * The outage was not a logic bug; it was the wrong CLIENT. The route used the
+ * anon-key browser client, RLS returned zero rows from user_company_roles, the
+ * membership lookup came back null, and every legitimate member received 403.
+ *
+ * A behavioural test cannot distinguish the two clients — both are mocked at
+ * the module boundary — so the regression is pinned STATICALLY against the
+ * route source. This is the assertion that fails if somebody restores
+ * getSupabaseBrowser() to this file.
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe('client selection — the outage regression', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const RAW = fs.readFileSync(
+    path.resolve(__dirname, '../../../pages/api/command-center/company-state.ts'), 'utf8');
+
+  /*
+   * Assert against CODE, not prose. The route's header comment explains the
+   * outage and necessarily names getSupabaseBrowser(), so a raw text match
+   * would fail on the very comment that documents the fix.
+   */
+  const SRC = RAW.split('\n')
+    .filter((l: string) => {
+      const t = l.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+    })
+    .join('\n');
+
+  it('CRITICAL the route does NOT use the anon-key browser client', () => {
+    expect(SRC).not.toMatch(/getSupabaseBrowser/);
+    expect(SRC).not.toMatch(/lib\/supabaseBrowser/);
+  });
+
+  it('CRITICAL the route uses the canonical service-role client', () => {
+    expect(SRC).toMatch(/import\s*\{\s*supabase\s*\}\s*from\s*'[^']*backend\/db\/supabaseClient'/);
+  });
+
+  it('the membership gate is still present in the source, before the data reads', () => {
+    // With RLS bypassed, this gate is the entire boundary — so its presence and
+    // its position are both part of the regression contract.
+    const gate = SRC.indexOf("from('user_company_roles')");
+    const firstDataRead = Math.min(
+      ...["from('blogs')", "from('companies')", "from('social_accounts')", "from('reports')"]
+        .map((t) => { const i = SRC.indexOf(t); return i === -1 ? Number.MAX_SAFE_INTEGER : i; }));
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(firstDataRead);
+    expect(SRC).toMatch(/\.eq\('status',\s*'active'\)/);
+  });
+});
 
 describe('authorization matrix', () => {
   it('unauthenticated is refused before any query', async () => {
