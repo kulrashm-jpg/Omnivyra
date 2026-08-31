@@ -3,12 +3,8 @@
   "grandfathered": [
     "pages/api/account-context/analyze.ts",
     "pages/api/admin/check-super-admin.ts",
-    "pages/api/billing/invoices/[id]/pdf.ts",
     "pages/api/blogs/[id]/public.ts",
     "pages/api/blogs/public.ts",
-    "pages/api/campaigns/[id]/strategic-insights.ts",
-    "pages/api/campaigns/business-report.ts",
-    "pages/api/campaigns/create-12week-plan.ts",
     "pages/api/command-center/company-state.ts",
     "pages/api/domain/verification-status.ts",
     "pages/api/extension/validate.ts",
