@@ -72,8 +72,95 @@ const APPROVED = [
   'resolveUserContext',
   // Other confirmed tenant/role access resolvers used by specific route families.
   'resolveCompanyAccess', 'isFinanceAuditor', 'requireCampaignCompanyMatch',
+  // AUTHZ-DETECTOR-PARITY-001 — thin wrappers over binders already approved
+  // above. Both are PROVENANCE-GATED (see PROVENANCE_REQUIRED): the name alone
+  // never clears a route.
+  //   requireCompanyContext (companyContextGuardService): rejects a missing
+  //   companyId with 400, then delegates to enforceCompanyAccess, which allows
+  //   only when assertTenantAccess reports an active membership in an active
+  //   org, and answers 401/403/503 itself otherwise.
+  //   withOrgAccess (backend/middleware): resolves the org, calls assertOrgAccess
+  //   -> requireTenantAccess, returns early unless it passes, and exposes the
+  //   authorized org as req.orgAccess.orgId.
+  'requireCompanyContext', 'withOrgAccess',
 ];
 const APPROVED_RE = new RegExp(`\\b(?:${APPROVED.join('|')})\\s*\\(`);
+
+/*
+ * AUTHZ-DETECTOR-PARITY-001 — recognize the two thin wrappers over binders this
+ * detector ALREADY credits, without becoming name-credulous.
+ *
+ *   requireCompanyContext -> enforceCompanyAccess (already approved)
+ *   withOrgAccess         -> assertOrgAccess -> requireTenantAccess (both already approved)
+ *
+ * Neither addition widens what is authorized; each closes a gap where the
+ * detector credited the callee but not the one-line wrapper around it, which is
+ * why four independently-audited routes could not leave the baseline.
+ *
+ * Two precision rules keep the addition from becoming a textual free pass. They
+ * exist because the sibling guard (check-orgaccess-binding) shipped a false-SAFE
+ * by crediting a wrapper on name/containment alone:
+ *
+ *   PROVENANCE — these two names count only when imported from the module that
+ *   actually implements them, AND actually called. A local look-alike
+ *   (`async function requireCompanyContext() { return true }`) is not the
+ *   primitive and does not clear a route.
+ *
+ * SCOPE OF THE PRECISION RULES — deliberately limited to the two names added
+ * here. Applying provenance/shadowing to the pre-existing binder list was tried
+ * and produced a FALSE POSITIVE: pages/api/super-admin/creator-operations.ts
+ * defines its own `isSuperAdmin` that verifies the token via
+ * supabase.auth.getUser and 403s unless user_metadata.is_super_admin — a
+ * legitimate implementation, not a look-alike. Tightening the older names is a
+ * separate change with its own route-level evidence; it is not smuggled in here,
+ * and no existing route changes classification because of this file.
+ */
+const PROVENANCE_REQUIRED = {
+  requireCompanyContext: /companyContextGuardService/,
+  withOrgAccess: /middleware\/withOrgAccess/,
+};
+
+/** Does this source DEFINE `name` itself (rather than import the real one)? */
+function definesLocally(src, name) {
+  return new RegExp(
+    `(?:export\\s+)?(?:async\\s+)?function\\s+${name}\\s*\\(` +
+    `|(?:const|let|var)\\s+${name}\\s*=\\s*(?:async\\s*)?(?:\\(|function\\b)`
+  ).test(src);
+}
+
+/** Is `name` imported from a module path matching `pathRe`? */
+function importedFrom(src, name, pathRe) {
+  const re = new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['"]([^'"]+)['"]`);
+  const m = re.exec(src);
+  return !!(m && pathRe.test(m[1]));
+}
+
+/**
+ * The approved binder this source actually invokes, or null.
+ * Requires a CALL (an unused import authorizes nothing), rejects a name the file
+ * defines itself, and for the provenance-gated names requires the canonical import.
+ */
+function approvedBinderInvoked(src) {
+  for (const name of APPROVED) {
+    if (!new RegExp(`\\b${name}\\s*\\(`).test(src)) continue;
+    const prov = PROVENANCE_REQUIRED[name];
+    if (prov) {
+      /*
+       * Provenance-gated: must be the real import, not a same-file look-alike.
+       *
+       * definesLocally is defence in depth and is REDUNDANT today — mutation
+       * testing confirmed removing it changes nothing, because a local
+       * definition has no canonical import and so already fails provenance, and
+       * a file cannot both import and declare the same binding. It is kept so
+       * the local-look-alike case stays closed if provenance is ever relaxed.
+       */
+      if (definesLocally(src, name)) continue;
+      if (!importedFrom(src, name, prov)) continue;
+    }
+    return name;
+  }
+  return null;
+}
 
 // Tenant id pulled FROM THE REQUEST (caller-supplied). Two shapes:
 //   req.query.companyId / req.body.company_id / query.companyId / body['org_id']
@@ -104,8 +191,17 @@ function scanSource(src) {
   if (!extractsTenant) return { violation: false, reason: 'no_request_tenant_id' };
   const doesDb = DB_RE.test(src);
   if (!doesDb) return { violation: false, reason: 'no_service_role_db' };
-  const hasAuthz = APPROVED_RE.test(src);
-  if (hasAuthz) return { violation: false, reason: 'authorized' };
+  const binder = approvedBinderInvoked(src);
+  if (binder) return { violation: false, reason: 'authorized', binder };
+  /*
+   * Fail closed. A name that LOOKS approved but was defined here, imported
+   * without being called, or imported from somewhere other than the module that
+   * implements it, lands here rather than clearing the route — the detector says
+   * it could not establish authorization, which is what the baseline is for.
+   */
+  if (APPROVED_RE.test(src)) {
+    return { violation: true, reason: 'authz_binder_not_established' };
+  }
   return { violation: true, reason: 'tenant_data_no_authz' };
 }
 
