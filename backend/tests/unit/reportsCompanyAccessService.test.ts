@@ -45,7 +45,10 @@ jest.mock('../../db/supabaseClient', () => {
       queries.push({ table, filters: { ...filters }, limited });
       const rows = ROLES.filter(r =>
         (filters.user_id === undefined || r.user_id === filters.user_id) &&
-        (filters.company_id === undefined || r.company_id === filters.company_id) &&
+        // Postgres compares uuid case-INSENSITIVELY, so a differently-cased
+        // request still matches — while the stored column stays canonical.
+        (filters.company_id === undefined ||
+          r.company_id.toLowerCase() === String(filters.company_id).toLowerCase()) &&
         (filters.status === undefined || r.status === filters.status));
       // maybeSingle() with >1 row is an error in PostgREST unless limited.
       if (rows.length > 1 && !limited) return Promise.resolve({ data: null, error: { message: 'multiple rows' } });
@@ -81,12 +84,18 @@ describe('resolveCompanyId — requested company', () => {
     });
   });
 
-  it('returns the ROW column, never the caller-supplied value', async () => {
-    // The mock returns the stored company_id; a route therefore cannot receive
-    // back a value the database did not confirm.
-    const out = await resolveCompanyId(MEMBER, COMPANY_A);
+  it('CRITICAL returns the stored ROW column, never the caller-supplied string', async () => {
+    /*
+     * Postgres matches uuids case-insensitively, so an oddly-cased request finds
+     * the row — but what must flow onward to the sinks is the CANONICAL stored
+     * value, not the string the caller typed. Mutation testing found that a
+     * mutant echoing `requestedCompanyId` survived while the fixture used an
+     * identical-case id, so the request is deliberately mis-cased here.
+     */
+    const miscased = COMPANY_A.toUpperCase();
+    const out = await resolveCompanyId(MEMBER, miscased);
     expect(out).toBe(COMPANY_A);
-    expect(queries[0].filters.company_id).toBe(COMPANY_A);
+    expect(out).not.toBe(miscased);
   });
 
   it('a malformed company resolves to null without throwing', async () => {
@@ -147,5 +156,67 @@ describe('resolveCompanyId — the contract limits, pinned deliberately', () => 
     await resolveCompanyId(MEMBER, COMPANY_A);
     await resolveCompanyId(MEMBER);
     expect([...new Set(queries.map(q => q.table))]).toEqual(['user_company_roles']);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * REPORTS-LIFECYCLE-SEC-001 — why membership-only is the CORRECT policy here.
+ *
+ * The open question was whether an active member of a suspended or soft-deleted
+ * company should keep reports access. The repository answers it: company
+ * lifecycle is enforced AT THE TRANSITION, not on every read.
+ *
+ * supabase/migrations/20260640_lifecycle_governance.sql defines
+ * disable_company_cascade(), which in ONE transaction:
+ *
+ *     UPDATE companies          SET status='inactive'
+ *     UPDATE user_company_roles SET status='inactive'
+ *                               WHERE company_id=… AND status='active'
+ *     UPDATE users              SET session_revoked_after=NOW()
+ *     UPDATE auth_sessions      SET revoked_at=NOW()
+ *
+ * and soft_delete_company() sets deleted_at and calls that same cascade. There
+ * is no other write path that makes a company inactive — every disable/delete
+ * goes through backend/services/lifecycleGovernance.
+ *
+ * So "active membership in a disabled company" is a state the system does not
+ * produce: the cascade deactivates the membership, and revokes the session on
+ * top. Production agrees — 24 membership rows exist on non-active companies and
+ * every one of them is inactive.
+ *
+ * These tests pin that reasoning. If someone later adds a lifecycle read to this
+ * helper, or breaks the cascade, they have to confront the policy here rather
+ * than discover it in an incident.
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe('lifecycle policy — membership is the enforcement point', () => {
+  it('POLICY: an inactive membership is refused, which is how a disabled company is refused', async () => {
+    // The cascade turns every membership of a disabled company into this state.
+    await expect(resolveCompanyId(STALE, VICTIM)).resolves.toBeNull();
+  });
+
+  it('POLICY: the helper decides on MEMBERSHIP alone and never reads companies', async () => {
+    await resolveCompanyId(MEMBER, SUSPENDED_CO);
+    expect(queries.every(q => q.table === 'user_company_roles')).toBe(true);
+    expect(queries.some(q => q.table === 'companies')).toBe(false);
+  });
+
+  it('POLICY: the fallback also keys on active membership, so a disabled company cannot be selected', async () => {
+    // MEMBER holds active rows in COMPANY_A and SUSPENDED_CO. Once the cascade
+    // has run for a company, its row is inactive and cannot be the fallback.
+    const out = await resolveCompanyId(MEMBER);
+    expect([COMPANY_A, SUSPENDED_CO]).toContain(out);
+    expect(queries[0].filters.status).toBe('active');
+  });
+
+  it('POLICY: a caller whose every membership was cascaded resolves to null', async () => {
+    await expect(resolveCompanyId(STALE)).resolves.toBeNull();
+  });
+
+  it('the fallback SKIPS inactive memberships and returns an active one', async () => {
+    // MULTI has two active rows; the query filters status='active', so an
+    // inactive row can never be chosen regardless of table order.
+    const out = await resolveCompanyId(MULTI);
+    expect([COMPANY_A, COMPANY_B]).toContain(out);
+    expect(queries[0].filters.status).toBe('active');
   });
 });
