@@ -433,12 +433,79 @@ export async function refreshPlatformToken(
 export const REFRESH_BUFFER_MS = 15 * 60 * 1000;
 
 /**
+ * A read this refresh flow depends on did not succeed.
+ *
+ * Distinct from "the read succeeded and matched nothing": callers must be able
+ * to tell an outage from an idle company, and `{checked:0,...}` cannot say
+ * which. Thrown rather than folded into the summary because every caller of
+ * these flows already treats a throw as visible failure —
+ * refreshAllExpiringSocialAccounts counts it (errors++ per company),
+ * runSocialAccountTokenRefreshJob logs and returns errors:1,
+ * /api/social-accounts/refresh-tokens answers 500, the oauth lifecycle sweep
+ * logs oauth_lifecycle_social_sweep_failed, and /api/social-accounts/status
+ * warns and falls through to reporting stale state. Returning a sentinel in the
+ * summary instead would have required changing a shape four callers destructure.
+ */
+export class TokenRefreshQueryError extends Error {
+  readonly table: string;
+
+  constructor(table: string, detail: string) {
+    super(`[tokenRefresh] read of ${table} failed: ${detail}`);
+    this.name = 'TokenRefreshQueryError';
+    this.table = table;
+  }
+}
+
+/**
+ * Collapse a PostgREST result into rows, or throw.
+ *
+ * The three states this refresh path can be in are modelled explicitly:
+ *
+ *   A. success with rows      -> the rows
+ *   B. success with zero rows -> [] (legitimate; the caller returns its normal
+ *                                zero-work summary, exactly as before)
+ *   C. the query failed       -> TokenRefreshQueryError
+ *
+ * B and C were previously indistinguishable. Every call site here destructured
+ * `{ data }` and discarded `error`, so `data` came back null on failure, `?? []`
+ * turned that into zero rows, and a database outage was reported as "nothing to
+ * do". The cron caller only logs when refreshed>0 || errors>0, so such a run was
+ * completely silent — no token refreshed, and no trace that none had been.
+ *
+ * `data: null` with no error is also treated as C, not B: PostgREST's select
+ * response is a union where a successful read always carries an array, so an
+ * absent array is an unknown state, and the only unknown state that must never
+ * be guessed is this one. A legitimately empty read is `[]`.
+ */
+function unwrapRows<T>(
+  table: string,
+  result: { data: T[] | null; error?: { message?: string | null } | null } | null | undefined,
+): T[] {
+  if (!result) {
+    throw new TokenRefreshQueryError(table, 'no result returned');
+  }
+  if (result.error) {
+    throw new TokenRefreshQueryError(table, String(result.error.message ?? result.error).slice(0, 300));
+  }
+  if (!Array.isArray(result.data)) {
+    throw new TokenRefreshQueryError(table, 'query reported no error but returned no rows array');
+  }
+  return result.data;
+}
+
+/**
  * Refresh all social_accounts rows for a company whose token expires within bufferMs.
  *
  * Used on dashboard load and by cron so short-lived access tokens (e.g. X — 2h)
  * don't appear "Token Expired" between user sessions. Per-account failures are
  * swallowed (fire-and-forget at the caller level); accounts without a stored
  * refresh_token are skipped — the user must reconnect once to seed it.
+ *
+ * Per-ACCOUNT failure stays inside the summary (errors++). A failure of the two
+ * reads this flow is built on does not: it throws TokenRefreshQueryError,
+ * because there is no accounts list to summarise and a zero-work summary would
+ * claim there was no work. A company with no active members, or no
+ * near-expiry accounts, still returns the zero-work summary as before.
  */
 export async function refreshExpiringSocialAccountsForCompany(
   companyId: string,
@@ -446,22 +513,29 @@ export async function refreshExpiringSocialAccountsForCompany(
 ): Promise<{ checked: number; refreshed: number; skipped: number; errors: number }> {
   const summary = { checked: 0, refreshed: 0, skipped: 0, errors: 0 };
 
-  const { data: roleRows } = await ownedDbTable('user_company_roles')
-    .select('user_id')
-    .eq('company_id', companyId)
-    .eq('status', 'active');
-  const userIds = (roleRows ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
+  const roleRows = unwrapRows<{ user_id: string }>(
+    'user_company_roles',
+    await ownedDbTable('user_company_roles')
+      .select('user_id')
+      .eq('company_id', companyId)
+      .eq('status', 'active'),
+  );
+  const userIds = roleRows.map((r: { user_id: string }) => r.user_id).filter(Boolean);
+  // Reached only when the read SUCCEEDED and the company genuinely has no
+  // active members — unchanged zero-work behaviour, no error raised.
   if (userIds.length === 0) return summary;
 
   const cutoffIso = new Date(Date.now() + bufferMs).toISOString();
-  const { data: rows } = await ownedDbTable('social_accounts')
-    .select('id, platform, token_expires_at, refresh_token')
-    .in('user_id', userIds)
-    .eq('is_active', true)
-    .or(`company_id.eq.${companyId},company_id.is.null`)
-    .lt('token_expires_at', cutoffIso);
+  const accounts = unwrapRows<{ id: string; platform: string }>(
+    'social_accounts',
+    await ownedDbTable('social_accounts')
+      .select('id, platform, token_expires_at, refresh_token')
+      .in('user_id', userIds)
+      .eq('is_active', true)
+      .or(`company_id.eq.${companyId},company_id.is.null`)
+      .lt('token_expires_at', cutoffIso),
+  );
 
-  const accounts = rows ?? [];
   summary.checked = accounts.length;
 
   await Promise.all(
@@ -558,11 +632,15 @@ export async function refreshAllExpiringSocialAccounts(
 ): Promise<{ companies: number; checked: number; refreshed: number; skipped: number; errors: number }> {
   const totals = { companies: 0, checked: 0, refreshed: 0, skipped: 0, errors: 0 };
 
-  const { data: companyRows } = await ownedDbTable('companies')
-    .select('id')
-    .eq('status', 'active');
-
-  const companies = (companyRows ?? []) as { id: string }[];
+  // Same three-state contract as the per-company flow. Without it the cron's
+  // OWN entry point stays silent on an outage: a failed companies read became
+  // zero companies, and {companies:0, refreshed:0, errors:0} is exactly what a
+  // quiet, healthy tick looks like. runSocialAccountTokenRefreshJob and the
+  // oauth lifecycle sweep both already catch and report a throw.
+  const companies = unwrapRows<{ id: string }>(
+    'companies',
+    await ownedDbTable('companies').select('id').eq('status', 'active'),
+  );
   totals.companies = companies.length;
 
   for (const c of companies) {

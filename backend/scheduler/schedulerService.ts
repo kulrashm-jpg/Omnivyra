@@ -87,14 +87,48 @@ async function findDuePostsAndEnqueueInner(): Promise<SchedulerResult> {
     return { found: 0, created: 0, skipped: 0 };
   }
 
-  // Check for existing queue jobs to prevent duplicates
-  const { data: existingJobs } = await ownedDbTable('queue_jobs')
+  // ── Duplicate guard: which due posts ALREADY have a live queue job? ─────────
+  // Three states exist here and MUST NOT be collapsed into two:
+  //   A. lookup succeeded, no row  → post is eligible
+  //   B. lookup succeeded, row     → post is protected from a second enqueue
+  //   C. lookup FAILED             → queue state is UNKNOWN, and must NEVER be
+  //                                  read as A.
+  //
+  // This error used to be discarded. On a failed round-trip `existingJobs` came
+  // back null, `existingPostIds` became an EMPTY SET, and the cycle therefore
+  // treated EVERY due post as un-enqueued — a mass duplicate enqueue that
+  // double-publishes to public social platforms and cannot be undone. Unlike
+  // the per-post guard in schedulerPostQueueControl, the blast radius here is
+  // the entire cycle.
+  //
+  // We fail the cycle, exactly like the sibling scheduled_posts lookup above and
+  // the campaigns lookup below. That is the option this architecture already
+  // supports end to end: nothing has been written at this point (the guard runs
+  // before the campaigns batch and before any insert/enqueue), the
+  // findDuePostsAndEnqueue wrapper records the run as `outcome: 'failed'`,
+  // cron.ts catches, logs and deliberately continues on the next interval, and
+  // recovery is automatic — the posts are still `status='scheduled'` with
+  // `scheduled_for <= now`, so the next healthy cycle re-selects and enqueues
+  // them normally. Returning them as `skipped` instead would be silently
+  // indistinguishable from "everything was already queued" and would lose the
+  // failure signal. Refusing to act on unknown queue state is the only
+  // behaviour that cannot double-publish.
+  const { data: existingJobs, error: existingJobsError } = await ownedDbTable('queue_jobs')
     .select('scheduled_post_id, status')
     .in('scheduled_post_id', duePosts.map(p => p.id))
     .in('status', ['pending', 'processing']);
 
+  if (existingJobsError || !existingJobs) {
+    const reason = existingJobsError?.message ?? 'no rows returned';
+    console.error(
+      `❌ Duplicate-guard lookup failed (${reason}) — aborting cycle without enqueueing ` +
+      `${found} due post(s); they remain scheduled and are retried next cycle`
+    );
+    throw new Error(`Failed to query queue_jobs: ${reason}`);
+  }
+
   const existingPostIds = new Set(
-    existingJobs?.map(j => j.scheduled_post_id) || []
+    existingJobs.map(j => j.scheduled_post_id)
   );
 
   // ── HARDEN-004: batch the per-post campaign lookup ──────────────────────────

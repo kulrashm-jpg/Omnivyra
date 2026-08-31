@@ -284,7 +284,18 @@ export async function dualWriteSocialAccount(opts: {
         .eq('company_id', companyId)
         .eq('platform', platform);
       if (platformUserId) strict.eq('platform_user_id', platformUserId);
-      const { data } = await strict.maybeSingle();
+      const { data, error } = await strict.maybeSingle();
+      // `existing = null` used to mean two different things: "no such row yet"
+      // (INSERT is correct) and "the lookup failed" (INSERT is NOT correct --
+      // the row may well exist). Only the first may reach the INSERT below.
+      if (error) {
+        console.error(
+          '[dualWriteSocialAccount] account lookup failed — aborting rather than risking a duplicate row:',
+          platform,
+          error.message,
+        );
+        return;
+      }
       existing = data ? { id: data.id } : null;
     }
 
@@ -309,6 +320,19 @@ export async function dualWriteSocialAccount(opts: {
         .order('updated_at', { ascending: false })
         .limit(1)
         .maybeSingle();
+      // Same three-state rule as the strict lookup above. This one matters more,
+      // not less: it exists precisely because Meta returns a different
+      // platform_user_id across sessions, and that is the case the unique index
+      // (company_id, platform, platform_user_id) does NOT catch — so a failed
+      // read here is exactly how a second row for one tenant/platform gets born.
+      if (relaxed.error) {
+        console.error(
+          '[dualWriteSocialAccount] relaxed account lookup failed — aborting rather than risking a duplicate row:',
+          platform,
+          relaxed.error.message,
+        );
+        return;
+      }
       if (relaxed.data?.id) {
         existing = { id: relaxed.data.id };
       }

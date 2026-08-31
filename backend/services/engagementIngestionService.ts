@@ -449,6 +449,89 @@ async function persistComments(rows: IngestCommentRow[]): Promise<void> {
 }
 
 /**
+ * The outcome of asking "which company owns this ingested engagement?".
+ *
+ * Three states, because two of them were previously indistinguishable and the
+ * collapse was the defect:
+ *
+ *   resolved      — an owning company is known.
+ *   unowned       — every authority answered, and none of them claims the post.
+ *   lookup_failed — an authority could not answer. This is NOT evidence of
+ *                   anything; it is the absence of evidence.
+ *
+ * `unowned` and `lookup_failed` both used to arrive as `organizationId = null`,
+ * so a transient database error was silently reported as "this engagement
+ * belongs to nobody".
+ *
+ * This is the split `backend/security/TenantGuard.ts` already makes, and the
+ * naming follows it: its `TENANT_LOOKUP_ERROR` is documented as "transient DB
+ * error reading membership/org — retryable, NOT a denial", and is kept distinct
+ * from `NOT_A_MEMBER` for exactly this reason. `engagementPollingProcessor`
+ * applies the same rule to this very table family: a query error throws rather
+ * than proceeding, while a post whose account resolves no company is counted
+ * into an explicit orphan bucket and skipped.
+ */
+type IngestTenantResolution =
+  | { state: 'resolved'; organizationId: string }
+  | { state: 'unowned' }
+  | { state: 'lookup_failed'; reason: string };
+
+/**
+ * Resolve the owning company for an ingested post.
+ *
+ * The resolution RULES are unchanged and deliberately so — campaign first via
+ * the canonical `resolveCampaignCompanyId` seam (B4.1), then the post's own
+ * user's active company role. Only the reporting changes: a failed lookup is
+ * now a distinct state instead of an indistinguishable null.
+ *
+ * Known residual (out of scope here): `resolveCampaignCompanyId` swallows its
+ * own query error and returns null, so a `campaign_versions` read failure still
+ * arrives as "campaign has no owner" and falls through to the role lookup.
+ * Closing that requires changing that seam's signature, which is shared with 13
+ * authorization callers.
+ */
+async function resolveIngestTenant(post: {
+  campaign_id?: string | null;
+  user_id?: string | null;
+}): Promise<IngestTenantResolution> {
+  // B4.1 — campaign → company goes through THE seam, not a local copy of it.
+  // This resolved the latest `campaign_versions.company_id` inline, which is
+  // byte-for-byte what `resolveCampaignCompanyId` does (same table, filter,
+  // ordering, limit and null handling) while also selecting eight columns
+  // nobody here reads. Two copies of one rule is how the X reply endpoint
+  // stayed wrong in two places for months.
+  if (post.campaign_id) {
+    const campaignCompanyId = await resolveCampaignCompanyId(post.campaign_id);
+    if (campaignCompanyId) {
+      return { state: 'resolved', organizationId: campaignCompanyId };
+    }
+  }
+
+  if (post.user_id) {
+    const { data: role, error } = await ownedDbTable('user_company_roles')
+      .select('company_id')
+      .eq('user_id', post.user_id)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    // Previously destructured as `{ data: role }` — the error was dropped on
+    // the floor and the empty `data` that accompanies it was read as "this
+    // user belongs to no company".
+    if (error) {
+      return {
+        state: 'lookup_failed',
+        reason: error.message ?? 'user_company_roles lookup failed',
+      };
+    }
+    if (role?.company_id) {
+      return { state: 'resolved', organizationId: String(role.company_id) };
+    }
+  }
+
+  return { state: 'unowned' };
+}
+
+/**
  * Sync ingested comments to the unified engagement model (engagement_messages, etc.).
  * Non-blocking: failures are logged but do not affect the main ingestion flow.
  */
@@ -601,31 +684,57 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
       ingested,
     });
     if (ingested > 0) {
-      // B4.1 — campaign → company goes through THE seam, not a local copy of
-      // it. This resolved the latest `campaign_versions.company_id` inline,
-      // which is byte-for-byte what `resolveCampaignCompanyId` does (same
-      // table, filter, ordering, limit and null handling) while also selecting
-      // eight columns nobody here reads. Two copies of one rule is how the X
-      // reply endpoint stayed wrong in two places for months.
-      let organizationId: string | null = null;
-      if (post.campaign_id) {
-        organizationId = await resolveCampaignCompanyId(post.campaign_id);
+      const tenant = await resolveIngestTenant(post);
+      if (tenant.state === 'lookup_failed') {
+        // Fail closed: attribute nothing rather than attribute to nobody.
+        //
+        // Writing these rows with organization_id = null is not a recoverable
+        // approximation, it is permanent. `resolveThread` keys on
+        // (platform, platform_thread_id, organization_id) and matches null with
+        // `IS NULL`, so an orphan thread is created and then REUSED by every
+        // later failing cycle — while the next SUCCESSFUL cycle, resolving a
+        // real company, matches nothing and creates a second, correctly-scoped
+        // thread beside it. The messages written during the failure are then
+        // stranded in the orphan for good: no tenant-scoped reader selects them
+        // (every engagement read filters `.eq('organization_id', ...)`) and no
+        // engagement worker selects them (every one filters
+        // `.not('organization_id','is',null)`).
+        //
+        // post_comments already holds the canonical rows, and they are keyed by
+        // scheduled_post_id rather than by tenant, so nothing is lost by
+        // declining: the next cycle re-reads the same comments and syncs them
+        // once the lookup answers.
+        console.error('[engagementIngestion] tenant attribution failed; unified sync skipped', {
+          scheduled_post_id,
+          platform: post.platform,
+          reason: tenant.reason,
+        });
+      } else {
+        if (tenant.state === 'unowned') {
+          // Not an error — the post genuinely has no owning company, and
+          // inventing one would be worse. Said out loud because it is the
+          // condition `backend/scripts/engagementPhase1Validation.js` flags
+          // after the fact as "ORGANIZATION_ID NOT POPULATED".
+          console.warn('[engagementIngestion] ingested engagement has no owning company', {
+            scheduled_post_id,
+            platform: post.platform,
+          });
+        }
+        syncToUnifiedEngagement(rows, {
+          platform_post_id: platformPostId,
+          organization_id: tenant.state === 'resolved' ? tenant.organizationId : null,
+          platform: post.platform,
+          scheduled_post_id,
+        }).catch((syncErr: unknown) => {
+          // Was `.catch(() => {})`. syncToUnifiedEngagement already handles its
+          // own failures, so this only fires if that handling itself throws —
+          // in which case discarding it silently is how it would stay unknown.
+          console.warn(
+            '[engagementIngestion] unified sync rejected',
+            syncErr instanceof Error ? syncErr.message : String(syncErr),
+          );
+        });
       }
-      if (!organizationId && post.user_id) {
-        const { data: role } = await ownedDbTable('user_company_roles')
-          .select('company_id')
-          .eq('user_id', post.user_id)
-          .eq('status', 'active')
-          .limit(1)
-          .maybeSingle();
-        organizationId = role?.company_id ? String(role.company_id) : null;
-      }
-      syncToUnifiedEngagement(rows, {
-        platform_post_id: platformPostId,
-        organization_id: organizationId,
-        platform: post.platform,
-        scheduled_post_id,
-      }).catch(() => {});
       try {
         const { evaluatePostEngagement } = await import('./engagementEvaluationService');
         await evaluatePostEngagement(scheduled_post_id);

@@ -45,12 +45,45 @@ export async function enqueueScheduledPostAt(
   socialAccountId: string,
   scheduledFor: string,
 ): Promise<'enqueued' | 'duplicate' | 'past'> {
-  // Duplicate guard: skip if a queue_jobs row already exists for this post
-  const { data: existing } = await ownedDbTable('queue_jobs')
+  // Duplicate guard: skip if a queue_jobs row already exists for this post.
+  //
+  // Three states must stay distinct. Collapsing (c) into (b) enqueues a SECOND
+  // publish job for a post that may already be queued, and a double publish to
+  // a public social platform is irreversible:
+  //   (a) query ok  + row found -> 'duplicate'
+  //   (b) query ok  + no row    -> enqueue
+  //   (c) query FAILED          -> duplicate status is UNKNOWN -> fail closed
+  //
+  // (c) throws instead of enqueueing. That matches the scheduler's existing
+  // policy for an unusable query (findDuePostsAndEnqueue throws on a failed
+  // scheduled_posts / campaigns lookup), and every caller already treats a
+  // throw from this function as a handled outcome — API routes log it as
+  // non-fatal, /api/scheduler/retry returns 502 retryable, and
+  // atomicCancelAndReEnqueueScheduledPost maps it to 'failed' and rolls the
+  // prior queue_job back to 'pending'.
+  //
+  // The post is NOT stranded. It keeps status='scheduled', so the safety-net
+  // cron (findDuePostsAndEnqueue) picks it up at its due time — the same
+  // recovery path the 'past' return already depends on.
+  //
+  // Note .maybeSingle() also errors when MORE THAN ONE pending row matches.
+  // Under the old code that error produced data=null and enqueued a third
+  // job; fail-closed is the correct answer there too.
+  const { data: existing, error: duplicateCheckError } = await ownedDbTable('queue_jobs')
     .select('id, status')
     .eq('scheduled_post_id', scheduledPostId)
     .in('status', ['pending', 'processing'])
     .maybeSingle();
+
+  if (duplicateCheckError) {
+    console.error('[enqueueScheduledPostAt] duplicate check failed – refusing to enqueue', {
+      scheduled_post_id: scheduledPostId,
+      message: duplicateCheckError.message,
+    });
+    throw new Error(
+      `Failed to query queue_jobs for duplicate check (post ${scheduledPostId}): ${duplicateCheckError.message}`,
+    );
+  }
 
   if (existing) {
     console.log(`[enqueueScheduledPostAt] duplicate – queue_job ${existing.id} already exists for post ${scheduledPostId}`);
