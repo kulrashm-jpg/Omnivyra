@@ -72,14 +72,14 @@ describe('PUB-DRIFT detector — each class fires on synthetic sources', () => {
 
   test('PUB-DRIFT-2: public declaration with DB reads and no published filter', () => {
     const src = `
-      const { data } = await supabase.from('blogs').select('*').eq('company_id', companyId);
+      const { data } = await supabase.from('blogs').select('id, title').eq('company_id', companyId);
       export default createApiRoute(handler, { ${PUBLIC_POLICY} });`;
     expect(checkPolicyDrift(src, 'pages/api/x.ts').map((d: { rule: string }) => d.rule)).toEqual(['PUB-DRIFT-2']);
   });
 
   test('public declaration with DB reads AND the published filter is clean', () => {
     const src = `
-      const { data } = await supabase.from('blogs').select('*').eq('status', 'published');
+      const { data } = await supabase.from('blogs').select('id, title').eq('status', 'published');
       export default createApiRoute(handler, { ${PUBLIC_POLICY} });`;
     expect(checkPolicyDrift(src, 'pages/api/x.ts')).toEqual([]);
   });
