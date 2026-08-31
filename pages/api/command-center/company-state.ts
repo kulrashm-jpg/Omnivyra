@@ -16,7 +16,24 @@ import { createApiRoute as __createApiRoute } from '../../../lib/platform/routeF
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getSupabaseBrowser } from '../../../lib/supabaseBrowser';
+/*
+ * COMMAND-CENTER-CLIENT-CORRECTNESS-001 — server route, server client.
+ *
+ * This route previously built its client with getSupabaseBrowser(), the
+ * anon-key browser client ("Frontend / client components only", per its own
+ * docstring). RLS is ON for all five tables read below, and four of them expose
+ * only a service_role policy, so the anon role saw ZERO rows — the membership
+ * lookup always returned null and every legitimate member got 403. The endpoint
+ * was dead in production.
+ *
+ * The service-role client bypasses RLS, so the membership gate below is now the
+ * ENTIRE security boundary rather than a second line of defence. It must keep
+ * running before every tenant read, and each read must keep its own company
+ * predicate — RLS will not catch a mistake here. That contract is pinned by
+ * commandCenterCompanyStateTenantBinding.test.ts
+ * (COMMAND-CENTER-COMPANY-STATE-SEC-001).
+ */
+import { supabase } from '../../../backend/db/supabaseClient';
 
 export interface CompanySetupState {
   hasBlogsCreated: boolean;
@@ -55,8 +72,6 @@ async function handler(
   }
 
   try {
-    const supabase = getSupabaseBrowser();
-
     // ── 2. Get user's selected company ID from request ──────────────────────
     const companyId = (req.query.company_id as string) || '';
     if (!companyId) {
